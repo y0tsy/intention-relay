@@ -1748,6 +1748,18 @@ pub(crate) enum ExecutedOutcome {
     },
 }
 
+/// Returns the interrupted outcome for one cooperatively observed stop.
+///
+/// Every workspace tool checks its invocation signal between I/O steps, so a
+/// stop that arrives while the tool runs produces a partial result instead of
+/// an unbounded effect or a lost observation.
+const fn stopped_outcome(partial: Option<ToolResult>) -> ExecutedOutcome {
+    ExecutedOutcome::Interrupted {
+        cause: InterruptCause::Stopped,
+        partial,
+    }
+}
+
 /// Local execution service rooted at an authorized workspace.
 pub struct ToolService {
     root: WorkspaceRoot,
@@ -1795,21 +1807,11 @@ impl ToolService {
             });
         }
         Ok(match input {
-            ToolInput::Read(i) => {
-                ExecutedOutcome::Completed(ExecutedTool::bare(file::read(&self.root, i)?))
-            }
-            ToolInput::Write(i) => {
-                ExecutedOutcome::Completed(ExecutedTool::bare(file::write(&self.root, i)?))
-            }
-            ToolInput::Edit(i) => {
-                ExecutedOutcome::Completed(ExecutedTool::bare(file::edit(&self.root, i)?))
-            }
-            ToolInput::Glob(i) => {
-                ExecutedOutcome::Completed(ExecutedTool::bare(search::glob(&self.root, i)?))
-            }
-            ToolInput::Grep(i) => {
-                ExecutedOutcome::Completed(ExecutedTool::bare(search::grep(&self.root, i)?))
-            }
+            ToolInput::Read(i) => file::read(&self.root, i, &cancellation)?,
+            ToolInput::Write(i) => file::write(&self.root, i, &cancellation)?,
+            ToolInput::Edit(i) => file::edit(&self.root, i, &cancellation)?,
+            ToolInput::Glob(i) => search::glob(&self.root, i, &cancellation)?,
+            ToolInput::Grep(i) => search::grep(&self.root, i, &cancellation)?,
             ToolInput::Execute(i) => execute::run(&self.root, i, cancellation)?,
         })
     }
@@ -1874,7 +1876,14 @@ impl ToolService {
     }
 }
 
-fn read_tool(root: &WorkspaceRoot, input: ReadInput) -> DtoResult<ToolResult> {
+fn read_tool(
+    root: &WorkspaceRoot,
+    input: ReadInput,
+    cancellation: &CancellationSignal,
+) -> DtoResult<ExecutedOutcome> {
+    if cancellation.is_cancelled() {
+        return Ok(stopped_outcome(None));
+    }
     let mut file = std::fs::File::open(root.resolve_path(&input.path)).map_err(|_| {
         intention_types::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
     })?;
@@ -1883,10 +1892,16 @@ fn read_tool(root: &WorkspaceRoot, input: ReadInput) -> DtoResult<ToolResult> {
         intention_types::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
     })?;
     let (text, truncated) = bounded_lossy(&bytes);
-    Ok(ToolResult::Read(TextResult {
+    let result = ToolResult::Read(TextResult {
         text: bounded_text(text)?,
         truncated: truncated || source_truncated,
-    }))
+    });
+    // A stop observed after the bounded read keeps the captured bytes as the
+    // call's partial output instead of discarding them.
+    if cancellation.is_cancelled() {
+        return Ok(stopped_outcome(Some(result)));
+    }
+    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(result)))
 }
 
 fn execute_tool(
@@ -1953,7 +1968,14 @@ fn execute_tool(
     }))
 }
 
-fn write_tool(root: &WorkspaceRoot, input: WriteInput) -> DtoResult<ToolResult> {
+fn write_tool(
+    root: &WorkspaceRoot,
+    input: WriteInput,
+    cancellation: &CancellationSignal,
+) -> DtoResult<ExecutedOutcome> {
+    if cancellation.is_cancelled() {
+        return Ok(stopped_outcome(None));
+    }
     let bytes = input.content.as_str().len() as u64;
     let path = root.resolve_new_file_path(&input.path);
     if let Some(expected) = input.expected_content.as_ref() {
@@ -1986,14 +2008,27 @@ fn write_tool(root: &WorkspaceRoot, input: WriteInput) -> DtoResult<ToolResult> 
                 "workspace file changed before write",
             ));
         }
+        // The preflight read is the last I/O step before the effect.
+        if cancellation.is_cancelled() {
+            return Ok(stopped_outcome(None));
+        }
     }
     std::fs::write(path, input.content.as_str()).map_err(|_| {
         intention_types::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
     })?;
-    Ok(ToolResult::Write(WriteResult { bytes }))
+    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
+        ToolResult::Write(WriteResult { bytes }),
+    )))
 }
 
-fn edit_tool(root: &WorkspaceRoot, input: EditInput) -> DtoResult<ToolResult> {
+fn edit_tool(
+    root: &WorkspaceRoot,
+    input: EditInput,
+    cancellation: &CancellationSignal,
+) -> DtoResult<ExecutedOutcome> {
+    if cancellation.is_cancelled() {
+        return Ok(stopped_outcome(None));
+    }
     let path = root.resolve_path(&input.path);
     // Edit reads the complete target to apply one replacement; the target is
     // therefore size-bounded so a huge file cannot allocate unboundedly
@@ -2032,17 +2067,30 @@ fn edit_tool(root: &WorkspaceRoot, input: EditInput) -> DtoResult<ToolResult> {
             "workspace file changed before edit",
         ));
     }
+    // The bounded read is the last I/O step before the replacement write.
+    if cancellation.is_cancelled() {
+        return Ok(stopped_outcome(None));
+    }
     let replacement = text.replacen(input.old.as_str(), input.new.as_str(), 1);
     std::fs::write(path, &replacement).map_err(|_| {
         intention_types::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
     })?;
-    Ok(ToolResult::Edit(WriteResult {
-        bytes: replacement.len() as u64,
-    }))
+    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
+        ToolResult::Edit(WriteResult {
+            bytes: replacement.len() as u64,
+        }),
+    )))
 }
 
-fn glob_tool(root: &WorkspaceRoot, input: GlobInput) -> DtoResult<ToolResult> {
+fn glob_tool(
+    root: &WorkspaceRoot,
+    input: GlobInput,
+    cancellation: &CancellationSignal,
+) -> DtoResult<ExecutedOutcome> {
     validate_search_pattern(input.pattern.as_str())?;
+    if cancellation.is_cancelled() {
+        return Ok(stopped_outcome(None));
+    }
     let base = root.root();
     let pattern = base
         .join(input.pattern.as_str())
@@ -2055,6 +2103,11 @@ fn glob_tool(root: &WorkspaceRoot, input: GlobInput) -> DtoResult<ToolResult> {
     for entry in glob::glob(&pattern).map_err(|_| {
         intention_types::ErrorDto::validation("invalid_tool_pattern", "tool pattern is invalid")
     })? {
+        // The traversal is the tool's I/O step: a stop ends it and the entries
+        // collected so far are returned as an honestly truncated partial list.
+        if cancellation.is_cancelled() {
+            break;
+        }
         // One unreadable or raced-away entry skips itself instead of aborting
         // the whole search; listing what is safely listable keeps repeated
         // traversals deterministic.
@@ -2069,10 +2122,28 @@ fn glob_tool(root: &WorkspaceRoot, input: GlobInput) -> DtoResult<ToolResult> {
     }
     paths.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     paths.dedup();
-    // The window is applied after the deterministic sort and dedup so the
-    // retained set never depends on traversal order. Each retained entry costs
-    // its JSON string bytes plus the one-byte list separator, which keeps the
-    // serialized path list inside the shared search-result window (C-04).
+    let (retained, window_truncated) = window_paths(paths);
+    if cancellation.is_cancelled() {
+        return Ok(stopped_outcome(Some(ToolResult::Glob(PathsResult {
+            paths: retained,
+            truncated: true,
+        }))));
+    }
+    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
+        ToolResult::Glob(PathsResult {
+            paths: retained,
+            truncated: window_truncated,
+        }),
+    )))
+}
+
+/// Applies the shared search-result window to one sorted, deduplicated path list.
+///
+/// The window is applied after the deterministic sort and dedup so the
+/// retained set never depends on traversal order. Each retained entry costs
+/// its JSON string bytes plus the one-byte list separator, which keeps the
+/// serialized path list inside the shared search-result window (C-04).
+fn window_paths(paths: Vec<WorkspaceRelativePathDto>) -> (Vec<WorkspaceRelativePathDto>, bool) {
     let mut retained = Vec::new();
     let mut retained_bytes = 0usize;
     let mut truncated = false;
@@ -2085,16 +2156,20 @@ fn glob_tool(root: &WorkspaceRoot, input: GlobInput) -> DtoResult<ToolResult> {
         retained_bytes += cost;
         retained.push(path);
     }
-    Ok(ToolResult::Glob(PathsResult {
-        paths: retained,
-        truncated,
-    }))
+    (retained, truncated)
 }
 
-fn grep_tool(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
+fn grep_tool(
+    root: &WorkspaceRoot,
+    input: GrepInput,
+    cancellation: &CancellationSignal,
+) -> DtoResult<ExecutedOutcome> {
     validate_search_pattern(input.pattern.as_str())?;
+    if cancellation.is_cancelled() {
+        return Ok(stopped_outcome(None));
+    }
     if input.scope.is_some() {
-        return grep_scoped(root, input);
+        return grep_scoped(root, input, cancellation);
     }
     let path = input
         .path
@@ -2141,6 +2216,14 @@ fn grep_tool(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
     let mut retained_bytes = 0usize;
     let mut truncated = source_truncated || lossy_truncated;
     for (line_index, line) in text.lines().enumerate() {
+        // A stop observed between scanned lines keeps the matches found so far
+        // as an honestly truncated partial result.
+        if cancellation.is_cancelled() {
+            return Ok(stopped_outcome(Some(ToolResult::Grep(GrepResult {
+                matches,
+                truncated: true,
+            }))));
+        }
         let Some(column) = line.find(input.pattern.as_str()) else {
             continue;
         };
@@ -2168,10 +2251,22 @@ fn grep_tool(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
             break;
         }
     }
-    Ok(ToolResult::Grep(GrepResult { matches, truncated }))
+    if cancellation.is_cancelled() {
+        return Ok(stopped_outcome(Some(ToolResult::Grep(GrepResult {
+            matches,
+            truncated: true,
+        }))));
+    }
+    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
+        ToolResult::Grep(GrepResult { matches, truncated }),
+    )))
 }
 
-fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
+fn grep_scoped(
+    root: &WorkspaceRoot,
+    input: GrepInput,
+    cancellation: &CancellationSignal,
+) -> DtoResult<ExecutedOutcome> {
     let scope = input.scope.ok_or_else(|| {
         intention_types::ErrorDto::validation("invalid_tool_path", "grep requires a workspace path")
     })?;
@@ -2198,6 +2293,13 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
     } else if metadata.is_dir() {
         let mut pending = vec![base];
         while let Some(directory) = pending.pop() {
+            // The directory walk is one bounded I/O step of the scoped search.
+            if cancellation.is_cancelled() {
+                return Ok(stopped_outcome(Some(ToolResult::Grep(GrepResult {
+                    matches: Vec::new(),
+                    truncated: true,
+                }))));
+            }
             let Ok(entries) = std::fs::read_dir(&directory) else {
                 continue;
             };
@@ -2236,6 +2338,14 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
     let mut retained_bytes = 0usize;
     let mut truncated = false;
     for path in files {
+        // A stop observed between searched files keeps the matches found so
+        // far as an honestly truncated partial result.
+        if cancellation.is_cancelled() {
+            return Ok(stopped_outcome(Some(ToolResult::Grep(GrepResult {
+                matches,
+                truncated: true,
+            }))));
+        }
         let mut file = std::fs::File::open(&path).map_err(|_| {
             intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
         })?;
@@ -2258,6 +2368,14 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
         });
         let Some(logical) = logical else { continue };
         for (line_index, line) in text.lines().enumerate() {
+            // A stop observed between scanned lines ends the search with the
+            // matches found so far.
+            if cancellation.is_cancelled() {
+                return Ok(stopped_outcome(Some(ToolResult::Grep(GrepResult {
+                    matches,
+                    truncated: true,
+                }))));
+            }
             let Some(column) = line.find(input.pattern.as_str()) else {
                 continue;
             };
@@ -2282,11 +2400,21 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
                 line[..column].chars().count() as u64 + 1,
                 fragment,
             )? {
-                return Ok(ToolResult::Grep(GrepResult { matches, truncated }));
+                return Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
+                    ToolResult::Grep(GrepResult { matches, truncated }),
+                )));
             }
         }
     }
-    Ok(ToolResult::Grep(GrepResult { matches, truncated }))
+    if cancellation.is_cancelled() {
+        return Ok(stopped_outcome(Some(ToolResult::Grep(GrepResult {
+            matches,
+            truncated: true,
+        }))));
+    }
+    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
+        ToolResult::Grep(GrepResult { matches, truncated }),
+    )))
 }
 
 /// Records one grep match when its serialized cost fits the aggregate window.

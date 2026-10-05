@@ -3,10 +3,8 @@
     reason = "M4 storage contract fixtures use expect for precise diagnostics."
 )]
 
-use intention_domain::{
-    RemoveQueuedTurnCommandDto, RunModeDto, SessionProjectionDto, WorkspaceRootDto,
-};
-use intention_storage::{CommittedChangeDto, RemoveQueuedTurnInputDto};
+use intention_domain::{RemoveTurnCommandDto, RunModeDto, SessionProjectionDto, WorkspaceRootDto};
+use intention_storage::{CommittedChangeDto, RemoveTurnInputDto};
 use intention_types::{
     ProjectId, SessionEventSequenceDto, SessionId, TimestampDto, TurnId, WorkspaceId,
 };
@@ -45,8 +43,7 @@ fn storage_commit_and_remove_dtos_expose_their_safe_fields() {
     assert!(committed.events().is_empty());
     assert!(committed.turn_outcome().is_none());
 
-    let remove =
-        RemoveQueuedTurnInputDto::new(RemoveQueuedTurnCommandDto::new(session_id, turn_id), time);
+    let remove = RemoveTurnInputDto::new(RemoveTurnCommandDto::new(session_id, turn_id), time);
     assert_eq!(remove.command().session_id(), session_id);
     assert_eq!(remove.command().turn_id(), turn_id);
 }

@@ -11,9 +11,9 @@ use intention_domain::{
 use intention_storage::{
     AcceptUserTurnInputDto, AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto,
     AppendToolLifecycleEventInputDto, CommittedChangeDto, CreateSessionInputDto,
-    ModelContextMessageDto, ModelContextRoleDto, RecoverUnfinishedRunsInputDto,
-    RemoveQueuedTurnInputDto, StartingRunModelContextDto, StorageRepositoryDto,
-    ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
+    ModelContextMessageDto, ModelContextRoleDto, RecoverUnfinishedRunsInputDto, RemoveTurnInputDto,
+    StartingRunModelContextDto, StorageRepositoryDto, ToolResultEvidenceDto, ToolResultKindDto,
+    TransitionRunInputDto,
 };
 use intention_types::{
     ConfigRevisionId, ProjectId, RunId, SessionId, TimestampDto, TurnId, WorkspaceId,
@@ -152,8 +152,8 @@ fn storage_dtos_expose_all_fields_and_default_repository_failures_safely() {
         "../../intention-config/tests/fixtures/config-snapshot-v1.json"
     ))
     .expect("safe config snapshot decodes");
-    let remove = RemoveQueuedTurnInputDto::new(
-        intention_domain::RemoveQueuedTurnCommandDto::new(session_id, TurnId::new()),
+    let remove = RemoveTurnInputDto::new(
+        intention_domain::RemoveTurnCommandDto::new(session_id, TurnId::new()),
         time,
     );
     assert_eq!(remove.occurred_at(), time);
@@ -258,9 +258,9 @@ fn storage_dtos_expose_all_fields_and_default_repository_failures_safely() {
         ) -> intention_types::DtoResult<CommittedChangeDto> {
             unreachable!()
         }
-        fn remove_queued_turn(
+        fn remove_turn(
             &self,
-            _: RemoveQueuedTurnInputDto,
+            _: RemoveTurnInputDto,
         ) -> intention_types::DtoResult<CommittedChangeDto> {
             unreachable!()
         }
@@ -362,6 +362,18 @@ fn storage_dtos_expose_all_fields_and_default_repository_failures_safely() {
             .code(),
         "run_history_unavailable"
     );
+    assert_eq!(
+        repository
+            .append_pending_user_turns(intention_storage::AppendPendingUserTurnsInputDto::new(
+                session_id,
+                run_id,
+                intention_domain::RunEventCursorDto::new(0),
+                time,
+            ))
+            .expect_err("repository operation must be unavailable")
+            .code(),
+        "pending_user_turns_unavailable"
+    );
 }
 
 #[test]
@@ -405,8 +417,8 @@ fn storage_constructors_cover_successful_accessors_and_validation_paths() {
     assert_eq!(transition.session_id(), session_id);
     assert_eq!(transition.run_id(), run_id);
     assert_eq!(transition.status(), RunStatusDto::Running);
-    let remove = RemoveQueuedTurnInputDto::new(
-        intention_domain::RemoveQueuedTurnCommandDto::new(session_id, TurnId::new()),
+    let remove = RemoveTurnInputDto::new(
+        intention_domain::RemoveTurnCommandDto::new(session_id, TurnId::new()),
         time,
     );
     assert_eq!(remove.command().turn_id().to_string().len(), 36);

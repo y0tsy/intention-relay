@@ -6,8 +6,8 @@
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto,
-    RemoveQueuedTurnCommandDto, RunModeDto, RunStatusDto, SendUserTurnCommandDto,
+    CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto, RemoveTurnCommandDto,
+    RunModeDto, SendUserTurnCommandDto,
 };
 use intention_protocol::{
     ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto, ProtocolQueryResultDto,
@@ -61,37 +61,36 @@ fn durable_lifecycle_and_replay_contracts_hold() {
             intention_protocol::ProtocolAcceptedResultDto::SendUserTurn(turn) => {
                 match turn.outcome() {
                     SendUserTurnOutcomeDto::Started { run_id, .. } => run_id,
-                    SendUserTurnOutcomeDto::Queued { .. } => panic!("first turn starts"),
+                    SendUserTurnOutcomeDto::Pending => panic!("first turn starts"),
                 }
             }
             _ => panic!("turn result expected"),
         },
         ProtocolCommandResultDto::Rejected(error) => panic!("turn rejected: {error}"),
     };
-    let queued_turn = TurnId::new();
+    let pending_turn = TurnId::new();
     assert!(matches!(
         facade.command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, queued_turn, "queued").expect("turn is valid")
+            SendUserTurnCommandDto::new(session_id, pending_turn, "pending")
+                .expect("turn is valid")
         )),
         ProtocolCommandResultDto::Accepted(_)
     ));
     facade
-        .stop_run_for_daemon_host(session_id, active_run)
-        .expect("host stop moves the run to cancelling");
+        .interrupt_run_for_daemon_host(session_id, active_run)
+        .expect("host interrupt reaches the active run");
     let events = durable_events(&facade, session_id).expect("durable event tail loads");
-    assert!(matches!(
-        events.last().expect("cancelling event exists").payload(),
-        DomainEventDto::RunStatusChanged(event)
-            if event.status() == RunStatusDto::Cancelling
-    ));
-    // The daemon task registry owns the Cancelling -> Cancelled terminal
-    // transition and the queued-turn promotion that follows it; without a
-    // task registry the run stays durably Cancelling and the queued turn
-    // stays queued (single execution path per operation under ADR 0038).
+    // An interrupt is transient: it ends the in-flight operation, records a
+    // notice, and leaves the run active. Without a daemon task registry the
+    // pending message stays durable input and no terminal status is written.
+    assert!(events.iter().any(|event| matches!(
+        event.payload(),
+        DomainEventDto::UserTurnPending(pending) if pending.turn_id() == pending_turn
+    )));
     assert!(events.iter().all(|event| !matches!(
         event.payload(),
         DomainEventDto::RunStatusChanged(change)
-            if change.status() == RunStatusDto::Cancelled
+            if change.status().is_terminal()
     )));
     assert!(matches!(
         facade.query(ProtocolQueryDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id))),
@@ -145,21 +144,21 @@ fn restart_interrupts_unfinished_work_before_ready() {
 }
 
 #[test]
-fn queued_turn_removal_is_accepted() {
+fn pending_turn_removal_is_accepted() {
     let (_directory, facade) = facade();
     let session_id = SessionId::new();
     create(&facade, session_id);
     let _ = facade.command(ProtocolCommandDto::SendUserTurn(
         SendUserTurnCommandDto::new(session_id, TurnId::new(), "active").expect("turn valid"),
     ));
-    let queued = TurnId::new();
+    let pending = TurnId::new();
     let _ = facade.command(ProtocolCommandDto::SendUserTurn(
-        SendUserTurnCommandDto::new(session_id, queued, "queued").expect("turn valid"),
+        SendUserTurnCommandDto::new(session_id, pending, "pending").expect("turn valid"),
     ));
     assert!(matches!(
-        facade.command(ProtocolCommandDto::RemoveQueuedTurn(
-            RemoveQueuedTurnCommandDto::new(session_id, queued)
-        )),
+        facade.command(ProtocolCommandDto::RemoveTurn(RemoveTurnCommandDto::new(
+            session_id, pending
+        ))),
         ProtocolCommandResultDto::Accepted(_)
     ));
 }

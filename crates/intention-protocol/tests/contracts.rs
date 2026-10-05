@@ -6,8 +6,8 @@
 //! Test-first protocol contract and current-version wire evidence.
 
 use intention_domain::{
-    GetSessionSnapshotQueryDto, RunModeDto, SendUserTurnCommandDto, SessionProjectionDto,
-    StopRunCommandDto,
+    GetSessionSnapshotQueryDto, InterruptRunCommandDto, RunModeDto, SendUserTurnCommandDto,
+    SessionProjectionDto,
 };
 use intention_protocol::{
     CURRENT_DTO_SCHEMA_VERSION, CURRENT_PROTOCOL_VERSION, DaemonHealthDto, DaemonReadinessDto,
@@ -94,7 +94,7 @@ const fn method_position(method: ProtocolMethodDto) -> usize {
         ProtocolMethodDto::SessionCreate => 0,
         ProtocolMethodDto::TurnSend => 1,
         ProtocolMethodDto::TurnRemove => 2,
-        ProtocolMethodDto::RunStop => 3,
+        ProtocolMethodDto::RunInterrupt => 3,
         ProtocolMethodDto::SessionSubscribe => 4,
         ProtocolMethodDto::RunSubscribe => 5,
         ProtocolMethodDto::DaemonHealth => 6,
@@ -108,7 +108,7 @@ const EVERY_METHOD: [ProtocolMethodDto; 8] = [
     ProtocolMethodDto::SessionCreate,
     ProtocolMethodDto::TurnSend,
     ProtocolMethodDto::TurnRemove,
-    ProtocolMethodDto::RunStop,
+    ProtocolMethodDto::RunInterrupt,
     ProtocolMethodDto::SessionSubscribe,
     ProtocolMethodDto::RunSubscribe,
     ProtocolMethodDto::DaemonHealth,
@@ -138,16 +138,14 @@ fn method_payload(method: ProtocolMethodDto) -> ProtocolRequestPayloadDto {
                     .expect("fixture turn is valid"),
             ))
         }
-        ProtocolMethodDto::TurnRemove => {
-            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::RemoveQueuedTurn(
-                intention_domain::RemoveQueuedTurnCommandDto::new(
-                    session_id,
-                    intention_types::TurnId::new(),
-                ),
-            ))
-        }
-        ProtocolMethodDto::RunStop => ProtocolRequestPayloadDto::Command(
-            ProtocolCommandDto::StopRun(StopRunCommandDto::new(session_id, run_id)),
+        ProtocolMethodDto::TurnRemove => ProtocolRequestPayloadDto::Command(
+            ProtocolCommandDto::RemoveTurn(intention_domain::RemoveTurnCommandDto::new(
+                session_id,
+                intention_types::TurnId::new(),
+            )),
+        ),
+        ProtocolMethodDto::RunInterrupt => ProtocolRequestPayloadDto::Command(
+            ProtocolCommandDto::InterruptRun(InterruptRunCommandDto::new(session_id, run_id)),
         ),
         ProtocolMethodDto::SessionSubscribe => {
             ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(
@@ -173,10 +171,9 @@ fn method_payload(method: ProtocolMethodDto) -> ProtocolRequestPayloadDto {
 fn foreign_payload(method: ProtocolMethodDto) -> ProtocolRequestPayloadDto {
     match method {
         ProtocolMethodDto::DaemonHealth => {
-            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(StopRunCommandDto::new(
-                SessionId::new(),
-                intention_types::RunId::new(),
-            )))
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::InterruptRun(
+                InterruptRunCommandDto::new(SessionId::new(), intention_types::RunId::new()),
+            ))
         }
         _ => ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
     }
@@ -310,9 +307,9 @@ fn protocol_request_and_response_variants_round_trip_through_jsonrpc_envelopes()
             SendUserTurnCommandDto::new(session_id, intention_types::TurnId::new(), "hello")
                 .expect("fixture turn is valid"),
         )),
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(StopRunCommandDto::new(
-            session_id, run_id,
-        ))),
+        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::InterruptRun(
+            InterruptRunCommandDto::new(session_id, run_id),
+        )),
         ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(
             SubscribeSessionCommandDto::new(schema, session_id, None, RunModeDto::Build),
         )),
@@ -344,8 +341,8 @@ fn protocol_request_and_response_variants_round_trip_through_jsonrpc_envelopes()
             ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(
                 ProtocolAcceptedDto::with_result(
                     correlation_id,
-                    ProtocolAcceptedResultDto::StopRun(
-                        intention_protocol::StopRunAcceptedDto::new(
+                    ProtocolAcceptedResultDto::InterruptRun(
+                        intention_protocol::InterruptRunAcceptedDto::new(
                             session_id,
                             run_id,
                             SessionEventSequenceDto::new(1),

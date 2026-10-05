@@ -4,8 +4,6 @@
 //! health, query, command, and replay-only subscription meaning to the durable
 //! composition facade.
 
-#[cfg(any(test, feature = "test-support"))]
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -22,8 +20,6 @@ use intention_protocol::{
     RunSnapshotFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto, decode_request_line,
     encode_response, is_notification_line,
 };
-#[cfg(any(test, feature = "test-support"))]
-use intention_runtime::ModelRunFirstAppendGate;
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
 };
@@ -44,7 +40,6 @@ use intention_types::{
 
 const SUBSCRIBER_QUEUE_CAPACITY: usize = 64;
 const SUBSCRIBER_WRITE_DEADLINE: Duration = Duration::from_secs(10);
-const CANCELLATION_TERMINALIZER_RETRY_DELAY: Duration = Duration::from_millis(25);
 const PUBLICATION_RETRY_ATTEMPTS: usize = 6;
 const PUBLICATION_RETRY_DELAY: Duration = Duration::from_millis(100);
 
@@ -110,20 +105,6 @@ struct HostState {
     data: Mutex<HostData>,
     publication_gate: Mutex<()>,
     #[cfg(any(test, feature = "test-support"))]
-    first_append_gate: Option<Arc<dyn ModelRunFirstAppendGate>>,
-    #[cfg(any(test, feature = "test-support"))]
-    terminalizer_failures: AtomicUsize,
-    #[cfg(any(test, feature = "test-support"))]
-    terminalizer_attempts: AtomicUsize,
-    #[cfg(any(test, feature = "test-support"))]
-    terminalizer_retry_paused: AtomicBool,
-    #[cfg(any(test, feature = "test-support"))]
-    terminalizer_failure_entered: tokio::sync::Notify,
-    #[cfg(any(test, feature = "test-support"))]
-    terminalizer_failure_release: tokio::sync::Notify,
-    #[cfg(any(test, feature = "test-support"))]
-    terminalizer_completed: tokio::sync::Notify,
-    #[cfg(any(test, feature = "test-support"))]
     task_completed: tokio::sync::Notify,
 }
 
@@ -134,20 +115,6 @@ fn host_for_test(facade: DaemonApplicationFacade) -> Arc<HostState> {
         data: Mutex::new(HostData::default()),
         publication_gate: Mutex::new(()),
         #[cfg(any(test, feature = "test-support"))]
-        first_append_gate: None,
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_failures: AtomicUsize::new(0),
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_attempts: AtomicUsize::new(0),
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_retry_paused: AtomicBool::new(false),
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_failure_entered: tokio::sync::Notify::new(),
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_failure_release: tokio::sync::Notify::new(),
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_completed: tokio::sync::Notify::new(),
-        #[cfg(any(test, feature = "test-support"))]
         task_completed: tokio::sync::Notify::new(),
     })
 }
@@ -155,10 +122,9 @@ fn host_for_test(facade: DaemonApplicationFacade) -> Arc<HostState> {
 impl HostState {
     fn schedule_if_starting(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
         let key = (session_id, run_id);
-        // Admission and StopRun share this registry lock. Once admission begins,
-        // it either registers an executor before StopRun can persist Cancelling,
-        // or StopRun installs its own terminalization task before a later
-        // admission can observe the no-longer-Starting run.
+        // Admission and interruption share this registry lock: an interrupt
+        // either reaches the registered execution signal, or arrives before
+        // admission and finds no in-flight operation to stop.
         let mut data = match self.data.lock() {
             Ok(data) => data,
             Err(_) => return,
@@ -194,30 +160,6 @@ impl HostState {
                 host: Arc::clone(&host),
             };
             let executor = DaemonToolExecutor::new(host.facade.clone());
-            #[cfg(any(test, feature = "test-support"))]
-            let result = if let Some(first_append_gate) = host.first_append_gate.as_deref() {
-                host.facade
-                    .execute_scheduled_model_run_for_daemon_with_first_append_gate(
-                        schedule.clone(),
-                        cancellation.clone(),
-                        &TokioTime,
-                        &observer,
-                        first_append_gate,
-                        &executor,
-                    )
-                    .await
-            } else {
-                host.facade
-                    .execute_scheduled_model_run_for_daemon_with_tool_executor(
-                        schedule.clone(),
-                        cancellation.clone(),
-                        &TokioTime,
-                        &observer,
-                        &executor,
-                    )
-                    .await
-            };
-            #[cfg(not(any(test, feature = "test-support")))]
             let result = host
                 .facade
                 .execute_scheduled_model_run_for_daemon_with_tool_executor(
@@ -229,39 +171,22 @@ impl HostState {
                 )
                 .await;
             // An executor error must never leave a non-terminal durable run
-            // without an owner (PR24-012/013): the registry entry stays until
-            // an independent durable reread proves the run terminal. A
-            // Cancelling run transfers to the unified terminalizer, and any
-            // other still-active run is terminalized Failed directly; when
-            // that terminalization cannot commit (or the reread itself
-            // fails), the terminalizer retries until the reread is terminal.
+            // without an owner (PR24-012/013): a still-active run is
+            // terminalized as `Failed` with the executor's stable error code.
             if let Err(error) = result {
-                let status = host
+                let active = host
                     .facade
                     .load_current_run_snapshot_for_daemon(key.0, key.1)
-                    .ok()
-                    .map(|replay| replay.run_projection().status());
-                match status {
-                    Some(status) if status.is_terminal() => {}
-                    Some(RunStatusDto::Cancelling) => {
-                        host.spawn_cancellation_terminalizer(key);
-                        return;
-                    }
-                    Some(_) => {
-                        if host
-                            .facade
-                            .fail_active_run_for_daemon(key.0, key.1, error.code())
-                            .is_err()
-                        {
-                            host.spawn_cancellation_terminalizer(key);
-                            return;
-                        }
-                        host.on_terminal(key.0, key.1);
-                    }
-                    None => {
-                        host.spawn_cancellation_terminalizer(key);
-                        return;
-                    }
+                    .map_or(true, |replay| {
+                        !replay.run_projection().status().is_terminal()
+                    });
+                if active
+                    && host
+                        .facade
+                        .fail_active_run_for_daemon(key.0, key.1, error.code())
+                        .is_ok()
+                {
+                    host.on_terminal(key.0, key.1);
                 }
             }
             if let Ok(mut data) = host.data.lock() {
@@ -279,138 +204,31 @@ impl HostState {
         std::mem::drop(task);
     }
 
-    fn stop_run(
+    /// Interrupts the current operation of one active run.
+    ///
+    /// The interrupt is accepted only for an exact active run; the run stays
+    /// `Running`. The registered execution task observes the shared signal,
+    /// ends its current provider stream or tool call with a partial result and
+    /// a context notice, and the model continues with the next step.
+    fn interrupt_run(
         self: &Arc<Self>,
         session_id: SessionId,
         run_id: RunId,
     ) -> DtoResult<intention_protocol::ProtocolAcceptedResultDto> {
-        let key = (session_id, run_id);
-        // Keep the registry locked through the durable transition so an
-        // unregistered executor cannot observe Starting, lose this StopRun,
-        // and leave the durable run stranded in Cancelling.
-        let mut data = self.data.lock().map_err(|_| {
+        let accepted = self
+            .facade
+            .interrupt_run_for_daemon_host(session_id, run_id)?;
+        let data = self.data.lock().map_err(|_| {
             ErrorDto::unavailable(
                 "daemon_task_registry_unavailable",
                 "the daemon task registry is unavailable",
             )
         })?;
-        let cancellation = data.tasks.get(&key).cloned();
-        let accepted = self.facade.stop_run_for_daemon_host(session_id, run_id)?;
-        let terminalize = cancellation.is_none();
-        let cancellation = cancellation.unwrap_or_else(|| {
-            let cancellation = ModelCancellationSignal::new();
-            data.tasks.insert(key, cancellation.clone());
-            cancellation
-        });
+        if let Some(cancellation) = data.tasks.get(&(session_id, run_id)) {
+            cancellation.cancel();
+        }
         drop(data);
-        self.publish_current(session_id, run_id);
-        cancellation.cancel();
-        if terminalize {
-            self.spawn_cancellation_terminalizer(key);
-        }
         Ok(accepted)
-    }
-
-    fn spawn_cancellation_terminalizer(self: &Arc<Self>, key: RunKey) {
-        let host = Arc::clone(self);
-        let task = tokio::spawn(async move {
-            let mut retry_immediately = true;
-            loop {
-                let result = host.terminalize_cancelling_run(key);
-                host.publish_current(key.0, key.1);
-                // The registry entry remains task-owned until an independent
-                // durable reread proves this exact run is terminal. A failed
-                // SQLite completion therefore cannot strand Cancelling after
-                // the terminalizer has relinquished its only ownership.
-                if host.cancellation_terminalizer_is_terminal(key) {
-                    host.on_terminal(key.0, key.1);
-                    if let Ok(mut data) = host.data.lock() {
-                        data.tasks.remove(&key);
-                    }
-                    #[cfg(any(test, feature = "test-support"))]
-                    {
-                        // The unified terminalizer is the single owner of the
-                        // Cancelling terminalization, so it also reports the
-                        // exact registered execution as complete once the
-                        // terminal reread proves the run terminal.
-                        host.signal_execution_completion(key);
-                        host.terminalizer_completed.notify_one();
-                        host.task_completed.notify_one();
-                    }
-                    return;
-                }
-                if result.is_err() {
-                    host.wait_for_injected_terminalizer_retry().await;
-                }
-                // Permit one immediate retry for a transient one-shot failure,
-                // then rate-limit every later retry. This keeps the exact task
-                // alive without an unbounded busy loop or a state conversion.
-                if retry_immediately {
-                    retry_immediately = false;
-                    tokio::task::yield_now().await;
-                } else {
-                    tokio::time::sleep(CANCELLATION_TERMINALIZER_RETRY_DELAY).await;
-                }
-            }
-        });
-        #[cfg(any(test, feature = "test-support"))]
-        self.track_test_execution_task(task);
-        #[cfg(not(any(test, feature = "test-support")))]
-        std::mem::drop(task);
-    }
-
-    /// Performs one durable terminalization step for the exact run according
-    /// to its current durable status: `Cancelling` completes as `Cancelled`
-    /// through the facade bridge; any other still-active state completes as
-    /// `Failed` (PR24-012/013).
-    fn terminalize_cancelling_run(&self, key: RunKey) -> DtoResult<()> {
-        #[cfg(any(test, feature = "test-support"))]
-        {
-            self.terminalizer_attempts.fetch_add(1, Ordering::Relaxed);
-            if self
-                .terminalizer_failures
-                .try_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
-                    remaining.checked_sub(1)
-                })
-                .is_ok()
-            {
-                self.terminalizer_retry_paused
-                    .store(true, Ordering::Release);
-                self.terminalizer_failure_entered.notify_one();
-                return Err(ErrorDto::unavailable(
-                    "injected_terminalizer_failure",
-                    "a deterministic terminalizer failure was injected",
-                ));
-            }
-        }
-        let status = self
-            .facade
-            .load_current_run_snapshot_for_daemon(key.0, key.1)?
-            .run_projection()
-            .status();
-        if status == RunStatusDto::Cancelling {
-            return self
-                .facade
-                .terminalize_cancelling_run_for_daemon(key.0, key.1);
-        }
-        if status.is_terminal() {
-            return Ok(());
-        }
-        self.facade
-            .fail_active_run_for_daemon(key.0, key.1, "model_execution_failed")
-    }
-
-    fn cancellation_terminalizer_is_terminal(&self, key: RunKey) -> bool {
-        self.facade
-            .load_current_run_snapshot_for_daemon(key.0, key.1)
-            .is_ok_and(|replay| replay.run_projection().status().is_terminal())
-    }
-
-    async fn wait_for_injected_terminalizer_retry(&self) {
-        #[cfg(any(test, feature = "test-support"))]
-        if self.terminalizer_retry_paused.swap(false, Ordering::AcqRel) {
-            self.terminalizer_failure_release.notified().await;
-        }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -428,31 +246,6 @@ impl HostState {
             return Vec::new();
         };
         std::mem::take(&mut data.execution_tasks)
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    fn inject_terminalizer_failure_once(&self) {
-        self.terminalizer_failures.store(1, Ordering::Release);
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    fn terminalizer_attempts(&self) -> usize {
-        self.terminalizer_attempts.load(Ordering::Acquire)
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    async fn wait_for_terminalizer_failure(&self) {
-        self.terminalizer_failure_entered.notified().await;
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    fn release_terminalizer_retry(&self) {
-        self.terminalizer_failure_release.notify_one();
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    async fn wait_for_terminalizer_completion(&self) {
-        self.terminalizer_completed.notified().await;
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -1031,31 +824,22 @@ pub fn run(endpoint: LocalEndpoint) -> DtoResult<()> {
     runtime.block_on(serve_async_listener(listener, facade))
 }
 
-async fn serve_async_listener(
-    listener: AsyncLocalListener,
-    facade: DaemonApplicationFacade,
-) -> DtoResult<()> {
-    let host = Arc::new(HostState {
+/// Builds one daemon host around a facade without exposing it outside the host.
+fn new_host(facade: DaemonApplicationFacade) -> Arc<HostState> {
+    Arc::new(HostState {
         facade,
         data: Mutex::new(HostData::default()),
         publication_gate: Mutex::new(()),
         #[cfg(any(test, feature = "test-support"))]
-        first_append_gate: None,
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_failures: AtomicUsize::new(0),
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_attempts: AtomicUsize::new(0),
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_retry_paused: AtomicBool::new(false),
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_failure_entered: tokio::sync::Notify::new(),
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_failure_release: tokio::sync::Notify::new(),
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_completed: tokio::sync::Notify::new(),
-        #[cfg(any(test, feature = "test-support"))]
         task_completed: tokio::sync::Notify::new(),
-    });
+    })
+}
+
+async fn serve_async_listener(
+    listener: AsyncLocalListener,
+    facade: DaemonApplicationFacade,
+) -> DtoResult<()> {
+    let host = new_host(facade);
     loop {
         let connection = listener.accept().await?;
         let host = Arc::clone(&host);
@@ -1191,9 +975,9 @@ fn dispatch_request(
         ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(subscription)) => {
             ProtocolResponsePayloadDto::Subscription(host.facade.subscribe(*subscription))
         }
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(command)) => {
+        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::InterruptRun(command)) => {
             let result = host
-                .stop_run(command.session_id(), command.run_id())
+                .interrupt_run(command.session_id(), command.run_id())
                 .map(|result| {
                     ProtocolCommandResultDto::Accepted(ProtocolAcceptedDto::with_result(
                         CorrelationIdDto::new(),
@@ -1302,28 +1086,7 @@ pub async fn serve_test_async_connection(
     connection: intention_transport::AsyncLocalDaemonConnection,
     facade: DaemonApplicationFacade,
 ) {
-    let host = Arc::new(HostState {
-        facade,
-        data: Mutex::new(HostData::default()),
-        publication_gate: Mutex::new(()),
-        #[cfg(any(test, feature = "test-support"))]
-        first_append_gate: None,
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_failures: AtomicUsize::new(0),
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_attempts: AtomicUsize::new(0),
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_retry_paused: AtomicBool::new(false),
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_failure_entered: tokio::sync::Notify::new(),
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_failure_release: tokio::sync::Notify::new(),
-        #[cfg(any(test, feature = "test-support"))]
-        terminalizer_completed: tokio::sync::Notify::new(),
-        #[cfg(any(test, feature = "test-support"))]
-        task_completed: tokio::sync::Notify::new(),
-    });
-    serve_async_connection(connection, host).await;
+    serve_async_connection(connection, new_host(facade)).await;
 }
 
 /// Serves a bounded number of fixture connections through one shared host.
@@ -1337,54 +1100,7 @@ pub async fn serve_test_async_listener(
     facade: DaemonApplicationFacade,
     connection_count: usize,
 ) {
-    let host = Arc::new(HostState {
-        facade,
-        data: Mutex::new(HostData::default()),
-        publication_gate: Mutex::new(()),
-        first_append_gate: None,
-        terminalizer_failures: AtomicUsize::new(0),
-        terminalizer_attempts: AtomicUsize::new(0),
-        terminalizer_retry_paused: AtomicBool::new(false),
-        terminalizer_failure_entered: tokio::sync::Notify::new(),
-        terminalizer_failure_release: tokio::sync::Notify::new(),
-        terminalizer_completed: tokio::sync::Notify::new(),
-        #[cfg(any(test, feature = "test-support"))]
-        task_completed: tokio::sync::Notify::new(),
-    });
-    for _ in 0..connection_count {
-        let Ok(connection) = listener.accept().await else {
-            return;
-        };
-        let host = Arc::clone(&host);
-        tokio::spawn(async move {
-            serve_async_connection(connection, host).await;
-        });
-    }
-}
-
-/// Serves bounded fixture connections with a deterministic first-append gate.
-#[cfg(any(test, feature = "test-support"))]
-#[doc(hidden)]
-pub async fn serve_test_async_listener_with_first_append_gate(
-    listener: AsyncLocalListener,
-    facade: DaemonApplicationFacade,
-    connection_count: usize,
-    first_append_gate: Arc<dyn ModelRunFirstAppendGate>,
-) {
-    let host = Arc::new(HostState {
-        facade,
-        data: Mutex::new(HostData::default()),
-        publication_gate: Mutex::new(()),
-        first_append_gate: Some(first_append_gate),
-        terminalizer_failures: AtomicUsize::new(0),
-        terminalizer_attempts: AtomicUsize::new(0),
-        terminalizer_retry_paused: AtomicBool::new(false),
-        terminalizer_failure_entered: tokio::sync::Notify::new(),
-        terminalizer_failure_release: tokio::sync::Notify::new(),
-        terminalizer_completed: tokio::sync::Notify::new(),
-        #[cfg(any(test, feature = "test-support"))]
-        task_completed: tokio::sync::Notify::new(),
-    });
+    let host = new_host(facade);
     for _ in 0..connection_count {
         let Ok(connection) = listener.accept().await else {
             return;
@@ -1415,20 +1131,7 @@ pub struct TestHostLifecycle {
 #[must_use]
 pub fn test_host_lifecycle(facade: DaemonApplicationFacade) -> TestHostLifecycle {
     TestHostLifecycle {
-        host: Arc::new(HostState {
-            facade,
-            data: Mutex::new(HostData::default()),
-            publication_gate: Mutex::new(()),
-            first_append_gate: None,
-            terminalizer_failures: AtomicUsize::new(0),
-            terminalizer_attempts: AtomicUsize::new(0),
-            terminalizer_retry_paused: AtomicBool::new(false),
-            terminalizer_failure_entered: tokio::sync::Notify::new(),
-            terminalizer_failure_release: tokio::sync::Notify::new(),
-            terminalizer_completed: tokio::sync::Notify::new(),
-            #[cfg(any(test, feature = "test-support"))]
-            task_completed: tokio::sync::Notify::new(),
-        }),
+        host: new_host(facade),
         connection_tasks: Arc::new(Mutex::new(Vec::new())),
     }
 }
@@ -1444,19 +1147,6 @@ impl TestHostLifecycle {
     #[must_use]
     pub fn task_count(&self) -> usize {
         self.host.data.lock().map_or(0, |data| data.tasks.len())
-    }
-
-    /// Makes the next exact cancellation terminalization fail before it is retried.
-    #[doc(hidden)]
-    pub fn inject_terminalizer_failure_once(&self) {
-        self.host.inject_terminalizer_failure_once();
-    }
-
-    /// Returns terminalizer attempts made by this bounded fixture host.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn terminalizer_attempts(&self) -> usize {
-        self.host.terminalizer_attempts()
     }
 
     /// Waits until every currently registered fixture task has removed its entry.
@@ -1476,24 +1166,6 @@ impl TestHostLifecycle {
         self.host
             .wait_for_execution_completion((session_id, run_id))
             .await
-    }
-
-    /// Waits until the injected terminalizer failure has been observed.
-    #[doc(hidden)]
-    pub async fn wait_for_terminalizer_failure(&self) {
-        self.host.wait_for_terminalizer_failure().await;
-    }
-
-    /// Releases the deterministic retry after an injected terminalizer failure.
-    #[doc(hidden)]
-    pub fn release_terminalizer_retry(&self) {
-        self.host.release_terminalizer_retry();
-    }
-
-    /// Waits for a terminalizer to prove a terminal reread and clean its registry entry.
-    #[doc(hidden)]
-    pub async fn wait_for_terminalizer_completion(&self) {
-        self.host.wait_for_terminalizer_completion().await;
     }
 
     /// Serves exactly `connection_count` fixture peers through this host.
@@ -1881,13 +1553,17 @@ mod tests {
             1
         );
 
+        // An interrupt that arrives before admission is accepted without a
+        // registered task, so it reaches no in-flight operation and the run
+        // stays starting and untouched.
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
         let (session_id, run_id) = create_and_start(&facade);
         let host = host_for_test(facade);
-        host.facade
-            .stop_run_for_daemon_host(session_id, run_id)
-            .expect("fixture run becomes cancelling");
-        host.schedule_if_starting(session_id, run_id);
+        assert!(matches!(
+            host.interrupt_run(session_id, run_id),
+            Ok(ProtocolAcceptedResultDto::InterruptRun(value))
+                if value.session_id() == session_id && value.run_id() == run_id
+        ));
         assert!(
             host.data
                 .lock()
@@ -1898,15 +1574,15 @@ mod tests {
         assert_eq!(
             host.facade
                 .load_current_run_snapshot_for_daemon(session_id, run_id)
-                .expect("cancelling run replay reads")
+                .expect("starting run replay reads")
                 .run_projection()
                 .status(),
-            RunStatusDto::Cancelling
+            RunStatusDto::Starting
         );
     }
 
     #[tokio::test]
-    async fn host_stop_signals_the_registered_task_and_executor_owns_cancelled_terminal_state() {
+    async fn host_interrupt_signals_the_registered_task_and_the_run_stays_active() {
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(PendingDriver));
         let (session_id, run_id) = create_and_start(&facade);
         let host = host_for_test(facade.clone());
@@ -1923,6 +1599,51 @@ mod tests {
             }
             tokio::task::yield_now().await;
         }
+        let signal = host
+            .data
+            .lock()
+            .expect("host registry remains available")
+            .tasks
+            .get(&(session_id, run_id))
+            .cloned()
+            .expect("the admitted run registers its execution signal");
+        // Wait until the pending provider stream is the run's live operation.
+        for _ in 0..20 {
+            if facade
+                .load_current_run_snapshot_for_daemon(session_id, run_id)
+                .expect("run replay reads")
+                .run_projection()
+                .status()
+                == RunStatusDto::Running
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        host.interrupt_run(session_id, run_id)
+            .expect("host interrupt commits and signals");
+        for _ in 0..20 {
+            if signal.is_cancelled() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(signal.is_cancelled());
+
+        // The interrupt ends the in-flight round with a notice; the run stays
+        // active and its execution task keeps the continuation alive.
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            facade
+                .load_current_run_snapshot_for_daemon(session_id, run_id)
+                .expect("interrupted run replay reads")
+                .run_projection()
+                .status(),
+            RunStatusDto::Running
+        );
         assert!(
             host.data
                 .lock()
@@ -1930,35 +1651,10 @@ mod tests {
                 .tasks
                 .contains_key(&(session_id, run_id))
         );
-        host.stop_run(session_id, run_id)
-            .expect("host stop commits and signals");
-        for _ in 0..20 {
-            if facade
-                .load_current_run_snapshot_for_daemon(session_id, run_id)
-                .expect("run replay reads")
-                .run_projection()
-                .status()
-                == RunStatusDto::Cancelled
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
+        for task in host.abort_test_execution_tasks() {
+            task.abort();
+            let _ = task.await;
         }
-        assert_eq!(
-            facade
-                .load_current_run_snapshot_for_daemon(session_id, run_id)
-                .expect("cancelled run replay reads")
-                .run_projection()
-                .status(),
-            RunStatusDto::Cancelled
-        );
-        assert!(
-            host.data
-                .lock()
-                .expect("host registry remains available")
-                .tasks
-                .is_empty()
-        );
     }
 
     #[tokio::test]

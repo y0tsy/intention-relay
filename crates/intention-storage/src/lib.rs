@@ -10,13 +10,13 @@
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, ModelRunFactInputDto, RemoveQueuedTurnCommandDto,
-    RunEventCursorDto, RunEventTailPageDto, RunProjectionDto, RunSnapshotDto, RunStatusDto,
-    SessionProjectionDto,
+    CreateSessionCommandDto, DomainEventDto, ModelRunFactDto, ModelRunFactInputDto,
+    RemoveTurnCommandDto, RunEventCursorDto, RunEventTailPageDto, RunProjectionDto, RunSnapshotDto,
+    RunStatusDto, SessionProjectionDto,
 };
 use intention_types::{
-    ConfigRevisionId, DtoResult, ErrorDto, EventEnvelopeDto, QueuePositionDto, RunId,
-    SessionEventSequenceDto, SessionId, TimestampDto, ToolCallId, TurnId,
+    ConfigRevisionId, DtoResult, ErrorDto, EventEnvelopeDto, RunId, SessionEventSequenceDto,
+    SessionId, TimestampDto, ToolCallId, TurnId,
 };
 
 /// Inputs required to create one durable session at an explicit event time.
@@ -336,16 +336,16 @@ impl AcceptUserTurnInputDto {
     }
 }
 
-/// Inputs required to remove a queued turn at an explicit event time.
+/// Inputs required to remove a pending turn at an explicit event time.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RemoveQueuedTurnInputDto {
-    command: RemoveQueuedTurnCommandDto,
+pub struct RemoveTurnInputDto {
+    command: RemoveTurnCommandDto,
     occurred_at: TimestampDto,
 }
-impl RemoveQueuedTurnInputDto {
-    /// Creates typed queued-turn removal storage input.
+impl RemoveTurnInputDto {
+    /// Creates typed pending-turn removal storage input.
     #[must_use]
-    pub const fn new(command: RemoveQueuedTurnCommandDto, occurred_at: TimestampDto) -> Self {
+    pub const fn new(command: RemoveTurnCommandDto, occurred_at: TimestampDto) -> Self {
         Self {
             command,
             occurred_at,
@@ -353,13 +353,103 @@ impl RemoveQueuedTurnInputDto {
     }
     /// Returns the typed removal command.
     #[must_use]
-    pub const fn command(self) -> RemoveQueuedTurnCommandDto {
+    pub const fn command(self) -> RemoveTurnCommandDto {
         self.command
     }
     /// Returns the externally selected durable event time.
     #[must_use]
     pub const fn occurred_at(self) -> TimestampDto {
         self.occurred_at
+    }
+}
+
+/// Inputs required to append every pending user turn to one active run context.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AppendPendingUserTurnsInputDto {
+    session_id: SessionId,
+    run_id: RunId,
+    expected_cursor: RunEventCursorDto,
+    occurred_at: TimestampDto,
+}
+
+impl AppendPendingUserTurnsInputDto {
+    /// Creates an explicit pending-message append request for one exact run cursor.
+    #[must_use]
+    pub const fn new(
+        session_id: SessionId,
+        run_id: RunId,
+        expected_cursor: RunEventCursorDto,
+        occurred_at: TimestampDto,
+    ) -> Self {
+        Self {
+            session_id,
+            run_id,
+            expected_cursor,
+            occurred_at,
+        }
+    }
+
+    /// Returns the owning session identity.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the target active run identity.
+    #[must_use]
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
+    }
+
+    /// Returns the required current run cursor before appending.
+    #[must_use]
+    pub const fn expected_cursor(&self) -> RunEventCursorDto {
+        self.expected_cursor
+    }
+
+    /// Returns the selected durable fact timestamp.
+    #[must_use]
+    pub const fn occurred_at(&self) -> TimestampDto {
+        self.occurred_at
+    }
+}
+
+/// Evidence that every pending user turn joined one run context atomically.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppendPendingUserTurnsOutcomeDto {
+    cursor: RunEventCursorDto,
+    facts: Vec<ModelRunFactDto>,
+}
+
+impl AppendPendingUserTurnsOutcomeDto {
+    /// Creates coherent pending-message append evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the facts do not end at the outcome cursor.
+    pub fn new(cursor: RunEventCursorDto, facts: Vec<ModelRunFactDto>) -> DtoResult<Self> {
+        if facts
+            .last()
+            .is_some_and(|fact| fact.cursor().value() != cursor.value())
+        {
+            return Err(ErrorDto::validation(
+                "invalid_run_event_cursor",
+                "pending user message append must end at its outcome cursor",
+            ));
+        }
+        Ok(Self { cursor, facts })
+    }
+
+    /// Returns the resulting current run cursor.
+    #[must_use]
+    pub const fn cursor(&self) -> RunEventCursorDto {
+        self.cursor
+    }
+
+    /// Returns the appended user-message facts in FIFO order.
+    #[must_use]
+    pub fn facts(&self) -> &[ModelRunFactDto] {
+        &self.facts
     }
 }
 
@@ -578,8 +668,8 @@ impl RecoverUnfinishedRunsInputDto {
 pub enum AcceptedTurnOutcomeDto {
     /// The turn began a newly created run with its mandatory configuration revision.
     Started(RunProjectionDto),
-    /// The turn was retained behind active work at this stable never-reused queue ticket.
-    Queued(QueuePositionDto),
+    /// The turn is a pending message that joins the active run context.
+    Pending,
 }
 
 /// Immutable semantic evidence that one state change committed atomically.
@@ -810,7 +900,7 @@ pub trait StorageRepositoryDto {
     /// cannot be committed, or an unavailable error when durable storage fails.
     fn create_session(&self, input: CreateSessionInputDto) -> DtoResult<CommittedChangeDto>;
 
-    /// Accepts a turn and atomically records whether it starts or queues durably.
+    /// Accepts a turn and atomically records whether it starts a run or becomes a pending message.
     ///
     /// # Errors
     ///
@@ -818,21 +908,37 @@ pub trait StorageRepositoryDto {
     /// be accepted for its session, or an unavailable error when storage fails.
     fn accept_user_turn(&self, input: AcceptUserTurnInputDto) -> DtoResult<CommittedChangeDto>;
 
-    /// Removes an unstarted queued turn.
+    /// Removes a not-yet-seen pending turn.
     ///
     /// # Errors
     ///
-    /// Returns a not-found or conflict error when the queued turn cannot be
+    /// Returns a not-found or conflict error when the pending turn cannot be
     /// removed, or an unavailable error when durable storage fails.
-    fn remove_queued_turn(&self, input: RemoveQueuedTurnInputDto) -> DtoResult<CommittedChangeDto>;
+    fn remove_turn(&self, input: RemoveTurnInputDto) -> DtoResult<CommittedChangeDto>;
 
-    /// Transitions a run and atomically promotes the oldest queued turn after every terminal transition.
+    /// Transitions a run to one declared successor status.
     ///
     /// # Errors
     ///
     /// Returns a validation, not-found, or conflict error when the transition
-    /// or promotion is invalid, or an unavailable error when storage fails.
+    /// is invalid, or an unavailable error when storage fails.
     fn transition_run(&self, input: TransitionRunInputDto) -> DtoResult<CommittedChangeDto>;
+
+    /// Atomically appends every pending user turn to one active run context in FIFO order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation, conflict, not-found, or unavailable error when the
+    /// scoped run cannot append its pending messages atomically.
+    fn append_pending_user_turns(
+        &self,
+        _input: AppendPendingUserTurnsInputDto,
+    ) -> DtoResult<AppendPendingUserTurnsOutcomeDto> {
+        Err(ErrorDto::unavailable(
+            "pending_user_turns_unavailable",
+            "pending user message storage is unavailable",
+        ))
+    }
 
     /// Appends typed durable model facts using an exact expected run cursor and optional status transition.
     ///

@@ -1,10 +1,18 @@
-use crate::{GlobInput, GrepInput, ToolResult};
+use crate::{CancellationSignal, ExecutedOutcome, GlobInput, GrepInput};
 use intention_types::DtoResult;
 use intention_workspace::WorkspaceRoot;
 
-pub fn glob(root: &WorkspaceRoot, input: GlobInput) -> DtoResult<ToolResult> {
-    super::glob_tool(root, input)
+pub fn glob(
+    root: &WorkspaceRoot,
+    input: GlobInput,
+    cancellation: &CancellationSignal,
+) -> DtoResult<ExecutedOutcome> {
+    super::glob_tool(root, input, cancellation)
 }
-pub fn grep(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
-    super::grep_tool(root, input)
+pub fn grep(
+    root: &WorkspaceRoot,
+    input: GrepInput,
+    cancellation: &CancellationSignal,
+) -> DtoResult<ExecutedOutcome> {
+    super::grep_tool(root, input, cancellation)
 }

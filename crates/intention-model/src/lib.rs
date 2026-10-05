@@ -1054,6 +1054,15 @@ impl ModelCancellationSignal {
         }
     }
 
+    /// Clears a cancellation request so the same run can observe the next one.
+    ///
+    /// An interrupt ends one in-flight operation and the run continues; the
+    /// executor that handled the interruption resets the signal, so a later
+    /// interrupt reaches the same shared signal again.
+    pub fn reset(&self) {
+        self.state.cancelled.store(false, Ordering::Release);
+    }
+
     /// Returns a fresh independently awaitable future that completes on cancellation.
     #[must_use]
     pub fn cancelled(&self) -> ModelCancelledFuture {

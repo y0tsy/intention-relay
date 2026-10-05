@@ -610,6 +610,77 @@ fn dispatch_reports_precise_errors_and_process_output_paths() {
 }
 
 #[test]
+fn a_stopped_tool_never_starts_its_effect_and_keeps_partial_results() {
+    let root_dir = fixture_dir("stop-effects");
+    let root = root_dir.path();
+    std::fs::write(root.join("file.txt"), "original").expect("seed");
+    let workspace = intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
+    )
+    .expect("workspace root");
+    let service = ToolService::new(workspace);
+    let stopped = || ToolDispatchOutcome::Interrupted {
+        cause: InterruptCause::Stopped,
+        partial: None,
+    };
+
+    // Write and edit report the stop instead of touching the file.
+    let write = service
+        .dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Write(WriteInput {
+                path: WorkspaceRelativePathDto::parse("file.txt").expect("path"),
+                content: BoundedText::new("replacement").expect("content"),
+                expected_content: None,
+            }),
+            CancellationSignal::cancelled(),
+        )
+        .expect("a stopped write is an outcome, not an error");
+    assert_eq!(write, stopped());
+    let edit = service
+        .dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Edit(EditInput {
+                path: WorkspaceRelativePathDto::parse("file.txt").expect("path"),
+                old: BoundedText::new("original").expect("old"),
+                new: BoundedText::new("replacement").expect("new"),
+                expected_content: None,
+            }),
+            CancellationSignal::cancelled(),
+        )
+        .expect("a stopped edit is an outcome, not an error");
+    assert_eq!(edit, stopped());
+    assert_eq!(
+        std::fs::read_to_string(root.join("file.txt")).expect("file survives untouched"),
+        "original"
+    );
+
+    // The search tools report the stop without collecting results.
+    let glob = service
+        .dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Glob(GlobInput {
+                pattern: BoundedText::new("**/*.txt").expect("pattern"),
+            }),
+            CancellationSignal::cancelled(),
+        )
+        .expect("a stopped glob is an outcome, not an error");
+    assert_eq!(glob, stopped());
+    let grep = service
+        .dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Grep(GrepInput {
+                pattern: BoundedText::new("original").expect("pattern"),
+                path: None,
+                scope: None,
+            }),
+            CancellationSignal::cancelled(),
+        )
+        .expect("a stopped grep is an outcome, not an error");
+    assert_eq!(grep, stopped());
+}
+
+#[test]
 fn execute_returns_stdout_stderr_and_truncation_metadata() {
     let root_dir = fixture_dir("execute-output");
     let workspace = intention_workspace::WorkspaceRoot::resolve(

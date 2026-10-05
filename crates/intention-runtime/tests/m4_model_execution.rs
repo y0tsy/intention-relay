@@ -106,7 +106,8 @@ struct FakeRepository {
     transitions: RefCell<Vec<TransitionRunInputDto>>,
     config_error: RefCell<Option<ErrorDto>>,
     append_failure: RefCell<Option<ErrorDto>>,
-    cancel_before_first_append: RefCell<bool>,
+    /// Fails exactly the append whose expected cursor matches this entry.
+    append_failure_at: RefCell<Option<(u64, ErrorDto)>>,
     transition_failure: RefCell<Option<(RunStatusDto, ErrorDto)>>,
 }
 
@@ -122,7 +123,7 @@ impl FakeRepository {
             transitions: RefCell::new(Vec::new()),
             config_error: RefCell::new(None),
             append_failure: RefCell::new(None),
-            cancel_before_first_append: RefCell::new(false),
+            append_failure_at: RefCell::new(None),
             transition_failure: RefCell::new(None),
         }
     }
@@ -166,9 +167,9 @@ impl StorageRepositoryDto for FakeRepository {
         Err(ErrorDto::unavailable("fixture_unused", "unused"))
     }
 
-    fn remove_queued_turn(
+    fn remove_turn(
         &self,
-        _input: intention_storage::RemoveQueuedTurnInputDto,
+        _input: intention_storage::RemoveTurnInputDto,
     ) -> DtoResult<CommittedChangeDto> {
         Err(ErrorDto::unavailable("fixture_unused", "unused"))
     }
@@ -216,26 +217,21 @@ impl StorageRepositoryDto for FakeRepository {
         &self,
         input: AppendModelRunFactsInputDto,
     ) -> DtoResult<AppendModelRunFactsOutcomeDto> {
-        if self.cancel_before_first_append.replace(false) {
-            // This is the deterministic scheduling barrier: execution has read
-            // Starting, then the host's StopRun commit wins immediately before
-            // the first transition-to-Running append.
-            *self.status.borrow_mut() = RunStatusDto::Cancelling;
-            self.transitions
-                .borrow_mut()
-                .push(TransitionRunInputDto::new(
-                    self.session_id,
-                    self.run_id,
-                    RunStatusDto::Cancelling,
-                    time(2),
-                ));
-            return Err(ErrorDto::unavailable(
-                "run_status_changed",
-                "the run changed while execution was being admitted",
-            ));
-        }
         if let Some(error) = self.append_failure.borrow_mut().take() {
             return Err(error);
+        }
+        if self
+            .append_failure_at
+            .borrow()
+            .as_ref()
+            .is_some_and(|(cursor, _)| *cursor == input.expected_cursor().value())
+        {
+            return Err(self
+                .append_failure_at
+                .borrow_mut()
+                .take()
+                .expect("configured append failure exists")
+                .1);
         }
         assert_eq!(input.session_id(), self.session_id);
         assert_eq!(input.run_id(), self.run_id);
@@ -257,6 +253,16 @@ impl StorageRepositoryDto for FakeRepository {
         *self.cursor.borrow_mut() = cursor;
         self.appends.borrow_mut().push(input);
         AppendModelRunFactsOutcomeDto::new(cursor, self.run_snapshot(status, cursor), facts)
+    }
+
+    fn append_pending_user_turns(
+        &self,
+        input: intention_storage::AppendPendingUserTurnsInputDto,
+    ) -> DtoResult<intention_storage::AppendPendingUserTurnsOutcomeDto> {
+        assert_eq!(input.session_id(), self.session_id);
+        assert_eq!(input.run_id(), self.run_id);
+        assert_eq!(input.expected_cursor(), *self.cursor.borrow());
+        intention_storage::AppendPendingUserTurnsOutcomeDto::new(*self.cursor.borrow(), Vec::new())
     }
 
     fn load_run_config_snapshot(
@@ -321,7 +327,9 @@ struct ScriptedDriver {
     preflight_error: Option<ErrorDto>,
     events: RefCell<Vec<Vec<Result<ModelEventDto, ProviderErrorDto>>>>,
     executions: RefCell<usize>,
-    cancel_during_stream: Option<ModelCancellationSignal>,
+    requests: RefCell<Vec<ModelRequestDto>>,
+    /// Cancels the shared signal after the given event index of the first round.
+    cancel_during_stream: Option<(usize, ModelCancellationSignal)>,
     pending_stream: bool,
 }
 
@@ -331,8 +339,16 @@ impl ScriptedDriver {
             preflight_error: None,
             events: RefCell::new(vec![events]),
             executions: RefCell::new(0),
+            requests: RefCell::new(Vec::new()),
             cancel_during_stream: None,
             pending_stream: false,
+        }
+    }
+
+    fn with_rounds(rounds: Vec<Vec<Result<ModelEventDto, ProviderErrorDto>>>) -> Self {
+        Self {
+            events: RefCell::new(rounds),
+            ..Self::new(Vec::new())
         }
     }
 }
@@ -350,17 +366,31 @@ impl ModelDriver for ScriptedDriver {
 impl ModelExecutionDriver for ScriptedDriver {
     fn execute(
         &self,
-        _request: ModelRequestDto,
+        request: ModelRequestDto,
         _cancellation: ModelCancellationSignal,
     ) -> ModelEventStream {
-        *self.executions.borrow_mut() += 1;
+        let execution = {
+            let mut count = self.executions.borrow_mut();
+            *count += 1;
+            *count
+        };
+        self.requests.borrow_mut().push(request);
         if self.pending_stream {
             return Box::pin(stream::pending());
         }
         let events = self.events.borrow_mut().remove(0);
-        if let Some(signal) = &self.cancel_during_stream {
+        if execution == 1
+            && let Some((index, signal)) = &self.cancel_during_stream
+        {
             let signal = signal.clone();
-            return Box::pin(stream::iter(events).inspect(move |_| signal.cancel()));
+            let index = *index;
+            let mut seen = 0usize;
+            return Box::pin(stream::iter(events).inspect(move |_| {
+                if seen == index {
+                    signal.cancel();
+                }
+                seen += 1;
+            }));
         }
         Box::pin(stream::iter(events))
     }
@@ -702,17 +732,32 @@ fn malformed_provider_and_eof_streams_safely_fail_without_invalid_facts() {
 }
 
 #[test]
-fn direct_cancellation_suppresses_late_events_and_completes_cancelling() {
+fn interruption_records_a_notice_and_continues_the_same_run() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let signal = ModelCancellationSignal::new();
-    let mut driver = ScriptedDriver::new(vec![
-        Ok(ModelEventDto::started()),
-        Ok(ModelEventDto::text_delta("late").expect("text is valid")),
-    ]);
-    driver.cancel_during_stream = Some(signal.clone());
+    let driver = ScriptedDriver {
+        preflight_error: None,
+        events: RefCell::new(vec![
+            vec![
+                Ok(ModelEventDto::started()),
+                Ok(ModelEventDto::text_delta("partial answer").expect("text is valid")),
+            ],
+            vec![
+                Ok(ModelEventDto::started()),
+                Ok(ModelEventDto::text_delta("final answer").expect("text is valid")),
+                Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+            ],
+        ]),
+        executions: RefCell::new(0),
+        requests: RefCell::new(Vec::new()),
+        // The interrupt is requested while the first provider stream is live,
+        // after its partial text was delivered.
+        cancel_during_stream: Some((1, signal.clone())),
+        pending_stream: false,
+    };
     let outcome = execute(
         &repository,
         &driver,
@@ -720,18 +765,34 @@ fn direct_cancellation_suppresses_late_events_and_completes_cancelling() {
         config,
         signal,
     )
-    .expect("cancellation commits");
-    assert_eq!(
+    .expect("the interrupted run continues and completes");
+    assert!(matches!(
         outcome,
-        ModelRunExecutionOutcomeDto::Cancelled {
-            cursor: RunEventCursorDto::new(1)
-        }
-    );
-    assert!(repository.appends.borrow().iter().all(|input| {
-        !input
-            .facts()
-            .iter()
-            .any(|fact| matches!(fact, ModelRunFactInputDto::AssistantContentAppended { .. }))
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
+    assert_eq!(*driver.executions.borrow(), 2);
+    let appends = repository.appends.borrow();
+    let facts = appends
+        .iter()
+        .flat_map(|input| input.facts())
+        .collect::<Vec<_>>();
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        ModelRunFactInputDto::AssistantContentAppended { content, .. }
+            if content == "partial answer"
+    )));
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        ModelRunFactInputDto::InterruptNoticeRecorded { content }
+            if content == intention_runtime::INTERRUPT_NOTICE
+    )));
+    // The continuation request carries the notice, so the model knows its
+    // previous call was stopped before a final result.
+    let requests = driver.requests.borrow();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].messages().iter().any(|message| {
+        message.role() == ModelRoleDto::Notice
+            && message.content() == intention_runtime::INTERRUPT_NOTICE
     }));
     let transitions = repository.transitions.borrow();
     assert_eq!(
@@ -739,45 +800,95 @@ fn direct_cancellation_suppresses_late_events_and_completes_cancelling() {
             .iter()
             .map(TransitionRunInputDto::status)
             .collect::<Vec<_>>(),
-        vec![RunStatusDto::Cancelling, RunStatusDto::Cancelled]
+        vec![RunStatusDto::Completed]
     );
+    drop(transitions);
+    assert_eq!(appends[0].status(), Some(RunStatusDto::Running));
 }
 
 #[test]
-fn stop_between_initial_replay_and_first_append_is_terminalized_by_the_task() {
+fn an_interrupt_before_the_first_round_still_records_a_notice_and_continues() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
-    *repository.cancel_before_first_append.borrow_mut() = true;
-    let driver = ScriptedDriver::new(vec![Ok(ModelEventDto::started())]);
+    let signal = ModelCancellationSignal::new();
+    signal.cancel();
+    let driver = ScriptedDriver::with_rounds(vec![
+        Vec::new(),
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
 
     let outcome = execute(
         &repository,
         &driver,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        signal,
     )
-    .expect("the task resolves the durable cancellation race");
+    .expect("a pre-requested interrupt is handled and the run continues");
 
-    assert_eq!(
+    assert!(matches!(
         outcome,
-        ModelRunExecutionOutcomeDto::Cancelled {
-            cursor: RunEventCursorDto::new(0)
-        }
-    );
-    assert_eq!(*driver.executions.borrow(), 0);
-    assert!(repository.appends.borrow().is_empty());
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
     assert_eq!(
-        repository
-            .transitions
-            .borrow()
-            .iter()
-            .map(TransitionRunInputDto::status)
-            .collect::<Vec<_>>(),
-        vec![RunStatusDto::Cancelling, RunStatusDto::Cancelled]
+        *driver.executions.borrow(),
+        2,
+        "the interrupted round is followed by the next provider step"
     );
+    let appends = repository.appends.borrow();
+    assert!(matches!(
+        appends[1].facts(),
+        [ModelRunFactInputDto::InterruptNoticeRecorded { .. }]
+    ));
+    assert!(matches!(
+        appends.last().expect("finished append").facts(),
+        [ModelRunFactInputDto::Finished { .. }]
+    ));
+}
+
+#[test]
+fn an_interrupt_whose_notice_cannot_commit_surfaces_the_storage_error() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let signal = ModelCancellationSignal::new();
+    // The attempt-start append commits at cursor 0; the interruption notice
+    // append then fails at cursor 1.
+    *repository.append_failure_at.borrow_mut() = Some((
+        1,
+        ErrorDto::unavailable(
+            "fixture_notice_unavailable",
+            "the interrupt notice could not be stored",
+        ),
+    ));
+    let driver = ScriptedDriver {
+        preflight_error: None,
+        events: RefCell::new(vec![vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::text_delta("late").expect("text is valid")),
+        ]]),
+        executions: RefCell::new(0),
+        requests: RefCell::new(Vec::new()),
+        cancel_during_stream: Some((0, signal.clone())),
+        pending_stream: false,
+    };
+
+    let error = execute(
+        &repository,
+        &driver,
+        request(run_id, "fixture"),
+        config,
+        signal,
+    )
+    .expect_err("an uncommittable notice is a typed error, never a silent stop");
+    assert_eq!(error.code(), "fixture_notice_unavailable");
+    assert_eq!(*driver.executions.borrow(), 1);
 }
 
 #[test]
@@ -801,6 +912,7 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
             ],
         ]),
         executions: RefCell::new(0),
+        requests: RefCell::new(Vec::new()),
         cancel_during_stream: None,
         pending_stream: false,
     };
@@ -1031,6 +1143,7 @@ fn exhausted_retryable_failure_stops_after_second_attempt() {
             .expect("error is valid"))],
         ]),
         executions: RefCell::new(0),
+        requests: RefCell::new(Vec::new()),
         cancel_during_stream: None,
         pending_stream: false,
     };
@@ -1085,6 +1198,7 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
         preflight_error: None,
         events: RefCell::new(Vec::new()),
         executions: RefCell::new(0),
+        requests: RefCell::new(Vec::new()),
         cancel_during_stream: None,
         pending_stream: true,
     };
@@ -1136,18 +1250,32 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
 }
 
 #[test]
-fn cancellation_completion_failure_becomes_durable_failure() {
+fn an_interrupt_during_a_retry_wait_records_a_notice_and_starts_the_next_attempt() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
-    *repository.transition_failure.borrow_mut() = Some((
-        RunStatusDto::Cancelled,
-        ErrorDto::unavailable("cancelled_transition_failed", "cancelled transition failed"),
-    ));
-    let driver = ScriptedDriver::new(Vec::new());
     let signal = ModelCancellationSignal::new();
-    signal.cancel();
+    let driver = ScriptedDriver {
+        preflight_error: None,
+        events: RefCell::new(vec![
+            vec![Err(ProviderErrorDto::unavailable(
+                "provider_down",
+                true,
+                None,
+            )
+            .expect("error is valid"))],
+            vec![
+                Ok(ModelEventDto::started()),
+                Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+            ],
+        ]),
+        executions: RefCell::new(0),
+        requests: RefCell::new(Vec::new()),
+        // The interrupt lands while the first attempt's retry delay is waiting.
+        cancel_during_stream: Some((0, signal.clone())),
+        pending_stream: false,
+    };
 
     let outcome = execute(
         &repository,
@@ -1156,27 +1284,35 @@ fn cancellation_completion_failure_becomes_durable_failure() {
         config,
         signal,
     )
-    .expect("failed final cancellation is recorded as a safe failure");
+    .expect("the interruption during the retry wait continues the run");
 
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Failed {
-            cursor: RunEventCursorDto::new(1)
-        }
-    );
-    assert_eq!(*driver.executions.borrow(), 0);
     assert!(matches!(
-        repository.appends.borrow()[0].facts(),
-        [ModelRunFactInputDto::Failed { failure }]
-            if failure.code() == "provider_cancellation_failed"
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed { .. }
     ));
+    assert_eq!(*driver.executions.borrow(), 2);
+    let appends = repository.appends.borrow();
+    let facts = appends
+        .iter()
+        .flat_map(|input| input.facts())
+        .collect::<Vec<_>>();
+    assert!(
+        facts
+            .iter()
+            .any(|fact| matches!(fact, ModelRunFactInputDto::InterruptNoticeRecorded { .. }))
+    );
+    let requests = driver.requests.borrow();
+    assert!(requests[1].messages().iter().any(|message| {
+        message.role() == ModelRoleDto::Notice
+            && message.content() == intention_runtime::INTERRUPT_NOTICE
+    }));
+    drop(requests);
+    let transitions = repository.transitions.borrow();
     assert_eq!(
-        repository
-            .transitions
-            .borrow()
+        transitions
             .iter()
             .map(TransitionRunInputDto::status)
             .collect::<Vec<_>>(),
-        vec![RunStatusDto::Cancelling]
+        vec![RunStatusDto::Completed]
     );
 }

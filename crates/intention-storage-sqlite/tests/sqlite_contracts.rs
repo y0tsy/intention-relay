@@ -7,13 +7,13 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, RemoveQueuedTurnCommandDto, RunModeDto, RunStatusDto,
+    CreateSessionCommandDto, DomainEventDto, RemoveTurnCommandDto, RunModeDto, RunStatusDto,
     ToolLifecycleEventDto, ToolLifecycleStatusDto, WorkspaceRootDto,
 };
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendToolLifecycleEventInputDto,
-    CreateSessionInputDto, RecoverUnfinishedRunsInputDto, RemoveQueuedTurnInputDto,
-    StorageRepositoryDto, ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
+    CreateSessionInputDto, RecoverUnfinishedRunsInputDto, RemoveTurnInputDto, StorageRepositoryDto,
+    ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_types::{
@@ -265,7 +265,6 @@ fn tool_lifecycle_rejects_invalid_initial_status_and_terminal_successor() {
 fn tool_lifecycle_guard_rejects_terminal_and_interrupted_runs_but_accepts_active_runs() {
     for status in [
         RunStatusDto::Completed,
-        RunStatusDto::Cancelled,
         RunStatusDto::Failed,
         RunStatusDto::Interrupted,
     ] {
@@ -273,16 +272,6 @@ fn tool_lifecycle_guard_rejects_terminal_and_interrupted_runs_but_accepts_active
         let session = create(&store);
         let run = RunId::new();
         accept(&store, session, TurnId::new(), run, "run");
-        if status == RunStatusDto::Cancelled {
-            store
-                .transition_run(TransitionRunInputDto::new(
-                    session,
-                    run,
-                    RunStatusDto::Cancelling,
-                    time(3),
-                ))
-                .expect("cancellation begins");
-        }
         if status == RunStatusDto::Completed {
             store
                 .transition_run(TransitionRunInputDto::new(
@@ -336,7 +325,7 @@ fn tool_lifecycle_guard_rejects_terminal_and_interrupted_runs_but_accepts_active
 }
 
 #[test]
-fn create_accept_queue_idempotence_removal_snapshots_and_tail_are_durable() {
+fn create_accept_pending_idempotence_removal_snapshots_and_tail_are_durable() {
     let (_directory, store) = repository();
     let session = create(&store);
     let first_turn = TurnId::new();
@@ -349,16 +338,18 @@ fn create_accept_queue_idempotence_removal_snapshots_and_tail_are_durable() {
 
     let second_turn = TurnId::new();
     let second_run = RunId::new();
-    let queued = accept(&store, session, second_turn, second_run, "second");
+    let pending = accept(&store, session, second_turn, second_run, "second");
     assert_eq!(
-        queued.turn_outcome(),
-        Some(AcceptedTurnOutcomeDto::Queued(
-            intention_types::QueuePositionDto::new(0)
-        ))
+        pending.turn_outcome(),
+        Some(AcceptedTurnOutcomeDto::Pending)
     );
     let retried = accept(&store, session, second_turn, second_run, "second");
     assert!(retried.events().is_empty());
-    assert_eq!(retried.position(), queued.position());
+    assert_eq!(retried.position(), pending.position());
+    assert_eq!(
+        retried.turn_outcome(),
+        Some(AcceptedTurnOutcomeDto::Pending)
+    );
     assert_eq!(
         store
             .accept_user_turn(
@@ -379,17 +370,17 @@ fn create_accept_queue_idempotence_removal_snapshots_and_tail_are_durable() {
     let snapshot_before = store
         .load_session_snapshot(session)
         .expect("snapshot loads");
-    assert_eq!(snapshot_before.queued_turns().len(), 1);
+    assert_eq!(snapshot_before.pending_turns().len(), 1);
     store
-        .remove_queued_turn(RemoveQueuedTurnInputDto::new(
-            RemoveQueuedTurnCommandDto::new(session, second_turn),
+        .remove_turn(RemoveTurnInputDto::new(
+            RemoveTurnCommandDto::new(session, second_turn),
             time(4),
         ))
-        .expect("queued turn removes");
+        .expect("pending turn removes");
     let projection = store
         .load_session_snapshot(session)
         .expect("snapshot loads");
-    assert!(projection.queued_turns().is_empty());
+    assert!(projection.pending_turns().is_empty());
     let tail = store
         .load_tail(session, SessionEventSequenceDto::new(0))
         .expect("full tail loads");
@@ -400,88 +391,70 @@ fn create_accept_queue_idempotence_removal_snapshots_and_tail_are_durable() {
 }
 
 #[test]
-fn terminal_transition_promotes_queue_and_recovery_promotes_oldest_queued_turn() {
+fn pending_messages_never_start_runs_and_recovery_interrupts_unfinished_work() {
     let (_directory, store) = repository();
     let session = create(&store);
     let active_run = RunId::new();
     accept(&store, session, TurnId::new(), active_run, "active");
-    let queued = [(TurnId::new(), RunId::new()), (TurnId::new(), RunId::new())];
-    for (turn_id, run_id) in queued {
-        accept(&store, session, turn_id, run_id, "queued");
+    let pending = [(TurnId::new(), RunId::new()), (TurnId::new(), RunId::new())];
+    for (turn_id, run_id) in pending {
+        let change = accept(&store, session, turn_id, run_id, "pending message");
+        assert_eq!(change.turn_outcome(), Some(AcceptedTurnOutcomeDto::Pending));
     }
 
     let recovered = store
         .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(time(5)))
-        .expect("recovery commits terminal interruption and promotion");
+        .expect("recovery interrupts the unfinished run");
     assert_eq!(recovered.len(), 1);
-    assert_eq!(recovered[0].events().len(), 2);
+    assert_eq!(recovered[0].events().len(), 1);
     let projection = store
         .load_session_snapshot(session)
         .expect("snapshot loads");
-    assert_eq!(
-        projection
-            .active_run()
-            .expect("oldest queue entry promotes")
-            .run_id(),
-        queued[0].1
-    );
-    assert_eq!(
-        projection
-            .active_run()
-            .expect("promoted run remains active")
-            .config_revision_id(),
-        snapshot().revision_id()
-    );
-    assert_eq!(projection.queued_turns().len(), 1);
-    assert_eq!(projection.queued_turns()[0].turn_id(), queued[1].0);
+    assert!(projection.active_run().is_none());
+    assert_eq!(projection.pending_turns().len(), 2);
+    assert_eq!(projection.pending_turns()[0].turn_id(), pending[0].0);
+    assert_eq!(projection.pending_turns()[1].turn_id(), pending[1].0);
     let tail = store
         .load_tail(session, SessionEventSequenceDto::new(0))
         .expect("tail loads");
     assert!(matches!(
-        tail[tail.len() - 2].payload(),
+        tail.last().expect("recovery event exists").payload(),
         intention_domain::DomainEventDto::RunStatusChanged(event)
             if event.status() == RunStatusDto::Interrupted
     ));
+
+    // The next accepted message finds an idle session with pending work: the
+    // oldest pending message starts the run and the new message stays pending.
+    let later_turn = TurnId::new();
+    let later = accept(&store, session, later_turn, RunId::new(), "later");
     assert!(
-        matches!(tail.last().expect("promoted run event exists").payload(), intention_domain::DomainEventDto::RunStarted(event) if event.run_id() == queued[0].1 && event.config_revision_id() == snapshot().revision_id())
-    );
-    let later = accept(&store, session, TurnId::new(), RunId::new(), "later");
-    assert_eq!(
-        later.turn_outcome(),
-        Some(AcceptedTurnOutcomeDto::Queued(
-            intention_types::QueuePositionDto::new(2)
-        ))
+        matches!(later.turn_outcome(), Some(AcceptedTurnOutcomeDto::Started(run)) if run.run_id() == pending[0].1)
     );
     let projection = store
         .load_session_snapshot(session)
         .expect("post-recovery snapshot loads");
-    assert_eq!(projection.queued_turns().len(), 2);
-    assert_eq!(projection.queued_turns()[0].turn_id(), queued[1].0);
+    assert_eq!(
+        projection
+            .active_run()
+            .expect("oldest pending message starts the run")
+            .run_id(),
+        pending[0].1
+    );
+    assert_eq!(projection.pending_turns().len(), 2);
+    assert_eq!(projection.pending_turns()[0].turn_id(), pending[1].0);
+    assert_eq!(projection.pending_turns()[1].turn_id(), later_turn);
 }
 
 #[test]
-fn every_terminal_transition_promotes_the_oldest_queued_turn() {
-    for status in [
-        RunStatusDto::Failed,
-        RunStatusDto::Interrupted,
-        RunStatusDto::Cancelled,
-    ] {
+fn every_terminal_transition_leaves_pending_messages_pending() {
+    for status in [RunStatusDto::Failed, RunStatusDto::Interrupted] {
         let (_directory, store) = repository();
         let session = create(&store);
         let active_run = RunId::new();
         accept(&store, session, TurnId::new(), active_run, "active");
-        let queued_run = RunId::new();
-        accept(&store, session, TurnId::new(), queued_run, "queued");
-        if status == RunStatusDto::Cancelled {
-            store
-                .transition_run(TransitionRunInputDto::new(
-                    session,
-                    active_run,
-                    RunStatusDto::Cancelling,
-                    time(3),
-                ))
-                .expect("cancellation begins before terminal state");
-        }
+        let pending_turn = TurnId::new();
+        let pending_run = RunId::new();
+        accept(&store, session, pending_turn, pending_run, "pending");
         store
             .transition_run(TransitionRunInputDto::new(
                 session,
@@ -489,42 +462,40 @@ fn every_terminal_transition_promotes_the_oldest_queued_turn() {
                 status,
                 time(4),
             ))
-            .expect("terminal transition promotes the queued turn");
-        assert_eq!(
-            store
-                .load_session_snapshot(session)
-                .expect("snapshot loads")
-                .active_run()
-                .expect("queued run promotes")
-                .run_id(),
-            queued_run
-        );
+            .expect("terminal transition commits");
+        let projection = store
+            .load_session_snapshot(session)
+            .expect("snapshot loads");
+        assert!(projection.active_run().is_none());
+        assert_eq!(projection.pending_turns().len(), 1);
+        assert_eq!(projection.pending_turns()[0].turn_id(), pending_turn);
+        assert_eq!(projection.pending_turns()[0].content(), "pending");
     }
 }
 
 #[test]
-fn terminal_promotion_retains_queued_run_identity_and_configuration_snapshot() {
+fn idle_admission_retains_the_oldest_pending_message_selection() {
     let (_directory, store) = repository();
     let session = create(&store);
     let active_run = RunId::new();
     accept(&store, session, TurnId::new(), active_run, "active");
-    let queued_turn = TurnId::new();
-    let queued_run = RunId::new();
+    let pending_turn = TurnId::new();
+    let pending_run = RunId::new();
     let revision_a = ConfigRevisionId::new();
     let config_a = snapshot_with_revision_and_model(revision_a, "fixture-a");
     store
         .accept_user_turn(
             AcceptUserTurnInputDto::new(
                 session,
-                queued_turn,
-                "queued",
-                queued_run,
+                pending_turn,
+                "pending",
+                pending_run,
                 config_a.clone(),
                 time(3),
             )
-            .expect("queued input is valid"),
+            .expect("pending input is valid"),
         )
-        .expect("turn queues");
+        .expect("turn becomes pending");
     let config_b = snapshot_with_revision_and_model(ConfigRevisionId::new(), "fixture-b");
     store
         .accept_configuration_revision(config_b)
@@ -536,17 +507,22 @@ fn terminal_promotion_retains_queued_run_identity_and_configuration_snapshot() {
             RunStatusDto::Failed,
             time(4),
         ))
-        .expect("terminal transition promotes original queued selection");
+        .expect("terminal transition commits");
+    let later = accept(&store, session, TurnId::new(), RunId::new(), "later");
+    assert!(
+        matches!(later.turn_outcome(), Some(AcceptedTurnOutcomeDto::Started(run)) if run.run_id() == pending_run)
+    );
     let active = store
         .load_session_snapshot(session)
         .expect("snapshot loads")
         .active_run()
-        .expect("queued run promoted");
-    assert_eq!(active.run_id(), queued_run);
+        .expect("oldest pending message starts the run");
+    assert_eq!(active.run_id(), pending_run);
+    assert_eq!(active.turn_id(), pending_turn);
     assert_eq!(active.config_revision_id(), revision_a);
     store
         .accept_configuration_revision(config_a)
-        .expect("queued snapshot remains canonical and unmodified");
+        .expect("pending snapshot remains canonical and unmodified");
 }
 
 #[test]
@@ -740,7 +716,7 @@ fn future_tail_positions_fail_before_sqlite_integer_conversion() {
 }
 
 #[test]
-fn direct_starting_to_cancelled_transition_is_rejected() {
+fn undeclared_terminal_successors_are_rejected() {
     let (_directory, store) = repository();
     let session = create(&store);
     let run = RunId::new();
@@ -750,22 +726,30 @@ fn direct_starting_to_cancelled_transition_is_rejected() {
             .transition_run(TransitionRunInputDto::new(
                 session,
                 run,
-                RunStatusDto::Cancelled,
+                RunStatusDto::Completed,
                 time(3),
             ))
-            .expect_err("direct cancellation bypasses the required cancelling state")
+            .expect_err("a starting run skips the completing state")
             .code(),
         "invalid_run_status_transition"
     );
 }
 
 #[test]
-fn queue_promotion_guard_rejects_a_new_run_ahead_of_durable_work() {
+fn an_inactive_session_admits_the_oldest_pending_message() {
     let (directory, store) = repository();
     let session = create(&store);
     let active_run = RunId::new();
     accept(&store, session, TurnId::new(), active_run, "active");
-    accept(&store, session, TurnId::new(), RunId::new(), "queued");
+    let pending_turn = TurnId::new();
+    let pending_run = RunId::new();
+    accept(
+        &store,
+        session,
+        pending_turn,
+        pending_run,
+        "pending message",
+    );
     let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
         .expect("fixture database reopens");
     connection
@@ -773,56 +757,58 @@ fn queue_promotion_guard_rejects_a_new_run_ahead_of_durable_work() {
             "UPDATE runs SET status='interrupted' WHERE run_id=?1",
             [active_run.to_string()],
         )
-        .expect("fixture simulates an inconsistent inactive queue state");
+        .expect("fixture simulates an idle session with pending work");
     drop(connection);
-    assert_eq!(
-        store
-            .accept_user_turn(
-                AcceptUserTurnInputDto::new(
-                    session,
-                    TurnId::new(),
-                    "must not bypass queue",
-                    RunId::new(),
-                    snapshot(),
-                    time(3),
-                )
-                .expect("turn input is valid"),
-            )
-            .expect_err("inactive sessions with queued work must not start a new run")
-            .code(),
-        "queue_promotion_required"
+    let later_turn = TurnId::new();
+    let change = accept(&store, session, later_turn, RunId::new(), "later");
+    assert!(
+        matches!(change.turn_outcome(), Some(AcceptedTurnOutcomeDto::Started(run)) if run.run_id() == pending_run && run.turn_id() == pending_turn)
     );
+    let projection = store
+        .load_session_snapshot(session)
+        .expect("snapshot loads");
+    assert_eq!(
+        projection
+            .active_run()
+            .expect("oldest pending message starts the run")
+            .run_id(),
+        pending_run
+    );
+    assert_eq!(projection.pending_turns().len(), 1);
+    assert_eq!(projection.pending_turns()[0].turn_id(), later_turn);
 }
 
 #[test]
-fn queue_tickets_never_reuse_and_terminal_promotion_selects_oldest() {
+fn pending_messages_keep_insertion_order_and_removal_allows_the_oldest_to_start() {
     let (_directory, store) = repository();
     let session = create(&store);
     let active_run = RunId::new();
     accept(&store, session, TurnId::new(), active_run, "active");
-    let queued = [
+    let pending = [
         (TurnId::new(), RunId::new()),
         (TurnId::new(), RunId::new()),
         (TurnId::new(), RunId::new()),
     ];
-    for (index, (turn, run)) in queued.iter().enumerate() {
-        let change = accept(&store, session, *turn, *run, "queued");
-        assert!(matches!(
-            change.turn_outcome(),
-            Some(AcceptedTurnOutcomeDto::Queued(position)) if position.value() == index as u64
-        ));
+    for (turn, run) in pending {
+        let change = accept(&store, session, turn, run, "pending message");
+        assert_eq!(change.turn_outcome(), Some(AcceptedTurnOutcomeDto::Pending));
     }
+    let projection = store
+        .load_session_snapshot(session)
+        .expect("snapshot loads");
+    let ordered = projection
+        .pending_turns()
+        .iter()
+        .map(intention_domain::PendingTurnProjectionDto::turn_id)
+        .collect::<Vec<_>>();
+    assert_eq!(ordered, vec![pending[0].0, pending[1].0, pending[2].0]);
+
     store
-        .remove_queued_turn(RemoveQueuedTurnInputDto::new(
-            RemoveQueuedTurnCommandDto::new(session, queued[0].0),
+        .remove_turn(RemoveTurnInputDto::new(
+            RemoveTurnCommandDto::new(session, pending[0].0),
             time(3),
         ))
-        .expect("oldest queued turn removes");
-    let later = accept(&store, session, TurnId::new(), RunId::new(), "later");
-    assert!(matches!(
-        later.turn_outcome(),
-        Some(AcceptedTurnOutcomeDto::Queued(position)) if position.value() == 3
-    ));
+        .expect("oldest pending turn removes");
     store
         .transition_run(TransitionRunInputDto::new(
             session,
@@ -830,16 +816,28 @@ fn queue_tickets_never_reuse_and_terminal_promotion_selects_oldest() {
             RunStatusDto::Failed,
             time(4),
         ))
-        .expect("terminal transition promotes oldest remaining ticket");
-    assert_eq!(
-        store
-            .load_session_snapshot(session)
-            .expect("snapshot loads")
-            .active_run()
-            .expect("oldest remaining turn promotes")
-            .run_id(),
-        queued[1].1
+        .expect("terminal transition commits");
+    let later_turn = TurnId::new();
+    let later = accept(&store, session, later_turn, RunId::new(), "later");
+    assert!(
+        matches!(later.turn_outcome(), Some(AcceptedTurnOutcomeDto::Started(run)) if run.run_id() == pending[1].1)
     );
+    let projection = store
+        .load_session_snapshot(session)
+        .expect("snapshot loads");
+    assert_eq!(
+        projection
+            .active_run()
+            .expect("oldest remaining pending turn starts the run")
+            .run_id(),
+        pending[1].1
+    );
+    let ordered = projection
+        .pending_turns()
+        .iter()
+        .map(intention_domain::PendingTurnProjectionDto::turn_id)
+        .collect::<Vec<_>>();
+    assert_eq!(ordered, vec![pending[2].0, later_turn]);
 }
 
 #[test]
@@ -860,7 +858,6 @@ fn current_storage_schema_is_created_completely_and_remains_authoritative() {
         "sessions",
         "turns",
         "runs",
-        "queued_turns",
         "configuration_revisions",
         "domain_events",
         "session_snapshots",
@@ -902,6 +899,18 @@ fn current_storage_schema_is_created_completely_and_remains_authoritative() {
             )
             .expect("index lookup");
         assert_eq!(present, 1, "index {index} must be created exactly once");
+    }
+    // The queue is gone in place: neither its table nor its ticket columns
+    // exist under the single live schema.
+    for (table, column) in [("turns", "queue_ticket"), ("sessions", "next_queue_ticket")] {
+        let present: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name=?2",
+                sqlite::params![table, column],
+                |row| row.get(0),
+            )
+            .expect("column lookup");
+        assert_eq!(present, 0, "removed column {table}.{column} must be absent");
     }
     // The freshly created schema is usable end to end.
     let session = create(&store);
@@ -1262,44 +1271,49 @@ fn idempotent_turn_replies_use_current_durable_state() {
     )
     .expect("turn input is valid");
     store.accept_user_turn(input.clone()).expect("turn commits");
-    // A queued second turn is retried before and after removal.
+    // A pending second turn is retried before and after removal.
     let run_two = RunId::new();
     let turn_two = TurnId::new();
-    let queued = AcceptUserTurnInputDto::new(
+    let pending = AcceptUserTurnInputDto::new(
         session_id,
         turn_two,
-        "queued second run",
+        "pending second message",
         run_two,
         snapshot_with_revision_and_model(ConfigRevisionId::new(), "fixture-model"),
         time(3),
     )
     .expect("turn input is valid");
-    store.accept_user_turn(queued.clone()).expect("turn queues");
-    // Retry while the membership still exists reports the real queue ticket.
+    store
+        .accept_user_turn(pending.clone())
+        .expect("turn becomes pending");
+    // Retry while the pending message is still unseen reports Pending.
     assert!(
         matches!(
             store
-                .accept_user_turn(queued.clone())
-                .expect("queued retry is accepted")
+                .accept_user_turn(pending.clone())
+                .expect("pending retry is accepted")
                 .turn_outcome(),
-            Some(AcceptedTurnOutcomeDto::Queued(_))
+            Some(AcceptedTurnOutcomeDto::Pending)
         ),
-        "an existing queued membership reports a real position"
+        "an existing pending message reports its pending outcome"
     );
-    // Remove the queued turn, then retry: the ghost queue position must not
-    // be returned; the retry reports the removal as a typed conflict.
+    // Removing the unseen pending message drops its durable row; a later retry
+    // of the same identity is a fresh acceptance of the same message.
     store
-        .remove_queued_turn(RemoveQueuedTurnInputDto::new(
-            RemoveQueuedTurnCommandDto::new(session_id, turn_two),
+        .remove_turn(RemoveTurnInputDto::new(
+            RemoveTurnCommandDto::new(session_id, turn_two),
             time(4),
         ))
-        .expect("queued turn removes");
-    assert_eq!(
-        store
-            .accept_user_turn(queued)
-            .expect_err("retry after removal is rejected")
-            .code(),
-        "accepted_turn_removed"
+        .expect("pending turn removes");
+    assert!(
+        matches!(
+            store
+                .accept_user_turn(pending)
+                .expect("a removed pending message can be accepted again")
+                .turn_outcome(),
+            Some(AcceptedTurnOutcomeDto::Pending)
+        ),
+        "the re-accepted message is pending again"
     );
     // Retry of a started turn reports the run's actual durable status, not a
     // hardcoded Starting projection.

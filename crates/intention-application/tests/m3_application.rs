@@ -16,10 +16,10 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto,
-    RemoveQueuedTurnCommandDto, RunEventCursorDto, RunEventTailPageDto, RunModeDto,
-    RunProjectionDto, RunSnapshotDto, RunStartedEventDto, RunStatusDto, SendUserTurnCommandDto,
-    SessionProjectionDto, WorkspaceRootDto,
+    CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto,
+    RemoveTurnCommandDto, RunEventCursorDto, RunEventTailPageDto, RunModeDto, RunProjectionDto,
+    RunSnapshotDto, RunStartedEventDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto,
+    WorkspaceRootDto,
 };
 use intention_hooks::{
     FailurePolicy, Hook, HookObservability, Outcome as HookOutcome, Phase, PhaseContext, Registry,
@@ -29,16 +29,15 @@ use intention_runtime::{ModelMessageDto, ModelRequestDto, ModelRoleDto};
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendModelRunFactsInputDto,
     AppendModelRunFactsOutcomeDto, CommittedChangeDto, CreateSessionInputDto,
-    ModelContextMessageDto, ModelContextRoleDto, RecoverUnfinishedRunsInputDto,
-    RemoveQueuedTurnInputDto, StartingRunModelContextDto, StorageRepositoryDto,
-    ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
+    ModelContextMessageDto, ModelContextRoleDto, RecoverUnfinishedRunsInputDto, RemoveTurnInputDto,
+    StartingRunModelContextDto, StorageRepositoryDto, ToolResultEvidenceDto, ToolResultKindDto,
+    TransitionRunInputDto,
 };
 use intention_tools::{ReadInput, ToolInput};
 use intention_types::ToolCallId;
 use intention_types::{
     ConfigRevisionId, DtoResult, ErrorDto, EventEnvelopeDto, EventId, EventMetadataDto, ProjectId,
-    QueuePositionDto, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto,
-    TurnId, WorkspaceId,
+    RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto, TurnId, WorkspaceId,
 };
 use intention_workspace::WorkspaceRoot;
 
@@ -182,7 +181,7 @@ fn workspace_root() -> WorkspaceRootDto {
 fn projection(
     session_id: SessionId,
     active_run: Option<RunProjectionDto>,
-    queued_turns: Vec<intention_domain::QueuedTurnProjectionDto>,
+    pending_turns: Vec<intention_domain::PendingTurnProjectionDto>,
     position: u64,
 ) -> SessionProjectionDto {
     SessionProjectionDto::new(
@@ -193,7 +192,7 @@ fn projection(
         RunModeDto::Build,
         active_run.map(RunProjectionDto::config_revision_id),
         active_run,
-        queued_turns,
+        pending_turns,
         SessionEventSequenceDto::new(position),
     )
     .expect("fixture projection is valid")
@@ -294,10 +293,7 @@ impl StorageRepositoryDto for FakeRepository {
         self.accepted.borrow().clone()
     }
 
-    fn remove_queued_turn(
-        &self,
-        _input: RemoveQueuedTurnInputDto,
-    ) -> DtoResult<CommittedChangeDto> {
+    fn remove_turn(&self, _input: RemoveTurnInputDto) -> DtoResult<CommittedChangeDto> {
         self.removed.borrow().clone().ok_or_else(|| {
             ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
         })
@@ -843,7 +839,7 @@ fn post_execution_result_phases_cover_rejection_and_invalid_input() {
 }
 
 #[test]
-fn stop_and_snapshot_workflows_map_durable_results() {
+fn interrupt_and_snapshot_workflows_map_durable_results() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot();
@@ -867,16 +863,15 @@ fn stop_and_snapshot_workflows_map_durable_results() {
     *repository.transitioned.borrow_mut() = Some(change(state.clone(), None));
     let application = ApplicationService::new(&repository);
 
-    let stopped = application
-        .stop_run(
-            intention_domain::StopRunCommandDto::new(session_id, run_id),
-            intention_runtime::RuntimeValuesDto::new(RunId::new(), config, fixture_time()),
-        )
-        .expect("stop maps");
+    let interrupted = application
+        .interrupt_run(InterruptRunCommandDto::new(session_id, run_id))
+        .expect("interrupt maps");
     assert!(matches!(
-        stopped,
-        ProtocolAcceptedResultDto::StopRun(value)
-            if value.session_id() == session_id && value.run_id() == run_id
+        interrupted,
+        ProtocolAcceptedResultDto::InterruptRun(value)
+            if value.session_id() == session_id
+                && value.run_id() == run_id
+                && value.at_sequence() == state.at_sequence()
     ));
 
     let snapshot = application
@@ -887,12 +882,29 @@ fn stop_and_snapshot_workflows_map_durable_results() {
 }
 
 #[test]
+fn interrupt_run_rejects_a_run_that_is_not_active() {
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable(
+        "fixture_unused",
+        "accept is not used by this fixture",
+    )));
+    *repository.loaded_snapshot.borrow_mut() = Some(projection(session_id, None, Vec::new(), 5));
+    assert_eq!(
+        ApplicationService::new(&repository)
+            .interrupt_run(InterruptRunCommandDto::new(session_id, RunId::new()))
+            .expect_err("an inactive session has no run to interrupt")
+            .code(),
+        "active_run_not_found"
+    );
+}
+
+#[test]
 fn create_and_remove_workflows_map_committed_results() {
     let session_id = SessionId::new();
-    let queued_turn = TurnId::new();
+    let pending_turn = TurnId::new();
     let repository = FakeRepository::with_accepted(Ok(change(
         projection(session_id, None, Vec::new(), 3),
-        Some(AcceptedTurnOutcomeDto::Queued(QueuePositionDto::new(4))),
+        Some(AcceptedTurnOutcomeDto::Pending),
     )));
     *repository.created.borrow_mut() =
         Some(change(projection(session_id, None, Vec::new(), 1), None));
@@ -915,15 +927,12 @@ fn create_and_remove_workflows_map_committed_results() {
         ProtocolAcceptedResultDto::CreateSession(_)
     ));
     let removed = application
-        .remove_queued_turn(
-            RemoveQueuedTurnCommandDto::new(session_id, queued_turn),
+        .remove_turn(
+            RemoveTurnCommandDto::new(session_id, pending_turn),
             fixture_time(),
         )
         .expect("removal maps");
-    assert!(matches!(
-        removed,
-        ProtocolAcceptedResultDto::RemoveQueuedTurn(_)
-    ));
+    assert!(matches!(removed, ProtocolAcceptedResultDto::RemoveTurn(_)));
 }
 
 #[test]
@@ -2464,7 +2473,7 @@ fn send_user_turn_and_schedule_returns_queued_acceptance_without_dispatching() {
     let session_id = SessionId::new();
     let repository = FakeRepository::with_accepted(Ok(change(
         projection(session_id, None, Vec::new(), 3),
-        Some(AcceptedTurnOutcomeDto::Queued(QueuePositionDto::new(4))),
+        Some(AcceptedTurnOutcomeDto::Pending),
     )));
     let dispatch = RecordingDispatchPort::default();
     let accepted = ApplicationService::new(&repository)
@@ -2478,7 +2487,7 @@ fn send_user_turn_and_schedule_returns_queued_acceptance_without_dispatching() {
         accepted,
         ProtocolAcceptedResultDto::SendUserTurn(value)
             if value.outcome()
-                == SendUserTurnOutcomeDto::Queued { queue_position: QueuePositionDto::new(4) }
+                == SendUserTurnOutcomeDto::Pending
     ));
     assert_eq!(repository.accepted_inputs.borrow().len(), 1);
     assert!(dispatch.inputs.borrow().is_empty());
