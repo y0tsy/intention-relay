@@ -91,15 +91,19 @@ repositories, remote systems, or effects. A fork never clones or rolls back mach
 
 ## Atomic lineage and idempotency
 
-Future storage adds fork-owned records for conversation trees, child lineage, base snapshots, fork operations, and a
-separately sequenced lineage journal. It does not alter source Session event sequences, run cursors, or ordinary replay.
+Future storage adds fork-owned records for conversation trees, child lineage, base snapshots, and fork operations,
+ordered by a conversation-tree container journal, the container journal of the container "conversation tree", dense
+within that tree, its only gap-detection token, and never the session event sequence or the run container journal. It
+does not alter source Session event sequences, run container journals, or ordinary replay.
 
 One transaction validates the source head and the accepted preview binding, then atomically creates the child
-projection/snapshots, lineage, base snapshot, optional anchor, child events, lineage event, and idempotency result. No
-provider, scheduler, tool, process, network, kernel, MCP, bridge, or other external work occurs in that transaction.
+projection/snapshots, lineage, base snapshot, optional anchor, child events, conversation-tree container journal
+records, and idempotency result. No provider, scheduler, tool, process, network, kernel, MCP, bridge, or other external
+work occurs in that transaction.
 
-Child events order as `SessionCreated`, `SessionForked`, then optional `ForkAnchorMaterialized`. The separate journal
-records `ConversationTreeCreated` and `ConversationBranchLinked`. No synthetic source `SessionForked` event is allowed.
+Child events order as `SessionCreated`, `SessionForked`, then optional `ForkAnchorMaterialized`. The conversation-tree
+container journal records `ConversationTreeCreated` and `ConversationBranchLinked`. No synthetic source `SessionForked`
+event is allowed.
 
 Equal operation identity and command semantics return the same child without new records. Changed reuse, stale source
 state, preview mismatch, ineligible boundary, unavailable history, unsupported snapshot, or unavailable reference fails
@@ -118,9 +122,9 @@ intrinsic representation/protocol constraints where their owning field table req
 The typed fork preview, fork, ordinary regeneration, tree page, rename, archive, and restore DTOs are exposed as
 ordinary JSON-RPC methods over the single local connection; the former `session_fork_v1` negotiated family and its
 capability gate were removed by [ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md). Tree reads are bounded
-immediate-child projections with stable continuation order and their own lineage sequence. They are not tree-wide event
-streams. Existing M3 session replay and M4 run streams remain unchanged; a peer that does not speak protocol 2.0
-receives the typed version-mismatch error before any method is served.
+immediate-child projections with stable continuation order, and lineage facts order by the conversation-tree container
+journal. They are not tree-wide event streams. Existing M3 session replay and M4 run streams remain unchanged; a peer
+that does not speak protocol 2.0 receives the typed version-mismatch error before any method is served.
 
 ## Detailed protocol DTOs, field tables, and limits
 
@@ -239,9 +243,9 @@ no quota. Boundaries, base snapshots, lineage, and idempotency records remain in
 archive-only retention policy.
 
 The ordinary-session taxonomy adds `SessionForked`, `ForkAnchorMaterialized`, `SessionRenamed`, `SessionArchived`, and
-`SessionRestored` to the existing `SessionCreated` and run taxonomy. The separate closed lineage taxonomy is
-`ConversationTreeCreated` and `ConversationBranchLinked`. Generic metadata events, raw snapshot blobs, and a synthetic
-source-session fork event are not acceptable audit boundaries.
+`SessionRestored` to the existing `SessionCreated` and run taxonomy. The conversation-tree container journal carries the
+closed lineage taxonomy `ConversationTreeCreated` and `ConversationBranchLinked`. Generic metadata events, raw snapshot
+blobs, and a synthetic source-session fork event are not acceptable audit boundaries.
 
 Inherited usage is source provenance and is never charged to the child a second time. Child totals count only
 child-owned runs; tree aggregates deduplicate inherited usage by original `RunId`. Presentation must distinguish own and

@@ -58,8 +58,9 @@ The model stream remains provider-neutral; durable model evidence is a separate 
 Contract Policy](02-dto-and-contract-policy.md) and [Sessions, Runs, Events, and
 Storage](04-sessions-runs-events-and-storage.md).
 
-Each atomic M4 batch assigns a dedicated, monotonically-increasing `RunEventCursorDto` and appends typed domain events
-for attempt start/failure, retry, assistant content, tail-only reasoning, usage, tool call, finish, or safe failure.
+Each atomic M4 batch takes a dedicated, monotonically increasing position in the run container journal
+(`RunEventCursorDto`) and appends typed domain events for attempt start/failure, retry, assistant content, tail-only
+reasoning, usage, tool call, finish, or safe failure.
 Attempts are positive; a retry's next attempt is exactly the failed attempt plus one; assistant batches are non-blank
 and at most 4 KiB; individual canonical facts are limited to 512 KiB; and a terminal run accepts no new facts. The safe
 run snapshot includes compatible M3 projection identity/status/revision, accumulated assistant content for the active

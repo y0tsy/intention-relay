@@ -145,9 +145,10 @@ sequenceDiagram
 
 Architecture 15's `ToolCallStarted` is the only generic durable boundary after which a bridge-routed external effect may
 be possible; the bridge introduces no second start marker, result stream, terminal-result frame, or sequence. Fragments
-and terminal results remain architecture-15 facts on the shared run cursor and use `ToolCallId` for demultiplexing.
-Publication occurs only after commit and an independent scoped durable reread; publisher/channel failure cannot roll
-back a commit or cause redispatch.
+and terminal results remain architecture-15 facts that take a position in the run container journal and use `ToolCallId`
+for demultiplexing. This is the general ordering rule, not a bridge-specific concession: no record family may introduce
+a further ordering sequence. Publication occurs only after commit and an independent scoped durable reread;
+publisher/channel failure cannot roll back a commit or cause redispatch.
 
 Before `ToolCallStarted`, cancellation or recovery records known `CancelledBeforeStart` or `InterruptedBeforeStart`.
 After start, a durably proven terminal result remains known; without terminal proof the exact attempt becomes
@@ -180,7 +181,7 @@ own architecture-13 fresh admission.
 Bridge-held evidence, a grant, parenthood, or a bridge result never grants or amplifies verifier authority; target
 mutation remains architecture 17's exact authority/baseline/evidence operation and verifier uncertainty remains verifier
 local. Bridge transport may carry only architecture-18 safe MCP projections and cannot discover, select, invoke,
-reattach, or recreate MCP work. Bridge replay is a read-only projection layered on the underlying sequence owners:
+reattach, or recreate MCP work. Bridge replay is a read-only projection layered on the underlying ordering authorities:
 correlated initial replay, typed resync/error, then live post-commit facts after required history completes; it cannot
 create a bridge-owned sequence, resend a graph message, start a child, consume verifier authority, rediscover/invoke
 MCP, or execute external work.

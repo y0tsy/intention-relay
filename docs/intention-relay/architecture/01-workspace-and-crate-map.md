@@ -46,7 +46,7 @@ coverage-tier classification with the base 80% line-coverage threshold and the d
 
 | Crate | Owns | May depend on |
 | --- | --- | --- |
-| `intention-types` | ID newtypes, schema versions, common errors, time, pagination, envelopes. | Minimal shared dependencies only. |
+| `intention-types` | ID newtypes, schema versions, common errors, time, envelopes. | Minimal shared dependencies only. |
 | `intention-domain` | Domain DTOs, value validation, domain events, invariants. | `intention-types`. |
 | `intention-application` | Commands, queries, semantic use-case workflows, and protocol-result mapping over DTO-only storage. | Domain, storage contracts, runtime contracts, config snapshots, protocol, types. |
 | `intention-runtime` | Deterministic session/run lifecycle decisions, cancellation, terminal promotion, and recovery-before-ready. | Domain, storage contracts, config snapshots, types. |

@@ -81,7 +81,7 @@ One idempotent transaction commits all or nothing:
 - direct edge, root-graph identity, and delegation snapshot;
 - graph projection and later activity reference;
 - parent `sub_agent` terminal creation result;
-- all affected events, snapshots, sequences, and idempotency evidence.
+- all affected events, snapshots, container journal sequences, and idempotency evidence.
 
 Equal creation identity and equal typed content return the original child, edge, snapshot, and result; changed reuse
 fails before another child, edge, run, activity record, or external action exists. No provider, tool, process, network,
@@ -112,17 +112,20 @@ A child may send only `Report` and `ClarificationRequest` to its direct parent, 
 carry these controls/messages. Siblings, indirect ancestors/descendants, roots, unrelated Mandates, adapters, providers,
 MCP, bridge/kernel, and models outside the admitted parent loop have no graph-control authority.
 
-Messages are typed, redacted, idempotent, and ordered by one edge-local monotonic sequence shared by both directions.
+Messages are typed, redacted, idempotent, and ordered by one delegation-edge container journal, the container journal of
+the container "delegation pair", whose shared `pair_order` positions (`AgentPairOrderDto`) cover both directions. That
+journal is local to its pair and is never reused for global event order.
 `GetStatus` and `AwaitTerminalSummary` are observation only. Instructions, replies, reports, and clarification requests
 are durable evidence, not authority: they create no `RunId`, consume no reason, revise no Mandate, mutate no
 already-sent provider request, and directly schedule no work. A later scheduler reread may evaluate any separately valid
 reason, and architecture 13 alone may admit a fresh run. A terminal or interrupted recipient rejects delivery: an
 undelivered ordinary message to a terminal or interrupted child is rejected with a typed durable delivery outcome, while
-the original message and its reason remain in the activity journal.
+the original message and its reason remain in the activity-tree container journal.
 
 Parenthood cannot complete, needs-rework, revise, archive, reconcile uncertainty, issue verifier authority, or control a
 sibling/root/unrelated Mandate; a user can mutate every child under architecture 13. Parent controls validate the exact
-edge, frozen delegated control, expected Mandate sequences, expected lifecycle, and idempotent operation identity.
+edge, frozen delegated control, the expected Mandate container journal sequence, expected lifecycle, and idempotent
+operation identity.
 
 ## Terminalization, uncertainty, and recovery
 
@@ -193,9 +196,9 @@ Mandate or Ordinary execution.
 ### Stale baseline tuple
 
 A verifier baseline is fresh only when all required values match the committed state: exact target identity, target
-revision, aggregate sequence, lifecycle, authority revision, audit contract, graph epoch where applicable, and operation
-idempotency identity. Any mismatch is a typed pre-mutation stale failure; the system never best-effort merges,
-retargets, substitutes current state, or retries with changed meaning.
+revision, Mandate container journal sequence, lifecycle, authority revision, audit contract, graph epoch where
+applicable, and operation idempotency identity. Any mismatch is a typed pre-mutation stale failure; the system never
+best-effort merges, retargets, substitutes current state, or retries with changed meaning.
 
 ## Audit, mutations, conflicts, and reconciliation
 
@@ -219,11 +222,11 @@ run or historical evidence.
 -  `ResolveUnknownEffect` names the exact target uncertainty and baseline and may yield only `Active` for later fresh
 work or `Stopped`. It never asserts rollback, absence, idempotence, repeatability, or safe replay.
 
-One target-mutation transaction validates the authority, baseline, evidence, verdict, target
-revision/sequence/lifecycle, graph closure where required, exact uncertainty where applicable, and idempotency identity.
-It commits all or nothing: applied/rejected result, target projection/events/snapshots when changed, authority
-consumption where selected, audit/reconciliation linkage, sequence, safe activity/notification reference, and
-idempotency evidence.
+One target-mutation transaction validates the authority, baseline, evidence, verdict, target revision, container journal
+sequence, and lifecycle, graph closure where required, exact uncertainty where applicable, and idempotency identity. It
+commits all or nothing: applied/rejected result, target projection/events/snapshots when changed, authority consumption
+where selected, audit/reconciliation linkage, the target container journal sequence, safe activity/notification
+reference, and idempotency evidence.
 
 User lifecycle, revision, reconciliation, revocation, and authority-revision mutations win optimistic conflicts. A
 losing parent, daemon, or verifier action performs a scoped reread and cannot merge, retarget, select another operation,
@@ -299,7 +302,7 @@ MandateChildMessageDto
   message_id
   graph_id
   parent_link_reference
-  message_order
+  pair_order
   direction = ParentToChild | ChildToParent
   kind = Instruction | Report | ClarificationRequest | ClarificationReply
   sender_run_reference
@@ -321,12 +324,14 @@ MandateChildTerminalSummaryDto
   safe_conclusion
 ```
 
-Each edge owns one durable monotonic order across both directions. Messages are redacted typed records (identity,
-revision/cursor, safe visibility, provenance references): equal replay returns the stored message, and changed reuse
-fails before publication. A terminal child run records one redacted summary; the parent receives the summary reference
-once in the next eligible model exchange, never a raw transcript or output. Summaries aggregate state and provenance;
-they never make child success complete a parent, child failure fail a parent, or child evidence satisfy a parent
-acceptance contract. Usage aggregation dedupes original `RunId` values. The first scope does not require a token ceiling
+Each delegation pair owns one durable container journal across both directions: a dense `pair_order` sequence
+(`AgentPairOrderDto`) that is that pair's only gap-detection token; a duplicate or skipped `pair_order` rejects before
+publication. Messages are redacted typed records (identity, revision/cursor, safe visibility, provenance references):
+equal replay returns the stored message, and changed reuse fails before publication. A terminal child run records one
+redacted summary; the parent receives the summary reference once in the next eligible model exchange, never a raw
+transcript or output. Summaries aggregate state and provenance; they never make child success complete a parent, child
+failure fail a parent, or child evidence satisfy a parent acceptance contract. Usage aggregation dedupes original
+`RunId` values. The first scope does not require a token ceiling
 from providers that cannot report usage: when a provider reports no usage component, the tree aggregates only the
 components it reports, and no synthetic ceiling, price, or inferred cost is introduced. A child
 `Paused`/`NeedsRework`/`Stopped` does not implicitly change the parent; a child `ExternalEffectUnknown` pauses that

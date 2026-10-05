@@ -30,12 +30,18 @@ performs a scoped reread and cannot merge by inference, overwrite, or retry with
 
 A Mandate owns its identity, current lifecycle, active immutable revision, pending trigger reasons and their coalesced
 provenance, current non-terminal run reference, dispositions, verified checkpoint references, uncertainty references,
-and Mandate-local sequence/version.
+and its Mandate container journal sequence/version.
 
-`MandateId`, revision, trigger reason, disposition, reconciliation, operation, and aggregate sequence are typed future
-values. The Mandate-local sequence is the authoritative optimistic-concurrency and event order for Mandate facts,
-distinct from `SessionEventSequenceDto`, `RunEventCursorDto`, and M3 queue tickets; run/model facts retain their
-existing run cursor and link to Mandates only through typed identities.
+`MandateId`, revision, trigger reason, disposition, reconciliation, operation, and container journal sequence are typed
+future values. Mandate facts order by a Mandate container journal, the container journal of the container "Mandate
+aggregate", when that container is activated. That journal orders exactly the records that belong to the Mandate
+aggregate and are not records of one session, is dense within the aggregate, and is its only gap-detection token; it is
+the authoritative optimistic-concurrency and event order for Mandate facts, never an identity and never an observation
+position. It is not `SessionEventSequenceDto`, which orders every record committed in a session, and it is not the run
+container journal, whose position type is `RunEventCursorDto`. M3 queue tickets are a queue-ordering mechanism, never an
+ordering authority, and are never merged, reused, or renumbered. The Mandate aggregate is not a session record, and one
+session may host more than one Mandate. Run and model facts keep their recorded session and run-container ordering and
+link to Mandates only through typed identities, with no arithmetic, offsets, or conversions across authorities.
 
 ### Mandate DTO family
 
@@ -195,7 +201,7 @@ required capacity/readiness. One transaction atomically commits:
 - selected reason consumption or hold;
 - selected Mandate revision and safe frozen context;
 - `MandateSelectionV1` with its closed execution-kind/version/payload fields, without envelope framing;
-- Mandate and Run projections, events, snapshots, aggregate sequence/version, and idempotency evidence.
+- Mandate and Run projections, events, snapshots, container journal sequence/version, and idempotency evidence.
 
 No provider, tool, process, network, kernel, child, MCP, bridge, or scheduler effect occurs inside this transaction;
 publication happens only after commit and an independent Mandate-scoped durable reread.
@@ -209,16 +215,16 @@ name, provider, ancestry, or live resources.
 
 ## Transaction classes and conflicts
 
-Every semantic mutation validates expected Mandate sequence/version and, where relevant, expected revision and
-lifecycle. Equal operation identity plus equal typed request content returns the committed result; changed reuse fails
-before a mutation, another trigger consumption, or another RunId.
+Every semantic mutation validates the expected Mandate container journal sequence/version and, where relevant, expected
+revision and lifecycle. Equal operation identity plus equal typed request content returns the committed result; changed
+reuse fails before a mutation, another trigger consumption, or another RunId.
 
 | Transaction | Atomic durable result |
 | --- | --- |
 | Create Mandate | identity, initial revision, Draft projection/event/snapshot, operation binding |
 | Create revision | immutable revision, permitted active-revision update, event/snapshot/version |
 | User lifecycle transition | expected-state validation, lifecycle projection/event/snapshot, idempotency |
-| Trigger capture/coalescing | reason/provenance, idempotency, eligibility projection, sequence |
+| Trigger capture/coalescing | reason/provenance, idempotency, eligibility projection, container journal sequence |
 | Fresh admission | selected reason, new RunId, frozen selection/meaning, Working projection and all evidence |
 | Known disposition | exact terminal evidence, disposition, eligible continuation reason if selected, Active transition |
 | Unknown effect | exact started-attempt evidence, uncertainty reference, PausedAwaitingDecision transition |
@@ -313,12 +319,12 @@ immutable run binding/selection, and safe disposition/uncertainty references. Sn
 are not alternate authority; events remain immutable and corrections are new events/projections.
 
 Future Mandate projections are exposed through typed JSON-RPC 2.0 methods over the local socket ([ADR
-0045](../decisions/0045-local-json-rpc-2-0-transport.md)): typed commands and queries, correlated results, then
-Mandate-local event batches and authoritative snapshot frames. There is no protocol capability or family gate; an
+0045](../decisions/0045-local-json-rpc-2-0-transport.md)): typed commands and queries, correlated results, then Mandate
+container journal event batches and authoritative snapshot frames. There is no protocol capability or family gate; an
 unsupported method or version returns a typed JSON-RPC error rather than a partial ordinary Session snapshot. M3 session
-replay and M4 run streaming remain unchanged, separately ordered, and linked only by typed IDs. Exact SQL tables,
-migrations, event variants, wire tags, pages, retention, crate activation, and protocol implementation are deliberately
-deferred.
+replay and M4 run streaming remain unchanged, ordered by the session event sequence and the run container journal
+respectively, and linked only by typed IDs. Exact SQL tables, migrations, event variants, wire tags, pages, retention,
+crate activation, and protocol implementation are deliberately deferred.
 
 ## Compatibility, dependencies, and non-goals
 

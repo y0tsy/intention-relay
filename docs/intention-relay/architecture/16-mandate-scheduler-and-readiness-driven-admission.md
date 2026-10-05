@@ -81,8 +81,9 @@ MandateReadinessObservationV1
 
 `resource_scope` references only a typed selected resource class/revision; it contains no credential, endpoint, handle,
 SDK value, raw provider error, path, or process topology. Absence, stale evidence, or unknown evidence is not ready.
-Owner-local `(source_instance_id, source_epoch, source_sequence)` orders observations, and timestamps are diagnostic
-only; equal identity and equal typed observation is idempotent, while changed reuse fails before mutation.
+Owner-local `(source_instance_id, source_epoch, source_sequence)` orders observations of one source instance and epoch;
+the tuple is owner-local operational metadata, not an ordering authority. Timestamps are diagnostic only; equal identity
+and equal typed observation is idempotent, while changed reuse fails before mutation.
 
 The scheduler may aggregate observations but cannot manufacture, override, or probe an alternate resource path. MCP
 readiness cannot perform discovery, select a source/capability, start a local service, mutate a selection, or retry an
@@ -143,10 +144,10 @@ sequenceDiagram
   S->>D: Dispatch committed RunId
 ```
 
-The scheduler supplies exact expected Mandate sequence, revision, `ReasonId`, immutable selection, and readiness
-references. The architecture-13 admission transaction revalidates durable predicates and commits all admission evidence
-or none; no scheduler, provider, tool, process, network, kernel, child, MCP, or other external effect occurs inside the
-transaction.
+The scheduler supplies the exact expected Mandate container journal sequence, revision, `ReasonId`, immutable
+selection, and readiness references. The architecture-13 admission transaction revalidates durable predicates and
+commits all admission evidence or none; no scheduler, provider, tool, process, network, kernel, child, MCP, or other
+external effect occurs inside the transaction.
 
 Multiple scheduler tasks may race operationally, but storage linearization permits only one successful admission, and a
 singleton lock is never the correctness boundary. A conflict loser performs a scoped reread and cannot merge changed
@@ -181,12 +182,12 @@ Scheduler state is operational state, not execution meaning: the removed executi
 and handles never become execution meaning; a reason retains its captured Mandate revision and provenance, and current
 schedule, time zone, configuration, registry, provider, or readiness cannot retarget it.
 
-Future scheduler projections use typed JSON-RPC 2.0 methods (ADR 0045) with Mandate-local sequence, correlated results
-or typed resync/error, and never partial snapshots. Reconnect/replay is read-only and cannot replay a wakeup, admission,
-or external action; exact method shapes, pages, retention, and schema remain deferred. M3 session replay, M4 run
-streaming, ordinary queue tickets, provider kinds, tool-call denial, snapshots, interruption, and all historical
-bytes/meaning remain unchanged, legacy queue tickets never become Mandate reasons, and no historical record gains
-scheduler facts.
+Future scheduler projections use typed JSON-RPC 2.0 methods (ADR 0045) with the Mandate container journal sequence,
+correlated results or typed resync/error, and never partial snapshots. Reconnect/replay is read-only and cannot replay a
+wakeup, admission, or external action; exact method shapes, pages, retention, and schema remain deferred. M3 session
+replay, M4 run streaming, ordinary queue tickets, provider kinds, tool-call denial, snapshots, interruption, and all
+historical bytes/meaning remain unchanged, legacy queue tickets never become Mandate reasons, and no historical record
+gains scheduler facts.
 
 ## Dependencies and non-goals
 

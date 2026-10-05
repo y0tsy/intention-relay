@@ -97,7 +97,7 @@ safety outcomes, retained M3 synchronous behavior, and Windows named-pipe multi-
 
 ### Persistent subscriptions and the run stream
 
-A subscription is an ordinary JSON-RPC method call. `run.subscribe` returns the initial authoritative `RunReplayDto` (or
+A subscription is an ordinary JSON-RPC method call. `run.subscribe` returns the initial authoritative `RunSnapshotDto` (or
 a typed resync or error) as its correlated response result, and later committed state arrives as `run.frame`
 notifications carrying the existing run replay/live/snapshot/resync payloads. Unknown or cross-session runs are safe
 errors; future cursors are `InvalidCursor`; unavailable history is `HistoryUnavailable`. A run stream never uses a
@@ -230,11 +230,11 @@ sequenceDiagram
 
 ### Reconciliation rules
 
-- Adapters render in sequence order per session.
+- Adapters render in session event sequence order per session.
 - A gap requires recovery through a snapshot and event tail, not guessed UI state.
-- Duplicate delivery is tolerated through `event_id` and sequence-aware reducers.
-- A stale live event may not mutate a projection if its sequence is already applied.
-- The daemon has authoritative ordering; adapters do not synthesize a server sequence.
+- Duplicate delivery is tolerated through `event_id` and session-event-sequence-aware reducers.
+- A stale live event may not mutate a projection if its session event sequence position is already applied.
+- The session event sequence is the session ordering authority; adapters do not synthesize a server sequence.
 
 ## M3 durable authority
 

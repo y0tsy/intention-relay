@@ -641,6 +641,14 @@ child/verifier, and bridge packages (architectures 15/17/19), and Milestone 12 t
 activating specification and atomic updates to crate ownership, DTO/wire/storage versions, quality policy, feature
 profiles, and evidence. This roadmap owns sequencing and milestone acceptance only.
 
+Current ordering status: the durable ordering authorities were collapsed to two — the session event sequence
+(`SessionEventSequenceDto`) for every record committed in one session, and the container journal sequence (storage
+mechanism `container_journals`; the only container kind today is `run`, whose position type is `RunEventCursorDto`) —
+plus one observation position, the reserved observation cursor, which is a reader's resume position and never an
+authority. The collapsed set is closed: no record family introduces a further ordering sequence, and queue tickets and
+owner-local operational tuples (for example scheduler readiness observations) are queue-ordering or operational
+metadata, not ordering authorities.
+
 | Package | Owner document | Status | Depends on |
 | --- | --- | --- | --- |
 | Post-M4 authority reconciliation and foundation boundary | [ADR 0005](../decisions/0005-m4plus-authority-reconciliation-and-delivery-boundaries.md) | Boundary record; the reconciliation registers it named are retired; no implementation authorized. | closed M4 baseline |

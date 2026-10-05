@@ -257,7 +257,7 @@ owner documents define only their domain-specific semantic payloads, and every n
 | Value | Owner | Scope | Representation/ordering | Reconstruction rule |
 | --- | --- | --- | --- | --- |
 | `SessionId`, `WorkspaceId`, `RunId`, `TurnId` | architecture 04 and existing domain owners | ordinary M3/M4 | historical domain newtypes and recorded sequences | never reconstruct or replace historical identity |
-| `MandateId`, revision, `ReasonId` | architecture 13 | Mandate aggregate | daemon/user-issued domain values with Mandate-local ordering | never derive from current mutable state |
+| `MandateId`, revision, `ReasonId` | architecture 13 | Mandate aggregate | daemon/user-issued domain values ordered by the Mandate container journal | never derive from current mutable state |
 | future execution-kind contract | architecture 14 | admitted run | typed serde JSON contract; no canonical bytes or digest layer (ADR 0046) | no fallback after missing or mismatched typed data |
 | child edge, delegation, verifier authority/baseline | architecture 17 | Mandate graph and target mutation | domain newtypes plus owner-defined typed references | stale or absent baselines fail before mutation |
 | `ConversationTreeId`, `ForkOperationId` | architecture 23 | ordinary Session lineage | typed lineage values; tree root derivation is frozen by architecture 23 | never infer lineage from current ancestry |
@@ -265,18 +265,25 @@ owner documents define only their domain-specific semantic payloads, and every n
 | provider/tool/MCP/kernel selections | architectures 15, 18, 20, 22 | future admitted run | immutable credential-free semantic references | live registry/resources cannot repair selection |
 | UUIDs, operation IDs, correlation IDs | architecture 02 plus owning architecture | all | distinct domain newtypes; UUID equality is not cross-domain identity | no conversion or authority inference |
 
-Sequences and cursors are independent authorities and are never interchangeable:
+Two durable ordering authorities exist, plus one observation position; together they are the closed set:
 
-| Sequence/cursor | Owner | Orders | Must not be reused for |
+| Authority | Scope | Orders | Must not be reused for |
 | --- | --- | --- | --- |
-| Session event sequence | architecture 04 | Session events | Run, Mandate, lineage, activity |
-| Run event cursor | architecture 04 and future loop owners | Run/model/tool facts | Session or activity records |
-| Mandate-local sequence | architecture 13 | Mandate lifecycle and reasons | queue tickets or Run cursors |
-| graph/message sequence | architecture 17 | direct child/verifier messages | global event order |
-| lineage sequence | architecture 23 | fork lineage facts | Session events or Run facts |
-| activity journal sequence | architecture 24 | activity-tree records | notification cursor or domain events |
-| notification cursor | architecture 24 | local-user observation | notification facts or acknowledgements |
-| scheduler observation order | architecture 16 | live readiness evidence | semantic identity or admission order |
+| Session event sequence (`SessionEventSequenceDto`) | one session | every record committed in the session: events, run lifecycle, tool lifecycle, model and tool facts | container records, observation positions |
+| Container journal sequence (storage mechanism `container_journals`; the only kind today is `run`, whose position type is `RunEventCursorDto`) | one container: a run today; a Mandate aggregate, a delegation pair, a conversation tree, or an activity tree when activated | records that belong to the container and are not a record of one session | session records, observation positions, identity |
+| Observation cursor (reserved name; no DTO until a producer exists) | one reader | nothing: it is a resume position | never an authority, never durable order, never a dedup key, never a conflict token |
+
+1. No record family may introduce a further ordering sequence: a family orders by the session event sequence, or belongs
+   to exactly one container and orders by that container's journal, or has no durable order; there is no fourth option.
+2. A container journal is dense within its container and is its only gap-detection token; today's adjacency (`+1`)
+   contracts stay in force.
+3. The container-scoped optimistic append token stays container-local: a write to another container or to the session
+   sequence must never invalidate it.
+4. Cross-authority correlation uses typed identity only, with no arithmetic, offsets, or conversions.
+5. Queue tickets are a queue-ordering mechanism, not an ordering authority: never merged, never reused, never
+   renumbered.
+6. Scheduler readiness observations order by the owner-local operational tuple `(source_instance_id, source_epoch,
+   source_sequence)`; that is operational metadata, not an ordering authority.
 
 Semantic/frozen metadata includes identities, revisions, selection references, and baselines. Operational/live metadata
 includes readiness, capacity, processes, handles, endpoints, current catalogs, wakeups, grants, and publication state.
