@@ -11,7 +11,10 @@ Project-scoped Goals apply to a session only through an explicit immutable appli
 non-authorizing.
 
 Future Skills are immutable, versioned, untrusted instructional content with explicit progressive disclosure. Admission
-freezes a source manifest, and each affected model step binds an immutable safe context projection. Memory uses
+freezes a source manifest, and each affected model step binds a safe context projection whose provider request is a
+mutable window under [architecture 08](../architecture/08-model-protocol-and-providers.md) ([ADR
+0054](../decisions/0054-dynamic-context-window-and-prompt-caching.md)); the manifest, the selections, and every durable
+fact stay recorded as written. Memory uses
 immutable typed records, safe cards, explicit disclosure, and explicit replacement/rollback relations. Compaction is an
 immutable safe summary over exact completed durable history and retains its source provenance and uncompacted suffix.
 

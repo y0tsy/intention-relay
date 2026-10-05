@@ -77,6 +77,17 @@ These M4 configuration and credential-isolation rules are implemented and verifi
 remain startup-only behavior; a follow-on milestone must not imply live reload, credential persistence, or rotation
 without new contracts and outcome evidence.
 
+### M5+ provider context-window policy
+
+The `[provider]` table carries the dynamic context-window policy as the optional `context_window_tokens` and
+`context_capacity_tokens` fields. `context_window_tokens` defaults to `250000` and `context_capacity_tokens` defaults to
+`1000000`; resolution requires a positive capacity and `0 < context_window_tokens < context_capacity_tokens`, and a
+value outside that range fails closed with the typed `invalid_provider_context_window_tokens` or
+`invalid_provider_context_capacity_tokens` validation error. The policy resolves into the credential-free
+`ContextWindowPolicyDto` included in `ResolvedConfigDto` and therefore in every `ConfigSnapshotDto`. [Architecture
+08](08-model-protocol-and-providers.md) owns the window mechanics that consume it ([ADR
+0054](../decisions/0054-dynamic-context-window-and-prompt-caching.md)).
+
 ### M5+ typed-edit rendering and reload status (reverted)
 
 The M5+ Slice 2 activation rendered typed-edit candidate documents inside `intention-config` (the accepted decision:

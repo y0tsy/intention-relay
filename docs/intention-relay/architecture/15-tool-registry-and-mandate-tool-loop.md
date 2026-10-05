@@ -265,12 +265,9 @@ terminal safe result projection of every call becomes model context after the wh
 
 The first-scope bounds are:
 
-- the existing **512 KiB** individual durable-fact bound applies to every fragment;
--  all output fragments and successful result content in one group share a **4 MiB** combined content limit, consumed in
-  actual durable commit order, with no equal per-call allocation and no dependence on later scheduler reconstruction;
--  content is never truncated or partly committed; if the next fragment cannot fit, it is not written and only its call
-  receives the terminal `tool_output_limit_exceeded` outcome, while remaining calls continue; and
-- a small closed terminal outcome remains representable after budget exhaustion.
+- the existing **512 KiB** individual durable-fact bound applies to every fragment; and
+-  content is never truncated or partly committed; if a fragment cannot fit, it is not written and only its call
+  receives the terminal `tool_output_limit_exceeded` outcome, while remaining calls continue.
 
 The closed initial terminal outcome taxonomy is: `Succeeded`, `DeniedBeforeExecution`, `FailedBeforeExternalEffect`,
 `CancelledBeforeStart`, `InterruptedBeforeStart`, `OutputLimitExceeded`, `ExecutionUnavailable`, and `Partial`. It

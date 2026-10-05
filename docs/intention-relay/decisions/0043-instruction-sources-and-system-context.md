@@ -17,6 +17,10 @@ Amended 2026-09-30: the intrinsic numeric bounds are superseded by [ADR
 condition are read through [ADR 0046](0046-typed-serde-json-contracts.md) and [ADR
 0047](0047-workspace-root-addressing-anchor.md) as recorded below.
 
+Amended 2026-10-05: the delivery clause is read through [ADR
+0054](0054-dynamic-context-window-and-prompt-caching.md) for the prompt-cache breakpoint at the end of the instruction
+block.
+
 ## Scope and supersession
 
 This decision defines the one instruction channel of a model request: which instruction sources exist, how they become
@@ -65,7 +69,9 @@ handoff materializes it into its frozen snapshot; and no run, fork, regeneration
 current configuration, current `AGENTS.md` content, or current session state.
 - **Delivery uses the existing `system_context` channel**: the daemon passes
 the assembled projection as the request's optional system context, and the drivers translate it into the leading system
-message with no driver-specific framing, rewrite, caching directive, or provider-side scan.
+message with no driver-specific framing, rewrite, or provider-side scan; the daemon-owned request marks the end of that
+instruction block with the ephemeral prompt-cache breakpoint of [ADR
+0054](0054-dynamic-context-window-and-prompt-caching.md).
 - **Materialization**: the projection is the contents of the
 `effective_instruction_projection` and `materialized_effective_instruction_projection` fields of the fork records
 ([architecture 23](../architecture/23-non-destructive-session-branching-and-regeneration.md)), and its revision identity
@@ -140,10 +146,10 @@ is permitted. Fake-secret regression covers every public, durable, log, and acti
 
 ## Non-goals
 
-Few-shot example selection, memory-derived prompt material, MCP-provided prompts, provider-native prompt framing, prompt
-caching configuration, model-specific prompt templates, prompt tuning, prompt telemetry, A/B prompt evaluation,
-automatic instruction generation or summarization, cross-project or shared instruction libraries, executable or scripted
-instructions, sandbox or privilege claims, and UI design beyond the declared control-plane surface.
+Few-shot example selection, memory-derived prompt material, MCP-provided prompts, provider-native prompt framing,
+model-specific prompt templates, prompt tuning, prompt telemetry, A/B prompt evaluation, automatic instruction
+generation or summarization, cross-project or shared instruction libraries, executable or scripted instructions,
+sandbox or privilege claims, and UI design beyond the declared control-plane surface.
 Date/time/Git/session-derived context injection and the remaining deferred items are recorded in the deferred and
 excluded register with their reconsideration owners.
 

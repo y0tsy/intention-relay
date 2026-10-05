@@ -171,9 +171,10 @@ and mode without admitting a run, creating a reason or selection, or writing dur
 - keep the surface credential-free, and keep fragment text visible only where
 the user edits it.
 
-Fragment editing is configuration, not admission: once a run is admitted, its projection is immutable, and a later edit
-affects only future runs. The primary UI exposes the surface; TUI/REPL remains contract-equivalent. Preview is
-non-authorizing and non-admitting.
+Fragment editing is configuration, not admission: once a run is admitted, its projection is immutable and stays the
+stable leading block of every request, and a later edit affects only future runs; the following request window is
+mutable under [architecture 08](08-model-protocol-and-providers.md). The primary UI exposes the surface; TUI/REPL
+remains contract-equivalent. Preview is non-authorizing and non-admitting.
 
 ## Trust, authority, and the injection boundary
 
@@ -188,7 +189,9 @@ Because the channel is the target of prompt injection rather than its source, th
 2. a configured instruction source cannot widen policy or permissions, and the
 workspace source is labeled project material (ADR 0019 boundary);
 3. a provider cannot scan, inject, rewrite, or reorder the projection, and no
-driver may add framing, caching, or templating of its own.
+driver may add framing or templating of its own; the daemon-owned request marks the end of the leading instruction block
+with the ephemeral prompt-cache breakpoint of [architecture 08](08-model-protocol-and-providers.md) ([ADR
+0054](../decisions/0054-dynamic-context-window-and-prompt-caching.md)), which adds no text and changes no projection.
 
 ## Bounds and deterministic assembly
 
@@ -247,13 +250,13 @@ instruction contract.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 04, 06, 07, 08, 09, 14, 21, 23, and 25 and on decision 0043. Non-goals: Goal,
-Skill, context-manifest, memory, or compaction semantics; fork lineage or lineage projection rules; the model request
-contract or driver translation; configuration storage, reload, or credential handling; activity, notification, or
-adapter behavior; few-shot example selection, memory-derived prompt material, MCP-provided prompts,
-date/time/Git/session-derived context injection, provider-native prompt framing or caching directives, model-specific
-templates, prompt tuning, telemetry, A/B evaluation, automatic instruction generation, cross-project instruction
-sharing, executable or scripted instructions, and sandbox or privilege claims. Deferred items are recorded with
-reconsideration owners in the deferred and excluded register.
+This document depends on architectures 04, 06, 07, 08, 09, 14, 21, 23, and 25 and on decisions 0043 and 0054.
+Non-goals: Goal, Skill, context-manifest, memory, or compaction semantics; fork lineage or lineage projection rules;
+the model request contract or driver translation; configuration storage, reload, or credential handling; activity,
+notification, or adapter behavior; few-shot example selection, memory-derived prompt material, MCP-provided prompts,
+date/time/Git/session-derived context injection, provider-native prompt framing, model-specific templates, prompt
+tuning, telemetry, A/B evaluation, automatic instruction generation, cross-project instruction sharing, executable or
+scripted instructions, and sandbox or privilege claims. Deferred items are recorded with reconsideration owners in the
+deferred and excluded register.
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).

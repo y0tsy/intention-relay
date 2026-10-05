@@ -294,9 +294,13 @@ ModelContextProjectionV1
 ```
 
 The manifest binds identities, revisions, audience, safe representation policy, declared semantic order, and typed
-omission reasons. A projection binds one model step to an ordered safe representation of that exact manifest. It is
-immutable before the step begins. A source or card may be narrower than its original content but can never be broader or
-visible to a wider audience.
+omission reasons. A projection binds one model step to an ordered safe representation of that exact manifest; the
+provider request built from it is a mutable window under [architecture
+08](08-model-protocol-and-providers.md) ([ADR
+0054](../decisions/0054-dynamic-context-window-and-prompt-caching.md)), and that window compresses the largest
+tool-role results in place when the request estimate crosses the configured context window. The manifest, the
+projection, and every durable fact stay recorded as written. A source or card may be narrower than its original content
+but can never be broader or visible to a wider audience.
 
 Memory uses immutable typed records, not mutable hidden prompt state. A memory record has provenance, scope, safe card,
 audience, explicit disclosure status, and supersession/replacement/rollback references. Retrieval and disclosure may
@@ -324,7 +328,7 @@ sequenceDiagram
   U->>G: Create or revise Goal
   G->>C: Select explicit references
   C->>M: Freeze manifest and selections
-  M->>S: Bind immutable projection
+  M->>S: Bind step projection
   S->>F: Commit completed facts
   F->>C: Provide exact completed range
   C->>C: Create immutable safe summary
