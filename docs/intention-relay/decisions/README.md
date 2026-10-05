@@ -54,5 +54,6 @@ linked architecture sections.
 | [0049](0049-base-coverage-threshold.md) | Accepted | Base 80% line-coverage threshold and designated-files mechanism (replaces the A/B/C coverage tiers) |
 | [0050](0050-ordering-authorities.md) | Accepted | Ordering authorities (session event sequence and container journal sequence, plus the observation cursor as a non-authoritative resume position) |
 | [0052](0052-partial-tool-results-for-interrupted-execution.md) | Accepted | Partial tool results for interrupted execution (bounded captured output, interruption notices, and no Mandate pause) |
+| [0053](0053-sub-agent-and-fork-limits-by-precedent.md) | Accepted | Sub-agent and fork limits by precedent (every numeric child, bridge, activity, fork, kernel, and progress cap removed; no survivor) |
 | [0054](0054-dynamic-context-window-and-prompt-caching.md) | Accepted | Dynamic context window and prompt-cache breakpoints (provider context-window policy, calibrated token accounting, largest-first tool-result compression, capacity stub, and ephemeral cache markers) |
 | [0055](0055-pending-turns-and-cooperative-interruption.md) | Accepted | Pending turns and cooperative interruption (durable pending input joined to the live run context, `run.interrupt`, no `Cancelling`/`Cancelled` run status, and cooperative tool interruption with partial results) |

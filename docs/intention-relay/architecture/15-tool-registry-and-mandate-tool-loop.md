@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 15. Decisions: ADR 0007, ADR 0025. Research: m4plus_concept.md.
+Owner: architecture 15. Decisions: ADR 0007, ADR 0025, ADR 0053. Research: m4plus_concept.md.
 
 This document owns the unified tool registry, immutable tool selection, direct Mandate tool admission, Mandate
 `WorkspaceRoot` semantics, the model-tool-model loop, and the tool-effect recovery boundary. It applies to future
@@ -159,8 +159,8 @@ descriptor revisions, selection ordering, and direct admission; typed serde JSON
 runtime/application owns live readiness and mode preconditions; primitive owners validate typed inputs/outputs; storage
 owns persistence constraints. No layer may bypass or replace another. Every numeric value is classified before
 activation as an intrinsic representation/protocol bound, typed capacity availability, or a liveness safeguard with
-recorded rationale (ADR 0048); future Mandate product ceilings, retry budgets, and successful-result truncation are not
-permitted.
+recorded rationale (ADR 0048); future Mandate product ceilings, retry budgets, and successful-result truncation to fit a
+ceiling are not permitted.
 
 ## Mandate direct admission and WorkspaceRoot
 
@@ -209,10 +209,9 @@ imported library modules publishes as run facts through this document's post-com
 The loop belongs to one daemon-owned active run. The daemon assigns `ModelStepId`, `ToolGroupId`, and canonical
 `ToolCallId`; providers, adapters, and tools assign none of them, and provider-native call IDs remain private. Runs have
 sequential model steps; this first scope adds no numeric step limit. A tool-calling completed step owns one non-empty
-ordered group; a `ToolCallId` is unique and never reused. A group holds at most **16 calls**; a provider step emitting
-more than 16 fails closed before any local effect with the typed `provider_tool_group_invalid` outcome. The same closed
-outcome applies to a step with calls but no `ToolCalls` closing reason, a `ToolCalls` reason without calls, a duplicate
-or malformed group, or later provider facts for an already closed step.
+ordered group; a `ToolCallId` is unique and never reused, and group validity is shape-only with no numeric call bound.
+A step with calls but no `ToolCalls` closing reason, a `ToolCalls` reason without calls, a duplicate or malformed group,
+or later provider facts for an already closed step fails closed before any local effect.
 
 ```mermaid
 sequenceDiagram
@@ -248,8 +247,9 @@ identifiers, and provider-owned tool execution are excluded, and a driver that c
 exchange cannot claim `model_tool_loop_v1` support.
 
 Representation limits for group validity and output framing are intrinsic bounds or typed capacity outcomes, never
-Mandate product ceilings. Oversized or malformed groups fail before effects; output is never partially committed, and a
-call whose fragment cannot fit receives a known terminal outcome without changing other calls' order or meaning.
+Mandate product ceilings. Malformed or unrepresentable groups fail before effects; output is never partially committed,
+and a call whose output reaches its tool's output window commits the explicitly marked result without changing other
+calls' order or meaning.
 
 ### Fragment stream, terminal outcomes, and bounds
 
@@ -266,15 +266,15 @@ terminal safe result projection of every call becomes model context after the wh
 The first-scope bounds are:
 
 - the existing **512 KiB** individual durable-fact bound applies to every fragment; and
--  content is never truncated or partly committed; if a fragment cannot fit, it is not written and only its call
-  receives the terminal `tool_output_limit_exceeded` outcome, while remaining calls continue.
+-  a tool renders its output within its own output window and reports a cut through the result's truncation flag and
+  explicit marker before the result becomes a fragment; there is no output-refusal outcome, and an accepted fragment is
+  never truncated or partly committed.
 
 The closed initial terminal outcome taxonomy is: `Succeeded`, `DeniedBeforeExecution`, `FailedBeforeExternalEffect`,
-`CancelledBeforeStart`, `InterruptedBeforeStart`, `OutputLimitExceeded`, `ExecutionUnavailable`, and `Partial`. It
-carries only safe model-visible projection and approved typed metadata; no value silently changes category during
-replay. `Succeeded`, known denials, known pre-effect failures, the output-limit outcome, and `Partial` may enter the
-next typed exchange; a `Partial` result carries the bounded captured output with its interruption notice, never blocks
-another model step, and is never retried.
+`CancelledBeforeStart`, `InterruptedBeforeStart`, `ExecutionUnavailable`, and `Partial`. It carries only safe
+model-visible projection and approved typed metadata; no value silently changes category during replay. `Succeeded`,
+known denials, known pre-effect failures, and `Partial` may enter the next typed exchange; a `Partial` result carries
+the bounded captured output with its interruption notice, never blocks another model step, and is never retried.
 
 ### Tool history replay and subscription
 
@@ -301,23 +301,23 @@ never a partially understood snapshot or live stream. Historical M4 runs retain 
 
 ## Model progress deadline
 
-`model_stream_progress_timeout_v1` is the selected future model-step policy for all post-M4 model-tool-loop steps,
-including roots and children. It does not reinterpret or alter M4's existing absolute provider-attempt deadline.
+`model_stream_progress_timeout_v1` is the selected model-step policy for all post-M4 model-tool-loop steps, including
+roots and children. Progress is content, not schedule: only non-empty `TextDelta` and `ReasoningDelta` facts count;
+`Started`, usage, and other non-content facts do not, and a continuously producing stream has no fixed step duration.
+The policy is active only while a provider stream for a model step is open; it is paused while a tool or foreground
+kernel cell runs, confirmation or `ask_user` awaits, `AwaitResult` waits for a child, a retry delay runs, or the run is
+completing or cancelling.
 
-After a future request is sent to a provider, the first non-empty `TextDelta` or `ReasoningDelta` must arrive within
-sixty seconds; the same sixty-second deadline applies between later such deltas. Only non-empty text and reasoning
-deltas reset the deadline; `Started`, usage, and other non-content facts do not. An accepted `ToolCall` or `Finished`
-before the deadline ends the provider phase normally. The progress deadline is active only while a provider stream for a
-model step is open; it is paused while a tool or foreground kernel cell runs, confirmation or `ask_user` awaits,
-`AwaitResult` waits for a child, a retry delay runs, or the run is completing or cancelling.
+A provider stream that stops producing content fails with `model_stream_progress_timeout`. This document selects no
+fixed deadline value: the enforcing bound for the current scope is the provider execution's configured attempt timeout,
+an implementation safeguard owned by [architecture 08](08-model-protocol-and-providers.md) and [architecture
+09](09-configuration-security-and-observability.md), and a later activating specification selects any progress deadline
+it adds. Before the first durable content or other irreversible fact, exactly one retry is permitted after
+`model_stream_progress_timeout`; after such a fact, no retry is permitted. A simultaneously committed user cancellation
+wins the race. A timeout otherwise produces a safe failed outcome, suppresses late fragments, and never claims success
+or resumes work after restart.
 
-For future post-M4 steps, this progress deadline replaces the absolute attempt deadline: a continuously producing stream
-has no additional fixed step duration. Before the first durable content or other irreversible fact, exactly one retry is
-permitted after `model_stream_progress_timeout`; after such a fact, no retry is permitted. A simultaneously committed
-user cancellation wins the race. A timeout otherwise produces a safe failed outcome, suppresses late fragments, and
-never claims success or resumes work after restart.
-
-The progress deadline is a model-step policy owned by this document, referenced by the programmatic-caller policy under
+The progress policy is a model-step policy owned by this document, referenced by the programmatic-caller policy under
 [architecture 27](27-programmatic-caller-policy-and-admission.md); it may not weaken it. A timeout outcome is a known
 typed failure before an external effect when no irreversible fact preceded it, and a bounded `Partial` result when a
 started effect lacks durable terminal proof; the next model step proceeds, and nothing pauses.
