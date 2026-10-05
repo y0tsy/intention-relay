@@ -39,6 +39,15 @@ fn time(value: i64) -> TimestampDto {
 }
 
 fn snapshot(model: &str) -> ConfigSnapshotDto {
+    snapshot_with_context_window(model, None)
+}
+
+/// Builds one frozen run configuration, optionally overriding the context
+/// window policy so a test can drive the sliding window deterministically.
+fn snapshot_with_context_window(
+    model: &str,
+    context_window: Option<(u64, u64)>,
+) -> ConfigSnapshotDto {
     let source = ConfigSourceDto::Explicit(
         ConfigPathDto::parse(
             std::env::temp_dir()
@@ -48,8 +57,11 @@ fn snapshot(model: &str) -> ConfigSnapshotDto {
         )
         .expect("fixture path is absolute"),
     );
+    let context_window = context_window.map_or_else(String::new, |(window, capacity)| {
+        format!("context_window_tokens = {window}\ncontext_capacity_tokens = {capacity}\n")
+    });
     let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-        format!("schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"fixture-secret\""),
+        format!("schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"fixture-secret\"\n{context_window}"),
         source,
     ))
     .expect("fixture config resolves");
@@ -105,6 +117,13 @@ fn request(run_id: RunId, model: &str) -> ModelRequestDto {
     .expect("request is valid")
     .with_tools(vec![tool_definition()])
     .expect("request tool definitions are valid")
+}
+
+/// Marks one expected message as the cache breakpoint the runtime recomputes
+/// for the stable window prefix before every continuation request.
+const fn cache_breakpoint(mut message: ModelMessageDto) -> ModelMessageDto {
+    message.set_cache_control(true);
+    message
 }
 
 /// Ordered markers shared by the repository fixture and a gate fixture, so a
@@ -915,9 +934,86 @@ fn tool_call_executes_tool_records_result_and_completes() {
             ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid"),
             ModelMessageDto::assistant_tool_calls(None, vec![call.clone()])
                 .expect("message is valid"),
-            ModelMessageDto::tool_result(call.call_id(), "hello world").expect("message is valid"),
+            cache_breakpoint(
+                ModelMessageDto::tool_result(call.call_id(), "hello world")
+                    .expect("message is valid"),
+            ),
         ]
     );
+}
+
+#[test]
+fn the_window_pass_compresses_a_large_tool_result_before_the_continuation_request() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot_with_context_window("fixture", Some((60, 1_000_000)));
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::tool_call(call.clone())),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    let large = "x".repeat(400);
+    let port = ScriptedPort::new(vec![Ok(
+        ToolResultOutcomeDto::succeeded(large.clone()).expect("content is valid")
+    )]);
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        &port,
+        request(run_id, "fixture"),
+        config,
+        ModelCancellationSignal::new(),
+    )
+    .expect("windowed tool loop completes");
+
+    assert_eq!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed {
+            cursor: RunEventCursorDto::new(4)
+        }
+    );
+    let requests = driver.requests.borrow();
+    let messages = requests[1].messages();
+    assert_eq!(messages.len(), 3, "no message is ever removed");
+    assert_eq!(messages[1].role(), ModelRoleDto::Assistant);
+    assert_eq!(
+        messages[1]
+            .tool_calls()
+            .expect("the assistant tool call is preserved")
+            .first()
+            .expect("one call is preserved")
+            .call_id(),
+        call.call_id()
+    );
+    let content = messages[2].content();
+    assert_eq!(messages[2].role(), ModelRoleDto::Tool);
+    assert_eq!(messages[2].tool_call_id(), Some(call.call_id()));
+    assert!(
+        content.chars().count() < large.chars().count(),
+        "the continuation request carries the compressed result"
+    );
+    assert!(content.contains("[compressed]"));
+    assert!(
+        messages[2].cache_control(),
+        "the recomputed breakpoint closes the trimmed stable prefix"
+    );
+    drop(requests);
+    let appends = repository.appends.borrow();
+    assert!(matches!(
+        appends[2].facts(),
+        [ModelRunFactInputDto::ToolResultRecorded {
+            outcome: ToolResultOutcomeDto::Succeeded { content },
+            ..
+        }] if content == &large
+    ));
 }
 
 #[test]
@@ -983,8 +1079,10 @@ fn partial_tool_result_continues_the_loop_without_terminalizing() {
             ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid"),
             ModelMessageDto::assistant_tool_calls(None, vec![call.clone()])
                 .expect("message is valid"),
-            ModelMessageDto::tool_result(call.call_id(), partial_content)
-                .expect("message is valid"),
+            cache_breakpoint(
+                ModelMessageDto::tool_result(call.call_id(), partial_content)
+                    .expect("message is valid"),
+            ),
         ]
     );
 }
@@ -1064,7 +1162,9 @@ fn multiple_tool_calls_execute_sequentially_in_provider_order() {
             ModelMessageDto::assistant_tool_calls(None, vec![first.clone(), second.clone()])
                 .expect("message is valid"),
             ModelMessageDto::tool_result(first.call_id(), "one").expect("message is valid"),
-            ModelMessageDto::tool_result(second.call_id(), "two").expect("message is valid"),
+            cache_breakpoint(
+                ModelMessageDto::tool_result(second.call_id(), "two").expect("message is valid"),
+            ),
         ]
     );
 }
@@ -1135,7 +1235,9 @@ fn repeated_tool_rounds_continue_until_finished() {
             ModelMessageDto::tool_result(first.call_id(), "one").expect("message is valid"),
             ModelMessageDto::assistant_tool_calls(None, vec![second.clone()])
                 .expect("message is valid"),
-            ModelMessageDto::tool_result(second.call_id(), "two").expect("message is valid"),
+            cache_breakpoint(
+                ModelMessageDto::tool_result(second.call_id(), "two").expect("message is valid"),
+            ),
         ]
     );
 }
@@ -2615,7 +2717,9 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
             ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid"),
             ModelMessageDto::assistant_tool_calls(None, vec![call.clone()])
                 .expect("message is valid"),
-            ModelMessageDto::tool_result(call.call_id(), "hello").expect("message is valid"),
+            cache_breakpoint(
+                ModelMessageDto::tool_result(call.call_id(), "hello").expect("message is valid"),
+            ),
         ]
     );
     drop(requests);

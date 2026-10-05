@@ -8,7 +8,7 @@
 use intention_config::{ConfigSnapshotDto, ProviderKindDto, ResolvedConfigDto};
 use intention_types::{ConfigRevisionId, SchemaVersionDto, TimestampDto};
 
-const VALID_RESOLVED: &str = r#"{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"source_kind":"explicit"}"#;
+const VALID_RESOLVED: &str = r#"{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000,"capacity_tokens":1000000},"source_kind":"explicit"}"#;
 
 #[test]
 fn config_snapshot_fixture_decodes_and_round_trips_without_credential() {
@@ -32,6 +32,14 @@ fn config_snapshot_fixture_decodes_and_round_trips_without_credential() {
         30
     );
     assert_eq!(snapshot.resolved().provider_execution().max_attempts(), 2);
+    assert_eq!(
+        snapshot.resolved().context_window().window_tokens(),
+        250_000
+    );
+    assert_eq!(
+        snapshot.resolved().context_window().capacity_tokens(),
+        1_000_000
+    );
 
     let encoded = serde_json::to_string(&snapshot).expect("test serialization must succeed");
     let decoded: ConfigSnapshotDto =
@@ -61,12 +69,12 @@ fn config_snapshot_fixture_decodes_and_round_trips_without_credential() {
 fn malformed_config_snapshot_wire_shapes_are_rejected() {
     for wire in [
         r#"{"schema_version":{"major":1,"minor":0},"revision_id":"not-an-id","captured_at":1700000000,"resolved":{}}"#,
-        r#"{"schema_version":{"major":2,"minor":0},"revision_id":"44444444-4444-4444-8444-444444444444","captured_at":1700000000,"resolved":{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"source_kind":"explicit"}}"#,
+        r#"{"schema_version":{"major":2,"minor":0},"revision_id":"44444444-4444-4444-8444-444444444444","captured_at":1700000000,"resolved":{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000,"capacity_tokens":1000000},"source_kind":"explicit"}}"#,
         r#"{"schema_version":{"major":1,"minor":0},"revision_id":"44444444-4444-4444-8444-444444444444","captured_at":1700000000}"#,
-        r#"{"schema_version":{"major":1,"minor":0},"revision_id":"44444444-4444-4444-8444-444444444444","captured_at":1700000000,"resolved":{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openai","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"source_kind":"explicit"}}"#,
-        r#"{"schema_version":{"major":1,"minor":0},"revision_id":"44444444-4444-4444-8444-444444444444","captured_at":1700000000,"resolved":{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":" ","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"source_kind":"explicit"}}"#,
-        r#"{"schema_version":{"major":1,"minor":0},"revision_id":"44444444-4444-4444-8444-444444444444","captured_at":1700000000,"resolved":{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":"fixture","endpoint":" ","credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"source_kind":"explicit"}}"#,
-        r#"{"schema_version":{"major":1,"minor":0},"revision_id":"44444444-4444-4444-8444-444444444444","captured_at":1700000000,"resolved":{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"source_kind":"explicit"},"unexpected":true}"#,
+        r#"{"schema_version":{"major":1,"minor":0},"revision_id":"44444444-4444-4444-8444-444444444444","captured_at":1700000000,"resolved":{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openai","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000,"capacity_tokens":1000000},"source_kind":"explicit"}}"#,
+        r#"{"schema_version":{"major":1,"minor":0},"revision_id":"44444444-4444-4444-8444-444444444444","captured_at":1700000000,"resolved":{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":" ","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000,"capacity_tokens":1000000},"source_kind":"explicit"}}"#,
+        r#"{"schema_version":{"major":1,"minor":0},"revision_id":"44444444-4444-4444-8444-444444444444","captured_at":1700000000,"resolved":{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":"fixture","endpoint":" ","credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000,"capacity_tokens":1000000},"source_kind":"explicit"}}"#,
+        r#"{"schema_version":{"major":1,"minor":0},"revision_id":"44444444-4444-4444-8444-444444444444","captured_at":1700000000,"resolved":{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000,"capacity_tokens":1000000},"source_kind":"explicit"},"unexpected":true}"#,
     ] {
         assert!(serde_json::from_str::<ConfigSnapshotDto>(wire).is_err());
     }

@@ -20,7 +20,7 @@ use intention_model::{
 use intention_types::{DtoResult, ErrorDto, ToolCallId};
 use openrouter_rs::{
     OpenRouterClient,
-    api::chat::{ChatCompletionRequest, Message},
+    api::chat::{ChatCompletionRequest, ContentPart, Message},
     error::OpenRouterError,
     types::{FinishReason as OpenRouterFinishReason, Role, stream::StreamEvent},
 };
@@ -403,6 +403,11 @@ fn safe_error(code: &'static str) -> ProviderErrorDto {
 
 /// Translates one provider-neutral request into the private native SDK shape.
 ///
+/// The daemon-owned system context always closes with the SDK's ephemeral
+/// prompt-cache marker: it is the stable instruction block every round of the
+/// attempt repeats. A provider-neutral message carries its own marker when the
+/// runtime's context window pass closed the stable window prefix on it.
+///
 /// The provider-neutral assistant reasoning attachment
 /// (`ModelRequestDto::assistant_reasoning()`) is intentionally not consumed by
 /// this adapter: the pinned OpenRouter chat-completions SDK has no
@@ -413,7 +418,10 @@ fn safe_error(code: &'static str) -> ProviderErrorDto {
 fn translate_request(request: &ModelRequestDto) -> DtoResult<ChatCompletionRequest> {
     let mut messages = Vec::new();
     if let Some(context) = request.system_context() {
-        messages.push(Message::new(Role::System, context));
+        messages.push(Message::with_parts(
+            Role::System,
+            vec![ContentPart::cacheable_text(context)],
+        ));
     }
     for message in request.messages() {
         messages.push(translate_message(message)?);
@@ -474,12 +482,12 @@ fn parse_parameters<T: std::str::FromStr>(raw: &str) -> DtoResult<T> {
 
 fn translate_message(message: &ModelMessageDto) -> DtoResult<Message> {
     match message.role() {
-        ModelRoleDto::System => Ok(Message::new(Role::System, message.content())),
-        ModelRoleDto::User => Ok(Message::new(Role::User, message.content())),
+        ModelRoleDto::System => Ok(translate_text_message(Role::System, message)),
+        ModelRoleDto::User => Ok(translate_text_message(Role::User, message)),
         ModelRoleDto::Assistant => translate_assistant_message(message),
         // A notice is daemon-synthesized context for the model: the wire
         // carries it as a user-role message with its text unchanged.
-        ModelRoleDto::Notice => Ok(Message::new(Role::User, message.content())),
+        ModelRoleDto::Notice => Ok(translate_text_message(Role::User, message)),
         ModelRoleDto::Tool => {
             let tool_call_id = message.tool_call_id().ok_or_else(|| {
                 ErrorDto::validation(
@@ -487,11 +495,31 @@ fn translate_message(message: &ModelMessageDto) -> DtoResult<Message> {
                     "tool-role messages must carry one tool call identity",
                 )
             })?;
-            Ok(Message::tool_response(
-                &tool_call_id.to_string(),
-                message.content(),
-            ))
+            Ok(translate_tool_message(&tool_call_id.to_string(), message))
         }
+    }
+}
+
+/// Translates one plain text message, marking its content as cacheable when the
+/// runtime's context window pass closed a prompt-cache prefix on it.
+fn translate_text_message(role: Role, message: &ModelMessageDto) -> Message {
+    if message.cache_control() {
+        Message::with_parts(role, vec![ContentPart::cacheable_text(message.content())])
+    } else {
+        Message::new(role, message.content())
+    }
+}
+
+/// Translates one tool response, keeping the prompt-cache marker of a message
+/// that closes a cacheable prefix.
+fn translate_tool_message(tool_call_id: &str, message: &ModelMessageDto) -> Message {
+    if message.cache_control() {
+        Message::tool_response(
+            tool_call_id,
+            vec![ContentPart::cacheable_text(message.content())],
+        )
+    } else {
+        Message::tool_response(tool_call_id, message.content())
     }
 }
 
@@ -507,12 +535,9 @@ fn translate_message(message: &ModelMessageDto) -> DtoResult<Message> {
 /// Returns a validation error when a tool-call message cannot be mapped.
 fn translate_assistant_message(message: &ModelMessageDto) -> DtoResult<Message> {
     let content = message.content();
-    let Some(tool_calls) = message.tool_calls() else {
-        return Ok(Message::new(Role::Assistant, content));
+    let Some(tool_calls) = message.tool_calls().filter(|calls| !calls.is_empty()) else {
+        return Ok(translate_text_message(Role::Assistant, message));
     };
-    if tool_calls.is_empty() {
-        return Ok(Message::new(Role::Assistant, content));
-    }
     let native_calls = tool_calls
         .iter()
         .map(|call| {
@@ -523,10 +548,17 @@ fn translate_assistant_message(message: &ModelMessageDto) -> DtoResult<Message> 
             )
         })
         .collect::<Vec<_>>();
-    Ok(Message::assistant_with_tool_calls(
-        content.to_owned(),
-        native_calls,
-    ))
+    if message.cache_control() {
+        Ok(Message::assistant_with_tool_calls(
+            vec![ContentPart::cacheable_text(content)],
+            native_calls,
+        ))
+    } else {
+        Ok(Message::assistant_with_tool_calls(
+            content.to_owned(),
+            native_calls,
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -727,6 +759,50 @@ mod tests {
             })
         );
         assert!(wire.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn cache_markers_close_the_system_block_and_the_stable_prefix() {
+        let call = ToolCallDto::new(ToolCallId::new(), "read", r#"{"path":"hello.txt"}"#)
+            .expect("fixture call is valid");
+        let mut result =
+            ModelMessageDto::tool_result(call.call_id(), "hello world").expect("message is valid");
+        result.set_cache_control(true);
+        let request = ModelRequestDto::new(
+            RunId::new(),
+            "fixture-model",
+            vec![
+                ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid"),
+                ModelMessageDto::assistant_tool_calls(None, vec![call]).expect("message is valid"),
+                result,
+            ],
+            Some("instructions".to_owned()),
+            None,
+        )
+        .expect("request is valid");
+
+        let wire = serde_json::to_value(translate_request(&request).expect("request translates"))
+            .expect("request serializes");
+
+        assert_eq!(
+            wire["messages"][0]["content"][0],
+            serde_json::json!({
+                "type": "text",
+                "text": "instructions",
+                "cache_control": {"type": "ephemeral"},
+            })
+        );
+        assert_eq!(wire["messages"][1]["content"], "hello");
+        assert!(wire["messages"][2].get("cache_control").is_none());
+        assert_eq!(
+            wire["messages"][3]["content"][0],
+            serde_json::json!({
+                "type": "text",
+                "text": "hello world",
+                "cache_control": {"type": "ephemeral"},
+            }),
+            "the flagged tool result closes the stable window prefix"
+        );
     }
 
     #[test]

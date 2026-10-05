@@ -30,7 +30,7 @@ use intention_types::{DtoResult, ErrorDto, ToolCallId};
 
 mod wire;
 
-use wire::{WireChunk, WireDelta, WireMessage, WireRequest};
+use wire::{WireCacheControl, WireChunk, WireDelta, WireMessage, WireRequest};
 
 /// Generic Chat Completions driver with private SDK client state.
 pub struct GenericChatDriver {
@@ -554,6 +554,11 @@ fn non_retryable_error(code: &'static str) -> ProviderErrorDto {
 
 /// Translates one provider-neutral request into the exact wire request.
 ///
+/// The daemon-owned system context always closes with a prompt-cache marker:
+/// it is the stable instruction block that every round of the attempt repeats.
+/// A provider-neutral message carries its own marker when the runtime's context
+/// window pass closed the stable window prefix on it.
+///
 /// # Errors
 ///
 /// Returns a validation error for an undecodable tool-parameter schema or a
@@ -567,6 +572,7 @@ fn translate_request(request: &ModelRequestDto) -> DtoResult<WireRequest> {
     if let Some(context) = request.system_context() {
         messages.push(WireMessage::System {
             content: context.to_owned(),
+            cache_control: Some(WireCacheControl::ephemeral()),
         });
     }
     for message in request.messages() {
@@ -637,18 +643,22 @@ fn translate_message(
     message: &ModelMessageDto,
     attachments: &BTreeMap<ToolCallId, &str>,
 ) -> DtoResult<WireMessage> {
+    let cache_control = message.cache_control().then(WireCacheControl::ephemeral);
     match message.role() {
         ModelRoleDto::System => Ok(WireMessage::System {
             content: message.content().to_owned(),
+            cache_control,
         }),
         ModelRoleDto::User => Ok(WireMessage::User {
             content: message.content().to_owned(),
+            cache_control,
         }),
         ModelRoleDto::Assistant => translate_assistant_message(message, attachments),
         // A notice is daemon-synthesized context for the model: the wire
         // carries it as a user-role message with its text unchanged.
         ModelRoleDto::Notice => Ok(WireMessage::User {
             content: message.content().to_owned(),
+            cache_control,
         }),
         ModelRoleDto::Tool => {
             let tool_call_id = message.tool_call_id().ok_or_else(|| {
@@ -660,6 +670,7 @@ fn translate_message(
             Ok(WireMessage::Tool {
                 content: message.content().to_owned(),
                 tool_call_id: tool_call_id.to_string(),
+                cache_control,
             })
         }
     }
@@ -672,11 +683,13 @@ fn translate_assistant_message(
     // The assistant content is optional when tool calls are present, so an
     // empty DTO content stays omitted on the wire.
     let content = (!message.content().is_empty()).then(|| message.content().to_owned());
+    let cache_control = message.cache_control().then(WireCacheControl::ephemeral);
     let Some(tool_calls) = message.tool_calls() else {
         return Ok(WireMessage::Assistant {
             content,
             tool_calls: None,
             reasoning_content: None,
+            cache_control,
         });
     };
     // A matching attachment serializes its reasoning text beside the tool
@@ -703,6 +716,7 @@ fn translate_assistant_message(
                 .collect(),
         ),
         reasoning_content,
+        cache_control,
     })
 }
 
@@ -823,6 +837,46 @@ mod tests {
                     "arguments": r#"{"path":"hello.txt"}"#,
                 },
             })
+        );
+    }
+
+    #[test]
+    fn cache_markers_close_the_system_block_and_the_stable_prefix() {
+        let call = ToolCallDto::new(ToolCallId::new(), "read", r#"{"path":"hello.txt"}"#)
+            .expect("fixture call is valid");
+        let mut result =
+            ModelMessageDto::tool_result(call.call_id(), "hello world").expect("message is valid");
+        result.set_cache_control(true);
+        let request = ModelRequestDto::new(
+            RunId::new(),
+            "fixture",
+            vec![
+                ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid"),
+                ModelMessageDto::assistant_tool_calls(None, vec![call]).expect("message is valid"),
+                result,
+            ],
+            Some("instructions".to_owned()),
+            None,
+        )
+        .expect("request is valid");
+
+        let wire = serde_json::to_value(translate_request(&request).expect("request translates"))
+            .expect("request serializes");
+
+        assert_eq!(
+            wire["messages"][0],
+            serde_json::json!({
+                "role": "system",
+                "content": "instructions",
+                "cache_control": {"type": "ephemeral"},
+            })
+        );
+        assert!(wire["messages"][1].get("cache_control").is_none());
+        assert!(wire["messages"][2].get("cache_control").is_none());
+        assert_eq!(
+            wire["messages"][3]["cache_control"],
+            serde_json::json!({"type": "ephemeral"}),
+            "the flagged message closes the stable window prefix"
         );
     }
 

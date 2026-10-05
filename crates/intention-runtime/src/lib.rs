@@ -23,6 +23,10 @@ use intention_types::{
     ToolCallDto,
 };
 
+mod context_window;
+
+use context_window::ContextWindowState;
+
 /// Explicit values for deterministic runtime lifecycle decisions.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeValuesDto {
@@ -543,6 +547,7 @@ where
         }
 
         let policy = persisted.resolved().provider_execution();
+        let context_window = persisted.resolved().context_window();
         let assistant_turn_id = AssistantTurnId::new();
         let mut pending_text = String::new();
         let mut durable_output = false;
@@ -564,6 +569,10 @@ where
                 .drive_attempt(
                     &input,
                     policy.attempt_timeout_seconds(),
+                    ContextWindowState::new(
+                        context_window.window_tokens(),
+                        context_window.capacity_tokens(),
+                    ),
                     AttemptState {
                         cursor,
                         assistant_turn_id,
@@ -642,6 +651,7 @@ where
         &self,
         input: &ModelRunExecutionInputDto,
         timeout_seconds: u8,
+        mut context_window: ContextWindowState,
         state: AttemptState<'_>,
     ) -> DtoResult<AttemptResult> {
         let AttemptState {
@@ -650,8 +660,11 @@ where
             pending_text,
             durable_output,
         } = state;
-        let mut request = input.request.clone();
         let mut messages: Vec<ModelMessageDto> = input.request.messages().to_vec();
+        // The starting context is windowed once, before its first provider
+        // request, exactly like every later tool-result round.
+        context_window.apply(&mut messages)?;
+        let mut request = input.request.with_messages(messages.clone())?;
         let mut reasoning_attachments: Vec<AssistantReasoningDto> = Vec::new();
         let mut tool_round = 0u8;
         loop {
@@ -663,6 +676,7 @@ where
                     assistant_turn_id,
                     pending_text,
                     durable_output,
+                    &mut context_window,
                     cursor,
                 )
                 .await?;
@@ -771,6 +785,10 @@ where
                                 let message =
                                     ModelMessageDto::tool_result(call.call_id(), content)?;
                                 messages.push(message);
+                                // Every added tool result re-runs the window
+                                // pass, so the continuation request carries a
+                                // trimmed context and recomputed breakpoints.
+                                context_window.apply(&mut messages)?;
                             }
                             ToolResultOutcomeDto::Failed { failure } => {
                                 let facts = vec![ModelRunFactInputDto::failed(failure)];
@@ -815,11 +833,13 @@ where
         assistant_turn_id: AssistantTurnId,
         pending_text: &mut String,
         durable_output: &mut bool,
+        context_window: &mut ContextWindowState,
         mut cursor: RunEventCursorDto,
     ) -> DtoResult<RoundOutcome> {
         use futures_util::{FutureExt, StreamExt, future::Either};
 
         let mut lifecycle = ModelStreamLifecycleDto::new();
+        let request_characters = ContextWindowState::request_characters(&request);
         let mut stream = self.driver.execute(request, input.cancellation.clone());
         let timeout = self
             .time
@@ -951,13 +971,6 @@ where
                         *durable_output = true;
                     }
                 }
-                // The per-fact 512 KiB reasoning bound is enforced by the
-                // domain constructors above; the combined per-run 4 MiB bound
-                // (`intention_domain::validate_reasoning_fact_output_bound`)
-                // is enforced at the durable append authority against the
-                // per-run `reasoning_aggregate_bytes` accounting, which
-                // rejects the whole crossing batch before any write
-                // (PR24-024).
                 ModelEventDto::Usage { usage } => {
                     cursor = self.append(
                         input.session_id,
@@ -966,6 +979,7 @@ where
                         vec![ModelRunFactInputDto::usage_recorded(usage)],
                         None,
                     )?;
+                    context_window.observe_usage(usage, request_characters);
                     *durable_output = true;
                 }
                 ModelEventDto::ToolCall { call } => {
