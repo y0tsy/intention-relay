@@ -650,14 +650,11 @@ async fn host_stop_cancels_blocked_execution_without_late_facts() {
         "the exact registered execution task completes without release"
     );
     let replay = facade
-        .load_current_run_replay_for_daemon(session_id, run_id)
+        .load_current_run_snapshot_for_daemon(session_id, run_id)
         .expect("cancelled run replay reads");
+    assert_eq!(replay.run_projection().status(), RunStatusDto::Cancelled);
     assert_eq!(
-        replay.snapshot().run_projection().status(),
-        RunStatusDto::Cancelled
-    );
-    assert_eq!(
-        replay.snapshot().cursor().value(),
+        replay.cursor().value(),
         1,
         "only initial attempt fact persisted"
     );
@@ -674,14 +671,14 @@ async fn host_stop_cancels_blocked_execution_without_late_facts() {
     );
     server.await.expect("host accepts command and stop peers");
     let released_replay = facade
-        .load_current_run_replay_for_daemon(session_id, run_id)
+        .load_current_run_snapshot_for_daemon(session_id, run_id)
         .expect("released cancellation replay reads");
     assert_eq!(
-        released_replay.snapshot().run_projection().status(),
+        released_replay.run_projection().status(),
         RunStatusDto::Cancelled
     );
     assert_eq!(
-        released_replay.snapshot().cursor().value(),
+        released_replay.cursor().value(),
         1,
         "released driver facts cannot arrive after cancellation"
     );
@@ -742,10 +739,10 @@ async fn terminal_promotion_schedules_the_persisted_queued_run_once_through_the_
     assert!(matches!(requests[1].messages().last(), Some(message)
         if message.role() == ModelRoleDto::User && message.content() == "queued host turn"));
     let promoted_replay = facade
-        .load_current_run_replay_for_daemon(session_id, promoted_run)
+        .load_current_run_snapshot_for_daemon(session_id, promoted_run)
         .expect("promoted run has durable replay");
     assert_eq!(
-        promoted_replay.snapshot().run_projection().status(),
+        promoted_replay.run_projection().status(),
         RunStatusDto::Running
     );
     assert_ne!(first_run, promoted_run);
@@ -763,9 +760,8 @@ async fn terminal_promotion_schedules_the_persisted_queued_run_once_through_the_
     );
     assert_eq!(
         facade
-            .load_current_run_replay_for_daemon(session_id, promoted_run)
+            .load_current_run_snapshot_for_daemon(session_id, promoted_run)
             .expect("promoted replay reads")
-            .snapshot()
             .run_projection()
             .status(),
         RunStatusDto::Completed,
@@ -845,18 +841,18 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
     )
     .expect("restart recovery opens the existing durable host state");
     let interrupted = restarted
-        .load_current_run_replay_for_daemon(session_id, first_run)
+        .load_current_run_snapshot_for_daemon(session_id, first_run)
         .expect("interrupted original replay reads");
     let successor = restarted
-        .load_current_run_replay_for_daemon(session_id, promoted_run)
+        .load_current_run_snapshot_for_daemon(session_id, promoted_run)
         .expect("recovery-promoted successor replay reads");
     assert_eq!(
-        interrupted.snapshot().run_projection().status(),
+        interrupted.run_projection().status(),
         RunStatusDto::Interrupted,
         "recovery finishes before the second host becomes ready"
     );
     assert_eq!(
-        successor.snapshot().run_projection().status(),
+        successor.run_projection().status(),
         RunStatusDto::Starting,
         "recovery promotion preserves queued durable input but does not resume it"
     );
@@ -993,13 +989,10 @@ async fn host_stop_before_task_registration_terminalizes_without_provider_work_o
         .await
         .expect("terminalizer removes its registry entry after a durable terminal reread");
     let replay = facade
-        .load_current_run_replay_for_daemon(session_id, run_id)
+        .load_current_run_snapshot_for_daemon(session_id, run_id)
         .expect("cancelled run replay reads");
-    assert_eq!(
-        replay.snapshot().run_projection().status(),
-        RunStatusDto::Cancelled
-    );
-    assert_eq!(replay.snapshot().cursor().value(), 0);
+    assert_eq!(replay.run_projection().status(), RunStatusDto::Cancelled);
+    assert_eq!(replay.cursor().value(), 0);
     assert_eq!(driver.executions(), 0, "provider work never begins");
     assert_eq!(
         host.task_count(),
@@ -1048,9 +1041,8 @@ async fn terminalizer_retries_an_injected_durable_failure_before_registry_cleanu
         .expect("terminalizer observes the injected durable failure");
     assert_eq!(
         facade
-            .load_current_run_replay_for_daemon(session_id, run_id)
+            .load_current_run_snapshot_for_daemon(session_id, run_id)
             .expect("cancelling replay reads")
-            .snapshot()
             .run_projection()
             .status(),
         RunStatusDto::Cancelling
@@ -1069,13 +1061,10 @@ async fn terminalizer_retries_an_injected_durable_failure_before_registry_cleanu
     .expect("terminalizer retries to durable completion");
     host.wait_for_task_cleanup().await;
     let replay = facade
-        .load_current_run_replay_for_daemon(session_id, run_id)
+        .load_current_run_snapshot_for_daemon(session_id, run_id)
         .expect("terminal run replay reads");
-    assert_eq!(
-        replay.snapshot().run_projection().status(),
-        RunStatusDto::Cancelled
-    );
-    assert_eq!(replay.snapshot().cursor().value(), 0);
+    assert_eq!(replay.run_projection().status(), RunStatusDto::Cancelled);
+    assert_eq!(replay.cursor().value(), 0);
     assert_eq!(host.terminalizer_attempts(), 2);
     assert_eq!(
         host.task_count(),
@@ -1138,9 +1127,8 @@ async fn host_stop_between_starting_replay_and_first_append_terminalizes_once_wi
     // terminal transition instead of an unbounded wait.
     for _ in 0..200 {
         if facade
-            .load_current_run_replay_for_daemon(session_id, run_id)
+            .load_current_run_snapshot_for_daemon(session_id, run_id)
             .expect("run replay reads")
-            .snapshot()
             .run_projection()
             .status()
             == RunStatusDto::Cancelled
@@ -1150,13 +1138,10 @@ async fn host_stop_between_starting_replay_and_first_append_terminalizes_once_wi
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     let replay = facade
-        .load_current_run_replay_for_daemon(session_id, run_id)
+        .load_current_run_snapshot_for_daemon(session_id, run_id)
         .expect("cancelled run replay reads");
-    assert_eq!(
-        replay.snapshot().run_projection().status(),
-        RunStatusDto::Cancelled
-    );
-    assert_eq!(replay.snapshot().cursor().value(), 0);
+    assert_eq!(replay.run_projection().status(), RunStatusDto::Cancelled);
+    assert_eq!(replay.cursor().value(), 0);
     assert_eq!(driver.executions(), 0, "provider work never begins");
     let events = facade
         .durable_events_for_test_support(session_id)

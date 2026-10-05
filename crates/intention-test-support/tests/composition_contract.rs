@@ -100,10 +100,12 @@ fn durable_lifecycle_and_replay_contracts_hold() {
     ));
     assert!(matches!(
         facade.subscribe(SubscribeSessionCommandDto::new(
-            SCHEMA, session_id, Some(SessionEventSequenceDto::new(0)), RunModeDto::Build,
+            SCHEMA,
+            session_id,
+            Some(SessionEventSequenceDto::new(0)),
+            RunModeDto::Build,
         )),
-        SessionSubscriptionResponseDto::SnapshotAndTail { snapshot: _, tail }
-            if tail.events().is_empty()
+        SessionSubscriptionResponseDto::Snapshot(_)
     ));
     for (scoped_session, run_id) in [
         (session_id, Some(active_run)),

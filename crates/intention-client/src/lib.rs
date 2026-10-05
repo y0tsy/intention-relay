@@ -12,7 +12,7 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use intention_domain::{ModelRunFactDto, ModelRunFactInputDto, RunEventCursorDto, RunSnapshotDto};
+use intention_domain::{ModelRunFactInputDto, RunEventCursorDto, RunSnapshotDto};
 use intention_protocol::{
     DaemonHealthDto, DaemonReadinessDto, ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto,
     ProtocolQueryResultDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, RunLiveBatchDto,
@@ -484,27 +484,16 @@ impl RunSubscriptionReducer {
     ///
     /// # Errors
     ///
-    /// Returns a typed scoped-response error without mutation for wrong scope or
-    /// an incomplete replay tail.
+    /// Returns a typed scoped-response error without mutation for a replay that
+    /// belongs to another session or run.
     pub fn apply_initial(&mut self, response: RunSubscriptionResponseDto) -> DtoResult<()> {
         match response {
-            RunSubscriptionResponseDto::Replay(replay) => {
-                self.ensure_scope(replay.snapshot().session_id(), replay.snapshot().run_id())?;
-                let tail = replay.tail();
-                if tail.session_id() != self.session_id
-                    || tail.run_id() != self.run_id
-                    || tail.after_cursor() != replay.snapshot().cursor()
-                    || tail.has_more()
-                {
-                    return Err(ErrorDto::validation(
-                        "invalid_run_subscription",
-                        "run replay must contain one complete matching tail",
-                    ));
-                }
+            RunSubscriptionResponseDto::Replay(snapshot) => {
+                self.ensure_scope(snapshot.session_id(), snapshot.run_id())?;
+                let cursor = snapshot.cursor();
                 let mut next = Self::new(self.session_id, self.run_id);
-                next.snapshot = Some(replay.snapshot().clone());
-                next.last_cursor = Some(replay.snapshot().cursor());
-                next.apply_replay_tail(tail.facts())?;
+                next.snapshot = Some(snapshot);
+                next.last_cursor = Some(cursor);
                 *self = next;
                 Ok(())
             }
@@ -584,37 +573,6 @@ impl RunSubscriptionReducer {
         self.historical_reasoning_cursors = historical_cursors;
         self.last_cursor = next_cursor;
         Ok(None)
-    }
-
-    fn apply_replay_tail(&mut self, facts: &[ModelRunFactDto]) -> DtoResult<()> {
-        let snapshot_cursor = self
-            .snapshot
-            .as_ref()
-            .map_or(RunEventCursorDto::new(0), RunSnapshotDto::cursor);
-        let mut next_cursor = snapshot_cursor;
-        let mut reasoning_content = String::new();
-        let mut reasoning_cursors = BTreeSet::new();
-        for fact in facts {
-            let expected_cursor = next_cursor.value().checked_add(1).ok_or_else(|| {
-                ErrorDto::validation("invalid_run_subscription", "run replay cursor overflow")
-            })?;
-            if fact.cursor().value() != expected_cursor {
-                return Err(ErrorDto::validation(
-                    "invalid_run_subscription",
-                    "run replay tail requires contiguous facts",
-                ));
-            }
-            if let ModelRunFactInputDto::ReasoningDeltaRecorded { content, .. } = fact.input()
-                && reasoning_cursors.insert(fact.cursor())
-            {
-                reasoning_content.push_str(content);
-            }
-            next_cursor = fact.cursor();
-        }
-        self.reasoning_content = reasoning_content;
-        self.historical_reasoning_cursors = reasoning_cursors;
-        self.last_cursor = Some(next_cursor);
-        Ok(())
     }
 
     fn apply_resync(&mut self, resync: RunResyncDto) -> DtoResult<()> {

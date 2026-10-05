@@ -117,10 +117,9 @@ fn durable_model_facts_are_replayed_with_cursor_boundaries_and_no_cross_session_
     );
     assert_eq!(outcome.cursor().value(), 2);
     let replay = repository
-        .load_current_run_replay(session_id, run_id)
+        .load_current_run_snapshot(session_id, run_id)
         .expect("current replay loads");
-    assert_eq!(replay.snapshot().cursor().value(), 2);
-    assert!(replay.tail().facts().is_empty());
+    assert_eq!(replay.cursor().value(), 2);
     let tail = repository
         .load_run_tail(session_id, run_id, RunEventCursorDto::new(0))
         .expect("run tail loads");
@@ -158,7 +157,7 @@ fn durable_model_facts_are_replayed_with_cursor_boundaries_and_no_cross_session_
     );
     assert_eq!(
         repository
-            .load_current_run_replay(SessionId::new(), run_id)
+            .load_current_run_snapshot(SessionId::new(), run_id)
             .expect_err("cross-session replay fails")
             .code(),
         "run_replay_not_found"
@@ -298,15 +297,12 @@ fn terminal_model_fact_append_promotes_the_oldest_queued_turn() {
         queued_turn_id
     );
     let promoted = repository
-        .load_current_run_replay(session_id, queued_run_id)
+        .load_current_run_snapshot(session_id, queued_run_id)
         .expect("promoted run snapshot loads");
-    assert_eq!(promoted.snapshot().cursor().value(), 0);
+    assert_eq!(promoted.cursor().value(), 0);
+    assert_eq!(promoted.run_projection().status(), RunStatusDto::Starting);
     assert_eq!(
-        promoted.snapshot().run_projection().status(),
-        RunStatusDto::Starting
-    );
-    assert_eq!(
-        promoted.snapshot().run_projection().config_revision_id(),
+        promoted.run_projection().config_revision_id(),
         queued_snapshot.revision_id()
     );
     let events = repository

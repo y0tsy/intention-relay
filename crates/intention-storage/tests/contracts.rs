@@ -346,7 +346,7 @@ fn storage_dtos_expose_all_fields_and_default_repository_failures_safely() {
     );
     assert_eq!(
         repository
-            .load_current_run_replay(session_id, run_id)
+            .load_current_run_snapshot(session_id, run_id)
             .expect_err("repository operation must be unavailable")
             .code(),
         "run_history_unavailable"

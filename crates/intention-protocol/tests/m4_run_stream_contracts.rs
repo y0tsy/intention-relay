@@ -5,7 +5,7 @@
 
 use intention_domain::{
     ModelRunFactDto, ModelRunFactInputDto, ModelRunProjectionDto, RunEventCursorDto,
-    RunEventTailPageDto, RunProjectionDto, RunSnapshotDto,
+    RunProjectionDto, RunSnapshotDto,
 };
 use intention_protocol::{
     RunLiveBatchDto, RunResyncDto, RunResyncReasonDto, RunSnapshotFrameDto, RunStreamFrameDto,
@@ -67,19 +67,7 @@ fn run_stream_dtos_round_trip_and_preserve_all_resync_reasons() {
         RunEventCursorDto::new(3),
     )
     .expect("contiguous batch is valid");
-    let replay = intention_domain::RunReplayDto::new(
-        snapshot(session_id, run_id, 2),
-        RunEventTailPageDto::new(
-            session_id,
-            run_id,
-            RunEventCursorDto::new(2),
-            vec![fact(3)],
-            RunEventCursorDto::new(3),
-            false,
-        )
-        .expect("replay tail is contiguous"),
-    )
-    .expect("replay is coherent");
+    let replay = snapshot(session_id, run_id, 2);
     let subscription_value = serde_json::to_value(subscription).expect("subscription serializes");
     let replay_response = RunSubscriptionResponseDto::Replay(replay);
     let replay_value = serde_json::to_value(&replay_response).expect("replay serializes");

@@ -6,7 +6,7 @@
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
     CreateSessionCommandDto, GetSessionSnapshotQueryDto, RemoveQueuedTurnCommandDto,
-    RunEventCursorDto, RunEventTailPageDto, RunReplayDto, SendUserTurnCommandDto,
+    RunEventCursorDto, RunEventTailPageDto, RunSnapshotDto, SendUserTurnCommandDto,
     StopRunCommandDto,
 };
 use intention_hooks::{
@@ -964,12 +964,13 @@ where
     ///
     /// Returns the typed repository error when the requested scoped replay is
     /// absent, mismatched, or unavailable.
-    pub fn load_current_run_replay(
+    pub fn load_current_run_snapshot(
         &self,
         session_id: SessionId,
         run_id: RunId,
-    ) -> DtoResult<RunReplayDto> {
-        self.repository.load_current_run_replay(session_id, run_id)
+    ) -> DtoResult<RunSnapshotDto> {
+        self.repository
+            .load_current_run_snapshot(session_id, run_id)
     }
 
     /// Loads one bounded internal run-scoped fact tail.

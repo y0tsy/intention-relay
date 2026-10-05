@@ -865,7 +865,7 @@ fn current_storage_schema_is_created_completely_and_remains_authoritative() {
         "domain_events",
         "session_snapshots",
         "run_snapshots",
-        "run_cursors",
+        "container_journals",
         "model_run_facts",
         "model_run_snapshots",
         "tool_results",

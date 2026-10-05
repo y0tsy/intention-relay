@@ -578,8 +578,7 @@ async fn collect_run_facts(
     let mut facts = Vec::new();
     match reply {
         ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Replay(replay)) => {
-            facts.extend(replay.tail().facts().iter().cloned());
-            let snapshot = replay.snapshot().clone();
+            let snapshot = replay;
             if snapshot.run_projection().status().is_terminal() {
                 return (facts, snapshot);
             }

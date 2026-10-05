@@ -7,7 +7,7 @@ use intention_domain::{RunModeDto, SessionProjectionDto, WorkspaceRootDto};
 use intention_protocol::{
     CURRENT_PROTOCOL_VERSION, CreateSessionAcceptedDto, ProtocolAcceptedDto,
     ProtocolAcceptedResultDto, ProtocolVersionDto, RemoveQueuedTurnAcceptedDto,
-    SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionEventTailBatchDto, SessionSnapshotDto,
+    SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionSnapshotDto,
     SessionSubscriptionResponseDto, StopRunAcceptedDto,
 };
 use intention_types::{
@@ -185,7 +185,7 @@ fn session_snapshot_validation_covers_m3_failure_boundaries() {
 }
 
 #[test]
-fn subscription_snapshot_and_tail_remains_an_unboxed_compatible_wire_value() {
+fn subscription_snapshot_remains_an_unboxed_compatible_wire_value() {
     let schema_version = SchemaVersionDto::new(1, 1);
     let session_id = SessionId::new();
     let snapshot = SessionSnapshotDto::with_projection(
@@ -195,20 +195,11 @@ fn subscription_snapshot_and_tail_remains_an_unboxed_compatible_wire_value() {
         fixture_projection(session_id, SessionEventSequenceDto::new(0)),
     )
     .expect("fixture snapshot is valid");
-    let tail = SessionEventTailBatchDto::new(
-        schema_version,
-        session_id,
-        SessionEventSequenceDto::new(0),
-        Vec::new(),
-    )
-    .expect("empty tail at the snapshot checkpoint is valid");
-    let response = SessionSubscriptionResponseDto::snapshot_and_tail(snapshot, tail)
-        .expect("matching snapshot and tail are valid");
+    let response = SessionSubscriptionResponseDto::snapshot(snapshot);
 
     let wire = serde_json::to_value(&response).expect("response serializes");
-    assert_eq!(wire["kind"], "snapshot_and_tail");
-    assert!(wire["data"]["snapshot"].is_object());
-    assert!(wire["data"]["tail"].is_object());
+    assert_eq!(wire["kind"], "snapshot");
+    assert!(wire["data"].is_object());
     assert_eq!(
         serde_json::from_value::<SessionSubscriptionResponseDto>(wire)
             .expect("response deserializes"),

@@ -13,9 +13,8 @@ use intention_domain::{RunModeDto, SessionProjectionDto};
 use intention_protocol::{
     DaemonHealthDto, DaemonReadinessDto, JsonRpcErrorDto, JsonRpcRequestDto, JsonRpcResponseDto,
     PROTOCOL_HELLO_METHOD, ProtocolHelloDto, ProtocolQueryResultDto, ProtocolResponsePayloadDto,
-    ProtocolVersionDto, SessionEventTailBatchDto, SessionSnapshotDto,
-    SessionSubscriptionResponseDto, SubscribeSessionCommandDto, decode_request_line,
-    encode_hello_response, encode_response,
+    ProtocolVersionDto, SessionSnapshotDto, SessionSubscriptionResponseDto,
+    SubscribeSessionCommandDto, decode_request_line, encode_hello_response, encode_response,
 };
 use intention_transport::{LocalEndpoint, LocalListener, local_protocol_version, negotiate_daemon};
 use intention_types::{
@@ -410,15 +409,7 @@ fn snapshot_and_subscription_validate_success_rejection_and_response_shape() {
         .join()
         .expect("invalid snapshot fixture server completes");
 
-    let tail = SessionEventTailBatchDto::new(
-        SCHEMA_VERSION,
-        session_id,
-        snapshot.at_sequence(),
-        Vec::new(),
-    )
-    .expect("empty fixture tail is valid");
-    let response = SessionSubscriptionResponseDto::snapshot_and_tail(snapshot.clone(), tail)
-        .expect("matching snapshot and tail are valid");
+    let response = SessionSubscriptionResponseDto::snapshot(snapshot.clone());
     let valid_subscription_endpoint = endpoint(&directory);
     let server = start_fixture_server(
         valid_subscription_endpoint.clone(),
@@ -431,20 +422,7 @@ fn snapshot_and_subscription_validate_success_rejection_and_response_shape() {
     )
     .subscribe(subscription(session_id, 4))
     .expect("typed subscription response is returned");
-    assert_eq!(
-        received,
-        SessionSubscriptionResponseDto::snapshot_and_tail(
-            snapshot.clone(),
-            SessionEventTailBatchDto::new(
-                SCHEMA_VERSION,
-                session_id,
-                snapshot.at_sequence(),
-                Vec::new(),
-            )
-            .expect("empty fixture tail is valid"),
-        )
-        .expect("fixture subscription is valid")
-    );
+    assert_eq!(received, SessionSubscriptionResponseDto::snapshot(snapshot));
     server
         .join()
         .expect("subscription fixture server completes");

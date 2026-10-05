@@ -18,7 +18,7 @@ use intention_config::{
 use intention_domain::{
     CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto,
     RemoveQueuedTurnCommandDto, RunEventCursorDto, RunEventTailPageDto, RunModeDto,
-    RunProjectionDto, RunReplayDto, RunStartedEventDto, RunStatusDto, SendUserTurnCommandDto,
+    RunProjectionDto, RunSnapshotDto, RunStartedEventDto, RunStatusDto, SendUserTurnCommandDto,
     SessionProjectionDto, WorkspaceRootDto,
 };
 use intention_hooks::{
@@ -309,11 +309,11 @@ impl StorageRepositoryDto for FakeRepository {
         ))
     }
 
-    fn load_current_run_replay(
+    fn load_current_run_snapshot(
         &self,
         _session_id: SessionId,
         _run_id: RunId,
-    ) -> DtoResult<RunReplayDto> {
+    ) -> DtoResult<RunSnapshotDto> {
         Err(ErrorDto::unavailable(
             "fixture_missing_result",
             "fixture result missing",

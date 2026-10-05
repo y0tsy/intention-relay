@@ -238,9 +238,9 @@ impl HostState {
             if let Err(error) = result {
                 let status = host
                     .facade
-                    .load_current_run_replay_for_daemon(key.0, key.1)
+                    .load_current_run_snapshot_for_daemon(key.0, key.1)
                     .ok()
-                    .map(|replay| replay.snapshot().run_projection().status());
+                    .map(|replay| replay.run_projection().status());
                 match status {
                     Some(status) if status.is_terminal() => {}
                     Some(RunStatusDto::Cancelling) => {
@@ -385,8 +385,7 @@ impl HostState {
         }
         let status = self
             .facade
-            .load_current_run_replay_for_daemon(key.0, key.1)?
-            .snapshot()
+            .load_current_run_snapshot_for_daemon(key.0, key.1)?
             .run_projection()
             .status();
         if status == RunStatusDto::Cancelling {
@@ -403,8 +402,8 @@ impl HostState {
 
     fn cancellation_terminalizer_is_terminal(&self, key: RunKey) -> bool {
         self.facade
-            .load_current_run_replay_for_daemon(key.0, key.1)
-            .is_ok_and(|replay| replay.snapshot().run_projection().status().is_terminal())
+            .load_current_run_snapshot_for_daemon(key.0, key.1)
+            .is_ok_and(|replay| replay.run_projection().status().is_terminal())
     }
 
     async fn wait_for_injected_terminalizer_retry(&self) {
@@ -567,13 +566,13 @@ impl HostState {
         };
         let replay = match self
             .facade
-            .load_current_run_replay_for_daemon(session_id, run_id)
+            .load_current_run_snapshot_for_daemon(session_id, run_id)
         {
             Ok(replay) => replay,
             Err(_) => return false,
         };
         let key = (session_id, run_id);
-        let snapshot = replay.snapshot().clone();
+        let snapshot = replay;
         let current = PublishedRun {
             cursor: snapshot.cursor(),
             status: snapshot.run_projection().status(),
@@ -705,7 +704,7 @@ impl HostState {
         };
         let replay = match self
             .facade
-            .load_current_run_replay_for_daemon(session_id, run_id)
+            .load_current_run_snapshot_for_daemon(session_id, run_id)
         {
             Ok(replay) => replay,
             Err(error) if error.code() == "run_replay_not_found" => {
@@ -727,7 +726,7 @@ impl HostState {
                 return None;
             }
         };
-        if after_cursor.is_some_and(|cursor| cursor > replay.snapshot().cursor()) {
+        if after_cursor.is_some_and(|cursor| cursor > replay.cursor()) {
             let _ = sender.try_send(run_subscription_response(
                 request_id,
                 RunSubscriptionResponseDto::Resync(RunResyncDto::new(
@@ -751,7 +750,7 @@ impl HostState {
         // response enters this subscriber's FIFO queue.
         let response = match self
             .facade
-            .load_current_run_replay_for_daemon(session_id, run_id)
+            .load_current_run_snapshot_for_daemon(session_id, run_id)
         {
             Ok(replay) => RunSubscriptionResponseDto::Replay(replay),
             Err(error) if error.code() == "run_replay_not_found" => {
@@ -1770,8 +1769,8 @@ mod tests {
         else {
             panic!("a run subscription answers with the concrete replay payload")
         };
-        assert_eq!(replay.snapshot().session_id(), session_id);
-        assert_eq!(replay.snapshot().run_id(), run_id);
+        assert_eq!(replay.session_id(), session_id);
+        assert_eq!(replay.run_id(), run_id);
 
         // The same connection still serves an ordinary request while the
         // subscription is registered.
@@ -1862,9 +1861,8 @@ mod tests {
         );
         assert_eq!(
             host.facade
-                .load_current_run_replay_for_daemon(session_id, run_id)
+                .load_current_run_snapshot_for_daemon(session_id, run_id)
                 .expect("cancelling run replay reads")
-                .snapshot()
                 .run_projection()
                 .status(),
             RunStatusDto::Cancelling
@@ -1900,9 +1898,8 @@ mod tests {
             .expect("host stop commits and signals");
         for _ in 0..20 {
             if facade
-                .load_current_run_replay_for_daemon(session_id, run_id)
+                .load_current_run_snapshot_for_daemon(session_id, run_id)
                 .expect("run replay reads")
-                .snapshot()
                 .run_projection()
                 .status()
                 == RunStatusDto::Cancelled
@@ -1913,9 +1910,8 @@ mod tests {
         }
         assert_eq!(
             facade
-                .load_current_run_replay_for_daemon(session_id, run_id)
+                .load_current_run_snapshot_for_daemon(session_id, run_id)
                 .expect("cancelled run replay reads")
-                .snapshot()
                 .run_projection()
                 .status(),
             RunStatusDto::Cancelled

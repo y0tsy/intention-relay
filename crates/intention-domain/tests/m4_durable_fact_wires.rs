@@ -5,7 +5,7 @@
 
 use intention_domain::{
     ModelRunFactDto, ModelRunFactInputDto, ModelRunProjectionDto, RunEventCursorDto,
-    RunEventTailPageDto, RunFailureDto, RunReplayDto, RunSnapshotDto, ToolResultOutcomeDto,
+    RunEventTailPageDto, RunFailureDto, RunSnapshotDto, ToolResultOutcomeDto,
 };
 use intention_types::{
     AssistantTurnId, ConfigRevisionId, CorrelationIdDto, FinishReasonDto, ProviderErrorDto, RunId,
@@ -173,12 +173,6 @@ fn snapshots_tails_and_replays_reject_mismatches_and_round_trip() {
         )
         .is_err()
     );
-    let snapshot_tail = RunEventTailPageDto::empty(session_id, run_id, snapshot.cursor());
-    let replay = RunReplayDto::new(snapshot.clone(), snapshot_tail).expect("replay is valid");
-    let decoded: RunReplayDto =
-        serde_json::from_str(&serde_json::to_string(&replay).expect("replay serializes"))
-            .expect("replay deserializes");
-    assert_eq!(decoded, replay);
     assert!(
         RunEventTailPageDto::new(
             session_id,
@@ -252,8 +246,6 @@ fn snapshots_tails_and_replays_reject_mismatches_and_round_trip() {
         )
         .is_err()
     );
-    let mismatched_tail = RunEventTailPageDto::empty(session_id, RunId::new(), snapshot.cursor());
-    assert!(RunReplayDto::new(snapshot, mismatched_tail).is_err());
 }
 
 #[test]

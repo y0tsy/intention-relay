@@ -54,8 +54,8 @@ fn tui_proof_reaches_the_shared_fixture_daemon_only_through_the_client() {
         .expect("TUI receives the daemon fixture subscription");
     assert!(matches!(
         session,
-        SessionSubscriptionResponseDto::SnapshotAndTail { snapshot, tail }
-            if snapshot.session_id() == session_id && tail.session_id() == session_id
+        SessionSubscriptionResponseDto::Snapshot(snapshot)
+            if snapshot.session_id() == session_id
     ));
     daemon
         .join()

@@ -15,8 +15,8 @@ mod model_facts;
 
 pub use model_facts::{
     ModelRunFactDto, ModelRunFactEventDto, ModelRunFactInputDto, ModelRunFactKindDto,
-    ModelRunProjectionDto, RunEventCursorDto, RunEventTailPageDto, RunFailureDto, RunReplayDto,
-    RunSnapshotDto, ToolResultOutcomeDto,
+    ModelRunProjectionDto, RunEventCursorDto, RunEventTailPageDto, RunFailureDto, RunSnapshotDto,
+    ToolResultOutcomeDto,
 };
 
 /// The agent policy active for a run.

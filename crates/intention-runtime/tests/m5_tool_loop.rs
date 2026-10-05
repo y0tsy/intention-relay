@@ -10,9 +10,9 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::{
-    ModelRunFactDto, ModelRunFactInputDto, ModelRunProjectionDto, RunEventCursorDto,
-    RunEventTailPageDto, RunFailureDto, RunModeDto, RunProjectionDto, RunReplayDto, RunSnapshotDto,
-    RunStatusDto, SessionProjectionDto, ToolResultOutcomeDto, WorkspaceRootDto,
+    ModelRunFactDto, ModelRunFactInputDto, ModelRunProjectionDto, RunEventCursorDto, RunFailureDto,
+    RunModeDto, RunProjectionDto, RunSnapshotDto, RunStatusDto, SessionProjectionDto,
+    ToolResultOutcomeDto, WorkspaceRootDto,
 };
 use intention_model::{
     AssistantReasoningDto, FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto,
@@ -312,18 +312,15 @@ impl StorageRepositoryDto for FakeRepository {
         Ok(self.config.clone())
     }
 
-    fn load_current_run_replay(
+    fn load_current_run_snapshot(
         &self,
         session_id: SessionId,
         run_id: RunId,
-    ) -> DtoResult<RunReplayDto> {
+    ) -> DtoResult<RunSnapshotDto> {
         assert_eq!((session_id, run_id), (self.session_id, self.run_id));
         let cursor = *self.cursor.borrow();
         let snapshot = self.run_snapshot(*self.status.borrow(), cursor);
-        RunReplayDto::new(
-            snapshot,
-            RunEventTailPageDto::empty(session_id, run_id, cursor),
-        )
+        Ok(snapshot)
     }
 
     fn recover_unfinished_runs(

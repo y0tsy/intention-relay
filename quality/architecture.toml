@@ -167,9 +167,29 @@ provider_sdk_resource_patterns = [
   "reqwest::",
 ]
 
+[ordering_authorities]
+# The closed set of durable ordering authorities (ADR 0050). A record family
+# either orders by the session event sequence, belongs to exactly one container
+# and orders by that container's journal, or has no durable order; there is no
+# fourth option. Queue tickets are a queue-ordering mechanism rather than an
+# ordering authority, declared here so the set stays closed and explicit.
+declared = [
+  "SessionEventSequenceDto",
+  "RunEventCursorDto",
+  "QueuePositionDto",
+]
+name_suffixes = [
+  "SequenceDto",
+  "CursorDto",
+  "PositionDto",
+  "TicketDto",
+  "WatermarkDto",
+  "OrderDto",
+]
+
 [[future_crates]]
 name = "intention-types"
-responsibility = "Identifiers, schema versions, common errors, time, pagination, and envelopes."
+responsibility = "Identifiers, schema versions, common errors, time, and envelopes."
 test_target = "dto and validation tests"
 test_targets = ["contracts", "error_contracts", "m3_contracts", "m4_model_values"]
 

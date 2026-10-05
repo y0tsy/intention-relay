@@ -207,8 +207,8 @@ pub fn fail_starting_run<Repository>(
 where
     Repository: StorageRepositoryDto,
 {
-    let replay = repository.load_current_run_replay(session_id, run_id)?;
-    if replay.snapshot().run_projection().status() != RunStatusDto::Starting {
+    let replay = repository.load_current_run_snapshot(session_id, run_id)?;
+    if replay.run_projection().status() != RunStatusDto::Starting {
         return Err(ErrorDto::validation(
             "invalid_starting_run_failure_state",
             "scheduling failure requires the exact run to remain starting",
@@ -218,7 +218,7 @@ where
     repository.append_model_run_facts(AppendModelRunFactsInputDto::new(
         session_id,
         run_id,
-        replay.snapshot().cursor(),
+        replay.cursor(),
         vec![ModelRunFactInputDto::failed(failure)],
         Some(RunStatusDto::Failed),
         occurred_at,
@@ -497,9 +497,9 @@ where
     ) -> DtoResult<ModelRunExecutionOutcomeDto> {
         let replay = self
             .repository
-            .load_current_run_replay(input.session_id, input.run_id)?;
-        let run = replay.snapshot().run_projection();
-        let mut cursor = replay.snapshot().cursor();
+            .load_current_run_snapshot(input.session_id, input.run_id)?;
+        let run = replay.run_projection();
+        let mut cursor = replay.cursor();
         if run.status() == RunStatusDto::Cancelling || input.cancellation.is_cancelled() {
             return self.cancel(input.session_id, input.run_id, cursor, run.status());
         }
@@ -1083,8 +1083,8 @@ where
     ) -> DtoResult<Option<ModelRunExecutionOutcomeDto>> {
         let replay = self
             .repository
-            .load_current_run_replay(input.session_id, input.run_id)?;
-        let snapshot = replay.snapshot();
+            .load_current_run_snapshot(input.session_id, input.run_id)?;
+        let snapshot = replay;
         let status = snapshot.run_projection().status();
         if status == RunStatusDto::Cancelling || input.cancellation.is_cancelled() {
             self.cancel(input.session_id, input.run_id, snapshot.cursor(), status)
@@ -1131,8 +1131,8 @@ where
     ) -> DtoResult<()> {
         let replay = self
             .repository
-            .load_current_run_replay(session_id, run_id)?;
-        self.observe_snapshot(session_id, run_id, cursor, replay.snapshot().clone());
+            .load_current_run_snapshot(session_id, run_id)?;
+        self.observe_snapshot(session_id, run_id, cursor, replay);
         Ok(())
     }
 
