@@ -158,9 +158,9 @@ unchanged replay and page bounds (strict-after contiguity, 256 facts, 512 KiB ca
 gate suite passing. Gates: `make quick`, `make verify`, `docs-check`, `make architecture`, Linux/Windows CI.
 
 The symbol receipt is exact for `crates/`, `docs/intention-relay/`, `quality/`, the `Makefile`, and `.github/`. The
-removed names survive only as historical prose in the root `architecture-fitness-audit.md` (a non-normative artifact of
-an earlier audit, whose own removal is recorded separately) and in the preserved research tree `docs/reference/`; both
-are exempt because editing a historical record to hide a name it reported would destroy the record.
+removed names survive only in the preserved research tree `docs/reference/`, which is exempt because editing a
+historical record to hide a name it reported would destroy the record. The root `architecture-fitness-audit.md` of the
+earlier audit also named them; that orphaned artifact was deleted, so nothing else in the tree does.
 
 The closed-set guard is a name-level check: `quality/check_architecture.py` rejects any production type declaration of
 any visibility, including aliases, whose name ends in a declared ordering suffix and is not in the declared set, and it
