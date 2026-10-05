@@ -227,8 +227,8 @@ malformed/compatibility cases;
 ## Quality-gate integration
 
 DTO compatibility, validation, redaction, and public-API boundary tests are blocking `make verify` inputs. Every
-DTO-owning crate is subject to the base 80% line-coverage threshold and the designated-files mechanism ([ADR
-0049](../decisions/0049-base-coverage-threshold.md)), and contract fixtures run across the required feature profiles.
+DTO-owning crate is subject to its declared coverage tier ([ADR
+0051](../decisions/0051-per-crate-coverage-tiers.md)), and contract fixtures run across the required feature profiles.
 See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Outcome criteria

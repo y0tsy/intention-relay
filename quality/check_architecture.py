@@ -113,7 +113,7 @@ def policy_crates(policy: dict[str, object]) -> dict[str, dict[str, object]]:
             fail(f"duplicate future crate declaration {name}")
         unknown = set(crate) - {"name", "responsibility", "test_target", "test_targets"}
         if "coverage_tier" in unknown:
-            fail(f"future crate {name} must not declare the retired coverage_tier key")
+            fail(f"future crate {name} must not declare coverage_tier; tiers live in quality/coverage.toml")
         if unknown:
             fail(f"future crate {name} has unknown declaration keys: {sorted(unknown)}")
         for field in ("responsibility", "test_target"):
@@ -688,31 +688,56 @@ def check_coverage_policy(root: Path, architecture: dict[str, object]) -> list[s
     if not isinstance(state, dict) or not isinstance(architecture_state, dict):
         return ["coverage and architecture policies require policy tables"]
     failures: list[str] = []
-    if "tiers" in coverage or "crate_tiers" in coverage:
-        failures.append("coverage policy must not define tier tables")
     phase = architecture_state.get("phase")
     if state.get("phase") != phase:
         return ["coverage policy phase must equal architecture policy phase"]
-    active = architecture_state["active_production_crates"]
-    if state.get("production_crates") != active:
-        return ["coverage production crates must equal active production crate list"]
-    if state.get("coverage_crates") != active:
-        return ["coverage crates must equal the active production crate list"]
-    thresholds: dict[str, float] = {}
-    for field in ("base_threshold_percent", "designated_threshold_percent"):
-        threshold = state.get(field)
-        if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
-            failures.append(f"coverage policy {field} must be numeric")
+    tiers = coverage.get("tiers")
+    if not isinstance(tiers, dict) or not tiers:
+        return ["coverage policy requires a [tiers] table"]
+    for name, percent in tiers.items():
+        if not isinstance(name, str) or not name:
+            failures.append("coverage tier names must be non-empty strings")
             continue
-        thresholds[field] = float(threshold)
-    if len(thresholds) == 2:
-        base = thresholds["base_threshold_percent"]
-        designated = thresholds["designated_threshold_percent"]
-        if not 0 < base <= designated <= 100:
-            failures.append(
-                "coverage policy thresholds must satisfy "
-                "0 < base_threshold_percent <= designated_threshold_percent <= 100"
-            )
+        if not isinstance(percent, (int, float)) or isinstance(percent, bool):
+            failures.append(f"coverage tier {name!r} percent must be numeric")
+            continue
+        if not 0 <= float(percent) <= 100:
+            failures.append(f"coverage tier {name!r} percent must be between 0 and 100")
+    assignments = coverage.get("crate_tiers")
+    if not isinstance(assignments, dict) or not assignments:
+        failures.append("coverage policy requires a [crate_tiers] table")
+        return failures
+    # Tier assignments cover the workspace production crates: every active
+    # production crate and adapter package declares exactly one tier. Exempt
+    # (0%) crates are declared here and stay outside collection and aggregates.
+    active = set(string_list(architecture_state, "active_production_crates"))
+    adapters = architecture.get("adapter_boundaries")
+    if not isinstance(adapters, dict):
+        return failures + ["coverage policy requires the adapter boundary package list"]
+    production = active | set(string_list(adapters, "packages"))
+    declared = set(assignments)
+    unknown = sorted(declared - production)
+    if unknown:
+        failures.append(
+            "coverage crates must be active production crates or adapter packages: "
+            + ", ".join(unknown)
+        )
+    missing = sorted(production - declared)
+    if missing:
+        failures.append(
+            "every active production crate and adapter package must declare a coverage tier: "
+            + ", ".join(missing)
+        )
+    collected: set[str] = set()
+    for crate, tier in assignments.items():
+        if not isinstance(crate, str) or not isinstance(tier, str) or tier not in tiers:
+            failures.append(f"coverage crate {crate!r} must name a tier declared in [tiers]")
+            continue
+        percent = tiers[tier]
+        if isinstance(percent, (int, float)) and not isinstance(percent, bool) and float(percent) > 0:
+            collected.add(crate)
+    if not collected:
+        failures.append("coverage policy must leave at least one crate collected (tier above zero)")
     return failures
 
 def main() -> None:

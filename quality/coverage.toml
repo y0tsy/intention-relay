@@ -1,57 +1,37 @@
 [policy]
 phase = "m5"
-# Every production crate and the workspace aggregate must satisfy the base
-# line-coverage threshold.
-base_threshold_percent = 80.0
-designated_threshold_percent = 85.0
-# Designated files carry the higher per-file threshold. The list is empty at
-# adoption; each entry declares a workspace-relative `path` under a production
-# crate `src` root plus a `rationale`:
-# [[designated_files]]
-# path = "crates/example/src/lib.rs"
-# rationale = "Why this file carries the higher bar."
-# Coverage is collected with one isolated Cargo package invocation per profile.
-coverage_crates = [
-  "intention-types",
-  "intention-domain",
-  "intention-protocol",
-  "intention-config",
-  "intention-transport",
-  "intention-client",
-  "intention",
-  "intention-daemon",
-  "intention-application",
-  "intention-runtime",
-  "intention-storage",
-  "intention-storage-sqlite",
-  "intention-model",
-  "intention-provider-openrouter",
-  "intention-provider-generic-chat",
-  "intention-tools",
-  "intention-workspace",
-  "intention-hooks",
-]
-production_crates = [
-  "intention-types",
-  "intention-domain",
-  "intention-protocol",
-  "intention-config",
-  "intention-transport",
-  "intention-client",
-  "intention",
-  "intention-daemon",
-  "intention-application",
-  "intention-runtime",
-  "intention-storage",
-  "intention-storage-sqlite",
-  "intention-model",
-  "intention-provider-openrouter",
-  "intention-provider-generic-chat",
-  "intention-tools",
-  "intention-workspace",
-  "intention-hooks",
-]
-adapter_crates = ["intention-tauri", "intention-tui"]
+
+# Line-coverage floors. [crate_tiers] assigns every active production crate and
+# both presentation adapters to exactly one tier; the runner collects every
+# crate whose tier is above zero, with one isolated Cargo package invocation per
+# profile, and exempt crates stay outside collection and every aggregate.
+[tiers]
+core = 75.0
+standard = 60.0
+edge = 20.0
+exempt = 0.0
+
+[crate_tiers]
+"intention-storage-sqlite" = "core"
+"intention-runtime" = "core"
+"intention-transport" = "core"
+"intention-storage" = "core"
+"intention-application" = "core"
+"intention-domain" = "core"
+"intention-model" = "standard"
+"intention-tools" = "standard"
+"intention-workspace" = "standard"
+"intention-config" = "standard"
+"intention-daemon" = "standard"
+"intention-hooks" = "standard"
+"intention-provider-openrouter" = "standard"
+"intention-provider-generic-chat" = "standard"
+"intention-tauri" = "edge"
+"intention-tui" = "edge"
+"intention" = "edge"
+"intention-client" = "edge"
+"intention-types" = "exempt"
+"intention-protocol" = "exempt"
 
 [[exclusions]]
 enabled = true

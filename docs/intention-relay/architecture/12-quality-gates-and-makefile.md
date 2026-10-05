@@ -13,7 +13,7 @@ The implemented policy covers:
 
 - pinned Rust toolchain and external quality tools;
 - strict pragmatic linting and formatting;
-- an immediate base coverage threshold with a designated-files mechanism;
+- immediate per-crate coverage tiers;
 - required Cargo feature profiles;
 - tests, doctests, documentation, and architecture checks;
 - dependency, license, advisory, unused-dependency, stale-dependency, and manifest hygiene checks;
@@ -202,8 +202,14 @@ gradual ramp.
 M0 provides the versioned coverage-policy file and checker over `cargo llvm-cov` output. Branch-aware reports use the
 pinned dated nightly toolchain; ordinary application checks remain on pinned stable. The checker maps reportable source
 files to each declared production crate, normalizing CI report paths back to workspace-relative sources before per-crate
-and exclusion arithmetic, enforces the base 80% threshold for that crate and the workspace aggregate and applies the
-higher designated-file threshold where declared, requires branch metrics, and emits JSON report artifacts.
+and exclusion arithmetic, resolves the crate's tier floor, requires branch metrics, and emits JSON report artifacts.
+The workspace aggregate report is informational: it exercises dependency code in the same instrumented test process, but
+each collected crate's own report is the only threshold authority.
+
+The coverage runner collects every crate whose tier is above zero — active production crates and both presentation
+adapters — with one isolated Cargo package invocation per profile. Exempt (0%) crates are neither collected nor counted
+in any aggregate. A crate that still has no executable test code has no measurable report: the runner prints the skip
+and its declared floor applies as soon as the crate gains tests (the `intention-tauri` M6 skeleton is the current case).
 
 The coverage runner always uses `--all-targets` for every coverage crate. Explicit target narrowing is intentionally
 disabled because explicit target sets do not reliably reproduce the `--all-targets` coverage set (Windows
@@ -215,23 +221,25 @@ inflate the report with self-covering test lines while a `cfg(windows)`-only bui
 Fixtures that exercise the same production paths on both platforms therefore use platform-native APIs and run on every
 supported OS instead of being gated to Unix.
 
-### Base threshold and designated files
+### Per-crate coverage tiers
 
-| Scope | Minimum line coverage |
-| --- | ---: |
-| Every production crate | 80% |
-| Workspace aggregate | 80% |
-| Designated files (list empty at adoption) | 85% |
-| Tauri and TUI presentation crates | No aggregate UI line threshold. Require complete command/event mapping contracts, all mandatory fixture-daemon smoke/outcome scenarios, and required platform CI evidence. |
+`quality/coverage.toml` declares the numeric ladder in `[tiers]` and assigns every active production crate and both
+presentation adapters to one rung in `[crate_tiers]` ([ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)):
 
-The designated-files list names individual source files that must reach 85%; each entry carries a workspace-relative
-path under a production crate `src` root with a rationale. The list is empty at adoption: the mechanism exists so a
-future high-risk file can carry a higher bar without reintroducing crate categories ([ADR
-0049](../decisions/0049-base-coverage-threshold.md)). The single base line-coverage threshold is 80%, applied to every
-production crate and to the workspace aggregate.
+| Tier | Minimum line coverage | Crates |
+| --- | ---: | --- |
+| `core` | 75% | `intention-storage-sqlite`, `intention-runtime`, `intention-transport`, `intention-storage`, `intention-application`, `intention-domain` |
+| `standard` | 60% | `intention-model`, `intention-tools`, `intention-workspace`, `intention-config`, `intention-daemon`, `intention-hooks`, `intention-provider-openrouter`, `intention-provider-generic-chat` |
+| `edge` | 20% | `intention-tauri`, `intention-tui`, `intention`, `intention-client` |
+| `exempt` | 0% (not collected) | `intention-types`, `intention-protocol` |
+
+Each collected crate's own report must reach its tier floor; there is no aggregate threshold and no per-file bar. An
+exempt crate is declared in `[crate_tiers]` with the 0% tier and is excluded from collection and from every aggregate
+denominator. Every active production crate and adapter package declares exactly one tier, and the architecture checker
+rejects a crate outside that production set, a missing declaration, and a tier name absent from `[tiers]`.
 
 Enabled exclusions are exact repository-relative source-file paths with rationale, owner, and equivalent test evidence;
-they must resolve under the active owner's `src` root, appear exactly once in the coverage report, and are subtracted
+they must resolve under the collected owner's `src` root, appear exactly once in the coverage report, and are subtracted
 from that crate's numerator and denominator.
 
 Branch coverage is reported. Critical safety and recovery branches are not excused by a passing line threshold. Those
@@ -240,16 +248,16 @@ Verification](10-test-driven-delivery-and-verification.md).
 
 ### Coverage constraints
 
--  Every production crate, including `intention-tools` and `intention-hooks`, is subject to the base 80% line-coverage
-  threshold before production code is merged, with no coverage override. Branch metrics and all semantic safety,
-  workspace-boundary, ordering, rejection, and short-circuit tests remain mandatory independently of the line threshold.
+-  Every collected crate, including `intention-tools` and `intention-hooks`, meets its declared tier floor before
+  production code is merged, with no coverage override. Branch metrics and all semantic safety, workspace-boundary,
+  ordering, rejection, and short-circuit tests remain mandatory independently of the line threshold.
 - Every required feature profile contributes to coverage where the crate supports that profile.
-- A coverage decrease fails `make coverage` and `make verify`.
+- A coverage decrease below a crate's tier floor fails `make coverage` and `make verify`.
 -  Generated code and technically unmeasurable code may be excluded only through a versioned policy entry with
   rationale, owner, and equivalent test evidence.
 - Exclusions cannot hide core runtime, policy, provider translation, persistence, redaction, or security logic.
--  The designated-files list is empty at adoption; an entry is added only with a workspace-relative path under a
-  production crate `src` root and a rationale, and only when the file is intended to carry the 85% bar.
+-  An exempt crate carries the 0% tier in `[crate_tiers]`; changing or removing an exemption is a reviewed policy
+  change in `quality/coverage.toml`, never a checker allowance.
 - Coverage reports are stored as CI artifacts.
 - Test code and generated code must not inflate the production coverage denominator.
 
@@ -269,8 +277,8 @@ Applying an enabled exclusion is explicit and reviewable. The checker rejects du
 out-of-source-root, absent, unreported, and all-source-removing exclusions. The sole enabled M2 exclusion is
 `intention-daemon/src/main.rs`: it is a thin process adapter whose unsafe-argument and concurrent bootstrap behavior are
 exercised through the real binary in `daemon_bootstrap`; the entry point carries no library logic, and those real-binary
-tests are accepted as equivalent coverage evidence. All daemon library behavior remains subject to the base 80%
-line-coverage threshold ([ADR 0049](../decisions/0049-base-coverage-threshold.md)).
+tests are accepted as equivalent coverage evidence. All daemon library behavior remains subject to the `standard` tier
+floor ([ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)).
 
 ## Cargo feature-profile policy
 
@@ -313,7 +321,7 @@ shell behavior and label each command as mutating or non-mutating.
 | `make test` | No | Run nextest suites and doctests for all feature profiles. |
 | `make docs-check` | No | Build Rust docs with warnings denied and validate Markdown links, Mermaid diagrams, and documentation navigation. |
 | `make architecture` | No | Run crate-set, dependency, import, DTO, WorkspaceRoot, hook, plan, and provider-SDK ownership boundary checks. |
-| `make coverage` | No | Collect coverage and apply the base threshold, designated-file bars, and exclusion policy. |
+| `make coverage` | No | Collect coverage and apply the per-crate tier floors and exclusion policy. |
 | `make coverage-default` | No | Collect coverage for the default profile only (`run_coverage.py --profile default`). |
 | `make coverage-no-default` | No | Collect coverage for the no-default profile only (`run_coverage.py --profile no_default`). |
 | `make coverage-all` | No | Collect coverage for the all-features profile only (`run_coverage.py --profile all`). |
@@ -337,6 +345,12 @@ shell behavior and label each command as mutating or non-mutating.
 `quality-self-test` and `quality-self-test-in-place` targets, its `ci-selftest` CI job, and its `selftest` tool scope no
 longer exist. No gate requires them: the remaining gates are the targets listed above, and decision records or closeout
 evidence that name the self-test describe completed historical work.
+
+**Added 2026-10-05: focused coverage-checker self-tests.** `quality/test_check_coverage.py` proves the tier decisions
+with synthetic reports: each tier floor passes at its percentage and fails below it, an exempt crate is rejected from
+collection, the aggregate stays informational and never counts an exempt crate, and invalid tier tables fail with typed
+errors. It runs directly (`python3 quality/test_check_coverage.py`) and as a step of the existing Linux `lint-arch` CI
+entry; it adds no Makefile target, CI job, or required status check.
 
 `make verify` runs `check`, `coverage`, and `deps`, then removes only the generated LLVM coverage target; coverage
 reports remain available for CI upload. `make ci` wraps `verify` with `metrics-start` and `metrics-finish`, which write
@@ -426,7 +440,7 @@ failure is prohibited.
 Every implementation slice must:
 
 1.  identify the owning architecture document and the applicable coverage declarations under [ADR
-   0049](../decisions/0049-base-coverage-threshold.md);
+   0051](../decisions/0051-per-crate-coverage-tiers.md);
 2. create or update DTO/contract fixtures first;
 3. create failing domain, architecture, and outcome tests appropriate to the change;
 4. implement the smallest code that makes those tests pass;
@@ -509,7 +523,7 @@ M0 proves that the quality system fails correctly for controlled fixtures:
 | Missing required crate/test-target policy metadata | `make architecture`. |
 | Forbidden crate dependency or import | `make architecture`. |
 | DTO/SDK implementation leak | `make architecture`. |
-| Coverage below the base threshold or a designated-file threshold | `make coverage`. |
+| Coverage below a crate's tier floor | `make coverage`. |
 | Unapproved coverage exclusion metadata | `make coverage`. |
 | Uncovered required feature profile | `make features`. |
 | Dependency advisory/license/source/ban/duplicate violation | `make deps`. |
@@ -529,9 +543,9 @@ M0 is accepted because its implementation establishes that:
 -  Makefile commands orchestrate every non-mutating quality gate and CI invokes the `ci-lint-arch`, `ci-test`,
   `ci-coverage-default`, `ci-coverage-no-default`, `ci-coverage-all`, and `ci-deps` job aliases as its sole verification
   commands after explicit setup;
--  the base 80% line-coverage threshold applies immediately to every production crate and the workspace aggregate, with
-  the designated-files mechanism for a future higher bar and no unreviewed escape hatch;
-- adapters use mapping/contract/outcome evidence rather than a misleading aggregate UI line target;
+-  the per-crate tier floors apply immediately to every collected crate with no unreviewed escape hatch, and exempt
+  crates stay outside collection and every aggregate;
+- adapters carry the `edge` tier floor in addition to their mapping/contract/outcome evidence;
 - linting is strict but pragmatic, with narrow justified exceptions rather than a blanket unworkable lint set;
 - default, no-default, all-features, and enabled critical combinations are verified;
 - TDD and semantic acceptance tests remain mandatory regardless of coverage percentage.

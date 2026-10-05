@@ -71,9 +71,9 @@ M0-M5 behavior.
 
 All workspace crates live under [crates/](crates/) unless noted. Coverage is
 enforced by the machine-readable policy in
-[quality/coverage.toml](quality/coverage.toml) under ADR 0049: a base 80% line
-threshold for every production crate and for the workspace aggregate, plus an
-85% threshold for the designated files the policy names.
+[quality/coverage.toml](quality/coverage.toml) under ADR 0051: per-crate line
+tiers of 75% (`core`), 60% (`standard`), and 20% (`edge`), with `intention-types`
+and `intention-protocol` exempt at 0% and outside collection.
 
 ### DTO foundations
 
@@ -232,7 +232,7 @@ quick` while iterating and run `make verify` before acceptance.
 | `make quick` | Fast local loop: tools check, `fmt-check`, lint, default-profile tests. |
 | `make check` | Complete non-mutating source gate: format, features, `check-cargo`, lint, tests/doctests, docs, architecture. |
 | `make docs-check` | Rustdoc across feature profiles, then Markdown link/Mermaid/secret-pattern validation. |
-| `make coverage` | Branch-aware coverage for all profiles, enforcing the declared line thresholds (see [quality/coverage.toml](quality/coverage.toml)). |
+| `make coverage` | Branch-aware coverage for all profiles, enforcing each collected crate's declared tier floor (see [quality/coverage.toml](quality/coverage.toml)). |
 | `make verify` | Full acceptance gate: `check` plus coverage and dependency gates; removes only generated LLVM coverage artifacts. |
 | `make deps` | Supply-chain gates: deny, audit, outdated, machete, udeps, notices check. |
 | `make notices` / `make notices-check` | Regenerate / verify [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) against the locked graph. |

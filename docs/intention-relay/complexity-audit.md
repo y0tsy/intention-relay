@@ -260,7 +260,7 @@ available, not the most valuable.
 | 9 | `intention-test-support` *feature* (as opposed to the crate) | Integration tests cannot see `cfg(test)` items; the daemon's five outcome binaries need the seams. |
 | 10 | `WorkspaceRoot` resolution ordering; `parse_tool_input`'s exhaustive match | Ordering guarantee is real; the match is compile-time coupling to `ToolId`. |
 | 11 | `docs/reference/prime-agent-research/` (4,153 lines, Z7-10) | Preserved research with no reachable consumer; KEEP-BUT-STOP-INVESTING, do not delete. |
-| 12 | `designated_files` mechanism with an empty list (Z4) | Adopted by ADR 0049; costs one config key. Do not add entries without a named high-risk file. |
+| 12 | The designated-files mechanism with an empty list (Z4) | Adopted by ADR 0049; costs one config key. Do not add entries without a named high-risk file. Removed 2026-10-05 by [ADR 0051](decisions/0051-per-crate-coverage-tiers.md), which replaced it with per-crate tiers. |
 
 ---
 

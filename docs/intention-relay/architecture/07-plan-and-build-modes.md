@@ -192,8 +192,8 @@ resources or authority.
 
 ## Quality-gate integration
 
-Plan policy and artifact crates are subject to the base 80% line-coverage threshold ([ADR
-0049](../decisions/0049-base-coverage-threshold.md)). Frontmatter hiding, plan-number allocation, ordinary mutation
+Plan policy and artifact crates are subject to the coverage tier declared when they are activated ([ADR
+0051](../decisions/0051-per-crate-coverage-tiers.md)). Frontmatter hiding, plan-number allocation, ordinary mutation
 denial, Plan `execute` audit, revision integrity, and same-Session Autopilot continuation are blocking `make verify`
 inputs. Coverage cannot replace captured model-context assertions or policy-denial tests. See [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md).

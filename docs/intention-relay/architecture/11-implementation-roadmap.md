@@ -5,7 +5,7 @@
 This is a dependency-aware delivery roadmap, not a time estimate. The first implementation milestone is the reproducible
 quality foundation. Every later milestone begins with failing tests and is accepted only after its applicable `make
 verify` evidence passes. This roadmap owns milestone order, dependencies, activation, and status only: required quality
-commands, pinned tools, the coverage policy ([ADR 0049](../decisions/0049-base-coverage-threshold.md)), lint policy,
+commands, pinned tools, the coverage policy ([ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)), lint policy,
 feature profiles, architecture checks, and supply-chain gates live in [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md); test-first and outcome-verification rules live in [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md).
@@ -57,15 +57,16 @@ flowchart TD
 
 Every milestone after Milestone 0 follows the test-first rules of [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md) and the quality policy of [Quality Gates and
-Makefile](12-quality-gates-and-makefile.md): new production crates meet the base 80% line-coverage threshold before
-merge ([ADR 0049](../decisions/0049-base-coverage-threshold.md)), new optional Cargo features are classified in the
+Makefile](12-quality-gates-and-makefile.md): new production crates meet the tier floor declared for them before merge
+([ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)), new optional Cargo features are classified in the
 feature-profile policy in the same change, only pinned dependencies and tools are used, `make quick` runs during
 development and `make verify` before acceptance, and any policy exception is recorded in a reviewed, versioned policy
 file with rationale and equivalent test evidence.
 
 The tier numbers in the closed M0-M5 milestone records below are historical acceptance evidence, not current policy:
-[ADR 0049](../decisions/0049-base-coverage-threshold.md) replaced them with the base 80% line-coverage threshold and the
-designated-files mechanism.
+[ADR 0049](../decisions/0049-base-coverage-threshold.md) replaced them with a single base threshold, and [ADR
+0051](../decisions/0051-per-crate-coverage-tiers.md) replaced that with the per-crate tiers declared in
+`quality/coverage.toml`.
 
 ## Milestone 0: Reproducible quality foundation
 
@@ -174,7 +175,7 @@ protocol with exact protocol version 2.0, its method/notification table, and the
 0045](../decisions/0045-local-json-rpc-2-0-transport.md)); explicit DTO schema versions with exact-equality comparison;
 SQLite as one live storage schema created directly on open ([ADR
 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)); and crate ownership, feature-profile, and
-coverage declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md) for every activated family. The
+coverage declarations under [ADR 0051](../decisions/0051-per-crate-coverage-tiers.md) for every activated family. The
 former contract ledger, `run-execution-meaning-v4` field tables, capability families, `typed-tlv-v1`/SHA-256 tags, and
 digests were deleted by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md): no ledger, tag registry, canonical
 digest, or identity record remains, and every future contract family is typed serde JSON with RFC 8785 canonicalization
@@ -241,8 +242,8 @@ and bytes remain authoritative and unchanged; SQLite storage is the single live 
 -  The reverted Slice 2 health, discovery, and pricing surfaces were non-authorizing: they create no RunId, reason,
 lifecycle transition, scheduler candidate, tool permission, child edge, verifier authority, MCP capability, bridge
 grant, kernel epoch, context projection, or branch; a re-introduction must restore their non-authority fixtures.
--  Applicable crates meet the base 80% line-coverage threshold (and any designated-file bar) without excluding policy or
-boundary logic; every activated slice passes `make quick`, `make verify`, and Linux/Windows CI.
+-  Applicable crates meet their declared tier floors without excluding policy or boundary logic; every activated slice
+passes `make quick`, `make verify`, and Linux/Windows CI.
 -  No slice ships half-ready: every activated contract ships with its version, owner, tests, policy mapping,
 storage/schema treatment, and evidence together.
 -  No M6-M9 boundary behavior is implemented, and no second runtime, registry, scheduler, persistence authority, or
@@ -350,8 +351,8 @@ new Session.
 - Plan `execute` focus/audit tests;
 - same-Session approval-to-fresh-Build tests with a new `RunId` and pinned plan revision;
 - optional handoff snapshot, lineage, redaction, and no-live-state-transfer tests;
--  coverage fixtures for plan policy and artifact integrity under the base 80% threshold ([ADR
-0049](../decisions/0049-base-coverage-threshold.md)).
+-  coverage fixtures for plan policy and artifact integrity under the per-crate tier floors ([ADR
+0051](../decisions/0051-per-crate-coverage-tiers.md)).
 
 ### Exit criteria
 
@@ -360,8 +361,8 @@ project file;
 - Plan `execute` remains available and is not represented as a sandbox; model context excludes plan frontmatter;
 -  approving a plan starts Build Autopilot in the same Session with a new `RunId`; the optional handoff creates an
 independent Session from a safe frozen context;
--  plan policy/artifact crates meet the base 80% line-coverage threshold ([ADR
-0049](../decisions/0049-base-coverage-threshold.md)) with mandatory captured-context and denial scenarios.
+-  plan policy/artifact crates meet their declared tier floors ([ADR
+0051](../decisions/0051-per-crate-coverage-tiers.md)) with mandatory captured-context and denial scenarios.
 
 ## Milestone 8: VFR and Headroom extensions
 
@@ -382,16 +383,16 @@ Goal: independently enabled hook extensions over the base tool pipeline.
 - Headroom retention/retrieval/expiry fixtures;
 - full hook-order integration test;
 - UI/model representation distinction test;
--  coverage fixtures for transform, expiry, retrieval, and error paths under the base 80% threshold ([ADR
-0049](../decisions/0049-base-coverage-threshold.md)).
+-  coverage fixtures for transform, expiry, retrieval, and error paths under the per-crate tier floors ([ADR
+0051](../decisions/0051-per-crate-coverage-tiers.md)).
 
 ### Exit criteria
 
 -  VFR and Headroom operate as independently enabled hook extensions; `retrieve` returns retained content while valid,
 with typed expiry behavior afterward;
 - base tools do not import VFR or Headroom implementation crates;
--  extension crates meet the base 80% line-coverage threshold ([ADR 0049](../decisions/0049-base-coverage-threshold.md))
-and feature-profile checks.
+-  extension crates meet their declared tier floors ([ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)) and
+feature-profile checks.
 
 ## Milestone 9: Hardening and acceptance verification
 
@@ -462,7 +463,7 @@ recovery-before-scheduling (architecture 16);
 -  calendar/interval/time-zone/DST semantics for Mandate scheduler triggers, never an admission quota ([ADR
 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md), architecture 16);
 -  crate ownership, feature-profile, and coverage declarations under [ADR
-0049](../decisions/0049-base-coverage-threshold.md), plus quality-policy declarations for every activated family
+0051](../decisions/0051-per-crate-coverage-tiers.md), plus quality-policy declarations for every activated family
 (architecture 01 post-M4 allocation), published with the activating specification.
 
 ### Tests first
@@ -516,7 +517,7 @@ cancellation propagation, recovery, and the closed `bridge_*` failures (architec
 -  worker/process supervision topology, never a second runtime, registry, scheduler, persistence authority, or sandbox
 ([ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md), architecture 03);
 -  crate ownership, feature-profile, and coverage declarations under [ADR
-0049](../decisions/0049-base-coverage-threshold.md), plus quality-policy declarations for every activated family.
+0051](../decisions/0051-per-crate-coverage-tiers.md), plus quality-policy declarations for every activated family.
 
 ### Tests first
 
@@ -576,7 +577,7 @@ context manifests, model-step safe projections, typed memory, and immutable comp
 -  the canonical `responses` provider driver, `SafeHeader` live wire injection, and the user-kind parser (architecture
 22);
 -  crate ownership, feature-profile, and coverage declarations under [ADR
-0049](../decisions/0049-base-coverage-threshold.md), plus quality-policy declarations for every activated family.
+0051](../decisions/0051-per-crate-coverage-tiers.md), plus quality-policy declarations for every activated family.
 
 ### Tests first
 

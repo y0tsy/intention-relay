@@ -51,8 +51,9 @@ linked architecture sections.
 | [0046](0046-typed-serde-json-contracts.md) | Accepted | Typed serde JSON contracts (binary canonical codec, tag registry, digests, and contract families removed; RFC 8785 policy deferred to the first real consumer) |
 | [0047](0047-workspace-root-addressing-anchor.md) | Accepted | WorkspaceRoot as an addressing anchor (join, child-process cwd, default glob/grep scope; not a security boundary) |
 | [0048](0048-limits-by-precedent-and-no-content-scanning.md) | Accepted | Limits by precedent, no runtime content scanning, and removal of the corridor, calendar-period, and queue-audit engines |
-| [0049](0049-base-coverage-threshold.md) | Accepted | Base 80% line-coverage threshold and designated-files mechanism (replaces the A/B/C coverage tiers) |
+| [0049](0049-base-coverage-threshold.md) | Accepted | Base 80% line-coverage threshold and designated-files mechanism (replaces the A/B/C coverage tiers; the base-threshold and designated-files clauses are superseded by ADR 0051) |
 | [0050](0050-ordering-authorities.md) | Accepted | Ordering authorities (session event sequence and container journal sequence, plus the observation cursor as a non-authoritative resume position) |
+| [0051](0051-per-crate-coverage-tiers.md) | Accepted | Per-crate coverage tiers (`core` 75%, `standard` 60%, `edge` 20%, `exempt` 0%; replaces the base 80% threshold and designated-files mechanism) |
 | [0052](0052-partial-tool-results-for-interrupted-execution.md) | Accepted | Partial tool results for interrupted execution (bounded captured output, interruption notices, and no Mandate pause) |
 | [0053](0053-sub-agent-and-fork-limits-by-precedent.md) | Accepted | Sub-agent and fork limits by precedent (every numeric child, bridge, activity, fork, kernel, and progress cap removed; no survivor) |
 | [0054](0054-dynamic-context-window-and-prompt-caching.md) | Accepted | Dynamic context window and prompt-cache breakpoints (provider context-window policy, calibrated token accounting, largest-first tool-result compression, capacity stub, and ephemeral cache markers) |
