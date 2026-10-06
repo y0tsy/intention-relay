@@ -134,7 +134,7 @@ impl WorkspaceRootDto {
     ///
     /// Resolution and root validation belong to `intention-workspace`, where
     /// the root is an addressing anchor rather than a containment boundary
-    /// (ADR 0047).
+    /// (ADR 0013).
     ///
     /// # Errors
     ///

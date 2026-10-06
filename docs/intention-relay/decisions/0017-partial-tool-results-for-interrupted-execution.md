@@ -1,4 +1,4 @@
-# ADR 0052: Partial tool results for interrupted execution
+# ADR 0017: Partial tool results for interrupted execution
 
 ## Status
 
@@ -17,21 +17,13 @@ recovery transition to `Interrupted`, and every behavior of the ordinary runtime
 
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |
-| [ADR 0002](0002-external-attempt-evidence-and-unknown-effect-reconciliation.md) | Whole record | The decision below: an interrupted or lost started effect commits a bounded `Partial` result; no pause, no blocking, no reconciliation |
-| [ADR 0007](0007-unified-tool-registry.md) 27-28 | The invariant that required a pause and exact reconciliation for an unknown started effect | A started effect without terminal proof commits a bounded partial result |
-| [ADR 0010](0010-mcp-capability-lifecycle.md) 29-30 | The invariant that required a pause for started ambiguous work | Started ambiguous work commits a bounded partial result |
-| [ADR 0012](0012-ipython-kernel-lifecycle.md) 27 | The invariant that required a pause for unproven started work | Unproven started work commits a bounded partial result |
-| [ADR 0017](0017-build-autopilot-and-plan-focus-continuity.md) invariant 13 | A started operation without terminal proof classified as the retired outcome, never automatically retried, resumed, or treated as rolled back | A started operation interrupted or lost before a final result commits a bounded partial result and permits the next model step; it is never automatically retried, resumed, or treated as rolled back |
-| [ADR 0017](0017-build-autopilot-and-plan-focus-continuity.md) 71-72 | The rule list that kept unknown-effect rules authoritative | The list drops the retired rule: one-active-run, append-only history, commit-before-effect, and no-resume rules remain authoritative |
-| [ADR 0018](0018-plan-build-autopilot-activation-scope.md) 20-21 | The activation-scope clause listing unknown-effect boundaries among the preserved boundaries | The list keeps one-active-run, no-resume, commit-before-effect, redaction, and DTO-only boundaries |
-| [ADR 0023](0023-goal-domain-and-verification-directions.md) 17 | The direction list including reconciliation | The direction list drops reconciliation |
-| [ADR 0023](0023-goal-domain-and-verification-directions.md) 59-60 | A started verification or gate action without durable terminal proof classified as the retired outcome and never retried | A started verification or gate action interrupted or lost before a final result commits a bounded `Partial` result with its notice and is never retried; nothing pauses |
-| [ADR 0025](0025-base-tool-contracts-and-tool-loop-bounds.md) 29 | The retired-outcome member of the closed terminal outcome taxonomy | The bounded `Partial` member |
-| [ADR 0025](0025-base-tool-contracts-and-tool-loop-bounds.md) 51 | A retired-outcome result never permitting another model step | A `Partial` result permits the next model step: the captured output is delivered with a notice, nothing is paused, and the interrupted call is never retried |
-| [ADR 0027](0027-child-kernel-bridge-mcp-detail-directions.md) 63 | A started unproven effect classified as the retired outcome and never retried, reattached, or rerun | A started unproven effect yields a bounded `Partial` result with its notice and is never retried, reattached, or rerun; the next model step proceeds |
+| [ADR 0001](0001-rust-owned-capability-plane-and-fixed-tool-registry.md) 27-28 | The invariant that required a pause and exact reconciliation for an unknown started effect | A started effect without terminal proof commits a bounded partial result |
+| [ADR 0002](0002-build-autopilot-and-plan-focus-continuity.md) invariant 13 | A started operation without terminal proof classified as the retired outcome, never automatically retried, resumed, or treated as rolled back | A started operation interrupted or lost before a final result commits a bounded partial result and permits the next model step; it is never automatically retried, resumed, or treated as rolled back |
+| [ADR 0002](0002-build-autopilot-and-plan-focus-continuity.md) 71-72 | The rule list that kept unknown-effect rules authoritative | The list drops the retired rule: one-active-run, append-only history, commit-before-effect, and no-resume rules remain authoritative |
+| [ADR 0002](0002-build-autopilot-and-plan-focus-continuity.md) 20-21 | The activation-scope clause listing unknown-effect boundaries among the preserved boundaries | The list keeps one-active-run, no-resume, commit-before-effect, redaction, and DTO-only boundaries |
 
-The named clause of each record is amended in place; every other clause of those records stays as written. ADR 0002 is
-superseded as a whole and its text stays as written.
+The named clause of each record is amended in place; every other clause of those records stays as written. The
+superseded external-attempt-evidence record is deleted from the corpus, and its text stays in git history.
 
 ## Decision
 
@@ -144,16 +136,9 @@ quarantine for an interrupted effect; no edit to closed milestone records, whose
 
 ## Affected documents
 
-[Decisions index](README.md) marks ADR 0002 superseded and lists this record; [ADR
-0002](0002-external-attempt-evidence-and-unknown-effect-reconciliation.md) keeps its text and is superseded. [ADR
-0007](0007-unified-tool-registry.md) 27-28, [ADR
-0010](0010-mcp-capability-lifecycle.md) 29-30, [ADR
-0012](0012-ipython-kernel-lifecycle.md) 27, [ADR
-0017](0017-build-autopilot-and-plan-focus-continuity.md) invariant 13 and 71-72, [ADR
-0018](0018-plan-build-autopilot-activation-scope.md) 20-21, [ADR
-0023](0023-goal-domain-and-verification-directions.md) 17 and 59-60, [ADR
-0025](0025-base-tool-contracts-and-tool-loop-bounds.md) 29 and 51, and [ADR
-0027](0027-child-kernel-bridge-mcp-detail-directions.md) 63 carry the amended clauses. [Architecture
+[Decisions index](README.md) lists this record, which supersedes the deleted external-attempt-evidence record. [ADR
+0001](0001-rust-owned-capability-plane-and-fixed-tool-registry.md) and [ADR
+0002](0002-build-autopilot-and-plan-focus-continuity.md) carry the amended clauses. [Architecture
 README](../architecture/README.md) defines **Partial**; [architecture
 00](../architecture/00-principles-and-scope.md) states the no-pause rule; [architecture
 15](../architecture/15-tool-registry-and-model-tool-loop.md) owns the terminal taxonomy and the
@@ -173,8 +158,8 @@ effect boundary. Secondary cleanup lands in architectures
 
 The change is accepted only together with: a repository symbol-search receipt showing the retired lifecycle member,
 result member, and durable tag have no remaining producer or consumer; a documentation search receipt showing the
-retired identifier has no remaining hit in `docs/intention-relay/` outside the frozen text of superseded ADR 0002 and
-the closed M5 closure evidence; the notice texts asserted by tests on the partial-result path and restart recovery; and
+retired identifier has no remaining hit in `docs/intention-relay/` outside the
+closed M5 closure evidence; the notice texts asserted by tests on the partial-result path and restart recovery; and
 the gate suite passing. Gates: `make quick`, `make verify`, `docs-check`, `make architecture`, Linux/Windows CI. The
 retired name survives as historical prose in the root `architecture-fitness-audit.md`; that record is exempt because
 editing a historical audit to hide a name it reported would destroy the record.
@@ -182,5 +167,5 @@ editing a historical audit to hide a name it reported would destroy the record.
 The uncertainty and reconciliation machinery was removed together with the retired outcome: [architecture
 28](../architecture/28-goal-domain-and-verification.md) no longer lists `ResolveUnknownEffect` as a target operation or
 audit-contract standard, and no `VerificationUnknownEffectReconciled` activity record remains. No current document
-declares a pause, a pause state, or a reconciliation command for an interrupted effect. Outside this record, only the
-frozen text of superseded ADR 0002 and closed milestone evidence keep the retired state and member names.
+declares a pause, a pause state, or a reconciliation command for an interrupted effect. Outside this record, only closed
+milestone evidence keeps the retired state and member names.

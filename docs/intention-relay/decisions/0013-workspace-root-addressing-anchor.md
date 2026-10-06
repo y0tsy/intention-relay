@@ -1,4 +1,4 @@
-# ADR 0047: WorkspaceRoot as an addressing anchor
+# ADR 0013: WorkspaceRoot as an addressing anchor
 
 ## Status
 
@@ -13,8 +13,7 @@ In scope: `intention-workspace` root semantics and path resolution, `intention-t
 
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |
-| [ADR 0042](0042-project-script-library-for-kernel-cells.md) | The `kernel_script_library_unavailable` condition for a library path that "fails the workspace boundary check", and the wording that resolves "through an outward, unprovable, or dangling symbolic link" | A library path that cannot be addressed under the session root fails before effect; the kernel import surface remains a kernel-side scope choice, not a containment guarantee |
-| [ADR 0025](0025-base-tool-contracts-and-tool-loop-bounds.md) | The invariant wording that ties `execute` to `WorkspaceRoot` CWD is read through this record; its substantive rule (ordinary OS authority, no sandbox) is unchanged | Child processes start with the root as their working directory, which addresses rather than restricts |
+| [ADR 0009](0009-project-script-library-for-kernel-cells.md) | The `kernel_script_library_unavailable` condition for a library path that "fails the workspace boundary check", and the wording that resolves "through an outward, unprovable, or dangling symbolic link" | A library path that cannot be addressed under the session root fails before effect; the kernel import surface remains a kernel-side scope choice, not a containment guarantee |
 
 Any other accepted direction that treats the root as a security boundary, or that requires a lexical symlink or
 containment check, is read through this record. The removed failure codes `workspace_path_symlink` and
@@ -46,7 +45,7 @@ canonicalization, the fail-closed resolution logic, the `workspace_path_symlink`
 codes, and the related error helpers.
 7. `intention-tools` removes the duplicate symlink checks in `write`, `edit`,
 `glob`, and `grep`, and the local `contains_symlink_component`. The `MAX_GLOB_MATCHES` cap and its truncated-result
-behavior are removed by [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md).
+behavior are removed by [ADR 0014](0014-limits-by-precedent-and-no-content-scanning.md).
 8. Tests are rewritten to positive semantics: a relative path joins to the
 root, `execute` sees `cwd = root`, a pathless `glob` or `grep` searches from the root, and the removed symlink and
 outside-root cases no longer exist.

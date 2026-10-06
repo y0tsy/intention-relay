@@ -39,9 +39,9 @@ its own immutable selected snapshot/revision.
 
 M3 applies TOML **only at daemon startup**. It neither watches TOML nor applies an edit to an already-running daemon. A
 changed TOML file therefore takes effect only after a restart; the new startup snapshot applies to new runs, while
-existing persisted runs retain their recorded revision. Controlled live reload is the accepted future direction ([ADR
-0020](../decisions/0020-configuration-provider-control-plane-directions.md), [architecture
-25](25-configuration-provider-control-plane.md)) and must be introduced by an explicit contract, transaction, and
+existing persisted runs retain their recorded revision. Controlled live reload is the accepted future direction
+([architecture 25](25-configuration-provider-control-plane.md)) and must be introduced by an explicit contract,
+transaction, and
 outcome test; it affects fresh runs only and never mutates a recorded snapshot.
 
 ### M3 lifecycle rules
@@ -55,8 +55,8 @@ to a configuration edit.
 -  TOML application is **daemon-restart-only** in M3: the daemon neither watches TOML nor applies an edit to an
 already-running daemon, and a changed TOML file takes effect only after a restart, where the new startup snapshot
 applies to new runs while existing persisted runs retain their recorded revision. The precise user experience for
-detecting or requesting the restart remains open; controlled live reload is the accepted future direction under [ADR
-0020](../decisions/0020-configuration-provider-control-plane-directions.md) and must never be implied by M3/M4 behavior.
+detecting or requesting the restart remains open; controlled live reload is the accepted future direction and must
+never be implied by M3/M4 behavior.
 -  Configuration discovery remains platform-standard with a validated explicit absolute-path override; it never falls
 back to process CWD.
 
@@ -86,7 +86,7 @@ value outside that range fails closed with the typed `invalid_provider_context_w
 `invalid_provider_context_capacity_tokens` validation error. The policy resolves into the credential-free
 `ContextWindowPolicyDto` included in `ResolvedConfigDto` and therefore in every `ConfigSnapshotDto`. [Architecture
 08](08-model-protocol-and-providers.md) owns the window mechanics that consume it ([ADR
-0054](../decisions/0054-dynamic-context-window-and-prompt-caching.md)).
+0018](../decisions/0018-dynamic-context-window-and-prompt-caching.md)).
 
 ### M5+ typed-edit rendering and reload status (reverted)
 
@@ -94,9 +94,9 @@ The M5+ Slice 2 activation rendered typed-edit candidate documents inside `inten
 render from the safe snapshot AST inside the crate) and added a `ConfigurationProjectionDto.reload_status` vocabulary.
 Slice 2 was reverted: the typed-edit renderer, the private credential-restore helper, the `configuration_edit_invalid`
 failure, and the reload-status vocabulary are removed from the tree. Configuration editing is again an accepted future
-direction ([ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), [architecture
+direction ([architecture
 25](25-configuration-provider-control-plane.md)) with no live implementation, and controlled reload is again only the
-accepted future direction of [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md) described
+accepted future direction described
 in the M3 lifecycle rules above. A re-introduction through a new activating specification must restore the recorded
 rules:
 
@@ -131,7 +131,7 @@ name-filtered or copied into evidence or logs;
 - errors, logs, and diagnostic bundles use centralized redaction;
 - configuration displays do not log values while rendering or validation fails;
 -  hermetic test fixtures use fake credentials only; the single opt-in live-provider e2e channel ([ADR
-0040](../decisions/0040-opt-in-live-provider-e2e.md)) injects a real credential from the environment (or a CI repository
+0007](../decisions/0007-opt-in-live-provider-e2e.md)) injects a real credential from the environment (or a CI repository
 secret) into a private temporary configuration file only and remains subject to every protection in this section.
 
 ## Data classification
@@ -205,7 +205,7 @@ atomicity.
 ## Quality-gate integration
 
 `intention-config` remains subject to its `standard` tier floor ([ADR
-0051](../decisions/0051-per-crate-coverage-tiers.md)). TOML parsing, M1 snapshot serialization, permissions, redaction,
+0016](../decisions/0016-per-crate-coverage-tiers.md)). TOML parsing, M1 snapshot serialization, permissions, redaction,
 and safe observability tests are blocking `make verify` inputs; M3 adds canonical snapshot-persistence, restart-only
 application, and per-run snapshot integration coverage. A recognizable fake secret is a mandatory regression fixture
 across logs, errors, snapshots, events, and adapter DTOs. See [12 Quality Gates and
@@ -223,7 +223,7 @@ Makefile](12-quality-gates-and-makefile.md).
 
 This document preserves M3/M4 startup-only TOML application. The configuration/provider control-plane cluster
 (controlled live reload, credential rotation, profile editing, discovery, pricing, and health behavior) is an accepted
-future direction under [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md) and the
+future direction and the
 [Implementation Roadmap](11-implementation-roadmap.md), and adds no implemented behavior. Future execution meanings and
 attempt evidence must remain credential-free and exclude SDK objects, process handles, kernel state, bridge grants, raw
 provider/MCP payloads, and private endpoint material.
@@ -236,7 +236,7 @@ diagnostic, and identity surface.
 
 Architecture 14 ([Run execution meaning and historical
 compatibility](14-run-execution-meaning-and-historical-compatibility.md)) is the historical record of the removed
-execution-meaning envelope, canonical codec, and decoders (ADR 0046); the removed machinery has no implementation path,
+execution-meaning envelope, canonical codec, and decoders (ADR 0012); the removed machinery has no implementation path,
 and its live owners now use typed serde JSON equivalents. This document retains M3/M4 startup-only configuration and the
 redaction boundaries above, and no future meaning record may reinterpret an M4 selection.
 
@@ -276,7 +276,7 @@ authority, read-state by cursor, or operational diagnostics.
 ## Post-M5 instruction-source configuration and observability consequence
 
 [Architecture 30](30-instruction-sources-and-system-context.md) owns the instruction channel ([ADR
-0043](../decisions/0043-instruction-sources-and-system-context.md)). Its profile revision identity and workspace
+0010](../decisions/0010-instruction-sources-and-system-context.md)). Its profile revision identity and workspace
 instruction reference cross the configuration surface; instruction text stays on the editing surface where the user
 reads and edits it ([architecture 25](25-configuration-provider-control-plane.md)).
 

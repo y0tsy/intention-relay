@@ -372,7 +372,7 @@ where
     /// so it becomes at most one textless presence event per stream and
     /// creates no fact; the continuation request must still send the channel
     /// back beside the assistant tool calls, because a provider in thinking
-    /// mode rejects a request whose assistant message omits it (ADR 0041). A
+    /// mode rejects a request whose assistant message omits it (ADR 0008). A
     /// non-empty fragment stays a transient reasoning fact: it is never
     /// appended to assistant text, never becomes message content, and never
     /// enters an error payload. An empty value is exactly what the normalized

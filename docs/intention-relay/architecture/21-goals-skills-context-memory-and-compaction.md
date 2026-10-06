@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 21. Decisions: ADR 0013. Research: m4plus_concept.md.
+Owner: architecture 21. Research: m4plus_concept.md.
 
 This document owns future Goal scope and evidence, Skill selection and safe disclosure, context-source manifests,
 model-step projections, typed memory records, and immutable compaction. It applies only to future run execution. M3/M4
@@ -12,7 +12,7 @@ material remains research provenance and historical-only where it conflicts with
 
 ## Ownership and non-authorities
 
-Architecture 14 is the historical record of the removed execution-meaning envelope and decoders (ADR 0046); 15 owns the
+Architecture 14 is the historical record of the removed execution-meaning envelope and decoders (ADR 0012); 15 owns the
 registry, frozen direct-tool selection, tool admission, model-tool loop, `ToolCallId`, and generic effect facts; 18 owns
 MCP lifecycle; 19 owns bridge grants, ingress, operation correlation, and bridge delivery; 20 owns kernel epochs, cells,
 checkpoints, and kernel-local safe projection.
@@ -26,7 +26,7 @@ continuation mechanism.
 ## Immutable selection and Goal scope
 
 This document owns detailed semantics of these credential-free nested future run-record fields (typed serde JSON,
-ADR 0046):
+ADR 0012):
 
 | Nested selection | Selection owner | Meaning |
 | --- | --- | --- |
@@ -210,7 +210,7 @@ delegation reference. It cannot widen any of them. A Skill reference to MCP cann
 register, or invoke an unselected capability. Python/IPython may render a selected Skill as convenience documentation
 only; it cannot import a Skill package, execute a body, or bypass the typed Skill disclosure and tool gateway paths.
 
-The project script library ([ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md)) is not a Skill
+The project script library ([ADR 0009](../decisions/0009-project-script-library-for-kernel-cells.md)) is not a Skill
 body, supplement, or package reference. A Skill may name a library module only as untrusted instructional text, and the
 module itself stays an ordinary project file created and run through the registered tools. This document adds no script
 supplement kind, and a script never becomes Skill content, Skill authority, or Skill disclosure.
@@ -247,9 +247,9 @@ affected snapshot(s), then publishes only after durable reread. Current cards an
 but never reconstruct historical use.
 
 Skill operations are typed JSON-RPC 2.0 methods (card-only listing, exact inspect/disclosure, user invocation, lifecycle
-commands, and durable skill audit; ADR 0045). A list captures one catalog revision, uses stable ordering and an opaque
+commands, and durable skill audit; ADR 0011). A list captures one catalog revision, uses stable ordering and an opaque
 token, and returns `has_more`; a malformed, cross-scope, or stale token fails with typed conflict/resynchronization.
-Skill records are typed serde JSON (ADR 0046) with no canonical tags or digest framing. Unknown, corrupt, incompatible,
+Skill records are typed serde JSON (ADR 0012) with no canonical tags or digest framing. Unknown, corrupt, incompatible,
 stale, missing, archived, revoked, or over-limit content blocks only the dependent disclosure/model step before external
 work while unrelated history remains readable; no current card, body, origin, or live path is substituted.
 
@@ -293,7 +293,7 @@ The manifest binds identities, revisions, audience, safe representation policy, 
 omission reasons. A projection binds one model step to an ordered safe representation of that exact manifest; the
 provider request built from it is a mutable window under [architecture
 08](08-model-protocol-and-providers.md) ([ADR
-0054](../decisions/0054-dynamic-context-window-and-prompt-caching.md)), and that window compresses the largest
+0018](../decisions/0018-dynamic-context-window-and-prompt-caching.md)), and that window compresses the largest
 tool-role results in place when the request estimate crosses the configured context window. The manifest, the
 projection, and every durable fact stay recorded as written. A source or card may be narrower than its original content
 but can never be broader or visible to a wider audience.
@@ -348,7 +348,7 @@ connection, process, or unfinished effect. Child context is independent and non-
 
 MCP, bridge, and kernel context is safe projection only. Context cannot discover or invoke MCP, issue a bridge
 grant/operation, create a kernel epoch, restore a checkpoint, or cause a host request. Future delivery uses typed
-JSON-RPC 2.0 methods (ADR 0045): correlated, history-before-live, read-only safe projection or typed resync/error.
+JSON-RPC 2.0 methods (ADR 0011): correlated, history-before-live, read-only safe projection or typed resync/error.
 Replay, reconnect, or audit cannot create a Goal, disclose memory, recompact, execute a model step, invoke a tool, start
 a child, issue authority, or perform external work. Partial delivery is never permitted.
 
@@ -358,7 +358,7 @@ may reconstruct missing future context meaning.
 
 ## Dependencies, non-goals, and evidence
 
-This document depends on architectures 14, 15, and 18--20 and decisions 0002, 0004, 0005, 0007, and 0010--0012. It does
+This document depends on architectures 14, 15, and 18--20 and decision 0001. It does
 not define actual Goal persistence, search/index/vector retrieval, instruction assembly (owned by [architecture
 30](30-instruction-sources-and-system-context.md)), SQL/wire tags, migrations, retention/deletion/encryption,
 source-page sizes, resource values, provider evolution, architecture-23 session branching, activity/UI, physical Plan

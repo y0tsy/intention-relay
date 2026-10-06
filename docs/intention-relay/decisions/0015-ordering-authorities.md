@@ -1,4 +1,4 @@
-# ADR 0050: Ordering authorities
+# ADR 0015: Ordering authorities
 
 ## Status
 
@@ -17,20 +17,12 @@ the ordinary runtime.
 
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |
-| [ADR 0015](0015-non-destructive-session-branching-and-regeneration.md) 22-23 | The lineage invariant that "lineage audit is separate from Session and Run sequences" | The conversation-tree container journal (authority 2, when activated); lineage stays outside the session event sequence as one container order, not as an independent sequence |
-| [ADR 0016](0016-activity-ui-and-adapters.md) 16-21 | "activity identity is distinct from Session fork lineage and every other cursor" and "notification cursor is observation-only, while acknowledgement is a separate durable presentation aggregate" | Activity records order by the activity-tree container journal (authority 2, when activated); the notification cursor is the observation position (row 3), not a peer cursor; acknowledgement stays a separate durable presentation aggregate |
-| [ADR 0019](0019-production-model-tool-loop.md) 65-67 | "a new fact type does not create a new sequence merely for convenience; a separate sequence is permitted only for an independent aggregate with dedicated bounded queries" | Invariant 1: no record family may introduce a further ordering sequence; it orders by the session event sequence or by its container's journal, or it has no durable order |
-| [ADR 0027](0027-child-kernel-bridge-mcp-detail-directions.md) 54 | "The bridge introduces no second start marker, result stream, or sequence" | The general invariant 1: bridge facts order by the session event sequence or by their container's journal |
-| [ADR 0028](0028-provider-reasoning-and-catalog-detail-directions.md) 75 | "The normalized reasoning stream has one shared `RunEventCursorDto`" | The single run container journal (authority 2, kind `run`); `RunEventCursorDto` is the run's position in that journal, shared by every run fact |
-| [ADR 0029](0029-activity-and-notification-detail-directions.md) 29 | "the daemon supplies all undelivered messages in increasing `AgentActivityJournalSequenceDto` order with `AgentPairOrderDto` proof" | The activity-tree container journal (authority 2, when activated); the pair order is the delegation-pair container order |
-| [ADR 0029](0029-activity-and-notification-detail-directions.md) 45-46 | "Activity identity is daemon-assigned and distinct from Session, Run, lineage, and notification identity; a `RunId` is provenance, not authority" | Identity separation is unchanged and restated under invariants 1 and 4: authorities are never identity and never substitute for one another |
-| [ADR 0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) 14 | Tree-level metadata "never becomes activity, authority, or a second sequence" | Invariant 1: tree metadata has no durable order of its own |
-| [ADR 0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) 29 | Tree-level metadata "does not replace or filter the activity journal or notification sequences" | The activity journal is the activity-tree container journal (authority 2, when activated), and the notification cursor is an observation position, not a sequence |
-| [ADR 0035](0035-m5plus-complete-foundation-activation.md) 85-86 | "M5+ introduces no second runtime, registry, scheduler, persistence authority, or sandbox" | The container journal is a storage mechanism inside the existing single persistence authority, not a second one |
-| [ADR 0045](0045-local-json-rpc-2-0-transport.md) 85 | "`session.subscribe` and `session.snapshot` return their snapshot-and-tail result" | They return their snapshot result, or a typed resync |
-| [ADR 0045](0045-local-json-rpc-2-0-transport.md) 122 | "M3/M4/M5 durable runs, sessions, events, snapshots, cursors, and storage bytes are untouched by the wire change" | "Cursors" now means exactly the ordering model of this record; the wire change still touches none of it |
-| [ADR 0046](0046-typed-serde-json-contracts.md) 84-85 | "M3/M4 bytes, runs, events, snapshots, and cursors keep their recorded meaning and are never re-encoded, rewritten, or synthesized" | Recorded bytes and meanings are preserved; the removed write-only snapshot `sequence` columns carried no recorded meaning, and "cursors" means the two-authority model |
-| [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md) 93-94 | "Live queue unchanged. M3 queue tickets and atomic promotion stay exactly as they are" | Invariant 5: queue tickets are a queue-ordering mechanism outside the ordering model; that mechanism was later removed by [ADR 0055](0055-pending-turns-and-cooperative-interruption.md) |
+| [ADR 0003](0003-production-model-tool-loop.md) 65-67 | "a new fact type does not create a new sequence merely for convenience; a separate sequence is permitted only for an independent aggregate with dedicated bounded queries" | Invariant 1: no record family may introduce a further ordering sequence; it orders by the session event sequence or by its container's journal, or it has no durable order |
+| [ADR 0004](0004-m5plus-complete-foundation-activation.md) 85-86 | "M5+ introduces no second runtime, registry, scheduler, persistence authority, or sandbox" | The container journal is a storage mechanism inside the existing single persistence authority, not a second one |
+| [ADR 0011](0011-local-json-rpc-2-0-transport.md) 85 | "`session.subscribe` and `session.snapshot` return their snapshot-and-tail result" | They return their snapshot result, or a typed resync |
+| [ADR 0011](0011-local-json-rpc-2-0-transport.md) 122 | "M3/M4/M5 durable runs, sessions, events, snapshots, cursors, and storage bytes are untouched by the wire change" | "Cursors" now means exactly the ordering model of this record; the wire change still touches none of it |
+| [ADR 0012](0012-typed-serde-json-contracts.md) 84-85 | "M3/M4 bytes, runs, events, snapshots, and cursors keep their recorded meaning and are never re-encoded, rewritten, or synthesized" | Recorded bytes and meanings are preserved; the removed write-only snapshot `sequence` columns carried no recorded meaning, and "cursors" means the two-authority model |
+| [ADR 0014](0014-limits-by-precedent-and-no-content-scanning.md) 93-94 | "Live queue unchanged. M3 queue tickets and atomic promotion stay exactly as they are" | Invariant 5: queue tickets are a queue-ordering mechanism outside the ordering model; that mechanism was later removed by [ADR 0019](0019-pending-turns-and-cooperative-interruption.md) |
 
 Each record's text stays as written; this record supersedes only the named clause.
 
@@ -85,7 +77,7 @@ or to the session sequence must never invalidate it.
 4. Cross-authority correlation uses typed identity only: no arithmetic, offsets, conversions, or authority
 substitution (extends [architecture 02](../architecture/02-dto-and-contract-policy.md), lines 41-42).
 5. No queue-ordering mechanism exists: the M3 queue, its tickets, and their promotion were removed by [ADR
-0055](0055-pending-turns-and-cooperative-interruption.md), and pending turns are durable input joined to the live run
+0019](0019-pending-turns-and-cooperative-interruption.md), and pending turns are durable input joined to the live run
 context rather than an order.
 
 ## Compatibility
@@ -93,9 +85,9 @@ context rather than an order.
 Ordering evolves in place under the single live schema version 1: no migration, no versioned upgrade step, and no
 second version ([AGENTS.md](../../../AGENTS.md), single-version rule). Recorded M3/M4 bytes and meanings are preserved;
 this change removes a representation and dead members, not a version, mirroring [ADR
-0046](0046-typed-serde-json-contracts.md). The replay and page bounds and the run tail publication are unchanged; the
+0012](0012-typed-serde-json-contracts.md). The replay and page bounds and the run tail publication are unchanged; the
 queue and its tickets were later removed by [ADR
-0055](0055-pending-turns-and-cooperative-interruption.md). No compatibility fixture, decoder, alias, or golden is kept
+0019](0019-pending-turns-and-cooperative-interruption.md). No compatibility fixture, decoder, alias, or golden is kept
 for a removed member.
 A local database file created by an earlier revision is not opened, migrated, or repaired: it is deleted and recreated
 by the normal development flow, as the single live schema requires.

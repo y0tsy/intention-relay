@@ -1,9 +1,9 @@
-# ADR 0039: Request-side tool advertisement
+# ADR 0006: Request-side tool advertisement
 
 ## Status
 
-Accepted as a Milestone 5+ retrospective completion of [ADR 0019](0019-production-model-tool-loop.md), within the
-retrospective scope of [ADR 0035](0035-m5plus-complete-foundation-activation.md). It completes the ordinary production
+Accepted as a Milestone 5+ retrospective completion of [ADR 0003](0003-production-model-tool-loop.md), within the
+retrospective scope of [ADR 0004](0004-m5plus-complete-foundation-activation.md). It completes the ordinary production
 model-tool loop on the request side: the daemon now advertises the active registered tools in model requests so real
 providers can emit structured tool calls. The M5+ Slice 3 reservations and all reserved tags remain untouched and
 reserved.
@@ -14,8 +14,8 @@ In scope is the ordinary production model-request path only: the provider-neutra
 built from the active registered tool set, the model tool-call capability is requested whenever definitions are present,
 and the two current provider adapters (`generic-chat` and `openrouter`) translate the definitions into their private SDK
 request. This record supersedes, in place and only for ordinary request translation, the [ADR
-0019](0019-production-model-tool-loop.md) non-goal clause that excluded "OpenRouter or OpenAI Responses tool mapping";
-ADR 0019's body is unchanged, and an OpenAI Responses driver still does not exist and is not added here.
+0003](0003-production-model-tool-loop.md) non-goal clause that excluded "OpenRouter or OpenAI Responses tool mapping";
+ADR 0003's body is unchanged, and an OpenAI Responses driver still does not exist and is not added here.
 
 1. `ModelRequestDto` gains a `tools: Vec<ModelToolDefinitionDto>` field.
 `ModelToolDefinitionDto` is provider-neutral and carries exactly `name`, `description`, and `parameters_json`. Because
@@ -37,7 +37,7 @@ that declare tool-call support; an empty replacement leaves the flag unchanged.
 preselects a tool.
 5. Result continuation is unchanged: assistant tool-call messages and
 tool-role result messages already flow through the runtime loop activated by [ADR
-0019](0019-production-model-tool-loop.md).
+0003](0003-production-model-tool-loop.md).
 
 The M5+ Slice 3 reservations remain untouched and reserved: `tool-descriptor-revision` (`0x0301`),
 `tool-registry-revision` (`0x0302`), and `model-tool-loop-v1` (`0x0303`) stay `ReservedForSlice3`. No frozen
@@ -62,11 +62,11 @@ typed tool calls; the daemon-owned typed registry, workspace, and hook pipeline 
 ## Compatibility
 
 Public DTO schema 1.1 is unchanged; the local protocol version clause of this bullet is superseded by [ADR
-0045](0045-local-json-rpc-2-0-transport.md) (JSON-RPC 2.0 over NDJSON at protocol version 2.0, no capability plane), and
+0011](0011-local-json-rpc-2-0-transport.md) (JSON-RPC 2.0 over NDJSON at protocol version 2.0, no capability plane), and
 the record otherwise stands. The provider-neutral request is not a public wire family, and the SQLite storage schema and
 canonical records are untouched: no migration, no version change, and no persisted advertisement state. M3/M4 recorded
 history, replay, and evidence remain unchanged; the M4 no-port denial fallback was already superseded by [ADR
-0038](0038-no-backward-compatibility-and-legacy-removal.md) and is not affected by this record. Drivers that do not
+0005](0005-no-backward-compatibility-and-legacy-removal.md) and is not affected by this record. Drivers that do not
 declare tool-call support remain valid for tool-free requests; they fail closed only when tools are advertised.
 
 ## Security and failure behavior
@@ -113,5 +113,5 @@ order); `crates/intention-daemon/tests/facade_e2e.rs`: `real_daemon_tool_loop_ex
 ## Research provenance
 
 `m4plus_concept.md` selected base-tool contracts and unified registry, descriptor/registry revisions, and selected
-foundational model-tool loop sections, filtered through [ADR 0019](0019-production-model-tool-loop.md) (ordinary loop
-activation), [ADR 0025](0025-base-tool-contracts-and-tool-loop-bounds.md), and the M5+ Slice 3 reservation ledger.
+foundational model-tool loop sections, filtered through [ADR 0003](0003-production-model-tool-loop.md) (ordinary loop
+activation), and the M5+ Slice 3 reservation ledger.

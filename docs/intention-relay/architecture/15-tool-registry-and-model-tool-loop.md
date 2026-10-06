@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 15. Decisions: ADR 0007, ADR 0025, ADR 0053. Research: m4plus_concept.md.
+Owner: architecture 15. Decisions: ADR 0001, ADR 0014. Research: m4plus_concept.md.
 
 This document owns the unified tool registry, immutable tool selection, tool admission on the ordinary run path,
 `WorkspaceRoot` semantics, the model-tool-model loop, and the tool-effect recovery boundary. It applies to future
@@ -20,7 +20,7 @@ shapes, not implementation selection.
 Providers, models, adapters, bridge/kernel code, child work, MCP sources, Skills, and primitive owners cannot create a
 second registry, private model-function collection, direct primitive path, persistence authority, or publication
 authority. Every invocation reaches the one daemon-owned, Rust-owned capability path required by [decision
-0004](../decisions/0004-rust-owned-capability-plane-and-fixed-tool-registry.md).
+0001](../decisions/0001-rust-owned-capability-plane-and-fixed-tool-registry.md).
 
 ## Fixed registry and descriptor revisions
 
@@ -100,7 +100,7 @@ get no fictional workspace path; their owners may require typed URL, question, t
 or MCP-method references instead. Plan denies ordinary `write`/`edit`; plan mutation remains plan-policy work.
 
 `ToolDescriptorRevisionId`, `ToolRegistryRevisionId`, and selection records are typed serde JSON values (ADR
-0046); the removed `IRCR` / `typed-tlv-v1` / SHA-256 canonical codec is not replaced by a competing codec. Semantic
+0012); the removed `IRCR` / `typed-tlv-v1` / SHA-256 canonical codec is not replaced by a competing codec. Semantic
 changes require a new record version; labels, executor handles, live readiness, and opaque owner resources are excluded
 from identity.
 
@@ -153,11 +153,11 @@ available.
 ## Validation ownership and limit classification
 
 Validation is layered: transport owns wire shape and protocol-version equality; this package owns fixed slots,
-descriptor revisions, selection ordering, and tool admission; typed serde JSON owns record shape (ADR 0046);
+descriptor revisions, selection ordering, and tool admission; typed serde JSON owns record shape (ADR 0012);
 runtime/application owns live readiness and mode preconditions; primitive owners validate typed inputs/outputs; storage
 owns persistence constraints. No layer may bypass or replace another. Every numeric value is classified before
 activation as an intrinsic representation/protocol bound, typed capacity availability, or a liveness safeguard with
-recorded rationale (ADR 0048); future product ceilings, retry budgets, and successful-result truncation to fit a
+recorded rationale (ADR 0014); future product ceilings, retry budgets, and successful-result truncation to fit a
 ceiling are not permitted.
 
 ## Tool admission and WorkspaceRoot
@@ -183,7 +183,7 @@ The workspace rule is the same for every run:
 | Relative paths | Default base: `workspace_root.join(path)`. |
 | `execute` | Initial CWD; the child process starts in the root. |
 | glob/grep | Default scope root when no path is supplied. |
-| Containment | None. The anchor does not contain: no symlink parser, containment check, or path-based denial remains, and a path inside the root may resolve outside it through a symbolic link. The typed input still rejects absolute and parent (`..`) paths — `WorkspaceRelativePathDto` for tool paths and the search-pattern validator for `glob`/`grep` patterns — as an input-shape rule, not a boundary; `WorkspaceRoot` is not a security boundary (ADR 0047). |
+| Containment | None. The anchor does not contain: no symlink parser, containment check, or path-based denial remains, and a path inside the root may resolve outside it through a symbolic link. The typed input still rejects absolute and parent (`..`) paths — `WorkspaceRelativePathDto` for tool paths and the search-pattern validator for `glob`/`grep` patterns — as an input-shape rule, not a boundary; `WorkspaceRoot` is not a security boundary (ADR 0013). |
 
 For path-bearing calls, typed safe observation may record path form, base reference, effective path/CWD subject to
 redaction, and observation completeness: audit evidence, not authorization, neither tracking descendants nor forming a
@@ -195,7 +195,7 @@ physical-plan mutation stays a plan-owner operation. `execute` is admissible whe
 sandbox; `ask_user` is normal `user_interaction` tooling, and the run remains `Running`
 after it starts.
 
-The project script library (`.ir/scripts`, [ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md))
+The project script library (`.ir/scripts`, [ADR 0009](../decisions/0009-project-script-library-for-kernel-cells.md))
 follows these same tool-admission semantics: its logical relative path is a default base for existing frozen
 descriptors and never an access boundary, `write`/`edit` create or change a module while `execute` or a kernel
 foreground cell runs it, and no new `ToolId`, registry slot, listener, or primitive path is admitted. Per-cell
@@ -281,7 +281,7 @@ content, raw tool results, model-visible projection text, provider-native correl
 Tool facts take a position in the run container journal and are available for bounded tail replay.
 
 `model_tool_loop_v1` is a descriptor/model capability, not a wire capability: there is no protocol capability
-negotiation or family gate (ADR 0045). After the correlated `RunSnapshotDto` result of a run subscription, the subscriber
+negotiation or family gate (ADR 0011). After the correlated `RunSnapshotDto` result of a run subscription, the subscriber
 receives `RunToolHistoryPageDto` notifications: one fixed session/run identity, a captured upper cursor, non-empty
 ascending tool facts, bounded by the existing **256 facts and 512 KiB per page**. The final `RunToolHistoryCompletedDto`
 repeats the identity and upper cursor. One publication gate serializes `RunSnapshotDto`, tool-history pages, completion,
@@ -336,14 +336,14 @@ and the old call is never replayed.
 
 ## Compatibility and protocol boundary
 
-`model_tool_loop_v1` is a descriptor/model capability delivered through JSON-RPC 2.0 run subscriptions (ADR 0045):
+`model_tool_loop_v1` is a descriptor/model capability delivered through JSON-RPC 2.0 run subscriptions (ADR 0011):
 authoritative replay, bounded ordered tool-history pages and completion, then live notifications under one publication
 gate. Missing or incomplete history yields resync/history-unavailable; a client that cannot represent future loop facts
 receives a typed error without partial snapshot, history, or live data. Snapshots stay compact and safe; exact wire
 tags, pages, and storage schema remain deferred.
 
 M3 session replay and M4 run streaming remain unchanged. An M4 `ToolCallRecorded` remains durable tool-call evidence;
-the M4-era no-tool-port `tool_execution_unavailable` denial is superseded by ADR 0038 binding decision 2, so the
+the M4-era no-tool-port `tool_execution_unavailable` denial is superseded by ADR 0005 binding decision 2, so the
 model-tool-loop executor requires a tool executor and provider tool calls execute through the durable tool path.
 Historical records gain no synthetic registry, descriptor, tool-loop, child, MCP, Skill, policy, or execution-kind
 state.

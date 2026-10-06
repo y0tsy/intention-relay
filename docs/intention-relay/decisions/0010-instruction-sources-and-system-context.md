@@ -1,24 +1,24 @@
-# ADR 0043: Instruction sources and system context
+# ADR 0010: Instruction sources and system context
 
 ## Status
 
 Accepted 2026-09-26 as a documentation-approved future direction within the retrospective scope of [ADR
-0035](0035-m5plus-complete-foundation-activation.md). It extends [ADR
-0017](0017-build-autopilot-and-plan-focus-continuity.md) by giving the Plan focus instruction one typed owner, respects
-the context boundary of [ADR 0013](0013-goals-skills-context-memory-and-compaction.md) without changing its Skill,
-memory, or projection rules, and amends ADR 0035 by adding a fifth activating slice to the Milestone 5+ sequence. It
+0004](0004-m5plus-complete-foundation-activation.md). It extends [ADR
+0002](0002-build-autopilot-and-plan-focus-continuity.md) by giving the Plan focus instruction one typed owner, respects
+the context boundary of without changing its Skill,
+memory, or projection rules, and amends ADR 0004 by adding a fifth activating slice to the Milestone 5+ sequence. It
 authorizes no crate, DTO, tag, wire, storage schema, configuration field, UI page, migration, feature profile,
 quality-policy target, or production behavior, and it is not the Slice 5 activating specification.
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
 Amended 2026-09-30: the intrinsic numeric bounds are superseded by [ADR
-0048](0048-limits-by-precedent-and-no-content-scanning.md), and the digest wording and the workspace-boundary failure
-condition are read through [ADR 0046](0046-typed-serde-json-contracts.md) and [ADR
-0047](0047-workspace-root-addressing-anchor.md) as recorded below.
+0014](0014-limits-by-precedent-and-no-content-scanning.md), and the digest wording and the workspace-boundary failure
+condition are read through [ADR 0012](0012-typed-serde-json-contracts.md) and [ADR
+0013](0013-workspace-root-addressing-anchor.md) as recorded below.
 
 Amended 2026-10-05: the delivery clause is read through [ADR
-0054](0054-dynamic-context-window-and-prompt-caching.md) for the prompt-cache breakpoint at the end of the instruction
+0018](0018-dynamic-context-window-and-prompt-caching.md) for the prompt-cache breakpoint at the end of the instruction
 block.
 
 ## Scope and supersession
@@ -30,7 +30,7 @@ instruction text never carries authority. It names [architecture
 fifth activating slice of Milestone 5+. It supersedes nothing else; it amends two recorded positions: [architecture
 21](../architecture/21-goals-skills-context-memory-and-compaction.md)'s documentation-only exclusion that leaves prompt
 assembly undefined (instruction assembly is owned by architecture 30, while architecture 21 keeps Goals, Skills, context
-manifests, memory, and compaction), and the slice sequence of [ADR 0035](0035-m5plus-complete-foundation-activation.md),
+manifests, memory, and compaction), and the slice sequence of [ADR 0004](0004-m5plus-complete-foundation-activation.md),
 whose fifth slice this decision declares.
 
 The M3/M4 baseline, the closed M4 charter, the current model contract, and the recorded `system_context` channel keep
@@ -52,10 +52,10 @@ are adapted, never consumed unchanged; `Mode` and `Vfr` are reserved to their ar
 - **Source scopes are closed**: `Deployment` (daemon-packaged defaults;
 enable/disable only), `User`, `Project`, and `Session` (durable configuration edited through the typed control-plane
 surface of architecture 25). Exactly one live configuration format version exists ([ADR
-0038](0038-no-backward-compatibility-and-legacy-removal.md)).
+0005](0005-no-backward-compatibility-and-legacy-removal.md)).
 - **Workspace project instructions**: `AGENTS.md` at the session's
 `WorkspaceRoot` is the only file-based instruction source, addressed by workspace path, read as text, never executed,
-and never treated as authority ([ADR 0047](0047-workspace-root-addressing-anchor.md)); an absent file contributes
+and never treated as authority ([ADR 0013](0013-workspace-root-addressing-anchor.md)); an absent file contributes
 nothing and is not a failure.
 - **Fragment profile**: all configured fragments form an immutable
 `InstructionProfileRevisionV1`; creating, editing, reordering, enabling, disabling, or re-scoping a fragment produces a
@@ -71,7 +71,7 @@ current configuration, current `AGENTS.md` content, or current session state.
 the assembled projection as the request's optional system context, and the drivers translate it into the leading system
 message with no driver-specific framing, rewrite, or provider-side scan; the daemon-owned request marks the end of that
 instruction block with the ephemeral prompt-cache breakpoint of [ADR
-0054](0054-dynamic-context-window-and-prompt-caching.md).
+0018](0018-dynamic-context-window-and-prompt-caching.md).
 - **Materialization**: the projection is the contents of the
 `effective_instruction_projection` and `materialized_effective_instruction_projection` fields of the fork records
 ([architecture 23](../architecture/23-non-destructive-session-branching-and-regeneration.md)), and its revision identity
@@ -81,7 +81,7 @@ duplicates, enables, disables, reorders, and re-scopes fragments, rejects invali
 profile revision identity, and previews the effective projection for a chosen session, policy, and mode without
 admitting a run; TUI/REPL remains contract-equivalent.
 - **Numeric bounds** are not fixed now: any future character, fragment-count,
-or size bound requires a recorded precedent under [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md), no
+or size bound requires a recorded precedent under [ADR 0014](0014-limits-by-precedent-and-no-content-scanning.md), no
 text is truncated, sampled, or silently replaced by a previous revision, and an unrepresentable, inconsistent, or
 unreadable source fails closed before admission.
 - **Observability**: logs, activity, notification, and audit surfaces carry
@@ -91,7 +91,7 @@ revision identities only; instruction text stays on the configuration surface wh
 
 1. No authority. Instruction text grants no tool, policy, MCP, bridge, kernel,
 provider, or reconciliation authority, and it cannot prevent or
-prove the absence of any external effect. The advisory rule of ADR 0017 is unchanged.
+prove the absence of any external effect. The advisory rule of ADR 0002 is unchanged.
 2. One channel. Exactly one effective instruction projection exists per
 admitted run, it has exactly one owner, and no second prompt-assembly path, hidden system text, or provider-supplied
 instruction may be added beside it.
@@ -102,7 +102,7 @@ context-manifest, Skill-disclosure, or evidence material under architecture 21.
 a change creates a new revision; forks and historical records are never rewritten or reconstructed.
 5. Determinism. The same profile revision, project instruction source, mode,
 and configuration produce the same ordered projection and the same projection identity; order and separators are fixed.
-Byte-level canonicalization is settled at activation under [ADR 0046](0046-typed-serde-json-contracts.md).
+Byte-level canonicalization is settled at activation under [ADR 0012](0012-typed-serde-json-contracts.md).
 6. Safety. The projection is credential-free and safe to record; no
 instruction source may carry a secret, a credential, raw provider or tool payload, an implementation resource, or
 executable content.
@@ -115,7 +115,7 @@ retained history, and recorded bytes gain no instruction state.
 
 Historical M3/M4 requests keep the optional `system_context` absent, and existing runs, events, snapshots, replay,
 recovery, and tool denial keep their recorded meaning. The mechanism adds no second model protocol, no second storage
-schema, no new event sequence, and no compatibility layer; under ADR 0038 it is part of the single first-scope
+schema, no new event sequence, and no compatibility layer; under ADR 0005 it is part of the single first-scope
 instruction contract rather than a versioned upgrade path. Fork, plan, and handoff records that must freeze context
 carry the materialized projection; records that must not (historical runs, activity projections, audit records) carry
 nothing new.
@@ -124,7 +124,7 @@ nothing new.
 
 The instruction channel is the only trusted instruction surface, and it accepts content from declared sources only.
 Repository content, tool output, fetched material, Skill bodies, memory cards, and provider output remain untrusted data
-and cannot be promoted into it, so the ADR 0019 prompt-injection risk keeps its existing boundary and gains one explicit
+and cannot be promoted into it, so the ADR 0003 prompt-injection risk keeps its existing boundary and gains one explicit
 rule: an instruction source cannot widen tool policy or provider selection.
 
 The closed instruction failure set is:
@@ -199,8 +199,8 @@ static session prompts (source revision `8604fde0566d4dfadf8124e0724c5a82db3f89d
 `crates/tauri-app/src/state.rs`, `build_system_prompt()`), whose four static sources this decision adapts instead of
 consuming unchanged; its size cap is not carried over. `legacy-baseline/04-agent-behavior.md` records the user-visible
 legacy behavior of assembling a system prompt from project context, conventions, mode, and optional project files.
-- [ADR 0017](0017-build-autopilot-and-plan-focus-continuity.md): the accepted
-advisory Plan focus instruction, which becomes the `Mode` contribution. [ADR 0019](0019-production-model-tool-loop.md):
+- [ADR 0002](0002-build-autopilot-and-plan-focus-continuity.md): the accepted
+advisory Plan focus instruction, which becomes the `Mode` contribution. [ADR 0003](0003-production-model-tool-loop.md):
 the recorded prompt-injection risk of the production model-tool loop, whose boundary this decision keeps.
 - `m4plus_concept.md`: research provenance only. The roadmap declares it
 immutable, so this direction is recorded from the legacy reference material and the user-requested direction of

@@ -1,11 +1,11 @@
-# ADR 0041: Same-run provider reasoning round-trip
+# ADR 0008: Same-run provider reasoning round-trip
 
 ## Status
 
 Accepted as a Milestone 5+ retrospective completion of the ordinary production model-tool loop ([ADR
-0019](0019-production-model-tool-loop.md)) and of the request-side translation completed by [ADR
-0039](0039-request-side-tool-advertisement.md), within the retrospective scope of [ADR
-0035](0035-m5plus-complete-foundation-activation.md). It makes the ordinary same-run tool-loop continuation acceptable
+0003](0003-production-model-tool-loop.md)) and of the request-side translation completed by [ADR
+0006](0006-request-side-tool-advertisement.md), within the retrospective scope of [ADR
+0004](0004-m5plus-complete-foundation-activation.md). It makes the ordinary same-run tool-loop continuation acceptable
 to a real Chat Completions gateway in thinking mode by returning the current round's accepted reasoning as transient
 request state. The M5+ Slice 3 reservations and all reserved tags remain untouched and reserved.
 
@@ -17,17 +17,15 @@ fragments, the runtime attaches the current round's accepted reasoning to the as
 same-run continuation, the generic adapter serializes that attachment on the assistant tool-call message of its private
 typed request, and the generic adapter's declared `ModelCapabilitiesDto` gains reasoning output.
 
-This record supersedes, in place and only for this scope, the [ADR 0039](0039-request-side-tool-advertisement.md)
+This record supersedes, in place and only for this scope, the [ADR 0006](0006-request-side-tool-advertisement.md)
 Decision 5 sentence "Result continuation is unchanged: assistant tool-call messages and tool-role result messages
-already flow through the runtime loop activated by [ADR 0019](0019-production-model-tool-loop.md)." Continuation now
-also carries the same round's accepted reasoning when the selected model produced it. Everything else in ADR 0039
-Decision 5 remains true. ADR 0039's body is unchanged, and the supersession is recorded only in this record. The record
+already flow through the runtime loop activated by [ADR 0003](0003-production-model-tool-loop.md)." Continuation now
+also carries the same round's accepted reasoning when the selected model produced it. Everything else in ADR 0006
+Decision 5 remains true. ADR 0006's body is unchanged, and the supersession is recorded only in this record. The record
 claims no date, commit, or run identifier of its own; dates and commits stay in the evidence section. The rest of the
-reasoning contract surface is unchanged: the dialect direction is owned by [ADR
-0028](0028-provider-reasoning-and-catalog-detail-directions.md) and the provider evolution decision by [ADR
-0014](0014-provider-evolution-profiles-and-reasoning.md). The M5+ Slice 3 reservations (`tool-descriptor-revision`
+reasoning contract surface is unchanged. The M5+ Slice 3 reservations (`tool-descriptor-revision`
 `0x0301`, `tool-registry-revision` `0x0302`, `model-tool-loop-v1` `0x0303`) remain `ReservedForSlice3`, and the [ADR
-0038](0038-no-backward-compatibility-and-legacy-removal.md) single-version policy is unaffected.
+0005](0005-no-backward-compatibility-and-legacy-removal.md) single-version policy is unaffected.
 
 ## Context
 
@@ -35,7 +33,7 @@ The live evidence for this decision is a real Chat Completions gateway in thinki
 assistant tool-call message lacked `reasoning_content` was rejected with HTTP 400 and the normalized `request_rejected`
 failure, "The `reasoning_content` in the thinking mode must be passed back to the API". Re-sending the exact production
 request with the field added, even as an empty string, made the continuation succeed. The live run executes through the
-opt-in channel of [ADR 0040](0040-opt-in-live-provider-e2e.md); the controller records its date, commit, provider kind,
+opt-in channel of [ADR 0007](0007-opt-in-live-provider-e2e.md); the controller records its date, commit, provider kind,
 and model when the recorded run is available, together with the local `quality/reports/real-api-e2e` run report for a
 local `make e2e-real-api` run or the workflow run URL for a manual `workflow_dispatch` run.
 
@@ -98,13 +96,13 @@ meaning, or tool-loop contract is introduced, and the M5+ Slice 3 reservations r
 ## Compatibility
 
 Public DTO schema 1.1, TOML configuration schema 1, and the single live SQLite schema are unchanged; the local protocol
-version clause of this bullet is superseded by [ADR 0045](0045-local-json-rpc-2-0-transport.md) (JSON-RPC 2.0 over
+version clause of this bullet is superseded by [ADR 0011](0011-local-json-rpc-2-0-transport.md) (JSON-RPC 2.0 over
 NDJSON at protocol version 2.0, no capability plane), and the record otherwise stands. Reasoning attachment is
 provider-neutral request state, not a public wire family; no migration, version change, or durable representation is
 added. M3/M4/M5 recorded history, replay, durable facts, snapshots, and evidence remain unchanged; historical runs gain
 no reasoning category, echo, or synthetic reasoning state. The OpenRouter adapter's behavior, request shape, and
 capability declaration are unchanged; drivers that do not consume reasoning remain valid for ordinary requests. The [ADR
-0038](0038-no-backward-compatibility-and-legacy-removal.md) single-version policy is unaffected: nothing opens an older
+0005](0005-no-backward-compatibility-and-legacy-removal.md) single-version policy is unaffected: nothing opens an older
 schema or adds a compatibility branch.
 
 ## Security and failure behavior
@@ -118,7 +116,7 @@ marker. There is no silent fallback, no cross-run substitution, and no invented 
 - The typed `byot` seam keeps transport failures in the pinned SDK's existing
 normalized error mapping; malformed, out-of-order, or unknown reasoning chunks follow the adapter's existing safe
 failure behavior.
-- The live evidence is opt-in and manual under ADR 0040 and is never a
+- The live evidence is opt-in and manual under ADR 0007 and is never a
 blocking gate; hermetic tests remain the acceptance evidence.
 
 ## Non-goals
@@ -137,7 +135,7 @@ Touched: architecture 02, 08, 10, 22; README index; `crates/intention-model`, `c
 
 ## Evidence
 
-Hermetic tests remain the acceptance evidence; the ADR 0040 live channel adds the opt-in manual run.
+Hermetic tests remain the acceptance evidence; the ADR 0007 live channel adds the opt-in manual run.
 
 - Transient model contract round trip:
 `crates/intention-model/tests/model_contracts.rs`:
@@ -159,11 +157,11 @@ tests; multimodal and vendor extensions still fail before outbound work. OpenRou
 `crates/intention-provider-openrouter/src/lib.rs` unit tests, where the attachment is ignored and the request shape is
 unchanged.
 - Live 400 evidence and acceptance: the opt-in live run through
-`crates/intention-daemon/tests/real_api_e2e.rs` under ADR 0040; the controller records date, commit, provider kind,
+`crates/intention-daemon/tests/real_api_e2e.rs` under ADR 0007; the controller records date, commit, provider kind,
 model, and the local run report or the workflow run URL.
 - Reconciliation evidence: EVD-064 (`reconciliation/evidence-register.md`; `Verified` by the hermetic gates and the
-recorded live runs), supplemented by EVD-062 because the ADR 0039 continuation now also carries reasoning. Gates: `make
-quick`, `make verify`, `docs-check`, Linux/Windows CI; the ADR 0040 live channel remains manual and non-blocking.
+recorded live runs), supplemented by EVD-062 because the ADR 0006 continuation now also carries reasoning. Gates: `make
+quick`, `make verify`, `docs-check`, Linux/Windows CI; the ADR 0007 live channel remains manual and non-blocking.
 
 Recorded live run (EVD-063/EVD-064): 2026-09-23, local `make e2e-real-api`, commit `0dc2e30`, provider
 `generic-chat-completion-api`, model `deepseek-v4.1-flash`; both ignored live tests passed, so a thinking-mode gateway
@@ -175,9 +173,7 @@ same channel passed again after the provider SDK refresh (commit `722a8f4`). The
 
 ## Research provenance
 
-The reasoning directions in `m4plus_concept.md` were filtered through [ADR
-0014](0014-provider-evolution-profiles-and-reasoning.md) and [ADR
-0028](0028-provider-reasoning-and-catalog-detail-directions.md). The ADR 0040 live channel supplied the
+The reasoning directions in `m4plus_concept.md` were filtered through the provider evolution and reasoning directions. The ADR 0007 live channel supplied the
 delivery-integrity provenance: the thinking-mode gateway rejection and the empty-string acceptance were observed with
 the exact production request. This record adds no new research direction, no descriptor/profile revision, and no Slice 3
 contract.

@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 18. Decisions: ADR 0010, ADR 0027, ADR 0033. Research: m4plus_concept.md.
+Owner: architecture 18. Research: m4plus_concept.md.
 
 This document owns future MCP source proposals, discovery, normalized capabilities, run-local capability
 selections, invocation, safe projections, disposal, recovery, and compatibility. It applies only to future run
@@ -13,7 +13,7 @@ retained bounded user connection/catalog research remains historical provenance,
 ## Ownership and non-authorities
 
 Architecture 14 is the historical record of the removed execution-meaning envelope, canonical framing, decoders, and
-compatibility classes (ADR 0046). Architecture 15 owns the fixed `mcp` slot, composition-only activation, direct
+compatibility classes (ADR 0012). Architecture 15 owns the fixed `mcp` slot, composition-only activation, direct
 admission, `ToolCallId`, generic tool loop, and effect/publication boundary.
 
 This document owns only MCP-specific nested-selection semantics and capability lifecycle. It is not a second registry,
@@ -30,7 +30,7 @@ retained requirements for user-created catalogs, complete-at-admission method se
 quota gates, and it preserves the one gateway, typed boundary, private resources, idempotency,
 redaction, commit/reread publication, cancellation/disposal, and no-resume law.
 
-Typed serde JSON (ADR 0046) supplies the record shape; the removed `IRCR` / `typed-tlv-v1` / SHA-256 canonical policy is
+Typed serde JSON (ADR 0012) supplies the record shape; the removed `IRCR` / `typed-tlv-v1` / SHA-256 canonical policy is
 not revived. This document owns the field semantics of these conceptual records. The concept2 names
 `McpCapabilitySourceDto`, `McpDiscoveryDto`, and `McpCapabilityRevisionDto` are research-only; the
 authoritative names are the `V1` records below, whose fields (private endpoint/credential generation references,
@@ -205,7 +205,7 @@ never a live process, connection, credential handle, accumulated selection, invo
 controls cannot invoke, widen, or inspect private resources, and an interrupted child MCP call's partial result remains
 child-local.
 
-Future MCP projections use typed JSON-RPC 2.0 methods (ADR 0045) layered with the `model_tool_loop_v1` descriptor/model
+Future MCP projections use typed JSON-RPC 2.0 methods (ADR 0011) layered with the `model_tool_loop_v1` descriptor/model
 capability: authoritative initial replay/resync/error, bounded ordered discovery/capability/selection/invocation
 history, then live notifications through one post-commit gate. Replay is read-only and causes no discovery, invocation,
 process start, retry, or publication, and no caller receives a partial ordinary snapshot. M3/M4 and retained
@@ -258,13 +258,12 @@ They disclose no credential, path, raw external response, private process resour
 package continues to exclude autonomous continuation, work after client disconnection,
 attachments/images/binary/rich-MIME input, dynamic extensions and installation, dynamic tool registration, physical
 deletion, and administration of long-lived workers, leases, attach/detach, force-kill, or supervisor recovery.
-Work/continuation/requeue after client disconnection is an accepted post-M5 future direction under [ADR
-0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be executed in Milestone 5+ as an explicit durable
-contract that never silently resumes old external work; it is not activated here.
+Work/continuation/requeue after client disconnection is an accepted post-M5 future direction, to be executed in
+Milestone 5+ as an explicit durable contract that never silently resumes old external work; it is not activated here.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 14 and 15 and decisions 0002, 0004, and 0007. It defines no direct MCP
+This document depends on architectures 14 and 15 and decision 0001. It defines no direct MCP
 administration, an MCP listener/inbound daemon attachment, raw string-method transport, arbitrary maps/headers/schemas,
 plugins/installations, dynamic ToolIds, long-lived workers/supervision, provider evolution, bridge/IPython,
 Skills/Goals/context semantics, session forks, activity/UI, schema, migrations, crates, Cargo, Makefile/CI, or

@@ -33,7 +33,7 @@ design out of the initial product.
 
 ### JSON-RPC 2.0 protocol
 
-The wire is JSON-RPC 2.0 ([ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md)): every message is one UTF-8
+The wire is JSON-RPC 2.0 ([ADR 0011](../decisions/0011-local-json-rpc-2-0-transport.md)): every message is one UTF-8
 JSON line terminated by a newline. A request carries `"jsonrpc":"2.0"`, a numeric `id`, a `method`, and typed `params`;
 a response echoes the `id` and carries exactly one of `result` or `error`; a notification carries `"jsonrpc":"2.0"`, a
 `method`, and `params` with no `id`. The envelopes are `JsonRpcRequest<T>`, `JsonRpcResponse<T>`, `JsonRpcError`, and
@@ -66,7 +66,7 @@ changing the JSON-RPC error shape.
 The daemon host accepts each local connection, completes the JSON-RPC 2.0 `hello` handshake, and serves typed requests.
 A one-shot connection reads one request, writes the correlated response, and closes; a long-lived connection may send
 further requests and receive subscription notifications. Each connection carries bounded liveness safeguards, not
-contract bureaucracy (ADR 0048):
+contract bureaucracy (ADR 0014):
 
 - `MAX_MESSAGE_BYTES` (1 MiB) rejects an over-size message before unbounded allocation;
 - `CONNECT_TIMEOUT` (500 ms) bounds the connect wait;
@@ -177,7 +177,7 @@ sequenceDiagram
 
 At connection time the client sends `hello` carrying exactly the protocol version and the local adapter name, never an
 application account. The daemon accepts only the exact current protocol version, 2.0, and answers `hello` before serving
-any other method; there are no capability DTOs, feature flags, family gates, or connection modes (ADR 0045).
+any other method; there are no capability DTOs, feature flags, family gates, or connection modes (ADR 0011).
 
 An incompatible protocol version fails closed with the typed JSON-RPC error `-32001`, carrying `ErrorDto { category:
 unavailable }` in `error.data`, before the daemon closes the connection. The adapter should offer a safe
@@ -196,7 +196,7 @@ M3 serves sessions from durable SQLite projections and append-only event envelop
 one-shot JSON-RPC request: for an unscoped request it returns the **current durable projection snapshot**, or a typed
 resync when the session cannot be supplied. It is
 **replay-only**, not a retained connection and not a live event feed, and historical projection reconstruction is not
-represented in M3. The post-commit publication seam is removed (ADR 0038 Wave 7): committed evidence is published only
+represented in M3. The post-commit publication seam is removed (ADR 0005 Wave 7): committed evidence is published only
 through the daemon host's commit-observation path, never through a no-op session seam. M3 durability, unscoped
 snapshot replay, ordering, and resync remain unchanged; persistent delivery is implemented only for the separate M4
 run-scoped DTOs, never for filtered M3 session state.
@@ -307,7 +307,7 @@ follow-up run.
 
 The daemon, transport, client, and adapter tests in this document are blocking `make verify` inputs under the coverage
 policy of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate tiers,
-[ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)). Tauri and TUI carry the `edge` tier floor in addition to
+[ADR 0016](../decisions/0016-per-crate-coverage-tiers.md)). Tauri and TUI carry the `edge` tier floor in addition to
 their mapping contracts and fixture-daemon outcome scenarios; the floor never replaces that evidence.
 
 ## Open implementation decisions
@@ -330,7 +330,6 @@ resync, and never create a second listener or adapter-owned authority.
 
 ## Post-M5 supervision topology direction
 
-Worker and process supervision topology is an accepted post-M5 future direction under [ADR
-0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md), to be executed in Milestone 5+ as a production
-supervision topology for long-lived workers and processes. It never becomes a second runtime, registry, scheduler,
+Worker and process supervision topology is an accepted post-M5 future direction, to be executed in Milestone 5+ as a
+production supervision topology for long-lived workers and processes. It never becomes a second runtime, registry, scheduler,
 persistence authority, or sandbox.

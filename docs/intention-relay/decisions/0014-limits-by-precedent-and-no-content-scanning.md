@@ -1,4 +1,4 @@
-# ADR 0048: Limits by precedent, no runtime content scanning, and removal of the corridor, period, and queue-audit engines
+# ADR 0014: Limits by precedent, no runtime content scanning, and removal of the corridor, period, and queue-audit engines
 
 ## Status
 
@@ -6,7 +6,7 @@ Accepted 2026-09-30. It fixes the numeric-limit policy, bans runtime content sca
 reservation model, the Day/Week/Month period engine, and the queue audits from the documentation because they never
 existed in code. It authorizes no new limit, scanner, corridor, period engine, or queue audit.
 
-Amended 2026-10-05 by [ADR 0053](0053-sub-agent-and-fork-limits-by-precedent.md): the tool read and output window row
+Amended 2026-10-05 by [ADR 0014](0014-limits-by-precedent-and-no-content-scanning.md): the tool read and output window row
 records the explicit cut marker, and the child, bridge, activity, and fork bounds are resolved under this record's
 precedent rule.
 
@@ -17,9 +17,7 @@ documentation-only corridor, reservation, calendar-period, and queue-audit surfa
 
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |
-| [ADR 0025](0025-base-tool-contracts-and-tool-loop-bounds.md) | The 16-call tool-group maximum and `provider_tool_group_invalid`; the "first-scope bounds" (512 KiB per canonical fact, 4 MiB per group, `tool_output_limit_exceeded`); the 256-fact and 512-KiB replay page bounds; and the `model_tool_loop_required` gate (also removed with the capability plane by [ADR 0045](0045-local-json-rpc-2-0-transport.md)) | The qualitative fragment, descriptor, and terminal-taxonomy contracts stand; numeric bounds exist only by recorded precedent |
-| [ADR 0034](0034-accepted-m5plus-retained-deferral-directions.md) | Item 5, the future classification of activity numeric values as intrinsic bounds, capacity availability, or ordinary product policy | A numeric activity bound is introduced only with a recorded precedent, under the rule below |
-| [ADR 0035](0035-m5plus-complete-foundation-activation.md) | The Slice 2 queue-promotion and reconciliation wording and the Slice 3 "corridors and reservations" wording | The Slice 2 revert and the precedent rule below |
+| [ADR 0004](0004-m5plus-complete-foundation-activation.md) | The Slice 2 queue-promotion and reconciliation wording and the Slice 3 "corridors and reservations" wording | The Slice 2 revert and the precedent rule below |
 
 The fixed-limit rows of the removed Slice 1 ledger (activity, run, and tool-loop limit records) are removed with
 the ledger; no limit record remains. The unavailable-queue promotion and reconciliation, held-run admission, and related
@@ -78,7 +76,7 @@ the documentation instead of being kept as unimplemented direction.
 9. The unavailable-queue promotion and reconciliation, held-run admission,
 and related queue audits exist only in documentation after the Slice 2 revert (`AdmitRecoveredRun`). They are removed
 from the documentation. The live M3 turn input has since been replaced by pending turns joined to the live run context
-by [ADR 0055](0055-pending-turns-and-cooperative-interruption.md).
+by [ADR 0019](0019-pending-turns-and-cooperative-interruption.md).
 10. This removal is documentation-only: no queue behavior changes, and no new
 queue reconciliation, held-run admission, or audit surface is created.
 
@@ -95,14 +93,14 @@ shapes, and no heuristic replaces the removed scanners.
 Day/Week/Month period model exists in code or documentation.
 5. No live queue. Pending turns are durable input joined to the live run
 context at the next boundary; the M3 queue, its tickets, and its promotion were removed by [ADR
-0055](0055-pending-turns-and-cooperative-interruption.md).
+0019](0019-pending-turns-and-cooperative-interruption.md).
 6. No replacement bureaucracy. A removed limit is not replaced by a warning,
 a soft cap, a counter, or a periodic audit.
 
 ## Compatibility
 
 M3/M4 durable behavior, replay, and storage bytes are unchanged; the M3 queue, its tickets, and its promotion were
-later removed by [ADR 0055](0055-pending-turns-and-cooperative-interruption.md). The removed limits were
+later removed by [ADR 0019](0019-pending-turns-and-cooperative-interruption.md). The removed limits were
 either speculative contract vocabulary never enforced on the live path or clauses of the reverted Slice 2 surface. Where
 a real bound exists on a live path and is retained, its value is unchanged. No protocol, DTO, configuration, or storage
 schema version changes.
@@ -124,9 +122,8 @@ to the fake-secret tests or the CI documentation secret scan.
 
 ## Affected documents
 
-[ADR 0025](0025-base-tool-contracts-and-tool-loop-bounds.md),
-[ADR 0034](0034-accepted-m5plus-retained-deferral-directions.md), and [ADR
-0035](0035-m5plus-complete-foundation-activation.md) are amended as recorded above. [Architecture
+and [ADR
+0004](0004-m5plus-complete-foundation-activation.md) are amended as recorded above. [Architecture
 15](../architecture/15-tool-registry-and-model-tool-loop.md) owns
 the tool-loop contracts that lose the numeric group and output bounds; [architecture
 24](../architecture/24-activity-ui-and-adapters.md) owns the activity surface whose numeric classification is
@@ -150,6 +147,6 @@ Linux/Windows CI.
 ## Research provenance
 
 The cleanup-branch audit that inventoried every numeric bound and found most of them speculative; the project policy
-against unbounded bureaucracy in [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md); the finding that the
+against unbounded bureaucracy in [ADR 0005](0005-no-backward-compatibility-and-legacy-removal.md); the finding that the
 corridor, reservation, calendar-period, and queue-audit engines existed only in documentation; and the two real guards
 that remain, namely transport and IO liveness and repository secret hygiene.

@@ -1,4 +1,4 @@
-# ADR 0051: Per-crate coverage tiers
+# ADR 0016: Per-crate coverage tiers
 
 ## Status
 
@@ -15,19 +15,8 @@ Out of scope: enabled exclusions and their evidence; branch metrics and the pinn
 profiles; the TDD and outcome-scenario requirements; the `intention-daemon` entry-point exclusion; and recorded M0-M5
 evidence.
 
-| Record | Superseded clause | Replaced by |
-| --- | --- | --- |
-| [ADR 0049](0049-base-coverage-threshold.md) | Decision "One base threshold" items 1-3: the 80% floor for every production crate and for the workspace aggregate, and the statement that no per-crate thresholds exist | Per-crate tier floors under `quality/coverage.toml` `[tiers]` and `[crate_tiers]`: `core` 75%, `standard` 60%, `edge` 20%; the workspace aggregate carries no threshold |
-| [ADR 0049](0049-base-coverage-threshold.md) | Decision "Designated files" items 4-6 and invariant 2: the designated-files list, its per-file checks, and the 85% bar | Deleted: there is no designated-files list, per-file bar, or designated threshold key; the tiers are the only numeric classification |
-| [ADR 0049](0049-base-coverage-threshold.md) | Invariant 1, "80% floor" | Every collected crate meets the floor of the tier declared for it |
-| [ADR 0049](0049-base-coverage-threshold.md) | Invariant 4, "No tier reintroduction": "No per-crate category, tier letter, or 95/90/85 crate threshold returns under another name" | Cancelled: this record reintroduces per-crate tiers by name and percentage under the approved layout, and no clause of this repository bans them |
-| [ADR 0049](0049-base-coverage-threshold.md) | Invariant 6 (no override "beyond the designated-files mechanism") and the non-goals clause "no per-crate categories or additional thresholds beyond the base 80% and the designated 85%" | The no-override rule stands: no coverage override, waiver, ratchet, grace period, or grandfather clause is introduced, and the tier ladder replaces the deleted designated-files mechanism |
-| [ADR 0049](0049-base-coverage-threshold.md) | Decision item 10: Tauri and TUI keep their existing treatment "instead of an aggregate UI line target" | Tauri and TUI carry the `edge` tier floor in addition to their complete command/event mapping contracts and mandatory fixture-daemon smoke/outcome scenarios |
-| ADRs [0035](0035-m5plus-complete-foundation-activation.md), [0038](0038-no-backward-compatibility-and-legacy-removal.md), [0017](0017-build-autopilot-and-plan-focus-continuity.md), [0020](0020-configuration-provider-control-plane-directions.md)-[0034](0034-accepted-m5plus-retained-deferral-directions.md), [0042](0042-project-script-library-for-kernel-cells.md), [0043](0043-instruction-sources-and-system-context.md), [0046](0046-typed-serde-json-contracts.md), and [0048](0048-limits-by-precedent-and-no-content-scanning.md), and the reconciliation ownership map | The clause text ADR 0049 substituted with the "base 80% threshold", "designated files", and "no tier is declared" wording | Those clauses read through this record: a coverage declaration names the crate's tier in `quality/coverage.toml`, exclusions stay exact and reviewable, and the underlying deletions, activation sequence, and removals stand unchanged |
-
-The named clauses of [ADR 0049](0049-base-coverage-threshold.md) are amended in place; its rationale, compatibility,
-evidence, and research-provenance records of the 2026-09-30 change stay as written. Every other clause of every listed
-record stays as written.
+The base-threshold and designated-files record this decision replaced is deleted from the corpus; its text stays in
+git history.
 
 ## Decision
 
@@ -91,7 +80,7 @@ enabled exclusion, `intention-daemon/src/main.rs`, keeps its real-binary equival
 The change is a policy simplification, not a behavior change: no protocol, DTO, storage, configuration, or wire format
 changes, and no production code is rewritten to satisfy it. The policy file, checker, runner, and CI wiring move to the
 tiers in the same change. Under the repository's no-backward-compatibility rule ([ADR
-0038](0038-no-backward-compatibility-and-legacy-removal.md)), the base and designated keys are deleted in place rather
+0005](0005-no-backward-compatibility-and-legacy-removal.md)), the base and designated keys are deleted in place rather
 than preserved as deprecated alternatives; historical milestone records and closeout evidence that mention the A/B/C
 tiers or the base threshold stay as history.
 

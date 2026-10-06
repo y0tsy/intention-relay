@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 20. Decisions: ADR 0012, ADR 0027, ADR 0034, ADR 0042. Research: m4plus_concept.md.
+Owner: architecture 20. Decisions: ADR 0009. Research: m4plus_concept.md.
 
 This document owns future run-scoped IPython kernel epochs, foreground cells, namespace checkpoints, kernel-local
 background work, safe kernel projections, and kernel recovery. It applies only to future run execution. M3/M4 bytes,
@@ -12,7 +12,7 @@ IPython/RLM material remains research provenance and historical-only where it co
 
 ## Ownership and non-authorities
 
-Architecture 14 is the historical record of the removed execution-meaning machinery (ADR 0046); 15 owns registry
+Architecture 14 is the historical record of the removed execution-meaning machinery (ADR 0012); 15 owns registry
 selection, direct tool admission, `ToolCallId`, generic tool-loop facts, `ToolCallStarted`, and publication; 18 owns MCP
 lifecycle; 19 owns bridge attachment, grants, operation identity, ingress, delivery, and bridge recovery.
 
@@ -30,7 +30,7 @@ only an explicitly verified checkpoint projection may seed it. Session-scoped ke
 in retained research are historical provenance, not future run policy.
 
 This document owns the semantic fields of the credential-free kernel selection in the future typed run record
-(typed serde JSON, ADR 0046):
+(typed serde JSON, ADR 0012):
 
 ```text
 KernelSelectionV1
@@ -53,7 +53,7 @@ back to current state.
 
 One additive bounded reference joins the selection: `script_library_reference` points at a `KernelScriptLibraryV1` value
 (contract, import-surface, and evidence revisions for the logical workspace-relative path `.ir/scripts`, [ADR
-0042](../decisions/0042-project-script-library-for-kernel-cells.md)). It is credential-free and content-free, carries no
+0009](../decisions/0009-project-script-library-for-kernel-cells.md)). It is credential-free and content-free, carries no
 absolute or symlink-target path, and its absence means an empty import surface.
 
 A `KernelEpochId` is created lazily only after recovery completes, a supported active run is reread, the exact
@@ -108,7 +108,7 @@ existing run/tool-loop facts, cursor, terminal result, post-commit reread, and p
 observational only; only a complete safe terminal projection may enter a later model step. Unrepresentable output
 produces the closed `kernel_output_unrepresentable` before public publication, without truncation or partial commit, and
 the terminal result is never reconstructed from a formatted footer. Rich MIME/raw kernel output projection is an
-accepted post-M5 future direction under [ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md),
+accepted post-M5 future direction,
 to be executed in Milestone 5+ as a bounded, credential-free surface that never substitutes for this closed text-only
 safe projection and never crosses public or durable boundaries unredacted; it is not activated here.
 
@@ -122,13 +122,13 @@ kernel disposal, and restart prevent new host requests.
 
 Agent-authored reusable modules live as ordinary project files under the logical workspace-relative path `.ir/scripts`
 (`.ir` is the project-local hidden root), created and edited only through the frozen `write` and `edit` descriptors and
-run through `execute` or a foreground cell ([ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md)).
+run through `execute` or a foreground cell ([ADR 0009](../decisions/0009-project-script-library-for-kernel-cells.md)).
 The library is file material, not kernel state: it is never a namespace, checkpoint, epoch, task, or host-request
 resource, and no selection, cell, or checkpoint carries its source.
 
 An epoch's import surface is exactly the library directory named by `script_library_reference`; the parent, the
 workspace root as a second library, and any other path never enter it. The directory is addressed as
-`WorkspaceRoot.join('.ir/scripts')`; `WorkspaceRoot` is an addressing anchor and not a security boundary (ADR 0047), so
+`WorkspaceRoot.join('.ir/scripts')`; `WorkspaceRoot` is an addressing anchor and not a security boundary (ADR 0013), so
 no lexical symlink or containment check gates the surface. A missing library directory yields an empty import surface,
 so a project without saved modules behaves as if the capability were absent; an unreadable library directory fails
 before effect with `kernel_script_library_unavailable`. Python-level import errors inside a cell stay ordinary safe
@@ -173,7 +173,7 @@ serializer. Payload and metadata contain no executable payload or code, open fil
 provider/MCP/Jupyter resource, raw Jupyter frame, provider SDK object, bridge grant, credential, endpoint, raw
 traceback, or implementation resource; unsupported or non-serializable values are explicitly omitted with typed safe
 metadata, never guessed or stringified. Verified metadata may additionally carry the project script-library reference
-([ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md)); the payload never carries script source.
+([ADR 0009](../decisions/0009-project-script-library-for-kernel-cells.md)); the payload never carries script source.
 Payload, metadata, verification, generation promotion, and publication are atomic: a failed generation leaves the prior
 verified one intact and never becomes latest verified. Checkpoint payload stays private to the daemon-owned session
 kernel service; public artifacts contain only safe generation, schema, bounded size, and restoration status.
@@ -220,7 +220,7 @@ unfinished effect; a child may receive only a separately selected verified check
 independent, and child-local. Kernel-originated MCP work still uses the fixed `mcp` slot through
 architectures 19, 15, and 18; checkpoints never contain live MCP state and later runs reacquire capabilities.
 
-Future kernel delivery uses typed JSON-RPC 2.0 methods (ADR 0045): correlated results or typed resync/error followed by
+Future kernel delivery uses typed JSON-RPC 2.0 methods (ADR 0011): correlated results or typed resync/error followed by
 history-before-live notifications under existing durable sequence owners. It is read-only: replay/reconnect cannot
 create a kernel, restore a namespace, execute a cell, issue a grant, repeat a host request, start a child, or invoke
 MCP. Partial delivery is never permitted. M3/M4 and retained IPython/RLM records gain no kernel selection, epoch,
@@ -279,8 +279,7 @@ implementation detail.
 
 ## Dependencies, non-goals, and evidence
 
-This document depends on architectures 14, 15, 18, and 19, decisions 0002, 0004, 0005, 0007, 0010, and 0011, and
-decision 0042 for the project script library
+This document depends on architectures 14, 15, 18, and 19, decisions 0001 and 0009 for the project script library
 path, selection, and evidence contract. It does not define Python/Jupyter dependencies, process supervision,
 storage/wire tags, migrations, retention, encryption, resource-limit values, RLM executor topology,
 Skills/Goals/context, provider evolution, session forks, activity/UI, direct MCP administration, Cargo, Makefile/CI, or

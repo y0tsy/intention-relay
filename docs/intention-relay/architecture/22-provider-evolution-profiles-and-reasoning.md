@@ -5,7 +5,7 @@ was reverted; the catalog, selection, capability-taxonomy, reasoning-history, an
 directions awaiting a new activating specification; none of those surfaces exists in the tree (`responses` driver
 remains not activated).
 
-Owner: architecture 22. Decisions: ADR 0014, ADR 0028, ADR 0032, ADR 0033. Research: m4plus_concept.md.
+Owner: architecture 22. Research: m4plus_concept.md.
 
 This document owns provider kinds, profiles and catalog lifecycle, provider/model-capability selections, endpoint and
 credential-transport semantics, driver-contract compatibility, provider-local availability, and normalized textual
@@ -15,13 +15,12 @@ tool_execution_unavailable` retain their recorded ordinary semantics, and `openr
 `generic-chat-completion-api` remain the only M4 kinds. Retained provider/profile/reasoning material is research
 provenance where it conflicts with architectures 14--21. The configuration/provider control-plane cluster (profile
 UI/control plane, live reload, credential rotation, discovery, pricing, health checks) is owned by [architecture
-25](25-configuration-provider-control-plane.md) under [ADR
-0020](../decisions/0020-configuration-provider-control-plane-directions.md).
+25](25-configuration-provider-control-plane.md).
 
 ## Ownership and non-authorities
 
 Architecture 14 owns run-execution meaning and historical compatibility (its binary codec with canonical records,
-digests, and decode classes was removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md)); 15 owns the
+digests, and decode classes was removed by [ADR 0012](../decisions/0012-typed-serde-json-contracts.md)); 15 owns the
 registry, tool loop, model-step identities, and local tool exchange; 18 owns MCP; 19 owns bridge ingress; 20 owns kernel
 lifecycle; 21 owns source selection, audience, disclosure, and immutable model-context projection.
 
@@ -35,7 +34,7 @@ context builder, persistence authority, profile UI, or sandbox.
 
 Architecture 14's canonical bytes, tags, field framing, digest validation, `IRCR`/`typed-tlv-v1` framing, SHA-256
 policy, and the research-only `IRCD` framing were removed by [ADR
-0046](../decisions/0046-typed-serde-json-contracts.md): wire and durable contracts are typed serde JSON, and no
+0012](../decisions/0012-typed-serde-json-contracts.md): wire and durable contracts are typed serde JSON, and no
 canonical digest or identity layer exists. This document owns the provider-selection and model-capability selection
 semantics that a future typed run record would carry as its provider and model-capability fields.
 
@@ -128,7 +127,7 @@ never falls back to Generic Chat.
 Generic Chat remains narrow. A divergent reasoning protocol requires a separate first-party descriptor or user-declared
 typed kind. For the ordinary production path, the current `generic-chat-completion-api` adapter consumes the pinned
 SDK's typed `reasoning_content` field as normalized `Primary` reasoning output and echoes the current round's accepted
-reasoning on the same-run assistant tool-call continuation (ADR 0041); that typed field does not widen the descriptor
+reasoning on the same-run assistant tool-call continuation (ADR 0008); that typed field does not widen the descriptor
 envelope, and any other or vendor-specific dialect still requires a separate descriptor or typed kind. A user kind is an
 immutable composition of closed binary-owned protocol parts accepted by a code-owned compatibility matrix. It cannot be
 a plugin, executable configuration, arbitrary driver/parser, raw HTTP/JSON template, arbitrary header map, or secret
@@ -234,7 +233,7 @@ alone selects safe source references, audience, disclosure, omissions, and model
 sessions/ancestors/siblings, construct history from current state, inject prior reasoning, compact content, or broaden
 an audience. The ordinary same-run continuation is not prior-reasoning injection: the runtime may attach the current
 round's own accepted reasoning to the assistant tool-call message of that in-flight exchange as transient request state
-(ADR 0041); prior-run, cross-turn, and fork reasoning injection remains forbidden.
+(ADR 0008); prior-run, cross-turn, and fork reasoning injection remains forbidden.
 
 The future normalized stream uses one run container journal (`RunEventCursorDto`) for text, reasoning, summaries, tool
 calls, usage, and terminal facts. The Slice 2 provider-neutral reasoning DTO surface was owned by `intention-model` and
@@ -270,7 +269,7 @@ provider input; `ModelRunFactInputDto::ReasoningDeltaRecorded { category, conten
 `ModelRunFactInputDto::ReasoningSummaryDeltaRecorded { content }` persist it; and the domain taxonomy has matching
 `ReasoningDeltaRecorded` and `ReasoningSummaryDeltaRecorded` event variants. `ReasoningHistoryBound` is a separate
 closed durable fact, never a provider stream event. Per [ADR
-0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md), `category` is required on the wire in the
+0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md), `category` is required on the wire in the
 model and domain reasoning representations with no defaulting to `Primary` and no historical decode class; reasoning
 never synthesizes a summary or history manifest.
 
@@ -279,9 +278,8 @@ have a fixed 4 MiB bound. A fragment that would exceed the individual bound fail
 fragment that would exceed the combined bound fails with `reasoning_output_limit_exceeded`. Neither case truncates or
 partially writes the fragment. This contract does not add content inspection, secret substitution, or a new reasoning
 redaction algorithm; existing central redaction and credential, provider-payload, SDK-resource, and diagnostic exclusion
-rules remain in force. Semantic content inspection of reasoning or provider content is an accepted future direction
-under [ADR
-0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md); it
+rules remain in force. Semantic content inspection of reasoning or provider content is an accepted future direction;
+it
 is not activated here and never substitutes for central redaction.
 
 `responses` is local-history-first. Every request uses `store: false`; Conversations, `previous_response_id`, remote
@@ -291,7 +289,7 @@ only when frozen capability selection declares `model_tool_loop_v1`; otherwise u
 local tool action.
 
 Future provider/reasoning delivery is history-before-live and rides the single JSON-RPC 2.0 connection without
-capability or family negotiation ([ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md)). It exposes only safe
+capability or family negotiation ([ADR 0011](../decisions/0011-local-json-rpc-2-0-transport.md)). It exposes only safe
 typed projections, never raw provider bytes, native payloads, remote IDs, credentials, or private resources; a peer that
 cannot decode a typed frame fails closed. M3/M4 replay remains unchanged.
 
@@ -302,7 +300,7 @@ The initial versioned capability slice selects text streaming, textual reasoning
 maximum model capability envelope; each profile explicitly declares a safe subset for its exact configured model,
 including reasoning availability, supported effort values, summary availability, and custom-function-call availability.
 The current ordinary `generic-chat-completion-api` driver declares reasoning output in its `ModelCapabilitiesDto`
-because it consumes and preserves `reasoning_content` (ADR 0041); that declaration is the existing driver capability
+because it consumes and preserves `reasoning_content` (ADR 0008); that declaration is the existing driver capability
 contract, not a descriptor revision, and a future descriptor that cannot represent the selected model's reasoning
 dialect still requires its own closed capability declaration. Model identifiers remain byte-exact and are never used to
 infer capabilities. Preflight rejects a requested capability or value that is absent from either level before any
@@ -376,7 +374,7 @@ same source `RunId` twice. There is no price, currency, or inferred cost.
 Initial reasoning delivery is an unconditional part of the ordinary run subscription: after the existing correlated
 authoritative `RunSnapshotDto` response, the daemon sends uncorrelated `RunReasoningHistoryPageDto` and
 `RunReasoningHistoryCompletedDto` frames. The former `normalized_reasoning_stream_v1` negotiated capability was removed
-by [ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md), so delivery is not gated on a handshake string. A page
+by [ADR 0011](../decisions/0011-local-json-rpc-2-0-transport.md), so delivery is not gated on a handshake string. A page
 carries a fixed session/run identity, a captured upper run cursor, and a non-empty ascending list of only reasoning
 fragment or summary facts; page positions may be sparse but strictly increasing across all initial pages, and that
 sparseness is a property of the reasoning page subset only, never of the run container journal. The completion frame
@@ -399,7 +397,7 @@ assistant-turn identity when present, ordered reasoning fact cursor/category/siz
 descriptor's `compatibility_id`. `fork-model-context-v1` remains a text-only projection and does not add reasoning or
 summaries to ordinary model messages. The ordinary same-run continuation echo is out of scope here: it attaches only the
 current round's own reasoning to that round's assistant tool-call message and never adds fork or prior reasoning to
-ordinary messages (ADR 0041). A child run combines frozen references with its own completed compatible responses to
+ordinary messages (ADR 0008). A child run combines frozen references with its own completed compatible responses to
 construct its own `ReasoningHistoryManifestDto`; it never rescans the source or a sibling. An unavailable required
 reference blocks only the dependent action.
 
@@ -420,7 +418,7 @@ Each accepted fragment maps to the future normalized reasoning path. No encrypte
 vLLM/SGLang parser config, raw provider JSON, or generic request templates. Cross-turn policy is limited to the explicit
 typed textual history contract; provider-native `preserve_thinking`, `thinking.keep`, remote continuation identifiers,
 and non-fitting assistant-history requirements are excluded. Arbitrary authentication headers are an accepted post-M5
-direction under [ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md) and were activated for M5+ Slice 2
+direction, activated for M5+ Slice 2
 as a closed code-owned typed header policy (the `intention-model` `AuthenticationHeaderPolicyV1` consumed by both
 provider adapters; the protocol-only duplicate was removed by the unconsumed-surface audit (2026-09)). The Slice 2
 revert removed that policy with the rest of Slice 2, so the direction is again documentation-only until a new activating
@@ -429,7 +427,7 @@ unconsumed-surface audit (2026-09): no preservation-control or parser-configurat
 header injection (`SafeHeader`) and provider-native live extraction beyond the declared paths remain not activated. The
 current `async-openai` core Chat Completions adapter is not assumed sufficient for every descriptor; a future
 implementation must choose a pinned private SDK or an explicitly specified private typed decoder per closed descriptor.
-ADR 0041 follows this clause for the current ordinary adapter: it keeps the pinned `async-openai` SDK and uses its
+ADR 0008 follows this clause for the current ordinary adapter: it keeps the pinned `async-openai` SDK and uses its
 private `byot` typed-stream seam with crate-private request and chunk structs, rather than assuming the core adapter's
 fixed types are sufficient. The descriptor registry never authorizes arbitrary network protocol handling, unbounded
 parsing, or provider SDK data outside its owner adapter.
@@ -438,7 +436,7 @@ parsing, or provider SDK data outside its owner adapter.
 
 The reverted activation's fixed catalog caps (profile/kind/display-name lengths, catalog and registry counts, candidate
 and page sizes, validation-issue counts, pending-removal lifetime, and its queue-promotion and reconciliation pages) are
-not part of the direction: [ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md) removes
+not part of the direction: [ADR 0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md) removes
 speculative contract limits and requires any future numeric bound to record the failure mode it prevents, its unit, and
 its behavior at the bound. A re-introduction must not restore the caps.
 
@@ -478,7 +476,7 @@ runtime public API, or adapter boundary.
 ## Legacy M4 selection bridge (removed)
 
 The legacy M4 selection bridge (tag `legacy-m4-selection-binding` 0x020C) was removed by [ADR
-0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md): no `LegacyM4SelectionBindingDto` is
+0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md): no `LegacyM4SelectionBindingDto` is
 materialized, no `legacy_m4_selection_bindings` table exists, and provider binding identity is owned by the provider
 catalog runtime and resolved through the catalog admission port. No synthetic binding or provider selection is ever
 created for historical runs.
@@ -486,9 +484,8 @@ created for historical runs.
 ## Session selection, degraded recovery, and protocol
 
 The provider session-selection layer (session default, per-turn/fork overrides, profile-keyed usage, and pending-removal
-accept/reject) is owned by [architecture 29](29-provider-session-and-profiles-protocol.md) under [ADR
-0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md); it was activated under Milestone 5+ and
-then reverted.
+accept/reject) is owned by [architecture 29](29-provider-session-and-profiles-protocol.md); it was activated under
+Milestone 5+ and then reverted.
 
 ## Child, MCP, bridge, kernel, context, and compatibility boundaries
 
@@ -505,15 +502,14 @@ untagged meaning and gains no synthetic category, summary, or history.
 
 ## Dependencies, non-goals, and evidence
 
-This document depends on architectures 14, 15, and 21 plus decisions 0002, 0004, 0005, 0007, and 0010--0013. It does
+This document depends on architectures 14, 15, and 21 plus decision 0001. It does
 not define a Responses SDK/driver, user-kind parser, profile picker/editor presentation, credential entry/keychain,
 telemetry, multimodal or structured output, plugin drivers, or remote continuation. The catalog database, the single
 current storage schema (logical version 1), credential rotation, health checks, discovery, pricing, controlled live
 reload, and typed header policy were activated by Slice 2 and then removed; the typed preservation-control and
 server-side-parser contracts were removed as unconsumed by the unconsumed-surface audit (2026-09), and no
 parser-configuration surface is activated.
-Semantic content inspection of reasoning or provider content is an accepted post-M5 future direction under [ADR
-0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md),
+Semantic content inspection of reasoning or provider content is an accepted post-M5 future direction,
 bound to Milestone 5+; it is not activated here, never substitutes for central redaction, and never rewrites stored
 facts. The profile picker/editor, credential rotation, health test, discovery, pricing, telemetry, and live reload items
 are accepted post-M5 directions owned by [architecture 25](25-configuration-provider-control-plane.md) under [Milestone

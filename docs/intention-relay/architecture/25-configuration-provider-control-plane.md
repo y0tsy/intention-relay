@@ -4,17 +4,17 @@
 configuration and provider control-plane cluster: controlled configuration live reload, credential rotation, provider
 health checks, provider/model discovery, pricing and budget policy, and the configuration control-plane surface. The M5+
 Slice 2 activation was reverted; re-introduction requires a new activating specification (activation sequence: [ADR
-0035](../decisions/0035-m5plus-complete-foundation-activation.md), [ADR
-0043](../decisions/0043-instruction-sources-and-system-context.md)).
+0004](../decisions/0004-m5plus-complete-foundation-activation.md), [ADR
+0010](../decisions/0010-instruction-sources-and-system-context.md)).
 
-Owner: architecture 25. Decisions: ADR 0020, ADR 0033, ADR 0043. Research: `m4plus_concept.md`.
+Owner: architecture 25. Decisions: ADR 0010. Research: `m4plus_concept.md`.
 
 ## Ownership and non-authorities
 
 Architecture 09 owns TOML parsing, schema validation, configuration discovery, redaction, and startup-only application.
 Architecture 22 owns future provider kinds, profiles, catalogs, selections, and driver compatibility. Architecture 14
 owns run-execution meaning and historical compatibility; its canonical codec was removed by [ADR
-0046](../decisions/0046-typed-serde-json-contracts.md). Architecture 15 owns the tool loop, architecture 24 activity/UI
+0012](../decisions/0012-typed-serde-json-contracts.md). Architecture 15 owns the tool loop, architecture 24 activity/UI
 projections and adapter behavior.
 
 This document owns only the accepted future directions below: no second runtime, registry, persistence authority, or
@@ -30,7 +30,7 @@ live reload is the accepted direction that applies a validated TOML change to a 
 - reload is an explicit command, contract, transaction, and outcome test: the
 daemon re-parses and validates a candidate snapshot against the current single configuration shape, atomically commits a
 new accepted revision, and applies it to fresh runs only; configuration has no migration path, unversioned or legacy
-documents fail closed under [ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md), and there is
+documents fail closed under [ADR 0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md), and there is
 no watcher, polling, auto-restart, or automatic re-application;
 - a candidate that cannot be applied atomically fails closed and leaves the
 daemon on its recorded snapshot; a candidate that changes catalog-affecting configuration is rejected with
@@ -112,8 +112,7 @@ affect fresh runs only.
 
 ## Raw-TOML editing and configuration editing
 
-Raw-TOML editing and a validated configuration-editing surface are accepted directions under [ADR
-0033](../decisions/0033-accepted-m5plus-execution-directions.md), awaiting a new activating specification:
+Raw-TOML editing and a validated configuration-editing surface are accepted directions awaiting a new activating specification:
 
 - a safe, validated raw-TOML editing surface over the shared typed client
 produces a new candidate snapshot through the same atomic reload contract; it is never adapter authority and never
@@ -130,7 +129,7 @@ material, SDK objects, or raw provider payloads on durable/public surfaces.
 ## Instruction-fragment editing and preview
 
 The instruction configuration surface of [architecture 30](30-instruction-sources-and-system-context.md) is edited
-through this control plane, per [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md); architecture 30
+through this control plane, per [ADR 0010](../decisions/0010-instruction-sources-and-system-context.md); architecture 30
 owns the fragment operations and the non-admitting preview, and the surface ships with the fifth Milestone 5+ slice and
 its activating specification. Validate an edit before it commits and reject an invalid, inconsistent, or over-bound edit
 with a typed failure, leaving the running daemon on its recorded profile revision; keep the surface credential-free,
@@ -147,7 +146,7 @@ reverted and re-introduction requires a new activating specification.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 09, 14, 22, and 24 plus decisions 0014 and 0020. Non-goals: a reload
+This document depends on architectures 09, 14, 22, and 24. Non-goals: a reload
 watcher/transport, keychain or secret store, standalone health-service or discovery topology, pricing engine, profile
 picker/editor implementation, OS notifications, remote transport, multi-user access, sandbox/container isolation, and
 production activation beyond the accepted directions. The daemon-facade serving surface for reload, rotation, health,

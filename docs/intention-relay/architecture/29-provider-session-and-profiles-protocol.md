@@ -4,18 +4,18 @@
 provider session-selection and profiles protocol layer: session default selection, per-turn and fork overrides,
 profile-keyed usage, and safe presentation. The M5+ Slice 2 activation of this layer was reverted; re-introduction
 requires a new activating specification (activation sequence: [ADR
-0035](../decisions/0035-m5plus-complete-foundation-activation.md), [ADR
-0043](../decisions/0043-instruction-sources-and-system-context.md)). The unavailable-queue promotion and reconciliation
+0004](../decisions/0004-m5plus-complete-foundation-activation.md), [ADR
+0010](../decisions/0010-instruction-sources-and-system-context.md)). The unavailable-queue promotion and reconciliation
 and the held-run admission path were removed from the direction by [ADR
-0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md), and the negotiated capability plane is removed
-by [ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md).
+0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md), and the negotiated capability plane is removed
+by [ADR 0011](../decisions/0011-local-json-rpc-2-0-transport.md).
 
-Owner: architecture 29. Decisions: ADR 0024, ADR 0045, ADR 0048. Research: `m4plus_concept.md`.
+Owner: architecture 29. Decisions: ADR 0011, ADR 0014. Research: `m4plus_concept.md`.
 
 ## Ownership and non-authorities
 
 Architecture 14 owns run-execution meaning and historical
-compatibility; its canonical codec was removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md).
+compatibility; its canonical codec was removed by [ADR 0012](../decisions/0012-typed-serde-json-contracts.md).
 Architecture 15 owns the registry and tool loop, and architecture 23 session branching.
 Architecture 22 owns provider kinds, profiles, catalogs, selections, and driver compatibility;
 architecture 25 owns the configuration/provider control plane.
@@ -77,7 +77,7 @@ Slice 2.
 The reverted profiles protocol served paginated catalog reads, catalog status, session default query/command, safe
 per-turn and fork overrides, resolved-selection projections, and pending-removal accept/reject. It was the additive
 negotiated capability `provider_profiles_v1`; that capability mechanism was removed by [ADR
-0045](../decisions/0045-local-json-rpc-2-0-transport.md), so a re-introduced surface uses plain typed methods with no
+0011](../decisions/0011-local-json-rpc-2-0-transport.md), so a re-introduced surface uses plain typed methods with no
 capability or family gate. It did not imply live reload, configuration editing, profile testing, credential entry, or
 model discovery. Configuration editing belonged to the [architecture 25](25-configuration-provider-control-plane.md)
 atomic reload contract and was not part of this surface. The daemon advertises and serves no `provider_profiles_v1`
@@ -121,7 +121,7 @@ reconstruction and `ProviderCatalogRecoveryCompleted` only after the exact accep
 `activation_recovery_required`. The closed degraded reasons are `removal_candidate_pending`,
 `removal_candidate_rejected`, `removal_candidate_expired`, and `activation_recovery_required`. The reverted layer also
 held a recovery-promoted `Starting` run for explicit `AdmitRecoveredRunCommandDto` admission; [ADR
-0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md) removed that held-run admission path, and the
+0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md) removed that held-run admission path, and the
 ordinary recovery path is again the only one.
 
 ## Compatibility and historical preservation
@@ -134,7 +134,7 @@ re-introduction requires a new activating specification.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 14, 15, 22, 23, and 25 plus decisions 0014, 0015, 0020, and 0024.
+This document depends on architectures 14, 15, 22, 23, and 25.
 Non-goals: a `responses` SDK/driver, user-kind parser, catalog database, profile picker/editor
 presentation, credential entry/keychain, health test, discovery, pricing, telemetry, live reload, multimodal or
 structured output, plugin drivers, remote continuation, and production behavior. The catalog database, the single

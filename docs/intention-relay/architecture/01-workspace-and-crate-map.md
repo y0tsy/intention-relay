@@ -40,7 +40,7 @@ tools (`read`, `write`, `edit`, `execute`, `glob`, and `grep`) and the workspace
 the application path but does not select implementations. The remaining registry slots are reserved and unavailable.
 
 The M1-M5 activation notes are historical records: the coverage policy is now the per-crate tiers declared in
-`quality/coverage.toml` ([ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)).
+`quality/coverage.toml` ([ADR 0016](../decisions/0016-per-crate-coverage-tiers.md)).
 
 ## Planned crates
 
@@ -117,7 +117,7 @@ resource.
 -  `intention-storage-sqlite` owns bundled SQLite opening and direct creation of the single current storage schema,
 transactional projection/event/snapshot writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId
 -> WorkspaceRootDto` association; the workspace addressing policy — the root as an anchor, not a containment boundary
-(ADR 0047) — remains M5 policy ownership.
+(ADR 0013) — remains M5 policy ownership.
 -  `intention-runtime` decides valid run state edges and owns interruption handling: a stopped provider stream or tool
 call records a notice, resets its signal, and the run continues with its next model step. The repository owns run
 creation, pending-turn context joins, and recovery. It has no provider, tool, timer, or stream dependency in
@@ -176,7 +176,7 @@ The workspace must have tests that fail when these rules are broken:
 
 The exact test strategy and minimum test portfolio are defined in [10 Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (per-crate tiers,
-[ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)), feature profiles, lint policy, and
+[ADR 0016](../decisions/0016-per-crate-coverage-tiers.md)), feature profiles, lint policy, and
 Makefile/CI contract in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Non-goals
@@ -209,10 +209,10 @@ Architectures 18 and 20 own future MCP and kernel semantics. Kernel work must sp
 orchestration, and private Python/Jupyter translation without exposing implementation resources; Skill, provider-profile,
 and fork boundaries remain separate delivery decisions. Any split must preserve this acyclic direction, DTO-first
 contracts, a declared test target, the declared coverage tier ([ADR
-0051](../decisions/0051-per-crate-coverage-tiers.md)), and isolated architecture fixtures before production activation.
+0016](../decisions/0016-per-crate-coverage-tiers.md)), and isolated architecture fixtures before production activation.
 Exact crate allocation remains activation-time work.
 
-See [decision 0004](../decisions/0004-rust-owned-capability-plane-and-fixed-tool-registry.md) and the ownership map.
+See [decision 0001](../decisions/0001-rust-owned-capability-plane-and-fixed-tool-registry.md) and the ownership map.
 
 ## Post-M4 provider evolution ownership
 

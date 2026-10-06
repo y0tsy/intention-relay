@@ -901,7 +901,7 @@ impl ModelEventDto {
     /// A provider can carry the reasoning channel with no textual content, and
     /// that presence alone must round-trip into the continuation request: the
     /// assistant tool-call message keeps the channel beside its tool calls even
-    /// when the channel held no text (ADR 0041). The marker never becomes a
+    /// when the channel held no text (ADR 0008). The marker never becomes a
     /// durable reasoning fact and never reaches assistant content; the
     /// non-empty constructor stays the only source of reasoning text.
     #[must_use]

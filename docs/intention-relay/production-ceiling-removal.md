@@ -1,7 +1,7 @@
 # Limits by precedent
 
-**Status:** current policy, recorded by [ADR 0048](decisions/0048-limits-by-precedent-and-no-content-scanning.md) and
-amended by [ADR 0053](decisions/0053-sub-agent-and-fork-limits-by-precedent.md). This document replaces the
+**Status:** current policy, recorded by [ADR 0014](decisions/0014-limits-by-precedent-and-no-content-scanning.md) and
+amended by [ADR 0014](decisions/0014-limits-by-precedent-and-no-content-scanning.md). This document replaces the
 earlier product-ceiling audit scope. The PR #15 ceiling removal and the M5+
 Slice 1 cleanup are historical inputs, not open work items.
 
@@ -76,7 +76,7 @@ specific value is sufficient; the value itself is not policy.
 - Corridors, reservations, the Day/Week/Month period engine, and
   unavailable-queue promotion/reconciliation audits are removed from the
   corpus; the M3 turn queue, its tickets, and its promotion were removed by
-  [ADR 0055](decisions/0055-pending-turns-and-cooperative-interruption.md), and a user turn accepted during an
+  [ADR 0019](decisions/0019-pending-turns-and-cooperative-interruption.md), and a user turn accepted during an
   active run is a pending turn joined to that run's live context.
 - The protocol and domain contracts are typed serde JSON; canonicalization is
   RFC 8785 only, and only when a first real consumer exists.

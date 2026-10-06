@@ -635,7 +635,7 @@ def ordering_authority_failures(
 ) -> list[str]:
     """Returns failures for ordering-authority types outside the declared set.
 
-    The set of durable ordering authorities is closed (ADR 0050): a record
+    The set of durable ordering authorities is closed (ADR 0015): a record
     family orders by the session event sequence, belongs to exactly one container
     and orders by that container's journal, or has no durable order.
 

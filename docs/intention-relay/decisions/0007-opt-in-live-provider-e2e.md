@@ -1,10 +1,10 @@
-# ADR 0040: Opt-in live-provider end-to-end channel
+# ADR 0007: Opt-in live-provider end-to-end channel
 
 ## Status
 
 Accepted as an additive, non-blocking verification channel for the ordinary production tool loop completed by [ADR
-0039](0039-request-side-tool-advertisement.md), within the retrospective scope of [ADR
-0035](0035-m5plus-complete-foundation-activation.md). It introduces the repository's first deliberately `#[ignore]`d
+0006](0006-request-side-tool-advertisement.md), within the retrospective scope of [ADR
+0004](0004-m5plus-complete-foundation-activation.md). It introduces the repository's first deliberately `#[ignore]`d
 integration test target (two ignored test functions): source that is compiled and reviewed with the workspace but
 executes only under an explicit operator opt-in. The M5+ Slice 3 reservations and all reserved tags remain untouched and
 reserved.
@@ -16,7 +16,7 @@ In scope is exactly one opt-in live-provider e2e channel: one ignored daemon int
 through the real local transport, and execute a real model tool loop (the positive tool-loop/replay case and the
 negative invalid-credential case) against a real provider API over HTTPS; one local entry point, `make e2e-real-api`;
 and one manual workflow entry point, `.github/workflows/real-api-e2e.yml`. Nothing is superseded: [ADR
-0039](0039-request-side-tool-advertisement.md) keeps hermetic tests as the acceptance evidence, and this record adds
+0006](0006-request-side-tool-advertisement.md) keeps hermetic tests as the acceptance evidence, and this record adds
 complementary manual evidence without weakening, replacing, or extending the blocking gates.
 
 1. The channel is exactly one `#[ignore]`d integration test target carrying
@@ -38,7 +38,7 @@ the ignored target;
 never triggered by `push`, `pull_request`, or `schedule`) and supplies the credential only from the repository secret
 `REAL_API_E2E_PROVIDER_KEY`.
 4. The live run proves the ordinary production tool loop end to end against a
-real provider: the daemon builds and sends a request that advertises the six active registered tools (ADR 0039); the
+real provider: the daemon builds and sends a request that advertises the six active registered tools (ADR 0006); the
 provider returns a real tool call; the daemon validates and executes it through the real typed registry under
 `WorkspaceRoot`; the durable `ToolCallRecorded` and `ToolResultRecorded` facts commit before publication; the exchange
 continues and the run reaches a terminal outcome.
@@ -79,13 +79,13 @@ schema, canonical record, tag, or production error-code change.
 ## Compatibility
 
 Public DTO schema 1.1, TOML configuration schema 1, and the single live SQLite schema are unchanged; the local protocol
-version clause is superseded by [ADR 0045](0045-local-json-rpc-2-0-transport.md) (JSON-RPC 2.0 over NDJSON at protocol
+version clause is superseded by [ADR 0011](0011-local-json-rpc-2-0-transport.md) (JSON-RPC 2.0 over NDJSON at protocol
 version 2.0, no capability plane), and the record otherwise stands. M3/M4/M5 recorded history, replay, durable facts,
 snapshots, and evidence are unchanged, and a live run creates only ordinary current-version run state in its disposable
 test database. M5+ exit invariants are preserved: no M6-M9 boundary behavior and no second runtime, registry, scheduler,
 persistence authority, or sandbox; the M5+ Slice 3 reservations (`tool-descriptor-revision` `0x0301`,
 `tool-registry-revision` `0x0302`, `model-tool-loop-v1` `0x0303`) remain `ReservedForSlice3`. The [ADR
-0038](0038-no-backward-compatibility-and-legacy-removal.md) single-version policy is unaffected: the channel opens no
+0005](0005-no-backward-compatibility-and-legacy-removal.md) single-version policy is unaffected: the channel opens no
 older schema and carries no migration or compatibility branch.
 
 ## Security and failure behavior
@@ -107,7 +107,7 @@ cannot fail a pull request, block a merge, or change a required status check.
 ## Non-goals
 
 No required or scheduled live-provider check and no live work in `make quick`, `make check`, `make verify`, `make ci`,
-or a `ci-*` alias; no new provider driver, OpenAI Responses driver, or adapter behavior beyond the ADR 0039
+or a `ci-*` alias; no new provider driver, OpenAI Responses driver, or adapter behavior beyond the ADR 0006
 advertisement translation; no credential persistence, keychain integration, rotation, or controlled reload; no recording
 of prompts, completions, tool content, provider traffic, or credentials (only the run summary metadata: date, commit,
 provider, model, and workflow run URL); no coverage credit and no coverage exclusion justified by a live run; no change
@@ -137,8 +137,8 @@ Linux/Windows CI; the live channel is never one of them.
 
 ## Research provenance
 
-The channel is delivery-integrity provenance for the ADR 0039 request-side advertisement completion (PR-E2E workstream
+The channel is delivery-integrity provenance for the ADR 0006 request-side advertisement completion (PR-E2E workstream
 E3), not a new research direction: `m4plus_concept.md` does not require a live-provider test. It follows the
 manual-only, non-blocking `quality-benchmark` workflow precedent recorded in architecture 12 and the open-text provider
 credential protections in architecture 09 (user-only file permissions; credentials never in durable or published
-output). It activates no slice and changes no ADR 0035-0039 decision.
+output). It activates no slice and changes no other decision.

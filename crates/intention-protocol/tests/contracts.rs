@@ -553,7 +553,7 @@ fn malformed_protocol_payload_fields_and_closed_variants_are_rejected() {
 #[test]
 fn parameterless_daemon_health_decodes_without_a_params_member() {
     // JSON-RPC 2.0 makes `params` optional, and `daemon.health` is the one
-    // genuinely parameterless method (ADR 0045).
+    // genuinely parameterless method (ADR 0011).
     let line = r#"{"jsonrpc":"2.0","id":1,"method":"daemon.health"}"#;
     let request = decode_request_line(line).expect("the parameterless form is spec-legal");
     assert_eq!(request.id(), 1);

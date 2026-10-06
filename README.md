@@ -58,7 +58,7 @@ below is detailed in its closure document under
 | M3 SQLite sessions, events, snapshots, queue | Closed | Durable SQLite-backed sessions, append-only events, snapshots, turn queueing, canonical credential-free config revisions, recovery-before-ready, durable one-shot replay. |
 | M4 Model contract, providers, one streaming run | Closed | Provider-neutral model contracts and validated stream facts; private OpenRouter and generic Chat Completions drivers; durable model facts; one daemon-owned streaming run with reconnect/replay and run-scoped delivery. |
 | M5 Typed tools, WorkspaceRoot, hooks | Closed | Production model-tool loop hosted by the real daemon binary: six executable tools, fail-closed `WorkspaceRoot` resolution, deterministic typed hooks, durable and redacted tool-result evidence, daemon-host end-to-end tests on Linux and Windows. |
-| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (ADR 0035, amended by ADR 0043) delivered as five slices: 1) contracts and versions, 2) control plane, 3) Goal domain, 4) UI foundation, 5) instruction sources and system context. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slice 2 (controlled live reload, credential rotation, health checks, provider discovery and pricing, raw-TOML configuration editing, canonical config revisions, session defaults and per-turn overrides) was merged and then **reverted**; it is not delivered, and a new activating specification is required to re-introduce it. Slices 3-5 are not implemented. |
+| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (ADR 0004, amended by ADR 0010) delivered as five slices: 1) contracts and versions, 2) control plane, 3) Goal domain, 4) UI foundation, 5) instruction sources and system context. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slice 2 (controlled live reload, credential rotation, health checks, provider discovery and pricing, raw-TOML configuration editing, canonical config revisions, session defaults and per-turn overrides) was merged and then **reverted**; it is not delivered, and a new activating specification is required to re-introduce it. Slices 3-5 are not implemented. |
 | M6-M9 | Planned | M6 Tauri bridge and primary desktop UI; M7 Plan/Build policies, physical plans, and Build Autopilot; M8 VFR and Headroom; M9 hardening and acceptance verification. See the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md). |
 
 Everything beyond M5 is roadmap direction recorded in
@@ -71,7 +71,7 @@ M0-M5 behavior.
 
 All workspace crates live under [crates/](crates/) unless noted. Coverage is
 enforced by the machine-readable policy in
-[quality/coverage.toml](quality/coverage.toml) under ADR 0051: per-crate line
+[quality/coverage.toml](quality/coverage.toml) under ADR 0016: per-crate line
 tiers of 75% (`core`), 60% (`standard`), and 20% (`edge`), with `intention-types`
 and `intention-protocol` exempt at 0% and outside collection.
 
@@ -81,7 +81,7 @@ and `intention-protocol` exempt at 0% and outside collection.
 | --- | --- |
 | [intention-types](crates/intention-types) | Shared, dependency-light DTOs: validated identifiers, schema versions, safe errors, time, pagination, event envelopes, model/tool value DTOs. |
 | [intention-domain](crates/intention-domain) | Domain DTOs and value validation, commands/queries, domain events, run modes, model facts, and tool results. |
-| [intention-protocol](crates/intention-protocol) | Versioned public local-protocol DTOs: typed JSON-RPC 2.0 request/response envelopes over NDJSON, command/query wrappers, and their typed serde payloads (ADR 0045, ADR 0046). |
+| [intention-protocol](crates/intention-protocol) | Versioned public local-protocol DTOs: typed JSON-RPC 2.0 request/response envelopes over NDJSON, command/query wrappers, and their typed serde payloads (ADR 0011, ADR 0012). |
 | [intention-config](crates/intention-config) | Versioned TOML parsing, migration, validation, path selection, and credential-free public configuration projections. |
 
 ### Durable storage and application core
@@ -106,7 +106,7 @@ and `intention-protocol` exempt at 0% and outside collection.
 | Crate | Responsibility |
 | --- | --- |
 | [intention-tools](crates/intention-tools) | Typed, bounded tool contracts and the fixed registry; `read`, `write`, `edit`, `execute`, `glob`, and `grep` are executable; remaining fixed slots are reserved. |
-| [intention-workspace](crates/intention-workspace) | `WorkspaceRoot` addressing anchor: relative-path resolution, child-process CWD, and default search scope (ADR 0047). |
+| [intention-workspace](crates/intention-workspace) | `WorkspaceRoot` addressing anchor: relative-path resolution, child-process CWD, and default search scope (ADR 0013). |
 | [intention-hooks](crates/intention-hooks) | Typed, deterministic hook registration and dispatch around tool execution. |
 
 ### Transport, client, and daemon (active)
@@ -279,7 +279,7 @@ is enabled for dependency updates
   immutable closure evidence for each milestone, including CI results and
   coverage.
 - [docs/intention-relay/decisions/README.md](docs/intention-relay/decisions/README.md):
-  accepted architecture decision records (ADR 0002-0048).
+  accepted architecture decision records (ADR 0001-0019).
 - [docs/reference/README.md](docs/reference/README.md): preserved legacy
   research material, not an implementation dependency.
 - [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md): generated license notices
@@ -296,7 +296,7 @@ What `main` does not yet provide (all of it is documented roadmap work):
 - No M5+ work on the Goal domain or session
   branching, and no UI foundation or fork override commands (slices 3-4); no
   instruction-source, `AGENTS.md`, or effective instruction projection behavior
-  (slice 5, ADR 0043).
+  (slice 5, ADR 0010).
 - Out of scope for v1: Web/remote transport, multi-user access, sandboxed
   execution, and automatic run resumption.
 

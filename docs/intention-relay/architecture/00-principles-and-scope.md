@@ -40,7 +40,7 @@ silently merges into an in-flight request.
 A session has an obligatory `WorkspaceRoot`. All filesystem tools resolve paths against it, reject absolute and parent
 (`..`) paths at the typed input, and never fall back to process `pwd`. Process execution receives it as CWD. The root is
 an addressing anchor, not a containment boundary: a path may leave it through a symbolic link, and v1 is trusted local
-execution, not a sandbox (ADR 0047).
+execution, not a sandbox (ADR 0013).
 
 ### 7. Cross-cutting features use typed hooks
 
@@ -68,7 +68,7 @@ delivery and verification](10-test-driven-delivery-and-verification.md).
 ### 11. Reproducible quality gates are architectural
 
 Before production functionality is accepted, the workspace must have a pinned toolchain, strict pragmatic linting, the
-per-crate line-coverage tiers ([ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)), feature-profile checks,
+per-crate line-coverage tiers ([ADR 0016](../decisions/0016-per-crate-coverage-tiers.md)), feature-profile checks,
 documentation checks, architecture checks, and supply-chain verification. The root Makefile orchestrates these
 non-mutating gates. GitHub Actions runs the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default`,
 `ci-coverage-no-default`, `ci-coverage-all`, `ci-deps`) as parallel matrix jobs in `.github/workflows/quality.yml`, and
@@ -128,8 +128,8 @@ work; the second stays owned by the named slice.
 | Topic | Settled decision and source |
 | --- | --- |
 | Turn input | A user turn accepted during an active run is recorded as a durable pending turn and joins that run's live context in FIFO order at the next model boundary; removal of a not-yet-seen pending turn stays explicit, `run.interrupt` stops the in-flight call with a notice while the run continues, and no automatic retry or resume exists ([architecture 04](04-sessions-runs-events-and-storage.md), "Pending turns"). |
-| Risk policy | Build runs without a per-action confirmation barrier for configured active capabilities, while Plan keeps hard-denied project writes and an advisory-guided `execute` (decision [0017](../decisions/0017-build-autopilot-and-plan-focus-continuity.md)); the exact capability taxonomy and audit policy for `execute`, network, and destructive file actions remains listed as open in [architecture 05](05-tools-workspace-and-hooks.md). |
-| AppData location | Production SQLite state lives in the platform AppData/state location with no process-CWD fallback (roadmap M3), and the migration half of the question is closed by the single-live-schema rule in [ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md). |
+| Risk policy | Build runs without a per-action confirmation barrier for configured active capabilities, while Plan keeps hard-denied project writes and an advisory-guided `execute` (decision [0017](../decisions/0002-build-autopilot-and-plan-focus-continuity.md)); the exact capability taxonomy and audit policy for `execute`, network, and destructive file actions remains listed as open in [architecture 05](05-tools-workspace-and-hooks.md). |
+| AppData location | Production SQLite state lives in the platform AppData/state location with no process-CWD fallback (roadmap M3), and the migration half of the question is closed by the single-live-schema rule in [ADR 0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md). |
 | Plan revision mechanics | Each edit rewrites the single full-file `plan.md` artifact, preserves controlled metadata, increments the frontmatter revision, and persists a matching typed plan revision ([architecture 07](07-plan-and-build-modes.md)); no patch-record family exists, and Plan mode itself is M7 scope. |
 | Provider retries | Runtime owns at most one retry for a delayed or retryable provider failure before any durable fact, with a fixed 250 ms delay and `max_attempts` 1..=2 / `attempt_timeout_seconds` 1..=60 ([architecture 08](08-model-protocol-and-providers.md), [architecture 09](09-configuration-security-and-observability.md)). |
 
@@ -198,14 +198,14 @@ Future Gateway/RLM attachment uses one daemon-owned capability path, a frozen cr
 and an ephemeral daemon-issued grant bound to one active run/model step. A grant, channel, operation ID, facade, kernel,
 provider, or MCP result cannot create lifecycle or tool authority. Operation replay is idempotent and read-only after
 binding; restart never resumes or reattaches old work. The bridge is a trusted-local product control, not a sandbox or
-privilege boundary. Architecture 19 and decision 0011 own the detailed rules.
+privilege boundary. Architecture 19 owns the detailed rules.
 
 ### 18. Kernel state is run-scoped convenience, not authority
 
 Future IPython is a private daemon-managed sidecar with one kernel epoch per run. A live namespace never crosses a run
 boundary; only an explicitly selected verified checkpoint may seed a replacement kernel. Kernel state, checkpoints,
 cells, background tasks, grants, and output cannot create lifecycle, tool, or MCP authority. The kernel consumes the one
-Gateway/RLM and tool path and is not a sandbox or privilege boundary. Architecture 20 and decision 0012 own the detailed
+Gateway/RLM and tool path and is not a sandbox or privilege boundary. Architecture 20 owns the detailed
 rules.
 
 ### 19. Context is immutable evidence, not authority
@@ -214,20 +214,20 @@ Future Goals, Skills, source manifests, model-step projections, memory cards, di
 immutable non-authorizing evidence. Project Goals apply to sessions only through explicit immutable applicability links.
 Current files, catalogs, indexes, memory, configuration, UI, and runtime state cannot reconstruct missing selected
 context. Safe representations never widen their source audience, and compaction cannot replace durable facts or become
-continuation state. Architecture 21 and decision 0013 own the detailed rules.
+continuation state. Architecture 21 owns the detailed rules.
 
 ### 20. Provider selection is immutable compatibility evidence
 
 Future provider profile, descriptor, capability, endpoint, credential-transport, and driver-contract selections are
 credential-free immutable execution evidence, not authority. Model names and current
 catalog/configuration/credential/driver state cannot reconstruct, reroute, or replace stored meaning. Architecture 22
-and decision 0014 own the detailed rules.
+owns the detailed rules.
 
 ### 21. Session branches are independent history, not rollback
 
 A future ordinary Session fork creates a separate child Session with immutable lineage and frozen context. It does not
 allow parallel runs within one Session, rewrite a source Session, transfer authority, or claim rollback of workspace or
-external state. Architecture 23 and decision 0015 own the detailed rules.
+external state. Architecture 23 owns the detailed rules.
 
 ### 22. Instructions are advisory deployment and project content, not authority
 
@@ -240,4 +240,4 @@ and it cannot prove the absence of an external effect. Skill bodies, memory reco
 repository content, and provider output never enter the instruction channel. The projection is frozen at admission,
 inherited verbatim by forks and handoffs, and never re-derived from current state. [Architecture
 30](30-instruction-sources-and-system-context.md) and [decision
-0043](../decisions/0043-instruction-sources-and-system-context.md) own the detailed rules.
+0010](../decisions/0010-instruction-sources-and-system-context.md) own the detailed rules.

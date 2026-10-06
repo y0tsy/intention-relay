@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 24. Decisions: ADR 0016, ADR 0029, ADR 0032, ADR 0033, ADR 0034 (superseded by ADR 0048), ADR 0053.
+Owner: architecture 24. Decisions: ADR 0014.
 Research: `m4plus_concept.md`.
 
 This document owns future activity trees, direct-pair communication, activity and notification journals, acknowledgement
@@ -10,10 +10,9 @@ projections, safe UI projections, and adapter delivery. It applies to future ord
 compatibility-only M3/M4 activity projections, where supported, are read-only views computed without
 synthetic activity identity, journal, message, notification, or acknowledgement state, and M3/M4 records gain no such
 state. Numeric values retained in research are not implementation limits for this package: under [ADR
-0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md) a numeric bound exists only with a recorded
-precedent naming the failure mode it prevents, the former intrinsic/capacity/ordinary classification direction of [ADR
-0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md) is superseded, and no numeric activity bound is
-activated here.
+0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md) a numeric bound exists only with a recorded
+precedent naming the failure mode it prevents, the former intrinsic/capacity/ordinary classification direction is
+superseded, and no numeric activity bound is activated here.
 
 ## Ownership and non-authorities
 
@@ -22,7 +21,7 @@ recovery, and publication. `intention-client` remains the only adapter ingress. 
 typed user input, local display state, and reconnect UX only.
 
 Architecture 14 owns run-execution meaning and historical compatibility (its canonical codec was removed by [ADR
-0046](../decisions/0046-typed-serde-json-contracts.md)); 15 owns tool effects; 18--20 own MCP, bridge, and kernel;
+0012](../decisions/0012-typed-serde-json-contracts.md)); 15 owns tool effects; 18--20 own MCP, bridge, and kernel;
 21 owns context; 22 owns provider/reasoning; 23 owns Session fork lineage. Activity, notifications, acknowledgements,
 adapters, and UI never grant or infer any of those authorities.
 
@@ -39,7 +38,7 @@ replacement state.
 
 The credential-free `AgentActivitySelectionV1` is a typed serde JSON selection record; the former
 `run-execution-meaning-v4` carrier was removed with the canonical codec by [ADR
-0046](../decisions/0046-typed-serde-json-contracts.md):
+0012](../decisions/0012-typed-serde-json-contracts.md):
 
 ```text
 AgentActivitySelectionV1
@@ -127,7 +126,7 @@ AgentMessageReferenceDto
 `safe_text` is bounded redacted presentation, never raw content; a message carries closed typed references, and
 `RetainedContent` is disclosed only via the separately admitted `retrieve` tool. A message is never merged, overwritten,
 or silently dropped, and no per-direction queue count, size cap, or clarification reservation exists
-([ADR 0053](../decisions/0053-sub-agent-and-fork-limits-by-precedent.md)).
+([ADR 0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md)).
 
 Messages deliver only at the recipient's next fresh model request, in activity-tree container journal order. They cannot
 alter a sent provider request, interrupt a step, create a run, schedule work, or become a remote continuation.
@@ -186,8 +185,8 @@ journal sequence and bounded counts, marked incomplete when a projection is unre
 projections only.
 
 No numeric activity bound is activated here ([ADR
-0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md)); the research values formerly listed in this
-section are removed by [ADR 0053](../decisions/0053-sub-agent-and-fork-limits-by-precedent.md) because none had a
+0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md)); the research values formerly listed in this
+section are removed by [ADR 0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md) because none had a
 recorded precedent. A rejection is checked before a partial durable record exists; it never truncates, evicts,
 synthesizes, or starts external work. Archive is accepted only after the root and every descendant are terminal; it is
 read-only, retains everything, and physical deletion, compaction, export, and garbage collection remain out of scope.
@@ -238,12 +237,10 @@ parent terminalization. If a parent is already terminal when no eligible step re
 reference remains readable through the direct-child result/status evidence and activity journal without inventing a
 model delivery.
 
-Tree-level metadata is an accepted post-M5 future direction under [ADR
-0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md): a
+Tree-level metadata is an accepted post-M5 future direction under : a
 future bounded, credential-free metadata surface on activity trees, distinct from journal records and notification
 state, that never becomes activity, authority, or a second sequence. It is not activated here. Export of activity
-records is an accepted post-M5 future direction under [ADR
-0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be executed in Milestone 5+ as a bounded,
+records is an accepted post-M5 future direction, to be executed in Milestone 5+ as a bounded,
 credential-free surface that never rewrites history and is never destructive; it is not activated here.
 
 ## Notifications and acknowledgement
@@ -287,7 +284,7 @@ authority, or schedules/retries work. Native OS notifications, remote push, acco
 ## Protocol, adapters, and recovery
 
 Activity and notification projections ride the single JSON-RPC 2.0 connection over the existing private
-Unix-socket/Windows-named-pipe endpoint ([ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md)): typed
+Unix-socket/Windows-named-pipe endpoint ([ADR 0011](../decisions/0011-local-json-rpc-2-0-transport.md)): typed
 subscription methods and notification frames replace the former `agent_activity_v1` and `user_notifications_v1`
 negotiated families and their capability gates. Activity replay captures one upper activity-tree container journal
 sequence, sends a safe snapshot and bounded ascending pages through that bound, sends completion, then emits only later
@@ -335,7 +332,7 @@ Existing M3 session replay, M4 run streaming, cursors, facts, retries, provider 
 `tool_execution_unavailable` remain unchanged. Activity is not a filtered Session/Run stream and conversation lineage
 does not imply activity authority.
 
-This document depends on architectures 03, 10, 12, 14, 15, and 18--23 plus decisions 0002--0015. It does not define
+This document depends on architectures 03, 10, 12, 14, 15, and 18--23 plus decision 0001. It does not define
 production storage/wire tags, crate activation, OS notifications, remote transport, accounts, physical deletion, export,
 compaction, retention clocks, provider UI/control planes, or final visual design.
 

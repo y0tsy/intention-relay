@@ -1,4 +1,4 @@
-# 0017: Build Autopilot and Plan Focus Continuity
+# 0002: Build Autopilot and Plan Focus Continuity
 
 ## Status
 

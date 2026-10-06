@@ -133,9 +133,9 @@ Provider SDK request/response/stream types and raw `serde_json::Value` cannot cr
 model/provider contracts use validated text context, requested/declared capability DTOs, ordered stream facts, usage,
 finish reasons, safe provider errors, and typed JSON-object tool-call text. A request advertises tool definitions as
 validated JSON-object parameter text (`ModelToolDefinitionDto`), never as raw `serde_json::Value`; the advertised set is
-transient request state with no durable representation (ADR 0039). A request may additionally carry the current round's
+transient request state with no durable representation (ADR 0006). A request may additionally carry the current round's
 accepted provider reasoning as transient same-run attachment state with no durable representation: the runtime may
-attach it to the assistant tool-call message of the same-run continuation (ADR 0041), and it is never durable history,
+attach it to the assistant tool-call message of the same-run continuation (ADR 0008), and it is never durable history,
 message text, or cross-turn transfer. `intention-types` owns the shared safe usage, finish-reason, tool-call, and
 provider-error values; `intention-model` re-exports them for source compatibility. Native SDK decoding and JSON values
 may exist only inside the owning provider implementation before being normalized to those DTOs.
@@ -159,7 +159,7 @@ are enforced at the boundary that owns them and again at admission before any ef
 cannot assume the producer decoded through the same boundary.
 
 There is no binary canonical form: the wire and domain contracts are the serde JSON DTOs themselves, and no tag
-registry, canonical digest, or identity layer exists (ADR 0046). Canonicalization is introduced only when a first real
+registry, canonical digest, or identity layer exists (ADR 0012). Canonicalization is introduced only when a first real
 consumer needs canonical bytes, and then only as RFC 8785 JSON Canonicalization (`serde_json_canonicalizer`); no
 canonicalization dependency is added before that consumer exists. The public DTOs that declare invariants beyond their
 field types are validated at admission; extending decode-time enforcement to them remains a recorded follow-up card.
@@ -168,7 +168,7 @@ Validation occurs at the boundary that has the necessary context.
 
 The error category follows the boundary that detected a version mismatch: the JSON-RPC 2.0 handshake fails an
 incompatible protocol version as the typed `-32001` error with `ErrorDto { category: unavailable }` (architecture 03,
-"Protocol lifecycle"; ADR 0045), while an `incompatible_protocol_version` decode rejection at a public DTO boundary is a
+"Protocol lifecycle"; ADR 0011), while an `incompatible_protocol_version` decode rejection at a public DTO boundary is a
 `validation` failure. The difference is intentional.
 
 Validation cannot be delegated only to UI. Tauri and TUI may provide ergonomic pre-validation, but daemon validation is
@@ -207,7 +207,7 @@ configuration schema explicitly documents `deny_unknown_fields`. Required fields
 closed variants, and any schema/protocol version other than the current one always fail safely.
 - The daemon/client JSON-RPC 2.0 handshake accepts only the exact current
 protocol version (2.0) and rejects any other version with the typed `-32001` version error before closing the connection
-(ADR 0045); the public DTO schema compares by exact equality (no same-major tolerance).
+(ADR 0011); the public DTO schema compares by exact equality (no same-major tolerance).
 - SQLite storage is the single live schema (logical version 1) created
 directly on open; there is no migration chain, no version gate, and no opening of older schemas, and persisted rows keep
 their recorded bytes and meaning.
@@ -228,7 +228,7 @@ malformed/compatibility cases;
 
 DTO compatibility, validation, redaction, and public-API boundary tests are blocking `make verify` inputs. Every
 DTO-owning crate is subject to its declared coverage tier ([ADR
-0051](../decisions/0051-per-crate-coverage-tiers.md)), and contract fixtures run across the required feature profiles.
+0016](../decisions/0016-per-crate-coverage-tiers.md)), and contract fixtures run across the required feature profiles.
 See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Outcome criteria
@@ -246,7 +246,7 @@ Future M4+ packages use closed, typed serde JSON families rather than widening h
 future record kind is needed, it is a typed serde JSON contract declared by its own activating specification;
 kind/version/payload mismatch blocks dependent external work, and live availability never silently mutates a persisted
 meaning. The superseded execution-meaning envelope, canonical tag registry, and digest/identity codec — including
-`RunExecutionMeaningEnvelopeDto` — are deleted (ADR 0046): no canonical encoding or decoder retention schedule remains.
+`RunExecutionMeaningEnvelopeDto` — are deleted (ADR 0012): no canonical encoding or decoder retention schedule remains.
 
 ### Future DTO families
 
@@ -265,7 +265,7 @@ their semantics.
 
 The future instruction-source families include `InstructionSourceV1`, `InstructionProfileRevisionV1`, and
 `InstructionProjectionV1` ([architecture 30](30-instruction-sources-and-system-context.md), [ADR
-0043](../decisions/0043-instruction-sources-and-system-context.md)). They carry bounded credential-free instruction text
+0010](../decisions/0010-instruction-sources-and-system-context.md)). They carry bounded credential-free instruction text
 with its declared kind, scope, order, and audience; they carry no tool, policy, admission, provider, or other authority,
 and no untrusted material may enter them. Architecture 30 owns their semantics, and the Slice 5 activating specification
 assigns their typed serde JSON contract versions.

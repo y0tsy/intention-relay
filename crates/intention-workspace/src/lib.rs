@@ -6,7 +6,7 @@
 //! relative path addresses the root joined with that path, child processes
 //! start in the root, and a pathless search addresses the root. It is not a
 //! security boundary — absolute paths and `..` are not contained, and symbolic
-//! links are ordinary filesystem material (ADR 0047). Hook phase contexts may
+//! links are ordinary filesystem material (ADR 0013). Hook phase contexts may
 //! identify the workspace only through safe identity — the daemon-owned
 //! `intention_types::WorkspaceId` — never through this crate's root path. This
 //! crate owns no persistence and no publication.
@@ -51,7 +51,7 @@ impl WorkspaceRoot {
     /// Addresses a logical relative path under the root.
     ///
     /// This is exactly `root.join(path)`: the path is addressed as given, not
-    /// canonicalized and not contained (ADR 0047).
+    /// canonicalized and not contained (ADR 0013).
     #[must_use]
     pub fn resolve_path(&self, path: &WorkspaceRelativePathDto) -> PathBuf {
         self.root.join(path.as_str())

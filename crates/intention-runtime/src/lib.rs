@@ -44,7 +44,7 @@ const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 /// an echo inside it is always attachable. The durable per-fact and per-run
 /// bounds remain the append authority; a round that crosses this bound
 /// terminalizes as a typed failed run instead of aborting `execute` with a
-/// DTO validation error (ADR 0041).
+/// DTO validation error (ADR 0008).
 const MAX_ROUND_REASONING_ECHO_BYTES: usize = 512 * 1024;
 
 /// Appends one atomic manual-retry failure for exactly a current starting run.
@@ -906,7 +906,7 @@ where
                         // the round is unrepresentable and terminalizes as a
                         // typed failed run at round end; the echo is never
                         // truncated and the durable per-fact and per-run bounds
-                        // stay with the append authority (ADR 0041).
+                        // stay with the append authority (ADR 0008).
                         if reasoning_echo_exceeds_round_bound
                             || reasoning_text.len() + content.len() > MAX_ROUND_REASONING_ECHO_BYTES
                         {
@@ -1250,7 +1250,7 @@ fn round_reasoning_attachment(
 /// character the attachment DTO rejects. The run fails with the dedicated
 /// `reasoning_attachment_unrepresentable` code instead of aborting `execute`
 /// with a DTO validation error, and the echo is never truncated or silently
-/// omitted (ADR 0041).
+/// omitted (ADR 0008).
 ///
 /// # Errors
 ///

@@ -41,11 +41,11 @@ Core DTO families:
 
 The optional system context is the effective instruction projection of [architecture
 30](30-instruction-sources-and-system-context.md) ([ADR
-0043](../decisions/0043-instruction-sources-and-system-context.md)): the daemon assembles it once per admitted run from
+0010](../decisions/0010-instruction-sources-and-system-context.md)): the daemon assembles it once per admitted run from
 declared instruction sources, it is bounded and credential-free, and the current drivers keep translating it into the
 leading system message with no driver-specific framing, rewrite, or provider-side scan; the request marks the end of
 that instruction block as an ephemeral prompt-cache breakpoint under [ADR
-0054](../decisions/0054-dynamic-context-window-and-prompt-caching.md). Historical M3/M4 requests keep the system context
+0018](../decisions/0018-dynamic-context-window-and-prompt-caching.md). Historical M3/M4 requests keep the system context
 absent. A driver never synthesizes, substitutes, reorders, or truncates instruction text, and a provider cannot inject
 or extend it.
 
@@ -134,7 +134,7 @@ extensions fail preflight before any outbound request is prepared. Reasoning out
 `ModelEventDto::ReasoningDelta` (`Primary`), and when a configured thinking-mode gateway requires it the adapter
 serializes the same round's accepted reasoning as `reasoning_content` on the assistant tool-call message of the same-run
 continuation, as transient request state with no durable representation; an empty channel is only a presence marker (ADR
-0041). The OpenRouter adapter ignores the transient attachment because its pinned SDK request type has no reasoning
+0008). The OpenRouter adapter ignores the transient attachment because its pinned SDK request type has no reasoning
 field and its wire does not require the echo. OpenRouter declares text, reasoning, tool-call, and streaming capability
 while its M4 foundation rejects multimodal context. Execution-time capability behavior belongs to the selected provider
 driver and runtime policy.
@@ -162,12 +162,12 @@ Ordinary production requests advertise the active registered tools: the request 
 `write`, `edit`, `execute`, `glob`, `grep`). A non-empty advertisement forces the requested `tool_calls` capability, so
 a driver that does not declare tool-call support fails closed at preflight with `unsupported_model_capability`. Both
 current adapters translate the definitions into their private SDK request and omit `tool_choice`; an empty advertisement
-preserves the previous request shape (ADR 0039).
+preserves the previous request shape (ADR 0006).
 
 The same-run continuation is the one place provider reasoning returns to a request: the runtime attaches the current
 round's accepted reasoning to the assistant tool-call message (`assistant_reasoning`), and no prior-turn reasoning is
 transferred. The attachment is transient request state with no durable representation and never becomes message text or
-durable history; cross-turn transfer remains future work (ADR 0041).
+durable history; cross-turn transfer remains future work (ADR 0008).
 
 Provider drivers do not invoke local tools directly. The application builds the typed invocation from a provider-emitted
 tool call, and the daemon-owned registry executes it under `WorkspaceRoot` with typed hooks. The M4 no-port denial path
@@ -185,7 +185,7 @@ The `[provider]` configuration keys `context_window_tokens` (default `250000`) a
 `1000000`) resolve into the credential-free `ContextWindowPolicyDto` of every `ConfigSnapshotDto`; resolution requires a
 positive capacity and `0 < window < capacity`, and a value outside that range fails closed with a typed validation error
 ([architecture 09](09-configuration-security-and-observability.md), [ADR
-0054](../decisions/0054-dynamic-context-window-and-prompt-caching.md)).
+0018](../decisions/0018-dynamic-context-window-and-prompt-caching.md)).
 
 Token accounting estimates one request's input from its character count at four characters per token, rounded up,
 calibrated by provider usage: a reported `UsageDto::Reported` input count replaces the estimate for the request that
@@ -249,7 +249,7 @@ wait starts the next attempt immediately.
 ## Quality-gate integration
 
 `intention-model` and provider adapters are subject to their `standard` tier floor ([ADR
-0051](../decisions/0051-per-crate-coverage-tiers.md)). Stream normalization, capability validation, retry, SDK-isolation,
+0016](../decisions/0016-per-crate-coverage-tiers.md)). Stream normalization, capability validation, retry, SDK-isolation,
 and secret-redaction fixtures are blocking `make verify` inputs under every relevant feature profile. Dependency and
 public-API checks must prevent provider SDK types and secrets from escaping their crate. See [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md).
@@ -265,7 +265,7 @@ Makefile](12-quality-gates-and-makefile.md).
 M4 provider selection, retry behavior, supported provider kinds, and stream contracts remain unchanged. The former
 execution-meaning envelope, canonical codec, and digest/identity layer are a superseded historical record ([Run
 execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md)); no canonical
-execution-meaning record exists (ADR 0046), and no future meaning record may reinterpret an M4 selection.
+execution-meaning record exists (ADR 0012), and no future meaning record may reinterpret an M4 selection.
 
 A future provider/model/capability selection is a typed JSON field owned by its domain document. Provider drivers remain
 subordinate adapters: they do not select lifecycle, authority, tools, or current-state fallback. Model names never
@@ -279,8 +279,8 @@ parse-time alias, and model names never route provider behavior.
 ## Post-M4 tool-loop consequence
 
 M4 tool-call evidence and denial remain unchanged. The ordinary request-side advertisement of the active registered
-tools is active under ADR 0039 and creates no frozen selection; `model_tool_loop_v1` and `ModelToolExchangeDto` history
-remain reserved for Slice 3. The same-run reasoning round-trip is active under ADR 0041: it
+tools is active under ADR 0006 and creates no frozen selection; `model_tool_loop_v1` and `ModelToolExchangeDto` history
+remain reserved for Slice 3. The same-run reasoning round-trip is active under ADR 0008: it
 attaches only the current round's accepted reasoning as transient request state, creates no durable reasoning history,
 and does not change the reserved `model_tool_loop_v1` contract. A future driver may support `model_tool_loop_v1` only
 when it can translate a frozen local typed tool selection and complete `ModelToolExchangeDto` history into a fresh

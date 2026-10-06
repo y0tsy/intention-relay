@@ -8,7 +8,7 @@ frontmatter, and plan lifecycle behavior.
 
 Plan and Build are separate modes, not separate applications or persistence models. Plan is a planning focus policy;
 Build may run as the single user-authorized Autopilot policy described in [ADR
-0017](../decisions/0017-build-autopilot-and-plan-focus-continuity.md).
+0002](../decisions/0002-build-autopilot-and-plan-focus-continuity.md).
 
 ```mermaid
 flowchart LR
@@ -129,7 +129,7 @@ state beyond tool-level path policy. Plan therefore has a product focus, not a s
 
 Mode does not currently filter the tool definitions advertised in model requests: both Plan and Build requests advertise
 all six active registered tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`). Mode-based advertisement filtering
-is not part of the ordinary request path (ADR 0039); runtime tool policy, including Plan-mode
+is not part of the ordinary request path (ADR 0006); runtime tool policy, including Plan-mode
 `write` and `edit` denial, remains enforced at execution and is unchanged.
 
 ### Plan focus instruction
@@ -145,7 +145,7 @@ or external effects.
 
 It is the `Mode` contribution of the effective instruction projection ([architecture
 30](30-instruction-sources-and-system-context.md), [ADR
-0043](../decisions/0043-instruction-sources-and-system-context.md)): architecture 30 owns the assembly order and the
+0010](../decisions/0010-instruction-sources-and-system-context.md)): architecture 30 owns the assembly order and the
 materialization of the projection, while this document keeps the instruction text and its advisory meaning. The
 contribution cannot widen or narrow tool policy, and a Build run's projection never inherits the Plan contribution.
 
@@ -193,7 +193,7 @@ resources or authority.
 ## Quality-gate integration
 
 Plan policy and artifact crates are subject to the coverage tier declared when they are activated ([ADR
-0051](../decisions/0051-per-crate-coverage-tiers.md)). Frontmatter hiding, plan-number allocation, ordinary mutation
+0016](../decisions/0016-per-crate-coverage-tiers.md)). Frontmatter hiding, plan-number allocation, ordinary mutation
 denial, Plan `execute` audit, revision integrity, and same-Session Autopilot continuation are blocking `make verify`
 inputs. Coverage cannot replace captured model-context assertions or policy-denial tests. See [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md).

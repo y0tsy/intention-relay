@@ -1,18 +1,17 @@
-# ADR 0042: Project script library for kernel cells
+# ADR 0009: Project script library for kernel cells
 
 ## Status
 
-Accepted as a documentation-approved future direction that extends [ADR 0012](0012-ipython-kernel-lifecycle.md) and [ADR
-0027](0027-child-kernel-bridge-mcp-detail-directions.md) without changing them, within the retrospective scope of [ADR
-0035](0035-m5plus-complete-foundation-activation.md).
+Accepted as a documentation-approved future direction that extends the kernel lifecycle and Gateway/RLM bridge designs without changing them, within the retrospective scope of [ADR
+0004](0004-m5plus-complete-foundation-activation.md).
 
 **Approved future design. Not implemented; activation requires an activating specification.** It authorizes no crate,
 dependency, listener, protocol implementation, storage schema, migration, feature profile, quality-policy target, or
 production kernel execution, and it leaves the M5+ Slice 3 and Slice 4 reservations untouched.
 
 Amended 2026-09-30: the canonical digest fields, the bounded import-evidence wording, and the workspace-boundary failure
-clause are superseded by [ADR 0046](0046-typed-serde-json-contracts.md) and [ADR
-0047](0047-workspace-root-addressing-anchor.md) as recorded below.
+clause are superseded by [ADR 0012](0012-typed-serde-json-contracts.md) and [ADR
+0013](0013-workspace-root-addressing-anchor.md) as recorded below.
 
 ## Decision
 
@@ -50,7 +49,7 @@ daemon never writes, rewrites, or collects a script on its own, and no namespace
 no file content, no absolute path, and no credential.
 - An epoch's import surface contains exactly the referenced library directory.
 The parent, the workspace root, a second library, and any path outside the workspace never enter it. This is a
-kernel-side scope choice, not a containment guarantee ([ADR 0047](0047-workspace-root-addressing-anchor.md)). A missing
+kernel-side scope choice, not a containment guarantee ([ADR 0013](0013-workspace-root-addressing-anchor.md)). A missing
 library directory yields an empty import surface rather than a failure, so a project without saved scripts behaves
 exactly as today.
 - A fresh run reuses a script by reading the file inside its own new epoch; a
@@ -76,7 +75,7 @@ public or durable surface. The library is file material, not state carried insid
 fresh run never reuses a live kernel or namespace, and reuse happens only through the persisted project file.
 4. The import surface is exact. A library path that cannot be addressed under
 the session `WorkspaceRoot` fails before any cell effect with the closed `kernel_script_library_unavailable`. The root
-is an addressing anchor, not a security boundary ([ADR 0047](0047-workspace-root-addressing-anchor.md)).
+is an addressing anchor, not a security boundary ([ADR 0013](0013-workspace-root-addressing-anchor.md)).
 5. Import evidence is deterministic. The same modules in the same order
 produce the same evidence list; an unrepresentable list fails before publication instead of being truncated, sampled, or
 stringified.
@@ -90,7 +89,7 @@ produces.
 
 M3/M4 bytes, IDs, events, snapshots, replay, recovery, tool denial, and retained IPython/RLM history keep their recorded
 meaning. The capability adds no second kernel version, no second workspace root, and no parallel registry, storage, or
-wire family; under [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md) the library is part of the single
+wire family; under [ADR 0005](0005-no-backward-compatibility-and-legacy-removal.md) the library is part of the single
 first-scope kernel contract rather than a compatibility layer. A project that has no `.ir/scripts` directory keeps
 today's behavior, including an empty import surface.
 
@@ -124,8 +123,8 @@ owns `WorkspaceRoot` semantics, the frozen-descriptor rule, and the publication 
 import evidence; [architecture 21](../architecture/21-goals-skills-context-memory-and-compaction.md) records that the
 library is not a Skill body, supplement, or package reference; and [architecture
 09](../architecture/09-configuration-security-and-observability.md) redaction and classification rules apply unchanged.
-[ADR 0046](0046-typed-serde-json-contracts.md) removes the canonical digest fields and [ADR
-0047](0047-workspace-root-addressing-anchor.md) replaces the boundary-validation wording, as recorded in the status
+[ADR 0012](0012-typed-serde-json-contracts.md) removes the canonical digest fields and [ADR
+0013](0013-workspace-root-addressing-anchor.md) replaces the boundary-validation wording, as recorded in the status
 above.
 
 ## Evidence

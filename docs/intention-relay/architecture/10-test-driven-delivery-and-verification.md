@@ -5,7 +5,7 @@
 This document makes TTD a delivery requirement for Intention Relay: it defines how architecture rules become executable
 checks and how implementation is judged by observable product outcomes, not only source structure or unit coverage. It
 applies to every crate, vertical slice, and adapter. The mandatory pinned tooling, strict linting, the coverage policy
-(per-crate tiers, [ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)), feature profiles,
+(per-crate tiers, [ADR 0016](../decisions/0016-per-crate-coverage-tiers.md)), feature profiles,
 Makefile targets, and supply-chain gates are defined in [Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Delivery principle
@@ -48,7 +48,7 @@ Compilation is necessary but never sufficient acceptance evidence.
 For each implementation slice:
 
 1. reference the owning architecture document, the applicable coverage
-declarations under [ADR 0051](../decisions/0051-per-crate-coverage-tiers.md), and acceptance criteria;
+declarations under [ADR 0016](../decisions/0016-per-crate-coverage-tiers.md), and acceptance criteria;
 2. add or update DTO/contract fixtures before implementation;
 3. add failing domain, architecture, and outcome tests appropriate to the slice;
 4. implement the smallest code that makes the intended tests pass;
@@ -159,7 +159,7 @@ The following scenarios must become executable before the corresponding capabili
 2. Change process CWD to a different directory.
 3. Invoke a filesystem tool with relative paths, and a `glob`/`grep` without an explicit path.
 4.  Verify relative access resolves from the session root, `execute` observes it as CWD, and the pathless search starts
-   at the root; absolute and parent paths are addressed as given, not contained (ADR 0047).
+   at the root; absolute and parent paths are addressed as given, not contained (ADR 0013).
 
 ### C. Durable run interruption
 
@@ -220,7 +220,7 @@ advertises the six active registered tools and requests the `tool_calls` capabil
 the call through the real typed registry under `WorkspaceRoot`, the durable `ToolCallRecorded` and `ToolResultRecorded`
 facts commit before publication, and the run completes. When the configured model runs in thinking mode, the
 continuation request also carries the same round's accepted reasoning as `reasoning_content` on the assistant tool-call
-message (ADR 0041); no prior-turn reasoning is transferred.
+message (ADR 0008); no prior-turn reasoning is transferred.
 4. Restart the daemon and replay the run; verify the recorded tool call and
 result replay and are never re-executed.
 5. Verify the credential is absent from durable facts, snapshots, daemon logs,
@@ -229,7 +229,7 @@ and state bytes.
 untyped panic or a credential echo.
 
 This scenario is non-hermetic: it needs network access, a live provider, and a real credential. It runs only under the
-explicit opt-in ([ADR 0040](../decisions/0040-opt-in-live-provider-e2e.md)) and never in `make quick`, `make verify`,
+explicit opt-in ([ADR 0007](../decisions/0007-opt-in-live-provider-e2e.md)) and never in `make quick`, `make verify`,
 CI, or any required status check.
 
 ## Verification evidence
@@ -237,14 +237,14 @@ CI, or any required status check.
 Each completed implementation slice must report:
 
 -  the architecture document, the applicable coverage declarations under [ADR
-  0051](../decisions/0051-per-crate-coverage-tiers.md), and acceptance criteria it implements;
+  0016](../decisions/0016-per-crate-coverage-tiers.md), and acceptance criteria it implements;
 - tests added before or alongside behavior;
 - `make quick`, narrow, integration, and `make verify` checks run;
 - outcome scenarios covered;
 - lint, coverage, feature, dependency, or architecture exceptions, if any;
 - known non-covered risk, if any;
 -  a recorded live run, when one is cited, reports the date, commit, provider, model, and workflow run URL and never the
-  credential; the opt-in live channel ([ADR 0040](../decisions/0040-opt-in-live-provider-e2e.md)) is additional evidence
+  credential; the opt-in live channel ([ADR 0007](../decisions/0007-opt-in-live-provider-e2e.md)) is additional evidence
   and never a substitute for the mandatory hermetic gates;
 - whether the behavior is proven by automated test, manual smoke test, or intentionally still deferred.
 
@@ -281,7 +281,7 @@ Evidence: activating specification per [architecture 12](12-quality-gates-and-ma
 ## Execution-meaning compatibility evidence
 
 The binary canonical codec, execution-meaning envelope, tag registry, and digest/identity layer were removed by [ADR
-0046](../decisions/0046-typed-serde-json-contracts.md); no golden bytes, digests, kind/tag mismatch fixtures, or decoder
+0012](../decisions/0012-typed-serde-json-contracts.md); no golden bytes, digests, kind/tag mismatch fixtures, or decoder
 retention schedule remain.
 
 Historical-compatibility work that survives the removal (M3/M4 byte preservation, no current-state reconstruction, and

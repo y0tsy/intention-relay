@@ -6,12 +6,12 @@ run selection; verification gates and evidence; working memory, roles, and templ
 model proposals and user confirmation; the conversation-compaction working form; and Goal-domain bounds and closed safe
 failures.
 
-Owner: architecture 28. Decisions: ADR 0023, ADR 0033. Research: `m4plus_concept.md`.
+Owner: architecture 28. Research: `m4plus_concept.md`.
 
 ## Ownership and non-authorities
 
 Architecture 14 owns run-execution meaning and historical
-compatibility; its canonical codec was removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md).
+compatibility; its canonical codec was removed by [ADR 0012](../decisions/0012-typed-serde-json-contracts.md).
 Architecture 15 owns the registry and tool loop, architecture 18 MCP lifecycle, architecture 21 context selection and
 projection (Goal context selection, Skills, memory/compaction selection), and architecture 24 activity/UI projections.
 
@@ -115,7 +115,7 @@ alter Goal, memory, Skill, role, template, or connection state.
 
 A run's immutable selections are typed serde JSON records rather than one canonical execution-meaning envelope; the
 former `run-execution-meaning-v4` carrier was removed with the canonical codec by [ADR
-0046](../decisions/0046-typed-serde-json-contracts.md). The applicable records are `GoalRunSelectionV1`,
+0012](../decisions/0012-typed-serde-json-contracts.md). The applicable records are `GoalRunSelectionV1`,
 `McpMethodCatalogSelectionV1`, and `AgentActivitySelectionV1`; an absent record means the feature does not apply, and
 historical M4 records gain nothing.
 
@@ -297,14 +297,14 @@ directions affect fresh runs only.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 14, 15, 18, 21, and 24 plus decisions 0007, 0010, 0013, and 0023.
+This document depends on architectures 14, 15, 18, 21, and 24 plus decision 0001.
 Non-goals: Goal persistence, search/index/vector retrieval, prompt assembly, SQL/wire tags,
 migrations, retention/deletion/encryption, source-page sizes, resource values, provider evolution, session branching,
 activity/UI, Plan artifacts, MCP administration, Python/Jupyter process behavior, Cargo, Makefile/CI, production
 activation, attachments/images/binary/ rich-MIME input, dynamic extensions and installation,
 dynamic tool registration, physical deletion, and long-lived-worker administration (leases, attach/detach, force-kill,
 supervisor recovery). Work/continuation/requeue after client disconnection is an accepted post-M5 future direction under
-[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md): an explicit durable contract that never silently
+: an explicit durable contract that never silently
 resumes old external work.
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).

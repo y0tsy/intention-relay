@@ -1,4 +1,4 @@
-# 0004: Rust-Owned Capability Plane and Fixed Tool Registry
+# 0001: Rust-Owned Capability Plane and Fixed Tool Registry
 
 ## Status
 

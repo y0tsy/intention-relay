@@ -3,13 +3,13 @@
 **Superseded historical record. No implementation work is authorized here; the removed machinery has no implementation
 path.**
 
-Owner: architecture 14 (historical record). Decisions: ADR 0038, ADR 0046. Research: m4plus_concept.md.
+Owner: architecture 14 (historical record). Decisions: ADR 0005, ADR 0012. Research: m4plus_concept.md.
 
 This document was the detailed owner for immutable execution meaning, canonical semantic identity, decoding, and
 execution/replay/audit compatibility. That machinery is removed: the binary canonical codec, the semantic decoders, the
-digest/identity helpers, and the compatibility classes are deleted by ADR 0046, and historical compatibility is banned
+digest/identity helpers, and the compatibility classes are deleted by ADR 0012, and historical compatibility is banned
 by ADR
-0038. The document is retained as the historical record of what existed, what was removed, and what remains.
+0005. The document is retained as the historical record of what existed, what was removed, and what remains.
 
 ## What existed
 
@@ -44,11 +44,11 @@ executable nested versions, a supported exact driver contract, required referenc
 availability could defer work but never mutated or rebuilt meaning, readable history could replay while execution was
 unavailable, and an unavailable audit record was isolated without synthesizing a replacement fact. Every claimed
 executable decoder retained exact golden fixtures. The earlier V3 record codec and its golden had already been removed
-under ADR 0038, leaving V4 as the single live record version with no legacy bridge.
+under ADR 0005, leaving V4 as the single live record version with no legacy bridge.
 
 ## What was removed
 
-The removal (ADR 0046) deleted the binary canonical codec and the unconsumed contract families in one change:
+The removal (ADR 0012) deleted the binary canonical codec and the unconsumed contract families in one change:
 
 - `crates/intention-domain/src/canonical.rs`: the codec, tag registry, and canonical record framing;
 -  `crates/intention-domain/src/run_execution_meaning.rs`: the execution-kind envelope, `MandateRunExecutionMeaningV1`,
@@ -61,19 +61,19 @@ lockfile and third-party notices;
 -  the 256/512-character checks, the frozen activity/run/child limit records (`Fixed*Limits`), and other speculative
 contract limits that lived in those files.
 
-No replacement codec was introduced: domain and wire records are typed serde JSON (ADR 0046), and the
+No replacement codec was introduced: domain and wire records are typed serde JSON (ADR 0012), and the
 `IRCR`/`typed-tlv-v1` framing, a tag registry, canonical digests, and canonical semantic identity no longer exist
 anywhere in the project. RFC 8785 canonicalization is adopted only together with a first real consumer, and no
-canonicalization crate is added before then. Historical compatibility remains banned (ADR 0038): no legacy bridge,
+canonicalization crate is added before then. Historical compatibility remains banned (ADR 0005): no legacy bridge,
 old-version decoder, migration or byte-preservation fixture exists, and no historical record gains synthetic future
 state, and missing meaning is never reconstructed from current state.
 
 ## What remains
 
-- The local protocol is JSON-RPC 2.0 over NDJSON (ADR 0045); domain and wire records are typed serde JSON DTOs.
+- The local protocol is JSON-RPC 2.0 over NDJSON (ADR 0011); domain and wire records are typed serde JSON DTOs.
 -  M3/M4 sessions, runs, provider kinds, tool-call denial, replay, and recovery keep their ordinary
-current semantics under the single live schema and protocol version (ADR 0038). Transport and storage liveness
-safeguards are the limits kept by ADR 0048, not semantic limits.
+current semantics under the single live schema and protocol version (ADR 0005). Transport and storage liveness
+safeguards are the limits kept by ADR 0014, not semantic limits.
 -  Provider selection for future work stays credential-free and non-authorizing: a model ID never selects provider kind,
 driver, endpoint, protocol, capability, credential transport, or execution kind, and the frozen capability intersection
 remains kind descriptor maximum intersect explicitly declared model subset intersect driver support.
@@ -88,9 +88,9 @@ and reasoning semantics.
 21](21-goals-skills-context-memory-and-compaction.md). None of them revives a canonical envelope, digest, or decoder.
 -  `WorkspaceRoot` is an addressing anchor: the default base for relative paths, the initial CWD for `execute`, and the
 default scope root for glob/grep. It is not a security boundary, and no lexical symlink parser or containment check
-gates it (ADR 0047).
+gates it (ADR 0013).
 -  [Architecture 30](30-instruction-sources-and-system-context.md) ([ADR
-0043](../decisions/0043-instruction-sources-and-system-context.md)) keeps the effective instruction projection as
+0010](../decisions/0010-instruction-sources-and-system-context.md)) keeps the effective instruction projection as
 configuration and project content; no instruction digest exists, and instruction text is never execution meaning.
 
 ## Historical ownership

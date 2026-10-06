@@ -1,4 +1,4 @@
-# ADR 0045: Local JSON-RPC 2.0 transport
+# ADR 0011: Local JSON-RPC 2.0 transport
 
 ## Status
 
@@ -18,11 +18,11 @@ schema version; the TOML configuration and SQLite storage schemas; and every non
 
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |
-| [ADR 0035](0035-m5plus-complete-foundation-activation.md) | The Slice 1 negotiated capability families (`provider_profiles_v1`, `session_fork_v1`, `normalized_reasoning_stream_v1`, `agent_activity_v1`, `user_notifications_v1`, `daemon_tool_gateway_v1`, `model_tool_loop_v1`) | No capability plane exists; one protocol version and typed methods only |
-| [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md) | The local-protocol row of the version ledger, the "Protocol same-major compatibility" superseded commitment, and the Wave 3 instruction to keep the 1.1 negotiation gates | Protocol 2.0 exact equality; the single-version policy is unchanged |
-| [ADR 0039](0039-request-side-tool-advertisement.md), [ADR 0040](0040-opt-in-live-provider-e2e.md), [ADR 0041](0041-same-run-reasoning-round-trip.md) | Their compatibility lines "Local protocol 1.1 ... unchanged" | Protocol 2.0 exact equality; the feature records otherwise stand |
+| [ADR 0004](0004-m5plus-complete-foundation-activation.md) | The Slice 1 negotiated capability families (`provider_profiles_v1`, `session_fork_v1`, `normalized_reasoning_stream_v1`, `agent_activity_v1`, `user_notifications_v1`, `daemon_tool_gateway_v1`, `model_tool_loop_v1`) | No capability plane exists; one protocol version and typed methods only |
+| [ADR 0005](0005-no-backward-compatibility-and-legacy-removal.md) | The local-protocol row of the version ledger, the "Protocol same-major compatibility" superseded commitment, and the Wave 3 instruction to keep the 1.1 negotiation gates | Protocol 2.0 exact equality; the single-version policy is unchanged |
+| [ADR 0006](0006-request-side-tool-advertisement.md), [ADR 0007](0007-opt-in-live-provider-e2e.md), [ADR 0008](0008-same-run-reasoning-round-trip.md) | Their compatibility lines "Local protocol 1.1 ... unchanged" | Protocol 2.0 exact equality; the feature records otherwise stand |
 
-The protocol-version clauses of ADRs 0039, 0040, and 0041 are read through this record. The M5+ Slice 2 control plane
+The protocol-version clauses of ADRs 0006, 0007, and 0008 are read through this record. The M5+ Slice 2 control plane
 was activated and then reverted (Slice 2 revert); the capability and connection-role surfaces this record removes were
 the remaining live pieces of that negotiated plane.
 
@@ -38,7 +38,7 @@ created through `interprocess`, with the existing `0700` directory and `0600` so
 reclaim probe, and the connect and synchronous IO timeouts. No network listener is added.
 3. `MAX_FRAME_BYTES` (1 MiB) is retained under the name `MAX_MESSAGE_BYTES`
 as a transport liveness cap: an over-size message fails closed instead of allowing a self-inflicted out-of-memory or
-hang. It is not a contract limit on message content ([ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md)).
+hang. It is not a contract limit on message content ([ADR 0014](0014-limits-by-precedent-and-no-content-scanning.md)).
 4. The envelope DTOs are removed: `ProtocolMessageDto`,
 `ProtocolRequestEnvelopeDto`, `ProtocolResponseEnvelopeDto`, `RunSubscriptionRequestEnvelopeDto`, and
 `ProtocolDaemonFrameDto`. A new `intention-protocol/src/jsonrpc.rs` module defines the typed conforming envelopes
@@ -118,10 +118,10 @@ remote client, or authentication layer is introduced.
 
 The protocol version rises from 1.1 to 2.0 because the wire changed. Old daemons and clients fail closed with the typed
 `-32001` mismatch error rather than misparsing a new message; no compatibility branch, fallback decoder, or protocol-1.1
-path is kept, per the single-version policy of [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md).
+path is kept, per the single-version policy of [ADR 0005](0005-no-backward-compatibility-and-legacy-removal.md).
 M3/M4/M5 durable runs, sessions, events, snapshots, cursors, and storage bytes are untouched by the wire change, and
 replay is served through the same typed payloads as before. The live-provider end-to-end channel of [ADR
-0040](0040-opt-in-live-provider-e2e.md) is re-pointed at the new wire and remains the manual, non-blocking live anchor.
+0007](0007-opt-in-live-provider-e2e.md) is re-pointed at the new wire and remains the manual, non-blocking live anchor.
 
 ## Security and failure behavior
 

@@ -60,7 +60,7 @@
 ## Test-first and architectural boundaries
 
 - Follow TDD/TTD: establish applicable contract, architecture, and outcome tests before implementation.
-- Every new production crate must be declared in the machine-readable policy with its responsibility and test target before production code is accepted; the crate's coverage tier applies ([ADR 0051](docs/intention-relay/decisions/0051-per-crate-coverage-tiers.md)).
+- Every new production crate must be declared in the machine-readable policy with its responsibility and test target before production code is accepted; the crate's coverage tier applies ([ADR 0016](docs/intention-relay/decisions/0016-per-crate-coverage-tiers.md)).
 - Never bypass `WorkspaceRoot`, DTO-first, or adapter-isolation rules.
 - Follow existing data, configuration, and dependency patterns. Do not hard-code values that are genuinely configurable, and do not add configuration unless configurability is a requirement.
 - Check the workspace `Cargo.toml` and existing dependency graph before adding a dependency.

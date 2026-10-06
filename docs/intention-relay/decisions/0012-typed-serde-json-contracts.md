@@ -1,4 +1,4 @@
-# ADR 0046: Typed serde JSON contracts
+# ADR 0012: Typed serde JSON contracts
 
 ## Status
 
@@ -14,18 +14,18 @@ families and tag descriptors, the SHA-256 dependency, the canonical goldens and 
 documentation statements that describe them.
 
 Out of scope: the typed serde DTOs themselves, the storage schema, the configuration format, the local transport framing
-(ADR 0045), and every behavior of the ordinary runtime. The deletion removed the codec and tag-descriptor DTO families
+(ADR 0011), and every behavior of the ordinary runtime. The deletion removed the codec and tag-descriptor DTO families
 defined inside `contract_families.rs`; the retained domain, protocol, storage, and configuration DTOs are unaffected.
 
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |
-| [ADR 0035](0035-m5plus-complete-foundation-activation.md) | The Slice 1 items `run-execution-meaning-v4` and "canonical tags and digests under the existing `typed-tlv-v1`/SHA-256 policy" | Slice 1 is the typed JSON protocol/DTO contract surface; no canonical codec and no digest identity |
-| [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md) | The "Canonical records" version-ledger row and the Wave 2 plan that repins identity goldens and keeps the V4 record codec | The whole codec, not only the V3 record, is removed |
+| [ADR 0004](0004-m5plus-complete-foundation-activation.md) | The Slice 1 items `run-execution-meaning-v4` and "canonical tags and digests under the existing `typed-tlv-v1`/SHA-256 policy" | Slice 1 is the typed JSON protocol/DTO contract surface; no canonical codec and no digest identity |
+| [ADR 0005](0005-no-backward-compatibility-and-legacy-removal.md) | The "Canonical records" version-ledger row and the Wave 2 plan that repins identity goldens and keeps the V4 record codec | The whole codec, not only the V3 record, is removed |
 
 The historical-compatibility rule that no historical record gains synthetic meaning and that missing meaning is never
 reconstructed from current state is not superseded by this record; it remains a project rule owned by [architecture
 14](../architecture/14-run-execution-meaning-and-historical-compatibility.md) and [ADR
-0038](0038-no-backward-compatibility-and-legacy-removal.md).
+0005](0005-no-backward-compatibility-and-legacy-removal.md).
 
 ## Decision
 
@@ -65,7 +65,7 @@ rather than a digest.
 9. The removed files carried the 256 and 512 character caps, the quantity and
 aggregate limits, the digest-format checks, and the frozen activity and run limit records. Those validators are
 deleted rather than relocated; the surviving limits are only the liveness safeguards recorded by [ADR
-0048](0048-limits-by-precedent-and-no-content-scanning.md).
+0014](0014-limits-by-precedent-and-no-content-scanning.md).
 10. Coverage denominators shrink by more than eight thousand lines; coverage
 tiers are re-verified by `make verify` rather than adjusted by exclusion.
 11. The Slice 1 "contract ledger" as a canonical-codec and registry artifact
@@ -84,14 +84,14 @@ the semantic checks that remain in the typed DTOs.
 5. History untouched. M3/M4 bytes, runs, events, snapshots, and cursors keep
 their recorded meaning and are never re-encoded, rewritten, or synthesized.
 6. Single version. The single-version policy of
-[ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md) is unchanged; this record removes a representation, not
+[ADR 0005](0005-no-backward-compatibility-and-legacy-removal.md) is unchanged; this record removes a representation, not
 a version.
 
 ## Compatibility
 
 M3/M4 recorded state and replay are unaffected: the removed surfaces had no consumer outside their own codecs, tests,
 and goldens. No compatibility fixture, golden, or decoder is kept for the removed representation, per [ADR
-0038](0038-no-backward-compatibility-and-legacy-removal.md). Typed DTOs evolve in place under the current public schema
+0005](0005-no-backward-compatibility-and-legacy-removal.md). Typed DTOs evolve in place under the current public schema
 version; no second DTO schema version and no migration are introduced.
 
 ## Security and failure behavior
@@ -100,14 +100,14 @@ Removing the digest and identity machinery removes the digest-mismatch failure f
 dependent work no longer fails on a canonical-encoding mismatch because no canonical encoding exists. Typed DTO
 validation remains the only contract rejection surface and keeps its credential-free typed errors. The runtime
 credential-shaped content validators that lived in the deleted files are removed with them, and the content-scanning ban
-is recorded by [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md); the surviving secret hygiene is the CI
+is recorded by [ADR 0014](0014-limits-by-precedent-and-no-content-scanning.md); the surviving secret hygiene is the CI
 documentation secret scan and the fake-secret absence tests.
 
 ## Non-goals
 
 No replacement binary codec; no canonicalization dependency now; no new identity or digest scheme; no migration or
 conversion of persisted data; no change to typed DTO shapes or schema versions; no change to the local transport framing
-of [ADR 0045](0045-local-json-rpc-2-0-transport.md); no re-introduction of the deleted validation limits.
+of [ADR 0011](0011-local-json-rpc-2-0-transport.md); no re-introduction of the deleted validation limits.
 
 ## Affected documents
 
@@ -133,4 +133,4 @@ with an unchanged live `make e2e-real-api` path. Gates: `make quick`, `make veri
 
 The canonical codec's original purpose of typed-TLV record identity across M3/M4; the audit finding that no consumer
 outside the codec, its tests, and its goldens existed; the single-version and no-bureaucracy policy of [ADR
-0038](0038-no-backward-compatibility-and-legacy-removal.md); and the deferral of RFC 8785 until a real consumer appears.
+0005](0005-no-backward-compatibility-and-legacy-removal.md); and the deferral of RFC 8785 until a real consumer appears.

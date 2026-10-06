@@ -99,7 +99,7 @@ producer or reader. This is the dominant cost in Z1 and Z6 and reappears in Z2, 
 - Z6-F04 (**121 closed failure codes specified; none appear anywhere in `crates/`**), Z7-01 (33
   "accepted future direction" ADRs with zero code).
 
-The counter-rule this violates already exists in the corpus: ADRs 0032/0033/0034 bundle many
+The counter-rule this violates already exists in the corpus: the deferred-direction records bundled many
 directions into short registers, which is the form the corpus itself converged on.
 
 ### T2 — One fact owned in several places, already disagreeing
@@ -114,7 +114,7 @@ Not duplication for readability: the copies have drifted, and a gate checks none
 - Z5-2 (provider-SDK ownership enforced twice by two disagreeing mechanisms).
 - Z6-F02 (**four of seven restated facts are false as written**), Z6-F05, Z6-F07, Z6-F09.
 - Z7-02 (`production-ceiling-removal.md:56` says "these five safeguards are the only numeric
-  safeguards retained"; ADR 0048 lists **nine**, and code confirms all nine exist), Z7-05 (root
+  safeguards retained"; ADR 0014 lists **nine**, and code confirms all nine exist), Z7-05 (root
   README claims a capability its own ADR says is not implemented), Z7-07, Z7-09.
 
 ### T3 — A durable record with no reader
@@ -145,7 +145,7 @@ the durable reader would read.
 - Z6-F01 (architecture 14: 127 lines, entire subject is deleted machinery, still in the reading
   path), Z6-F04, Z6-F06 (architecture 29 specifies a reverted surface in the present tense),
   Z6-F09 (removed codec re-narrated in 24 of 32 documents).
-- Z7-04 (dangling references to deleted artifacts in 54 documents, including live ADR 0049),
+- Z7-04 (dangling references to deleted artifacts in 54 documents, including a then-live ADR),
   Z7-11 ("fake-secret absence tests" named as live evidence in nine documents but names no
   runnable artifact).
 - Z5-6 (four documents still claim deleted expected-failure fixtures exist), Z5-15.
@@ -186,7 +186,7 @@ Three phases. Phase 1 needs no product decision; phase 2 needs one named decisio
 | 1 | Z7 | Z7-03 delete root `architecture-fitness-audit.md` | DELETE | — | — | 6,157 | 0% |
 | 2 | Z7 | Z7-01 bundle 33 unbuilt ADRs into one direction register | MERGE | — | — | ~2,000 | 0% |
 | 3 | Z7 | Z7-07 de-duplicate architecture README | MERGE | — | — | ~100 | 0% |
-| 4 | Z7 | Z7-08 shrink ADR 0038 to policy + ledger | SIMPLIFY | — | — | ~90 | 0% |
+| 4 | Z7 | Z7-08 shrink ADR 0005 to policy + ledger | SIMPLIFY | — | — | ~90 | 0% |
 | 5 | Z7 | Z7-02 delete stale `production-ceiling-removal.md` | DELETE | — | — | 75 | 0% |
 | 6 | Z7 | Z7-04/06/09 repair dangling refs, closeout boilerplate, slice restatement | SIMPLIFY | — | — | ~82 | 0% |
 | 7 | Z6 | Z6-F03 future-mechanism sections inside shipped docs | SIMPLIFY | — | — | ~500 | low |
@@ -251,7 +251,7 @@ available, not the most valuable.
 | ---: | --- | --- |
 | 1 | 751 lines of hand-written `Deserialize` + 33 mirror structs (Z1-F11) | The decode-boundary validation the entire workspace depends on. 12% of Z1 production code. |
 | 2 | Stream-ordering validator; `!durable_output` retry gate; two-step cancellation + append-race recovery; commit-before-publication (Z3) | Real correctness boundaries; the only coverage of the terminalizer/publication-retry paths. |
-| 3 | `MAX_MESSAGE_BYTES`, `CONNECT_TIMEOUT`, `SYNC_IO_TIMEOUT`, subscriber queue capacity, write deadline, stale-socket identity-checked reclaim (Z4) | Without them a peer that accepts and stops reading hangs a thread or allocates without bound; an unclean exit blocks every restart. ADR 0048 keep-list. |
+| 3 | `MAX_MESSAGE_BYTES`, `CONNECT_TIMEOUT`, `SYNC_IO_TIMEOUT`, subscriber queue capacity, write deadline, stale-socket identity-checked reclaim (Z4) | Without them a peer that accepts and stops reading hangs a thread or allocates without bound; an unclean exit blocks every restart. ADR 0014 keep-list. |
 | 4 | Structural credential absence; typed error shape (Z1-F12, Z4) | Keeps secrets out of errors without runtime content scanning. |
 | 5 | `normalize_tool_result` (the *read* representation) | Do not confuse it with Z3-F01's write-only document. |
 | 6 | 8-phase hook pipeline; capability flags (Z3-F07) | Documented invariants (arch 05, arch 08); underused, not wrong. |
@@ -260,7 +260,7 @@ available, not the most valuable.
 | 9 | `intention-test-support` *feature* (as opposed to the crate) | Integration tests cannot see `cfg(test)` items; the daemon's five outcome binaries need the seams. |
 | 10 | `WorkspaceRoot` resolution ordering; `parse_tool_input`'s exhaustive match | Ordering guarantee is real; the match is compile-time coupling to `ToolId`. |
 | 11 | `docs/reference/prime-agent-research/` (4,153 lines, Z7-10) | Preserved research with no reachable consumer; KEEP-BUT-STOP-INVESTING, do not delete. |
-| 12 | The designated-files mechanism with an empty list (Z4) | Adopted by ADR 0049; costs one config key. Do not add entries without a named high-risk file. Removed 2026-10-05 by [ADR 0051](decisions/0051-per-crate-coverage-tiers.md), which replaced it with per-crate tiers. |
+| 12 | The designated-files mechanism with an empty list (Z4) | Adopted by the deleted base-threshold record; costs one config key. Do not add entries without a named high-risk file. Removed 2026-10-05 by [ADR 0016](decisions/0016-per-crate-coverage-tiers.md), which replaced it with per-crate tiers. |
 
 ---
 
@@ -314,7 +314,7 @@ audits did not measure reviewer time or build cost.
 ## 7. Relation to the pre-existing `architecture-fitness-audit.md`
 
 The 6,157-line root audit covered the same repository earlier. This audit's zone numbering does
-not match it, and its findings are partly stale at this revision: ADR 0046 removals have already
+not match it, and its findings are partly stale at this revision: ADR 0012 removals have already
 landed, so `intention-domain/src/canonical.rs`, `run_execution_meaning.rs`, and
 `intention-protocol/src/contract_families.rs` no longer exist, and the audit's "8-vs-9 checks"
 defect is fixed (`architecture/12:66,75` both say "eight").
@@ -465,7 +465,7 @@ in this document.
 | Z7-05 | Root README claims an unmerged capability; restates 3 tables | SIMPLIFY | 1 | 0% |
 | Z7-06 | Closeout baseline `bf40567` not in `main`; boilerplate | SIMPLIFY | ~40 | 0% |
 | Z7-07 | Architecture README duplication hub (~150 of 284 lines) | MERGE | ~100 | 0% |
-| Z7-08 | ADR 0038: 194 lines recording an executed removal program | SIMPLIFY | ~90 | 0% |
+| Z7-08 | ADR 0005: 194 lines recording an executed removal program | SIMPLIFY | ~90 | 0% |
 | Z7-09 | M5+ slice status restated in four places | SIMPLIFY | ~30 | 0% |
 | Z7-10 | `docs/reference/prime-agent-research/`: 4,153 lines | KEEP-BUT-STOP-INVESTING | 0 | — |
 | Z7-11 | "Fake-secret absence tests" names no runnable artifact | SIMPLIFY | ~0 | 0% |

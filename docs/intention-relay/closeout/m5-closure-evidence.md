@@ -14,7 +14,7 @@ scope). The
 implementation activates six executable tools (`read`, `write`, `edit`,
 `execute`, `glob`, and `grep`), fail-closed `WorkspaceRoot` resolution, typed
 deterministic hooks, and the daemon-owned production model-tool loop (ADR
-0019). Remaining fixed registry slots are reserved.
+0003). Remaining fixed registry slots are reserved.
 
 The evidence table below records the historical pre-merge worktree results
 (after `299d922`, 2026-08-26/27); the merged-baseline CI verification is
@@ -28,7 +28,7 @@ recorded in the CI verification section.
 | Full test result | Historical: 501 tests passed, 0 failed, 0 skipped. Post-merge: 527 tests passed, 0 failed, 0 skipped (local `make quick`, 2026-08-30 at `b930c14`) |
 | Focused verification | `cargo test -p intention-tools -p intention-workspace -p intention-hooks` — exit status `0`, executed 2026-08-26 in the current worktree |
 | Focused result | 32 tests passed, 0 failed, 0 ignored; all three package doctest suites passed |
-| Application/runtime integration verification | `cargo test -p intention-application --test m3_application && cargo test -p intention-runtime --test m4_model_execution` — exit status `0`, executed 2026-08-27 in the current worktree (command updated under ADR 0038 Wave 7: the removed `m4_application_scheduling` target no longer appears) |
+| Application/runtime integration verification | `cargo test -p intention-application --test m3_application && cargo test -p intention-runtime --test m4_model_execution` — exit status `0`, executed 2026-08-27 in the current worktree (command updated under ADR 0005 Wave 7: the removed `m4_application_scheduling` target no longer appears) |
 | Application/runtime integration result | 54 tests passed, 0 failed, 0 ignored across the real application workflow, scheduling boundary, and model execution path |
 | Documentation verification | Markdown/Mermaid/navigation/secret check: `python3 quality/check_docs.py` — exit status `0`, executed 2026-08-27 in this dirty worktree after repairing the secret-shaped literal assignment fixture in `crates/intention-tools/tests/tool_contracts.rs` (the fixture now builds its recognizable fake credential at runtime; the scanner itself is unchanged). The prior full `make docs-check` result remains a 2026-08-26 run on an earlier tree, and Rust-doc profile verification (`quality/run_profiles.py doc`) is still not evidenced for this dirty tree. |
 | Architecture and public-API verification | `python3 quality/check_architecture.py` and `python3 quality/check_public_api.py` — pass |
@@ -189,7 +189,7 @@ quick` at `b930c14`: 527/527 tests passed (2026-08-30).
   physical plans, Plan mode, Build Autopilot, or UI delivery.
 - Mandate-specific architecture-15 registry, loop, recovery, replay, and
   canonicalization obligations remain future follow-up; the ordinary-run
-  production model-tool loop is implemented per ADR 0019.
+  production model-tool loop is implemented per ADR 0003.
 
 ## Closeout rule
 

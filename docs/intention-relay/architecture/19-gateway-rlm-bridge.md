@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 19. Decisions: ADR 0011, ADR 0027, ADR 0032, ADR 0053. Research: m4plus_concept.md.
+Owner: architecture 19. Decisions: ADR 0014. Research: m4plus_concept.md.
 
 This document owns future Gateway/RLM attachment, ephemeral bridge grant, ingress operation correlation, safe
 bridge-visible delivery, and bridge recovery. It applies only to future run execution; M3/M4 bytes, IDs, UUIDs,
@@ -12,7 +12,7 @@ remains research provenance and historical-only where it conflicts with architec
 
 ## Ownership and one capability path
 
-Architecture 14 is the historical record of the removed execution-meaning envelope and decoders (ADR 0046); 15 owns the
+Architecture 14 is the historical record of the removed execution-meaning envelope and decoders (ADR 0012); 15 owns the
 fixed registry, frozen tool selection, direct admission, model-tool loop, `ToolCallId`, generic effect evidence, and
 recovery; 18 owns MCP source, discovery, selection, invocation, and recovery.
 
@@ -29,7 +29,7 @@ Rust-owned capability path.
 ## Immutable bridge selection and ephemeral grant
 
 This document owns the semantic fields of the credential-free nested bridge selection in the future typed run record
-(typed serde JSON, ADR 0046):
+(typed serde JSON, ADR 0012):
 
 ```text
 BridgeSelectionV1
@@ -65,7 +65,7 @@ may outlive an expired grant but must obtain a newly issued grant before invokin
 
 ## Attachment, operation identity, and admission
 
-Bridge attachment is a future additive surface on the repository's JSON-RPC 2.0 local protocol (ADR 0045), reusing the
+Bridge attachment is a future additive surface on the repository's JSON-RPC 2.0 local protocol (ADR 0011), reusing the
 version-only hello, the existing private per-user Unix-socket/Windows-named-pipe endpoint, the **1 MiB message bound**,
 and the OS-user access boundary; it requires `model_tool_loop_v1` descriptor/model support whenever the peer receives
 future tool-loop facts. An unsupported request fails with a typed error before a partial bridge result, history page,
@@ -240,9 +240,9 @@ MCP selection, Skill, Goal, activity, or policy state, and no current
 mutable state may reconstruct missing bridge meaning. Retained RLM `SubAgentId`, `RlmParentLinkDto`, session/run-rooted
 trees, policy inheritance, queues, activity identities, and product limits remain historical only; no later bridge may
 reference exact legacy bytes, rewrite, normalize, or synthesize future state (ADR
-0038).
+0005).
 
-This document depends on architectures 14, 15, and 18 and decisions 0002, 0004, 0007, and 0010. Related
+This document depends on architectures 14, 15, and 18 and decision 0001. Related
 owners: 20 owns kernel process/namespace/checkpoint lifecycle; 21 owns Goal, Skill, context, memory, and compaction
 (bridge-delivered context is safe immutable projection only); 22 owns provider profile/capability semantics (bridge
 delivery uses only safe existing provider facts); 23 owns ordinary Session forks (no bridge grant or operation crosses

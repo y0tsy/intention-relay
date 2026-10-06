@@ -46,7 +46,7 @@ flowchart TD
 | **Turn** | A causally identified unit of conversation, such as a user request or assistant response. |
 | **Pending turn** | A user turn accepted while a session run is active: durable input that joins that run's live context at the next model boundary and is removed only before it is seen. |
 | **Run** | One agent execution lifecycle started from an accepted user turn. |
-| **WorkspaceRoot** | The required addressing anchor and process CWD for every session tool: relative paths join the root, `execute` starts there, and pathless `glob`/`grep` search from there (ADR 0047). |
+| **WorkspaceRoot** | The required addressing anchor and process CWD for every session tool: relative paths join the root, `execute` starts there, and pathless `glob`/`grep` search from there (ADR 0013). |
 | **Artifact** | A durable work product associated with a session or run. Plans are artifacts. |
 | **Hook** | A typed, ordered extension point around tool execution and result processing. |
 | **Plan** | A physical, revisioned artifact produced by a planning-focused mode; ordinary project writes remain denied, while `execute` is available as trusted-local, advisory-guided execution. |
@@ -168,7 +168,7 @@ roadmap](11-implementation-roadmap.md) owns activation order and status.
 
 -  [14 Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md):
   the historical compatibility semantics that remain after the binary canonical codec and digest layer were deleted by
-  [ADR 0046](../decisions/0046-typed-serde-json-contracts.md).
+  [ADR 0012](../decisions/0012-typed-serde-json-contracts.md).
 -  [15 Tool registry and model-tool loop](15-tool-registry-and-model-tool-loop.md): future fixed registry identity,
   frozen tool selection, WorkspaceRoot semantics, tool-loop facts, and tool-effect recovery.
 -  [18 MCP capability lifecycle](18-mcp-capability-lifecycle.md): future typed MCP source acquisition,
@@ -179,7 +179,7 @@ roadmap](11-implementation-roadmap.md) owns activation order and status.
 -  [20 Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md): future private kernel epochs, cells,
   namespace checkpoints, safe projections, and kernel recovery, plus the kernel-side import surface and script-import
   evidence of the project script library (`.ir/scripts`, [decision
-  0042](../decisions/0042-project-script-library-for-kernel-cells.md)); the library's path convention and tools stay
+  0009](../decisions/0009-project-script-library-for-kernel-cells.md)); the library's path convention and tools stay
   with architectures 05 and 15.
 -  [21 Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md): future
   non-authorizing Goal scope/evidence, Skill disclosure, context manifests/projections, typed memory, and immutable
@@ -193,23 +193,22 @@ roadmap](11-implementation-roadmap.md) owns activation order and status.
   messages, notifications, acknowledgement projections, and shared-client adapter behavior.
 -  [25 Configuration and provider control plane](25-configuration-provider-control-plane.md): accepted post-M5
   directions — controlled live reload, credential rotation, provider health checks, discovery, pricing policy, and the
-  profile UI/control plane ([ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md)); the Slice
+  profile UI/control plane; the Slice
   2 activation was reverted and re-introduction requires a new activating specification.
 -  [28 Goal domain and verification](28-goal-domain-and-verification.md): the accepted post-M5 Goal aggregate domain —
   Goal identity/scope/tree, lifecycle/readiness/user decision, leading-goal run selection, delegated Verification
   verification gates, working memory/roles/templates, model proposals, and the conversation-compaction working
-  form ([ADR 0023](../decisions/0023-goal-domain-and-verification-directions.md)); Goals remain acceptance/evidence
+  form; Goals remain acceptance/evidence
   records, not the work-authorization plane.
 -  [29 Provider session selection and profiles protocol](29-provider-session-and-profiles-protocol.md): the accepted
   post-M5 provider session-selection layer — session defaults, per-turn/fork overrides, profile-keyed usage, the
-  provider profiles protocol, and pending-removal/degraded recovery ([ADR
-  0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md)); the Slice 2 activation was reverted
+  provider profiles protocol, and pending-removal/degraded recovery; the Slice 2 activation was reverted
   and re-introduction requires a new activating specification.
 -  [30 Instruction sources and system context](30-instruction-sources-and-system-context.md): the instruction channel of
   a model request — closed instruction source kinds and scopes, the deployment profile, workspace `AGENTS.md` project
   instructions read through the `WorkspaceRoot` anchor, the `Mode` and `Vfr` contributions of architectures 07 and 06,
   deterministic assembly, the immutable effective instruction projection with its typed identity, closed failures, and
-  safe observability ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)); activated under
+  safe observability ([ADR 0010](../decisions/0010-instruction-sources-and-system-context.md)); activated under
   Milestone 5+ as the fifth slice.
 
 ### Foundation terms
@@ -231,12 +230,12 @@ boundaries.
 The following table is normative at the role level. [Architecture
 14](14-run-execution-meaning-and-historical-compatibility.md) remains the owner of historical compatibility semantics;
 owner documents define only their domain-specific semantic payloads, and every new family is typed serde JSON ([ADR
-0046](../decisions/0046-typed-serde-json-contracts.md)).
+0012](../decisions/0012-typed-serde-json-contracts.md)).
 
 | Value | Owner | Scope | Representation/ordering | Reconstruction rule |
 | --- | --- | --- | --- | --- |
 | `SessionId`, `WorkspaceId`, `RunId`, `TurnId` | architecture 04 and existing domain owners | ordinary M3/M4 | historical domain newtypes and recorded sequences | never reconstruct or replace historical identity |
-| future execution-kind contract | architecture 14 | admitted run | typed serde JSON contract; no canonical bytes or digest layer (ADR 0046) | no fallback after missing or mismatched typed data |
+| future execution-kind contract | architecture 14 | admitted run | typed serde JSON contract; no canonical bytes or digest layer (ADR 0012) | no fallback after missing or mismatched typed data |
 | `ConversationTreeId`, `ForkOperationId` | architecture 23 | ordinary Session lineage | typed lineage values; tree root derivation is frozen by architecture 23 | never infer lineage from current ancestry |
 | `AgentActivityTreeId` and activity records | architecture 24 | projections | daemon-assigned IDs and tree-local journal sequence | never convert from Session/Run/lineage identity |
 | provider/tool/MCP/kernel selections | architectures 15, 18, 20, 22 | future admitted run | immutable credential-free semantic references | live registry/resources cannot repair selection |
@@ -259,7 +258,7 @@ Two durable ordering authorities exist, plus one observation position; together 
 4. Cross-authority correlation uses typed identity only, with no arithmetic, offsets, or conversions.
 5. No queue-ordering mechanism exists: pending turns are durable input joined to the live run context, and the M3
    queue, its tickets, and their promotion were removed by [ADR
-   0055](../decisions/0055-pending-turns-and-cooperative-interruption.md).
+   0019](../decisions/0019-pending-turns-and-cooperative-interruption.md).
 
 Semantic/frozen metadata includes identities, revisions, selection references, and baselines. Operational/live metadata
 includes readiness, capacity, processes, handles, endpoints, current catalogs, wakeups, grants, and publication state.

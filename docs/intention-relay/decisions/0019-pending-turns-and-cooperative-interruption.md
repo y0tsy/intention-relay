@@ -1,4 +1,4 @@
-# ADR 0055: Pending turns and cooperative interruption
+# ADR 0019: Pending turns and cooperative interruption
 
 ## Status
 
@@ -15,21 +15,18 @@ table; `InterruptNoticeRecorded`; cooperative tool interruption with partial res
 gate, and terminalizer machinery.
 
 Out of scope: provider retry policy; the tool lifecycle and result vocabularies; `Partial` semantics and its notices
-(ADR 0052); the restart recovery transition to `Interrupted`; Goal, Skill, context, and compaction semantics; and
+(ADR 0017); the restart recovery transition to `Interrupted`; Goal, Skill, context, and compaction semantics; and
 recorded M3/M4 bytes.
 
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |
-| [ADR 0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) | Decision item 3, the per-call cancellation direction, and normative invariant 3 | The delivered interrupt contract: `run.interrupt` interrupts the in-flight provider call or tool call cooperatively through the existing signal, records a notice with any captured output, and keeps the run `Running` for its next model step; no separate per-`ToolCallId` command and no `Cancelling`/`Cancelled` run status |
-| [ADR 0024](0024-provider-session-and-profiles-protocol-directions.md) | Decision clause, "the live M3 queue with its tickets and atomic promotion remains the queue authority", and invariants 5-6 on recovery-promoted scheduling and preserved queue tickets | Pending turns are durable input joined to the active run context; no M3 queue, ticket, or promotion exists, and recovery never auto-schedules a run |
-| [ADR 0023](0023-goal-domain-and-verification-directions.md), [ADR 0033](0033-accepted-m5plus-execution-directions.md), [ADR 0034](0034-accepted-m5plus-retained-deferral-directions.md), and [ADR 0035](0035-m5plus-complete-foundation-activation.md) | Preservation clauses keeping "M3/M4 ... queue tickets ... authoritative and unchanged" | The lists drop queue tickets; recorded sessions, runs, events, snapshots, replay, and recovery stay authoritative, and pending turns are durable input joined to the live run context |
-| [ADR 0027](0027-child-kernel-bridge-mcp-detail-directions.md) | The architecture 20 explicit negative that `StopRunCommandDto` remains the only first-scope run cancellation command | `run.interrupt` (`InterruptRunCommandDto`) is the only first-scope run interruption command, and the daemon still does not wait for a cell to acknowledge an interrupt |
-| [ADR 0045](0045-local-json-rpc-2-0-transport.md) | Method-table rows `turn.remove` (`RemoveQueuedTurnCommandDto`) and `run.stop` (`StopRunCommandDto`) | `turn.remove` carries `RemoveTurnCommandDto` and `run.interrupt` carries `InterruptRunCommandDto`; the method set, framing, and DTO-only payload rule are unchanged |
-| [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md) | Decision item 9, invariant 5, and the compatibility clause that keep the live M3 queue, its tickets, and its atomic promotion as the queue authority | Pending turns are durable input joined to the live run context at the next boundary; the queue, its tickets, and its promotion no longer exist |
-| [ADR 0050](0050-ordering-authorities.md) | Invariant 5 and its out-of-scope, compatibility, and non-goals clauses on `sessions.next_queue_ticket` and `QueuePositionDto` | No queue-ordering mechanism exists: the queue tables, columns, tickets, and positions were removed, and pending turns are durable input rather than a queue order |
+| [ADR 0004](0004-m5plus-complete-foundation-activation.md) | Preservation clauses keeping "M3/M4... queue tickets... authoritative and unchanged" | The lists drop queue tickets; recorded sessions, runs, events, snapshots, replay, and recovery stay authoritative, and pending turns are durable input joined to the live run context |
+| [ADR 0011](0011-local-json-rpc-2-0-transport.md) | Method-table rows `turn.remove` (`RemoveQueuedTurnCommandDto`) and `run.stop` (`StopRunCommandDto`) | `turn.remove` carries `RemoveTurnCommandDto` and `run.interrupt` carries `InterruptRunCommandDto`; the method set, framing, and DTO-only payload rule are unchanged |
+| [ADR 0014](0014-limits-by-precedent-and-no-content-scanning.md) | Decision item 9, invariant 5, and the compatibility clause that keep the live M3 queue, its tickets, and its atomic promotion as the queue authority | Pending turns are durable input joined to the live run context at the next boundary; the queue, its tickets, and its promotion no longer exist |
+| [ADR 0015](0015-ordering-authorities.md) | Invariant 5 and its out-of-scope, compatibility, and non-goals clauses on `sessions.next_queue_ticket` and `QueuePositionDto` | No queue-ordering mechanism exists: the queue tables, columns, tickets, and positions were removed, and pending turns are durable input rather than a queue order |
 
 The named clause of each record is amended in place; every other clause of those records stays as written. The
-per-call cancellation direction of [ADR 0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md)
+per-call cancellation direction of
 is superseded as a direction and its text stays as written; its other two directions remain accepted.
 
 ## Decision
@@ -129,7 +126,7 @@ positions, and promotion path no longer exist; the single live schema version 1 
 ## Compatibility
 
 The change evolves in place under the single live schema version 1 ([ADR
-0038](0038-no-backward-compatibility-and-legacy-removal.md)): the `turns` table loses its ticket column and gains the
+0005](0005-no-backward-compatibility-and-legacy-removal.md)): the `turns` table loses its ticket column and gains the
 closed `outcome` set, the queue tables and columns are deleted, and no migration, versioned upgrade step, or second
 version exists. A local database file created by an earlier revision is not opened, migrated, or repaired; it is
 deleted and recreated by the normal development flow, as the single live schema requires. The queue events
@@ -154,7 +151,7 @@ Interruption and pending input stay typed and fail closed:
   matching pending turn exists; an appended turn is never silently removed.
 - Late fragments, late results, and late provider data after an interruption remain non-authoritative and cannot repair
   or reinterpret a committed result.
-- No runtime content scanning is introduced ([ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md)).
+- No runtime content scanning is introduced ([ADR 0014](0014-limits-by-precedent-and-no-content-scanning.md)).
 
 ## Non-goals
 
@@ -166,17 +163,11 @@ cancellation wording stays history.
 
 ## Affected documents
 
-[Decisions index](README.md) lists this record and marks the per-call cancellation direction of [ADR
-0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) superseded.
-[ADR 0023](0023-goal-domain-and-verification-directions.md), [ADR
-0024](0024-provider-session-and-profiles-protocol-directions.md), [ADR
-0027](0027-child-kernel-bridge-mcp-detail-directions.md), [ADR
-0033](0033-accepted-m5plus-execution-directions.md), [ADR
-0034](0034-accepted-m5plus-retained-deferral-directions.md), [ADR
-0035](0035-m5plus-complete-foundation-activation.md), [ADR
-0045](0045-local-json-rpc-2-0-transport.md), [ADR
-0048](0048-limits-by-precedent-and-no-content-scanning.md), and [ADR
-0050](0050-ordering-authorities.md) carry the amended clauses. [Architecture
+[Decisions index](README.md) lists this record, which supersedes the deleted per-call cancellation direction. [ADR
+0004](0004-m5plus-complete-foundation-activation.md), [ADR
+0011](0011-local-json-rpc-2-0-transport.md), [ADR
+0014](0014-limits-by-precedent-and-no-content-scanning.md), and [ADR
+0015](0015-ordering-authorities.md) carry the amended clauses. [Architecture
 04](../architecture/04-sessions-runs-events-and-storage.md) owns the run state machine, pending turns, boundary joins,
 the event taxonomy, and the required outcome tests; [architecture
 README](../architecture/README.md) owns the glossary and the ordering invariants; [architecture
@@ -213,9 +204,8 @@ suite passing. Gates: `make quick`, `make verify`, `docs-check`, `make architect
 The retired names survive only as historical prose: the queue-and-cancellation wording of the closed M3/M4/M5
 milestone records ([M3](../closeout/m3-closure-evidence.md), [M4](../closeout/m4-closure-evidence.md),
 [M5](../closeout/m5-closure-evidence.md)); the removal ledgers of [ADR
-0038](0038-no-backward-compatibility-and-legacy-removal.md); the reverted Slice 2 descriptions in ADRs 0028 and 0035;
-the superseded text of [ADR
-0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md); the historical
+0005](0005-no-backward-compatibility-and-legacy-removal.md); the reverted Slice 2 descriptions in ADR 0004;
+the superseded text of ; the historical
 audit [`complexity-audit.md`](../complexity-audit.md); and the preserved research tree under
 [`../../reference/`](../../reference/README.md). Editing a historical record to hide a name it reported would destroy
 the record.

@@ -29,7 +29,7 @@ erDiagram
 
 1.  Each session has one mandatory stable `WorkspaceId` and declared `WorkspaceRootDto`; M3 persists the identity/root
 association, while M5 owns the workspace addressing policy — the root as an anchor, not a containment boundary (ADR
-0047).
+0013).
 2. A session has at most one run in an active state.
 3. Every turn, run, plan, tool call, todo, permission, question, and event carries stable typed identity.
 4.  Every semantic state-changing repository method commits the current-state projection, append-only event envelope(s),
@@ -102,7 +102,7 @@ context; and
 ## Persistence model
 
 SQLite is the M3 `intention-storage` implementation. It uses bundled SQLite and creates the complete current storage
-schema directly on open; there is no migration chain and no version gate (ADR 0038). Storage combines:
+schema directly on open; there is no migration chain and no version gate (ADR 0005). Storage combines:
 
 - normalized current-state tables for project, workspace-root, session, run, and turn queries;
 - append-only domain-event envelopes for auditability and event-tail recovery;
@@ -146,7 +146,7 @@ M3's session publisher remains a no-op; a later one-shot session replay reads co
 ### Common durable-fact rules
 
 The following cross-direction rules govern future fact families and their sequences (adopted by [ADR
-0019](../decisions/0019-production-model-tool-loop.md)):
+0003](../decisions/0003-production-model-tool-loop.md)):
 
 -  a new fact type does not create a new sequence merely for convenience; it either orders by the session event
 sequence, belongs to exactly one container and orders by that container's journal, or has no durable order, and it
@@ -256,7 +256,7 @@ tool/run audit is evidence of intent and observed state, not proof of external a
 
 Session, run, turn, event, snapshot, and transaction tests are mandatory `make verify` inputs under the coverage policy
 of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate tiers, [ADR
-0051](../decisions/0051-per-crate-coverage-tiers.md)), and must exercise every declared feature profile. Numeric coverage
+0016](../decisions/0016-per-crate-coverage-tiers.md)), and must exercise every declared feature profile. Numeric coverage
 does not excuse missing fault-injection, recovery, ordering, or durable turn outcome tests.
 
 ## Non-goals
@@ -264,10 +264,10 @@ does not excuse missing fault-injection, recovery, ordering, or durable turn out
 Event sourcing as the sole query model; concurrent runs and event-merge semantics in one session; automatic continuation
 after restart; distributed replication or cross-device synchronization.
 
-Physical deletion and garbage collection of historical work are an accepted post-M5 future direction under [ADR
-0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md), to be executed in Milestone 5+ as an explicit
-user-authorized retention/deletion/garbage-collection policy that never rewrites or corrupts history, never destroys
-descendants or audit dependencies, and is never a silent automatic cleanup; archive-only retention remains the
+Physical deletion and garbage collection of historical work are an accepted post-M5 future direction, to be executed in
+Milestone 5+ as an explicit user-authorized retention/deletion/garbage-collection policy that never rewrites or
+corrupts history, never destroys descendants or audit dependencies, and is never a silent automatic cleanup;
+archive-only retention remains the
 first-scope default.
 
 ## Post-M4 tool-loop storage consequence
@@ -308,7 +308,7 @@ per-Session invariant; concurrent branches are separate Sessions, not parallel r
 ## Post-M5 instruction-source storage consequence
 
 [Architecture 30](30-instruction-sources-and-system-context.md) owns the effective instruction projection ([ADR
-0043](../decisions/0043-instruction-sources-and-system-context.md)). A run records the profile revision identity as safe
+0010](../decisions/0010-instruction-sources-and-system-context.md)). A run records the profile revision identity as safe
 usage provenance; a fork, plan, or handoff record materializes the projection itself inside its frozen snapshot. The
 mechanism adds no ordering sequence, rewrites no M3/M4 bytes, and never reconstructs a missing projection from current
 configuration, current project files, or current session state.

@@ -56,7 +56,7 @@ ToolResultDto
 Every active descriptor also declares `model_parameters_schema`: the code-owned JSON Schema text for its typed model
 parameters. `intention_tools::model_visible_descriptors()` returns exactly the active descriptors that expose such a
 schema, in registry order; the current model-visible set is `read`, `write`, `edit`, `execute`, `glob`, and `grep`, and
-reserved slots are never included. Ordinary model requests advertise that set as typed tool definitions (ADR 0039).
+reserved slots are never included. Ordinary model requests advertise that set as typed tool definitions (ADR 0006).
 
 The concrete Rust API can use traits and generic DTOs, but the runtime registry must not accept untyped tool inputs or
 results.
@@ -72,7 +72,7 @@ local path/process.
 resolution rule, no per-path canonicalization, and no per-tool alias;
 - tools must not use process `pwd` as a fallback;
 - absolute paths and `..` are not contained; they are addressed as given, and
-this is deliberate (ADR 0047);
+this is deliberate (ADR 0013);
 - symbolic links are ordinary filesystem material: no lexical symlink parser,
 no containment check, and no fail-closed path rejection exists;
 - `glob` and `grep` with no explicit path search from `workspace_root`; the
@@ -87,7 +87,7 @@ security, environment, or privilege boundary.
 
 The project script library is the logical, slash-separated, workspace-relative path `.ir/scripts` under
 `workspace_root`, with `.ir` as the project-local hidden root for agent-authored reusable material ([ADR
-0042](../decisions/0042-project-script-library-for-kernel-cells.md)):
+0009](../decisions/0009-project-script-library-for-kernel-cells.md)):
 
 - the convention names a location only; the library is not implicitly included
 in, or excluded from, any other policy, and no plan artifact, daemon state, checkpoint, or configuration lives there;
@@ -227,7 +227,7 @@ Autopilot. Plan's advisory instruction is not a technical boundary.
 
 Tool, WorkspaceRoot, and hook tests are blocking `make verify` inputs under the coverage policy of [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md) (per-crate tiers, [ADR
-0051](../decisions/0051-per-crate-coverage-tiers.md)). Architecture checks must reject direct process-CWD fallback and
+0016](../decisions/0016-per-crate-coverage-tiers.md)). Architecture checks must reject direct process-CWD fallback and
 VFR/Headroom coupling inside base tools; line coverage cannot replace the explicit relative-addressing, search-scope,
 execute-CWD, hook-order, and policy-denial scenarios above.
 

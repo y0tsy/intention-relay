@@ -1,4 +1,4 @@
-# ADR 0054: Dynamic context window and prompt-cache breakpoints
+# ADR 0018: Dynamic context window and prompt-cache breakpoints
 
 ## Status
 
@@ -19,8 +19,7 @@ policy; the tool loop and its terminal vocabulary; and recorded M3/M4 bytes.
 
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |
-| [ADR 0043](0043-instruction-sources-and-system-context.md) Decision, delivery clause | The clause read "with no driver-specific framing, rewrite, caching directive, or provider-side scan" | The projection is delivered as the leading system message with no driver-specific framing, rewrite, or provider-side scan, and the daemon-owned request marks the end of that instruction block with an ephemeral prompt-cache breakpoint; the marker adds no text and changes no projection |
-| [ADR 0013](0013-goals-skills-context-memory-and-compaction.md) Decision, Skills clause | "each affected model step binds an immutable safe context projection" | Each affected model step binds a safe context projection; the provider request built from it is a mutable window under [architecture 08](../architecture/08-model-protocol-and-providers.md), while the manifest, the selections, and every durable fact stay recorded as written |
+| [ADR 0010](0010-instruction-sources-and-system-context.md) Decision, delivery clause | The clause read "with no driver-specific framing, rewrite, caching directive, or provider-side scan" | The projection is delivered as the leading system message with no driver-specific framing, rewrite, or provider-side scan, and the daemon-owned request marks the end of that instruction block with an ephemeral prompt-cache breakpoint; the marker adds no text and changes no projection |
 
 The named clause of each record is amended in place; every other clause of those records stays as written.
 
@@ -96,7 +95,7 @@ with no durable representation; it changes no content, and a trim never leaves a
 ## Compatibility
 
 The feature evolves in place under the single live configuration and schema version 1 ([ADR
-0038](0038-no-backward-compatibility-and-legacy-removal.md)): the resolved configuration and snapshot shapes gain the
+0005](0005-no-backward-compatibility-and-legacy-removal.md)): the resolved configuration and snapshot shapes gain the
 explicit context-window policy with no second version and no migration. M3/M4 requests keep the optional system context
 absent, and recorded M3/M4 bytes, meanings, replay, and recovery are unchanged. A configuration document without the
 two keys resolves their defaults exactly like a document that names them.
@@ -112,7 +111,7 @@ two keys resolves their defaults exactly like a document that names them.
   compression; the compressed request content is never recorded as the tool result.
 - The capacity stub fails nothing and discards nothing, so an over-capacity request is still sent with the window
   applied rather than silently dropped.
-- No runtime content scanning is introduced ([ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md)).
+- No runtime content scanning is introduced ([ADR 0014](0014-limits-by-precedent-and-no-content-scanning.md)).
 
 ## Non-goals
 
@@ -130,10 +129,9 @@ and their validation. [Architecture 21](../architecture/21-goals-skills-context-
 context manifest and projection semantics that the window reads through. [Architecture
 30](../architecture/30-instruction-sources-and-system-context.md) owns the instruction projection delivered as the
 leading system block whose end carries the instruction-block breakpoint. [ADR
-0043](0043-instruction-sources-and-system-context.md) and [ADR
-0013](0013-goals-skills-context-memory-and-compaction.md) carry the amended clauses. Secondary cleanup: [architecture
+0010](0010-instruction-sources-and-system-context.md) carries the amended clauses. Secondary cleanup: [architecture
 15](../architecture/15-tool-registry-and-model-tool-loop.md) drops the stale 4 MiB group bound that [ADR
-0048](0048-limits-by-precedent-and-no-content-scanning.md) already superseded.
+0014](0014-limits-by-precedent-and-no-content-scanning.md) already superseded.
 
 ## Evidence
 

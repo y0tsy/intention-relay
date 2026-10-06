@@ -224,7 +224,7 @@ supported OS instead of being gated to Unix.
 ### Per-crate coverage tiers
 
 `quality/coverage.toml` declares the numeric ladder in `[tiers]` and assigns every active production crate and both
-presentation adapters to one rung in `[crate_tiers]` ([ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)):
+presentation adapters to one rung in `[crate_tiers]` ([ADR 0016](../decisions/0016-per-crate-coverage-tiers.md)):
 
 | Tier | Minimum line coverage | Crates |
 | --- | ---: | --- |
@@ -278,7 +278,7 @@ out-of-source-root, absent, unreported, and all-source-removing exclusions. The 
 `intention-daemon/src/main.rs`: it is a thin process adapter whose unsafe-argument and concurrent bootstrap behavior are
 exercised through the real binary in `daemon_bootstrap`; the entry point carries no library logic, and those real-binary
 tests are accepted as equivalent coverage evidence. All daemon library behavior remains subject to the `standard` tier
-floor ([ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)).
+floor ([ADR 0016](../decisions/0016-per-crate-coverage-tiers.md)).
 
 ## Cargo feature-profile policy
 
@@ -339,7 +339,7 @@ shell behavior and label each command as mutating or non-mutating.
 | `make ci-coverage-no-default` | No | Run the CI coverage job for the no-default profile: job-scoped metrics, `coverage-no-default`, generated-artifact cleanup, then job-scoped metrics finalize. |
 | `make ci-coverage-all` | No | Run the CI coverage job for the all-features profile: job-scoped metrics, `coverage-all`, generated-artifact cleanup, then job-scoped metrics finalize. |
 | `make ci-deps` | No | Run the CI dependency job: job-scoped metrics, `deps`, then job-scoped metrics finalize. |
-| `make e2e-real-api` | Yes, networked; writes a local run report | MUTATING/NETWORKED/OPT-IN: run the ignored `real_api_e2e` daemon integration test against a real provider API; requires `INTENTION_REAL_API_KEY` and `INTENTION_REAL_API_MODEL` from the environment or from a local gitignored `.env` file (explicit environment values take precedence), exports the `INTENTION_REAL_API_E2E=1` opt-in itself, accepts optional `INTENTION_REAL_API_KIND`/`INTENTION_REAL_API_ENDPOINT` selectors, and writes only the gitignored `quality/reports/real-api-e2e` run report; never a prerequisite of `quick`, `check`, `verify`, `ci`, or a `ci-*` alias ([ADR 0040](../decisions/0040-opt-in-live-provider-e2e.md)). |
+| `make e2e-real-api` | Yes, networked; writes a local run report | MUTATING/NETWORKED/OPT-IN: run the ignored `real_api_e2e` daemon integration test against a real provider API; requires `INTENTION_REAL_API_KEY` and `INTENTION_REAL_API_MODEL` from the environment or from a local gitignored `.env` file (explicit environment values take precedence), exports the `INTENTION_REAL_API_E2E=1` opt-in itself, accepts optional `INTENTION_REAL_API_KIND`/`INTENTION_REAL_API_ENDPOINT` selectors, and writes only the gitignored `quality/reports/real-api-e2e` run report; never a prerequisite of `quick`, `check`, `verify`, `ci`, or a `ci-*` alias ([ADR 0007](../decisions/0007-opt-in-live-provider-e2e.md)). |
 
 **Removed 2026-10-02: the quality self-test suite.** The expected-failure fixture suite `quality/self_test.py`, its
 `quality-self-test` and `quality-self-test-in-place` targets, its `ci-selftest` CI job, and its `selftest` tool scope no
@@ -429,7 +429,7 @@ while `syn@2.0.119` is required by `async-openai 0.42.0 -> async-openai-macros 0
 through `wasm-bindgen 0.2.128` on WASM targets. Native bundled SQLite instead resolves `rusqlite 0.40.2 -> hashlink
 0.12.2 -> hashbrown 0.17.1`; the independently required native proc-macro path retains `syn@3.0.6`. The native daemon
 continues to use bundled SQLite through `rusqlite` with its `bundled` feature; `rusqlite_migration 2.6.0` is no longer
-in the graph because the schema-migration machinery was removed (ADR 0038, Wave 4); these exceptions do not replace
+in the graph because the schema-migration machinery was removed (ADR 0005, Wave 4); these exceptions do not replace
 either dependency or relax duplicate bans for other crates or versions. Reassess both exceptions whenever `rusqlite`,
 `sqlite-wasm-rs`, `rsqlite-vfs`, `wasm-bindgen`, or their supported target selection changes; record the locked native
 and WASM validation trees with the review. Ignoring a failing gate, using a broad CI bypass, or silently allowing a tool
@@ -440,7 +440,7 @@ failure is prohibited.
 Every implementation slice must:
 
 1.  identify the owning architecture document and the applicable coverage declarations under [ADR
-   0051](../decisions/0051-per-crate-coverage-tiers.md);
+   0016](../decisions/0016-per-crate-coverage-tiers.md);
 2. create or update DTO/contract fixtures first;
 3. create failing domain, architecture, and outcome tests appropriate to the change;
 4. implement the smallest code that makes those tests pass;
@@ -481,7 +481,7 @@ fixtures, and current-schema creation fixtures with their policy declarations.
 
 ### Opt-in live-provider e2e
 
-[ADR 0040](../decisions/0040-opt-in-live-provider-e2e.md) adds one ignored integration target to the machine-readable
+[ADR 0007](../decisions/0007-opt-in-live-provider-e2e.md) adds one ignored integration target to the machine-readable
 policy: `intention-daemon` `real_api_e2e` (`crates/intention-daemon/tests/real_api_e2e.rs`). Ignored tests are compiled
 by every test build but are never executed by `make test`, `make coverage`, `make quick`, or `make verify`; executing
 them requires the explicit `make e2e-real-api` opt-in with `INTENTION_REAL_API_KEY` and `INTENTION_REAL_API_MODEL` (the

@@ -1,22 +1,22 @@
-# 0035: M5+ Complete Foundation Activation
+# 0004: M5+ Complete Foundation Activation
 
 ## Status
 
 Accepted 2026-08-30.
 
-Amended 2026-09-26 by [ADR 0043](0043-instruction-sources-and-system-context.md): the pre-approved slice sequence gains
+Amended 2026-09-26 by [ADR 0010](0010-instruction-sources-and-system-context.md): the pre-approved slice sequence gains
 a fifth activating slice, instruction sources and system context, without changing slices 1-4.
 
-Amended 2026-09-30 by [ADR 0045](0045-local-json-rpc-2-0-transport.md), [ADR 0046](0046-typed-serde-json-contracts.md),
-and [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md): the Slice 1 canonical-codec and capability-family
+Amended 2026-09-30 by [ADR 0011](0011-local-json-rpc-2-0-transport.md), [ADR 0012](0012-typed-serde-json-contracts.md),
+and [ADR 0014](0014-limits-by-precedent-and-no-content-scanning.md): the Slice 1 canonical-codec and capability-family
 items, the Slice 2 control-plane reversion, the queue-audit and corridor wording, and the numeric contract limits are
 reconciled in the slice list below without changing the five-slice order. The M5+ Slice 2 control plane was activated
-and then reverted; re-introduction requires a new activating specification (fifth slice: ADR 0043; activation sequence:
-ADR 0035).
+and then reverted; re-introduction requires a new activating specification (fifth slice: ADR 0010; activation sequence:
+ADR 0004).
 
 ## Decision
 
-Milestone 5+ is the single activation home for the full post-M5 stack (architectures 25 and 28-29, ADR 0023-0034, and
+Milestone 5+ is the single activation home for the full post-M5 stack (architectures 25 and 28-29, and
 all detail packages) and the hard prerequisite of Milestones 6-9 in the roadmap dependency graph (`K[M5+] -->
 F/G/H/I`).
 
@@ -24,34 +24,34 @@ The milestone is delivered as a pre-approved sequence of activating slices, all 
 
 1. **Contracts and versions** — the versioned protocol, schema, and DTO
 contract ledger for the full post-M5 stack over JSON-RPC 2.0 and typed serde JSON ([ADR
-0045](0045-local-json-rpc-2-0-transport.md), [ADR 0046](0046-typed-serde-json-contracts.md)), the single live
+0011](0011-local-json-rpc-2-0-transport.md), [ADR 0012](0012-typed-serde-json-contracts.md)), the single live
 configuration and storage schemas with M3/M4 byte preservation, and crate ownership, feature-profile, and coverage-tier
 declarations for every activated family. The former execution-meaning record, capability families, canonical tags, and
 digests are removed by those records.
-2. **Control plane** — the ADR 0020 cluster and provider session selection
+2. **Control plane** — the control-plane cluster and provider session selection
 (architectures 25/29/22): controlled live reload, credential rotation, provider health checks, model discovery, pricing
 policy, profile UI and raw-TOML/configuration editing, arbitrary authentication headers, session defaults and
 per-turn/fork overrides, pending-removal and degraded recovery, and the provider reasoning/catalog surface. The Slice 2
 activation is reverted and can return only through a new activating specification; the queue-audit, queue-promotion,
 reconciliation, and held-run admission wording is removed by [ADR
-0048](0048-limits-by-precedent-and-no-content-scanning.md). The unconsumed-surface audit (2026-09) removed the
+0014](0014-limits-by-precedent-and-no-content-scanning.md). The unconsumed-surface audit (2026-09) removed the
 unconsumed provider-native preservation-control and server-side-parser contracts, the Responses reasoning-mode
 projection, the reasoning-usage DTOs, and the model-capability envelope.
-3. **Goal domain** — Goal domain (architecture 28, ADR 0023/0033): the Goal tree.
+3. **Goal domain** — Goal domain (architecture 28): the Goal tree.
 4. **UI foundation** — session branching, activity/notification, reasoning
-and catalog delivery, and adapter boundaries (architectures 23/24/22, ADR 0026/0028/0029/0032/0033/0034):
+and catalog delivery, and adapter boundaries (architectures 23/24/22):
 `session_fork_v1`, activity journal and notification projections, normalized reasoning delivery, RLM packaging and
 export, and the exact typed client/protocol surface that M6 consumes.
 5. **Instruction sources and system context** — the instruction channel added
-by [ADR 0043](0043-instruction-sources-and-system-context.md) and owned by architecture 30 (instruction sources and
+by [ADR 0010](0010-instruction-sources-and-system-context.md) and owned by architecture 30 (instruction sources and
 system context): the closed instruction source kinds and scopes, the deployment instruction profile adapted from the
 legacy Antibusy static prompt set, user-editable fragments, workspace `AGENTS.md` project instructions, the reserved
 `Mode` and `Vfr` contributions, deterministic assembly, the immutable effective instruction projection with its revision
 identity, closed `instruction_*` safe failures, and identity-only observability. Numeric bounds and digest wording are
-settled at activation under ADR 0048 and ADR 0046. Its activating specification declares the instruction contract
+settled at activation under ADR 0014 and ADR 0012. Its activating specification declares the instruction contract
 families under the Slice 1 ledger policy without changing slices 1-4.
 
-Each direction from ADR 0020-0034 remains bound to its slice; every retrospective change to M0-M5 code required by these
+Each direction remains bound to its slice; every retrospective change to M0-M5 code required by these
 directions is activated inside its slice with its own contract, transaction, and outcome test.
 
 ## Rationale
@@ -79,7 +79,7 @@ sessions, runs, events, and bytes remain authoritative and unchanged; no synthet
 added to historical runs.
 7. M5+ introduces no second runtime, registry, scheduler, persistence
 authority, or sandbox.
-8. No direction from ADR 0020-0034 is implemented by this decision; each
+8. No direction is implemented by this decision; each
 remains non-authorizing until its slice activation.
 
 ## Failure semantics
@@ -92,7 +92,8 @@ evidence together) is not accepted; the milestone remains on the prior accepted 
 
 ## Compatibility and non-goals
 
-This decision extends and operationalizes ADR 0020 and ADR 0032-0034: their domain decisions remain authoritative, and
+This decision extends and operationalizes the accepted post-M5 directions owned by the architecture documents: their
+domain decisions remain authoritative, and
 this decision supersedes only conflicting activation and dependency wording (the "may run in parallel with M6-M9" and
 "does not block their activation" clauses, and the per-direction activation wording replaced by the pre-approved slice
 sequence). The closed M4 baseline, M3/M4 bytes, and existing behavior remain unchanged.
