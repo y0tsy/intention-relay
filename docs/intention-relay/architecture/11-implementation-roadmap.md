@@ -188,8 +188,8 @@ targets, goldens, and control-plane tables are removed. The unconsumed-surface a
 typed preservation-control, server-side-parser, Responses reasoning-mode, reasoning-usage, and model-capability-envelope
 contracts, the protocol-only reasoning/header/parser duplicates, the eight producer-less control-plane event DTOs, and
 the `provider_profile_tombstoned` wire code; that removal is not reverted.
-3.  **Caller policy and Goal domain — not activated.** Programmatic-caller policy and Goal domain (architectures 27/28,
-ADR 0022/0023/0033). The slice also activates the tool-descriptor, tool-registry, and model-tool-loop contracts ([ADR
+3.  **Goal domain — not activated.** The Goal domain (architecture 28, ADR 0023/0033). The slice also activates the
+tool-descriptor, tool-registry, and model-tool-loop contracts ([ADR
 0025](../decisions/0025-base-tool-contracts-and-tool-loop-bounds.md) as amended by [ADR
 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md), architecture 15), the bridge-invocation and
 MCP-method-catalog selections ([ADR 0027](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md),
@@ -596,8 +596,7 @@ operational tuples are operational metadata, not ordering authorities.
 | Provider evolution, profiles, and reasoning | [architecture 22](22-provider-evolution-profiles-and-reasoning.md) | Documentation-approved; not activated; the remaining provider work (`responses` driver, `SafeHeader` live wire injection, user-kind parser) is delivered by Milestone 12. | Foundation |
 | Non-destructive session branching and regeneration | [architecture 23](23-non-destructive-session-branching-and-regeneration.md) | Documentation-approved; not activated; activating slice 4 (`session_fork_v1`). | ordinary Session/storage compatibility; context; provider evolution |
 | Activity, UI, and adapters | [architecture 24](24-activity-ui-and-adapters.md) | Documentation-approved; not activated; activating slice 4; extends M6 planning. | transport; MCP; bridge; kernel; context; provider evolution; session branching |
-| Programmatic-caller policy and admission | [architecture 27](27-programmatic-caller-policy-and-admission.md) | Documentation-approved; not activated; activating slice 3. | fixed tool registry/loop; MCP; bridge; provider evolution; activity/UI |
-| Goal domain and verification | [architecture 28](28-goal-domain-and-verification.md) | Documentation-approved; not activated; activating slice 3. | fixed tool loop; MCP; context; provider evolution; activity/UI; programmatic-caller policy |
+| Goal domain and verification | [architecture 28](28-goal-domain-and-verification.md) | Documentation-approved; not activated; activating slice 3. | fixed tool loop; MCP; context; provider evolution; activity/UI |
 | Provider session selection and profiles protocol | [architecture 29](29-provider-session-and-profiles-protocol.md) | The Slice 2 activation was reverted and re-introduction requires a new activating specification; not activated. | provider evolution; session branching; configuration/provider control plane |
 | Base-tool contracts and tool-loop bounds | [architecture 15](15-tool-registry-and-model-tool-loop.md) | Documentation-approved; slice 3 activates the reserved contracts; tool-loop implementation is Milestone 11. | architecture 15; M5+ activation |
 | Session-branching detail | [architecture 23](23-non-destructive-session-branching-and-regeneration.md) | Documentation-approved; not activated; activating slice 4. | extends architecture 23 |
@@ -611,7 +610,7 @@ operational tuples are operational metadata, not ordering authorities.
 
 ### Activation-order notes
 
--  The slice order is fixed: 1 contracts and versions, 2 control plane, 3 caller policy and Goal domain, 4 UI
+-  The slice order is fixed: 1 contracts and versions, 2 control plane, 3 Goal domain, 4 UI
 foundation, 5 instruction sources. Later slices consume only contracts activated by earlier slices, and instruction
 sources is the fifth and last slice.
 -  Slice 3 additionally activates the tool-descriptor/tool-registry/model-tool-loop contracts reserved by [ADR

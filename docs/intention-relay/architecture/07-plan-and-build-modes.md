@@ -33,7 +33,7 @@ Build mode:
 - applies WorkspaceRoot to every filesystem/process tool;
 - uses Build Autopilot when explicitly started by the user, in which case the
 configured active tool surface is admitted without per-action confirmation;
-- records tool decisions, tool results, and any confirmation outcome durably.
+- records tool decisions and tool results durably.
 
 Build Autopilot is trusted-local and unrestricted by per-action confirmation, but it does not bypass typed validation,
 hooks, persistence, the daemon-owned capability path, cancellation, or recovery. It may execute destructive and external

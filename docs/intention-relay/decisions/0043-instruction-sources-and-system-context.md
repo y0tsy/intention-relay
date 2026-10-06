@@ -90,7 +90,7 @@ revision identities only; instruction text stays on the configuration surface wh
 ## Invariants
 
 1. No authority. Instruction text grants no tool, policy, MCP, bridge, kernel,
-provider, reconciliation, or confirmation authority, and it cannot prevent or
+provider, or reconciliation authority, and it cannot prevent or
 prove the absence of any external effect. The advisory rule of ADR 0017 is unchanged.
 2. One channel. Exactly one effective instruction projection exists per
 admitted run, it has exactly one owner, and no second prompt-assembly path, hidden system text, or provider-supplied
@@ -125,8 +125,7 @@ nothing new.
 The instruction channel is the only trusted instruction surface, and it accepts content from declared sources only.
 Repository content, tool output, fetched material, Skill bodies, memory cards, and provider output remain untrusted data
 and cannot be promoted into it, so the ADR 0019 prompt-injection risk keeps its existing boundary and gains one explicit
-rule: an instruction source cannot widen tool policy, provider selection, admission policy, or confirmation
-requirements.
+rule: an instruction source cannot widen tool policy or provider selection.
 
 The closed instruction failure set is:
 

@@ -17,7 +17,6 @@ documentation-only corridor, reservation, calendar-period, and queue-audit surfa
 
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |
-| [ADR 0022](0022-programmatic-caller-policy-directions.md) | `InteractiveLocalReadBaselineV1` (256/16); the bounded `ProgrammaticAuthorizationCorridorDto`; "run and calendar limits with atomic reservations"; the corridor and reservation invariants; and the corridor, counter, reservation, and limit failure wording | The remaining programmatic-caller policy and admission direction stands without limits, corridors, reservations, or calendar counters |
 | [ADR 0025](0025-base-tool-contracts-and-tool-loop-bounds.md) | The 16-call tool-group maximum and `provider_tool_group_invalid`; the "first-scope bounds" (512 KiB per canonical fact, 4 MiB per group, `tool_output_limit_exceeded`); the 256-fact and 512-KiB replay page bounds; and the `model_tool_loop_required` gate (also removed with the capability plane by [ADR 0045](0045-local-json-rpc-2-0-transport.md)) | The qualitative fragment, descriptor, and terminal-taxonomy contracts stand; numeric bounds exist only by recorded precedent |
 | [ADR 0034](0034-accepted-m5plus-retained-deferral-directions.md) | Item 5, the future classification of activity numeric values as intrinsic bounds, capacity availability, or ordinary product policy | A numeric activity bound is introduced only with a recorded precedent, under the rule below |
 | [ADR 0035](0035-m5plus-complete-foundation-activation.md) | The Slice 2 queue-promotion and reconciliation wording and the Slice 3 "corridors and reservations" wording | The Slice 2 revert and the precedent rule below |
@@ -75,7 +74,7 @@ and the recorded state; they are not runtime content scanners.
 
 8. The corridor and reservation model, its calendar counters, and the
 Day/Week/Month period engine never existed in code: a repository search finds zero occurrences. They are removed from
-the documentation instead of being kept as unimplemented direction, and ADR 0022 above is amended accordingly.
+the documentation instead of being kept as unimplemented direction.
 9. The unavailable-queue promotion and reconciliation, held-run admission,
 and related queue audits exist only in documentation after the Slice 2 revert (`AdmitRecoveredRun`). They are removed
 from the documentation. The live M3 turn input has since been replaced by pending turns joined to the live run context
@@ -125,11 +124,10 @@ to the fake-secret tests or the CI documentation secret scan.
 
 ## Affected documents
 
-[ADR 0022](0022-programmatic-caller-policy-directions.md), [ADR 0025](0025-base-tool-contracts-and-tool-loop-bounds.md),
+[ADR 0025](0025-base-tool-contracts-and-tool-loop-bounds.md),
 [ADR 0034](0034-accepted-m5plus-retained-deferral-directions.md), and [ADR
 0035](0035-m5plus-complete-foundation-activation.md) are amended as recorded above. [Architecture
-27](../architecture/27-programmatic-caller-policy-and-admission.md) owns the programmatic-caller policy that loses the
-limit, corridor, and period clauses; [architecture 15](../architecture/15-tool-registry-and-model-tool-loop.md) owns
+15](../architecture/15-tool-registry-and-model-tool-loop.md) owns
 the tool-loop contracts that lose the numeric group and output bounds; [architecture
 24](../architecture/24-activity-ui-and-adapters.md) owns the activity surface whose numeric classification is
 superseded; [architecture 04](../architecture/04-sessions-runs-events-and-storage.md) owns the live M3 queue that stays

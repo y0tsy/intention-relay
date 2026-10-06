@@ -75,8 +75,8 @@ Public boundaries reject raw JSON/maps, unvalidated paths, provider/Python value
 and implementation errors.
 
 `ToolEffectProfile` describes direct declared effects: workspace read or write, process start, network retrieval, user
-interaction, session mutation, retained-content read, and future child controls. It is not authority, confirmation
-policy, sandbox, or a complete indirect-effect inventory. The initial mapping is:
+interaction, session mutation, retained-content read, and future child controls. It is not authority, sandbox, or a
+complete indirect-effect inventory. The initial mapping is:
 
 | `ToolId` | Direct effect flags |
 | --- | --- |
@@ -118,14 +118,14 @@ from identity.
   boundary and does not relax the separate provider-endpoint policy. Redirects remain retrievals under the same
   restrictions with a descriptor-fixed bounded limit. The typed result distinguishes final URL, status, safe content
   metadata, and bounded body; arbitrary response headers are not model-visible by default.
--  **`ask_user`** is a normal long-running `user_interaction` tool, not an `AwaitingConfirmation` policy outcome. After
+-  **`ask_user`** is a normal long-running `user_interaction` tool. After
   `ToolCallStarted` the post-M4 run stays `Running`; other independently admitted calls may complete concurrently, and
   the next model step waits for this question's terminal safe result with every other group result. It never moves the
   post-M4 run to `WaitingInput` and never rewrites M3/M4 `WaitingInput` snapshots, facts, or recovery.
 
 Trusted-local is explicit: daemon, agent, IPython kernel, child agents, and Rust tools run with the same OS permissions
 as the user who starts the daemon; there is no agent sandbox, container/VM isolation, privilege separation, or
-restricted Python sidecar. `WorkspaceRoot`, Plan/Build mode, confirmation, hooks, audit, redaction, and the capability
+restricted Python sidecar. `WorkspaceRoot`, Plan/Build mode, hooks, audit, redaction, and the capability
 plane are logical product policies, not security boundaries against a malicious or compromised program running as the
 user; an IPython kernel can bypass the facade via `pathlib`, `os`, and `subprocess`, which is accepted. Future work must
 not describe the facade, tool gateway, prompt policy, or audit trail as OS-level isolation.
@@ -143,7 +143,7 @@ selected it contains:
   revision, safe-result-projection revision, observation-contract revision, and stream shape.
 
 It excludes unexposed slots, credentials, raw schemas/JSON, executor handles, readiness, current registry state,
-provider-native IDs, confirmation, quotas, root-origin rules, and mutable policy state. Ordering is semantic and
+provider-native IDs, quotas, and mutable policy state. Ordering is semantic and
 preserved by the typed record; duplicate semantic keys are rejected. Admission, replay, retry, recovery, forks, audit,
 or a later package must not rebuild a missing selection from current registry/descriptors, configuration, model/provider
 names, driver availability, hooks, workspace, ancestry, MCP discovery, bridge/kernel state, logs, or UI state; unknown,
@@ -170,9 +170,9 @@ implementation/runtime resources are available.
 The only admission outcomes are `Admitted`, typed `Incompatible`, or typed `Unavailable`. `Incompatible` covers
 invalid input, selection/revision or capability mismatch, reserved/inactive descriptor, mode mismatch, malformed
 meaning, and intrinsic representation failure; `Unavailable` covers actual registry, implementation, workspace context,
-runtime, provider, storage, or capacity unavailability. Both are known pre-effect outcomes. No call may enter
-`AwaitingConfirmation`: a compatible selected active descriptor is not gated by confirmation, risk selector,
-root-origin, parent, Goal, Skill, provider, MCP, prompt, model, quota, or product ceiling. Hooks remain mandatory for
+runtime, provider, storage, or capacity unavailability. Both are known pre-effect outcomes. A compatible selected
+active descriptor is not gated by a risk selector, parent, Goal, Skill, provider, MCP, prompt, model, quota, or
+product ceiling. Hooks remain mandatory for
 typed normalization, observation, redaction, mode enforcement, and lifecycle preparation but cannot recreate a
 discretionary authorization layer.
 
@@ -192,7 +192,7 @@ own typed plan authorization.
 
 Build admits otherwise compatible selected descriptors; Plan keeps ordinary project `write`/`edit` incompatible while
 physical-plan mutation stays a plan-owner operation. `execute` is admissible when otherwise compatible but is not a
-sandbox; `ask_user` is normal `user_interaction` tooling, not confirmation transport, and the run remains `Running`
+sandbox; `ask_user` is normal `user_interaction` tooling, and the run remains `Running`
 after it starts.
 
 The project script library (`.ir/scripts`, [ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md))
@@ -303,7 +303,7 @@ never a partially understood snapshot or live stream. Historical M4 runs retain 
 roots and children. Progress is content, not schedule: only non-empty `TextDelta` and `ReasoningDelta` facts count;
 `Started`, usage, and other non-content facts do not, and a continuously producing stream has no fixed step duration.
 The policy is active only while a provider stream for a model step is open; it is paused while a tool or foreground
-kernel cell runs, confirmation or `ask_user` awaits, `AwaitResult` waits for a child, a retry delay runs, or the run is
+kernel cell runs, `ask_user` awaits, `AwaitResult` waits for a child, a retry delay runs, or the run is
 completing or cancelling.
 
 A provider stream that stops producing content fails with `model_stream_progress_timeout`. This document selects no
@@ -315,8 +315,7 @@ it adds. Before the first durable content or other irreversible fact, exactly on
 wins the race. A timeout otherwise produces a safe failed outcome, suppresses late fragments, and never claims success
 or resumes work after restart.
 
-The progress policy is a model-step policy owned by this document, referenced by the programmatic-caller policy under
-[architecture 27](27-programmatic-caller-policy-and-admission.md); it may not weaken it. A timeout outcome is a known
+The progress policy is a model-step policy owned by this document. A timeout outcome is a known
 typed failure before an external effect when no irreversible fact preceded it, and a bounded `Partial` result when a
 started effect lacks durable terminal proof; the next model step proceeds, and nothing pauses.
 

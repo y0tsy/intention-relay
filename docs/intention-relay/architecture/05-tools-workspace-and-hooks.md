@@ -202,7 +202,6 @@ The following must remain distinct:
 | Plan-mode mutation authorization | Plan policy hook. |
 | Compression and retrieval metadata | Headroom hook. |
 | Virtual source transformation | VFR hook. |
-| Confirmation/risk determination | Application/runtime policy service. |
 | Persistence transaction | Application/storage. |
 | UI rendering | Adapter. |
 

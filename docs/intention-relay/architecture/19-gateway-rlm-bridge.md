@@ -100,8 +100,8 @@ source path.
 Bridge ingress validates the grant/epoch, exact run/revision/model step, frozen bridge and descriptor selection,
 operation idempotency, typed input, intrinsic bounds, and live availability, then invokes architecture 15's generic
 admission contract. The only bridge admission outcomes are `Admitted`, typed `Incompatible`, typed `Unavailable`, an
-idempotent existing binding, or an operation conflict; `AwaitingConfirmation`, quota, root-origin,
-parent, Goal, Skill, provider, or bridge-specific authorization cannot be introduced. Equal operation identity and equal
+idempotent existing binding, or an operation conflict; quota, parent, Goal, Skill, provider, or bridge-specific
+authorization cannot be introduced. Equal operation identity and equal
 typed content return the committed binding or safe durable outcome without another `ToolCallId`, child, or effect;
 changed reuse fails before mutation or effect.
 
@@ -109,8 +109,8 @@ Reuse with a different authority context, `ToolId`, descriptor revision, or type
 `bridge_operation_conflict`; an equal command returns the saved binding, current admission state, stream attachment, or
 terminal safe result and never admits, starts, or executes a second action. `ToolCallId` remains the one canonical
 identity for `ToolCallRecorded`, `ToolCallStarted`, `ToolOutputDeltaRecorded`, and `ToolCallResultRecorded` facts.
-Before `ToolCallStarted`, a bound operation may report `Admitted` or `AwaitingConfirmation` (the bridge does not decide
-the producing policy); on daemon recovery an admitted operation that never reached start records
+Before `ToolCallStarted`, a bound operation may report `Admitted`; on daemon recovery an admitted operation that never
+reached start records
 `InterruptedBeforeStart`; once `ToolCallStarted`, a repeat is read-only and returns only durable evidence, never
 re-executing.
 

@@ -235,8 +235,8 @@ Every newly admitted run carries exactly one immutable effective instruction pro
 only: the daemon-packaged instruction profile adapted from the legacy static prompt set, user-editable fragments scoped
 to user, project, or session, the workspace `AGENTS.md` read through the `WorkspaceRoot` boundary, and the reserved
 `Mode` and `Vfr` contributions of architectures 07 and 06. Instruction text is bounded, credential-free, and advisory:
-it cannot create, widen, or remove a tool permission, provider selection, admission decision, grant, or confirmation
-requirement, and it cannot prove the absence of an external effect. Skill bodies, memory records, tool output,
+it cannot create, widen, or remove a tool permission, provider selection, admission decision, or grant,
+and it cannot prove the absence of an external effect. Skill bodies, memory records, tool output,
 repository content, and provider output never enter the instruction channel. The projection is frozen at admission,
 inherited verbatim by forks and handoffs, and never re-derived from current state. [Architecture
 30](30-instruction-sources-and-system-context.md) and [decision

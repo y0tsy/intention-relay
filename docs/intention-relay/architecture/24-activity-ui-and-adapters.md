@@ -45,7 +45,6 @@ The credential-free `AgentActivitySelectionV1` is a typed serde JSON selection r
 AgentActivitySelectionV1
   Root {
     activity_tree_id
-    root_origin
     activity_exchange_revision
     activity_journal_revision
     user_projection_revision
@@ -276,7 +275,7 @@ publication, archival reads, and slow-peer handling never start work.
 accepted cursor (no read, seen, dismissed, or accepted claim) and returns one redacted `AgentNotificationSummaryDto` per
 affected tree, ordered by first new cursor then `AgentActivityTreeId`, at most 32 trees and 64 KiB per page; missed
 notifications are never replayed as new alerts. Delivery, summary, replay, reconnect, archival read, and resync are
-read/presentation only and never start a model step, `ask_user`, confirmation, tool, MCP, child,
+read/presentation only and never start a model step, `ask_user`, tool, MCP, child,
 provider request, or external work. Urgent frames are prioritized over pending ordinary summaries in one bounded
 subscriber queue; an unaccepting peer receives a typed resync then detach and never blocks execution, persistence, or
 healthy subscribers.

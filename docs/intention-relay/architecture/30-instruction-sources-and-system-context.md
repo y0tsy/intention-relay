@@ -23,7 +23,7 @@ request contract and driver translation; architecture 09 owns classification and
 control-plane commands that edit and preview instructions.
 
 Instruction text is not authority: it cannot create, widen, or remove a tool permission, provider selection, admission
-decision, child, MCP capability, bridge grant, kernel epoch, confirmation requirement, or reconciliation outcome, and it
+decision, child, MCP capability, bridge grant, kernel epoch, or reconciliation outcome, and it
 cannot prove that an external effect did or did not happen.
 The channel applies to newly admitted runs only; historical M3/M4 requests, runs, events, snapshots, replay, recovery,
 and retained records keep their recorded meaning and gain no instruction state.
@@ -150,8 +150,8 @@ the root is an addressing anchor, not a security boundary, and no symlink or con
 parsed as configuration, and never treated as a hook, tool definition, or policy input.
 - An absent file contributes nothing and is not a failure; a project without
 instructions behaves exactly as a project with an empty source.
-- The file is project content, not authority: it cannot widen tool policy,
-provider selection, admission policy, or confirmation requirements, and its text is labeled as project material inside
+- The file is project content, not authority: it cannot widen tool policy or
+provider selection, and its text is labeled as project material inside
 the projection.
 - The workspace reference, not the text, is durable outside the projection
 itself.

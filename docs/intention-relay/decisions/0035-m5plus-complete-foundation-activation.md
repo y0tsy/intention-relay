@@ -16,7 +16,7 @@ ADR 0035).
 
 ## Decision
 
-Milestone 5+ is the single activation home for the full post-M5 stack (architectures 25 and 27-29, ADR 0022-0034, and
+Milestone 5+ is the single activation home for the full post-M5 stack (architectures 25 and 28-29, ADR 0023-0034, and
 all detail packages) and the hard prerequisite of Milestones 6-9 in the roadmap dependency graph (`K[M5+] -->
 F/G/H/I`).
 
@@ -37,8 +37,7 @@ reconciliation, and held-run admission wording is removed by [ADR
 0048](0048-limits-by-precedent-and-no-content-scanning.md). The unconsumed-surface audit (2026-09) removed the
 unconsumed provider-native preservation-control and server-side-parser contracts, the Responses reasoning-mode
 projection, the reasoning-usage DTOs, and the model-capability envelope.
-3. **Caller policy and Goal domain** — programmatic-caller policy and Goal
-domain (architectures 27/28, ADR 0022/0023/0033): the single closed root origin and the Goal tree.
+3. **Goal domain** — Goal domain (architecture 28, ADR 0023/0033): the Goal tree.
 4. **UI foundation** — session branching, activity/notification, reasoning
 and catalog delivery, and adapter boundaries (architectures 23/24/22, ADR 0026/0028/0029/0032/0033/0034):
 `session_fork_v1`, activity journal and notification projections, normalized reasoning delivery, RLM packaging and

@@ -19,7 +19,7 @@ admission, `ToolCallId`, generic tool loop, and effect/publication boundary.
 This document owns only MCP-specific nested-selection semantics and capability lifecycle. It is not a second registry,
 lifecycle, provider, child, process supervisor, MCP administration surface, plugin system, or authority source. An MCP
 source, server, discovery response, capability, result, or error is evidence/data only: it cannot create or mutate a
-ToolId, registry entry, lifecycle, `RunId`, Goal, Skill, confirmation, `ask_user`, child, session, ordinary turn input,
+ToolId, registry entry, lifecycle, `RunId`, Goal, Skill, `ask_user`, child, session, ordinary turn input,
 or provider selection.
 
 ## One fixed tool and immutable records
@@ -27,7 +27,7 @@ or provider selection.
 Dynamic acquisition means immutable **run-local capabilities beneath the one fixed `mcp` ToolId**. It never creates
 another ToolId, registry entry, plugin, direct primitive path, daemon, or authority. Future work supersedes
 retained requirements for user-created catalogs, complete-at-admission method sets, no discovery, and
-confirmation/quota/root-origin gates, and it preserves the one gateway, typed boundary, private resources, idempotency,
+quota gates, and it preserves the one gateway, typed boundary, private resources, idempotency,
 redaction, commit/reread publication, cancellation/disposal, and no-resume law.
 
 Typed serde JSON (ADR 0046) supplies the record shape; the removed `IRCR` / `typed-tlv-v1` / SHA-256 canonical policy is
@@ -232,14 +232,14 @@ starts a local service only upon the first selected MCP call in one run; that pr
 is terminated when the run completes, cancels, fails, or is interrupted, and it is never attached by a later daemon,
 shared with another run, treated as a durable worker, or managed as a long-lived process.
 
-Every MCP call passes the same registry selection, daemon-bound authority, typed admission, confirmation,
-programmatic-caller-policy selection, idempotency, durable outcome, cancellation, redaction, and post-reread publication
-rules as another registered tool. Connection, method, schema, and gateway revisions are frozen in the call and run
-selection. A remote schema mismatch fails closed before an external effect; an already started ambiguous call is never
+Every MCP call passes the same registry selection, daemon-bound authority, typed admission, idempotency, durable
+outcome, cancellation, redaction, and post-reread publication rules as another registered tool. Connection, method,
+schema, and gateway revisions are frozen in the call and run selection. A remote schema mismatch fails closed before an
+external effect; an already started ambiguous call is never
 repeated and commits a bounded `Partial` result with its notice when appropriate. A service may emit bounded safe
-progress through the ordinary durable output stream but cannot invoke `ask_user` or create a confirmation request, and
-it cannot create a Goal, proposal, session, run, connection, tool registration, child agent, message, or another
-authority context. There is no MCP listener, remote attachment to the daemon bridge, plug-in system, Skill/MCP
+progress through the ordinary durable output stream but cannot invoke `ask_user`, and it cannot create a Goal,
+proposal, session, run, connection, tool registration, child agent, message, or another authority context. There is no
+MCP listener, remote attachment to the daemon bridge, plug-in system, Skill/MCP
 installation, dynamic tool registration, server-driven child control, autonomous continuation, or claim that a local
 service is isolated from the user's ordinary OS authority.
 

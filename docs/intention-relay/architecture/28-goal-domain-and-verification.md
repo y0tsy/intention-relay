@@ -14,7 +14,6 @@ Architecture 14 owns run-execution meaning and historical
 compatibility; its canonical codec was removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md).
 Architecture 15 owns the registry and tool loop, architecture 18 MCP lifecycle, architecture 21 context selection and
 projection (Goal context selection, Skills, memory/compaction selection), and architecture 24 activity/UI projections.
-Architecture 27 owns programmatic-caller policy.
 
 This document owns the Goal aggregate domain and its verification semantics. A Goal, revision, link, gate, memory
 record, role, template, proposal, or summary creates no `RunId` except through the ordinary admission path, lifecycle
@@ -117,16 +116,15 @@ alter Goal, memory, Skill, role, template, or connection state.
 A run's immutable selections are typed serde JSON records rather than one canonical execution-meaning envelope; the
 former `run-execution-meaning-v4` carrier was removed with the canonical codec by [ADR
 0046](../decisions/0046-typed-serde-json-contracts.md). The applicable records are `GoalRunSelectionV1`,
-`McpMethodCatalogSelectionV1`, `ProgrammaticCallerPolicySelectionV1`, and `AgentActivitySelectionV1`; an absent record
-means the feature does not apply, and historical M4 records gain nothing.
+`McpMethodCatalogSelectionV1`, and `AgentActivitySelectionV1`; an absent record means the feature does not apply, and
+historical M4 records gain nothing.
 
 `GoalRunSelectionV1` contains the leading `GoalId`, exact revision, scope/session-link provenance, ordered parent
 revision chain, effective obligatory-component references, selected gate/template revisions and valid evidence
-references, selected memory/Skill/role cards and revisions, already-revealed full-record references, the selected
-effective programmatic-caller policy snapshot reference, an `AgentActivitySelectionV1` reference, run kind, the
-target-snapshot reference, and immutable bounds. It holds no full memory/Skill/role/summary, credential, provider value,
-current machine state, raw transcript, grant, process resource, or handle. Factory Skills use the exact
-`SkillSelectionV1` under the frozen snapshot.
+references, selected memory/Skill/role cards and revisions, already-revealed full-record references, an
+`AgentActivitySelectionV1` reference, run kind, the target-snapshot reference, and immutable bounds. It holds no full
+memory/Skill/role/summary, credential, provider value, current machine state, raw transcript, grant, process resource,
+or handle. Factory Skills use the exact `SkillSelectionV1` under the frozen snapshot.
 
 The admission transaction validates the Goal and session link, the complete target snapshot, all references and bounds,
 provider selection, registry revision, and applicable policy, then atomically writes the run, selection, audit evidence,
@@ -197,9 +195,7 @@ child/Skill/role/gate/MCP method, and grants no execution authority. A later equ
 one pending draft rather than producing an unbounded queue. The daemon records the proposal durably before asking the
 user; via the normal `ask_user` path the user may accept, edit-and-accept, or reject, and the draft remains pending
 until an explicit decision. Acceptance validates the exact base revision and creates a new immutable record revision; a
-stale base is a typed conflict, and rejection changes no active record. Programmatic-caller policy uses the same
-user-confirmed flow for its separate inactive policy drafts under [architecture
-27](27-programmatic-caller-policy-and-admission.md).
+stale base is a typed conflict, and rejection changes no active record.
 
 ## Conversation compaction and progressive context disclosure
 
@@ -222,17 +218,13 @@ VFR, and `retrieve` retain their own semantics and never turn source content int
 A new session fork receives a frozen copy of applicable project-Goal links, session memory/Skill/role/template cards,
 exact revisions, and the selected current summary reference in an independent fork snapshot. It does not receive a new
 session Goal, active Goal run, grant, kernel namespace, current ancestor record, local MCP process, external connection
-resource, or future source change; the user explicitly creates any new session Goal in the branch. Programmatic-caller
-policy uses a separate immutable session-policy inheritance record: a fork refers to the same source-session policies
-and the same durable counters rather than copying a fresh allowance, and a branch may add only a new policy that narrows
-the inherited effective policy.
+resource, or future source change; the user explicitly creates any new session Goal in the branch.
 
 An admitted child agent receives a frozen Goal context: parent task, leading-Goal identity and revision, effective
-required constraints, applicable cards, selected role when any, selected effective programmatic-caller-policy snapshot
-reference, selected `AgentActivitySelectionV1` reference, and only the required safe references; not a full parent
-transcript or live target context. Later parent/Goal/memory/Skill/role/policy/activity edits do not change the child
-snapshot, though live suspension or revocation can impose a stricter present-time denial. A child uses independently
-assigned session/run/class/tool/provider selections and its own interruption and no-resume rules. An interruption stops
+required constraints, applicable cards, selected role when any, selected `AgentActivitySelectionV1` reference, and only
+the required safe references; not a full parent transcript or live target context. Later
+parent/Goal/memory/Skill/role/activity edits do not change the child snapshot. A child uses independently assigned
+session/run/class/tool/provider selections and its own interruption and no-resume rules. An interruption stops
 only the in-flight call: it commits a bounded `Partial` result with its notice and the child continues with its next
 model step.
 On failure or daemon restart, no provider request, gate, tool, MCP request, process, kernel action, child, or external
@@ -305,7 +297,7 @@ directions affect fresh runs only.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 14, 15, 18, 21, 24, and 27 plus decisions 0007, 0010, 0013, 0022, and 0023.
+This document depends on architectures 14, 15, 18, 21, and 24 plus decisions 0007, 0010, 0013, and 0023.
 Non-goals: Goal persistence, search/index/vector retrieval, prompt assembly, SQL/wire tags,
 migrations, retention/deletion/encryption, source-page sizes, resource values, provider evolution, session branching,
 activity/UI, Plan artifacts, MCP administration, Python/Jupyter process behavior, Cargo, Makefile/CI, production

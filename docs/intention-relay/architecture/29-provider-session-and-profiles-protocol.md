@@ -18,7 +18,7 @@ Architecture 14 owns run-execution meaning and historical
 compatibility; its canonical codec was removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md).
 Architecture 15 owns the registry and tool loop, and architecture 23 session branching.
 Architecture 22 owns provider kinds, profiles, catalogs, selections, and driver compatibility;
-architecture 25 owns the configuration/provider control plane; architecture 27 owns programmatic-caller policy.
+architecture 25 owns the configuration/provider control plane.
 
 This document owns only the session-selection and presentation layer. A session default, override, usage aggregate, or
 protocol frame is not a second runtime, registry, persistence authority, catalog, or sandbox, and creates no `RunId`,
@@ -134,7 +134,7 @@ re-introduction requires a new activating specification.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 14, 15, 22, 23, 25, and 27 plus decisions 0014, 0015, 0020, 0022, and 0024.
+This document depends on architectures 14, 15, 22, 23, and 25 plus decisions 0014, 0015, 0020, and 0024.
 Non-goals: a `responses` SDK/driver, user-kind parser, catalog database, profile picker/editor
 presentation, credential entry/keychain, health test, discovery, pricing, telemetry, live reload, multimodal or
 structured output, plugin drivers, remote continuation, and production behavior. The catalog database, the single

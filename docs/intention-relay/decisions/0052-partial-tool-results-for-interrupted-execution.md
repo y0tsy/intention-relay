@@ -24,8 +24,6 @@ recovery transition to `Interrupted`, and every behavior of the ordinary runtime
 | [ADR 0017](0017-build-autopilot-and-plan-focus-continuity.md) invariant 13 | A started operation without terminal proof classified as the retired outcome, never automatically retried, resumed, or treated as rolled back | A started operation interrupted or lost before a final result commits a bounded partial result and permits the next model step; it is never automatically retried, resumed, or treated as rolled back |
 | [ADR 0017](0017-build-autopilot-and-plan-focus-continuity.md) 71-72 | The rule list that kept unknown-effect rules authoritative | The list drops the retired rule: one-active-run, append-only history, commit-before-effect, and no-resume rules remain authoritative |
 | [ADR 0018](0018-plan-build-autopilot-activation-scope.md) 20-21 | The activation-scope clause listing unknown-effect boundaries among the preserved boundaries | The list keeps one-active-run, no-resume, commit-before-effect, redaction, and DTO-only boundaries |
-| [ADR 0022](0022-programmatic-caller-policy-directions.md) 24-26 | The retired-outcome recovery bullet for admitted effects | `InterruptedBeforeStart`/`Partial` recovery: an admitted effect interrupted or lost before a final result commits a bounded partial result and permits the next model step |
-| [ADR 0022](0022-programmatic-caller-policy-directions.md) 51-52 | A started effect without durable terminal proof classified as the retired outcome and never retried | A started effect interrupted or lost before a final result commits a bounded `Partial` result with its notice and is never retried; nothing pauses |
 | [ADR 0023](0023-goal-domain-and-verification-directions.md) 17 | The direction list including reconciliation | The direction list drops reconciliation |
 | [ADR 0023](0023-goal-domain-and-verification-directions.md) 59-60 | A started verification or gate action without durable terminal proof classified as the retired outcome and never retried | A started verification or gate action interrupted or lost before a final result commits a bounded `Partial` result with its notice and is never retried; nothing pauses |
 | [ADR 0025](0025-base-tool-contracts-and-tool-loop-bounds.md) 29 | The retired-outcome member of the closed terminal outcome taxonomy | The bounded `Partial` member |
@@ -153,7 +151,6 @@ quarantine for an interrupted effect; no edit to closed milestone records, whose
 0012](0012-ipython-kernel-lifecycle.md) 27, [ADR
 0017](0017-build-autopilot-and-plan-focus-continuity.md) invariant 13 and 71-72, [ADR
 0018](0018-plan-build-autopilot-activation-scope.md) 20-21, [ADR
-0022](0022-programmatic-caller-policy-directions.md) 24-26 and 51-52, [ADR
 0023](0023-goal-domain-and-verification-directions.md) 17 and 59-60, [ADR
 0025](0025-base-tool-contracts-and-tool-loop-bounds.md) 29 and 51, and [ADR
 0027](0027-child-kernel-bridge-mcp-detail-directions.md) 63 carry the amended clauses. [Architecture
@@ -170,7 +167,6 @@ effect boundary. Secondary cleanup lands in architectures
 [22](../architecture/22-provider-evolution-profiles-and-reasoning.md),
 [23](../architecture/23-non-destructive-session-branching-and-regeneration.md),
 [24](../architecture/24-activity-ui-and-adapters.md),
-[27](../architecture/27-programmatic-caller-policy-and-admission.md), and
 [28](../architecture/28-goal-domain-and-verification.md).
 
 ## Evidence

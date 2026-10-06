@@ -24,7 +24,6 @@ linked architecture sections.
 | [0018](0018-plan-build-autopilot-activation-scope.md) | Accepted | Plan/Build Autopilot activation scope |
 | [0019](0019-production-model-tool-loop.md) | Accepted | Production model-tool loop |
 | [0020](0020-configuration-provider-control-plane-directions.md) | Accepted | Post-M5 configuration and provider control-plane directions |
-| [0022](0022-programmatic-caller-policy-directions.md) | Accepted | Post-M5 programmatic-caller policy directions |
 | [0023](0023-goal-domain-and-verification-directions.md) | Accepted | Post-M5 Goal domain and verification directions |
 | [0024](0024-provider-session-and-profiles-protocol-directions.md) | Accepted | Post-M5 provider session selection and profiles protocol directions |
 | [0025](0025-base-tool-contracts-and-tool-loop-bounds.md) | Accepted | Post-M5 base-tool contracts and tool-loop bounds |
