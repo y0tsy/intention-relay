@@ -11,16 +11,15 @@ Owner: architecture 27. Decisions: ADR 0022, ADR 0048. Research: `m4plus_concept
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle and fresh admission; architecture 15 the registry, frozen direct-tool selection,
-tool admission, and the model tool loop; architecture 17 child creation and verifier authority; architecture 18 MCP
-lifecycle; architecture 19 bridge grants and ingress; architecture 22 provider selection; architecture 24 activity/UI
-projections.
+Architecture 15 owns the registry, frozen direct-tool selection, tool admission, and the model tool loop;
+architecture 18 MCP lifecycle; architecture 19 bridge grants and ingress; architecture 22 provider selection;
+architecture 24 activity/UI projections.
 
 A root origin, provenance record, policy, revision, confirmation, counter, draft, or snapshot is not a second runtime,
-registry, scheduler, persistence authority, or sandbox, and creates no `RunId`, Mandate reason, lifecycle transition,
-scheduler candidate, tool permission, registry slot, child edge, verifier authority, MCP capability, bridge grant,
-kernel epoch, context projection, branch, or reconciliation result. A local protocol peer remains an adapter under the
-ordinary operating-system-user boundary, not an account or a caller-selected principal.
+registry, persistence authority, or sandbox, and creates no `RunId`, lifecycle transition, tool permission, registry
+slot, child, MCP capability, bridge grant, kernel epoch, context projection, branch, or reconciliation result. A local
+protocol peer remains an adapter under the ordinary operating-system-user boundary, not an account or a caller-selected
+principal.
 
 ## Root origin, calling path, and durable provenance
 
@@ -280,12 +279,11 @@ ProgrammaticCallerPolicySelectionV1
 The selection is `Disabled` only for historical M4 records; every new ordinary, goal-directed, verification, and child
 run carries this selection, including a selection that contains only the narrow interactive direct-local-read baseline.
 
-`GoalRunSelectionV1`, `SubAgentDelegationSnapshotDto`, `GoalDelegationSnapshotV1`, and `McpMethodCatalogSelectionV1`
-retain only safe typed references to it and to any later admission evidence. No historical M4 snapshot, event, `RunId`,
-replay, or `tool_execution_unavailable` result is rewritten or given a synthetic policy record. Live suspension,
-revocation, registry availability, and daemon readiness remain outside the immutable selection: they may impose a
-stricter present-time denial, but never rewrite historical semantics, reroute a call, substitute a current policy
-snapshot, or resume external work.
+`GoalRunSelectionV1` and `McpMethodCatalogSelectionV1` retain only safe typed references to it and to any later
+admission evidence. No historical M4 snapshot, event, `RunId`, replay, or `tool_execution_unavailable` result is
+rewritten or given a synthetic policy record. Live suspension, revocation, registry availability, and daemon readiness
+remain outside the immutable selection: they may impose a stricter present-time denial, but never rewrite historical
+semantics, reroute a call, substitute a current policy snapshot, or resume external work.
 
 At a minimum, the policy adds these closed safe failures through `ErrorDto`:
 
@@ -314,15 +312,13 @@ except that work that had already started retains its independently selected bou
 
 M3/M4 bytes, sessions, runs, events, snapshots, replay, recovery, and `ToolCallRecorded ->
 tool_execution_unavailable` remain authoritative and unchanged, and no historical record gains a synthetic policy state;
-the `Disabled` policy selection applies only to historical M4 records and is never rewritten. For new Mandate work,
-retained RLM run-rooted activity identity, root-origin, direct-pair queue, and fixed observation limits are
-historical-only where they conflict; the Mandate child-work graph and its immutable links own activity identity across
-fresh runs. All directions affect fresh runs only.
+the `Disabled` policy selection applies only to historical M4 records and is never rewritten. All directions affect
+fresh runs only.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 13, 15, 17, 18, 19, 22, and 24 plus decisions 0001, 0004, 0007, 0009, 0010,
-0011, 0014, and 0022. Non-goals: a durable autonomous actor, a second daemon, a second tool registry, a remote
+This document depends on architectures 15, 18, 19, 22, and 24 plus decisions 0004, 0007, 0010, 0011, 0014, and
+0022. Non-goals: a durable autonomous actor, a second daemon, a second tool registry, a remote
 identity, an OS security boundary, a typed command-template direction, a new policy decoder, and production activation.
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).

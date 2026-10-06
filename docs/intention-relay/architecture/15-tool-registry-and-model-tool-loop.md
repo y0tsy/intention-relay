@@ -1,15 +1,14 @@
-# Tool Registry and Direct Mandate Tool Loop
+# Tool Registry and Model-Tool Loop
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
 Owner: architecture 15. Decisions: ADR 0007, ADR 0025, ADR 0053. Research: m4plus_concept.md.
 
-This document owns the unified tool registry, immutable tool selection, direct Mandate tool admission, Mandate
+This document owns the unified tool registry, immutable tool selection, tool admission on the ordinary run path,
 `WorkspaceRoot` semantics, the model-tool-model loop, and the tool-effect recovery boundary. It applies to future
-`Mandate` execution and Build Autopilot; `VerifierMandate` does not inherit this policy until its target-scoped
-authority package defines that relationship. M3/M4 behavior is unchanged. Build Autopilot and Mandates admit tools
-directly without per-action confirmation; Plan denies ordinary `write`/`edit`, while Plan `execute` is advisory-guided
-and non-sandboxed.
+ordinary runs and Build Autopilot. M3/M4 behavior is unchanged. Ordinary runs and Build Autopilot admit compatible
+tools without per-action confirmation; Plan denies ordinary `write`/`edit`, while Plan `execute` is advisory-guided and
+non-sandboxed.
 
 ## Ownership and one capability path
 
@@ -97,11 +96,10 @@ read/write/start descendants/access network, and `network_retrieval` does not cl
 No flag requires confirmation. `WorkspaceRoot` is required for `read`, `write`, `edit`, `execute`, `glob`, `grep`, and
 `expand` (default relative-path base and initial `execute` CWD, not an access boundary; absolute and `..` paths are
 accepted with no path-based denial). `fetch_url`, `ask_user`, `todo`, `retrieve`, `plan_submit`, `sub_agent`, and `mcp`
-get no fictional workspace path; their owners may require typed URL, question, todo, retained-content, plan,
-child-agent, or MCP-method references instead. Plan denies ordinary `write`/`edit`; plan mutation remains plan-policy
-work.
+get no fictional workspace path; their owners may require typed URL, question, todo, retained-content, plan, child-agent,
+or MCP-method references instead. Plan denies ordinary `write`/`edit`; plan mutation remains plan-policy work.
 
-`ToolDescriptorRevisionId`, `ToolRegistryRevisionId`, and nested selection records are typed serde JSON values (ADR
+`ToolDescriptorRevisionId`, `ToolRegistryRevisionId`, and selection records are typed serde JSON values (ADR
 0046); the removed `IRCR` / `typed-tlv-v1` / SHA-256 canonical codec is not replaced by a competing codec. Semantic
 changes require a new record version; labels, executor handles, live readiness, and opaque owner resources are excluded
 from identity.
@@ -132,13 +130,13 @@ plane are logical product policies, not security boundaries against a malicious 
 user; an IPython kernel can bypass the facade via `pathlib`, `os`, and `subprocess`, which is accepted. Future work must
 not describe the facade, tool gateway, prompt policy, or audit trail as OS-level isolation.
 
-## Frozen direct tool selection
+## Frozen tool selection
 
-`MandateRunExecutionMeaningV1.direct_tool_selection` is a closed, credential-free `Disabled | Selected` nested
-selection. When selected it contains:
+A run's frozen tool selection is a closed, credential-free `Disabled | Selected` typed serde JSON record. When
+selected it contains:
 
 - the exact `ToolRegistryRevisionId`;
-- a direct-admission-engine revision limited to common typed mechanics;
+- a tool-admission-engine revision limited to common typed mechanics;
 - the hook-pipeline revision; and
 -  an ordered list of only the active descriptors actually supplied to the model, each binding `ToolId`, intended owner,
   descriptor revision, input/result schema references, required-capability binding, mode relation, model-function-schema
@@ -155,30 +153,30 @@ available.
 ## Validation ownership and limit classification
 
 Validation is layered: transport owns wire shape and protocol-version equality; this package owns fixed slots,
-descriptor revisions, selection ordering, and direct admission; typed serde JSON owns record shape (ADR 0046);
+descriptor revisions, selection ordering, and tool admission; typed serde JSON owns record shape (ADR 0046);
 runtime/application owns live readiness and mode preconditions; primitive owners validate typed inputs/outputs; storage
 owns persistence constraints. No layer may bypass or replace another. Every numeric value is classified before
 activation as an intrinsic representation/protocol bound, typed capacity availability, or a liveness safeguard with
-recorded rationale (ADR 0048); future Mandate product ceilings, retry budgets, and successful-result truncation to fit a
+recorded rationale (ADR 0048); future product ceilings, retry budgets, and successful-result truncation to fit a
 ceiling are not permitted.
 
-## Mandate direct admission and WorkspaceRoot
+## Tool admission and WorkspaceRoot
 
-Direct admission is legal only when the run's frozen selection includes the exact active descriptor,
+Tool admission is legal only when the run's frozen selection includes the exact active descriptor,
 descriptor/owner/revisions agree, typed input is valid, immutable model-capability and mode relations are satisfied,
 required hooks and workspace context are valid, idempotency and intrinsic bounds pass, and required live
 implementation/runtime resources are available.
 
-The only Mandate admission outcomes are `Admitted`, typed `Incompatible`, or typed `Unavailable`. `Incompatible` covers
+The only admission outcomes are `Admitted`, typed `Incompatible`, or typed `Unavailable`. `Incompatible` covers
 invalid input, selection/revision or capability mismatch, reserved/inactive descriptor, mode mismatch, malformed
 meaning, and intrinsic representation failure; `Unavailable` covers actual registry, implementation, workspace context,
-runtime, provider, storage, or capacity unavailability. Both are known pre-effect outcomes. No Mandate call may enter
+runtime, provider, storage, or capacity unavailability. Both are known pre-effect outcomes. No call may enter
 `AwaitingConfirmation`: a compatible selected active descriptor is not gated by confirmation, risk selector,
 root-origin, parent, Goal, Skill, provider, MCP, prompt, model, quota, or product ceiling. Hooks remain mandatory for
 typed normalization, observation, redaction, mode enforcement, and lifecycle preparation but cannot recreate a
-discretionary Mandate authorization layer.
+discretionary authorization layer.
 
-The workspace rule is the same for every execution kind:
+The workspace rule is the same for every run:
 
 | Item | `WorkspaceRoot` meaning |
 | --- | --- |
@@ -187,22 +185,22 @@ The workspace rule is the same for every execution kind:
 | glob/grep | Default scope root when no path is supplied. |
 | Containment | None. The anchor does not contain: no symlink parser, containment check, or path-based denial remains, and a path inside the root may resolve outside it through a symbolic link. The typed input still rejects absolute and parent (`..`) paths — `WorkspaceRelativePathDto` for tool paths and the search-pattern validator for `glob`/`grep` patterns — as an input-shape rule, not a boundary; `WorkspaceRoot` is not a security boundary (ADR 0047). |
 
-For path-bearing Mandate calls, typed safe observation may record path form, base reference, effective path/CWD subject
-to redaction, and observation completeness: audit evidence, not authorization, neither tracking descendants nor forming
-a boundary. Non-path tools receive no fictional workspace path; plan artifacts stay outside `WorkspaceRoot` under their
+For path-bearing calls, typed safe observation may record path form, base reference, effective path/CWD subject to
+redaction, and observation completeness: audit evidence, not authorization, neither tracking descendants nor forming a
+boundary. Non-path tools receive no fictional workspace path; plan artifacts stay outside `WorkspaceRoot` under their
 own typed plan authorization.
 
 Build admits otherwise compatible selected descriptors; Plan keeps ordinary project `write`/`edit` incompatible while
-physical-plan mutation stays a plan-owner operation. `execute` is directly admissible when otherwise compatible but is
-not a sandbox; `ask_user` is normal `user_interaction` tooling, not confirmation transport, and the Mandate run remains
-`Running` after it starts.
+physical-plan mutation stays a plan-owner operation. `execute` is admissible when otherwise compatible but is not a
+sandbox; `ask_user` is normal `user_interaction` tooling, not confirmation transport, and the run remains `Running`
+after it starts.
 
 The project script library (`.ir/scripts`, [ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md))
-follows these same Mandate semantics: its logical relative path is a default base for existing frozen descriptors and
-never an access boundary, `write`/`edit` create or change a module while `execute` or a kernel foreground cell runs it,
-and no new `ToolId`, registry slot, listener, or primitive path is admitted. Per-cell script-import evidence for
-imported library modules publishes as run facts through this document's post-commit publication gate under architecture
-20's cell rules.
+follows these same tool-admission semantics: its logical relative path is a default base for existing frozen
+descriptors and never an access boundary, `write`/`edit` create or change a module while `execute` or a kernel
+foreground cell runs it, and no new `ToolId`, registry slot, listener, or primitive path is admitted. Per-cell
+script-import evidence for imported library modules publishes as run facts through this document's post-commit
+publication gate under architecture 20's cell rules.
 
 ## Model-to-tool-to-model lifecycle
 
@@ -247,7 +245,7 @@ identifiers, and provider-owned tool execution are excluded, and a driver that c
 exchange cannot claim `model_tool_loop_v1` support.
 
 Representation limits for group validity and output framing are intrinsic bounds or typed capacity outcomes, never
-Mandate product ceilings. Malformed or unrepresentable groups fail before effects; output is never partially committed,
+product ceilings. Malformed or unrepresentable groups fail before effects; output is never partially committed,
 and a call whose output reaches its tool's output window commits the explicitly marked result without changing other
 calls' order or meaning.
 
@@ -333,9 +331,9 @@ retry may not repeat a tool action or occur after durable group, admission, star
 Cancellation stops further admission, suppresses late facts, and prevents a next model step.
 
 Recovery completes before readiness, classifies unfinished calls from durable evidence, and never attaches, rediscovers,
-retries, resumes, or reruns a tool, process, filesystem, network, or other external action. For Mandate work, a partial
-result links the exact call evidence and pauses no Mandate: the next model step proceeds with the bounded captured
-output and its notice, and the old call is never replayed.
+retries, resumes, or reruns a tool, process, filesystem, network, or other external action. A partial result links the
+exact call evidence and pauses nothing: the next model step proceeds with the bounded captured output and its notice,
+and the old call is never replayed.
 
 ## Compatibility and protocol boundary
 
@@ -348,32 +346,29 @@ tags, pages, and storage schema remain deferred.
 M3 session replay and M4 run streaming remain unchanged. An M4 `ToolCallRecorded` remains durable tool-call evidence;
 the M4-era no-tool-port `tool_execution_unavailable` denial is superseded by ADR 0038 binding decision 2, so the
 model-tool-loop executor requires a tool executor and provider tool calls execute through the durable tool path.
-Historical records gain no synthetic registry, descriptor, tool-loop, Mandate, verifier, child, MCP, Skill, policy, or
-execution-kind state.
+Historical records gain no synthetic registry, descriptor, tool-loop, child, MCP, Skill, policy, or execution-kind
+state.
 
 ## Dependencies and non-goals
 
-This document depends on Mandate lifecycle, external-attempt evidence, and the one-capability-path decisions. Scheduler
-work may consume only typed live readiness of a frozen selection and cannot select, bypass, or retry tools; scheduler
-semantics are owned by architecture 16. Architecture 17 owns child creation/control/result semantics and verifier
-authority; this document retains only the `sub_agent` slot, descriptor, admission, and generic tool-effect boundary.
-Architecture 18 owns the `mcp` descriptor's source/discovery/capability/invocation semantics; this document retains
-fixed-slot, descriptor, direct-admission, and generic loop ownership. Architecture 19 owns Gateway/RLM attachment,
-grants, bridge operation correlation, and bridge-visible delivery; its ingress must use this document's frozen
-descriptor selection, admission, `ToolCallId`, start/result facts, and post-commit reread publication without bypass or
-duplication, and tool admission never grants target-mutation authority. Architecture 20 kernel host requests consume the
-same frozen descriptor selection, direct admission, `ToolCallId`, facts, and publication path; kernel execution is not a
-new ToolId, registry, or primitive bypass.
+This document depends on the one-capability-path decisions. It retains the `sub_agent` slot, descriptor, admission,
+and generic tool-effect boundary. Architecture 18 owns the `mcp` descriptor's source/discovery/capability/invocation
+semantics; this document retains fixed-slot, descriptor, admission, and generic loop ownership. Architecture 19 owns
+Gateway/RLM attachment, grants, bridge operation correlation, and bridge-visible delivery; its ingress must use this
+document's frozen descriptor selection, admission, `ToolCallId`, start/result facts, and post-commit reread publication
+without bypass or duplication, and tool admission never grants target-mutation authority. Architecture 20 kernel host
+requests consume the same frozen descriptor selection, admission, `ToolCallId`, facts, and publication path; kernel
+execution is not a new ToolId, registry, or primitive bypass.
 
 Architectures 21-24 own Goal/Skill/context, provider, fork, and activity semantics; none may add a descriptor, ToolId,
-direct admission exception, `WorkspaceRoot` authority, `ToolCallId`, or retry path, and context projections may inform a
+admission exception, `WorkspaceRoot` authority, `ToolCallId`, or retry path, and context projections may inform a
 model step only through immutable selected safe representations. A provider may normalize a tool call only when the
 immutable capability selection declares `model_tool_loop_v1`, and it cannot assign local IDs, use provider-built-in
 tools, create a registry, or bypass the frozen local exchange. Architecture 23 may preserve terminal tool provenance
 only as non-authorizing frozen fork evidence and cannot rebuild a tool selection from current registry state;
 architecture 24 may project safe tool provenance but cannot create ToolIds, descriptors, ToolCallIds, admission,
-effects, retries, or current-registry repair. No bridge/IPython/kernel, Skills/Goals/context, scheduler topology,
-provider evolution, UI, schema, migrations, crates, Cargo, Makefile/CI, or production implementation is defined here.
+effects, retries, or current-registry repair. No bridge/IPython/kernel, Skills/Goals/context, provider evolution, UI,
+schema, migrations, crates, Cargo, Makefile/CI, or production implementation is defined here.
 
 ## Required evidence before implementation
 

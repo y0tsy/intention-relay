@@ -129,7 +129,7 @@ state beyond tool-level path policy. Plan therefore has a product focus, not a s
 
 Mode does not currently filter the tool definitions advertised in model requests: both Plan and Build requests advertise
 all six active registered tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`). Mode-based advertisement filtering
-is future Mandate work and is not part of the ordinary request path (ADR 0039); runtime tool policy, including Plan-mode
+is not part of the ordinary request path (ADR 0039); runtime tool policy, including Plan-mode
 `write` and `edit` denial, remains enforced at execution and is unchanged.
 
 ### Plan focus instruction
@@ -197,15 +197,6 @@ Plan policy and artifact crates are subject to the coverage tier declared when t
 denial, Plan `execute` audit, revision integrity, and same-Session Autopilot continuation are blocking `make verify`
 inputs. Coverage cannot replace captured model-context assertions or policy-denial tests. See [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md).
-
-## Mandate boundary
-
-The accepted Autopilot direction supersedes the future ordinary Build policy: Build Autopilot does not use per-action
-confirmation. Plan-mode project `write` and `edit` remain incompatible, while `execute` remains advisory-guided
-trusted-local execution. A future Mandate's direct tool admission likewise excludes confirmation and risk authorization,
-subject to its own frozen selection and lifecycle rules. `ask_user` is a future ordinary tool rather than confirmation
-transport. Existing M3/M4 ordinary confirmation behavior remains historical. See [Tool registry and direct Mandate tool
-loop](15-tool-registry-and-mandate-tool-loop.md).
 
 ## Dependencies and non-goals
 

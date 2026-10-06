@@ -14,14 +14,13 @@ Owner: architecture 25. Decisions: ADR 0020, ADR 0033, ADR 0043. Research: `m4pl
 Architecture 09 owns TOML parsing, schema validation, configuration discovery, redaction, and startup-only application.
 Architecture 22 owns future provider kinds, profiles, catalogs, selections, and driver compatibility. Architecture 14
 owns run-execution meaning and historical compatibility; its canonical codec was removed by [ADR
-0046](../decisions/0046-typed-serde-json-contracts.md). Architecture 13 owns Mandate lifecycle and fresh admission,
-architecture 15 the tool loop, architecture 24 activity/UI projections and adapter behavior.
+0046](../decisions/0046-typed-serde-json-contracts.md). Architecture 15 owns the tool loop, architecture 24 activity/UI
+projections and adapter behavior.
 
-This document owns only the accepted future directions below: no second runtime, registry, scheduler, persistence
-authority, or sandbox, and no Mandate reason, `RunId`, lifecycle transition, scheduler candidate, tool permission, child
-edge, verifier authority, MCP capability, bridge grant, kernel epoch, context projection, branch, or reconciliation
-result from a reload, rotation, health observation, discovery result, price, or control-plane action. All directions
-apply to future fresh runs only.
+This document owns only the accepted future directions below: no second runtime, registry, persistence authority, or
+sandbox, and no `RunId`, lifecycle transition, tool permission, child, MCP capability, bridge grant, kernel epoch,
+context projection, branch, or reconciliation result from a reload, rotation, health observation, discovery result,
+price, or control-plane action. All directions apply to future fresh runs only.
 
 ## Controlled configuration live reload
 
@@ -76,7 +75,7 @@ A provider health-check service produces typed operational readiness evidence:
 or a fallback selector, and health checks never perform provider/model selection, routing, pricing, discovery, or
 credential testing beyond the declared contract;
 - unavailability retains the exact reason and creates no `RunId`, retry
-counter, or quota; restoration only permits architecture-16 reevaluation;
+counter, or quota;
 - the health-evidence DTO carries the provider identity (`provider_id`) and
 reports no profile revision while the catalog is not wired into the health path: `provider_profile_revision_id` stays
 absent, and no synthesized `health-profile-<hex>` identity is fabricated.
@@ -94,10 +93,9 @@ immutable selection.
 
 ## Pricing and budget policy
 
-Pricing and budget policy is product/budget policy, never a Mandate admission ceiling, quota, or entitlement:
+Pricing and budget policy is product/budget policy, never an admission ceiling, quota, or entitlement:
 
-- it cannot gate direct Mandate admission, tool admission, scheduler
-eligibility, or capacity outcomes;
+- it cannot gate tool admission or capacity outcomes;
 - numeric values are classified Intrinsic/Capacity/Product; pricing is never an
 admission ceiling.
 
@@ -149,7 +147,7 @@ reverted and re-introduction requires a new activating specification.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 09, 14, 16, 22, and 24 plus decisions 0014 and 0020. Non-goals: a reload
+This document depends on architectures 09, 14, 22, and 24 plus decisions 0014 and 0020. Non-goals: a reload
 watcher/transport, keychain or secret store, standalone health-service or discovery topology, pricing engine, profile
 picker/editor implementation, OS notifications, remote transport, multi-user access, sandbox/container isolation, and
 production activation beyond the accepted directions. The daemon-facade serving surface for reload, rotation, health,

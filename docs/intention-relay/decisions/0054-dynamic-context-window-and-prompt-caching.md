@@ -104,7 +104,7 @@ two keys resolves their defaults exactly like a document that names them.
 ## Security and failure behavior
 
 - The window is a representation bound for the provider request, not authority: it cannot select a provider, widen a
-  tool policy, change a Mandate, or prove an external effect.
+  tool policy, or prove an external effect.
 - A cache breakpoint is fixed marker text with no content and no credential; it is a provider request hint and never
   enters a snapshot, event, log, or adapter projection.
 - Configuration validation fails closed with a typed error; no invalid window is silently clamped to a default.
@@ -132,7 +132,7 @@ context manifest and projection semantics that the window reads through. [Archit
 leading system block whose end carries the instruction-block breakpoint. [ADR
 0043](0043-instruction-sources-and-system-context.md) and [ADR
 0013](0013-goals-skills-context-memory-and-compaction.md) carry the amended clauses. Secondary cleanup: [architecture
-15](../architecture/15-tool-registry-and-mandate-tool-loop.md) drops the stale 4 MiB group bound that [ADR
+15](../architecture/15-tool-registry-and-model-tool-loop.md) drops the stale 4 MiB group bound that [ADR
 0048](0048-limits-by-precedent-and-no-content-scanning.md) already superseded.
 
 ## Evidence

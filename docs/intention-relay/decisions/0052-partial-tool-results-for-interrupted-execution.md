@@ -17,26 +17,20 @@ recovery transition to `Interrupted`, and every behavior of the ordinary runtime
 
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |
-| [ADR 0001](0001-mandate-authority-and-fresh-run-lifecycle.md) 11 | The daemon operational-facts clause that included required uncertainty pausing | The clause lists trigger capture, admission, and known terminal disposition only |
-| [ADR 0002](0002-external-attempt-evidence-and-unknown-effect-reconciliation.md) | Whole record | The decision below: an interrupted or lost started effect commits a bounded `Partial` result; no Mandate pause, no blocking, no reconciliation |
-| [ADR 0006](0006-mandate-lifecycle-and-admission-boundary.md) 11 and 16 | The ownership clause that included uncertainty pausing and the clause that paused the Mandate on an unknown terminal effect | Architecture 13 owns conflict precedence and recovery, not uncertainty; a started effect without terminal proof commits a bounded partial result and pauses no Mandate |
-| [ADR 0007](0007-unified-tool-registry-and-direct-mandate-tool-admission.md) 27-28 | The invariant that paused the owning Mandate for an unknown started effect and required exact reconciliation | A started effect without terminal proof commits a bounded partial result and pauses no Mandate; later work is fresh admission |
-| [ADR 0009](0009-mandate-child-graph-and-delegated-verifier-authority.md) 14-15 and 25 | The conflict list containing reconciliation and the invariant that kept child/verifier unknown effects local | User lifecycle, revision, revocation, and authority changes win conflicts; child and verifier partial results remain local to their owning Mandate |
-| [ADR 0010](0010-mandate-mcp-capability-lifecycle.md) 29-30 | The invariant that paused the owning Mandate for started ambiguous work | Started ambiguous work commits a bounded partial result and pauses no Mandate |
-| [ADR 0011](0011-mandate-gateway-rlm-bridge.md) 22 | The invariant assigning Mandate uncertainty and reconciliation to architecture 13 | Architecture 13 owns Mandate lifecycle and fresh admission |
-| [ADR 0012](0012-ipython-kernel-lifecycle.md) 27 | The invariant that paused the owning Mandate for unproven started work | Unproven started work commits a bounded partial result and pauses no Mandate |
+| [ADR 0002](0002-external-attempt-evidence-and-unknown-effect-reconciliation.md) | Whole record | The decision below: an interrupted or lost started effect commits a bounded `Partial` result; no pause, no blocking, no reconciliation |
+| [ADR 0007](0007-unified-tool-registry.md) 27-28 | The invariant that required a pause and exact reconciliation for an unknown started effect | A started effect without terminal proof commits a bounded partial result |
+| [ADR 0010](0010-mcp-capability-lifecycle.md) 29-30 | The invariant that required a pause for started ambiguous work | Started ambiguous work commits a bounded partial result |
+| [ADR 0012](0012-ipython-kernel-lifecycle.md) 27 | The invariant that required a pause for unproven started work | Unproven started work commits a bounded partial result |
 | [ADR 0017](0017-build-autopilot-and-plan-focus-continuity.md) invariant 13 | A started operation without terminal proof classified as the retired outcome, never automatically retried, resumed, or treated as rolled back | A started operation interrupted or lost before a final result commits a bounded partial result and permits the next model step; it is never automatically retried, resumed, or treated as rolled back |
 | [ADR 0017](0017-build-autopilot-and-plan-focus-continuity.md) 71-72 | The rule list that kept unknown-effect rules authoritative | The list drops the retired rule: one-active-run, append-only history, commit-before-effect, and no-resume rules remain authoritative |
 | [ADR 0018](0018-plan-build-autopilot-activation-scope.md) 20-21 | The activation-scope clause listing unknown-effect boundaries among the preserved boundaries | The list keeps one-active-run, no-resume, commit-before-effect, redaction, and DTO-only boundaries |
 | [ADR 0022](0022-programmatic-caller-policy-directions.md) 24-26 | The retired-outcome recovery bullet for admitted effects | `InterruptedBeforeStart`/`Partial` recovery: an admitted effect interrupted or lost before a final result commits a bounded partial result and permits the next model step |
 | [ADR 0022](0022-programmatic-caller-policy-directions.md) 51-52 | A started effect without durable terminal proof classified as the retired outcome and never retried | A started effect interrupted or lost before a final result commits a bounded `Partial` result with its notice and is never retried; nothing pauses |
-| [ADR 0023](0023-goal-domain-and-verification-directions.md) 17 | The direction list including reconciliation | The delegated Verification Mandate list keeps authority, target sets, and operation matrix |
-| [ADR 0023](0023-goal-domain-and-verification-directions.md) invariant 6 (47-49) | Invariant 6 requiring `ResolveUnknownEffect` outcomes | An interrupted verifier execution yields a bounded `Partial` result and never mutates the target |
-| [ADR 0023](0023-goal-domain-and-verification-directions.md) 59-60 | A started verifier or gate action without durable terminal proof classified as the retired outcome and never retried | A started verifier or gate action interrupted or lost before a final result commits a bounded `Partial` result with its notice and is never retried; nothing pauses |
+| [ADR 0023](0023-goal-domain-and-verification-directions.md) 17 | The direction list including reconciliation | The direction list drops reconciliation |
+| [ADR 0023](0023-goal-domain-and-verification-directions.md) 59-60 | A started verification or gate action without durable terminal proof classified as the retired outcome and never retried | A started verification or gate action interrupted or lost before a final result commits a bounded `Partial` result with its notice and is never retried; nothing pauses |
 | [ADR 0025](0025-base-tool-contracts-and-tool-loop-bounds.md) 29 | The retired-outcome member of the closed terminal outcome taxonomy | The bounded `Partial` member |
 | [ADR 0025](0025-base-tool-contracts-and-tool-loop-bounds.md) 51 | A retired-outcome result never permitting another model step | A `Partial` result permits the next model step: the captured output is delivered with a notice, nothing is paused, and the interrupted call is never retried |
 | [ADR 0027](0027-child-kernel-bridge-mcp-detail-directions.md) 63 | A started unproven effect classified as the retired outcome and never retried, reattached, or rerun | A started unproven effect yields a bounded `Partial` result with its notice and is never retried, reattached, or rerun; the next model step proceeds |
-| [ADR 0031](0031-autonomous-continuation-direction.md) 17 and 45 | The decision and failure-semantics clauses denying conversion of a known failure into an unknown effect | Both clauses keep only the absence of a hidden retry count or automatic escalation threshold |
 
 The named clause of each record is amended in place; every other clause of those records stays as written. ADR 0002 is
 superseded as a whole and its text stays as written.
@@ -56,8 +50,8 @@ transition set is closed: none to `Admitted`; `Admitted` to `Cancelled`, `Starte
 
 `ToolResultOutcomeDto::Partial { content }` records one execution that was interrupted before a final result. `Partial`
 requires non-blank content, exactly like `Succeeded`. An interrupted execution commits a `Partial` lifecycle fact and a
-`Partial` result whose content is the output captured before the interruption. `Partial` never terminalizes the run and
-never pauses a Mandate: the next model step proceeds, and the interrupted call is never retried.
+`Partial` result whose content is the output captured before the interruption. `Partial` never terminalizes the run:
+the next model step proceeds, and the interrupted call is never retried.
 
 The bounded captured output uses the existing per-tool output windows with their explicit truncation marker and is
 normalized and redacted by the same path as a completed result, so a partial document is bounded exactly like a
@@ -87,7 +81,7 @@ is `Started` with no terminal record, the next run's model context carries one r
 
 `[The tool call "<tool_id>" did not receive a final result.]`
 
-Recovery writes no new durable record for the call and reports it only through that notice. There is no Mandate pause,
+Recovery writes no new durable record for the call and reports it only through that notice. There is no pause state,
 no uncertainty quarantine, and no reconciliation authority for an interrupted effect.
 
 ## Rationale
@@ -111,7 +105,7 @@ and no further result is recorded for it.
 2. A `Partial` result always carries non-blank content: the bounded captured output, the notice, or the output followed
 by the notice.
 3. `Partial` never pauses, blocks, or terminalizes anything above the call. The run reaches its next model step when no
-cancellation is in force, and no Mandate lifecycle transition results from an interrupted effect.
+cancellation is in force, and no lifecycle transition results from an interrupted effect.
 4. An interrupted call is never automatically retried, resumed, reattached, or treated as rolled back.
 5. Captured output is bounded by the existing per-tool window and truncation marker; no new bound, quota, or budget is
 introduced.
@@ -154,31 +148,24 @@ quarantine for an interrupted effect; no edit to closed milestone records, whose
 
 [Decisions index](README.md) marks ADR 0002 superseded and lists this record; [ADR
 0002](0002-external-attempt-evidence-and-unknown-effect-reconciliation.md) keeps its text and is superseded. [ADR
-0001](0001-mandate-authority-and-fresh-run-lifecycle.md) 11, [ADR
-0006](0006-mandate-lifecycle-and-admission-boundary.md) 11 and 16, [ADR
-0007](0007-unified-tool-registry-and-direct-mandate-tool-admission.md) 27-28, [ADR
-0009](0009-mandate-child-graph-and-delegated-verifier-authority.md) 14-15 and 25, [ADR
-0010](0010-mandate-mcp-capability-lifecycle.md) 29-30, [ADR 0011](0011-mandate-gateway-rlm-bridge.md) 22, [ADR
+0007](0007-unified-tool-registry.md) 27-28, [ADR
+0010](0010-mcp-capability-lifecycle.md) 29-30, [ADR
 0012](0012-ipython-kernel-lifecycle.md) 27, [ADR
 0017](0017-build-autopilot-and-plan-focus-continuity.md) invariant 13 and 71-72, [ADR
 0018](0018-plan-build-autopilot-activation-scope.md) 20-21, [ADR
 0022](0022-programmatic-caller-policy-directions.md) 24-26 and 51-52, [ADR
-0023](0023-goal-domain-and-verification-directions.md) 17, invariant 6, and 59-60, [ADR
-0025](0025-base-tool-contracts-and-tool-loop-bounds.md) 29 and 51, [ADR
-0027](0027-child-kernel-bridge-mcp-detail-directions.md) 63, and [ADR
-0031](0031-autonomous-continuation-direction.md) 17 and 45 carry the amended clauses. [Architecture
+0023](0023-goal-domain-and-verification-directions.md) 17 and 59-60, [ADR
+0025](0025-base-tool-contracts-and-tool-loop-bounds.md) 29 and 51, and [ADR
+0027](0027-child-kernel-bridge-mcp-detail-directions.md) 63 carry the amended clauses. [Architecture
 README](../architecture/README.md) defines **Partial**; [architecture
 00](../architecture/00-principles-and-scope.md) states the no-pause rule; [architecture
-13](../architecture/13-mandate-domain-and-durable-lifecycle.md) owns the attempt-evidence, transition, and recovery
-wording; [architecture 15](../architecture/15-tool-registry-and-mandate-tool-loop.md) owns the terminal taxonomy and the
+15](../architecture/15-tool-registry-and-model-tool-loop.md) owns the terminal taxonomy and the
 effect boundary. Secondary cleanup lands in architectures
 [02](../architecture/02-dto-and-contract-policy.md), [04](../architecture/04-sessions-runs-events-and-storage.md),
 [10](../architecture/10-test-driven-delivery-and-verification.md),
 [11](../architecture/11-implementation-roadmap.md),
-[16](../architecture/16-mandate-scheduler-and-readiness-driven-admission.md),
-[17](../architecture/17-mandate-child-graph-and-delegated-verifier-authority.md),
-[18](../architecture/18-mandate-mcp-capability-lifecycle.md),
-[19](../architecture/19-mandate-gateway-rlm-bridge.md), [20](../architecture/20-ipython-kernel-lifecycle.md),
+[18](../architecture/18-mcp-capability-lifecycle.md),
+[19](../architecture/19-gateway-rlm-bridge.md), [20](../architecture/20-ipython-kernel-lifecycle.md),
 [21](../architecture/21-goals-skills-context-memory-and-compaction.md),
 [22](../architecture/22-provider-evolution-profiles-and-reasoning.md),
 [23](../architecture/23-non-destructive-session-branching-and-regeneration.md),
@@ -196,12 +183,8 @@ the gate suite passing. Gates: `make quick`, `make verify`, `docs-check`, `make 
 retired name survives as historical prose in the root `architecture-fitness-audit.md`; that record is exempt because
 editing a historical audit to hide a name it reported would destroy the record.
 
-The Mandate uncertainty machinery was removed together with the retired outcome: [architecture
-13](../architecture/13-mandate-domain-and-durable-lifecycle.md) no longer carries the `PausedAwaitingDecision` state or
-its reconciliation transaction in its ownership table, transition set, state diagram, state list, or transaction table;
-[architecture 17](../architecture/17-mandate-child-graph-and-delegated-verifier-authority.md) no longer lists
-`ResolveUnknownEffect` as a delegated operation; [architecture
-28](../architecture/28-goal-domain-and-verification.md) no longer lists it as a target operation or audit-contract
-standard, and no `VerificationUnknownEffectReconciled` activity record remains. No current document declares a pause, a
-pause state, or a reconciliation command for an interrupted effect. Outside this record, only the frozen text of
-superseded ADR 0002 and closed milestone evidence keep the retired state and member names.
+The uncertainty and reconciliation machinery was removed together with the retired outcome: [architecture
+28](../architecture/28-goal-domain-and-verification.md) no longer lists `ResolveUnknownEffect` as a target operation or
+audit-contract standard, and no `VerificationUnknownEffectReconciled` activity record remains. No current document
+declares a pause, a pause state, or a reconciliation command for an interrupted effect. Outside this record, only the
+frozen text of superseded ADR 0002 and closed milestone evidence keep the retired state and member names.

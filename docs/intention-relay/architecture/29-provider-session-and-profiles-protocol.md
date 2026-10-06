@@ -14,16 +14,16 @@ Owner: architecture 29. Decisions: ADR 0024, ADR 0045, ADR 0048. Research: `m4pl
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle and fresh admission. Architecture 14 owns run-execution meaning and historical
+Architecture 14 owns run-execution meaning and historical
 compatibility; its canonical codec was removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md).
-Architecture 15 owns the registry and tool loop, architecture 16 scheduler readiness reevaluation, and architecture 23
-session branching. Architecture 22 owns provider kinds, profiles, catalogs, selections, and driver compatibility;
+Architecture 15 owns the registry and tool loop, and architecture 23 session branching.
+Architecture 22 owns provider kinds, profiles, catalogs, selections, and driver compatibility;
 architecture 25 owns the configuration/provider control plane; architecture 27 owns programmatic-caller policy.
 
 This document owns only the session-selection and presentation layer. A session default, override, usage aggregate, or
-protocol frame is not a second runtime, registry, scheduler, persistence authority, catalog, or sandbox, and creates no
-`RunId`, Mandate reason, lifecycle transition, scheduler candidate, tool permission, registry slot, child edge, verifier
-authority, MCP capability, bridge grant, kernel epoch, context projection, branch, or reconciliation result.
+protocol frame is not a second runtime, registry, persistence authority, catalog, or sandbox, and creates no `RunId`,
+lifecycle transition, tool permission, registry slot, child, MCP capability, bridge grant, kernel epoch, context
+projection, branch, or reconciliation result.
 
 ## Session selection, runs, and usage
 
@@ -134,8 +134,8 @@ re-introduction requires a new activating specification.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 13, 14, 15, 16, 22, 23, 25, and 27 plus decisions 0001, 0008, 0014, 0015, 0020,
-0022, and 0024. Non-goals: a `responses` SDK/driver, user-kind parser, catalog database, profile picker/editor
+This document depends on architectures 14, 15, 22, 23, 25, and 27 plus decisions 0014, 0015, 0020, 0022, and 0024.
+Non-goals: a `responses` SDK/driver, user-kind parser, catalog database, profile picker/editor
 presentation, credential entry/keychain, health test, discovery, pricing, telemetry, live reload, multimodal or
 structured output, plugin drivers, remote continuation, and production behavior. The catalog database, the single
 current storage schema (logical version 1), credential rotation, health checks, discovery, pricing, controlled live

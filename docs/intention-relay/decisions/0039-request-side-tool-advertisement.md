@@ -41,7 +41,7 @@ tool-role result messages already flow through the runtime loop activated by [AD
 
 The M5+ Slice 3 reservations remain untouched and reserved: `tool-descriptor-revision` (`0x0301`),
 `tool-registry-revision` (`0x0302`), and `model-tool-loop-v1` (`0x0303`) stay `ReservedForSlice3`. No frozen
-descriptor/registry revision, canonical digest, execution meaning, or Mandate tool selection is introduced, and no wire,
+descriptor/registry revision, canonical digest, execution meaning, or tool selection is introduced, and no wire,
 protocol, or storage change is made.
 
 ## Invariants
@@ -82,7 +82,7 @@ persistence, or recovery, and provider adapters never invoke local tools.
 
 ## Non-goals
 
-No Mandate or frozen tool selection, descriptor/registry revision, or canonical digest; no mode-based or risk-based tool
+No frozen tool selection, descriptor/registry revision, or canonical digest; no mode-based or risk-based tool
 filtering and no executor-side allowlist; no `tool_choice`, forced or ranked tool selection; no parallel tool execution;
 no strict JSON schemas or provider-specific dialects beyond the validated JSON-object parameter text; no OpenAI
 Responses driver, remote continuation, or MCP/kernel tool advertisement.

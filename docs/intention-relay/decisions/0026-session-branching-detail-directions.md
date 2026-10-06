@@ -44,9 +44,8 @@ failed, cancelled, interrupted, incomplete, waiting, and unfinished work are ine
 and idempotency result or none; no external work occurs inside it.
 4. `ForkOperationId` is a domain idempotency identity; changed reuse fails
 `fork_operation_conflict`.
-5. Session lineage is ordinary-session structure only and never constrains
-Mandate admission, scheduler behavior, or Mandate-child creation; a fork carries no depth, descendant-count,
-source-boundary rate, or base-snapshot size limit.
+5. Session lineage is ordinary-session structure only; a fork carries no
+depth, descendant-count, source-boundary rate, or base-snapshot size limit.
 6. Inherited usage is never charged twice; tree aggregates deduplicate by
 original `RunId`.
 7. M3/M4 historical sessions remain linear ordinary records until an additive
@@ -72,9 +71,8 @@ documenting any part of it as implemented.
 This decision supersedes the absence of the detail in architecture 23's principle-level text. The closed M4 baseline,
 M3/M4 bytes, and existing behavior remain unchanged, and no code changes are authorized by this decision.
 
-Mandate association, activity/UI implementation, workspace cloning/rebinding, autonomous model or IPython forking,
-provider implementation, destructive deletion/GC/export, and production activation remain outside this decision. M5-M9
-are not renumbered.
+Activity/UI implementation, workspace cloning/rebinding, autonomous model or IPython forking, provider implementation,
+destructive deletion/GC/export, and production activation remain outside this decision. M5-M9 are not renumbered.
 
 Owner: architecture 23. Evidence: activating specification per [architecture
 12](../architecture/12-quality-gates-and-makefile.md).

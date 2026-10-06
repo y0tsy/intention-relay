@@ -39,10 +39,9 @@ unbounded parsing.
 
 **Session branching and regeneration (owner: architecture 23):**
 7. **Tool-result execution** — a future fork/regeneration mode that may
-execute a frozen terminal tool result as a separately admitted ordinary action, never silent re-execution and never
-Mandate authority.
+execute a frozen terminal tool result as a separately admitted ordinary action, never silent re-execution.
 8. **Child-agent execution** — a future fork/regeneration mode that may start
-a child-agent execution from frozen fork references, never Mandate child edges and never verifier authority.
+a child-agent execution from frozen fork references.
 
 **Activity and MCP boundaries (owners: architectures 23/24/28/18):**
 9. **Export** — a bounded, credential-free export surface for fork lineage,
@@ -54,9 +53,8 @@ state or authority.
 for durable work, continuation, or requeue after client disconnection, never silent automatic resumption of old external
 work.
 12. **Delivery of all RLM capabilities in one package** — the packaging
-direction that a later M5+ activating specification may consolidate all RLM capabilities (child graph, sub-agent
-classes, direct-pair messaging, activity identity) into one implementation package, preserving the existing
-documentation package boundaries.
+direction that a later M5+ activating specification may consolidate the RLM capabilities (direct-pair messaging and
+activity identity) into one implementation package, preserving the existing documentation package boundaries.
 
 Each direction keeps M3/M4 behavior authoritative, affects fresh runs only after its own activating specification, and
 remains bound to Milestone 5+.
@@ -64,8 +62,8 @@ remains bound to Milestone 5+.
 ## Normative invariants
 
 1. Every direction is non-authorizing until its activating specification: it
-creates no `RunId`, reason, lifecycle transition, scheduler candidate, tool permission, child edge, verifier authority,
-MCP capability, bridge grant, kernel epoch, context projection, branch, or reconciliation result.
+creates no `RunId`, tool permission, MCP capability, bridge grant, kernel epoch, context projection, branch, or
+reconciliation result.
 2. M3/M4 startup-only configuration, recorded revisions, persisted snapshots,
 sessions, runs, events, and bytes remain authoritative and unchanged.
 3. Fresh-run-only: each direction affects only future runs after activation.
@@ -74,7 +72,7 @@ variant, or reconstructs missing meaning from current state.
 5. Raw-TOML editing, configuration editing, and arbitrary headers never expose
 credentials, private endpoint material, SDK objects, or raw provider payloads on durable or public surfaces.
 6. Tool-result and child-agent execution in forks are separately admitted
-ordinary actions and never Mandate child edges, verifier authority, or silent re-execution.
+ordinary actions and never silent re-execution.
 7. Post-disconnect work is separately admitted and never resumes, retries,
 reattaches, or reruns old external work.
 8. Export and cross-workspace clone/rebind are bounded, credential-free, and
@@ -99,8 +97,8 @@ execution in Milestone 5+ rather than permanent exclusion, without documenting a
 
 ## Compatibility and non-goals
 
-This decision supersedes the "excluded"/"deferred" wording for the twelve items in the non-goals of ADR
-0020/0028/0031 and architectures 22/23/25/28/29/18. The closed M4 baseline, M3/M4 bytes, and existing behavior
+This decision supersedes the "excluded"/"deferred" wording for the twelve items in the non-goals of ADR 0020/0028 and
+architectures 22/23/25/28/29/18. The closed M4 baseline, M3/M4 bytes, and existing behavior
 remain unchanged, and no code changes are authorized by this decision. The directions remain non-authorizing until their
 M5+ activating specifications; M5-M9 are not renumbered.
 

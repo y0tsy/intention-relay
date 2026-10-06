@@ -9,7 +9,7 @@ gate are removed. The qualitative contracts and the terminal taxonomy stand.
 ## Decision
 
 The following detail from `m4plus_concept.md` is adopted and owned by [architecture
-15](../architecture/15-tool-registry-and-mandate-tool-loop.md):
+15](../architecture/15-tool-registry-and-model-tool-loop.md):
 
 - the initial effect-profile flag mapping for the base tools;
 - the base-tool initial contracts: `execute` `ShellCommandTextDto`,
@@ -72,7 +72,7 @@ without documenting any part of it as implemented.
 This decision supersedes the absence of the detail in architecture 15's principle-level text. The closed M4 baseline,
 M3/M4 bytes, and existing behavior remain unchanged, and no code changes are authorized by this decision.
 
-Parallel tool execution, tool-failure-to-model continuation, and Mandate/architecture-15 loop activation remain outside
+Parallel tool execution, tool-failure-to-model continuation, and architecture-15 loop activation remain outside
 this decision, as do MCP, kernel, VFR, Headroom, and Plan features. M5-M9 are not renumbered.
 
 Owner: architecture 15. Evidence: activating specification per [architecture

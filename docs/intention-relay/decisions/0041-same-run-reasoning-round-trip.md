@@ -93,7 +93,7 @@ to the provider crate.
 because it consumes and preserves reasoning output; unsupported multimodal and vendor-extension requests still fail
 closed at preflight.
 7. No slice advance. No frozen descriptor/registry revision, digest, execution
-meaning, or Mandate tool-loop contract is introduced, and the M5+ Slice 3 reservations remain reserved.
+meaning, or tool-loop contract is introduced, and the M5+ Slice 3 reservations remain reserved.
 
 ## Compatibility
 

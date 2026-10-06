@@ -63,7 +63,7 @@ rather than a digest.
 ### Consequences
 
 9. The removed files carried the 256 and 512 character caps, the quantity and
-aggregate limits, the digest-format checks, and the frozen activity, run, and child limit records. Those validators are
+aggregate limits, the digest-format checks, and the frozen activity and run limit records. Those validators are
 deleted rather than relocated; the surviving limits are only the liveness safeguards recorded by [ADR
 0048](0048-limits-by-precedent-and-no-content-scanning.md).
 10. Coverage denominators shrink by more than eight thousand lines; coverage

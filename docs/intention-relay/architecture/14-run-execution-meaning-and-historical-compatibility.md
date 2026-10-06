@@ -81,13 +81,11 @@ remains kind descriptor maximum intersect explicitly declared model subset inter
 order, capability, or credential-transport changes require a new major. [Architecture
 22](22-provider-evolution-profiles-and-reasoning.md) owns `responses`, parse-time `openai` aliasing, profiles/catalogs,
 and reasoning semantics.
--  Future Mandate-side nested selections are typed JSON fields owned by their domain documents: tool selection by
-[architecture 15](15-tool-registry-and-mandate-tool-loop.md), MCP by [architecture
-18](18-mandate-mcp-capability-lifecycle.md), bridge by [architecture 19](19-mandate-gateway-rlm-bridge.md), kernel by
+-  Future nested selections are typed JSON fields owned by their domain documents: tool selection by [architecture
+15](15-tool-registry-and-model-tool-loop.md), MCP by [architecture
+18](18-mcp-capability-lifecycle.md), bridge by [architecture 19](19-gateway-rlm-bridge.md), kernel by
 [architecture 20](20-ipython-kernel-lifecycle.md), and Goal/Skill/context by [architecture
-21](21-goals-skills-context-memory-and-compaction.md); child and verifier payload semantics are owned by [architecture
-17](17-mandate-child-graph-and-delegated-verifier-authority.md). None of them revives a canonical envelope, digest, or
-decoder.
+21](21-goals-skills-context-memory-and-compaction.md). None of them revives a canonical envelope, digest, or decoder.
 -  `WorkspaceRoot` is an addressing anchor: the default base for relative paths, the initial CWD for `execute`, and the
 default scope root for glob/grep. It is not a security boundary, and no lexical symlink parser or containment check
 gates it (ADR 0047).
@@ -112,11 +110,9 @@ The removed machinery was owned as follows; the live owners now implement typed 
 
 ## Dependencies and non-goals
 
-This document defines no live encoding, SQL/wire implementation, provider runtime activation, scheduler topology, child
-graph, verifier workflow, MCP, Skills/Goals, bridge/kernel, forks, UI, crates, Cargo, feature/coverage policy,
-Makefile/CI, or M4 behavior. The Mandate aggregate owns its immutable meaning reference; the admitted run owns execution
-evidence that references it; Mandate sequence, Session sequence, and Run cursor remain separate, as owned by
-[architecture 13](13-mandate-domain-and-durable-lifecycle.md) and [architecture
+This document defines no live encoding, SQL/wire implementation, provider runtime activation, MCP, Skills/Goals,
+bridge/kernel, forks, UI, crates, Cargo, feature/coverage policy, Makefile/CI, or M4 behavior. The admitted run owns
+its execution evidence; Session sequence and Run cursor remain separate, as owned by [architecture
 04](04-sessions-runs-events-and-storage.md).
 
 ## Required evidence before implementation

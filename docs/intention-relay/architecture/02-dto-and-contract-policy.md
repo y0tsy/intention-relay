@@ -34,7 +34,7 @@ A DTO is a stable contract, not merely any serializable struct.
 
 UUID is an encoding/value representation, not authority. Every public UUID value uses a domain newtype whose owner
 defines generation, scope, validation, serialization, and idempotency behavior. UUID equality never establishes semantic
-identity across Session, Run, Mandate, activity, lineage, graph, operation, or diagnostic domains.
+identity across Session, Run, activity, lineage, graph, operation, or diagnostic domains.
 
 Deterministic UUIDv5 is permitted only where the owner freezes its namespace and name derivation. Daemon-assigned/random
 UUIDs and deterministic UUIDv5 values are not interchangeable. Historical UUID bytes and meanings remain unchanged and
@@ -243,7 +243,7 @@ and Makefile](12-quality-gates-and-makefile.md) for the blocking orchestration c
 ## Post-M4 execution and compatibility boundary
 
 Future M4+ packages use closed, typed serde JSON families rather than widening historical records by implication. If a
-future execution-kind record is needed, it is a typed serde JSON contract declared by its own activating specification;
+future record kind is needed, it is a typed serde JSON contract declared by its own activating specification;
 kind/version/payload mismatch blocks dependent external work, and live availability never silently mutates a persisted
 meaning. The superseded execution-meaning envelope, canonical tag registry, and digest/identity codec — including
 `RunExecutionMeaningEnvelopeDto` — are deleted (ADR 0046): no canonical encoding or decoder retention schedule remains.
@@ -256,17 +256,11 @@ and optional implementation handoff. Approval binds an exact plan revision; same
 must not carry credentials, raw transcripts, provider continuation state, live handles, processes, grants, or unfinished
 effects.
 
-Future Mandate work requires typed IDs and values for Mandate identity/revision, trigger reason, disposition, execution
-meaning, verified checkpoint reference, external-attempt phase/evidence, capacity outcome, and explicit verifier
-authority where applicable. These are future contract families, not current M4 storage or wire fields. [Mandate domain
-and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md) owns the Mandate lifecycle families and their
-validation and revision/sequence rules.
-
 The future tool-loop families include `ToolRegistryEntryDto`, `ToolDescriptorRevisionId`, `ToolRegistryRevisionId`,
-`DirectToolSelectionV1`, `ModelStepId`, `ToolGroupId`, model-step/group facts, typed direct-admission outcomes, safe
-workspace-path observations, output fragments, terminal results, and `ModelToolExchangeDto`. They cannot widen
+`ModelStepId`, `ToolGroupId`, model-step/group facts, safe workspace-path observations, output fragments, terminal
+results, and `ModelToolExchangeDto`. They cannot widen
 historical M4 tool facts, expose provider-native IDs, raw paths, secrets, or SDK resources, or recreate stored selection
-from a current registry. [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md) owns
+from a current registry. [Tool registry and model-tool loop](15-tool-registry-and-model-tool-loop.md) owns
 their semantics.
 
 The future instruction-source families include `InstructionSourceV1`, `InstructionProfileRevisionV1`, and
@@ -285,26 +279,12 @@ is not executable.
 - **Audit compatibility:** an unknown/corrupt future audit record may isolate
 that audit result without inventing replacement state.
 
-Historical M3/M4 and ordinary records must not receive synthetic Mandate, verifier, Skill, MCP, child, activity, policy,
-profile, or execution-kind fields. The single live storage schema may evolve in place to add tables, bridges, or
-projections but may not rewrite old payload bytes, IDs, cursors, snapshots, or event envelopes. Unknown or corrupt
-future meaning blocks dependent work before an effect and must not fall back to current TOML, registry, model name,
-provider, or live resource state. [Run execution meaning and historical
-compatibility](14-run-execution-meaning-and-historical-compatibility.md) owns the remaining historical compatibility
-rules.
-
-Future scheduler families include typed readiness observations, candidate views, capacity-unavailable outcomes, and
-scheduler admission requests. They are closed, credential/resource-free DTOs: no SDK health values, handles, task
-identities, opaque timer objects, raw paths, or current-state-derived execution meaning may cross a boundary. Unknown
-scheduler/readiness variants block dependent admission and cannot synthesize ordinary turn input or Mandate state. [Mandate
-scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md) owns the detailed
-semantics.
-
-Future child/verifier families include typed child-edge, `ParentMandateId`, delegation snapshot, direct-edge
-control/message, terminal-summary, verifier authority/revision, immutable target-set, audit baseline/evidence/verdict,
-and target-mutation values. They are credential-free, closed, versioned families that neither widen
-historical records nor grant authority by relationship, prompt, evidence, or current state. Architecture 17 owns their
-semantics.
+Historical M3/M4 and ordinary records must not receive synthetic Skill, MCP, activity, policy, or profile fields. The
+single live storage schema may evolve in place to add tables, bridges, or projections but may not rewrite old payload
+bytes, IDs, cursors, snapshots, or event envelopes. Unknown or corrupt future meaning blocks dependent work before an
+effect and must not fall back to current TOML, registry, model name, provider, or live resource state. [Run execution
+meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md) owns the remaining
+historical compatibility rules.
 
 Future MCP families include typed capability source, discovery, server observation, normalized capability revision,
 accumulated run-local selection, model-step selection binding, invocation selection, safe capability/result projection,

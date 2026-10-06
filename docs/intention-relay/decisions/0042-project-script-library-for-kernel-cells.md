@@ -68,7 +68,7 @@ checkpoint promotion, or restart.
 ## Invariants
 
 1. No authority. A library path, an import, or a persisted module grants no
-lifecycle, scheduling, tool, child, verifier, MCP, bridge, reconciliation, or confirmation authority, and it never
+lifecycle, tool, MCP, bridge, reconciliation, or confirmation authority, and it never
 substitutes for a frozen registry selection.
 2. No executable payload in checkpoint payload, namespace snapshot, or any
 public or durable surface. The library is file material, not state carried inside a checkpoint.
@@ -119,8 +119,8 @@ bypasses the tool gateway; no implementation authorization.
 [Architecture 20](../architecture/20-ipython-kernel-lifecycle.md) owns the kernel-side selection reference, import
 surface, script-import evidence, checkpoint exclusion rule, and closed failure; [architecture
 05](../architecture/05-tools-workspace-and-hooks.md) owns the project-local path convention and the ordinary tool rules
-that create, read, and run the modules; [architecture 15](../architecture/15-tool-registry-and-mandate-tool-loop.md)
-owns Mandate-scoped `WorkspaceRoot` semantics, the frozen-descriptor rule, and the publication gate that carries the
+that create, read, and run the modules; [architecture 15](../architecture/15-tool-registry-and-model-tool-loop.md)
+owns `WorkspaceRoot` semantics, the frozen-descriptor rule, and the publication gate that carries the
 import evidence; [architecture 21](../architecture/21-goals-skills-context-memory-and-compaction.md) records that the
 library is not a Skill body, supplement, or package reference; and [architecture
 09](../architecture/09-configuration-security-and-observability.md) redaction and classification rules apply unchanged.

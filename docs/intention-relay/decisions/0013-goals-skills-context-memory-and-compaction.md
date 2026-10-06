@@ -21,7 +21,7 @@ immutable safe summary over exact completed durable history and retains its sour
 ## Invariants
 
 - Goals, Skills, context, memory, cards, disclosures, and summaries cannot
-create or widen Mandate, scheduler, tool, child, verifier, MCP, bridge, kernel, provider, or reconciliation authority;
+create or widen tool, MCP, bridge, kernel, provider, or reconciliation authority;
 - a current file, catalog, index, memory, Skill, Goal, configuration, UI, or
 runtime state cannot reconstruct a missing admitted selection or model-step projection;
 - safe cards and projections are never broader than source content or its
@@ -41,4 +41,4 @@ Owner: architecture 21. Evidence: activating specification per [architecture
 12](../architecture/12-quality-gates-and-makefile.md).
 
 Provenance: `m4plus_concept.md`, selected Goal, Skill, memory, and compaction material, reconciled against architectures
-13--20.
+14, 15, and 18--20.

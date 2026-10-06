@@ -6,8 +6,8 @@ Owner: architecture 24. Decisions: ADR 0016, ADR 0029, ADR 0032, ADR 0033, ADR 0
 Research: `m4plus_concept.md`.
 
 This document owns future activity trees, direct-pair communication, activity and notification journals, acknowledgement
-projections, safe UI projections, and adapter delivery. It applies to future ordinary, Mandate, and VerifierMandate
-projections; compatibility-only M3/M4 activity projections, where supported, are read-only views computed without
+projections, safe UI projections, and adapter delivery. It applies to future ordinary projections;
+compatibility-only M3/M4 activity projections, where supported, are read-only views computed without
 synthetic activity identity, journal, message, notification, or acknowledgement state, and M3/M4 records gain no such
 state. Numeric values retained in research are not implementation limits for this package: under [ADR
 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md) a numeric bound exists only with a recorded
@@ -21,17 +21,15 @@ The daemon owns activity identity assignment, journal persistence, notification 
 recovery, and publication. `intention-client` remains the only adapter ingress. Tauri, TUI, and REPL own presentation,
 typed user input, local display state, and reconnect UX only.
 
-Architecture 13 owns lifecycle and admission; 14 owns run-execution meaning and historical compatibility (its canonical
-codec was removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md)); 15 owns tool effects; 16 owns
-scheduling; 17 owns child edges and verifier authority; 18--20 own MCP, bridge, and kernel; 21 owns context; 22 owns
-provider/reasoning; 23 owns Session fork lineage. Activity, notifications, acknowledgements, adapters, and UI never
-grant or infer any of those authorities.
+Architecture 14 owns run-execution meaning and historical compatibility (its canonical codec was removed by [ADR
+0046](../decisions/0046-typed-serde-json-contracts.md)); 15 owns tool effects; 18--20 own MCP, bridge, and kernel;
+21 owns context; 22 owns provider/reasoning; 23 owns Session fork lineage. Activity, notifications, acknowledgements,
+adapters, and UI never grant or infer any of those authorities.
 
 ## Activity identity and direct pairs
 
-New work uses a daemon-assigned `AgentActivityTreeId`. New Mandate work retains Mandate-scoped activity identity across
-fresh runs; a `RunId` is provenance, not activity authority. `AgentActivityTreeId` is distinct from
-`ConversationTreeId`, Mandate graph identity, the session event sequence, the run container journal
+New work uses a daemon-assigned `AgentActivityTreeId`; a `RunId` is provenance, not activity authority.
+`AgentActivityTreeId` is distinct from `ConversationTreeId`, the session event sequence, the run container journal
 (`RunEventCursorDto`), the conversation-tree container journal, and the notification observation cursor.
 
 Every new root run receives its `AgentActivityTreeId` in the same durable admission transaction as its immutable run
@@ -77,7 +75,6 @@ rejects before publication.
 
 ```mermaid
 flowchart LR
-  M[Mandate graph] --> A[Activity tree]
   S[Session fork] --> C[Conversation tree]
   A --> J[Activity journal]
   J --> N[Notification journal]
@@ -192,10 +189,9 @@ projections only.
 No numeric activity bound is activated here ([ADR
 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md)); the research values formerly listed in this
 section are removed by [ADR 0053](../decisions/0053-sub-agent-and-fork-limits-by-precedent.md) because none had a
-recorded precedent, and the child clarification deadline remains architecture 17's deadline, a sublimit of the child
-lifetime. A rejection is checked before a partial durable record exists; it never truncates, evicts, synthesizes,
-or starts external work. Archive is accepted only after the root and every descendant are terminal; it is read-only,
-retains everything, and physical deletion, compaction, export, and garbage collection remain out of scope.
+recorded precedent. A rejection is checked before a partial durable record exists; it never truncates, evicts,
+synthesizes, or starts external work. Archive is accepted only after the root and every descendant are terminal; it is
+read-only, retains everything, and physical deletion, compaction, export, and garbage collection remain out of scope.
 
 ## Child operations, delivery, and model exchanges
 
@@ -340,8 +336,8 @@ Existing M3 session replay, M4 run streaming, cursors, facts, retries, provider 
 `tool_execution_unavailable` remain unchanged. Activity is not a filtered Session/Run stream and conversation lineage
 does not imply activity authority.
 
-This document depends on architectures 03, 10, 12, and 13--23 plus decisions 0001--0015. It does not define production
-storage/wire tags, crate activation, OS notifications, remote transport, accounts, physical deletion, export,
+This document depends on architectures 03, 10, 12, 14, 15, and 18--23 plus decisions 0002--0015. It does not define
+production storage/wire tags, crate activation, OS notifications, remote transport, accounts, physical deletion, export,
 compaction, retention clocks, provider UI/control planes, or final visual design.
 
 ## Required evidence before implementation

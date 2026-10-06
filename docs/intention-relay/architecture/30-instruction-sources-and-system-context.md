@@ -23,8 +23,8 @@ request contract and driver translation; architecture 09 owns classification and
 control-plane commands that edit and preview instructions.
 
 Instruction text is not authority: it cannot create, widen, or remove a tool permission, provider selection, admission
-decision, Mandate, child edge, verifier target, MCP capability, bridge grant, kernel epoch, scheduler reason,
-confirmation requirement, or reconciliation outcome, and it cannot prove that an external effect did or did not happen.
+decision, child, MCP capability, bridge grant, kernel epoch, confirmation requirement, or reconciliation outcome, and it
+cannot prove that an external effect did or did not happen.
 The channel applies to newly admitted runs only; historical M3/M4 requests, runs, events, snapshots, replay, recovery,
 and retained records keep their recorded meaning and gain no instruction state.
 

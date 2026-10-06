@@ -1,47 +1,44 @@
-# Mandate MCP Capability Lifecycle
+# MCP Capability Lifecycle
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
 Owner: architecture 18. Decisions: ADR 0010, ADR 0027, ADR 0033. Research: m4plus_concept.md.
 
-This document owns future Mandate MCP source proposals, discovery, normalized capabilities, run-local capability
-selections, invocation, safe projections, disposal, recovery, and compatibility. It applies only to future Mandate
+This document owns future MCP source proposals, discovery, normalized capabilities, run-local capability
+selections, invocation, safe projections, disposal, recovery, and compatibility. It applies only to future run
 execution through the fixed `mcp` `ToolId`. M3/M4 bytes, IDs, UUIDs, provider behavior, replay, recovery,
 snapshots, and M4 `ToolCallRecorded -> tool_execution_unavailable` retain their recorded ordinary semantics, and
-retained bounded user connection/catalog research remains historical provenance, not future Mandate capability state.
+retained bounded user connection/catalog research remains historical provenance, not future MCP capability state.
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle, fresh admission, and user-conflict precedence.
 Architecture 14 is the historical record of the removed execution-meaning envelope, canonical framing, decoders, and
 compatibility classes (ADR 0046). Architecture 15 owns the fixed `mcp` slot, composition-only activation, direct
-admission, `ToolCallId`, generic tool loop, and effect/publication boundary. Architecture 16 owns readiness-driven fresh
-admission. Architecture 17 owns child/verifier relations and authority.
+admission, `ToolCallId`, generic tool loop, and effect/publication boundary.
 
 This document owns only MCP-specific nested-selection semantics and capability lifecycle. It is not a second registry,
-scheduler, lifecycle, provider, child/verifier, process supervisor, MCP administration surface, plugin system, or
-authority source. An MCP source, server, discovery response, capability, result, or error is evidence/data only: it
-cannot create or mutate a ToolId, registry entry, Mandate, lifecycle, trigger reason, RunId, scheduler candidate, Goal,
-Skill, confirmation, `ask_user`, child, graph message, verifier authority, target mutation, session, ordinary turn
-input, provider selection, or execution kind.
+lifecycle, provider, child, process supervisor, MCP administration surface, plugin system, or authority source. An MCP
+source, server, discovery response, capability, result, or error is evidence/data only: it cannot create or mutate a
+ToolId, registry entry, lifecycle, `RunId`, Goal, Skill, confirmation, `ask_user`, child, session, ordinary turn input,
+or provider selection.
 
 ## One fixed tool and immutable records
 
 Dynamic acquisition means immutable **run-local capabilities beneath the one fixed `mcp` ToolId**. It never creates
-another ToolId, registry entry, plugin, direct primitive path, daemon, or authority. Future Mandate work supersedes
+another ToolId, registry entry, plugin, direct primitive path, daemon, or authority. Future work supersedes
 retained requirements for user-created catalogs, complete-at-admission method sets, no discovery, and
 confirmation/quota/root-origin gates, and it preserves the one gateway, typed boundary, private resources, idempotency,
 redaction, commit/reread publication, cancellation/disposal, and no-resume law.
 
 Typed serde JSON (ADR 0046) supplies the record shape; the removed `IRCR` / `typed-tlv-v1` / SHA-256 canonical policy is
 not revived. This document owns the field semantics of these conceptual records. The concept2 names
-`MandateMcpCapabilitySourceDto`, `MandateMcpDiscoveryDto`, and `MandateMcpCapabilityRevisionDto` are research-only; the
+`McpCapabilitySourceDto`, `McpDiscoveryDto`, and `McpCapabilityRevisionDto` are research-only; the
 authoritative names are the `V1` records below, whose fields (private endpoint/credential generation references,
 acquisition operation identity, requesting run and tool call, server revision reference, attempt evidence, effect
 classification, invocation operation identity) supersede the concept2 reduced field sets:
 
 ```text
-MandateMcpCapabilitySourceV1
+McpCapabilitySourceV1
   source_id
   source_revision
   transport = Http | LocalStdio
@@ -51,7 +48,7 @@ MandateMcpCapabilitySourceV1
   discovery_protocol_revision
   gateway_contract_revision
 
-MandateMcpDiscoveryV1
+McpDiscoveryV1
   discovery_id
   acquisition_operation_id
   source_reference
@@ -62,7 +59,7 @@ MandateMcpDiscoveryV1
   discovered_set_reference
   attempt_evidence_reference
 
-MandateMcpCapabilityRevisionV1
+McpCapabilityRevisionV1
   capability_id
   capability_revision
   source_and_discovery_references
@@ -74,13 +71,13 @@ MandateMcpCapabilityRevisionV1
   effect_classification
   safe_projection_revisions
 
-MandateMcpCapabilitySelectionV1
+McpCapabilitySelectionV1
   run_id
   predecessor_selection_reference
   accumulated_selection_revision
   ordered_capability_references
 
-MandateMcpInvocationSelectionV1
+McpInvocationSelectionV1
   accumulated_selection_reference
   capability_reference
   typed_input_reference
@@ -128,7 +125,7 @@ sequenceDiagram
   S-->>L: Reread then publish
 ```
 
-Acquisition validates active Mandate run, exact frozen active descriptor, source proposal, mode, gateway/protocol
+Acquisition validates an active run, exact frozen active descriptor, source proposal, mode, gateway/protocol
 compatibility, private material availability, idempotency, and intrinsic bounds. It atomically records pre-effect
 binding, records `Started` immediately before discovery dispatch, and performs discovery outside transactions.
 
@@ -146,7 +143,7 @@ known result.
 
 Invocation validates exact model-step selection, selected capability, typed input, descriptor/gateway/protocol/schema
 revisions, private material availability, live exact compatibility, and cancellation state. It atomically binds
-`MandateMcpInvocationSelectionV1`, idempotency, and `ToolCallId`, then records `Started` immediately before irreversible
+`McpInvocationSelectionV1`, idempotency, and `ToolCallId`, then records `Started` immediately before irreversible
 dispatch; no external work occurs in either transaction. An invocation cannot substitute current discovery, schema,
 endpoint, credential generation, registry, configuration, or another same-named method, and remote idempotency support
 is evidence only: it cannot authorize automatic retry, status lookup, replay, or a claim of safe repetition.
@@ -154,7 +151,7 @@ is evidence only: it cannot authorize automatic retry, status lookup, replay, or
 Only descriptor-owned safe projections cross the boundary:
 
 ```text
-MandateMcpCapabilitySummaryV1
+McpCapabilitySummaryV1
   safe_source_identity
   capability_id_and_revision
   bounded_display_method
@@ -163,7 +160,7 @@ MandateMcpCapabilitySummaryV1
   effect_classification
   safe_projection_revisions
 
-MandateMcpResultProjectionV1
+McpResultProjectionV1
   capability_reference
   known_terminal_class
   bounded_validated_typed_result
@@ -182,14 +179,14 @@ pre-effect incompatibility but a started effect without terminal proof.
 
 MCP readiness is typed operational evidence for resources named by frozen source/acquisition semantics, such as
 descriptor implementation, exact private material generation, transport/process capacity, or protocol support. It must
-not perform discovery, and the scheduler cannot select sources/capabilities, start a local service, mutate a selection,
-repair meaning, or retry acquisition/invocation; run-local acquisition is tool-loop work after admission.
+not perform discovery and cannot select sources/capabilities, start a local service, mutate a selection, repair meaning,
+or retry acquisition/invocation; run-local acquisition is tool-loop work after admission.
 
 Before `Started`, cancellation or restart records a known before-start outcome and no MCP effect occurs; after
 `Started`, only durable terminal proof makes the result known, and otherwise the interrupted acquisition/invocation
-commits a bounded `Partial` result with its notice. Partial pauses no Mandate: the next model step proceeds, and the
-interrupted call is never repeated. Cancellation prevents later calls/model steps, suppresses late facts, and disposes
-private resources without asserting rollback.
+commits a bounded `Partial` result with its notice. A partial result pauses nothing: the next model step proceeds, and
+the interrupted call is never repeated. Cancellation prevents later calls/model steps, suppresses late facts, and
+disposes private resources without asserting rollback.
 
 Local stdio resources are run-owned and lazy: they are disposed on completion, cancellation, failure, or interruption,
 never shared with another run, and never reattached after restart. HTTP connections and local process epochs are private
@@ -201,25 +198,21 @@ reattaches, respawns, retries, resumes, rediscovers, or repeats old discovery/in
 live process, connection, credential handle, or accumulated selection; it acquires again, and earlier discovery remains
 audit evidence only.
 
-## Child, verifier, protocol, and compatibility boundaries
+## Child, protocol, and compatibility boundaries
 
-A child has its own MCP acquisition lifecycle. Delegation may carry only explicit safe source/provenance references,
+A child has its own MCP acquisition lifecycle. A child run may receive only explicit safe source/provenance references,
 never a live process, connection, credential handle, accumulated selection, invocation, or unfinished effect; parent
 controls cannot invoke, widen, or inspect private resources, and an interrupted child MCP call's partial result remains
 child-local.
-
-Verifier MCP work belongs only to the verifier Mandate; an MCP result is evidence and cannot issue, expand, consume, or
-exercise verifier authority or mutate a target, and an interrupted verifier MCP call yields a bounded `Partial` result
-with its notice and pauses nothing.
 
 Future MCP projections use typed JSON-RPC 2.0 methods (ADR 0045) layered with the `model_tool_loop_v1` descriptor/model
 capability: authoritative initial replay/resync/error, bounded ordered discovery/capability/selection/invocation
 history, then live notifications through one post-commit gate. Replay is read-only and causes no discovery, invocation,
 process start, retry, or publication, and no caller receives a partial ordinary snapshot. M3/M4 and retained
-bounded-MCP/RLM records gain no synthetic source, discovery, capability, selection, process, authority, or
-execution-kind state; M4 `ToolCallRecorded` remains denial evidence, and no historical record, current server, endpoint,
-credential, schema, registry, configuration, ancestry, Goal, Skill, UI, logs, or remote continuation state may
-reconstruct missing MCP meaning.
+bounded-MCP/RLM records gain no synthetic source, discovery, capability, selection, process, or authority state; M4
+`ToolCallRecorded` remains denial evidence, and no historical record, current server, endpoint, credential, schema,
+registry, configuration, ancestry, Goal, Skill, UI, logs, or remote continuation state may reconstruct missing MCP
+meaning.
 
 ## MCP detail: bounded gateway, bounds, and safe failures
 
@@ -271,13 +264,13 @@ contract that never silently resumes old external work; it is not activated here
 
 ## Dependencies and non-goals
 
-This document depends on architectures 13-17 and decisions 0001, 0002, 0004, 0006, 0007, 0008, and
-0009.  It defines no direct MCP administration, an MCP listener/inbound daemon attachment, raw string-method transport,
-arbitrary maps/headers/schemas, plugins/installations, dynamic ToolIds, long-lived workers/supervision, provider
-evolution, bridge/IPython, Skills/Goals/context semantics, session forks, activity/UI, schema, migrations, crates,
-Cargo, Makefile/CI, or production implementation. It introduces no Mandate product
-depth/count/calendar/lifetime/concurrency ceiling: intrinsic representation/protocol bounds and actual finite resource
-capacity remain separately typed, with no truncation, hidden retry counter, or quota.
+This document depends on architectures 14 and 15 and decisions 0002, 0004, and 0007. It defines no direct MCP
+administration, an MCP listener/inbound daemon attachment, raw string-method transport, arbitrary maps/headers/schemas,
+plugins/installations, dynamic ToolIds, long-lived workers/supervision, provider evolution, bridge/IPython,
+Skills/Goals/context semantics, session forks, activity/UI, schema, migrations, crates, Cargo, Makefile/CI, or
+production implementation. It introduces no product depth/count/calendar/lifetime/concurrency ceiling: intrinsic
+representation/protocol bounds and actual finite resource capacity remain separately typed, with no truncation, hidden
+retry counter, or quota.
 
 Architecture 19 may carry safe MCP projections through its shared ingress and delivery path but cannot discover, select,
 invoke, reattach, or recreate MCP work independently, and bridge replay remains zero-effect. Architecture 20

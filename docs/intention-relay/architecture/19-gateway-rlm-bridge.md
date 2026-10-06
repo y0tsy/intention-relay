@@ -1,40 +1,38 @@
-# Mandate Gateway/RLM Bridge
+# Gateway/RLM Bridge
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
 Owner: architecture 19. Decisions: ADR 0011, ADR 0027, ADR 0032, ADR 0053. Research: m4plus_concept.md.
 
-This document owns future Mandate Gateway/RLM attachment, ephemeral bridge grant, ingress operation correlation, safe
-bridge-visible delivery, and bridge recovery. It applies only to future Mandate execution; M3/M4 bytes, IDs, UUIDs,
+This document owns future Gateway/RLM attachment, ephemeral bridge grant, ingress operation correlation, safe
+bridge-visible delivery, and bridge recovery. It applies only to future run execution; M3/M4 bytes, IDs, UUIDs,
 cursors, events, snapshots, provider behavior, replay, recovery, and M4 `ToolCallRecorded ->
 tool_execution_unavailable` retain their recorded ordinary semantics. Retained RLM bridge, child, and activity material
-remains research provenance and historical-only where it conflicts with architectures 13--18.
+remains research provenance and historical-only where it conflicts with architectures 14--18.
 
 ## Ownership and one capability path
 
-Architecture 13 owns Mandate lifecycle and fresh admission; 14 is the historical
-record of the removed execution-meaning envelope and decoders (ADR 0046); 15 owns the fixed registry, frozen tool
-selection, direct admission, model-tool loop, `ToolCallId`, generic effect evidence, and recovery; 16 owns scheduler
-reevaluation and readiness-driven admission; 17 owns child Mandates, graph edges, delegation, controls, terminalization,
-and verifier authority; 18 owns MCP source, discovery, selection, invocation, and recovery.
+Architecture 14 is the historical record of the removed execution-meaning envelope and decoders (ADR 0046); 15 owns the
+fixed registry, frozen tool selection, direct admission, model-tool loop, `ToolCallId`, generic effect evidence, and
+recovery; 18 owns MCP source, discovery, selection, invocation, and recovery.
 
 This document owns only bridge attachment, grant, operation identity, ingress correlation, safe bridge projection,
 replay, cancellation propagation, and bridge-local recovery classification; it is not a second registry, gateway,
-daemon, lifecycle, scheduler, tool implementation, child executor, MCP client, provider selector, verifier authority,
-persistence authority, sandbox, or OS privilege boundary.
+daemon, lifecycle, tool implementation, child executor, MCP client, provider selector, persistence authority, sandbox,
+or OS privilege boundary.
 
 Python/RLM facade code, direct model ingress, kernels, children, MCP servers, providers, adapters, bridge channels,
 grants, operation IDs, current configuration, readiness, evidence, and retained RLM identities cannot create or widen
-tool, lifecycle, scheduling, child, verifier, or reconciliation authority; every invocation reaches architecture 15's
-one daemon-owned, Rust-owned capability path.
+tool, lifecycle, child, or reconciliation authority; every invocation reaches architecture 15's one daemon-owned,
+Rust-owned capability path.
 
 ## Immutable bridge selection and ephemeral grant
 
-This document owns the semantic fields of the credential-free nested bridge selection in future Mandate meaning (typed
-serde JSON, ADR 0046):
+This document owns the semantic fields of the credential-free nested bridge selection in the future typed run record
+(typed serde JSON, ADR 0046):
 
 ```text
-MandateBridgeSelectionV1
+BridgeSelectionV1
   gateway_contract_revision
   ingress_family
   safe_projection_revision
@@ -45,29 +43,25 @@ It freezes the executable bridge contract, not a live attachment, and excludes a
 kernel, process, connection, endpoint, credential, registry state, descriptor handle, live readiness, child identity,
 and external resource.
 
-After a durable reread proves a supported active Mandate run, exact frozen bridge and tool selections, active model
-step, and no cancellation gate, the daemon alone may issue an opaque ephemeral grant:
+After a durable reread proves a supported active run, exact frozen bridge and tool selections, active model step, and no
+cancellation gate, the daemon alone may issue an opaque ephemeral grant:
 
 ```text
 BridgeAttachmentGrantV1
   opaque_grant_id
   daemon_epoch
   issued_protocol_revision
-  execution_kind
-  mandate_id
-  mandate_revision
   run_id
   model_step_id
 ```
 
 A grant binds its holder to one daemon-held `SessionId`, `RunId`, originating `TurnId`, and `ModelStepId`
 (daemon-assigned, never caller-selected). It is non-secret ephemeral transport evidence for one daemon epoch and live
-daemon process, not a credential, durable fact, semantic selection, lifecycle permission, policy decision, child
-delegation, verifier authority, or caller-selected identity. It expires on model-step closure, run terminalization or
-interruption, cancellation reaching the bridge gate, channel detachment, or daemon exit, and never enters execution
-meaning, `RunExecutionMeaningDto`, events, snapshots, model messages, tool facts, model context, logs, diagnostics,
-child delegation, or public replay. A persistent Python namespace may outlive an expired grant but must obtain a newly
-issued grant before invoking a tool for a later run.
+daemon process, not a credential, durable fact, semantic selection, lifecycle permission, policy decision, or
+caller-selected identity. It expires on model-step closure, run terminalization or interruption, cancellation
+reaching the bridge gate, channel detachment, or daemon exit, and never enters the future typed run record, events,
+snapshots, model messages, tool facts, model context, logs, diagnostics, or public replay. A persistent Python namespace
+may outlive an expired grant but must obtain a newly issued grant before invoking a tool for a later run.
 
 ## Attachment, operation identity, and admission
 
@@ -86,8 +80,6 @@ references:
 BridgeOperationV1
   bridge_operation_id
   run_id
-  mandate_id
-  mandate_revision
   model_step_id
   tool_id
   descriptor_revision
@@ -107,8 +99,8 @@ source path.
 
 Bridge ingress validates the grant/epoch, exact run/revision/model step, frozen bridge and descriptor selection,
 operation idempotency, typed input, intrinsic bounds, and live availability, then invokes architecture 15's generic
-admission contract. For Mandate execution the only bridge admission outcomes are `Admitted`, typed `Incompatible`, typed
-`Unavailable`, an idempotent existing binding, or an operation conflict; `AwaitingConfirmation`, quota, root-origin,
+admission contract. The only bridge admission outcomes are `Admitted`, typed `Incompatible`, typed `Unavailable`, an
+idempotent existing binding, or an operation conflict; `AwaitingConfirmation`, quota, root-origin,
 parent, Goal, Skill, provider, or bridge-specific authorization cannot be introduced. Equal operation identity and equal
 typed content return the committed binding or safe durable outcome without another `ToolCallId`, child, or effect;
 changed reuse fails before mutation or effect.
@@ -152,7 +144,7 @@ publisher/channel failure cannot roll back a commit or cause redispatch.
 
 Before `ToolCallStarted`, cancellation or recovery records known `CancelledBeforeStart` or `InterruptedBeforeStart`.
 After start, a durably proven terminal result remains known; without terminal proof the exact attempt commits a bounded
-`Partial` result with its notice and pauses no Mandate, and the next model step proceeds. Known validation, denial,
+`Partial` result with its notice, and the next model step proceeds. Known validation, denial,
 protocol, tool, or remote failures remain known when terminal effect proof exists.
 
 Channel close, slow-peer resync, and grant expiry do not interrupt a run; run interruption remains owner-controlled and
@@ -162,30 +154,25 @@ the run `Running`, and a valid durable interruption/result race is decided by th
 loser rereading and unable to overwrite. Late fragments/results after interruption, terminalization, grant
 expiry, or restart are non-authoritative and cannot append durable facts.
 
-Recovery completes before attachment, readiness, scheduling, or fresh admission: it invalidates old grants, disposes
+Recovery completes before attachment, readiness, or fresh admission: it invalidates old grants, disposes
 private bridge-side resources, classifies operations only from durable evidence, and rebuilds safe projections only from
 supported records. It never reissues an old grant, re-admits an old operation, reattaches a facade/kernel/task,
 retries/reruns a tool, recreates a child, polls remote work, or reconstructs meaning from current registry,
 configuration, kernel, process, channel, or graph state. Post-restart lookup and replay are read-only; later work
 requires a new `RunId`, fresh admission, a new grant, and new operation identity.
 
-## Child, verifier, MCP, and protocol boundaries
+## Child, MCP, and protocol boundaries
 
-For `sub_agent`, the bridge performs only generic ingress and architecture-15 admission; architecture 17 validates the
-parent run and creating `ToolCallId` and atomically creates the child Mandate, edge, delegation snapshot, graph
-projections, and parent terminal result. The bridge returns only safe references and result projections and assigns no
-child identity, edge, control, message, terminalization, or authority; a child never inherits a live bridge grant,
-kernel, provider continuation, MCP selection, connection, process, or unfinished effect, and a child run requires its
-own architecture-13 fresh admission.
+For `sub_agent`, the bridge performs only generic ingress and architecture-15 admission, returns only safe references
+and result projections, and assigns no child identity, control, message, terminalization, or authority. A child never
+inherits a live bridge grant, kernel, provider continuation, MCP selection, connection, process, or unfinished effect,
+and a child run requires its own fresh admission.
 
-Bridge-held evidence, a grant, parenthood, or a bridge result never grants or amplifies verifier authority; target
-mutation remains architecture 17's exact authority/baseline/evidence operation and an interrupted verifier call's
-partial result remains verifier local. Bridge transport may carry only architecture-18 safe MCP projections and cannot
-discover, select, invoke, reattach, or recreate MCP work. Bridge replay is a read-only projection layered on the
+Bridge transport may carry only architecture-18 safe MCP projections and cannot discover, select, invoke, reattach, or
+recreate MCP work. Bridge replay is a read-only projection layered on the
 underlying ordering authorities:
 correlated initial replay, typed resync/error, then live post-commit facts after required history completes; it cannot
-create a bridge-owned sequence, resend a graph message, start a child, consume verifier authority, rediscover/invoke
-MCP, or execute external work.
+create a bridge-owned sequence, start a child, rediscover/invoke MCP, or execute external work.
 
 ## Bridge detail: DTOs, limits, and safe failures
 
@@ -247,15 +234,15 @@ implementation detail.
 ## Compatibility, dependencies, and non-goals
 
 M3 session replay and M4 run streaming remain unchanged. M4 provider kinds remain `openrouter` and
-`generic-chat-completion-api`; model names do not select a provider, bridge contract, or execution kind. Historical M4
-tool calls remain denial evidence. Historical M3/M4 and retained RLM records gain no bridge grant, operation, Mandate,
-child edge, verifier authority, MCP selection, Skill, Goal, activity, policy, or execution-kind state, and no current
+`generic-chat-completion-api`; model names do not select a provider or bridge contract. Historical M4
+tool calls remain denial evidence. Historical M3/M4 and retained RLM records gain no bridge grant, operation,
+MCP selection, Skill, Goal, activity, or policy state, and no current
 mutable state may reconstruct missing bridge meaning. Retained RLM `SubAgentId`, `RlmParentLinkDto`, session/run-rooted
 trees, policy inheritance, queues, activity identities, and product limits remain historical only; no later bridge may
-reference exact legacy bytes, rewrite, normalize, make old work Mandate-executable, or synthesize future state (ADR
+reference exact legacy bytes, rewrite, normalize, or synthesize future state (ADR
 0038).
 
-This document depends on architectures 13--18 and decisions 0001, 0002, 0004, 0006, 0007, 0008, 0009, and 0010. Related
+This document depends on architectures 14, 15, and 18 and decisions 0002, 0004, 0007, and 0010. Related
 owners: 20 owns kernel process/namespace/checkpoint lifecycle; 21 owns Goal, Skill, context, memory, and compaction
 (bridge-delivered context is safe immutable projection only); 22 owns provider profile/capability semantics (bridge
 delivery uses only safe existing provider facts); 23 owns ordinary Session forks (no bridge grant or operation crosses

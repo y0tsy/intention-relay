@@ -11,16 +11,15 @@ pending turns, provider selections, retries, event bytes/sequences, cursors, sna
 
 ## Ownership and non-authorities
 
-Architecture 04 owns current Session/Run persistence and recovery. Architecture 13 owns Mandate lifecycle, triggers, and
-fresh admission. Architecture 14 owns run-execution meaning and historical
-compatibility; its canonical framing was removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md).
-Architectures 15--20 own tool, scheduler, child/verifier, MCP, bridge, and kernel semantics. Architecture 21 owns
-Goal/Skill/context source, audience, and disclosure semantics. Architecture 22 owns
-provider/profile/capability/reasoning semantics.
+Architecture 04 owns current Session/Run persistence and recovery. Architecture 14 owns run-execution meaning and
+historical compatibility; its canonical framing was removed by [ADR
+0046](../decisions/0046-typed-serde-json-contracts.md). Architectures 15, 18, 19, and 20 own tool, MCP, bridge, and
+kernel semantics. Architecture 21 owns Goal/Skill/context source, audience, and disclosure semantics. Architecture 22
+owns provider/profile/capability/reasoning semantics.
 
-This document owns only ordinary Session lineage and frozen fork transfer semantics. A conversation branch is not a
-Mandate child edge, verifier target, RLM parent link, activity aggregate, provider continuation, tool permission,
-scheduler reason, bridge grant, kernel epoch, MCP selection, or authority.
+This document owns only ordinary Session lineage and frozen fork transfer semantics. A conversation branch is not an RLM
+parent link, activity aggregate, provider continuation, tool permission, bridge grant, kernel epoch, MCP selection, or
+authority.
 
 ## Branch identity and user workflow
 
@@ -48,8 +47,8 @@ flowchart LR
   S --> X[Source continues]
 ```
 
-`Regenerate response` is a user-turn fork followed by a separate idempotent ordinary `StartForkRunCommandDto`. It is not
-Mandate creation, trigger capture, or fresh admission. A failed start leaves the committed idle child visible.
+`Regenerate response` is a user-turn fork followed by a separate idempotent ordinary `StartForkRunCommandDto`.
+A failed start leaves the committed idle child visible.
 
 ## Closed boundaries and frozen context
 
@@ -98,7 +97,7 @@ does not alter source Session event sequences, run container journals, or ordina
 
 One transaction validates the source head and the accepted preview binding, then atomically creates the child
 projection/snapshots, lineage, base snapshot, optional anchor, child events, conversation-tree container journal
-records, and idempotency result. No provider, scheduler, tool, process, network, kernel, MCP, bridge, or other external
+records, and idempotency result. No provider, tool, process, network, kernel, MCP, bridge, or other external
 work occurs in that transaction.
 
 Child events order as `SessionCreated`, `SessionForked`, then optional `ForkAnchorMaterialized`. The conversation-tree
@@ -115,8 +114,8 @@ binding.
 Titles and reversible archive state belong only to their ordinary Session. They never rewrite lineage or base snapshots.
 Archive requires an idle session; archived sources remain readable and forkable.
 
-Session lineage is ordinary-session structure only; it never constrains Mandate admission, scheduler behavior, or
-Mandate-child creation. A fork carries no depth, descendant-count, source-boundary rate, or base-snapshot size limit
+Session lineage is ordinary-session structure only; it never constrains run admission or child creation. A fork carries
+no depth, descendant-count, source-boundary rate, or base-snapshot size limit
 ([ADR 0053](../decisions/0053-sub-agent-and-fork-limits-by-precedent.md)). Title and page bounds remain intrinsic
 representation/protocol constraints where their owning field table requires them.
 
@@ -275,21 +274,21 @@ M3/M4 historical sessions remain linear ordinary records until an additive migra
 records. Migration preserves IDs, turns, runs, pending turns, configuration revisions, event JSON, sequences, cursors, and
 snapshots byte-for-byte. It creates no synthetic parent, anchor, run, assistant message, or source event.
 
-A fork begins Mandate-free. It cannot create or transfer a Mandate reason/run, verifier authority, child edge, provider
-request/client/credential, tool action, kernel task, MCP process, bridge grant, or unfinished effect. Later child runs
-select their own immutable provider meaning. A profile override is allowed only for user-turn regeneration as a safe
-future-default proposal, never as a current run selection or continuation.
+A fork begins with no run and no execution authority. It cannot transfer a provider request/client/credential, tool
+action, kernel task, MCP process, bridge grant, or unfinished effect. Later child runs select their own immutable
+provider meaning. A profile override is allowed only for user-turn regeneration as a safe future-default proposal, never
+as a current run selection or continuation.
 
-This document depends on architectures 04 and 13--22 plus the DTO, transport, security, verification, and quality
-policies. It does not define Mandate association, activity/UI implementation, workspace cloning/rebinding, autonomous
-model/IPython forking, provider implementation, destructive deletion/GC/export, schema, migrations, crates, Cargo,
-Makefile/CI, or production activation.
+This document depends on architectures 04 and 14--22 plus the DTO, transport, security, verification, and quality
+policies. It does not define activity/UI implementation, workspace cloning/rebinding, autonomous model/IPython forking,
+provider implementation, destructive deletion/GC/export, schema, migrations, crates, Cargo, Makefile/CI, or production
+activation.
 
 Tool-result execution, child-agent execution, export, and cross-workspace clone/rebind are accepted post-M5 future
 directions under [ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be executed in Milestone 5+:
 
 - tool-result execution and child-agent execution are separately admitted ordinary fork actions from frozen references,
-never silent re-execution, never Mandate child edges, and never verifier authority;
+never silent re-execution;
 - export is a bounded, credential-free surface for fork lineage and activity records, never a history rewrite and never
 destructive deletion;
 - cross-workspace clone/rebind is explicit user-authorized only, never implicit, and never transfers live state or

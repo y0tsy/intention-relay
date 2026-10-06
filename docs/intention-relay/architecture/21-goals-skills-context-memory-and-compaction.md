@@ -5,29 +5,27 @@
 Owner: architecture 21. Decisions: ADR 0013. Research: m4plus_concept.md.
 
 This document owns future Goal scope and evidence, Skill selection and safe disclosure, context-source manifests,
-model-step projections, typed memory records, and immutable compaction. It applies only to future Mandate and
-VerifierMandate execution. M3/M4 bytes, IDs, UUIDs, cursors, events, snapshots, provider behavior,
-replay, recovery, and M4 `ToolCallRecorded -> tool_execution_unavailable` retain their recorded ordinary semantics.
-Retained Goal, Skill, memory, or compaction material remains research provenance and historical-only where it conflicts
-with architectures 13--20.
+model-step projections, typed memory records, and immutable compaction. It applies only to future run execution. M3/M4
+bytes, IDs, UUIDs, cursors, events, snapshots, provider behavior, replay, recovery, and M4 `ToolCallRecorded ->
+tool_execution_unavailable` retain their recorded ordinary semantics. Retained Goal, Skill, memory, or compaction
+material remains research provenance and historical-only where it conflicts with architectures 14--20.
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle and fresh admission; 14 is the historical
-record of the removed execution-meaning envelope and decoders (ADR 0046); 15 owns the registry, frozen direct-tool
-selection, tool admission, model-tool loop, `ToolCallId`, and generic effect facts; 16 owns scheduler reevaluation and
-readiness; 17 owns child graph and verifier authority; 18 owns MCP lifecycle; 19 owns bridge grants, ingress, operation
-correlation, and bridge delivery; 20 owns kernel epochs, cells, checkpoints, and kernel-local safe projection.
+Architecture 14 is the historical record of the removed execution-meaning envelope and decoders (ADR 0046); 15 owns the
+registry, frozen direct-tool selection, tool admission, model-tool loop, `ToolCallId`, and generic effect facts; 18 owns
+MCP lifecycle; 19 owns bridge grants, ingress, operation correlation, and bridge delivery; 20 owns kernel epochs, cells,
+checkpoints, and kernel-local safe projection.
 
 This document owns only future non-authorizing context/evidence selection and safe representation. A Goal, Skill, source
 manifest, projection, memory record, card, disclosure, summary, omission, or compaction never creates or mutates a
-`RunId`, Mandate reason, lifecycle state, scheduler eligibility, tool permission, registry slot, `WorkspaceRoot`, child
-edge, verifier authority, MCP capability, bridge grant, kernel epoch, provider route, or reconciliation decision.
-Context is not a hidden prompt-mutation channel, sandbox, policy engine, or continuation mechanism.
+`RunId`, lifecycle state, tool permission, registry slot, `WorkspaceRoot`, MCP capability, bridge grant, kernel epoch,
+provider route, or reconciliation decision. Context is not a hidden prompt-mutation channel, sandbox, policy engine, or
+continuation mechanism.
 
 ## Immutable selection and Goal scope
 
-This document owns detailed semantics of these credential-free nested future Mandate-meaning fields (typed serde JSON,
+This document owns detailed semantics of these credential-free nested future run-record fields (typed serde JSON,
 ADR 0046):
 
 | Nested selection | Selection owner | Meaning |
@@ -55,15 +53,14 @@ GoalContextSelectionV1
 ```
 
 A selected reference freezes typed identity, revision, scope, and safe acceptance/evidence projection. A later edit
-creates a new Goal revision; it cannot rewrite admitted or model-step context. Goal evidence may be referenced by a
-verifier baseline only through architecture 17's separately issued authority. A Goal cannot create a verifier, target,
-verdict, target mutation, child, or lifecycle transition.
+creates a new Goal revision; it cannot rewrite admitted or model-step context. Goal evidence is not authority:
+a Goal cannot create a target, verdict, target mutation, child, or lifecycle transition.
 
 ## Skills and progressive disclosure
 
 A Skill is immutable, versioned, untrusted instructional content with typed provenance, declared audience, and safe
 disclosure policy. A Skill cannot contain executable authority, hidden tool permissions, registry mutation, provider
-credential, bridge/kernel/MCP resource, or implicit child/verifier/scheduler/lifecycle power.
+credential, bridge/kernel/MCP resource, or implicit child/lifecycle power.
 
 ```text
 SkillSelectionV1
@@ -154,7 +151,7 @@ Bodies and supplements are bounded immutable UTF-8 text or typed structured refe
 binary/image/rich-MIME payload, executable code, shell template, Python package, install instruction, plug-in runtime,
 raw JSON schema, arbitrary URL/host/header, endpoint, credential, provider/SDK value, process/kernel/socket handle,
 hidden external effect, or dynamic registration. The only typed references are immutable memory, role, gate-template,
-registered descriptor revision, retained content, and an exact Mandate MCP capability revision that is already present
+registered descriptor revision, retained content, and an exact MCP capability revision already present
 in the same frozen run-local MCP selection.
 
 ```text
@@ -202,10 +199,10 @@ model Skill matching.
 Supporting resources are never implicitly loaded. The body may name a `SkillSupplementDto`, but only an explicit
 `retrieve` against that exact frozen reference discloses its bounded content. A Skill invocation is instructional
 context and selected references only. Every actual action still travels through the selected Rust-owned
-descriptor/gateway path. A card, body, supplement, frontmatter, declared tools, origin, role link, Goal, child relation,
-verifier, IPython facade, MCP server, or model request cannot create a ToolId, descriptor, registry entry, credential
-access, provider selection, authorization, confirmation, policy/quota, lifecycle mutation, scheduler trigger, child
-authority, gate success, or external effect.
+descriptor/gateway path. A card, body, supplement, frontmatter, declared tools, origin, role link, Goal, child,
+IPython facade, MCP server, or model request cannot create a ToolId, descriptor, registry entry, credential access,
+provider selection, authorization, confirmation, policy/quota, lifecycle mutation, child authority, gate success, or
+external effect.
 
 Skill text is untrusted model-visible data, not policy or executable authority. It may recommend already available work
 and may narrow a task, class, context/result bound, or selected descriptor subset through an exact typed role or
@@ -232,13 +229,12 @@ SkillSelectionV1
 ```
 
 Selection is immutable before the next affected model step or external action. `GoalRunSelectionV1` records exact Skill
-selections; ordinary runs use a separately versioned optional selection; Mandate and VerifierMandate execution meaning
-carries the same non-authorizing frozen Skill context. A child Mandate receives only exact selected Skill/role/reference
-values explicitly placed in its delegation snapshot. A verifier Skill never derives authority. Forks retain the exact
-selected card/revision/disclosure references in their immutable base snapshot. Retry, replay, and
-recovery validate stored selection and never rediscover a current Skill. A new revision, disable, archive, revoke,
-replacement, or restore affects future discovery/admission only; it never rewrites an admitted run, child, fork,
-verifier, historical selection, or body.
+selections; ordinary runs use a separately versioned optional selection carrying the same non-authorizing frozen Skill
+context. A child run receives only exact selected Skill/role/reference values explicitly selected for it. Forks retain
+the exact selected card/revision/disclosure references in their immutable base snapshot. Retry, replay, and recovery
+validate stored selection and never rediscover a current Skill. A new revision, disable, archive, revoke, replacement,
+or restore affects future discovery/admission only; it never rewrites an admitted run, child, fork, historical
+selection, or body.
 
 Skill facts are session records: `SkillCreated`, `SkillImported`, `SkillRevisionCreated`, `SkillReplacementLinked`,
 `SkillRolledBack`, `SkillArchived`, `SkillRestored`, `SkillRevoked`, `SkillResolutionRecorded`, `SkillSelected`,
@@ -321,14 +317,14 @@ sequenceDiagram
   participant U as User
   participant G as Goals
   participant C as Context
-  participant M as Meaning
+  participant R as Run record
   participant S as Model step
   participant F as Durable facts
 
   U->>G: Create or revise Goal
   G->>C: Select explicit references
-  C->>M: Freeze manifest and selections
-  M->>S: Bind step projection
+  C->>R: Freeze manifest and selections
+  R->>S: Bind step projection
   S->>F: Commit completed facts
   F->>C: Provide exact completed range
   C->>C: Create immutable safe summary
@@ -344,13 +340,11 @@ references, but never rediscloses, recompacts, fetches current catalog/file/inde
 reconstructs projections from mutable state. Unsupported, corrupt, or missing selected context blocks only dependent
 future work before effect; unrelated readable history stays isolated.
 
-## Child, verifier, MCP, bridge, kernel, protocol, and compatibility boundaries
+## Child, MCP, bridge, kernel, protocol, and compatibility boundaries
 
 A child receives only separately selected frozen safe references. It never inherits a live manifest, undisclosed memory,
 Goal applicability, Skill source, bridge grant, kernel namespace/checkpoint, provider continuation, MCP selection,
-connection, process, or unfinished effect. Child context is independent and non-authorizing. A verifier receives only
-architecture-17-authorized safe baseline/evidence references; context cannot widen verifier authority or mutate a
-target.
+connection, process, or unfinished effect. Child context is independent and non-authorizing.
 
 MCP, bridge, and kernel context is safe projection only. Context cannot discover or invoke MCP, issue a bridge
 grant/operation, create a kernel epoch, restore a checkpoint, or cause a host request. Future delivery uses typed
@@ -359,13 +353,13 @@ Replay, reconnect, or audit cannot create a Goal, disclose memory, recompact, ex
 a child, issue authority, or perform external work. Partial delivery is never permitted.
 
 M3/M4 and retained records gain no Goal, Skill, source-manifest, projection, memory, disclosure, summary, applicability
-link, Mandate, child, verifier, MCP, activity, policy, or execution-kind state. Historical M4 tool calls remain denial
-evidence. No current mutable state may reconstruct missing future context meaning.
+link, child, MCP, activity, or policy state. Historical M4 tool calls remain denial evidence. No current mutable state
+may reconstruct missing future context meaning.
 
 ## Dependencies, non-goals, and evidence
 
-This document depends on architectures 13--20 and decisions 0001--0012. It does not define actual Goal persistence,
-search/index/vector retrieval, instruction assembly (owned by [architecture
+This document depends on architectures 14, 15, and 18--20 and decisions 0002, 0004, 0005, 0007, and 0010--0012. It does
+not define actual Goal persistence, search/index/vector retrieval, instruction assembly (owned by [architecture
 30](30-instruction-sources-and-system-context.md)), SQL/wire tags, migrations, retention/deletion/encryption,
 source-page sizes, resource values, provider evolution, architecture-23 session branching, activity/UI, physical Plan
 artifacts, direct MCP administration, Python/Jupyter process behavior, Cargo, Makefile/CI, or production activation.

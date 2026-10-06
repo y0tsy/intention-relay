@@ -256,20 +256,20 @@ user flow works.
 
 ## Post-M4 Foundation evidence obligations
 
-Before any future Mandate-capable production slice, its specification must name contract, architecture, fault/recovery,
+Before any future post-M4 production slice, its specification must name contract, architecture, fault/recovery,
 compatibility, redaction, and outcome evidence for the Foundation rules it consumes. At minimum, later packages must
 cover:
 
 - typed contract/version mismatch rejection before external work;
 - M3/M4 byte/meaning preservation and no synthetic future state;
-- user-versus-daemon/verifier conflict precedence where relevant;
+- user-versus-daemon conflict precedence where relevant;
 - atomic admission/transition rollback at every persistence stage;
 - no external effect inside a transition transaction and post-commit reread
 publication;
 - crash/cancel behavior before start versus after a potentially interrupted start;
-- no provider/tool/process/kernel/MCP/child/bridge resumption after restart;
+- no provider/tool/process/kernel/MCP/bridge resumption after restart;
 - limit behavior only where a recorded precedent names the failure mode it
-prevents, with no hidden Mandate product quotas; and
+prevents, with no hidden product quotas; and
 - recognizable fake-secret absence from future records, logs, errors, protocol,
 and diagnostics.
 
@@ -293,57 +293,38 @@ compatibility](14-run-execution-meaning-and-historical-compatibility.md) and car
 Each later package declares its own evidence portfolio through the activating-specification contract in [architecture
 12](12-quality-gates-and-makefile.md).
 
-### Tool-registry and Mandate-loop evidence
+### Tool-registry and tool-loop evidence
 
 Before implementation, future tool-loop work requires fixed-slot and owner fixtures, Reserved/non-bypass fixtures, typed
-registry/descriptor selection, ordinary-versus-Mandate WorkspaceRoot outcomes, direct-Mandate/no-confirmation admission,
-group atomicity/concurrency/order, fragment/result integrity, before-start/started/known/unknown recovery, typed
-protocol replay, historical M4 tool-call compatibility, no-current-state reconstruction, and fake-secret absence. These
-are future obligations, not claims that a runtime or test target exists; the detailed portfolio is owned by [Tool
-registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md).
+registry/descriptor selection, group atomicity/concurrency/order, fragment/result integrity,
+before-start/started/known/unknown recovery, typed protocol replay, historical M4 tool-call compatibility,
+no-current-state reconstruction, and fake-secret absence. These are future obligations, not claims that a runtime or
+test target exists; the detailed portfolio is owned by [Tool registry and model-tool
+loop](15-tool-registry-and-model-tool-loop.md).
 
-### Mandate scheduler and readiness evidence
-
-Before implementation, future scheduler work requires durable-reason versus observation/candidate/admission fixtures;
-deterministic ordering; unavailable reason preservation; duplicate wake/readiness idempotency; lifecycle/readiness
-races; transaction fault injection; recovery-before-scheduling; no-resume; ordinary turn input and M4 preservation;
-no-current-state reconstruction; typed protocol replay; and fake-secret/resource absence. These are future obligations,
-not current tests or targets. The detailed portfolio is owned by [Mandate scheduler and readiness-driven
-admission](16-mandate-scheduler-and-readiness-driven-admission.md).
-
-### Mandate child graph and verifier evidence
-
-Before implementation, future child/verifier work requires typed
-edge/delegation/authority/baseline/evidence/verdict/mutation fixtures; idempotent child creation and graph-integrity
-fixtures; direct-edge-only control and non-scheduling messages; terminalization/cascade and child-local partial-result
-matrices; authority revision/revocation/target-set/stale-baseline/operation fixtures; user-precedence races; atomic
-fault injection; recovery/no-resume; typed protocol replay; M3/M4 and retained-RLM preservation; and fake-secret/raw
-resource absence. These are future obligations, not current tests or targets. The detailed portfolio is owned by
-[Mandate child graph and delegated verifier authority](17-mandate-child-graph-and-delegated-verifier-authority.md).
-
-### Mandate MCP capability evidence
+### MCP capability evidence
 
 Before implementation, future MCP work requires typed source/discovery/ capability/selection/invocation fixtures; closed
 schema-normalization negatives; fixed-slot/no-bypass and server-non-authority fixtures; idempotency, selection freeze,
 schema-drift, and no-current-state reconstruction cases; transaction fault injection; HTTP/local-stdio
-cancellation/recovery/no-resume; private resource redaction; scheduler/child/verifier isolation; typed protocol replay;
+cancellation/recovery/no-resume; private resource redaction; typed protocol replay;
 and M3/M4 plus retained bounded-MCP preservation. These are future obligations, not current tests or targets. The
-detailed portfolio is owned by [Mandate MCP capability lifecycle](18-mandate-mcp-capability-lifecycle.md).
+detailed portfolio is owned by [MCP capability lifecycle](18-mcp-capability-lifecycle.md).
 
-### Mandate Gateway/RLM bridge evidence
+### Gateway/RLM bridge evidence
 
 Before implementation, future bridge work requires typed bridge-selection fixtures; grant scope/expiry and no-bypass
-fixtures; operation idempotency and fault injection; cancellation/crash/late-result/no-resume matrices; child, verifier,
-and MCP isolation; typed protocol replay/resync and zero-effect reconnect; M3/M4 plus retained-RLM preservation; and
-fake-secret/raw resource absence. These are future obligations, not current tests or targets. The detailed portfolio is
-owned by [Mandate Gateway/RLM bridge](19-mandate-gateway-rlm-bridge.md).
+fixtures; operation idempotency and fault injection; cancellation/crash/late-result/no-resume matrices; MCP isolation;
+typed protocol replay/resync and zero-effect reconnect; M3/M4 plus retained-RLM preservation; and fake-secret/raw
+resource absence. These are future obligations, not current tests or targets. The detailed portfolio is owned by
+[Gateway/RLM bridge](19-gateway-rlm-bridge.md).
 
 ### Run-scoped IPython kernel evidence
 
 Before implementation, future kernel work requires typed selection/checkpoint fixtures; run-scoped lazy epoch/no-sharing
 fixtures; required/optional restore and no-current-state reconstruction; cell/host-request/checkpoint fault injection;
-cancellation/crash/late-message/no-resume matrices; bridge-only/no-bypass and stale-grant/task tests; child/verifier/MCP
-isolation; typed protocol replay/resync; historical M3/M4 and retained IPython/RLM preservation; and fake-secret/raw
+cancellation/crash/late-message/no-resume matrices; bridge-only/no-bypass and stale-grant/task tests; MCP isolation;
+typed protocol replay/resync; historical M3/M4 and retained IPython/RLM preservation; and fake-secret/raw
 Python/Jupyter/resource absence. These are future obligations, not current tests or targets. The detailed portfolio is
 owned by [Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md).
 
@@ -352,7 +333,7 @@ owned by [Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md).
 Before implementation, future context work requires canonical Goal scope and applicability, Skill selection/disclosure,
 source-manifest/projection, memory, and compaction fixtures and negative cases; admission/model-step fault injection;
 no-current-state reconstruction; audience/redaction and non-authority outcomes; recovery/no-resume and replay/resync;
-child/verifier/MCP/bridge/kernel isolation; M3/M4 preservation; and fake-secret/raw-source/private-reference absence.
+MCP/bridge/kernel isolation; M3/M4 preservation; and fake-secret/raw-source/private-reference absence.
 These are future obligations, not current tests or targets. The detailed portfolio is owned by [Goals, Skills, context,
 memory, and compaction](21-goals-skills-context-memory-and-compaction.md).
 

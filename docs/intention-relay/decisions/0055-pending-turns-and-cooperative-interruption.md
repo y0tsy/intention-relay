@@ -15,16 +15,14 @@ table; `InterruptNoticeRecorded`; cooperative tool interruption with partial res
 gate, and terminalizer machinery.
 
 Out of scope: provider retry policy; the tool lifecycle and result vocabularies; `Partial` semantics and its notices
-(ADR 0052); Mandate lifecycle, trigger reasons, and fresh admission; the restart recovery transition to `Interrupted`;
-Goal, Skill, context, and compaction semantics; and recorded M3/M4 bytes.
+(ADR 0052); the restart recovery transition to `Interrupted`; Goal, Skill, context, and compaction semantics; and
+recorded M3/M4 bytes.
 
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |
 | [ADR 0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) | Decision item 3, the per-call cancellation direction, and normative invariant 3 | The delivered interrupt contract: `run.interrupt` interrupts the in-flight provider call or tool call cooperatively through the existing signal, records a notice with any captured output, and keeps the run `Running` for its next model step; no separate per-`ToolCallId` command and no `Cancelling`/`Cancelled` run status |
-| [ADR 0001](0001-mandate-authority-and-fresh-run-lifecycle.md) | Decision, the continuation clause "A continuation always admits a fresh run with a new `RunId`", and the invariant "triggers are durable causal evidence, not legacy queued turns" | A Mandate continuation always admits a fresh run with a new `RunId`; a user message accepted while a run is active is durable pending input that joins that run's live context at the next boundary, and a trigger is durable causal evidence, not pending input |
-| [ADR 0031](0031-autonomous-continuation-direction.md) | Invariant 1, "Continue autonomously is Mandate continuation, not old-run resumption: it admits only a fresh run with a new `RunId`" | Continue autonomously admits only a fresh run; a pending user message behind an active run joins that run's context in durable order and is neither autonomous continuation nor old-run resumption |
 | [ADR 0024](0024-provider-session-and-profiles-protocol-directions.md) | Decision clause, "the live M3 queue with its tickets and atomic promotion remains the queue authority", and invariants 5-6 on recovery-promoted scheduling and preserved queue tickets | Pending turns are durable input joined to the active run context; no M3 queue, ticket, or promotion exists, and recovery never auto-schedules a run |
-| [ADR 0006](0006-mandate-lifecycle-and-admission-boundary.md), [ADR 0023](0023-goal-domain-and-verification-directions.md), [ADR 0033](0033-accepted-m5plus-execution-directions.md), [ADR 0034](0034-accepted-m5plus-retained-deferral-directions.md), and [ADR 0035](0035-m5plus-complete-foundation-activation.md) | Preservation clauses keeping "M3/M4 ... queue tickets ... authoritative and unchanged" | The lists drop queue tickets; recorded sessions, runs, events, snapshots, replay, and recovery stay authoritative, and pending turns are durable input joined to the live run context |
+| [ADR 0023](0023-goal-domain-and-verification-directions.md), [ADR 0033](0033-accepted-m5plus-execution-directions.md), [ADR 0034](0034-accepted-m5plus-retained-deferral-directions.md), and [ADR 0035](0035-m5plus-complete-foundation-activation.md) | Preservation clauses keeping "M3/M4 ... queue tickets ... authoritative and unchanged" | The lists drop queue tickets; recorded sessions, runs, events, snapshots, replay, and recovery stay authoritative, and pending turns are durable input joined to the live run context |
 | [ADR 0027](0027-child-kernel-bridge-mcp-detail-directions.md) | The architecture 20 explicit negative that `StopRunCommandDto` remains the only first-scope run cancellation command | `run.interrupt` (`InterruptRunCommandDto`) is the only first-scope run interruption command, and the daemon still does not wait for a cell to acknowledge an interrupt |
 | [ADR 0045](0045-local-json-rpc-2-0-transport.md) | Method-table rows `turn.remove` (`RemoveQueuedTurnCommandDto`) and `run.stop` (`StopRunCommandDto`) | `turn.remove` carries `RemoveTurnCommandDto` and `run.interrupt` carries `InterruptRunCommandDto`; the method set, framing, and DTO-only payload rule are unchanged |
 | [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md) | Decision item 9, invariant 5, and the compatibility clause that keep the live M3 queue, its tickets, and its atomic promotion as the queue authority | Pending turns are durable input joined to the live run context at the next boundary; the queue, its tickets, and its promotion no longer exist |
@@ -170,10 +168,7 @@ cancellation wording stays history.
 
 [Decisions index](README.md) lists this record and marks the per-call cancellation direction of [ADR
 0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) superseded.
-[ADR 0001](0001-mandate-authority-and-fresh-run-lifecycle.md), [ADR
-0031](0031-autonomous-continuation-direction.md), [ADR
-0006](0006-mandate-lifecycle-and-admission-boundary.md), [ADR
-0023](0023-goal-domain-and-verification-directions.md), [ADR
+[ADR 0023](0023-goal-domain-and-verification-directions.md), [ADR
 0024](0024-provider-session-and-profiles-protocol-directions.md), [ADR
 0027](0027-child-kernel-bridge-mcp-detail-directions.md), [ADR
 0033](0033-accepted-m5plus-execution-directions.md), [ADR
@@ -194,12 +189,9 @@ architectures [01](../architecture/01-workspace-and-crate-map.md),
 [09](../architecture/09-configuration-security-and-observability.md),
 [10](../architecture/10-test-driven-delivery-and-verification.md),
 [11](../architecture/11-implementation-roadmap.md),
-[13](../architecture/13-mandate-domain-and-durable-lifecycle.md),
 [14](../architecture/14-run-execution-meaning-and-historical-compatibility.md),
-[16](../architecture/16-mandate-scheduler-and-readiness-driven-admission.md),
-[17](../architecture/17-mandate-child-graph-and-delegated-verifier-authority.md),
-[18](../architecture/18-mandate-mcp-capability-lifecycle.md),
-[19](../architecture/19-mandate-gateway-rlm-bridge.md),
+[18](../architecture/18-mcp-capability-lifecycle.md),
+[19](../architecture/19-gateway-rlm-bridge.md),
 [21](../architecture/21-goals-skills-context-memory-and-compaction.md),
 [22](../architecture/22-provider-evolution-profiles-and-reasoning.md),
 [23](../architecture/23-non-destructive-session-branching-and-regeneration.md),

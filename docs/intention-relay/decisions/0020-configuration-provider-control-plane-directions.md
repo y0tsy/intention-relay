@@ -16,8 +16,7 @@ altering frozen per-run meaning or selection;
 - provider health-check service: non-authorizing typed readiness evidence;
 - provider/model discovery: non-authorizing discovery, never model-name
 routing;
-- pricing and budget policy: product policy, never a Mandate admission
-ceiling;
+- pricing and budget policy: product policy, never an admission ceiling;
 - provider profile UI and configuration control plane: presentation over the
 shared typed client, never adapter authority.
 
@@ -34,8 +33,8 @@ test; it is never implied by M3/M4 behavior.
 3. Rotation replaces private material only and never changes frozen meaning,
 selection, digest, or canonical bytes.
 4. Health checks, discovery, and pricing are non-authorizing: they create no
-`RunId`, reason, lifecycle transition, scheduler candidate, tool permission, child edge, verifier authority, MCP
-capability, bridge grant, kernel epoch, context projection, branch, or reconciliation result.
+`RunId`, lifecycle transition, tool permission, MCP capability, bridge grant, kernel epoch, context projection, branch,
+or reconciliation result.
 5. Profile UI and control plane consume only the shared typed client and
 existing projections; they are never a second authority or transport.
 
@@ -49,9 +48,9 @@ they never produce fallback routing or silent selection changes.
 
 ## Rationale
 
-Architectures 13-24 and decisions 0001-0019 already cover the `m4plus_concept.md` research directions except this
-cluster, which architectures 09 and 22 had excluded or deferred. Adopting the cluster as an accepted direction removes
-the permanent-exclusion statement without documenting any feature as implemented.
+The accepted architecture documents and decision records already cover the `m4plus_concept.md` research directions
+except this cluster, which architectures 09 and 22 had excluded or deferred. Adopting the cluster as an accepted
+direction removes the permanent-exclusion statement without documenting any feature as implemented.
 
 ## Compatibility and non-goals
 

@@ -36,7 +36,7 @@
   - Database schemas: exactly one schema version, version 1. Tables, columns, and indexes are removed, updated, and added only within that version. There are no migrations, no versioned upgrade steps, and no opening of older schema versions.
   - The same single-version rule applies to protocol versions, wire formats, configuration formats, storage formats, and any other versioned system: evolve in place, never carry two versions at once.
 - Do not write compatibility fixtures, golden files, or tests that assert behavior of any version other than the current one.
-- When this policy conflicts with architecture documents or ADRs that mandate migration or preservation behavior, update those documents in the same change that removes the obsolete path.
+- When this policy conflicts with architecture documents or ADRs that require migration or preservation behavior, update those documents in the same change that removes the obsolete path.
 
 ### Goal-driven delivery
 

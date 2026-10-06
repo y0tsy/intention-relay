@@ -9,30 +9,27 @@ Owner: architecture 22. Decisions: ADR 0014, ADR 0028, ADR 0032, ADR 0033. Resea
 
 This document owns provider kinds, profiles and catalog lifecycle, provider/model-capability selections, endpoint and
 credential-transport semantics, driver-contract compatibility, provider-local availability, and normalized textual
-reasoning. It applies only to future Mandate and VerifierMandate execution; M3/M4 bytes, IDs, UUID `ConfigRevisionId`
-values, provider kinds, configuration snapshots, retries, model facts, cursors, snapshots, replay, recovery, and M4
-`ToolCallRecorded -> tool_execution_unavailable` retain their recorded ordinary semantics, and `openrouter` and
+reasoning. It applies only to future run execution; M3/M4 bytes, IDs, UUID `ConfigRevisionId` values, provider kinds,
+configuration snapshots, retries, model facts, cursors, snapshots, replay, recovery, and M4 `ToolCallRecorded ->
+tool_execution_unavailable` retain their recorded ordinary semantics, and `openrouter` and
 `generic-chat-completion-api` remain the only M4 kinds. Retained provider/profile/reasoning material is research
-provenance where it conflicts with architectures 13--21. The configuration/provider control-plane cluster (profile
+provenance where it conflicts with architectures 14--21. The configuration/provider control-plane cluster (profile
 UI/control plane, live reload, credential rotation, discovery, pricing, health checks) is owned by [architecture
 25](25-configuration-provider-control-plane.md) under [ADR
 0020](../decisions/0020-configuration-provider-control-plane-directions.md).
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle and fresh admission; 14 owns run-execution
-meaning and historical compatibility (its binary codec with canonical records, digests, and decode classes was removed
-by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md)); 15 owns the registry, tool loop, model-step identities,
-and local tool exchange; 16 owns scheduler readiness reevaluation; 17 owns child/verifier authority; 18 owns MCP; 19
-owns bridge ingress; 20 owns kernel lifecycle; 21 owns source selection, audience, disclosure, and immutable
-model-context projection.
+Architecture 14 owns run-execution meaning and historical compatibility (its binary codec with canonical records,
+digests, and decode classes was removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md)); 15 owns the
+registry, tool loop, model-step identities, and local tool exchange; 18 owns MCP; 19 owns bridge ingress; 20 owns kernel
+lifecycle; 21 owns source selection, audience, disclosure, and immutable model-context projection.
 
 This document owns only provider selection, compatibility, catalog, private adapter translation, and provider-local
 availability. A provider/profile/kind, model ID, endpoint, capability, reasoning value, catalog entry, driver, output,
-or availability observation cannot create a Mandate reason, `RunId`, lifecycle transition, scheduler candidate, tool
-permission, child edge, verifier authority, MCP capability, bridge grant, kernel epoch, context projection, branch, or
-reconciliation result; it is not a second runtime, tool registry, context builder, scheduler, persistence authority,
-profile UI, or sandbox.
+or availability observation cannot create a `RunId`, lifecycle transition, tool permission, MCP capability, bridge
+grant, kernel epoch, context projection, branch, or reconciliation result; it is not a second runtime, tool registry,
+context builder, persistence authority, profile UI, or sandbox.
 
 ## Immutable provider and capability selections
 
@@ -40,7 +37,7 @@ Architecture 14's canonical bytes, tags, field framing, digest validation, `IRCR
 policy, and the research-only `IRCD` framing were removed by [ADR
 0046](../decisions/0046-typed-serde-json-contracts.md): wire and durable contracts are typed serde JSON, and no
 canonical digest or identity layer exists. This document owns the provider-selection and model-capability selection
-semantics that a future typed run record would carry under the former `MandateRunExecutionMeaningV1` fields 2 and 3.
+semantics that a future typed run record would carry as its provider and model-capability fields.
 
 ```text
 ProviderDriverContractRevisionDto
@@ -117,7 +114,7 @@ ModelCapabilitySetV1
 
 `reasoning_input_contract` is the selected cross-turn reasoning transfer contract (the concept2
 `reasoning_history_transfer` name is research-only; architecture 22 owns the field name). Non-text input and structured
-output require a new taxonomy version. Capability, provider kind, endpoint, driver, or execution kind is never inferred
+output require a new taxonomy version. Capability, provider kind, endpoint, or driver is never inferred
 from a model ID, including `gpt-*`, `o*`, or `codex*`.
 
 ## Provider kinds, profiles, credentials, and endpoints
@@ -203,30 +200,28 @@ Acceptance atomically wrote safe revisions, tombstones, current projection, and 
 after which registry activation swapped the exact accepted private entries. A crash after acceptance but before
 activation left `activation_recovery_required`, a changed current file could not be adopted, and fresh provider
 readiness was unavailable until exact recovery succeeded. Catalog/default/enablement changes affected fresh selection
-only: they neither rewrote stored selection nor revoked an already admitted run, and explicit Run/Mandate cancellation
+only: they neither rewrote stored selection nor revoked an already admitted run, and explicit Run cancellation
 remained the stopping authority. No private binding survived restart. The Slice 2 revert removed the catalog, its
 tables, and the configuration-audit sequence. The reverted audit taxonomy (candidate prepared, removal
 pending/accepted/rejected/expired, catalog accepted/activated, activation recovery required, recovery completed) was the
 durable `configuration_audit.audit_kind` vocabulary written by the storage path, not protocol events, and no wire event
 DTO carried those names; it was not one of the two ordering authorities and had no container journal. Numeric
 catalog/parser/page bounds must be explicitly classified as intrinsic representation bounds, protocol bounds, or actual
-capacity, never Mandate admission quotas.
+capacity, never admission quotas.
 
 ## Availability, attempts, cancellation, and recovery
 
 Compatibility and availability are distinct. Corrupt/missing meaning, unknown version/taxonomy, invalid intersection,
 descriptor mismatch, or incompatible driver blocks execution before effect. Exact compatible private material that is
-absent, disabled, or unavailable is live availability evidence. For a Mandate it retains the existing reason and creates
-no `RunId`; readiness restoration only wakes architecture-16 reevaluation. Neither outcome allows default, same-model,
-alternate endpoint, kind, driver, or current-TOML fallback.
+absent, disabled, or unavailable is live availability evidence: it creates no `RunId` and permits only a later fresh
+admission. Neither outcome allows default, same-model, alternate endpoint, kind, driver, or current-TOML fallback.
 
-Future provider attempts use architecture 13's admitted-before-start, started, known-terminal, and unknown-terminal law.
+Future provider attempts use the admitted-before-start, started, known-terminal, and unknown-terminal law.
 `Started` commits before an outbound boundary and never inside an external-effect transaction. A known terminal or
 pre-start failure remains known. A started request without durable terminal proof after loss, cancellation, timeout, or
-restart commits a bounded `Partial` result with its notice and pauses no Mandate; nothing is retried, and a later
-attempt is fresh admission. Late provider data is non-authoritative. Recovery terminalizes admitted-before-start work as
-known interruption, recovers exact catalog activation, establishes new readiness, and permits only fresh admission with
-a new `RunId`.
+restart commits a bounded `Partial` result with its notice; nothing is retried, and a later attempt is fresh admission.
+Late provider data is non-authoritative. Recovery terminalizes admitted-before-start work as known interruption,
+recovers exact catalog activation, establishes new readiness, and permits only fresh admission with a new `RunId`.
 
 A future retry may follow only a frozen-policy, durably known retryable terminal or pre-start outcome. Any accepted
 text, reasoning, summary, usage, tool, or terminal fact prevents retry. A post-dispatch timeout/loss without terminal
@@ -267,7 +262,7 @@ descriptor metadata, never inferred from a model name, endpoint, or equal text. 
 never raw chain-of-thought, and never automatic model context. Malformed, duplicate-where-forbidden, out-of-order,
 unknown, or post-terminal values fail safely with the closed `provider_reasoning_stream_invalid` failure and without raw
 native publication. Reasoning representation bounds reject without truncation or partial fact commit and are never
-Mandate quotas.
+admission quotas.
 
 The future provider/model, domain, and durable representations are closed and corresponding:
 `ModelEventDto::ReasoningDelta { category, content }` and `ModelEventDto::ReasoningSummaryDelta { content }` normalize
@@ -495,27 +490,28 @@ accept/reject) is owned by [architecture 29](29-provider-session-and-profiles-pr
 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md); it was activated under Milestone 5+ and
 then reverted.
 
-## Child, verifier, MCP, bridge, kernel, context, and compatibility boundaries
+## Child, MCP, bridge, kernel, context, and compatibility boundaries
 
-Every child or verifier fresh run has its own immutable provider selection. Provider output is evidence only and cannot
-confer child/verifier authority. Provider work cannot discover/invoke MCP, issue a bridge grant, create a kernel, or
+Every fresh run, including a child run, has its own immutable provider selection. Provider output is evidence only and
+cannot confer execution authority. Provider work cannot discover/invoke MCP, issue a bridge grant, create a kernel, or
 execute a tool. Bridge and kernel paths consume immutable provider selections only through their existing owners. A
 kernel never carries provider continuation or private driver resources.
 
 M3/M4 records gain no `responses`, `openai` alias, profile, catalog, capability taxonomy, categorized reasoning,
-summary, provider-selection, or execution-kind state. Historical generic model IDs remain generic. A later explicit
-ordinary bridge may reference exact legacy bytes and schema class but cannot fabricate a profile/catalog membership,
-normalize historical selection, or rebuild it from current configuration. Existing M4 reasoning retains its recorded
+summary, or provider-selection state. Historical generic model IDs remain generic. A later explicit ordinary bridge
+may reference exact legacy bytes and schema class but cannot fabricate a profile/catalog membership, normalize
+historical selection, or rebuild it from current configuration. Existing M4 reasoning retains its recorded
 untagged meaning and gains no synthetic category, summary, or history.
 
 ## Dependencies, non-goals, and evidence
 
-This document depends on architectures 13, 14, 15, 16, and 21 plus decisions 0001--0013. It does not define a Responses
-SDK/driver, user-kind parser, profile picker/editor presentation, credential entry/keychain, telemetry, multimodal or
-structured output, plugin drivers, or remote continuation. The catalog database, the single current storage schema
-(logical version 1), credential rotation, health checks, discovery, pricing, controlled live reload, and typed header
-policy were activated by Slice 2 and then removed; the typed preservation-control and server-side-parser contracts were
-removed as unconsumed by the unconsumed-surface audit (2026-09), and no parser-configuration surface is activated.
+This document depends on architectures 14, 15, and 21 plus decisions 0002, 0004, 0005, 0007, and 0010--0013. It does
+not define a Responses SDK/driver, user-kind parser, profile picker/editor presentation, credential entry/keychain,
+telemetry, multimodal or structured output, plugin drivers, or remote continuation. The catalog database, the single
+current storage schema (logical version 1), credential rotation, health checks, discovery, pricing, controlled live
+reload, and typed header policy were activated by Slice 2 and then removed; the typed preservation-control and
+server-side-parser contracts were removed as unconsumed by the unconsumed-surface audit (2026-09), and no
+parser-configuration surface is activated.
 Semantic content inspection of reasoning or provider content is an accepted post-M5 future direction under [ADR
 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md),
 bound to Milestone 5+; it is not activated here, never substitutes for central redaction, and never rewrites stored

@@ -5,38 +5,35 @@
 Owner: architecture 20. Decisions: ADR 0012, ADR 0027, ADR 0034, ADR 0042. Research: m4plus_concept.md.
 
 This document owns future run-scoped IPython kernel epochs, foreground cells, namespace checkpoints, kernel-local
-background work, safe kernel projections, and kernel recovery. It applies only to future Mandate and VerifierMandate
-execution. M3/M4 bytes, IDs, UUIDs, cursors, events, snapshots, provider behavior, replay, recovery, and
+background work, safe kernel projections, and kernel recovery. It applies only to future run execution. M3/M4 bytes,
+IDs, UUIDs, cursors, events, snapshots, provider behavior, replay, recovery, and
 M4 `ToolCallRecorded -> tool_execution_unavailable` retain their recorded ordinary semantics. Retained session-scoped
-IPython/RLM material remains research provenance and historical-only where it conflicts with architectures 13--19.
+IPython/RLM material remains research provenance and historical-only where it conflicts with architectures 14--19.
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle and fresh admission; 14 is the historical
-record of the removed execution-meaning machinery (ADR 0046); 15 owns registry selection, direct tool admission,
-`ToolCallId`, generic tool-loop facts, `ToolCallStarted`, and publication; 16 owns readiness-driven admission; 17 owns
-child graph and verifier authority; 18 owns MCP lifecycle; 19 owns bridge attachment, grants, operation identity,
-ingress, delivery, and bridge recovery.
+Architecture 14 is the historical record of the removed execution-meaning machinery (ADR 0046); 15 owns registry
+selection, direct tool admission, `ToolCallId`, generic tool-loop facts, `ToolCallStarted`, and publication; 18 owns MCP
+lifecycle; 19 owns bridge attachment, grants, operation identity, ingress, delivery, and bridge recovery.
 
 This document owns only private sidecar creation/disposal, kernel epochs, foreground cells, namespace/checkpoint
 lifecycle, safe output normalization, kernel-local background restrictions, kernel readiness/capacity, and
-kernel-specific attempt evidence. A kernel is not a daemon, registry, tool, provider, scheduler, persistence authority,
-child executor, verifier, MCP client, sandbox, or OS privilege boundary. Namespace, checkpoint, Python value, output,
-kernel epoch, task, process, or resource never grants lifecycle, scheduling, tool, child, verifier, MCP, or
-reconciliation authority.
+kernel-specific attempt evidence. A kernel is not a daemon, registry, tool, provider, persistence authority,
+child executor, MCP client, sandbox, or OS privilege boundary. Namespace, checkpoint, Python value, output, kernel
+epoch, task, process, or resource never grants lifecycle, tool, child, MCP, or reconciliation authority.
 
 ## Immutable selection and run scope
 
 One live `KernelEpochId` belongs to exactly one admitted `RunId`. A persistent process, if retained for operational
 reasons, is not an executable epoch and cannot carry a usable namespace across runs. A new run receives a fresh epoch;
 only an explicitly verified checkpoint projection may seed it. Session-scoped kernel and fixed idle/concurrency limits
-in retained research are historical provenance, not future Mandate policy.
+in retained research are historical provenance, not future run policy.
 
-This document owns the semantic fields of the credential-free kernel selection in future Mandate execution meaning
+This document owns the semantic fields of the credential-free kernel selection in the future typed run record
 (typed serde JSON, ADR 0046):
 
 ```text
-MandateKernelSelectionV1
+KernelSelectionV1
   kernel_contract_revision
   runtime_family = IPython
   interpreter_contract_revision
@@ -59,7 +56,7 @@ One additive bounded reference joins the selection: `script_library_reference` p
 0042](../decisions/0042-project-script-library-for-kernel-cells.md)). It is credential-free and content-free, carries no
 absolute or symlink-target path, and its absence means an empty import surface.
 
-A `KernelEpochId` is created lazily only after recovery completes, a supported active Mandate run is reread, the exact
+A `KernelEpochId` is created lazily only after recovery completes, a supported active run is reread, the exact
 kernel/bridge/tool selections validate, required live capacity exists, and no cancellation gate applies.
 A fresh run never reuses a live kernel or namespace. Process creation occurs outside semantic transactions.
 
@@ -80,7 +77,7 @@ stateDiagram
 ```
 
 `Unknown` is attempt evidence, not a kernel-owned product state. A started kernel attempt without terminal proof commits
-a bounded partial result and pauses no Mandate.
+a bounded partial result.
 
 ## Foreground cells, output, and host requests
 
@@ -89,8 +86,6 @@ One epoch executes at most one foreground cell at a time. A cell binding is immu
 ```text
 KernelExecutionBindingV1
   kernel_execution_id
-  mandate_id
-  mandate_revision
   run_id
   model_step_id
   kernel_selection_reference
@@ -166,7 +161,6 @@ KernelCheckpointMetadataV1
   source_kernel_epoch
   source_execution_id
   source_run_id
-  source_mandate_revision
   parent_checkpoint_reference
   bounded_size
   verification_status
@@ -195,44 +189,43 @@ empty, and durable history remains readable.
 
 ## Background work, interruption, and recovery
 
-Background computation is private kernel convenience work only. It cannot create a trigger, child, scheduler candidate,
-durable continuation, or independent tool authority. It may use a host request only while carrying the current
-foreground grant; every bridge request by background code must carry the grant of the currently attached foreground
-execution, and after expiry it fails immediately and is never queued. Tasks and their output are discarded on
+Background computation is private kernel convenience work only. It cannot create a run, child, durable continuation, or
+independent tool authority. It may use a host request only while carrying the current foreground grant; every bridge
+request by background code must carry the grant of the currently attached foreground execution, and after expiry it
+fails immediately and is never queued. Tasks and their output are discarded on
 cell/run/epoch termination and are excluded from checkpoints; they are terminated by cancellation, kernel failure, idle
 disposal, daemon shutdown, or checkpoint restoration. Their in-memory results may be captured only by a later successful
 foreground cell.
 
 Interruption terminates the attached epoch without claiming rollback. Before start it records known pre-effect
-interruption; after start, known terminal proof remains known and absent proof commits a bounded `Partial`
-result with its notice; no Mandate pause follows. `run.interrupt` (`InterruptRunCommandDto`) remains the only
-first-scope run interruption command: the daemon signals the in-flight operation, then terminates the attached
-kernel epoch rather than merely leaving a potentially modified namespace alive. The run stays `Running`, the stopped
-cell commits its bounded `Partial` result with its notice, and the model receives the next step; the daemon does not
+interruption; after start, known terminal proof remains known and absent proof commits a bounded `Partial` result with
+its notice. `run.interrupt` (`InterruptRunCommandDto`) remains the only first-scope run interruption command: the daemon
+signals the in-flight operation, then terminates the attached kernel epoch rather than merely leaving a potentially
+modified namespace alive. The run stays `Running`, the stopped cell commits its bounded `Partial` result with its
+notice, and the model receives the next step; the daemon does not
 wait for the cell to acknowledge an interrupt. Late cell output, host responses, fragments, and results after
 interruption, terminalization, epoch replacement, grant expiry, or restart are non-authoritative and cannot append
 facts.
 
-Recovery completes before kernel readiness, attachment, scheduling, or admission. It invalidates grants, refuses
-old-sidecar adoption, classifies unfinished kernel attempts from durable evidence, disposes discoverable private
+Recovery completes before kernel readiness, attachment, or admission. It invalidates grants, refuses old-sidecar
+adoption, classifies unfinished kernel attempts from durable evidence, disposes discoverable private
 resources without a rollback claim, and verifies stored checkpoints without executing them. It never resumes, retries,
 reattaches, reruns, polls, or redisplays old kernel/cell/task/bridge/tool/child/MCP work; later work requires a new
 RunId, epoch, grant, cell identity, and operation identities.
 
-## Child, verifier, MCP, protocol, and compatibility boundaries
+## Child, MCP, protocol, and compatibility boundaries
 
-A child, verifier, or unrelated Mandate never receives a live kernel, namespace, grant, task, process, connection, MCP
-selection, or unfinished effect; a child may receive only a separately selected verified checkpoint copy, which is
-non-authorizing, independent, and child-local. Kernel state/evidence never widens verifier authority or mutates a
-target. Kernel-originated MCP work still uses the fixed `mcp` slot through architectures 19, 15, and 18; checkpoints
-never contain live MCP state and later runs reacquire capabilities.
+A child or unrelated run never receives a live kernel, namespace, grant, task, process, connection, MCP selection, or
+unfinished effect; a child may receive only a separately selected verified checkpoint copy, which is non-authorizing,
+independent, and child-local. Kernel-originated MCP work still uses the fixed `mcp` slot through
+architectures 19, 15, and 18; checkpoints never contain live MCP state and later runs reacquire capabilities.
 
 Future kernel delivery uses typed JSON-RPC 2.0 methods (ADR 0045): correlated results or typed resync/error followed by
 history-before-live notifications under existing durable sequence owners. It is read-only: replay/reconnect cannot
 create a kernel, restore a namespace, execute a cell, issue a grant, repeat a host request, start a child, or invoke
 MCP. Partial delivery is never permitted. M3/M4 and retained IPython/RLM records gain no kernel selection, epoch,
-checkpoint, grant, operation, Mandate, child, verifier, MCP, activity, policy, or execution-kind state; M4 tool calls
-remain denial evidence, and no current kernel, process, checkpoint, registry, configuration, bridge, provider, model,
+checkpoint, grant, operation, child, MCP, activity, or policy state; M4 tool calls remain denial evidence, and no
+current kernel, process, checkpoint, registry, configuration, bridge, provider, model,
 graph, or UI state may reconstruct missing meaning. The trusted-local model remains explicit: direct Python OS APIs can
 bypass the facade and are not sandboxed or fully observable.
 
@@ -286,7 +279,8 @@ implementation detail.
 
 ## Dependencies, non-goals, and evidence
 
-This document depends on architectures 13--19, decisions 0001--0011, and decision 0042 for the project script library
+This document depends on architectures 14, 15, 18, and 19, decisions 0002, 0004, 0005, 0007, 0010, and 0011, and
+decision 0042 for the project script library
 path, selection, and evidence contract. It does not define Python/Jupyter dependencies, process supervision,
 storage/wire tags, migrations, retention, encryption, resource-limit values, RLM executor topology,
 Skills/Goals/context, provider evolution, session forks, activity/UI, direct MCP administration, Cargo, Makefile/CI, or

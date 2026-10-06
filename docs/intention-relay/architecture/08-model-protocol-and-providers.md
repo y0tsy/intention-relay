@@ -267,11 +267,9 @@ execution-meaning envelope, canonical codec, and digest/identity layer are a sup
 execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md)); no canonical
 execution-meaning record exists (ADR 0046), and no future meaning record may reinterpret an M4 selection.
 
-A future provider/model/capability selection is only one nested part of the kind-specific execution meaning, and future
-Mandate-side nested selections are typed JSON fields owned by their domain documents. Provider drivers remain
-subordinate adapters: they do not select execution kind, Mandate revision, trigger, lifecycle, authority, tools,
-continuation, or current-state fallback. Model names never select a provider kind or driver, and model names never infer
-provider kind, driver, endpoint, capability, or execution kind.
+A future provider/model/capability selection is a typed JSON field owned by its domain document. Provider drivers remain
+subordinate adapters: they do not select lifecycle, authority, tools, or current-state fallback. Model names never
+select a provider kind or driver, and model names never infer provider kind, driver, endpoint, or capability.
 
 Future `responses`, parse-time `openai` aliasing, profiles, catalog lifecycle, reasoning, and driver compatibility are
 owned by [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md). It preserves M4
@@ -281,13 +279,13 @@ parse-time alias, and model names never route provider behavior.
 ## Post-M4 tool-loop consequence
 
 M4 tool-call evidence and denial remain unchanged. The ordinary request-side advertisement of the active registered
-tools is active under ADR 0039 and creates no frozen selection; `model_tool_loop_v1`, `ModelToolExchangeDto` history,
-and Mandate tool selection remain reserved for Slice 3. The same-run reasoning round-trip is active under ADR 0041: it
+tools is active under ADR 0039 and creates no frozen selection; `model_tool_loop_v1` and `ModelToolExchangeDto` history
+remain reserved for Slice 3. The same-run reasoning round-trip is active under ADR 0041: it
 attaches only the current round's accepted reasoning as transient request state, creates no durable reasoning history,
 and does not change the reserved `model_tool_loop_v1` contract. A future driver may support `model_tool_loop_v1` only
 when it can translate a frozen local typed tool selection and complete `ModelToolExchangeDto` history into a fresh
 provider request. It never invokes a local primitive or reuses opaque remote continuation state. Registry and tool-loop
-semantics are owned by [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md); provider
+semantics are owned by [Tool registry and model-tool loop](15-tool-registry-and-model-tool-loop.md); provider
 evolution remains separate.
 
 ## Post-M4 session branching consequence

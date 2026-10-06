@@ -21,8 +21,7 @@ closed variants), `AgentActivityJournalRecordDto`, `DirectChildStatusDto`, `Desc
 - the activity model without numeric bounds: the former
 1,024-message, 4-MiB-aggregate, 4,096-journal-record, 64-KiB-record, 256/512-KiB-page, 16-reference, and 16/512-KiB
 per-direction queue values, including their 1-slot/64-KiB clarification reserve, are removed by
-[ADR 0053](0053-sub-agent-and-fork-limits-by-precedent.md), and the child clarification deadline remains architecture
-17's deadline, a sublimit of the child lifetime;
+[ADR 0053](0053-sub-agent-and-fork-limits-by-precedent.md);
 - urgent-notification conditions and one-`Urgent`-per-(tree, reason) dedup;
 - the archive terminality precondition and the 32-tree/64-KiB notification
 page bound;
@@ -45,12 +44,12 @@ The former `run-execution-meaning-v4` carrier is removed with the canonical code
 Each direction keeps M3/M4 behavior authoritative, affects fresh runs only after its own activating specification, and
 remains bound to Milestone 5+. The former numeric values were first-scope limits classified as intrinsic/capacity
 bounds; they are removed by [ADR 0053](0053-sub-agent-and-fork-limits-by-precedent.md), and a future activity bound
-returns only with a recorded precedent, never as a Mandate quota.
+returns only with a recorded precedent.
 
 ## Normative invariants
 
 1. Activity identity is daemon-assigned and distinct from Session, Run,
-lineage, notification, and Mandate-graph identity; a `RunId` is provenance, not authority.
+lineage, and notification identity; a `RunId` is provenance, not authority.
 2. Only a direct parent/child pair exchanges the closed message kinds; a
 sibling, root, adapter, bridge, kernel, MCP service, provider, or arbitrary caller cannot send a pair message.
 3. `safe_text` is bounded redacted presentation; `RetainedContent` is

@@ -75,12 +75,10 @@ and do not enter the run publication gate merely because they are related to the
 
 This decision supersedes the M4 denial-only boundary for newly admitted ordinary runs. The closed M4 baseline, [M4
 Closure Evidence](../closeout/m4-closure-evidence.md), and historical M4 `ToolCallRecorded` facts remain unchanged, and
-the no-port denial path continues to behave byte-identically to M4. Mandate-specific tool-loop execution meaning remains
-future architecture-15 scope.
+the no-port denial path continues to behave byte-identically to M4.
 
-This decision adds no OpenRouter or OpenAI Responses tool mapping, parallel tool execution, tool-failure-to-model
-continuation, or Mandate/architecture-15 loop activation. MCP, kernel, VFR, Headroom, and Plan features remain outside
-it.
+This decision adds no OpenRouter or OpenAI Responses tool mapping, parallel tool execution, or tool-failure-to-model
+continuation. MCP, kernel, VFR, Headroom, and Plan features remain outside it.
 
 ## Security and residual risk
 

@@ -270,33 +270,6 @@ user-authorized retention/deletion/garbage-collection policy that never rewrites
 descendants or audit dependencies, and is never a silent automatic cleanup; archive-only retention remains the
 first-scope default.
 
-## Post-M4 Mandate foundation boundary
-
-A future Mandate is a distinct durable work aggregate. It may associate with a future service-session concept while
-preserving the existing one-active-run invariant for that service session. Mandate triggers are durable causal reasons
-for future fresh admission; they are not pending turns and do not reinterpret accepted turn input.
-
-For future Mandate work:
-
--  admission freezes the selected Mandate revision, trigger, execution meaning, and applicable safe context before
-dependent external work;
-- a revision while a Mandate run is non-terminal affects only a later fresh run;
-- user lifecycle/revision commands win optimistic conflicts with daemon operational facts or later verifier mutations;
--  no external provider, tool, process, kernel, child, MCP, network, or scheduler action occurs inside the transition
-transaction;
-- recovery preserves durable facts/triggers but never resumes old work;
--  a started effect without terminal proof commits a bounded partial result and permits the next model step, never an
-automatic retry.
-
-[Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md) owns the detailed Mandate lifecycle,
-trigger ordering, fresh admission, and recovery contract; [architecture
-16](16-mandate-scheduler-and-readiness-driven-admission.md) owns scheduler semantics, and [architecture
-17](17-mandate-child-graph-and-delegated-verifier-authority.md) owns child graph and verifier authority. Existing run
-states and M3/M4 recovery behavior remain unchanged. Concrete timer/process topology, event variants, protocol delivery,
-and schema design remain later packages. See [decision
-0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md) and [decision
-0052](../decisions/0052-partial-tool-results-for-interrupted-execution.md).
-
 ## Post-M4 tool-loop storage consequence
 
 Future model-tool-loop work atomically records a completed tool-calling model step, its ordered tool group, normalized
@@ -305,48 +278,16 @@ Future admissions, starts, fragments, and terminal results order by the run's co
 publication, and publish only after an independent scoped reread. A started effect without terminal proof commits a
 bounded partial result; recovery never retries or resumes a tool action. This adds no current table, event,
 state, migration, or reinterpretation of M4 `ToolCallRecorded` denial;
-[Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md) owns the exact semantics.
-
-## Post-M4 execution-meaning storage consequence
-
-Future Mandate admission binds its immutable recorded meaning in the same transaction as the new RunId and Mandate
-transition. [Run execution meaning and historical
-compatibility](14-run-execution-meaning-and-historical-compatibility.md) owns the remaining historical compatibility
-rules. This adds no table, event, ordering sequence, or synthetic M3/M4 field; the binding carries no ordering of its
-own.
-
-## Post-M4 scheduler storage consequence
-
-Future scheduler candidate outcomes and durable observations are evidence of their Mandate container and order by that
-Mandate's container journal; live readiness observations carry no durable order and order only by the owner-local
-operational tuple `(source_instance_id, source_epoch, source_sequence)`, which is operational metadata rather than an
-ordering authority. They are distinct from pending turns, the session event sequence, and the run's container
-journal. An unavailable candidate retains its reason and creates no Run. Fresh admission revalidates lifecycle,
-sequence, revision, reason, meaning, and readiness atomically; no scheduler action occurs in that transaction.
-Scheduler admission begins only after recovery, and pre-crash live readiness is never trusted. This adds no current
-table, event, migration, or pending-turn change; [Mandate scheduler and readiness-driven
-admission](16-mandate-scheduler-and-readiness-driven-admission.md) owns the semantics.
-
-## Post-M4 child/verifier storage consequence
-
-Future child creation atomically binds the child Mandate, immutable direct edge, delegation snapshot, parent tool
-result, and their affected projections/events/snapshots before publication. Future verifier mutation atomically
-validates its authority and frozen target baseline with its applied or rejected result. These facts remain separate from
-the session event sequence, the run's container journal, pending turns, and M4 replay: a delegation pair is a
-container, and records that belong to it order by that pair's container journal. Recovery rebuilds only supported graph
-projections and never resumes child/verifier external work. This adds no current table, event, migration, or historical
-reinterpretation; [Mandate child graph and delegated verifier
-authority](17-mandate-child-graph-and-delegated-verifier-authority.md) owns the detailed semantics.
+[Tool registry and model-tool loop](15-tool-registry-and-model-tool-loop.md) owns the exact semantics.
 
 ## Post-M4 MCP storage consequence
 
 Future MCP discovery atomically commits safe discovery evidence, immutable capability revisions, accumulated selection,
 and its tool result before publication. Future invocation atomically binds its exact selection/capability/input before
 effect and persists only safe terminal projection or bounded partial evidence. These records remain separate from the
-session event sequence, the run's container journal, pending turns, and M4 replay: MCP records belong to their Mandate
-container and order by that Mandate's container journal. Recovery never reconnects, reattaches, rediscovers, retries, or
-resumes MCP work. This adds no current table, event, migration, or historical reinterpretation; [Mandate MCP
-capability lifecycle](18-mandate-mcp-capability-lifecycle.md) owns the detailed semantics.
+session event sequence, the run's container journal, pending turns, and M4 replay. Recovery never reconnects,
+reattaches, rediscovers, retries, or resumes MCP work. This adds no current table, event, migration, or historical
+reinterpretation; [MCP capability lifecycle](18-mcp-capability-lifecycle.md) owns the detailed semantics.
 
 ## Post-M4 provider-evolution storage consequence
 

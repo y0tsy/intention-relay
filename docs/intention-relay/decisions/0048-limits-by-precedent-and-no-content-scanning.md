@@ -22,7 +22,7 @@ documentation-only corridor, reservation, calendar-period, and queue-audit surfa
 | [ADR 0034](0034-accepted-m5plus-retained-deferral-directions.md) | Item 5, the future classification of activity numeric values as intrinsic bounds, capacity availability, or ordinary product policy | A numeric activity bound is introduced only with a recorded precedent, under the rule below |
 | [ADR 0035](0035-m5plus-complete-foundation-activation.md) | The Slice 2 queue-promotion and reconciliation wording and the Slice 3 "corridors and reservations" wording | The Slice 2 revert and the precedent rule below |
 
-The fixed-limit rows of the removed Slice 1 ledger (activity, run, child, and tool-loop limit records) are removed with
+The fixed-limit rows of the removed Slice 1 ledger (activity, run, and tool-loop limit records) are removed with
 the ledger; no limit record remains. The unavailable-queue promotion and reconciliation, held-run admission, and related
 queue audits were reverted (Slice 2 revert); this record removes their documentation remnants.
 
@@ -37,7 +37,7 @@ justifies a limit.
 512 character caps, the contract quantity and aggregate caps, the 16-call tool-group maximum and its
 `provider_tool_group_invalid` outcome, the frozen `Fixed*Limits` records, digest-format checks, the tool-result quantity
 caps (`MAX_GLOB_MATCHES`, `MAX_GREP_MATCHES`, `MAX_GREP_FILES`) with their truncated-result behavior, the execute
-argument caps (`MAX_EXECUTE_ARGUMENTS`, `MAX_EXECUTE_ARGUMENTS_TOTAL_BYTES`), and the activity, run, and child ceiling
+argument caps (`MAX_EXECUTE_ARGUMENTS`, `MAX_EXECUTE_ARGUMENTS_TOTAL_BYTES`), and the activity and run ceiling
 families. They are deleted, not renumbered or relocated.
 3. The keep-list of liveness safeguards is retained, each with its reason:
 
@@ -129,7 +129,7 @@ to the fake-secret tests or the CI documentation secret scan.
 [ADR 0034](0034-accepted-m5plus-retained-deferral-directions.md), and [ADR
 0035](0035-m5plus-complete-foundation-activation.md) are amended as recorded above. [Architecture
 27](../architecture/27-programmatic-caller-policy-and-admission.md) owns the programmatic-caller policy that loses the
-limit, corridor, and period clauses; [architecture 15](../architecture/15-tool-registry-and-mandate-tool-loop.md) owns
+limit, corridor, and period clauses; [architecture 15](../architecture/15-tool-registry-and-model-tool-loop.md) owns
 the tool-loop contracts that lose the numeric group and output bounds; [architecture
 24](../architecture/24-activity-ui-and-adapters.md) owns the activity surface whose numeric classification is
 superseded; [architecture 04](../architecture/04-sessions-runs-events-and-storage.md) owns the live M3 queue that stays

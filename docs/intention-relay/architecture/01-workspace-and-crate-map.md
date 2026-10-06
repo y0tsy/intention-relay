@@ -120,7 +120,7 @@ transactional projection/event/snapshot writes, and SQLite-only fault injection.
 (ADR 0047) — remains M5 policy ownership.
 -  `intention-runtime` decides valid run state edges and owns interruption handling: a stopped provider stream or tool
 call records a notice, resets its signal, and the run continues with its next model step. The repository owns run
-creation, pending-turn context joins, and recovery. It has no provider, tool, timer, stream, or scheduler dependency in
+creation, pending-turn context joins, and recovery. It has no provider, tool, timer, or stream dependency in
 M3.
 -  `intention-test-support` is a non-production workspace crate. It owns credential-free fixture configuration, native
 temporary roots under `std::env::temp_dir()`, `TempDir`-backed durable databases, deterministic sessions, and bounded
@@ -192,16 +192,10 @@ feature policy remain activation-time projections.
 
 | Concern | Future layer owner | Required boundary |
 | --- | --- | --- |
-| Mandate IDs, revisions, lifecycle values, trigger/disposition values | Domain/types | Typed, credential-free values and invariants. |
-| Admission workflows, user/daemon conflict handling, recovery decisions | Application/runtime | DTO-only storage and capability contracts. |
+| Admission workflows and recovery decisions | Application/runtime | DTO-only storage and capability contracts. |
 | Atomic lifecycle/attempt persistence and recovery facts | Storage | No transaction/resource leaks. |
 | Public commands, queries, events, and future versioned typed replay | Protocol | No runtime, SDK, storage, or adapter resources. |
 | Registry and one capability invocation path | Tools/gateway | Composition-only concrete assembly. |
-| Scheduler readiness/candidate values | Domain/types | Typed, credential-free operational evidence. |
-| Scheduler reevaluation and admission orchestration | Application/runtime | Lifecycle-owned admission only; no second runtime. |
-| Scheduler observations and decision evidence | Storage | Atomic persistence without resource leaks. |
-| Child edges, delegation, verifier authority, and audit values | Domain/types | Typed, credential-free values and invariants. |
-| Child/verifier orchestration and target mutation | Application/runtime | Lifecycle-owned transitions and DTO-only storage. |
 | MCP source, capability, selection, and invocation values | Domain/types | Typed, credential-free values and invariants. |
 | MCP discovery/invocation orchestration and recovery | Application/runtime | One registry path and DTO-only storage. |
 | Kernel IDs, selections, checkpoint metadata, and safe projections | Domain/types | Typed, credential-free values and no Python/Jupyter resources. |
@@ -211,12 +205,12 @@ feature policy remain activation-time projections.
 | Concrete provider/tool/storage selection | Composition | The only concrete assembler. |
 | Presentation and typed user input | Adapters | No local business authority or bypass. |
 
-Architectures 17, 18, and 20 own future child/verifier, MCP, and kernel semantics. Kernel work must split typed
-contracts, lifecycle orchestration, and private Python/Jupyter translation without exposing implementation resources;
-Skill, provider-profile, and fork boundaries remain separate delivery decisions. Any split must preserve this acyclic
-direction, DTO-first contracts, a declared test target, the declared coverage tier ([ADR
-0051](../decisions/0051-per-crate-coverage-tiers.md)), and isolated architecture fixtures before
-production activation. Architecture 16 owns no scheduler crate; exact crate allocation remains activation-time work.
+Architectures 18 and 20 own future MCP and kernel semantics. Kernel work must split typed contracts, lifecycle
+orchestration, and private Python/Jupyter translation without exposing implementation resources; Skill, provider-profile,
+and fork boundaries remain separate delivery decisions. Any split must preserve this acyclic direction, DTO-first
+contracts, a declared test target, the declared coverage tier ([ADR
+0051](../decisions/0051-per-crate-coverage-tiers.md)), and isolated architecture fixtures before production activation.
+Exact crate allocation remains activation-time work.
 
 See [decision 0004](../decisions/0004-rust-owned-capability-plane-and-fixed-tool-registry.md) and the ownership map.
 

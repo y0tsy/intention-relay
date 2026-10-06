@@ -9,16 +9,12 @@ linked architecture sections.
 
 | ID | Status | Topic |
 | --- | --- | --- |
-| [0001](0001-mandate-authority-and-fresh-run-lifecycle.md) | Accepted | Mandate authority and fresh-run lifecycle |
 | [0002](0002-external-attempt-evidence-and-unknown-effect-reconciliation.md) | Superseded | External attempt evidence and unknown-effect reconciliation |
 | [0004](0004-rust-owned-capability-plane-and-fixed-tool-registry.md) | Accepted | One Rust-owned capability path and fixed registry boundary |
 | [0005](0005-m4plus-authority-reconciliation-and-delivery-boundaries.md) | Accepted | M4+ reconciliation and delivery boundaries |
-| [0006](0006-mandate-lifecycle-and-admission-boundary.md) | Accepted | Mandate lifecycle and admission boundary |
-| [0007](0007-unified-tool-registry-and-direct-mandate-tool-admission.md) | Accepted | Unified tool registry and direct Mandate tool admission |
-| [0008](0008-durable-mandate-scheduler-and-readiness-driven-admission.md) | Accepted | Durable Mandate scheduler and readiness-driven admission |
-| [0009](0009-mandate-child-graph-and-delegated-verifier-authority.md) | Accepted | Mandate child graph and delegated verifier authority |
-| [0010](0010-mandate-mcp-capability-lifecycle.md) | Accepted | Mandate MCP capability lifecycle |
-| [0011](0011-mandate-gateway-rlm-bridge.md) | Accepted | Mandate Gateway/RLM bridge |
+| [0007](0007-unified-tool-registry.md) | Accepted | Unified tool registry |
+| [0010](0010-mcp-capability-lifecycle.md) | Accepted | MCP capability lifecycle |
+| [0011](0011-gateway-rlm-bridge.md) | Accepted | Gateway/RLM bridge |
 | [0012](0012-ipython-kernel-lifecycle.md) | Accepted | Run-scoped IPython kernel lifecycle |
 | [0013](0013-goals-skills-context-memory-and-compaction.md) | Accepted | Goals, Skills, context, memory, and compaction |
 | [0014](0014-provider-evolution-profiles-and-reasoning.md) | Accepted | Provider evolution, profiles, and reasoning |
@@ -36,7 +32,6 @@ linked architecture sections.
 | [0027](0027-child-kernel-bridge-mcp-detail-directions.md) | Accepted | Post-M5 child, kernel, bridge, and MCP detail directions |
 | [0028](0028-provider-reasoning-and-catalog-detail-directions.md) | Accepted | Post-M5 provider reasoning and catalog detail directions |
 | [0029](0029-activity-and-notification-detail-directions.md) | Accepted | Post-M5 activity and notification detail directions |
-| [0031](0031-autonomous-continuation-direction.md) | Accepted | Post-M5 autonomous continuation direction |
 | [0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) | Accepted | Post-M5 accepted deferred directions: activity-tree metadata, semantic content inspection, and per-call cancellation (the per-call cancellation direction is superseded by ADR 0055) |
 | [0033](0033-accepted-m5plus-execution-directions.md) | Accepted | Post-M5 accepted execution directions: control-plane editing, provider-native controls, fork execution, and RLM packaging |
 | [0034](0034-accepted-m5plus-retained-deferral-directions.md) | Accepted | Post-M5 accepted retained-deferral directions: kernel output projection, retention policy, supervision topology, calendar semantics, and activity limit classification |
@@ -54,7 +49,7 @@ linked architecture sections.
 | [0049](0049-base-coverage-threshold.md) | Accepted | Base 80% line-coverage threshold and designated-files mechanism (replaces the A/B/C coverage tiers; the base-threshold and designated-files clauses are superseded by ADR 0051) |
 | [0050](0050-ordering-authorities.md) | Accepted | Ordering authorities (session event sequence and container journal sequence, plus the observation cursor as a non-authoritative resume position) |
 | [0051](0051-per-crate-coverage-tiers.md) | Accepted | Per-crate coverage tiers (`core` 75%, `standard` 60%, `edge` 20%, `exempt` 0%; replaces the base 80% threshold and designated-files mechanism) |
-| [0052](0052-partial-tool-results-for-interrupted-execution.md) | Accepted | Partial tool results for interrupted execution (bounded captured output, interruption notices, and no Mandate pause) |
+| [0052](0052-partial-tool-results-for-interrupted-execution.md) | Accepted | Partial tool results for interrupted execution (bounded captured output, interruption notices, and no pause) |
 | [0053](0053-sub-agent-and-fork-limits-by-precedent.md) | Accepted | Sub-agent and fork limits by precedent (every numeric child, bridge, activity, fork, kernel, and progress cap removed; no survivor) |
 | [0054](0054-dynamic-context-window-and-prompt-caching.md) | Accepted | Dynamic context window and prompt-cache breakpoints (provider context-window policy, calibrated token accounting, largest-first tool-result compression, capacity stub, and ephemeral cache markers) |
 | [0055](0055-pending-turns-and-cooperative-interruption.md) | Accepted | Pending turns and cooperative interruption (durable pending input joined to the live run context, `run.interrupt`, no `Cancelling`/`Cancelled` run status, and cooperative tool interruption with partial results) |

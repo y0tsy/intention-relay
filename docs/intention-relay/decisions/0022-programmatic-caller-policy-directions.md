@@ -62,9 +62,8 @@ accepted future direction for ordinary future work without documenting any featu
 ## Compatibility and non-goals
 
 This decision supersedes the absence of a disposition for the programmatic-caller policy in the retired reconciliation
-registers. For new Mandate work, retained RLM run-rooted activity identity, root-origin, direct-pair queue, and fixed
-observation limits remain historical-only where they conflict, consistent with architectures 17 and 24. The closed M4
-baseline, M3/M4 bytes, and existing behavior remain unchanged, and no code changes are authorized by this decision.
+registers. The closed M4 baseline, M3/M4 bytes, and existing behavior remain unchanged, and no code changes are
+authorized by this decision.
 
 No typed command-template direction, new policy decoder, or OS security boundary is added. M5-M9 are not renumbered.
 

@@ -55,7 +55,7 @@ independent Session; it transfers no authority or live resources.
 12. No external effect occurs inside a durable semantic transaction.
 13. A started operation interrupted or lost before a final result commits a bounded partial result and permits the
 next model step; it is never automatically retried, resumed, or treated as rolled back.
-14. Recovery always uses fresh admission and a new `RunId`.
+14. Recovery always uses a new `RunId`.
 15. Audit is evidence, not proof of rollback or absence of external effects.
 16. No secret, raw provider resource, live handle, or hidden plan frontmatter
 crosses a public or durable projection.

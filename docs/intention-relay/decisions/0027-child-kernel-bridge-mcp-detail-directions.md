@@ -1,27 +1,18 @@
-# 0027: Post-M5 Child, Kernel, Bridge, and MCP Detail Directions
+# 0027: Post-M5 Kernel, Bridge, and MCP Detail Directions
 
 ## Status
 
 Accepted 2026-08-30. Not implemented; activation requires an activating specification.
 
-Amended 2026-10-05 by [ADR 0053](0053-sub-agent-and-fork-limits-by-precedent.md): every numeric child, bridge, kernel,
-and progress bound is removed — queue, delegation size, result size, concurrency, topology counts, class step budgets,
-lifetime and clarification deadlines, kernel idle/live/cell durations, and the bridge slow-peer numbers; the
-qualitative child-graph shape, label-only classes, kernel policy, and the implemented transport, storage, and
-host-streaming safeguards stay.
+Amended 2026-10-05 by [ADR 0053](0053-sub-agent-and-fork-limits-by-precedent.md): every numeric bridge and kernel bound
+is removed — kernel idle/live/cell durations and the bridge slow-peer numbers; the qualitative kernel policy and the
+implemented transport, storage, and host-streaming safeguards stay.
 
 ## Decision
 
-The child-agent (RLM), kernel, bridge, and MCP detail from `m4plus_concept.md` is adopted and owned by the respective
-authoritative packages:
+The kernel, bridge, and MCP detail from `m4plus_concept.md` is adopted and owned by the respective authoritative
+packages:
 
-- **Architecture 17 (child/verifier)**: the child commands and messages
-(`ParentSubAgentCommandDto`, `SubAgentHandleDto`, `RlmChildMessageOperation`, `MandateChildMessageDto`,
-`MandateChildTerminalSummaryDto`, `RlmParentLinkDto`), the child-graph shape with label-only classes and no numeric
-bounds, child kernel seeding, the 10 closed
-`sub_agent_*`/`model_stream_progress_timeout` safe failures, and the child-creation and delegation fields
-`child_provider_capability_selection`, `child_activity_graph_id`, and
-`required_evidence_contract_references`;
 - **Architecture 20 (kernel)**: the `KernelExecutionRequestDto` family, the
 idle-disposal, kernel-capacity, and foreground-cell execution policy without fixed durations,
 `kernel-state-snapshot-v1`, `KernelOutputChunkDto` closed
@@ -35,28 +26,14 @@ cell to acknowledge an interrupt;
 per-`ToolCallId` cancellation command, and the slow-peer non-delay property of that path;
 - **Architecture 18 (MCP)**: the bounded `McpMethodDto` gateway, connection
 scope and local-stdio process lifecycle, the 6 closed `mcp_*` safe failures, and the supersession of the concept2
-`MandateMcpCapabilitySourceDto`/ `DiscoveryDto`/`CapabilityRevisionDto` names by the authoritative
-`MandateMcpCapabilitySourceV1`/`MandateMcpDiscoveryV1`/ `MandateMcpCapabilityRevisionV1` records.
-
-The child-graph prose clauses (terminal or interrupted recipient rejects delivery, composition-root-only activation of
-`sub_agent`, handle content exclusion, message delivery ordering to a terminal child, stale-handle and restart behavior,
-the durable admission transaction, class narrowing and no-fallback, child lifetime, and the no-token-ceiling rule) are
-owned by architecture 17.
+`McpCapabilitySourceDto`/`McpDiscoveryDto`/`McpCapabilityRevisionDto` names by the authoritative
+`McpCapabilitySourceV1`/`McpDiscoveryV1`/`McpCapabilityRevisionV1` records.
 
 Each direction keeps M3/M4 behavior authoritative, affects fresh runs only after its own activating specification, and
-remains bound to Milestone 5+. The retained RLM session-scoped identity and fixed limits remain historical provenance
-where they conflict with Mandate child-graph semantics.
+remains bound to Milestone 5+.
 
 ## Normative invariants
 
-1. `sub_agent` creates a durable child Mandate; the child model adds no
-`ToolId`, registry entry, or independent authority.
-2. Messages are durable redacted records; equal replay returns the stored
-message; changed reuse fails before publication.
-3. The child-graph shape and its label-only classes are RLM-tree policy and
-never become a Mandate admission quota or a scheduler gate.
-4. A clarification request has a deadline that is a sublimit of the
-child lifetime; a late reply fails closed.
 5. One live kernel epoch belongs to exactly one admitted `RunId`; retained
 session-scoped idle/concurrency limits are historical provenance, and the first-scope kernel policy states no fixed
 idle, count, or cell duration.
@@ -82,12 +59,12 @@ documenting any part of them as implemented.
 
 ## Compatibility and non-goals
 
-This decision supersedes the absence of the detail in the principle-level text of architectures 17, 20, 19, and 18. The
+This decision supersedes the absence of the detail in the principle-level text of architectures 20, 19, and 18. The
 closed M4 baseline, M3/M4 bytes, and existing behavior remain unchanged, and no code changes are authorized by this
 decision.
 
 A sub-agent executor or recursion topology, process supervision, RLM/IPython executor topology, direct MCP
 administration, and production activation remain outside this decision. M5-M9 are not renumbered.
 
-Owner: architectures 17-20. Evidence: activating specification per [architecture
+Owner: architectures 18-20. Evidence: activating specification per [architecture
 12](../architecture/12-quality-gates-and-makefile.md).

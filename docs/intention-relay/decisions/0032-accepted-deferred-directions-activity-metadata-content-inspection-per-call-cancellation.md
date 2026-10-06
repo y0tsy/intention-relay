@@ -27,8 +27,8 @@ remains bound to Milestone 5+.
 ## Normative invariants
 
 1. Tree-level metadata is bounded, credential-free, and non-authorizing; it
-cannot create activity, notification, lifecycle, scheduler, tool, child, verifier, MCP, bridge, kernel, or
-reconciliation authority, and it does not replace or filter the activity journal or notification sequences.
+cannot create activity, notification, lifecycle, tool, child, MCP, bridge, kernel, or reconciliation authority, and it
+does not replace or filter the activity journal or notification sequences.
 2. Semantic content inspection is explicit, code-owned, and non-authorizing;
 it never substitutes for central redaction, never rewrites stored facts, and never exposes raw provider content.
 3. Per-call cancellation and owner-specific semantics are additive future

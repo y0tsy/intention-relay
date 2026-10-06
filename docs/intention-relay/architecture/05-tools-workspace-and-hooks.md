@@ -61,13 +61,6 @@ reserved slots are never included. Ordinary model requests advertise that set as
 The concrete Rust API can use traits and generic DTOs, but the runtime registry must not accept untyped tool inputs or
 results.
 
-### Execution-kind scope
-
-The addressing rules in this document apply to ordinary M3/M4 and ordinary v1 execution. Future Mandate WorkspaceRoot
-semantics are owned by architecture 15: WorkspaceRoot supplies the default relative base, the `execute` CWD, and the
-default search scope, while absolute or parent paths are addressed as given. Hooks remain typed and mandatory in both
-modes, but future Mandate hooks cannot add discretionary confirmation, risk, or root-origin authorization.
-
 ## WorkspaceRoot is a required addressing anchor
 
 A session's `WorkspaceRootDto` is passed to every tool that reads, writes, searches, expands, or executes against a
@@ -245,13 +238,11 @@ execute-CWD, hook-order, and policy-denial scenarios above.
 destructive file actions. Build Autopilot does not use per-action confirmation; Plan `execute` is advisory-guided and
 trusted-local.
 
-## Autopilot and Mandate tool boundary
+## Autopilot tool boundary
 
 Existing M3/M4 path-handling and confirmation behavior remains historical. The accepted Build Autopilot policy
-intentionally removes per-action confirmation for the configured Build surface. Future Mandate execution also differs:
-WorkspaceRoot is a required default base/CWD with safe observation, not a path containment authority, and compatible
-frozen active descriptors admit without ordinary confirmation or risk gates. Hooks remain typed and mandatory but cannot
-recreate discretionary Mandate authorization. The fixed registry, descriptor revisions, direct admission, and loop
-details are owned by [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md). This does
-not create a second registry or bypass path. Plan `execute` remains available under advisory focus guidance and is not a
-sandbox; ordinary Plan `write` and `edit` remain denied.
+intentionally removes per-action confirmation for the configured Build surface. Hooks remain typed and mandatory but
+cannot add discretionary confirmation or risk authorization. The fixed registry, descriptor revisions, and loop details
+are owned by [Tool registry and model-tool loop](15-tool-registry-and-model-tool-loop.md). This does not create a
+second registry or bypass path. Plan `execute` remains available under advisory focus guidance and is not a sandbox;
+ordinary Plan `write` and `edit` remain denied.

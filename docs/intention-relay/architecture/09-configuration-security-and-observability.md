@@ -228,7 +228,7 @@ future direction under [ADR 0020](../decisions/0020-configuration-provider-contr
 attempt evidence must remain credential-free and exclude SDK objects, process handles, kernel state, bridge grants, raw
 provider/MCP payloads, and private endpoint material.
 
-Future observability may expose typed capacity outcomes and safe Mandate/attempt references, but it cannot convert logs,
+Future observability may expose typed capacity outcomes and safe attempt references, but it cannot convert logs,
 notifications, activity, or provider responses into authority. Redaction rules apply to every new persistence, protocol,
 diagnostic, and identity surface.
 
@@ -244,8 +244,8 @@ redaction boundaries above, and no future meaning record may reinterpret an M4 s
 
 Future registry/descriptor revisions and safe tool state may be observable, but canonical or public projections may not
 expose credentials, raw typed inputs, unsafe absolute/canonical/symlink paths, process resources, provider-native call
-identifiers, SDK values, or raw output. Mandate outside-root observation is audit-only and non-authorizing. See [Tool
-registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md).
+identifiers, SDK values, or raw output. See [Tool registry and model-tool
+loop](15-tool-registry-and-model-tool-loop.md).
 
 ## Post-M4 kernel observability consequence
 

@@ -8,8 +8,8 @@ Accepted.
 
 Future activity, notification, and acknowledgement behavior extends ordinary M6 through daemon-owned safe projections
 and one shared typed client path. Activity identity, direct-pair communication, journals, notification summaries, and
-presentation acknowledgement are separate durable concerns; they do not create lifecycle, scheduler, tool,
-child/verifier, provider, fork, or reconciliation authority.
+presentation acknowledgement are separate durable concerns; they do not create lifecycle, tool, provider, fork, or
+reconciliation authority.
 
 ## Invariants
 
@@ -32,4 +32,4 @@ Owner: architecture 24. Evidence: activating specification per [architecture
 12](../architecture/12-quality-gates-and-makefile.md).
 
 Provenance: `m4plus_concept.md`, selected agent communication, observation, notification, and presentation material,
-reconciled against architectures 03 and 13--23.
+reconciled against architectures 03, 14, 15, and 18--23.

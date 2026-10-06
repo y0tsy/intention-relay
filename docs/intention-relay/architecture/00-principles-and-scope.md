@@ -1,7 +1,7 @@
 # Principles and Scope
 
-**Current policy.** Principles 1–11 govern v1, delivered through M5. Principles 12–29 bind the post-M5+ Mandate track
-and its ordinary-run extensions, each implemented only where its owning milestone has landed.
+**Current policy.** Principles 1–11 govern v1, delivered through M5. Principles 12–22 govern the post-M4+ extension
+packages, each implemented only where its owning milestone has landed.
 
 This document governs the application shape, ownership boundaries, v1 exclusions, and delivery mindset. Detailed
 contracts belong to [DTO and contract policy](02-dto-and-contract-policy.md); crate ownership to [Workspace and crate
@@ -143,9 +143,8 @@ work; the second stays owned by the named slice.
 ## Deferred decisions
 
 Remote adapter security and authentication; multi-daemon or cloud synchronization; a plugin API for externally supplied
-tools; ordinary-v1 background scheduled jobs (future Mandate scheduler semantics are separately owned by architecture
-16, while recurring schedule syntax and worker topology remain deferred); sandboxing, worktrees, or per-run filesystem
-isolation.
+tools; ordinary-v1 background scheduled jobs, including recurring schedule syntax and worker topology; sandboxing,
+worktrees, or per-run filesystem isolation.
 
 ## Verification
 
@@ -156,107 +155,60 @@ requires at least one executable test or a justified documented exception.
 
 ## Post-M4 foundation principles
 
-Principles 12–29 bind the post-M5+ Mandate track and its ordinary-run extensions. They govern future authoritative M4+
-packages without changing closed M4 or current ordinary-run behavior. Principle 27's provider-selection evidence was
-delivered by the M5+ Slice 2 control plane and then reverted, so it is again future work; principles 12–26 and 28 are
-held by the Mandate milestones (roadmap M10–M12) and their owning architecture documents 15–23. The authoritative source
-and package boundaries for these principles are decision records 0001–0002 and 0004–0016.
+Principles 12–22 govern future authoritative post-M4 packages without changing closed M4 or current ordinary-run
+behavior. Principle 20's provider-selection evidence was delivered by the M5+ Slice 2 control plane and then reverted,
+so it is again future work. The authoritative source and package boundaries for these principles are their owning
+architecture documents and decision records.
 
-### 12. Execution kinds are explicit
-
-Future execution has a closed kind discriminator: `Ordinary`, `Mandate`, or `VerifierMandate`. A record's kind, meaning
-version, and payload must agree before dependent external work. New semantics are not inferred from model names, current
-configuration, ancestry, prompts, Goals, Skills, or adapter state.
-
-### 13. Mandate authority is user-issued and bounded
-
-A future Mandate is durable user-issued work authority. User commands own its product lifecycle and revisions. The
-daemon owns only explicitly enumerated operational facts such as durable trigger capture, admission, and known terminal
-disposition. A Goal, Skill, parent relation, MCP source, provider response, bridge grant, kernel namespace, or activity
-record cannot grant lifecycle, target-mutation, scheduling, or tool authority.
-
-### 14. Continuation is fresh admission, never resumption
-
-A future continuation may admit a new run from durable state. It never resumes, reattaches, or repeats an old provider
-request, tool call, process, kernel task, child work, MCP operation, bridge operation, or interrupted external effect.
-
-### 15. Durable transitions and effects are separate
+### 12. Durable transitions and effects are separate
 
 Future lifecycle/admission transitions atomically commit their projections, events, snapshots, and idempotency evidence
 or commit nothing. External work occurs after that transaction. Publication follows durable commit and an independent
 scoped reread; publication failure cannot roll back committed state.
 
-### 16. External uncertainty is explicit
+### 13. External uncertainty is explicit
 
-A future external attempt distinguishes no-start, started, known terminal, and unknown terminal facts. A known
-validation failure, provider failure, or non-zero process exit is not automatically unknown. A started attempt
-interrupted or lost before a final result commits a bounded `Partial` result: the model receives the captured output
-with a notice and the next model step proceeds. Nothing pauses, and nothing is automatically retried.
+An external attempt distinguishes no-start, started, known terminal, and unknown terminal facts. A known validation
+failure, provider failure, or non-zero process exit is not automatically unknown. A started effect interrupted or lost
+before a final result commits a bounded `Partial` result: the model receives the captured output with a notice and the
+next model step proceeds. Nothing pauses, and nothing is automatically retried.
 
-### 17. Compatibility is non-reinterpretation
+### 14. Compatibility is non-reinterpretation
 
-M3/M4 and existing ordinary records remain readable under their recorded semantics. They gain no synthetic Mandate,
-verifier, Skill, MCP, child, activity, profile, policy, or execution-kind state. Current mutable configuration,
-registry, provider/model naming, ancestry, and live resources cannot reconstruct missing historical meaning.
+M3/M4 and existing ordinary records remain readable under their recorded semantics. They gain no synthetic Skill, MCP,
+activity, profile, or policy state. Current mutable configuration, registry, provider/model naming, ancestry, and live
+resources cannot reconstruct missing historical meaning.
 
-### 18. Limits state their class
+### 15. Limits state their class
 
 Future design distinguishes intrinsic bounds, capacity availability, and product ceilings. Intrinsic bounds remain
 mandatory correctness or security constraints. Capacity unavailability is typed and preserves its relevant pending work.
-Product ceilings cannot be introduced as hidden future Mandate admission policy. Existing numeric bounds retain their
-current behavior until a later owner classifies their future applicability.
+Product ceilings cannot be introduced as hidden future admission policy. Existing numeric bounds retain their current
+behavior until a later owner classifies their future applicability.
 
-### 19. Mandate tool admission is direct but typed
+### 16. MCP capabilities are typed evidence, not authority
 
-For future Mandate execution, a descriptor frozen as active and model-visible in immutable execution meaning admits
-directly after typed validation, mode, hook, intrinsic-bound, idempotency, and live-readiness checks. Confirmation, risk
-selectors, corridors, root-origin rules, quotas, and secondary tool authority cannot veto it. This does not amend
-ordinary execution.
+Future MCP work uses the one fixed `mcp` capability path to acquire and invoke immutable run-local capabilities. An MCP
+server, discovery, capability, or result cannot create lifecycle, registry, or user authority. Started unproven MCP work
+never resumes. Architecture 18 owns the detailed rules.
 
-### 20. WorkspaceRoot is execution-kind-specific
-
-Current ordinary containment remains authoritative. For future Mandate tool work, WorkspaceRoot is the required
-relative-path base and `execute` initial CWD, not an OS access boundary; explicit paths are not denied solely for being
-outside it. Both forms forbid process-CWD fallback, and neither claims a sandbox. Architecture 15 owns the detailed
-rules.
-
-### 21. Scheduling is durable reevaluation, not authority
-
-A future Mandate scheduler works only from durable reasons and typed readiness evidence. It cannot grant lifecycle or
-tool authority, rebuild immutable meaning, reserve capacity, or create hidden quotas or retry counters. Unavailability
-retains the reason, and recovery completes before fresh admission. Architecture 16 owns the detailed rules.
-
-### 22. Child edges and verifier authority are explicit
-
-Future child work uses immutable direct Mandate edges and credential-free delegation snapshots. Parenthood grants only
-explicitly selected direct-child controls and no implicit lifecycle, scheduler, tool, or verifier authority. A verifier
-may mutate only an explicitly named target under separately user-issued target-scoped authority, immutable baseline, and
-qualifying evidence. Architecture 17 owns the detailed rules.
-
-### 23. MCP capabilities are typed evidence, not authority
-
-Future Mandate MCP work uses the one fixed `mcp` capability path to acquire and invoke immutable run-local capabilities.
-An MCP server, discovery, capability, or result cannot create lifecycle, scheduler, registry, child, verifier, or user
-authority. Started unproven MCP work never resumes. Architecture 18 owns the detailed rules.
-
-### 24. Gateway/RLM attachment is typed ingress, not authority
+### 17. Gateway/RLM attachment is typed ingress, not authority
 
 Future Gateway/RLM attachment uses one daemon-owned capability path, a frozen credential-free bridge contract selection,
 and an ephemeral daemon-issued grant bound to one active run/model step. A grant, channel, operation ID, facade, kernel,
-provider, child, or MCP result cannot create lifecycle, scheduling, tool, child, verifier, or reconciliation authority.
-Operation replay is idempotent and read-only after binding; restart never resumes or reattaches old work. The bridge is
-a trusted-local product control, not a sandbox or privilege boundary. Architecture 19 and decision 0011 own the detailed
+provider, or MCP result cannot create lifecycle or tool authority. Operation replay is idempotent and read-only after
+binding; restart never resumes or reattaches old work. The bridge is a trusted-local product control, not a sandbox or
+privilege boundary. Architecture 19 and decision 0011 own the detailed rules.
+
+### 18. Kernel state is run-scoped convenience, not authority
+
+Future IPython is a private daemon-managed sidecar with one kernel epoch per run. A live namespace never crosses a run
+boundary; only an explicitly selected verified checkpoint may seed a replacement kernel. Kernel state, checkpoints,
+cells, background tasks, grants, and output cannot create lifecycle, tool, or MCP authority. The kernel consumes the one
+Gateway/RLM and tool path and is not a sandbox or privilege boundary. Architecture 20 and decision 0012 own the detailed
 rules.
 
-### 25. Kernel state is run-scoped convenience, not authority
-
-Future IPython is a private daemon-managed sidecar with one kernel epoch per Mandate run. A live namespace never crosses
-fresh admission; only an explicitly selected verified checkpoint may seed a replacement kernel. Kernel state,
-checkpoints, cells, background tasks, grants, and output cannot create lifecycle, scheduling, tool, child, verifier,
-MCP, or reconciliation authority. The kernel consumes the one Gateway/RLM and tool path and is not a sandbox or
-privilege boundary. Architecture 20 and decision 0012 own the detailed rules.
-
-### 26. Context is immutable evidence, not authority
+### 19. Context is immutable evidence, not authority
 
 Future Goals, Skills, source manifests, model-step projections, memory cards, disclosures, and compaction summaries are
 immutable non-authorizing evidence. Project Goals apply to sessions only through explicit immutable applicability links.
@@ -264,29 +216,28 @@ Current files, catalogs, indexes, memory, configuration, UI, and runtime state c
 context. Safe representations never widen their source audience, and compaction cannot replace durable facts or become
 continuation state. Architecture 21 and decision 0013 own the detailed rules.
 
-### 27. Provider selection is immutable compatibility evidence
+### 20. Provider selection is immutable compatibility evidence
 
 Future provider profile, descriptor, capability, endpoint, credential-transport, and driver-contract selections are
 credential-free immutable execution evidence, not authority. Model names and current
-catalog/configuration/credential/driver state cannot reconstruct, reroute, or replace stored meaning. Provider readiness
-only supports scheduler reevaluation; it cannot create a reason, RunId, or admission. Architecture 22 and decision 0014
-own the detailed rules.
+catalog/configuration/credential/driver state cannot reconstruct, reroute, or replace stored meaning. Architecture 22
+and decision 0014 own the detailed rules.
 
-### 28. Session branches are independent history, not rollback
+### 21. Session branches are independent history, not rollback
 
 A future ordinary Session fork creates a separate child Session with immutable lineage and frozen context. It does not
 allow parallel runs within one Session, rewrite a source Session, transfer authority, or claim rollback of workspace or
 external state. Architecture 23 and decision 0015 own the detailed rules.
 
-### 29. Instructions are advisory deployment and project content, not authority
+### 22. Instructions are advisory deployment and project content, not authority
 
 Every newly admitted run carries exactly one immutable effective instruction projection, assembled from declared sources
 only: the daemon-packaged instruction profile adapted from the legacy static prompt set, user-editable fragments scoped
 to user, project, or session, the workspace `AGENTS.md` read through the `WorkspaceRoot` boundary, and the reserved
 `Mode` and `Vfr` contributions of architectures 07 and 06. Instruction text is bounded, credential-free, and advisory:
-it cannot create, widen, or remove a tool permission, provider selection, admission decision, Mandate, grant, or
-confirmation requirement, and it cannot prove the absence of an external effect. Skill bodies, memory records, tool
-output, repository content, and provider output never enter the instruction channel. The projection is frozen at
-admission, inherited verbatim by forks and handoffs, and never re-derived from current state. [Architecture
+it cannot create, widen, or remove a tool permission, provider selection, admission decision, grant, or confirmation
+requirement, and it cannot prove the absence of an external effect. Skill bodies, memory records, tool output,
+repository content, and provider output never enter the instruction channel. The projection is frozen at admission,
+inherited verbatim by forks and handoffs, and never re-derived from current state. [Architecture
 30](30-instruction-sources-and-system-context.md) and [decision
 0043](../decisions/0043-instruction-sources-and-system-context.md) own the detailed rules.

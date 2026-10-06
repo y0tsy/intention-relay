@@ -11,8 +11,8 @@ execution-meaning fields 2 and 3. Future canonical Responses support is kind `re
 parse-time compatibility alias and never a persisted/provider-routing identity.
 
 Provider profiles, kind descriptors, catalog revisions, endpoint/credential transport metadata, capability
-intersections, reasoning policy, and driver contracts are selection/compatibility evidence, never lifecycle, scheduler,
-tool, child, verifier, MCP, bridge, kernel, context, or reconciliation authority.
+intersections, reasoning policy, and driver contracts are selection/compatibility evidence, never lifecycle, tool, MCP,
+bridge, kernel, context, or reconciliation authority.
 
 ## Invariants
 
@@ -24,8 +24,7 @@ framing, digest, and decoder policy is not revived, and provider semantics canno
 driver cannot reconstruct, reroute, or replace stored provider meaning;
 - `responses` is local-history-first with `store: false`, no remote
 continuation, encrypted/opaque reasoning, provider-managed history, or built-in tools;
-- provider availability only retains/re-evaluates a Mandate reason before fresh
-admission; recovery never resumes, reattaches, retries, or dispatches old provider work; and
+- recovery never resumes, reattaches, retries, or dispatches old provider work; and
 - reasoning normalization cannot choose or disclose context sources, audiences,
 or model projections, which remain architecture-21 authority.
 
@@ -40,4 +39,4 @@ Owner: architecture 22. Evidence: activating specification per [architecture
 12](../architecture/12-quality-gates-and-makefile.md).
 
 Provenance: `m4plus_concept.md`, selected provider contracts, profiles, Responses, and reasoning material, reconciled
-against architectures 8 and 13--21.
+against architectures 8, 14, 15, and 18--21.
