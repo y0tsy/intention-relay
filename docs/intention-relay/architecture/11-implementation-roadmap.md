@@ -192,12 +192,11 @@ the `provider_profile_tombstoned` wire code; that removal is not reverted.
 tool-descriptor, tool-registry, and model-tool-loop contracts as amended by [ADR
 0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md) (architecture 15), the bridge-invocation and
 MCP-method-catalog selections (architectures 19/18), and work/requeue after client disconnection.
-4.  **UI foundation — not activated.** Session branching, activity/notification delivery, reasoning/catalog delivery,
-and adapter boundaries (architectures 23/24/22): `session_fork_v1`; activity journal
-and notification projections; normalized reasoning delivery; RLM packaging and export; and the exact typed
-client/protocol surface M6 consumes. It also carries export of fork/activity records and cross-workspace
-clone/rebind (architecture 23), activity numeric-limit classification (architecture 24), and the physical deletion/GC
-retention policy for historical work under architecture 04's retention rules.
+4.  **UI foundation — not activated.** Session branching, reasoning/catalog delivery, and adapter boundaries
+(architectures 23/22 plus architecture 03's flat activity journal and notification list): `session_fork_v1`;
+normalized reasoning delivery; and the exact typed client/protocol surface M6 consumes. It also carries cross-workspace
+clone/rebind (architecture 23) and the physical deletion/GC retention policy for historical work under architecture 04's
+retention rules.
 5.  **Instruction sources and system context — fifth and last slice; not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md), adopted by [ADR
 0010](../decisions/0010-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
@@ -294,12 +293,12 @@ instruction-source slices.
 ### Deliver
 
 - `intention-tauri` bootstrap/native bridge using only `intention-client`;
--  minimal Svelte UI to create/open a session, send a turn, render streamed state, reconnect, and render safe
-activity/notification/acknowledgement projections;
+-  minimal Svelte UI to create/open a session, send a turn, render streamed state, reconnect, and render the safe
+activity-journal and notification projections;
 - TUI/REPL remains a contract-equivalent client;
 -  instruction-fragment editing and effective-projection preview in the primary UI over the fifth Milestone 5+ slice's
 control-plane surface ([ADR 0010](../decisions/0010-instruction-sources-and-system-context.md));
--  post-M4 activity/UI contracts are delivered by the Milestone 5+ UI-foundation slice (/) and
+-  post-M4 activity-journal and notification contracts are delivered by the Milestone 5+ UI-foundation slice and
 consumed here, while the durable `SessionProviderProfileChanged` delivery stays reserved to M6.
 
 ### Tests first
@@ -583,17 +582,15 @@ operational tuples are operational metadata, not ordering authorities.
 | Goals, Skills, context, memory, and compaction | [architecture 21](21-goals-skills-context-memory-and-compaction.md) | Documentation-approved; not activated; Milestone 12. | Foundation |
 | Provider evolution, profiles, and reasoning | [architecture 22](22-provider-evolution-profiles-and-reasoning.md) | Documentation-approved; not activated; the remaining provider work (`responses` driver, `SafeHeader` live wire injection, user-kind parser) is delivered by Milestone 12. | Foundation |
 | Non-destructive session branching and regeneration | [architecture 23](23-non-destructive-session-branching-and-regeneration.md) | Documentation-approved; not activated; activating slice 4 (`session_fork_v1`). | ordinary Session/storage compatibility; context; provider evolution |
-| Activity, UI, and adapters | [architecture 24](24-activity-ui-and-adapters.md) | Documentation-approved; not activated; activating slice 4; extends M6 planning. | transport; MCP; bridge; kernel; context; provider evolution; session branching |
-| Goal domain and verification | [architecture 28](28-goal-domain-and-verification.md) | Documentation-approved; not activated; activating slice 3. | fixed tool loop; MCP; context; provider evolution; activity/UI |
+| Goal domain and verification | [architecture 28](28-goal-domain-and-verification.md) | Documentation-approved; not activated; activating slice 3. | fixed tool loop; MCP; context; provider evolution; activity-journal and notification delivery |
 | Provider session selection and profiles protocol | [architecture 29](29-provider-session-and-profiles-protocol.md) | The Slice 2 activation was reverted and re-introduction requires a new activating specification; not activated. | provider evolution; session branching; configuration/provider control plane |
 | Base-tool contracts and tool-loop bounds | [architecture 15](15-tool-registry-and-model-tool-loop.md) | Documentation-approved; slice 3 activates the reserved contracts; tool-loop implementation is Milestone 11. | architecture 15; M5+ activation |
 | Session-branching detail | [architecture 23](23-non-destructive-session-branching-and-regeneration.md) | Documentation-approved; not activated; activating slice 4. | extends architecture 23 |
 | Kernel, bridge, and MCP detail | [architectures 18](18-mcp-capability-lifecycle.md)/[19](19-gateway-rlm-bridge.md)/[20](20-ipython-kernel-lifecycle.md) | Documentation-approved; slice 3 activates the bridge-invocation and MCP-method-catalog contracts; bridge implementation is Milestone 11, MCP and kernel implementation Milestone 12. | extends architectures 18/19/20 |
 | Provider reasoning and catalog detail | [architecture 22](22-provider-evolution-profiles-and-reasoning.md) | Documentation-approved; not activated; the typed `ReasoningUsageDto` was removed by the unconsumed-surface audit (2026-09). | extends architecture 22 |
-| Activity and notification detail | [architecture 24](24-activity-ui-and-adapters.md) | Documentation-approved; not activated; slice 4 carries activity numeric-limit classification. | extends architecture 24 |
-| Accepted deferred directions | [architectures 24](24-activity-ui-and-adapters.md)/[22](22-provider-evolution-profiles-and-reasoning.md)/[19](19-gateway-rlm-bridge.md) | Documentation-approved; not activated; the directions are non-authorizing. | extends architectures 24, 22, and 19 |
-| Accepted execution directions | [architectures 25](25-configuration-provider-control-plane.md)/[22](22-provider-evolution-profiles-and-reasoning.md)/[23](23-non-destructive-session-branching-and-regeneration.md)/[28](28-goal-domain-and-verification.md)/[18](18-mcp-capability-lifecycle.md)/[24](24-activity-ui-and-adapters.md)/[29](29-provider-session-and-profiles-protocol.md) | Documentation-approved; the control-plane items were reverted with Slice 2 and require a new activating specification; the work/requeue items activate in slice 3, and export plus cross-workspace clone/rebind and RLM packaging in slice 4. | extends architectures 25, 22, 23, 28, 18, 24, and 29 |
-| Accepted retained-deferral directions | [architectures 20](20-ipython-kernel-lifecycle.md)/[04](04-sessions-runs-events-and-storage.md)/[03](03-daemon-transport-and-adapters.md)/[24](24-activity-ui-and-adapters.md) | Documentation-approved; rich MIME/raw kernel output projection is Milestone 12, worker/process supervision topology is Milestone 11, and the physical deletion/GC retention policy plus the activity limit classification are slice 4. | extends architectures 20, 04, 03, and 24 |
+| Accepted deferred directions | [architectures 22](22-provider-evolution-profiles-and-reasoning.md)/[19](19-gateway-rlm-bridge.md) | Documentation-approved; not activated; the directions are non-authorizing. | extends architectures 22 and 19 |
+| Accepted execution directions | [architectures 25](25-configuration-provider-control-plane.md)/[22](22-provider-evolution-profiles-and-reasoning.md)/[23](23-non-destructive-session-branching-and-regeneration.md)/[28](28-goal-domain-and-verification.md)/[18](18-mcp-capability-lifecycle.md)/[29](29-provider-session-and-profiles-protocol.md) | Documentation-approved; the control-plane items were reverted with Slice 2 and require a new activating specification; the work/requeue items activate in slice 3, and export plus cross-workspace clone/rebind and RLM packaging in slice 4. | extends architectures 25, 22, 23, 28, 18, and 29 |
+| Accepted retained-deferral directions | [architectures 20](20-ipython-kernel-lifecycle.md)/[04](04-sessions-runs-events-and-storage.md)/[03](03-daemon-transport-and-adapters.md) | Documentation-approved; rich MIME/raw kernel output projection is Milestone 12, worker/process supervision topology is Milestone 11, and the physical deletion/GC retention policy is slice 4. | extends architectures 20, 04, and 03 |
 | Instruction sources and system context | [architecture 30](30-instruction-sources-and-system-context.md) | Documentation-approved; not activated; fifth and last slice ([ADR 0010](../decisions/0010-instruction-sources-and-system-context.md)). | extends architectures 30, 00, 02, 04, 06, 07, 08, 09, 14, 21, 23, and 25 |
 
 ### Activation-order notes

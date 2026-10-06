@@ -238,7 +238,7 @@ schema, and gateway revisions are frozen in the call and run selection. A remote
 external effect; an already started ambiguous call is never
 repeated and commits a bounded `Partial` result with its notice when appropriate. A service may emit bounded safe
 progress through the ordinary durable output stream but cannot invoke `ask_user`, and it cannot create a Goal,
-proposal, session, run, connection, tool registration, child agent, message, or another authority context. There is no
+proposal, session, run, connection, tool registration, child agent, or another authority context. There is no
 MCP listener, remote attachment to the daemon bridge, plug-in system, Skill/MCP
 installation, dynamic tool registration, server-driven child control, autonomous continuation, or claim that a local
 service is isolated from the user's ordinary OS authority.

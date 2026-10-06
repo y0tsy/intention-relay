@@ -13,7 +13,7 @@ Owner: architecture 28. Research: `m4plus_concept.md`.
 Architecture 14 owns run-execution meaning and historical
 compatibility; its canonical codec was removed by [ADR 0012](../decisions/0012-typed-serde-json-contracts.md).
 Architecture 15 owns the registry and tool loop, architecture 18 MCP lifecycle, architecture 21 context selection and
-projection (Goal context selection, Skills, memory/compaction selection), and architecture 24 activity/UI projections.
+projection (Goal context selection, Skills, memory/compaction selection), and architecture 03 activity-journal and notification projections.
 
 This document owns the Goal aggregate domain and its verification semantics. A Goal, revision, link, gate, memory
 record, role, template, proposal, or summary creates no `RunId` except through the ordinary admission path, lifecycle
@@ -115,14 +115,14 @@ alter Goal, memory, Skill, role, template, or connection state.
 
 A run's immutable selections are typed serde JSON records rather than one canonical execution-meaning envelope; the
 former `run-execution-meaning-v4` carrier was removed with the canonical codec by [ADR
-0012](../decisions/0012-typed-serde-json-contracts.md). The applicable records are `GoalRunSelectionV1`,
-`McpMethodCatalogSelectionV1`, and `AgentActivitySelectionV1`; an absent record means the feature does not apply, and
-historical M4 records gain nothing.
+0012](../decisions/0012-typed-serde-json-contracts.md). The applicable records are `GoalRunSelectionV1` and
+`McpMethodCatalogSelectionV1`; an absent record means the feature does not apply, and historical M4 records gain
+nothing.
 
 `GoalRunSelectionV1` contains the leading `GoalId`, exact revision, scope/session-link provenance, ordered parent
 revision chain, effective obligatory-component references, selected gate/template revisions and valid evidence
-references, selected memory/Skill/role cards and revisions, already-revealed full-record references, an
-`AgentActivitySelectionV1` reference, run kind, the target-snapshot reference, and immutable bounds. It holds no full
+references, selected memory/Skill/role cards and revisions, already-revealed full-record references, run kind, the
+target-snapshot reference, and immutable bounds. It holds no full
 memory/Skill/role/summary, credential, provider value, current machine state, raw transcript, grant, process resource,
 or handle. Factory Skills use the exact `SkillSelectionV1` under the frozen snapshot.
 
@@ -221,8 +221,8 @@ session Goal, active Goal run, grant, kernel namespace, current ancestor record,
 resource, or future source change; the user explicitly creates any new session Goal in the branch.
 
 An admitted child agent receives a frozen Goal context: parent task, leading-Goal identity and revision, effective
-required constraints, applicable cards, selected role when any, selected `AgentActivitySelectionV1` reference, and only
-the required safe references; not a full parent transcript or live target context. Later
+required constraints, applicable cards, selected role when any, and only the required safe references; not a full parent
+transcript or live target context. Later
 parent/Goal/memory/Skill/role/activity edits do not change the child snapshot. A child uses independently assigned
 session/run/class/tool/provider selections and its own interruption and no-resume rules. An interruption stops
 only the in-flight call: it commits a bounded `Partial` result with its notice and the child continues with its next
@@ -300,7 +300,7 @@ directions affect fresh runs only.
 This document depends on architectures 14, 15, 18, 21, and 24 plus decision 0001.
 Non-goals: Goal persistence, search/index/vector retrieval, prompt assembly, SQL/wire tags,
 migrations, retention/deletion/encryption, source-page sizes, resource values, provider evolution, session branching,
-activity/UI, Plan artifacts, MCP administration, Python/Jupyter process behavior, Cargo, Makefile/CI, production
+activity-journal and UI delivery, Plan artifacts, MCP administration, Python/Jupyter process behavior, Cargo, Makefile/CI, production
 activation, attachments/images/binary/ rich-MIME input, dynamic extensions and installation,
 dynamic tool registration, physical deletion, and long-lived-worker administration (leases, attach/detach, force-kill,
 supervisor recovery). Work/continuation/requeue after client disconnection is an accepted post-M5 future direction under

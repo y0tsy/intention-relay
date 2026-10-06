@@ -354,9 +354,9 @@ authority/no-resume/no-current-state-reconstruction matrices; redaction; and Lin
 These are future obligations only. The detailed portfolio is owned by [Session branching and
 regeneration](23-non-destructive-session-branching-and-regeneration.md).
 
-### Activity, UI, and adapter evidence
+### Activity and adapter evidence
 
-Before implementation, architecture 24 requires activity/message/journal/ notification/acknowledgement fixtures and
-negative cases; transaction and sequence isolation; typed protocol replay/resync; redaction; no-resume; Tauri/TUI/REPL
-parity; and Linux/Windows outcome evidence. These are future obligations only. The detailed portfolio is owned by
-[Activity, UI, and adapters](24-activity-ui-and-adapters.md).
+Before implementation, architecture 03 requires activity-journal and notification-list fixtures and negative cases;
+transaction and sequence isolation; typed protocol replay/resync; redaction; no-resume; Tauri/TUI/REPL parity; and
+Linux/Windows outcome evidence. These are future obligations only. The detailed portfolio is owned by [Daemon,
+transport, and adapters](03-daemon-transport-and-adapters.md).

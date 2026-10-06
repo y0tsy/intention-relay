@@ -151,7 +151,6 @@ effect boundary. Secondary cleanup lands in architectures
 [21](../architecture/21-goals-skills-context-memory-and-compaction.md),
 [22](../architecture/22-provider-evolution-profiles-and-reasoning.md),
 [23](../architecture/23-non-destructive-session-branching-and-regeneration.md),
-[24](../architecture/24-activity-ui-and-adapters.md),
 [28](../architecture/28-goal-domain-and-verification.md).
 
 ## Evidence

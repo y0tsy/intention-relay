@@ -122,12 +122,11 @@ to the fake-secret tests or the CI documentation secret scan.
 
 ## Affected documents
 
-and [ADR
-0004](0004-m5plus-complete-foundation-activation.md) are amended as recorded above. [Architecture
+[ADR
+0004](0004-m5plus-complete-foundation-activation.md) is amended as recorded above. [Architecture
 15](../architecture/15-tool-registry-and-model-tool-loop.md) owns
 the tool-loop contracts that lose the numeric group and output bounds; [architecture
-24](../architecture/24-activity-ui-and-adapters.md) owns the activity surface whose numeric classification is
-superseded; [architecture 04](../architecture/04-sessions-runs-events-and-storage.md) owns the live M3 queue that stays
+04](../architecture/04-sessions-runs-events-and-storage.md) owns the live M3 queue that stays
 unchanged; [architecture 09](../architecture/09-configuration-security-and-observability.md) owns redaction and the
 surviving secret hygiene; [architecture 10](../architecture/10-test-driven-delivery-and-verification.md) and
 [architecture 12](../architecture/12-quality-gates-and-makefile.md) own the removal of the scanner and limit tests from

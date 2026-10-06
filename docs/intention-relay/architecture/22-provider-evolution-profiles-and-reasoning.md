@@ -520,5 +520,5 @@ protocol. UI, Cargo, Makefile/CI, or production activation beyond the accepted d
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
 
-Architecture 24 owns activity/UI projections; provider and reasoning facts may be safely projected only through their
+Architecture 03 owns the activity journal and notification list; provider and reasoning facts may be safely projected only through their
 existing owners and never expose raw native data, select a provider, or create activity authority.

@@ -229,5 +229,5 @@ DTO family; application/runtime owns fork orchestration; adapters own presentati
 
 ## Post-M4 activity and adapter ownership
 
-Architecture 24 owns future typed activity, notification, acknowledgement, and safe presentation projection contracts.
+Architecture 03 owns the future typed flat activity-journal and notification-list contracts and the safe presentation projections built from them.
 Domain/storage/protocol/application/runtime roles remain DTO-first; adapters consume only `intention-client`.

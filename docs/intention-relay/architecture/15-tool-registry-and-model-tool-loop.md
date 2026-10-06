@@ -122,6 +122,15 @@ from identity.
   `ToolCallStarted` the post-M4 run stays `Running`; other independently admitted calls may complete concurrently, and
   the next model step waits for this question's terminal safe result with every other group result. It never moves the
   post-M4 run to `WaitingInput` and never rewrites M3/M4 `WaitingInput` snapshots, facts, or recovery.
+-  **`sub_agent`** admits one child run and returns its markdown answer. The typed input carries the bounded markdown
+  task and the selected `mode`. `Sync` holds the call open until the child run reaches a terminal state and returns the
+  child's terminal markdown answer as the call's result. `Async` terminates the call immediately with a `Deferred`
+  outcome carrying the child session handle as plain text (a UUIDv4); the child's terminal markdown answer is recorded
+  as one durable child-result fact bound to the same `ToolCallId` and delivered once into the parent's next fresh model
+  request. There is no message exchange, delegation pair, clarification round trip, or `AwaitResult`. A child run is an
+  ordinary run with its own lifecycle, tool loop, cancellation, and no-resume rules; a child result never starts a parent
+  step, and a parent that is already terminal when the result arrives keeps it as readable durable evidence without a
+  model delivery.
 
 Trusted-local is explicit: daemon, agent, IPython kernel, child agents, and Rust tools run with the same OS permissions
 as the user who starts the daemon; there is no agent sandbox, container/VM isolation, privilege separation, or
@@ -268,11 +277,14 @@ The first-scope bounds are:
   explicit marker before the result becomes a fragment; there is no output-refusal outcome, and an accepted fragment is
   never truncated or partly committed.
 
-The closed initial terminal outcome taxonomy is: `Succeeded`, `DeniedBeforeExecution`, `FailedBeforeExternalEffect`,
-`CancelledBeforeStart`, `InterruptedBeforeStart`, `ExecutionUnavailable`, and `Partial`. It carries only safe
-model-visible projection and approved typed metadata; no value silently changes category during replay. `Succeeded`,
-known denials, known pre-effect failures, and `Partial` may enter the next typed exchange; a `Partial` result carries
-the bounded captured output with its interruption notice, never blocks another model step, and is never retried.
+The closed initial terminal outcome taxonomy is: `Succeeded`, `Deferred`, `DeniedBeforeExecution`,
+`FailedBeforeExternalEffect`, `CancelledBeforeStart`, `InterruptedBeforeStart`, `ExecutionUnavailable`, and `Partial`.
+It carries only safe model-visible projection and approved typed metadata; no value silently changes category during
+replay. `Succeeded`, `Deferred`, known denials, known pre-effect failures, and `Partial` may enter the next typed
+exchange; a `Partial` result carries the bounded captured output with its interruption notice, never blocks another
+model step, and is never retried. `Deferred` is the asynchronous `sub_agent` acceptance outcome: it carries the child
+session handle, permits the next model step, and never changes category when the child's terminal markdown answer
+arrives later as the durable child-result fact.
 
 ### Tool history replay and subscription
 
@@ -303,7 +315,7 @@ never a partially understood snapshot or live stream. Historical M4 runs retain 
 roots and children. Progress is content, not schedule: only non-empty `TextDelta` and `ReasoningDelta` facts count;
 `Started`, usage, and other non-content facts do not, and a continuously producing stream has no fixed step duration.
 The policy is active only while a provider stream for a model step is open; it is paused while a tool or foreground
-kernel cell runs, `ask_user` awaits, `AwaitResult` waits for a child, a retry delay runs, or the run is
+kernel cell runs, `ask_user` awaits, a retry delay runs, or the run is
 completing or cancelling.
 
 A provider stream that stops producing content fails with `model_stream_progress_timeout`. This document selects no
@@ -365,7 +377,7 @@ model step only through immutable selected safe representations. A provider may 
 immutable capability selection declares `model_tool_loop_v1`, and it cannot assign local IDs, use provider-built-in
 tools, create a registry, or bypass the frozen local exchange. Architecture 23 may preserve terminal tool provenance
 only as non-authorizing frozen fork evidence and cannot rebuild a tool selection from current registry state;
-architecture 24 may project safe tool provenance but cannot create ToolIds, descriptors, ToolCallIds, admission,
+architecture 03 may project safe tool provenance but cannot create ToolIds, descriptors, ToolCallIds, admission,
 effects, retries, or current-registry repair. No bridge/IPython/kernel, Skills/Goals/context, provider evolution, UI,
 schema, migrations, crates, Cargo, Makefile/CI, or production implementation is defined here.
 

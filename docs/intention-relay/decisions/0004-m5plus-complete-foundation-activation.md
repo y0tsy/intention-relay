@@ -38,10 +38,9 @@ reconciliation, and held-run admission wording is removed by [ADR
 unconsumed provider-native preservation-control and server-side-parser contracts, the Responses reasoning-mode
 projection, the reasoning-usage DTOs, and the model-capability envelope.
 3. **Goal domain** — Goal domain (architecture 28): the Goal tree.
-4. **UI foundation** — session branching, activity/notification, reasoning
-and catalog delivery, and adapter boundaries (architectures 23/24/22):
-`session_fork_v1`, activity journal and notification projections, normalized reasoning delivery, RLM packaging and
-export, and the exact typed client/protocol surface that M6 consumes.
+4. **UI foundation** — session branching, reasoning and catalog delivery, and adapter boundaries (architectures 23/22
+plus architecture 03's flat activity journal and notification list):
+`session_fork_v1`, normalized reasoning delivery, and the exact typed client/protocol surface that M6 consumes.
 5. **Instruction sources and system context** — the instruction channel added
 by [ADR 0010](0010-instruction-sources-and-system-context.md) and owned by architecture 30 (instruction sources and
 system context): the closed instruction source kinds and scopes, the deployment instruction profile adapted from the

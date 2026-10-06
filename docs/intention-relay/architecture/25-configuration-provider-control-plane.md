@@ -14,8 +14,8 @@ Owner: architecture 25. Decisions: ADR 0010. Research: `m4plus_concept.md`.
 Architecture 09 owns TOML parsing, schema validation, configuration discovery, redaction, and startup-only application.
 Architecture 22 owns future provider kinds, profiles, catalogs, selections, and driver compatibility. Architecture 14
 owns run-execution meaning and historical compatibility; its canonical codec was removed by [ADR
-0012](../decisions/0012-typed-serde-json-contracts.md). Architecture 15 owns the tool loop, architecture 24 activity/UI
-projections and adapter behavior.
+0012](../decisions/0012-typed-serde-json-contracts.md). Architecture 15 owns the tool loop, and architecture 03 owns the flat
+activity journal, the notification list, and adapter behavior.
 
 This document owns only the accepted future directions below: no second runtime, registry, persistence authority, or
 sandbox, and no `RunId`, lifecycle transition, tool permission, child, MCP capability, bridge grant, kernel epoch,

@@ -282,7 +282,7 @@ implementation detail.
 This document depends on architectures 14, 15, 18, and 19, decisions 0001 and 0009 for the project script library
 path, selection, and evidence contract. It does not define Python/Jupyter dependencies, process supervision,
 storage/wire tags, migrations, retention, encryption, resource-limit values, RLM executor topology,
-Skills/Goals/context, provider evolution, session forks, activity/UI, direct MCP administration, Cargo, Makefile/CI, or
+Skills/Goals/context, provider evolution, session forks, activity-journal and UI delivery, direct MCP administration, Cargo, Makefile/CI, or
 production activation.
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
@@ -292,5 +292,5 @@ projections, and context cannot create an epoch, disclose private namespace/chec
 reconstruct missing kernel meaning. Architecture 22 owns provider profile/capability semantics; kernel state,
 checkpoints, and namespaces cannot select a provider, retain a provider continuation, or carry private provider
 clients/resources. Architecture 23 owns ordinary Session forks; no live kernel epoch, grant, task, process, namespace,
-checkpoint authority, or unfinished effect crosses a fork. Architecture 24 may expose safe kernel outcome provenance
+checkpoint authority, or unfinished effect crosses a fork. Architecture 03 may expose safe kernel outcome provenance
 only; it cannot create a kernel, restore a checkpoint, issue a grant, or disclose live kernel state.

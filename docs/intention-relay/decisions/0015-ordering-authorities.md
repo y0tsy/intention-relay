@@ -33,7 +33,7 @@ Two durable ordering authorities exist, plus one observation position:
 | Authority | Scope | Orders | Never used for |
 | --- | --- | --- | --- |
 | Session event sequence (`SessionEventSequenceDto`) | one session | every record committed in the session: events, run lifecycle, tool lifecycle, model and tool facts | container records, observation positions |
-| Container journal sequence (storage mechanism `container_journals`, first and today only kind `run`; the run's position type is `RunEventCursorDto`) | one container: a run today; a delegation pair, a conversation tree, or an activity tree when activated | records that belong to the container and are not a record of one session | session records, observation positions, identity |
+| Container journal sequence (storage mechanism `container_journals`, first and today only kind `run`; the run's position type is `RunEventCursorDto`) | one container: a run today; a conversation tree when activated | records that belong to the container and are not a record of one session | session records, observation positions, identity |
 | Observation cursor (reserved name; no DTO until a producer exists) | one reader (an adapter or the local user) | nothing: it is a resume position | never an authority, never durable order, never a dedup key, never a conflict token |
 
 Mapping of the declared rows:
@@ -43,8 +43,7 @@ Mapping of the declared rows:
 | Session event sequence (arch 04) | authority 1, unchanged |
 | Run event cursor (arch 04) | authority 2, container kind `run` |
 | lineage sequence (arch 23) | authority 2, container "conversation tree", when activated |
-| activity journal sequence (arch 24) | authority 2, container "activity tree", when activated |
-| notification cursor (arch 24) | row 3, observation position |
+| notification cursor (arch 03) | row 3, observation position |
 | Skill sequence (arch 21:243, not in the table) | authority 1: session records, no separate sequence |
 
 The dead members of the family are deleted in this change: `PageCursorDto`, `PageRequestDto`, `SessionEventTailBatchDto`
@@ -54,12 +53,11 @@ publication uses them.
 
 ## Rationale
 
-- Only two ordering mechanisms exist in code today: the session event sequence and the per-run journal cursor. Six of
-  the eight declared rows belong to unbuilt systems, a ninth Skill sequence was never in the table, and the run cursor
+- Only two ordering mechanisms exist in code today: the session event sequence and the per-run journal cursor. Five of
+  the seven declared rows belong to unbuilt systems, a ninth Skill sequence was never in the table, and the run cursor
   is the first instance of a general container mechanism rather than a peer of the session sequence.
 - One storage mechanism with per-container journals keeps the model honest for the systems that will need it: a
-  delegation pair, a conversation tree, or an activity tree orders its own records and nothing
-  else, with no fourth option invented later.
+  conversation tree orders its own records and nothing else, with no fourth option invented later.
 - The observation cursor is named and reserved before any producer exists so a reader position can never drift into
   being treated as durable order, dedup key, conflict token, or identity.
 - Deleting the unowned sequences and the dead members keeps the normative set identical to what code and planned work
@@ -122,8 +120,9 @@ correlation rule; [architecture 04](../architecture/04-sessions-runs-events-and-
 sequence and the run container journal (kind `run`); [architecture
 21](../architecture/21-goals-skills-context-memory-and-compaction.md) removes the standalone Skill sequence;
 [architecture 23](../architecture/23-non-destructive-session-branching-and-regeneration.md) orders lineage in the
-conversation-tree journal; and [architecture 24](../architecture/24-activity-ui-and-adapters.md) orders activity
-records in the activity-tree journal and records the notification cursor as an observation position. Secondary mention
+conversation-tree journal; and [architecture 03](../architecture/03-daemon-transport-and-adapters.md) records the
+notification cursor as an observation position and projects the flat activity journal over the run container journal.
+Secondary mention
 cleanup lands in architectures [01](../architecture/01-workspace-and-crate-map.md),
 [03](../architecture/03-daemon-transport-and-adapters.md),
 [08](../architecture/08-model-protocol-and-providers.md), [11](../architecture/11-implementation-roadmap.md),

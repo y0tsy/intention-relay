@@ -361,13 +361,13 @@ may reconstruct missing future context meaning.
 This document depends on architectures 14, 15, and 18--20 and decision 0001. It does
 not define actual Goal persistence, search/index/vector retrieval, instruction assembly (owned by [architecture
 30](30-instruction-sources-and-system-context.md)), SQL/wire tags, migrations, retention/deletion/encryption,
-source-page sizes, resource values, provider evolution, architecture-23 session branching, activity/UI, physical Plan
+source-page sizes, resource values, provider evolution, architecture-23 session branching, activity-journal and UI delivery, physical Plan
 artifacts, direct MCP administration, Python/Jupyter process behavior, Cargo, Makefile/CI, or production activation.
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
 
 Architecture 22 owns provider kind/profile/capability/reasoning normalization. Provider may declare compatible reasoning
 input requirements, but only this document selects sources, audiences, disclosures, and model-step context projections;
-provider cannot scan or inject historical context. Architecture 24 owns activity/UI projections. Context records may be
+provider cannot scan or inject historical context. Architecture 03 owns the flat activity journal and notification list. Context records may be
 referenced only through safe selected provenance and never becomes activity authority or a hidden presentation
 disclosure channel.

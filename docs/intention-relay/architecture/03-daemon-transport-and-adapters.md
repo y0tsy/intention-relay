@@ -10,7 +10,8 @@ multi-user operation are explicit v1 exclusions ([00 Principles and Scope](00-pr
 
 The daemon is the sole owner of application use cases and runtime actors; SQLite connections and persistence
 transactions; active sessions and runs; provider drivers and model streams; the tool registry, workspace policy, hooks,
-VFR, Headroom, and plan policies; and event publication and subscription source.
+VFR, Headroom, and plan policies; event publication and subscription source; and the flat activity journal and
+notification list.
 
 Tauri, TUI, and REPL own only presentation, user input adaptation, local display state, and reconnect UX.
 
@@ -324,9 +325,25 @@ daemon-owned results and cannot infer lineage, authority, or rollback.
 
 ## Post-M4 activity and notification transport boundary
 
-Architecture 24 owns additive typed JSON-RPC `agent_activity_v1` and `user_notifications_v1` DTO families on the
+This document owns the flat activity journal and the flat notification list as additive typed JSON-RPC surfaces on the
 existing local endpoint. They are separate from M3 session replay and M4 run streams, use daemon-owned cursors and
-resync, and never create a second listener or adapter-owned authority.
+resync, and never create a second listener or adapter-owned authority. There is no activity tree, delegation pair,
+message exchange, notification level, deduplication rule, or acknowledgement aggregate.
+
+**Flat activity journal.** One append-only flat stream per root run records child-run lifecycle: a daemon-assigned
+record identity, the root-run and child-run references, the selected sub-agent mode, the child session handle when one
+was issued, a flat safe status, bounded safe text, and the occurrence time. It has no activity-tree identity, no
+delegation pair, no closed record-kind vocabulary, and no sequence of its own: the stream is ordered by the root run's
+container journal (`RunEventCursorDto`) and projects durable evidence those facts already carry. It never carries a
+child answer body, prompt, provider or tool output, path, credential, grant, or implementation detail.
+
+**Flat notification list.** One daemon-owned list holds safe summaries for the local OS user: record identity,
+occurrence time, the root-run and child-run references, a flat safe status, and bounded safe text. An entry appears when
+a child run is admitted in either mode and when a child or root run reaches a terminal state. The list has no levels, no
+deduplication rule, no acknowledgement aggregate, and no negotiated family: a request carries only the last observation
+cursor, which is a resume position and never a read, seen, dismissed, or accepted claim, and returns bounded pages
+ordered by that cursor. A summary never includes the child answer body, which stays readable only through the durable
+child result. Notification publication, replay, and reconnect never start work.
 
 ## Post-M5 supervision topology direction
 

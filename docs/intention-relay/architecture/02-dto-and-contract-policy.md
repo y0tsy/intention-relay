@@ -313,6 +313,6 @@ resource, provider payload, or authority. Architecture 23 owns their semantics.
 
 ## Post-M4 activity and adapter DTO boundary
 
-Future activity, notification, acknowledgement, snapshot, page, completion, live, and resync DTO families are closed,
-versioned, credential-free safe projections. They expose no raw prompt, provider/tool/MCP data, path, credential, grant,
-resource, or implementation value. Architecture 24 owns their semantics.
+Future activity-journal, notification, snapshot, page, completion, live, and resync DTO families are closed, versioned,
+credential-free safe projections. They expose no raw prompt, provider/tool/MCP data, path, credential, grant, resource,
+or implementation value. Architecture 03 owns their semantics.

@@ -280,7 +280,7 @@ provider meaning. A profile override is allowed only for user-turn regeneration 
 as a current run selection or continuation.
 
 This document depends on architectures 04 and 14--22 plus the DTO, transport, security, verification, and quality
-policies. It does not define activity/UI implementation, workspace cloning/rebinding, autonomous model/IPython forking,
+policies. It does not define activity-journal or UI implementation, workspace cloning/rebinding, autonomous model/IPython forking,
 provider implementation, destructive deletion/GC/export, schema, migrations, crates, Cargo, Makefile/CI, or production
 activation.
 
@@ -298,5 +298,5 @@ authority.
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
 
-Architecture 24 owns activity/UI projections. `AgentActivityTreeId` remains distinct from `ConversationTreeId`; neither
-tree implies the other, authority, or rollback semantics.
+Architecture 03 owns the flat activity journal and notification list. A child run is an ordinary run: it creates no
+second lineage, implies no authority, and proves no rollback.

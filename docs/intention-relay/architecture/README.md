@@ -77,7 +77,6 @@ flowchart TD
 11. [Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md)
 12. [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md)
 13. [Non-destructive session branching and regeneration](23-non-destructive-session-branching-and-regeneration.md)
-14. [Activity, UI, and adapters](24-activity-ui-and-adapters.md)
 15. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
 16. [VFR and Headroom](06-vfr-and-headroom.md)
 17. [Configuration and provider control plane](25-configuration-provider-control-plane.md)
@@ -189,8 +188,6 @@ roadmap](11-implementation-roadmap.md) owns activation order and status.
   reasoning.
 -  [23 Non-destructive session branching and regeneration](23-non-destructive-session-branching-and-regeneration.md):
   future ordinary Session lineage, frozen fork context, regeneration, and bounded lineage projections.
--  [24 Activity, UI, and adapters](24-activity-ui-and-adapters.md): future activity trees, safe projections, direct-pair
-  messages, notifications, acknowledgement projections, and shared-client adapter behavior.
 -  [25 Configuration and provider control plane](25-configuration-provider-control-plane.md): accepted post-M5
   directions — controlled live reload, credential rotation, provider health checks, discovery, pricing policy, and the
   profile UI/control plane; the Slice
@@ -237,7 +234,6 @@ owner documents define only their domain-specific semantic payloads, and every n
 | `SessionId`, `WorkspaceId`, `RunId`, `TurnId` | architecture 04 and existing domain owners | ordinary M3/M4 | historical domain newtypes and recorded sequences | never reconstruct or replace historical identity |
 | future execution-kind contract | architecture 14 | admitted run | typed serde JSON contract; no canonical bytes or digest layer (ADR 0012) | no fallback after missing or mismatched typed data |
 | `ConversationTreeId`, `ForkOperationId` | architecture 23 | ordinary Session lineage | typed lineage values; tree root derivation is frozen by architecture 23 | never infer lineage from current ancestry |
-| `AgentActivityTreeId` and activity records | architecture 24 | projections | daemon-assigned IDs and tree-local journal sequence | never convert from Session/Run/lineage identity |
 | provider/tool/MCP/kernel selections | architectures 15, 18, 20, 22 | future admitted run | immutable credential-free semantic references | live registry/resources cannot repair selection |
 | UUIDs, operation IDs, correlation IDs | architecture 02 plus owning architecture | all | distinct domain newtypes; UUID equality is not cross-domain identity | no conversion or authority inference |
 
@@ -246,7 +242,7 @@ Two durable ordering authorities exist, plus one observation position; together 
 | Authority | Scope | Orders | Must not be reused for |
 | --- | --- | --- | --- |
 | Session event sequence (`SessionEventSequenceDto`) | one session | every record committed in the session: events, run lifecycle, tool lifecycle, model and tool facts | container records, observation positions |
-| Container journal sequence (storage mechanism `container_journals`; the only kind today is `run`, whose position type is `RunEventCursorDto`) | one container: a run today; a conversation tree or an activity tree when activated | records that belong to the container and are not a record of one session | session records, observation positions, identity |
+| Container journal sequence (storage mechanism `container_journals`; the only kind today is `run`, whose position type is `RunEventCursorDto`) | one container: a run today; a conversation tree when activated | records that belong to the container and are not a record of one session | session records, observation positions, identity |
 | Observation cursor (reserved name; no DTO until a producer exists) | one reader | nothing: it is a resume position | never an authority, never durable order, never a dedup key, never a conflict token |
 
 1. No record family may introduce a further ordering sequence: a family orders by the session event sequence, or belongs
