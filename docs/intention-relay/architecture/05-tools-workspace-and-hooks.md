@@ -15,7 +15,7 @@ system used by WorkspaceRoot, VFR, Headroom, and Plan mode.
 - execution interfaces;
 - core tool registrations.
 
-Tools are domain/runtime capabilities, not UI commands. An adapter only renders tool events returned by the daemon.
+Tools are domain/runtime capabilities, not UI commands. An adapter only renders tool results returned by the daemon.
 
 ## Core tool contract
 
@@ -127,7 +127,7 @@ flowchart LR
   EX --> AE[After execute]
   AE --> PE[Persist result]
   PE --> MC[Model context hook]
-  MC --> PB[Publish event]
+  MC --> PB[Publish frame]
   PB --> CE[Continue provider exchange]
 ```
 
@@ -224,7 +224,7 @@ Autopilot. Plan's advisory instruction is not a technical boundary.
 | Execute CWD | Process fixture test. | Child process observes workspace root as CWD. |
 | Hook ordering | Registry unit/property test. | Same registration yields deterministic execution order. |
 | Hook rejection | Integration test. | Rejected invocation persists/publishes a typed outcome without base tool execution. |
-| Adapter independence | Daemon tool-stream contract test from TUI and bridge clients. | Both see the same tool event DTOs. |
+| Adapter independence | Daemon tool-stream contract test from TUI and bridge clients. | Both see the same committed tool results. |
 
 ## Quality-gate integration
 

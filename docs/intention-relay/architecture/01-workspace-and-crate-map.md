@@ -118,7 +118,7 @@ tiers are declared by its activating specification (roadmap, slice 1.5).
 | Target crate | Absorbs | Owns |
 | --- | --- | --- |
 | `intention-proto` | `intention-types`, `intention-protocol` | Identity newtypes, shared value types, schema versions, the versioned public protocol DTOs, and their typed serde payloads. |
-| `intention-domain` | `intention-domain` | Domain records, value validation, domain events, and invariants. |
+| `intention-domain` | `intention-domain` | Domain records, value validation, and invariants. |
 | `intention-config` | `intention-config` | TOML parsing, validation, resolved configuration, and credential-free snapshots. |
 | `intention-engine` | `intention-application`, `intention-runtime` | Commands, queries, semantic use-case workflows, deterministic lifecycle decisions, interruption handling, and recovery. |
 | `intention-tools` | `intention-tools`, `intention-workspace`, `intention-hooks` | Tool registry and contracts, WorkspaceRoot policy, and the typed hook phases, contexts, and dispatcher. |

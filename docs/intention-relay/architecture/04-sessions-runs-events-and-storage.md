@@ -49,10 +49,6 @@ stateDiagram
   Starting --> Running: model stream starts
   Starting --> Failed: startup error
   Starting --> Interrupted: daemon restart
-  Running --> WaitingInput: ask user or permission
-  WaitingInput --> Running: answer accepted
-  WaitingInput --> Failed: unrecoverable error
-  WaitingInput --> Interrupted: daemon restart
   Running --> Completed: terminal model result
   Running --> Failed: unrecoverable error
   Running --> Interrupted: daemon restart
@@ -64,12 +60,12 @@ stateDiagram
 Interruption is not a run state. `run.interrupt` is accepted only for an exact active run, commits no durable status
 change, records a durable notice message for the stopped provider stream or tool call, resets the run's cancellation
 signal, and the run continues with its next model step; `Cancelling` and `Cancelled` no longer exist, and `Interrupted`
-remains recovery-only. The closed status vocabulary is `Starting`, `Running`, `WaitingInput`, `Completed`, `Failed`,
-and `Interrupted`; the live path creates every run in `Starting`, and a terminal repository transition commits its
-state change in one transaction.
+remains recovery-only. The closed status vocabulary is `Starting`, `Running`, `Completed`, `Failed`, and
+`Interrupted`; the live path creates every run in `Starting`, and a terminal repository transition commits its state
+change in one transaction.
 
-The exact policy for a question or permission after restart remains future tool and interaction work. M4 preserves the
-M3 rule: the unfinished run is marked interrupted and does not resume.
+The exact policy for a question or permission after restart remains future tool and interaction work and adds no run
+status. M4 preserves the M3 rule: the unfinished run is marked interrupted and does not resume.
 
 ## Pending turns
 
@@ -81,6 +77,8 @@ frozen configuration revision. An acceptance that cannot start a run reports
 
 ### Required semantics
 
+- repeating an accepted turn with the same `IdempotencyKey` and unchanged content returns the recorded outcome instead
+of writing a second turn, while the same key with different content fails with `turn_idempotency_conflict`;
 -  a pending turn keeps its own proposed `RunId`, selected immutable configuration revision, and `ConfigRevisionId`,
 used if it starts the successor run;
 -  the runtime appends pending turns to the live run context at the next boundary — after the provider response that

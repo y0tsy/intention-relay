@@ -126,7 +126,7 @@ from identity.
 -  **`ask_user`** is a normal long-running `user_interaction` tool. After
   `ToolCallStarted` the post-M4 run stays `Running`; other independently admitted calls may complete concurrently, and
   the next model step waits for this question's terminal safe result with every other group result. It never moves the
-  post-M4 run to `WaitingInput` and never rewrites M3/M4 `WaitingInput` snapshots, facts, or recovery.
+  post-M4 run out of `Running` and never rewrites committed `messages` or `tool_results` rows or recovery state.
 -  **`sub_agent`** admits one child run and returns its markdown answer. The typed input carries the bounded markdown
   task and the selected `mode`. `Sync` holds the call open until the child run reaches a terminal state and returns the
   child's terminal markdown answer as the call's result. `Async` terminates the call immediately with a `Deferred`

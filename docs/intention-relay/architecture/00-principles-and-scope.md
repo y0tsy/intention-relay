@@ -1,7 +1,8 @@
 # Principles and Scope
 
-**Current policy.** Principles 1–11 govern v1, delivered through M5. Principles 12–22 govern the post-M4+ extension
-packages, each implemented only where its owning milestone has landed.
+**Current policy.** Principles 1–11 govern v1, delivered through M5. The post-M4+ extension packages state no
+principles here; each is governed by its owner document and implemented only where its owning milestone has landed
+([implementation roadmap](11-implementation-roadmap.md)).
 
 This document governs the application shape, ownership boundaries, v1 exclusions, and delivery mindset. Detailed
 contracts belong to [DTO and contract policy](02-dto-and-contract-policy.md); crate ownership to [Workspace and crate
@@ -50,8 +51,7 @@ Base tools stay focused on their primitive work and do not hard-code extension b
 ### 8. Automatic durable state
 
 Sessions, turns, run transitions, artifacts, plans, todos, tool calls, and configuration revisions are automatically
-persisted. A successful state transition commits its change in one SQLite transaction before any live frame is
-published.
+persisted under the one-transaction state-change law of [architecture 04](04-sessions-runs-events-and-storage.md).
 
 ### 9. Plan and Build are separate policies
 

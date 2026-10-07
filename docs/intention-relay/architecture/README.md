@@ -11,8 +11,7 @@ started from is retired and remains in git history.
 When the documents differ:
 
 1. explicit future product decisions override legacy implementation details;
-2. research material under [`../../reference/`](../../reference/README.md) is preserved reference only;
-3. this architecture must not inherit a legacy design merely because it existed.
+2. this architecture must not inherit a legacy design merely because it existed.
 
 ## Architectural summary
 
