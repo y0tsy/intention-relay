@@ -9,18 +9,13 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::{
-    DomainEventDto, ModelRunFactInputDto, ModelRunProjectionDto, RunEventCursorDto, RunModeDto,
-    RunProjectionDto, RunSnapshotDto, RunStatusDto, SessionProjectionDto, WorkspaceRootDto,
+    RunModeDto, RunProjectionDto, RunStatusDto, SessionProjectionDto, WorkspaceRootDto,
 };
 use intention_runtime::fail_starting_run;
-use intention_storage::{
-    AcceptUserTurnInputDto, AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto,
-    CommittedChangeDto, CreateSessionInputDto, RecoverUnfinishedRunsInputDto, StorageRepositoryDto,
-    TransitionRunInputDto,
-};
+use intention_storage::{CreateSessionInputDto, FinishRunInputDto, StorageRepositoryDto};
 use intention_types::{
-    ConfigRevisionId, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto,
-    SessionEventSequenceDto, SessionId, TimestampDto, TurnId, WorkspaceId,
+    ConfigRevisionId, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto, SessionId,
+    TimestampDto, TurnId, WorkspaceId,
 };
 
 fn time(value: i64) -> TimestampDto {
@@ -61,40 +56,45 @@ fn workspace_root() -> WorkspaceRootDto {
     .expect("native fixture workspace is valid")
 }
 
-fn projection(
+/// Records the exact terminal run outcome committed by the runtime helper.
+struct FakeRepository {
     session_id: SessionId,
-    active: Option<RunProjectionDto>,
-    position: u64,
-) -> SessionProjectionDto {
-    SessionProjectionDto::new(
-        ProjectId::new(),
-        session_id,
-        WorkspaceId::new(),
-        workspace_root(),
-        RunModeDto::Build,
-        active.map(RunProjectionDto::config_revision_id),
-        active,
-        Vec::new(),
-        SessionEventSequenceDto::new(position),
-    )
-    .expect("fixture projection is valid")
+    run: RefCell<RunProjectionDto>,
+    finishes: RefCell<Vec<FinishRunInputDto>>,
 }
 
-/// Records the exact durable scheduling-failure append issued by the runtime.
-struct FakeRepository {
-    snapshot: RefCell<SessionProjectionDto>,
-    appends: RefCell<Vec<AppendModelRunFactsInputDto>>,
+impl FakeRepository {
+    fn with_status(session_id: SessionId, status: RunStatusDto) -> Self {
+        Self {
+            session_id,
+            run: RefCell::new(RunProjectionDto::new(
+                session_id,
+                RunId::new(),
+                TurnId::new(),
+                status,
+                snapshot().revision_id(),
+            )),
+            finishes: RefCell::new(Vec::new()),
+        }
+    }
+
+    fn run_id(&self) -> RunId {
+        self.run.borrow().run_id()
+    }
 }
 
 impl StorageRepositoryDto for FakeRepository {
-    fn create_session(&self, _input: CreateSessionInputDto) -> DtoResult<CommittedChangeDto> {
+    fn create_session(&self, _input: CreateSessionInputDto) -> DtoResult<SessionProjectionDto> {
         Err(ErrorDto::unavailable(
             "fixture_unused",
             "create is not used by this fixture",
         ))
     }
 
-    fn accept_user_turn(&self, _input: AcceptUserTurnInputDto) -> DtoResult<CommittedChangeDto> {
+    fn accept_user_turn(
+        &self,
+        _input: intention_storage::AcceptUserTurnInputDto,
+    ) -> DtoResult<intention_storage::AcceptedTurnOutcomeDto> {
         Err(ErrorDto::unavailable(
             "fixture_unused",
             "accept is not used by this fixture",
@@ -104,138 +104,177 @@ impl StorageRepositoryDto for FakeRepository {
     fn remove_turn(
         &self,
         _input: intention_storage::RemoveTurnInputDto,
-    ) -> DtoResult<CommittedChangeDto> {
+    ) -> DtoResult<intention_domain::PendingTurnProjectionDto> {
         Err(ErrorDto::unavailable(
             "fixture_unused",
             "remove is not used by this fixture",
         ))
     }
 
-    fn transition_run(&self, _input: TransitionRunInputDto) -> DtoResult<CommittedChangeDto> {
+    fn consume_pending_user_turns(
+        &self,
+        _input: intention_storage::ConsumePendingUserTurnsInputDto,
+    ) -> DtoResult<Vec<intention_domain::MessageProjectionDto>> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "consume is not used by this fixture",
+        ))
+    }
+
+    fn transition_run(
+        &self,
+        _input: intention_storage::TransitionRunInputDto,
+    ) -> DtoResult<RunProjectionDto> {
         Err(ErrorDto::unavailable(
             "fixture_unused",
             "transition is not used by this fixture",
         ))
     }
 
+    fn finish_run(&self, input: FinishRunInputDto) -> DtoResult<RunProjectionDto> {
+        assert_eq!(input.session_id(), self.session_id);
+        assert_eq!(input.run_id(), self.run_id());
+        let current = *self.run.borrow();
+        let finished = RunProjectionDto::new(
+            current.session_id(),
+            current.run_id(),
+            current.turn_id(),
+            input.status(),
+            current.config_revision_id(),
+        );
+        *self.run.borrow_mut() = finished;
+        self.finishes.borrow_mut().push(input);
+        Ok(finished)
+    }
+
+    fn append_message(
+        &self,
+        _input: intention_storage::AppendMessageInputDto,
+    ) -> DtoResult<intention_domain::MessageProjectionDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "append is not used by this fixture",
+        ))
+    }
+
+    fn write_tool_result(
+        &self,
+        _input: intention_storage::WriteToolResultInputDto,
+    ) -> DtoResult<intention_storage::ToolResultEvidenceDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "tool result is not used by this fixture",
+        ))
+    }
+
+    fn load_tool_result(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+        _call_id: intention_types::ToolCallId,
+    ) -> DtoResult<intention_storage::ToolResultEvidenceDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "tool result is not used by this fixture",
+        ))
+    }
+
+    fn load_run_config_snapshot(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+    ) -> DtoResult<ConfigSnapshotDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "configuration is not used by this fixture",
+        ))
+    }
+
+    fn load_starting_run_model_context(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+    ) -> DtoResult<intention_storage::StartingRunModelContextDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "context is not used by this fixture",
+        ))
+    }
+
+    fn load_run_projection(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<RunProjectionDto> {
+        if session_id != self.session_id || run_id != self.run_id() {
+            return Err(ErrorDto::validation(
+                "run_not_found",
+                "the requested durable run does not exist",
+            ));
+        }
+        Ok(*self.run.borrow())
+    }
+
+    fn load_session_projection(&self, session_id: SessionId) -> DtoResult<SessionProjectionDto> {
+        assert_eq!(session_id, self.session_id);
+        SessionProjectionDto::new(
+            ProjectId::new(),
+            self.session_id,
+            WorkspaceId::new(),
+            workspace_root(),
+            RunModeDto::Build,
+            Some(self.run.borrow().config_revision_id()),
+            Some(*self.run.borrow()),
+            Vec::new(),
+        )
+    }
+
+    fn load_recent_messages(
+        &self,
+        _session_id: SessionId,
+        _limit: u32,
+    ) -> DtoResult<Vec<intention_domain::MessageProjectionDto>> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "messages are not used by this fixture",
+        ))
+    }
+
+    fn load_run_messages(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+        _limit: u32,
+    ) -> DtoResult<Vec<intention_domain::MessageProjectionDto>> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "messages are not used by this fixture",
+        ))
+    }
+
     fn recover_unfinished_runs(
         &self,
-        _input: RecoverUnfinishedRunsInputDto,
-    ) -> DtoResult<Vec<CommittedChangeDto>> {
+        _input: intention_storage::RecoverUnfinishedRunsInputDto,
+    ) -> DtoResult<Vec<RunProjectionDto>> {
         Err(ErrorDto::unavailable(
             "fixture_unused",
             "recovery is not used by this fixture",
         ))
     }
 
-    fn load_session_snapshot(&self, _session_id: SessionId) -> DtoResult<SessionProjectionDto> {
-        Ok(self.snapshot.borrow().clone())
-    }
-
-    fn load_current_run_snapshot(
-        &self,
-        _session_id: SessionId,
-        run_id: RunId,
-    ) -> DtoResult<RunSnapshotDto> {
-        let projection = self.snapshot.borrow();
-        let run = projection
-            .active_run()
-            .filter(|run| run.run_id() == run_id)
-            .ok_or_else(|| {
-                ErrorDto::validation(
-                    "run_replay_not_found",
-                    "the requested durable run replay does not exist",
-                )
-            })?;
-        Ok(RunSnapshotDto::new(
-            run.session_id(),
-            run.run_id(),
-            projection.at_sequence(),
-            ModelRunProjectionDto::new(run, RunEventCursorDto::new(0), None, "", None, None, None)
-                .expect("fixture model projection is valid"),
-        )
-        .expect("fixture snapshot is valid"))
-    }
-
-    fn append_model_run_facts(
-        &self,
-        input: AppendModelRunFactsInputDto,
-    ) -> DtoResult<AppendModelRunFactsOutcomeDto> {
-        let run = self
-            .snapshot
-            .borrow()
-            .active_run()
-            .expect("fixture has an active run");
-        let expected = self.appends.borrow().len() as u64;
-        let cursor = RunEventCursorDto::new(expected + 1);
-        let facts = input
-            .facts()
-            .iter()
-            .map(|fact| {
-                intention_domain::ModelRunFactDto::new(cursor, fact.clone())
-                    .expect("fixture fact is valid")
-            })
-            .collect::<Vec<_>>();
-        let outcome = AppendModelRunFactsOutcomeDto::new(
-            cursor,
-            RunSnapshotDto::new(
-                input.session_id(),
-                input.run_id(),
-                self.snapshot.borrow().at_sequence(),
-                ModelRunProjectionDto::new(run, cursor, None, "", None, None, None)
-                    .expect("fixture model projection is valid"),
-            )
-            .expect("fixture snapshot is valid"),
-            facts,
-        )
-        .expect("fixture append outcome is valid");
-        self.appends.borrow_mut().push(input);
-        Ok(outcome)
-    }
-
-    fn load_tail(
-        &self,
-        _session_id: SessionId,
-        _after_sequence: SessionEventSequenceDto,
-    ) -> DtoResult<Vec<intention_types::EventEnvelopeDto<DomainEventDto>>> {
-        Err(ErrorDto::unavailable(
-            "fixture_unused",
-            "tail is not used by this fixture",
-        ))
-    }
-
     fn accept_configuration_revision(&self, _snapshot: ConfigSnapshotDto) -> DtoResult<()> {
         Err(ErrorDto::unavailable(
             "fixture_unused",
-            "config is not used by this fixture",
+            "configuration is not used by this fixture",
         ))
-    }
-}
-
-fn repository_with_status(session_id: SessionId, status: RunStatusDto) -> FakeRepository {
-    let run = RunProjectionDto::new(
-        session_id,
-        RunId::new(),
-        TurnId::new(),
-        status,
-        snapshot().revision_id(),
-    );
-    FakeRepository {
-        snapshot: RefCell::new(projection(session_id, Some(run), 2)),
-        appends: RefCell::new(Vec::new()),
     }
 }
 
 #[test]
 fn fail_starting_run_records_a_manual_failure_for_the_exact_starting_run() {
     let session_id = SessionId::new();
-    let repository = repository_with_status(session_id, RunStatusDto::Starting);
-    let run_id = repository
-        .snapshot
-        .borrow()
-        .active_run()
-        .expect("fixture has active run")
-        .run_id();
+    let repository = FakeRepository::with_status(session_id, RunStatusDto::Starting);
+    let run_id = repository.run_id();
 
     let outcome = fail_starting_run(
         &repository,
@@ -246,34 +285,25 @@ fn fail_starting_run_records_a_manual_failure_for_the_exact_starting_run() {
     )
     .expect("starting mutation failure commits");
 
-    assert_eq!(outcome.cursor().value(), 1);
-    assert_eq!(outcome.facts().len(), 1);
-    match outcome.facts()[0].input() {
-        ModelRunFactInputDto::Failed { failure } => {
-            assert_eq!(failure.code(), "model_context_unavailable");
-            assert_eq!(failure.retry(), intention_types::ErrorRetryDto::Manual);
-        }
-        _ => unreachable!("the terminal failure fact is recorded"),
-    }
-    let appends = repository.appends.borrow();
-    assert_eq!(appends.len(), 1);
-    assert_eq!(appends[0].session_id(), session_id);
-    assert_eq!(appends[0].run_id(), run_id);
-    assert_eq!(appends[0].expected_cursor().value(), 0);
-    assert_eq!(appends[0].status(), Some(RunStatusDto::Failed));
-    assert_eq!(appends[0].occurred_at(), time(72));
+    assert_eq!(outcome.run_id(), run_id);
+    assert_eq!(outcome.status(), RunStatusDto::Failed);
+    let finishes = repository.finishes.borrow();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].session_id(), session_id);
+    assert_eq!(finishes[0].run_id(), run_id);
+    assert_eq!(finishes[0].status(), RunStatusDto::Failed);
+    assert_eq!(finishes[0].error_code(), Some("model_context_unavailable"));
+    assert!(finishes[0].error_message().is_some());
+    assert_eq!(finishes[0].usage(), None);
+    assert_eq!(finishes[0].finish_reason(), None);
+    assert_eq!(finishes[0].occurred_at(), time(72));
 }
 
 #[test]
 fn fail_starting_run_rejects_a_run_that_is_no_longer_starting() {
     let session_id = SessionId::new();
-    let repository = repository_with_status(session_id, RunStatusDto::Running);
-    let run_id = repository
-        .snapshot
-        .borrow()
-        .active_run()
-        .expect("fixture has active run")
-        .run_id();
+    let repository = FakeRepository::with_status(session_id, RunStatusDto::Running);
+    let run_id = repository.run_id();
 
     assert_eq!(
         fail_starting_run(
@@ -287,13 +317,13 @@ fn fail_starting_run_rejects_a_run_that_is_no_longer_starting() {
         .code(),
         "invalid_starting_run_failure_state"
     );
-    assert!(repository.appends.borrow().is_empty());
+    assert!(repository.finishes.borrow().is_empty());
 }
 
 #[test]
 fn fail_starting_run_propagates_an_absent_run_without_writing() {
     let session_id = SessionId::new();
-    let repository = repository_with_status(session_id, RunStatusDto::Starting);
+    let repository = FakeRepository::with_status(session_id, RunStatusDto::Starting);
     assert_eq!(
         fail_starting_run(
             &repository,
@@ -304,7 +334,7 @@ fn fail_starting_run_propagates_an_absent_run_without_writing() {
         )
         .expect_err("an unknown run rejects")
         .code(),
-        "run_replay_not_found"
+        "run_not_found"
     );
-    assert!(repository.appends.borrow().is_empty());
+    assert!(repository.finishes.borrow().is_empty());
 }

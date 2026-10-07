@@ -10,9 +10,8 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::{
-    ModelRunFactDto, ModelRunFactInputDto, ModelRunProjectionDto, RunEventCursorDto, RunFailureDto,
-    RunModeDto, RunProjectionDto, RunSnapshotDto, RunStatusDto, SessionProjectionDto,
-    ToolResultOutcomeDto, WorkspaceRootDto,
+    MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto, RunStatusDto,
+    SessionProjectionDto, WorkspaceRootDto,
 };
 use intention_model::{
     AssistantReasoningDto, FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto,
@@ -22,16 +21,16 @@ use intention_model::{
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,
     ModelRunExecutionOutcomeDto, ModelRunExecutionService, ModelSleepFuture, ModelTimePort,
-    ToolExecutionPort,
+    ToolExecutionPort, ToolResultOutcomeDto,
 };
 use intention_storage::{
-    AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto, CommittedChangeDto,
-    CreateSessionInputDto, RecoverUnfinishedRunsInputDto, StorageRepositoryDto,
-    TransitionRunInputDto,
+    AppendMessageInputDto, ConsumePendingUserTurnsInputDto, CreateSessionInputDto,
+    FinishRunInputDto, RemoveTurnInputDto, StorageRepositoryDto, TransitionRunInputDto,
+    WriteToolResultInputDto,
 };
 use intention_types::{
-    ConfigRevisionId, DtoResult, ErrorDto, ErrorRetryDto, ProjectId, RunId, SchemaVersionDto,
-    SessionEventSequenceDto, SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
+    ConfigRevisionId, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto, SessionId,
+    TimestampDto, ToolCallId, TurnId, WorkspaceId,
 };
 
 fn time(value: i64) -> TimestampDto {
@@ -126,36 +125,40 @@ const fn cache_breakpoint(mut message: ModelMessageDto) -> ModelMessageDto {
     message
 }
 
+/// Records every committed transcript row, terminal outcome, and transition.
 struct FakeRepository {
     session_id: SessionId,
     run_id: RunId,
+    turn_id: TurnId,
     config: ConfigSnapshotDto,
     status: RefCell<RunStatusDto>,
-    cursor: RefCell<RunEventCursorDto>,
-    appends: RefCell<Vec<AppendModelRunFactsInputDto>>,
+    messages: RefCell<Vec<MessageProjectionDto>>,
+    finishes: RefCell<Vec<FinishRunInputDto>>,
     transitions: RefCell<Vec<TransitionRunInputDto>>,
+    tool_results: RefCell<Vec<WriteToolResultInputDto>>,
     config_error: RefCell<Option<ErrorDto>>,
     append_failure: RefCell<Option<ErrorDto>>,
     fail_append_at: RefCell<Option<usize>>,
     append_count: RefCell<usize>,
     cancel_after_append: RefCell<Option<(usize, ModelCancellationSignal)>>,
     transition_failure: RefCell<Option<(RunStatusDto, ErrorDto)>>,
-    /// Pending user messages consumed by the next context boundary.
-    pending: RefCell<VecDeque<(TurnId, String)>>,
-    /// Facts committed by every pending-message boundary consume.
-    pending_facts: RefCell<Vec<ModelRunFactDto>>,
+    /// Pending user messages committed by the next context boundary.
+    pending: RefCell<VecDeque<MessageProjectionDto>>,
+    pending_consumes: RefCell<usize>,
 }
 
 impl FakeRepository {
-    const fn new(session_id: SessionId, run_id: RunId, config: ConfigSnapshotDto) -> Self {
+    fn new(session_id: SessionId, run_id: RunId, config: ConfigSnapshotDto) -> Self {
         Self {
             session_id,
             run_id,
+            turn_id: TurnId::new(),
             config,
             status: RefCell::new(RunStatusDto::Starting),
-            cursor: RefCell::new(RunEventCursorDto::new(0)),
-            appends: RefCell::new(Vec::new()),
+            messages: RefCell::new(Vec::new()),
+            finishes: RefCell::new(Vec::new()),
             transitions: RefCell::new(Vec::new()),
+            tool_results: RefCell::new(Vec::new()),
             config_error: RefCell::new(None),
             append_failure: RefCell::new(None),
             fail_append_at: RefCell::new(None),
@@ -163,57 +166,51 @@ impl FakeRepository {
             cancel_after_append: RefCell::new(None),
             transition_failure: RefCell::new(None),
             pending: RefCell::new(VecDeque::new()),
-            pending_facts: RefCell::new(Vec::new()),
+            pending_consumes: RefCell::new(0),
         }
     }
 
-    fn run_snapshot(&self, status: RunStatusDto, cursor: RunEventCursorDto) -> RunSnapshotDto {
-        let projection = ModelRunProjectionDto::new(
-            RunProjectionDto::new(
-                self.session_id,
-                self.run_id,
-                TurnId::new(),
-                status,
-                self.config.revision_id(),
-            ),
-            cursor,
-            None,
-            "",
-            None,
-            None,
-            None,
-        )
-        .expect("fixture projection is valid");
-        RunSnapshotDto::new(
+    fn projection(&self) -> RunProjectionDto {
+        RunProjectionDto::new(
             self.session_id,
             self.run_id,
-            SessionEventSequenceDto::new(cursor.value()),
-            projection,
+            self.turn_id,
+            *self.status.borrow(),
+            self.config.revision_id(),
         )
-        .expect("fixture snapshot is valid")
     }
 }
 
 impl StorageRepositoryDto for FakeRepository {
-    fn create_session(&self, _input: CreateSessionInputDto) -> DtoResult<CommittedChangeDto> {
+    fn create_session(&self, _input: CreateSessionInputDto) -> DtoResult<SessionProjectionDto> {
         Err(ErrorDto::unavailable("fixture_unused", "unused"))
     }
 
     fn accept_user_turn(
         &self,
         _input: intention_storage::AcceptUserTurnInputDto,
-    ) -> DtoResult<CommittedChangeDto> {
+    ) -> DtoResult<intention_storage::AcceptedTurnOutcomeDto> {
         Err(ErrorDto::unavailable("fixture_unused", "unused"))
     }
 
     fn remove_turn(
         &self,
-        _input: intention_storage::RemoveTurnInputDto,
-    ) -> DtoResult<CommittedChangeDto> {
+        _input: RemoveTurnInputDto,
+    ) -> DtoResult<intention_domain::PendingTurnProjectionDto> {
         Err(ErrorDto::unavailable("fixture_unused", "unused"))
     }
 
-    fn transition_run(&self, input: TransitionRunInputDto) -> DtoResult<CommittedChangeDto> {
+    fn consume_pending_user_turns(
+        &self,
+        input: ConsumePendingUserTurnsInputDto,
+    ) -> DtoResult<Vec<MessageProjectionDto>> {
+        assert_eq!(input.session_id(), self.session_id);
+        assert_eq!(input.run_id(), self.run_id);
+        *self.pending_consumes.borrow_mut() += 1;
+        Ok(self.pending.borrow_mut().drain(..).collect())
+    }
+
+    fn transition_run(&self, input: TransitionRunInputDto) -> DtoResult<RunProjectionDto> {
         assert_eq!(input.session_id(), self.session_id);
         assert_eq!(input.run_id(), self.run_id);
         if self
@@ -231,104 +228,61 @@ impl StorageRepositoryDto for FakeRepository {
         }
         *self.status.borrow_mut() = input.status();
         self.transitions.borrow_mut().push(input);
-        let projection = SessionProjectionDto::new(
-            ProjectId::new(),
-            self.session_id,
-            WorkspaceId::new(),
-            WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
-                .expect("workspace is valid"),
-            RunModeDto::Build,
-            Some(self.config.revision_id()),
-            None,
-            Vec::new(),
-            SessionEventSequenceDto::new(self.cursor.borrow().value()),
-        )
-        .expect("fixture projection is valid");
-        CommittedChangeDto::new(
-            projection,
-            SessionEventSequenceDto::new(self.cursor.borrow().value()),
-            Vec::new(),
-            None,
-        )
+        Ok(self.projection())
     }
 
-    fn append_model_run_facts(
-        &self,
-        input: AppendModelRunFactsInputDto,
-    ) -> DtoResult<AppendModelRunFactsOutcomeDto> {
-        if let Some(error) = self.append_failure.borrow_mut().take() {
-            return Err(error);
-        }
-        let append_index = {
+    fn finish_run(&self, input: FinishRunInputDto) -> DtoResult<RunProjectionDto> {
+        assert_eq!(input.session_id(), self.session_id);
+        assert_eq!(input.run_id(), self.run_id);
+        *self.status.borrow_mut() = input.status();
+        self.finishes.borrow_mut().push(input);
+        Ok(self.projection())
+    }
+
+    fn append_message(&self, input: AppendMessageInputDto) -> DtoResult<MessageProjectionDto> {
+        let index = {
             *self.append_count.borrow_mut() += 1;
             *self.append_count.borrow()
         };
-        if self.fail_append_at.borrow().as_ref() == Some(&append_index) {
+        if let Some(error) = self.append_failure.borrow_mut().take() {
+            return Err(error);
+        }
+        if self.fail_append_at.borrow().as_ref() == Some(&index) {
             return Err(ErrorDto::unavailable(
                 "fixture_append_failure",
                 "the scripted append failed",
             ));
         }
-        if let Some((index, signal)) = self.cancel_after_append.borrow().as_ref()
-            && index == &append_index
+        if let Some((cancel_at, signal)) = self.cancel_after_append.borrow().as_ref()
+            && cancel_at == &index
         {
             signal.cancel();
         }
-        assert_eq!(input.session_id(), self.session_id);
-        assert_eq!(input.run_id(), self.run_id);
-        assert_eq!(input.expected_cursor(), *self.cursor.borrow());
-        let mut next = input.expected_cursor().value();
-        let facts = input
-            .facts()
-            .iter()
-            .cloned()
-            .map(|fact| {
-                next += 1;
-                ModelRunFactDto::new(RunEventCursorDto::new(next), fact)
-                    .expect("fixture fact is valid")
-            })
-            .collect::<Vec<_>>();
-        let cursor = RunEventCursorDto::new(next);
-        let status = input.status().unwrap_or_else(|| *self.status.borrow());
-        *self.status.borrow_mut() = status;
-        *self.cursor.borrow_mut() = cursor;
-        self.appends.borrow_mut().push(input);
-        AppendModelRunFactsOutcomeDto::new(cursor, self.run_snapshot(status, cursor), facts)
+        assert_eq!(input.message().session_id(), self.session_id);
+        assert_eq!(input.message().run_id(), Some(self.run_id));
+        let message = input.message().clone();
+        self.messages.borrow_mut().push(message.clone());
+        Ok(message)
     }
 
-    fn append_pending_user_turns(
+    fn write_tool_result(
         &self,
-        input: intention_storage::AppendPendingUserTurnsInputDto,
-    ) -> DtoResult<intention_storage::AppendPendingUserTurnsOutcomeDto> {
-        assert_eq!(input.session_id(), self.session_id);
-        assert_eq!(input.run_id(), self.run_id);
-        assert_eq!(input.expected_cursor(), *self.cursor.borrow());
-        let pending = std::mem::take(&mut *self.pending.borrow_mut());
-        if pending.is_empty() {
-            return intention_storage::AppendPendingUserTurnsOutcomeDto::new(
-                *self.cursor.borrow(),
-                Vec::new(),
-            );
-        }
-        let mut next = self.cursor.borrow().value();
-        let facts = pending
-            .into_iter()
-            .map(|(turn_id, content)| {
-                next += 1;
-                ModelRunFactDto::new(
-                    RunEventCursorDto::new(next),
-                    ModelRunFactInputDto::user_message_appended(turn_id, content)
-                        .expect("fixture pending message is valid"),
-                )
-                .expect("fixture fact is valid")
-            })
-            .collect::<Vec<_>>();
-        let cursor = RunEventCursorDto::new(next);
-        *self.cursor.borrow_mut() = cursor;
-        self.pending_facts
-            .borrow_mut()
-            .extend(facts.iter().cloned());
-        intention_storage::AppendPendingUserTurnsOutcomeDto::new(cursor, facts)
+        input: WriteToolResultInputDto,
+    ) -> DtoResult<intention_storage::ToolResultEvidenceDto> {
+        assert_eq!(input.evidence().session_id(), self.session_id);
+        assert_eq!(input.evidence().run_id(), self.run_id);
+        let evidence = input.evidence().clone();
+        self.tool_results.borrow_mut().push(input);
+        Ok(evidence)
+    }
+
+    fn load_tool_result(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+        _call_id: ToolCallId,
+    ) -> DtoResult<intention_storage::ToolResultEvidenceDto> {
+        Err(ErrorDto::unavailable("fixture_unused", "unused"))
     }
 
     fn load_run_config_snapshot(
@@ -343,25 +297,25 @@ impl StorageRepositoryDto for FakeRepository {
         Ok(self.config.clone())
     }
 
-    fn load_current_run_snapshot(
+    fn load_starting_run_model_context(
         &self,
-        session_id: SessionId,
-        run_id: RunId,
-    ) -> DtoResult<RunSnapshotDto> {
-        assert_eq!((session_id, run_id), (self.session_id, self.run_id));
-        let cursor = *self.cursor.borrow();
-        let snapshot = self.run_snapshot(*self.status.borrow(), cursor);
-        Ok(snapshot)
-    }
-
-    fn recover_unfinished_runs(
-        &self,
-        _input: RecoverUnfinishedRunsInputDto,
-    ) -> DtoResult<Vec<CommittedChangeDto>> {
+        _session_id: SessionId,
+        _run_id: RunId,
+    ) -> DtoResult<intention_storage::StartingRunModelContextDto> {
         Err(ErrorDto::unavailable("fixture_unused", "unused"))
     }
 
-    fn load_session_snapshot(&self, _session_id: SessionId) -> DtoResult<SessionProjectionDto> {
+    fn load_run_projection(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<RunProjectionDto> {
+        assert_eq!((session_id, run_id), (self.session_id, self.run_id));
+        Ok(self.projection())
+    }
+
+    fn load_session_projection(&self, session_id: SessionId) -> DtoResult<SessionProjectionDto> {
+        assert_eq!(session_id, self.session_id);
         SessionProjectionDto::new(
             ProjectId::new(),
             self.session_id,
@@ -370,17 +324,32 @@ impl StorageRepositoryDto for FakeRepository {
                 .expect("workspace is valid"),
             RunModeDto::Build,
             Some(self.config.revision_id()),
-            None,
+            Some(self.projection()),
             Vec::new(),
-            SessionEventSequenceDto::new(0),
         )
     }
 
-    fn load_tail(
+    fn load_recent_messages(
         &self,
         _session_id: SessionId,
-        _after_sequence: SessionEventSequenceDto,
-    ) -> DtoResult<Vec<intention_types::EventEnvelopeDto<intention_domain::DomainEventDto>>> {
+        _limit: u32,
+    ) -> DtoResult<Vec<MessageProjectionDto>> {
+        Err(ErrorDto::unavailable("fixture_unused", "unused"))
+    }
+
+    fn load_run_messages(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+        _limit: u32,
+    ) -> DtoResult<Vec<MessageProjectionDto>> {
+        Err(ErrorDto::unavailable("fixture_unused", "unused"))
+    }
+
+    fn recover_unfinished_runs(
+        &self,
+        _input: intention_storage::RecoverUnfinishedRunsInputDto,
+    ) -> DtoResult<Vec<RunProjectionDto>> {
         Err(ErrorDto::unavailable("fixture_unused", "unused"))
     }
 
@@ -609,6 +578,13 @@ impl RecordingTime {
             sleeps: std::sync::Mutex::new(Vec::new()),
         }
     }
+
+    fn sleeps(&self) -> Vec<Duration> {
+        self.sleeps
+            .lock()
+            .expect("sleep recorder is available")
+            .clone()
+    }
 }
 
 impl ModelTimePort for RecordingTime {
@@ -625,7 +601,7 @@ impl ModelTimePort for RecordingTime {
     }
 }
 
-/// Records every committed model-run snapshot.
+/// Records every committed transcript row and run status.
 struct RecordingCommitObserver {
     commits: std::sync::Mutex<Vec<ModelRunCommitDto>>,
 }
@@ -636,14 +612,21 @@ impl RecordingCommitObserver {
             commits: std::sync::Mutex::new(Vec::new()),
         }
     }
-}
 
-impl ModelRunCommitObserver for RecordingCommitObserver {
-    fn observe_model_run_commit(&self, committed: ModelRunCommitDto) {
+    fn commits(&self) -> Vec<ModelRunCommitDto> {
         self.commits
             .lock()
             .expect("observer recorder is available")
-            .push(committed);
+            .clone()
+    }
+}
+
+impl ModelRunCommitObserver for RecordingCommitObserver {
+    fn observe_model_run_commit(&self, committed: &ModelRunCommitDto) {
+        self.commits
+            .lock()
+            .expect("observer recorder is available")
+            .push(committed.clone());
     }
 }
 
@@ -659,6 +642,13 @@ impl ScriptedPort {
             calls: std::sync::Mutex::new(Vec::new()),
             outcomes: std::sync::Mutex::new(outcomes.into()),
         }
+    }
+
+    fn calls(&self) -> Vec<(SessionId, RunId, ToolCallDto)> {
+        self.calls
+            .lock()
+            .expect("port call recorder is available")
+            .clone()
     }
 }
 
@@ -725,7 +715,7 @@ impl ToolExecutionPort for GatedPort {
         Box::pin(async move {
             called.send(()).expect("test observes the gated call");
             release.recv().expect("test releases the gated call");
-            Ok(ToolResultOutcomeDto::succeeded("tool output").expect("tool output is valid"))
+            Ok(ToolResultOutcomeDto::completed("tool output").expect("tool output is valid"))
         })
     }
 }
@@ -815,7 +805,7 @@ fn execute(
 }
 
 #[test]
-fn tool_call_executes_tool_records_result_and_completes() {
+fn tool_call_executes_tool_and_completes() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot("fixture");
@@ -834,7 +824,7 @@ fn tool_call_executes_tool_records_result_and_completes() {
         ],
     ]);
     let port = ScriptedPort::new(vec![Ok(
-        ToolResultOutcomeDto::succeeded("hello world").expect("content is valid")
+        ToolResultOutcomeDto::completed("hello world").expect("content is valid")
     )]);
 
     let outcome = execute(
@@ -847,53 +837,44 @@ fn tool_call_executes_tool_records_result_and_completes() {
     )
     .expect("tool loop completes");
 
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(6)
-        }
-    );
+    let ModelRunExecutionOutcomeDto::Completed { run } = outcome else {
+        unreachable!("a stop reason completes the run");
+    };
+    assert_eq!(run.status(), RunStatusDto::Completed);
     assert_eq!(*driver.executions.borrow(), 2);
     assert_eq!(
-        port.calls
-            .lock()
-            .expect("port call recorder is available")
-            .as_slice(),
+        port.calls().as_slice(),
         &[(session_id, run_id, call.clone())]
     );
-    let appends = repository.appends.borrow();
-    assert!(matches!(
-        appends[0].facts(),
-        [ModelRunFactInputDto::ProviderAttemptStarted { attempt: 1 }]
-    ));
-    assert!(matches!(
-        appends[1].facts(),
-        [ModelRunFactInputDto::AssistantContentAppended { content, .. }]
-            if content == "before "
-    ));
-    assert!(matches!(
-        appends[2].facts(),
-        [ModelRunFactInputDto::ToolCallRecorded { call: recorded }]
-            if *recorded == call
-    ));
-    assert!(matches!(
-        appends[3].facts(),
-        [ModelRunFactInputDto::ToolResultRecorded {
-            call_id,
-            outcome: ToolResultOutcomeDto::Succeeded { content },
-        }] if *call_id == call.call_id() && content == "hello world"
-    ));
-    assert!(matches!(
-        appends[4].facts(),
-        [ModelRunFactInputDto::AssistantContentAppended { content, .. }]
-            if content == "after"
-    ));
-    assert!(matches!(
-        appends[5].facts(),
-        [ModelRunFactInputDto::Finished { .. }]
-    ));
-    assert_eq!(appends[5].status(), Some(RunStatusDto::Completing));
-    drop(appends);
+    let messages = repository.messages.borrow();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| (message.kind(), message.text()))
+            .collect::<Vec<_>>(),
+        vec![
+            (MessageKindDto::Assistant, "before "),
+            (MessageKindDto::Assistant, "after"),
+        ],
+        "each completed model step commits one assistant row"
+    );
+    drop(messages);
+    assert!(
+        repository.tool_results.borrow().is_empty(),
+        "the dispatched tool path owns the tool-result transaction"
+    );
+    let finishes = repository.finishes.borrow();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].status(), RunStatusDto::Completed);
+    assert_eq!(
+        repository
+            .transitions
+            .borrow()
+            .iter()
+            .map(TransitionRunInputDto::status)
+            .collect::<Vec<_>>(),
+        vec![RunStatusDto::Running]
+    );
     let requests = driver.requests.borrow();
     assert_eq!(requests.len(), 2);
     assert_eq!(
@@ -934,7 +915,7 @@ fn the_window_pass_compresses_a_large_tool_result_before_the_continuation_reques
     ]);
     let large = "x".repeat(400);
     let port = ScriptedPort::new(vec![Ok(
-        ToolResultOutcomeDto::succeeded(large.clone()).expect("content is valid")
+        ToolResultOutcomeDto::completed(large.clone()).expect("content is valid")
     )]);
 
     let outcome = execute(
@@ -947,12 +928,10 @@ fn the_window_pass_compresses_a_large_tool_result_before_the_continuation_reques
     )
     .expect("windowed tool loop completes");
 
-    assert_eq!(
+    assert!(matches!(
         outcome,
-        ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(4)
-        }
-    );
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
     let requests = driver.requests.borrow();
     let messages = requests[1].messages();
     assert_eq!(messages.len(), 3, "no message is ever removed");
@@ -979,14 +958,10 @@ fn the_window_pass_compresses_a_large_tool_result_before_the_continuation_reques
         "the recomputed breakpoint closes the trimmed stable prefix"
     );
     drop(requests);
-    let appends = repository.appends.borrow();
-    assert!(matches!(
-        appends[2].facts(),
-        [ModelRunFactInputDto::ToolResultRecorded {
-            outcome: ToolResultOutcomeDto::Succeeded { content },
-            ..
-        }] if content == &large
-    ));
+    assert!(
+        repository.messages.borrow().is_empty(),
+        "a tool round without assistant text commits no transcript row"
+    );
 }
 
 #[test]
@@ -1022,28 +997,19 @@ fn partial_tool_result_continues_the_loop_without_terminalizing() {
     )
     .expect("the loop continues after a partial tool result");
 
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(5)
-        }
-    );
-    assert_eq!(*driver.executions.borrow(), 2);
-    let appends = repository.appends.borrow();
     assert!(matches!(
-        appends[2].facts(),
-        [ModelRunFactInputDto::ToolResultRecorded {
-            call_id,
-            outcome: ToolResultOutcomeDto::Partial { content },
-        }] if *call_id == call.call_id() && content == partial_content
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed { .. }
     ));
-    assert!(
-        appends
-            .iter()
-            .all(|append| !matches!(append.facts(), [ModelRunFactInputDto::Failed { .. }])),
-        "a partial tool result never records a failed fact"
+    assert_eq!(*driver.executions.borrow(), 2);
+    let finishes = repository.finishes.borrow();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(
+        finishes[0].status(),
+        RunStatusDto::Completed,
+        "a partial tool result never terminalizes the run"
     );
-    drop(appends);
+    drop(finishes);
     let requests = driver.requests.borrow();
     assert_eq!(requests.len(), 2);
     assert_eq!(
@@ -1080,8 +1046,8 @@ fn multiple_tool_calls_execute_sequentially_in_provider_order() {
         ],
     ]);
     let port = ScriptedPort::new(vec![
-        Ok(ToolResultOutcomeDto::succeeded("one").expect("content is valid")),
-        Ok(ToolResultOutcomeDto::succeeded("two").expect("content is valid")),
+        Ok(ToolResultOutcomeDto::completed("one").expect("content is valid")),
+        Ok(ToolResultOutcomeDto::completed("two").expect("content is valid")),
     ]);
 
     let outcome = execute(
@@ -1094,38 +1060,17 @@ fn multiple_tool_calls_execute_sequentially_in_provider_order() {
     )
     .expect("sequential tool loop completes");
 
-    assert_eq!(
+    assert!(matches!(
         outcome,
-        ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(6)
-        }
-    );
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
     assert_eq!(
-        port.calls
-            .lock()
-            .expect("port call recorder is available")
-            .as_slice(),
+        port.calls().as_slice(),
         &[
             (session_id, run_id, first.clone()),
             (session_id, run_id, second.clone()),
         ]
     );
-    let appends = repository.appends.borrow();
-    assert!(matches!(
-        appends[2].facts(),
-        [ModelRunFactInputDto::ToolResultRecorded {
-            call_id,
-            outcome: ToolResultOutcomeDto::Succeeded { content },
-        }] if *call_id == first.call_id() && content == "one"
-    ));
-    assert!(matches!(
-        appends[4].facts(),
-        [ModelRunFactInputDto::ToolResultRecorded {
-            call_id,
-            outcome: ToolResultOutcomeDto::Succeeded { content },
-        }] if *call_id == second.call_id() && content == "two"
-    ));
-    drop(appends);
     let requests = driver.requests.borrow();
     assert_eq!(requests.len(), 2);
     assert_eq!(
@@ -1166,8 +1111,8 @@ fn repeated_tool_rounds_continue_until_finished() {
         ],
     ]);
     let port = ScriptedPort::new(vec![
-        Ok(ToolResultOutcomeDto::succeeded("one").expect("content is valid")),
-        Ok(ToolResultOutcomeDto::succeeded("two").expect("content is valid")),
+        Ok(ToolResultOutcomeDto::completed("one").expect("content is valid")),
+        Ok(ToolResultOutcomeDto::completed("two").expect("content is valid")),
     ]);
 
     let outcome = execute(
@@ -1180,18 +1125,13 @@ fn repeated_tool_rounds_continue_until_finished() {
     )
     .expect("repeated tool rounds complete");
 
-    assert_eq!(
+    assert!(matches!(
         outcome,
-        ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(7)
-        }
-    );
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
     assert_eq!(*driver.executions.borrow(), 3);
     assert_eq!(
-        port.calls
-            .lock()
-            .expect("port call recorder is available")
-            .as_slice(),
+        port.calls().as_slice(),
         &[
             (session_id, run_id, first.clone()),
             (session_id, run_id, second.clone()),
@@ -1241,8 +1181,8 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
         ],
     ]);
     let port = ScriptedPort::new(vec![
-        Ok(ToolResultOutcomeDto::succeeded("one").expect("content is valid")),
-        Ok(ToolResultOutcomeDto::succeeded("two").expect("content is valid")),
+        Ok(ToolResultOutcomeDto::completed("one").expect("content is valid")),
+        Ok(ToolResultOutcomeDto::completed("two").expect("content is valid")),
     ]);
 
     let outcome = execute(
@@ -1254,12 +1194,10 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
         ModelCancellationSignal::new(),
     )
     .expect("tool loop completes");
-    assert_eq!(
+    assert!(matches!(
         outcome,
-        ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(9)
-        }
-    );
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
 
     let first_reasoning = AssistantReasoningDto::new(vec![first.call_id()], "think ")
         .expect("fixture reasoning is valid");
@@ -1278,16 +1216,15 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
     );
     drop(requests);
 
-    let appends = repository.appends.borrow();
-    assert!(matches!(
-        appends[1].facts(),
-        [ModelRunFactInputDto::ReasoningDeltaRecorded { content }] if content == "think "
-    ));
-    assert!(matches!(
-        appends[4].facts(),
-        [ModelRunFactInputDto::ReasoningDeltaRecorded { content, .. }]
-            if content == "second round"
-    ));
+    let messages = repository.messages.borrow();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| (message.kind(), message.text(), message.reasoning()))
+            .collect::<Vec<_>>(),
+        vec![(MessageKindDto::Assistant, "after", None)],
+        "a textless reasoning round never becomes a blank assistant row"
+    );
 }
 
 #[test]
@@ -1309,7 +1246,7 @@ fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
         ],
     ]);
     let port = ScriptedPort::new(vec![Ok(
-        ToolResultOutcomeDto::succeeded("one").expect("content is valid")
+        ToolResultOutcomeDto::completed("one").expect("content is valid")
     )]);
 
     let outcome = execute(
@@ -1321,12 +1258,10 @@ fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
         ModelCancellationSignal::new(),
     )
     .expect("textless reasoning round completes");
-    assert_eq!(
+    assert!(matches!(
         outcome,
-        ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(4)
-        }
-    );
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
 
     let requests = driver.requests.borrow();
     assert_eq!(requests.len(), 2);
@@ -1339,13 +1274,9 @@ fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
     assert!(requests[1].assistant_reasoning()[0].text().is_empty());
     drop(requests);
 
-    let appends = repository.appends.borrow();
     assert!(
-        appends.iter().all(|append| append
-            .facts()
-            .iter()
-            .all(|fact| !matches!(fact, ModelRunFactInputDto::ReasoningDeltaRecorded { .. }))),
-        "a textless reasoning channel must not become a blank durable reasoning fact"
+        repository.messages.borrow().is_empty(),
+        "a textless reasoning channel must not become a durable assistant row"
     );
 }
 
@@ -1356,15 +1287,14 @@ fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
     let config = snapshot("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
-    // Each fragment stays inside the durable 512 KiB per-fact bound, so the
-    // durable path accepts both; only the accumulated per-round echo crosses
-    // the attachment's representable bound.
+    // Each fragment stays inside the transient per-round bound; only the
+    // accumulated echo crosses the attachment's representable bound.
     let first = "a".repeat(300 * 1024);
     let second = "b".repeat(300 * 1024);
     let driver = ScriptedDriver::new(vec![
         Ok(ModelEventDto::started()),
-        Ok(ModelEventDto::reasoning_delta(first.clone()).expect("reasoning is valid")),
-        Ok(ModelEventDto::reasoning_delta(second.clone()).expect("reasoning is valid")),
+        Ok(ModelEventDto::reasoning_delta(first).expect("reasoning is valid")),
+        Ok(ModelEventDto::reasoning_delta(second).expect("reasoning is valid")),
         Ok(ModelEventDto::tool_call(call)),
     ]);
     let port = ScriptedPort::new(Vec::new());
@@ -1379,46 +1309,23 @@ fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
     )
     .expect("an unrepresentable attachment terminalizes as a typed failed run");
 
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Failed {
-            cursor: RunEventCursorDto::new(5)
-        }
-    );
+    let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
+        unreachable!("an unrepresentable echo fails the run");
+    };
+    assert_eq!(run.status(), RunStatusDto::Failed);
+    assert_eq!(error.code(), "reasoning_attachment_unrepresentable");
     assert_eq!(*driver.executions.borrow(), 1);
     assert!(
-        port.calls
-            .lock()
-            .expect("port call recorder is available")
-            .is_empty(),
+        port.calls().is_empty(),
         "the failed round never executes its tool call"
     );
-    let appends = repository.appends.borrow();
-    assert_eq!(appends.len(), 4);
-    assert!(matches!(
-        appends[1].facts(),
-        [ModelRunFactInputDto::ReasoningDeltaRecorded { content, .. }] if content == &first
-    ));
-    assert!(matches!(
-        appends[2].facts(),
-        [ModelRunFactInputDto::ReasoningDeltaRecorded { content, .. }] if content == &second
-    ));
-    assert!(matches!(
-        appends[3].facts(),
-        [
-            ModelRunFactInputDto::ProviderAttemptFailed { attempt: 1, failure },
-            ModelRunFactInputDto::Failed { .. },
-        ] if failure.code() == "reasoning_attachment_unrepresentable"
-            && failure.retry() == ErrorRetryDto::Never
-    ));
-    assert!(matches!(
-        appends[3].facts(),
-        [
-            ModelRunFactInputDto::ProviderAttemptFailed { .. },
-            ModelRunFactInputDto::Failed { failure },
-        ] if failure.code() == "reasoning_attachment_unrepresentable"
-    ));
-    assert_eq!(appends[3].status(), Some(RunStatusDto::Failed));
+    let finishes = repository.finishes.borrow();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(
+        finishes[0].error_code(),
+        Some("reasoning_attachment_unrepresentable")
+    );
+    assert!(repository.messages.borrow().is_empty());
 }
 
 #[test]
@@ -1428,12 +1335,10 @@ fn control_character_reasoning_echo_terminalizes_as_typed_failed_run() {
     let config = snapshot("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
-    // The durable fact path accepts the control character; the transient
-    // attachment DTO rejects it.
-    let content = "thinking\u{7}".to_owned();
+    // The transient attachment DTO rejects the control character.
     let driver = ScriptedDriver::new(vec![
         Ok(ModelEventDto::started()),
-        Ok(ModelEventDto::reasoning_delta(content.clone()).expect("reasoning is valid")),
+        Ok(ModelEventDto::reasoning_delta("thinking\u{7}").expect("reasoning is valid")),
         Ok(ModelEventDto::tool_call(call)),
         Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
     ]);
@@ -1449,47 +1354,22 @@ fn control_character_reasoning_echo_terminalizes_as_typed_failed_run() {
     )
     .expect("an unrepresentable attachment terminalizes as a typed failed run");
 
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Failed {
-            cursor: RunEventCursorDto::new(4)
-        }
-    );
+    let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
+        unreachable!("an unrepresentable echo fails the run");
+    };
+    assert_eq!(run.status(), RunStatusDto::Failed);
+    assert_eq!(error.code(), "reasoning_attachment_unrepresentable");
     assert_eq!(*driver.executions.borrow(), 1);
     assert!(
-        port.calls
-            .lock()
-            .expect("port call recorder is available")
-            .is_empty(),
+        port.calls().is_empty(),
         "the failed round never executes its tool call"
     );
-    let appends = repository.appends.borrow();
-    assert_eq!(appends.len(), 3);
-    assert!(matches!(
-        appends[1].facts(),
-        [ModelRunFactInputDto::ReasoningDeltaRecorded { content: recorded, .. }]
-            if recorded == &content
-    ));
-    assert!(matches!(
-        appends[2].facts(),
-        [
-            ModelRunFactInputDto::ProviderAttemptFailed { attempt: 1, failure },
-            ModelRunFactInputDto::Failed { .. },
-        ] if failure.code() == "reasoning_attachment_unrepresentable"
-            && failure.retry() == ErrorRetryDto::Never
-    ));
-    assert!(matches!(
-        appends[2].facts(),
-        [
-            ModelRunFactInputDto::ProviderAttemptFailed { .. },
-            ModelRunFactInputDto::Failed { failure },
-        ] if failure.code() == "reasoning_attachment_unrepresentable"
-    ));
-    assert_eq!(appends[2].status(), Some(RunStatusDto::Failed));
+    assert_eq!(repository.finishes.borrow().len(), 1);
+    assert!(repository.messages.borrow().is_empty());
 }
 
 #[test]
-fn tool_failure_records_result_and_terminalizes_without_retry() {
+fn tool_failure_terminalizes_without_retry() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot("fixture");
@@ -1497,11 +1377,11 @@ fn tool_failure_records_result_and_terminalizes_without_retry() {
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::new(vec![
         Ok(ModelEventDto::started()),
-        Ok(ModelEventDto::tool_call(call.clone())),
+        Ok(ModelEventDto::tool_call(call)),
     ]);
-    let failure =
-        RunFailureDto::new("tool_denied", ErrorRetryDto::Never, None).expect("failure is valid");
-    let port = ScriptedPort::new(vec![Ok(ToolResultOutcomeDto::failed(failure))]);
+    let port = ScriptedPort::new(vec![Ok(ToolResultOutcomeDto::failed(
+        ErrorDto::validation("tool_denied", "the workspace denied the call"),
+    ))]);
 
     let outcome = execute(
         &repository,
@@ -1513,39 +1393,24 @@ fn tool_failure_records_result_and_terminalizes_without_retry() {
     )
     .expect("tool denial terminalizes safely");
 
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Failed {
-            cursor: RunEventCursorDto::new(4)
-        }
-    );
+    let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
+        unreachable!("a failed tool call fails the run");
+    };
+    assert_eq!(run.status(), RunStatusDto::Failed);
+    assert_eq!(error.code(), "tool_denied");
     assert_eq!(*driver.executions.borrow(), 1);
-    assert_eq!(
-        port.calls
-            .lock()
-            .expect("port call recorder is available")
-            .len(),
-        1
+    assert_eq!(port.calls().len(), 1);
+    let finishes = repository.finishes.borrow();
+    assert_eq!(finishes.len(), 1, "a tool failure never retries");
+    assert_eq!(finishes[0].error_code(), Some("tool_denied"));
+    assert!(
+        repository.tool_results.borrow().is_empty(),
+        "the tool path committed the failed result row"
     );
-    let appends = repository.appends.borrow();
-    assert!(matches!(
-        appends[2].facts(),
-        [ModelRunFactInputDto::ToolResultRecorded {
-            call_id,
-            outcome: ToolResultOutcomeDto::Failed { failure: recorded },
-        }] if *call_id == call.call_id() && recorded.code() == "tool_denied"
-    ));
-    assert!(matches!(
-        appends[3].facts(),
-        [ModelRunFactInputDto::Failed { failure: terminal }]
-            if terminal.code() == "tool_denied"
-                && terminal.retry() == ErrorRetryDto::Never
-    ));
-    assert_eq!(appends[3].status(), Some(RunStatusDto::Failed));
 }
 
 #[test]
-fn port_infrastructure_error_terminalizes_without_leaking_text() {
+fn port_infrastructure_error_terminalizes_with_the_safe_error() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot("fixture");
@@ -1553,11 +1418,11 @@ fn port_infrastructure_error_terminalizes_without_leaking_text() {
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::new(vec![
         Ok(ModelEventDto::started()),
-        Ok(ModelEventDto::tool_call(call.clone())),
+        Ok(ModelEventDto::tool_call(call)),
     ]);
     let port = ScriptedPort::new(vec![Err(ErrorDto::unavailable(
         "tool_execution_failed",
-        "sensitive provider detail",
+        "the local tool executor is unavailable",
     ))]);
 
     let outcome = execute(
@@ -1570,43 +1435,24 @@ fn port_infrastructure_error_terminalizes_without_leaking_text() {
     )
     .expect("port failure terminalizes safely");
 
+    let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
+        unreachable!("a port failure fails the run");
+    };
+    assert_eq!(run.status(), RunStatusDto::Failed);
+    assert_eq!(error.code(), "tool_execution_failed");
+    assert_eq!(error.message(), "the local tool executor is unavailable");
+    let finishes = repository.finishes.borrow();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].error_code(), Some("tool_execution_failed"));
     assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Failed {
-            cursor: RunEventCursorDto::new(4)
-        }
+        finishes[0].error_message(),
+        Some("the local tool executor is unavailable"),
+        "the runtime persists the port's safe error verbatim"
     );
-    let appends = repository.appends.borrow();
-    assert_eq!(appends.len(), 4);
-    assert!(matches!(
-        appends[0].facts(),
-        [ModelRunFactInputDto::ProviderAttemptStarted { attempt: 1 }]
-    ));
-    assert!(matches!(
-        appends[1].facts(),
-        [ModelRunFactInputDto::ToolCallRecorded { .. }]
-    ));
-    assert!(matches!(
-        appends[2].facts(),
-        [ModelRunFactInputDto::ToolResultRecorded {
-            call_id,
-            outcome: ToolResultOutcomeDto::Failed { failure: recorded },
-        }] if *call_id == call.call_id()
-            && recorded.code() == "tool_execution_failed"
-            && recorded.retry() == ErrorRetryDto::Manual
-    ));
-    assert_eq!(appends[2].status(), None);
-    assert!(matches!(
-        appends[3].facts(),
-        [ModelRunFactInputDto::Failed { failure }]
-            if failure.code() == "tool_execution_failed"
-                && failure.retry() == ErrorRetryDto::Manual
-    ));
-    assert_eq!(appends[3].status(), Some(RunStatusDto::Failed));
-    // The injected provider diagnostic must never be recorded in the durable
-    // appends; only the safe code and retry classification cross the boundary.
-    let rendered_appends = format!("{appends:?}");
-    assert!(!rendered_appends.contains("sensitive provider detail"));
+    assert!(
+        repository.tool_results.borrow().is_empty(),
+        "the port owns the durable failed result row"
+    );
 }
 
 #[test]
@@ -1668,32 +1514,16 @@ fn interruption_during_tool_execution_records_the_notice_and_continues() {
         1,
         "the in-flight tool ran exactly once"
     );
-    let appends = repository.appends.borrow();
-    let facts = appends
-        .iter()
-        .flat_map(|input| input.facts())
-        .collect::<Vec<_>>();
-    assert!(facts.iter().any(|fact| matches!(
-        fact,
-        ModelRunFactInputDto::ToolResultRecorded {
-            outcome: ToolResultOutcomeDto::Succeeded { .. },
-            ..
-        }
-    )));
-    assert!(facts.iter().any(|fact| matches!(
-        fact,
-        ModelRunFactInputDto::InterruptNoticeRecorded { content }
-            if content == intention_runtime::INTERRUPT_NOTICE
-    )));
+    let messages = repository.messages.borrow();
     assert_eq!(
-        repository
-            .transitions
-            .borrow()
+        messages
             .iter()
-            .map(TransitionRunInputDto::status)
+            .map(|message| (message.kind(), message.text()))
             .collect::<Vec<_>>(),
-        vec![RunStatusDto::Completed]
+        vec![(MessageKindDto::Notice, intention_runtime::INTERRUPT_NOTICE)],
+        "the interruption commits its durable notice"
     );
+    drop(messages);
     let requests = driver.requests.borrow();
     assert!(requests[1].messages().iter().any(|message| {
         message.role() == ModelRoleDto::Notice
@@ -1721,7 +1551,7 @@ fn provider_failure_after_tool_round_is_terminal_without_retry() {
         .expect("fixture provider error is valid"))],
     ]);
     let port = ScriptedPort::new(vec![Ok(
-        ToolResultOutcomeDto::succeeded("hello world").expect("content is valid")
+        ToolResultOutcomeDto::completed("hello world").expect("content is valid")
     )]);
 
     let outcome = execute(
@@ -1734,29 +1564,20 @@ fn provider_failure_after_tool_round_is_terminal_without_retry() {
     )
     .expect("provider failure after a tool round terminalizes");
 
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Failed {
-            cursor: RunEventCursorDto::new(4)
-        }
-    );
+    let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
+        unreachable!("a provider failure after a tool round fails the run");
+    };
+    assert_eq!(run.status(), RunStatusDto::Failed);
+    assert_eq!(error.code(), "provider_broken");
     assert_eq!(*driver.executions.borrow(), 2);
     assert_eq!(
-        port.calls
-            .lock()
-            .expect("port call recorder is available")
-            .len(),
+        port.calls().len(),
         1,
         "a provider failure after a tool result never re-executes the tool"
     );
-    let appends = repository.appends.borrow();
-    assert_eq!(appends.len(), 4);
-    assert!(matches!(
-        appends[3].facts(),
-        [ModelRunFactInputDto::Failed { failure }]
-            if failure.code() == "provider_broken"
-    ));
-    assert_eq!(appends[3].status(), Some(RunStatusDto::Failed));
+    let finishes = repository.finishes.borrow();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].error_code(), Some("provider_broken"));
 }
 
 #[test]
@@ -1801,29 +1622,21 @@ fn interruption_during_a_provider_round_records_a_notice_and_continues() {
         "the interruption continues the run instead of terminalizing it, got {outcome:?}"
     );
     assert_eq!(*driver.executions.borrow(), 2);
-    let appends = repository.appends.borrow();
-    let facts = appends
-        .iter()
-        .flat_map(|input| input.facts())
-        .collect::<Vec<_>>();
-    assert!(facts.iter().any(|fact| matches!(
-        fact,
-        ModelRunFactInputDto::AssistantContentAppended { content, .. } if content == "partial"
-    )));
-    assert!(
-        facts
-            .iter()
-            .any(|fact| matches!(fact, ModelRunFactInputDto::InterruptNoticeRecorded { .. }))
-    );
+    let messages = repository.messages.borrow();
     assert_eq!(
-        repository
-            .transitions
-            .borrow()
+        messages
             .iter()
-            .map(TransitionRunInputDto::status)
+            .map(|message| (message.kind(), message.text()))
             .collect::<Vec<_>>(),
-        vec![RunStatusDto::Completed]
+        vec![
+            (MessageKindDto::Assistant, "partial"),
+            (MessageKindDto::Notice, intention_runtime::INTERRUPT_NOTICE),
+        ]
     );
+    drop(messages);
+    let finishes = repository.finishes.borrow();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].status(), RunStatusDto::Completed);
 }
 
 #[test]
@@ -1836,7 +1649,8 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
             Ok(ModelEventDto::started()),
-            Ok(ModelEventDto::tool_call(call)),
+            Ok(ModelEventDto::text_delta("planning").expect("text is valid")),
+            Ok(ModelEventDto::tool_call(call.clone())),
         ],
         vec![
             Ok(ModelEventDto::started()),
@@ -1844,14 +1658,15 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
         ],
     ]);
     let port = ScriptedPort::new(vec![Ok(
-        ToolResultOutcomeDto::succeeded("never used").expect("content is valid")
+        ToolResultOutcomeDto::completed("never used").expect("content is valid")
     )]);
     let signal = ModelCancellationSignal::new();
-    // The interrupt lands on the tool-call append, before the port invocation.
+    // The interrupt lands on the assistant step commit, before the port
+    // invocation of the round's call.
     repository
         .cancel_after_append
         .borrow_mut()
-        .replace((2, signal.clone()));
+        .replace((1, signal.clone()));
     let clock = ImmediateTime::new();
 
     let outcome = futures_executor::block_on(
@@ -1871,24 +1686,20 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
         outcome,
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
-    assert_eq!(
-        port.calls
-            .lock()
-            .expect("port call recorder is available")
-            .len(),
-        0,
+    assert!(
+        port.calls().is_empty(),
         "the interrupt never starts the tool effect"
     );
-    let appends = repository.appends.borrow();
-    let facts = appends
-        .iter()
-        .flat_map(|input| input.facts())
-        .collect::<Vec<_>>();
-    assert!(facts.iter().any(|fact| matches!(
-        fact,
-        ModelRunFactInputDto::ToolResultRecorded { outcome: ToolResultOutcomeDto::Partial { content }, .. }
-            if content == intention_runtime::TOOL_INTERRUPT_NOTICE
-    )));
+    let requests = driver.requests.borrow();
+    let answered = requests[1].messages().iter().any(|message| {
+        message.role() == ModelRoleDto::Tool
+            && message.tool_call_id() == Some(call.call_id())
+            && message.content() == intention_runtime::TOOL_INTERRUPT_NOTICE
+    });
+    assert!(
+        answered,
+        "the stopped call is answered with its partial notice"
+    );
 }
 
 #[test]
@@ -1901,15 +1712,17 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
             Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::text_delta("before").expect("text is valid")),
             Ok(ModelEventDto::tool_call(call)),
         ],
         vec![
             Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::text_delta("after").expect("text is valid")),
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
         ],
     ]);
     let port = ScriptedPort::new(vec![Ok(
-        ToolResultOutcomeDto::succeeded("hello world").expect("content is valid")
+        ToolResultOutcomeDto::completed("hello world").expect("content is valid")
     )]);
     let observer = RecordingCommitObserver::new();
     let clock = ImmediateTime::new();
@@ -1932,32 +1745,35 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
     )
     .expect("the tool loop with an observer completes");
 
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(4)
-        }
-    );
-    assert!(
-        observer
-            .commits
-            .lock()
-            .expect("observer recorder is available")
-            .len()
-            >= 5
-    );
     assert!(matches!(
-        observer
-            .commits
-            .lock()
-            .expect("observer recorder is available")
-            .last()
-            .expect("a terminal commit is observed")
-            .snapshot()
-            .run_projection()
-            .status(),
-        RunStatusDto::Completed
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed { .. }
     ));
+    let commits = observer.commits();
+    assert_eq!(
+        commits
+            .iter()
+            .filter(|commit| matches!(commit, ModelRunCommitDto::Status { .. }))
+            .count(),
+        2,
+        "the running and completed statuses are observed"
+    );
+    assert_eq!(
+        commits
+            .iter()
+            .filter(|commit| matches!(commit, ModelRunCommitDto::Content(_)))
+            .count(),
+        2,
+        "each committed assistant step is observed exactly once"
+    );
+    assert_eq!(
+        commits.last(),
+        Some(&ModelRunCommitDto::Status {
+            session_id,
+            run_id,
+            status: RunStatusDto::Completed,
+        })
+    );
 }
 
 #[test]
@@ -2000,36 +1816,22 @@ fn interruption_while_the_round_is_waiting_records_a_notice_and_continues() {
         matches!(outcome, ModelRunExecutionOutcomeDto::Completed { .. }),
         "the interruption continues the run instead of terminalizing it, got {outcome:?}"
     );
-    let appends = repository.appends.borrow();
-    let facts = appends
-        .iter()
-        .flat_map(|input| input.facts())
-        .collect::<Vec<_>>();
-    assert!(
-        facts
-            .iter()
-            .any(|fact| matches!(fact, ModelRunFactInputDto::InterruptNoticeRecorded { .. }))
-    );
+    let messages = repository.messages.borrow();
     assert_eq!(
-        repository
-            .transitions
-            .borrow()
+        messages
             .iter()
-            .map(TransitionRunInputDto::status)
+            .map(|message| (message.kind(), message.text()))
             .collect::<Vec<_>>(),
-        vec![RunStatusDto::Completed]
+        vec![(MessageKindDto::Notice, intention_runtime::INTERRUPT_NOTICE)]
     );
 }
 
 #[test]
-fn invalid_tool_input_json_records_failed_result_and_terminalizes() {
-    // The daemon's parse_tool_input (crates/intention-daemon/src/lib.rs)
-    // rejects arguments that are not valid typed input with the
-    // `invalid_tool_input_json` failure; non-JSON arguments cannot even be
-    // represented in ToolCallDto (rejected at construction). The runtime
-    // contract is that a port answering with that typed failed outcome
-    // durably records a failed ToolResultRecorded fact and then terminalizes
-    // Failed without scheduling any retry — the ADR's invalid-tool-input claim.
+fn invalid_tool_input_json_terminalizes_without_retry() {
+    // The daemon's typed tool-input decoding answers invalid arguments with the
+    // `invalid_tool_input_json` failure; the runtime contract is that a port
+    // answering with that typed failed outcome terminalizes Failed without
+    // scheduling any retry or re-invoking the call.
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot("fixture");
@@ -2037,11 +1839,11 @@ fn invalid_tool_input_json_records_failed_result_and_terminalizes() {
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::new(vec![
         Ok(ModelEventDto::started()),
-        Ok(ModelEventDto::tool_call(call.clone())),
+        Ok(ModelEventDto::tool_call(call)),
     ]);
-    let failure = RunFailureDto::new("invalid_tool_input_json", ErrorRetryDto::Never, None)
-        .expect("failure is valid");
-    let port = ScriptedPort::new(vec![Ok(ToolResultOutcomeDto::failed(failure))]);
+    let port = ScriptedPort::new(vec![Ok(ToolResultOutcomeDto::failed(
+        ErrorDto::validation("invalid_tool_input_json", "tool arguments are invalid"),
+    ))]);
 
     let outcome = execute(
         &repository,
@@ -2053,56 +1855,28 @@ fn invalid_tool_input_json_records_failed_result_and_terminalizes() {
     )
     .expect("invalid tool input terminalizes safely");
 
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Failed {
-            cursor: RunEventCursorDto::new(4)
-        }
-    );
+    let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
+        unreachable!("invalid tool input fails the run");
+    };
+    assert_eq!(run.status(), RunStatusDto::Failed);
+    assert_eq!(error.code(), "invalid_tool_input_json");
     assert_eq!(*driver.executions.borrow(), 1);
     assert_eq!(
-        port.calls
-            .lock()
-            .expect("port call recorder is available")
-            .len(),
+        port.calls().len(),
         1,
         "invalid input executes the tool exactly once, never re-invoking it"
     );
-    let appends = repository.appends.borrow();
-    assert!(matches!(
-        appends[2].facts(),
-        [ModelRunFactInputDto::ToolResultRecorded {
-            call_id,
-            outcome: ToolResultOutcomeDto::Failed { failure: recorded },
-        }] if *call_id == call.call_id()
-            && recorded.code() == "invalid_tool_input_json"
-            && recorded.retry() == ErrorRetryDto::Never
-    ));
-    assert_eq!(appends[2].status(), None);
-    assert!(matches!(
-        appends[3].facts(),
-        [ModelRunFactInputDto::Failed { failure: terminal }]
-            if terminal.code() == "invalid_tool_input_json"
-                && terminal.retry() == ErrorRetryDto::Never
-    ));
-    assert_eq!(appends[3].status(), Some(RunStatusDto::Failed));
-    assert!(
-        appends.iter().all(|input| {
-            !input
-                .facts()
-                .iter()
-                .any(|fact| matches!(fact, ModelRunFactInputDto::RetryScheduled { .. }))
-        }),
-        "invalid tool input never schedules a retry"
-    );
+    let finishes = repository.finishes.borrow();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].error_code(), Some("invalid_tool_input_json"));
 }
 
 #[test]
 fn second_tool_call_does_not_start_until_first_finishes() {
     // Tool calls from one provider round must execute strictly sequentially:
     // while the first call's port future is pending, the second call must not
-    // be invoked. After the first finishes, both results record durably in
-    // call order and the run completes.
+    // be invoked. After the first finishes, both results enter the live
+    // context in call order and the run completes.
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot("fixture");
@@ -2126,8 +1900,8 @@ fn second_tool_call_does_not_start_until_first_finishes() {
         called_tx,
         release_rx,
         vec![
-            Ok(ToolResultOutcomeDto::succeeded("one").expect("content is valid")),
-            Ok(ToolResultOutcomeDto::succeeded("two").expect("content is valid")),
+            Ok(ToolResultOutcomeDto::completed("one").expect("content is valid")),
+            Ok(ToolResultOutcomeDto::completed("two").expect("content is valid")),
         ],
     ));
     let clock = ImmediateTime::new();
@@ -2161,43 +1935,21 @@ fn second_tool_call_does_not_start_until_first_finishes() {
     let (outcome, repository, driver) = execution.join().expect("execution thread completes");
     let outcome = outcome.expect("sequential tool loop completes");
 
-    assert_eq!(
+    assert!(matches!(
         outcome,
-        ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(6)
-        }
-    );
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
     assert_eq!(*driver.executions.borrow(), 2);
     assert_eq!(
         port.calls
             .lock()
             .expect("port call recorder is available")
             .as_slice(),
-        &[
-            (session_id, run_id, first.clone()),
-            (session_id, run_id, second.clone()),
-        ]
+        &[(session_id, run_id, first), (session_id, run_id, second)]
     );
-    let appends = repository.appends.borrow();
-    assert!(matches!(
-        appends[2].facts(),
-        [ModelRunFactInputDto::ToolResultRecorded {
-            call_id,
-            outcome: ToolResultOutcomeDto::Succeeded { content },
-        }] if *call_id == first.call_id() && content == "one"
-    ));
-    assert!(matches!(
-        appends[4].facts(),
-        [ModelRunFactInputDto::ToolResultRecorded {
-            call_id,
-            outcome: ToolResultOutcomeDto::Succeeded { content },
-        }] if *call_id == second.call_id() && content == "two"
-    ));
-    assert!(matches!(
-        appends[5].facts(),
-        [ModelRunFactInputDto::Finished { .. }]
-    ));
-    assert_eq!(appends[5].status(), Some(RunStatusDto::Completing));
+    let finishes = repository.finishes.borrow();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].status(), RunStatusDto::Completed);
 }
 
 #[test]
@@ -2224,67 +1976,45 @@ fn provider_failure_before_first_tool_round_is_retryable_within_attempt_budget()
         ],
     ]);
     let port = ScriptedPort::new(Vec::new());
+    let clock = ImmediateTime::new();
 
-    let outcome = execute(
-        &repository,
-        &driver,
-        &port,
-        request(run_id, "fixture"),
-        config,
-        ModelCancellationSignal::new(),
+    let outcome = futures_executor::block_on(
+        ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
+            ModelRunExecutionInputDto::new(
+                session_id,
+                run_id,
+                request(run_id, "fixture"),
+                config,
+                ModelCancellationSignal::new(),
+            ),
+        ),
     )
     .expect("retryable pre-tool failure retries then completes");
 
-    assert_eq!(
+    assert!(matches!(
         outcome,
-        ModelRunExecutionOutcomeDto::Completed {
-            // The retry append carries two facts (ProviderAttemptFailed and
-            // RetryScheduled), so the final cursor advances by five facts.
-            cursor: RunEventCursorDto::new(5)
-        }
-    );
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
     assert_eq!(*driver.executions.borrow(), 2);
-    assert_eq!(
-        port.calls
-            .lock()
-            .expect("port call recorder is available")
-            .len(),
-        0,
+    assert!(
+        port.calls().is_empty(),
         "no tool round occurs before the retry"
     );
-    let appends = repository.appends.borrow();
-    assert!(matches!(
-        appends[0].facts(),
-        [ModelRunFactInputDto::ProviderAttemptStarted { attempt: 1 }]
-    ));
-    assert_eq!(appends[0].status(), Some(RunStatusDto::Running));
-    assert!(matches!(
-        appends[1].facts(),
-        [
-            ModelRunFactInputDto::ProviderAttemptFailed { attempt: 1, failure },
-            ModelRunFactInputDto::RetryScheduled {
-                failed_attempt: 1,
-                next_attempt: 2
-            },
-        ] if failure.code() == "provider_busy" && failure.retry() == ErrorRetryDto::Delayed
-    ));
-    assert_eq!(appends[1].status(), None);
-    assert!(matches!(
-        appends[2].facts(),
-        [ModelRunFactInputDto::ProviderAttemptStarted { attempt: 2 }]
-    ));
-    assert_eq!(appends[2].status(), None);
-    assert!(matches!(
-        appends[3].facts(),
-        [ModelRunFactInputDto::Finished { .. }]
-    ));
-    assert_eq!(appends[3].status(), Some(RunStatusDto::Completing));
-    assert!(
-        appends.iter().all(|input| !input
-            .facts()
+    assert_eq!(
+        clock
+            .sleeps
+            .borrow()
             .iter()
-            .any(|fact| matches!(fact, ModelRunFactInputDto::Failed { .. }))),
-        "the retried attempt completes without any terminal failure"
+            .filter(|&&duration| duration == Duration::from_millis(250))
+            .count(),
+        1
+    );
+    let finishes = repository.finishes.borrow();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].status(), RunStatusDto::Completed);
+    assert!(
+        repository.messages.borrow().is_empty(),
+        "the retried attempt commits only its completed step"
     );
 }
 
@@ -2344,31 +2074,20 @@ fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
         2,
         "the run re-enters the provider after the interruption"
     );
-    let appends = repository.appends.borrow();
-    let facts = appends
-        .iter()
-        .flat_map(|input| input.facts())
-        .collect::<Vec<_>>();
-    assert!(
-        facts
-            .iter()
-            .any(|fact| matches!(fact, ModelRunFactInputDto::InterruptNoticeRecorded { .. }))
-    );
+    let messages = repository.messages.borrow();
     assert_eq!(
-        repository
-            .transitions
-            .borrow()
+        messages
             .iter()
-            .map(TransitionRunInputDto::status)
+            .map(|message| (message.kind(), message.text()))
             .collect::<Vec<_>>(),
-        vec![RunStatusDto::Completed]
+        vec![(MessageKindDto::Notice, intention_runtime::INTERRUPT_NOTICE)]
     );
 }
 
 #[test]
 fn interruption_during_the_retry_delay_starts_the_next_attempt() {
     // A retryable pre-tool provider failure schedules a retry and the run then
-    // waits out the retry delay. An interruption inside that wait appends its
+    // waits out the retry delay. An interruption inside that wait commits its
     // notice, clears the signal, and starts the second attempt immediately.
     let session_id = SessionId::new();
     let run_id = RunId::new();
@@ -2424,54 +2143,22 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
         2,
         "the interrupted wait starts the second attempt"
     );
+    assert!(port.calls().is_empty());
+    let messages = repository.messages.borrow();
     assert_eq!(
-        port.calls
-            .lock()
-            .expect("port call recorder is available")
-            .len(),
-        0
-    );
-    let appends = repository.appends.borrow();
-    let facts = appends
-        .iter()
-        .flat_map(|input| input.facts())
-        .collect::<Vec<_>>();
-    assert!(matches!(
-        appends[1].facts(),
-        [
-            ModelRunFactInputDto::ProviderAttemptFailed { attempt: 1, failure },
-            ModelRunFactInputDto::RetryScheduled {
-                failed_attempt: 1,
-                next_attempt: 2
-            },
-        ] if failure.code() == "provider_busy"
-            && failure.retry() == ErrorRetryDto::Delayed
-    ));
-    assert!(
-        facts
+        messages
             .iter()
-            .any(|fact| matches!(fact, ModelRunFactInputDto::InterruptNoticeRecorded { .. }))
-    );
-    assert!(facts.iter().any(|fact| matches!(
-        fact,
-        ModelRunFactInputDto::ProviderAttemptStarted { attempt: 2 }
-    )));
-    assert_eq!(
-        repository
-            .transitions
-            .borrow()
-            .iter()
-            .map(TransitionRunInputDto::status)
+            .map(|message| (message.kind(), message.text()))
             .collect::<Vec<_>>(),
-        vec![RunStatusDto::Completed]
+        vec![(MessageKindDto::Notice, intention_runtime::INTERRUPT_NOTICE)]
     );
 }
 
 #[test]
-fn interruption_signalled_by_the_retry_append_still_starts_the_next_attempt() {
-    // The repository interrupts the run from inside the retry-scheduling
-    // append, so the signal is already set when the wait would begin. The wait
-    // appends its notice without arming the sub-second retry delay at all.
+fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() {
+    // The provider error cancels the run while the stream yields it, so the
+    // signal is already set when the retry wait would begin. The wait commits
+    // its notice without arming the sub-second retry delay at all.
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot("fixture");
@@ -2490,10 +2177,10 @@ fn interruption_signalled_by_the_retry_append_still_starts_the_next_attempt() {
     ]);
     let port = ScriptedPort::new(Vec::new());
     let signal = ModelCancellationSignal::new();
-    repository
-        .cancel_after_append
+    driver
+        .cancel_during_stream
         .borrow_mut()
-        .replace((2, signal.clone()));
+        .replace((0, signal.clone()));
     let clock = RecordingTime::new();
 
     let outcome = futures_executor::block_on(
@@ -2507,7 +2194,7 @@ fn interruption_signalled_by_the_retry_append_still_starts_the_next_attempt() {
             ),
         ),
     )
-    .expect("interruption during the retry append continues the run");
+    .expect("interruption before the retry wait continues the run");
 
     assert!(matches!(
         outcome,
@@ -2520,37 +2207,18 @@ fn interruption_signalled_by_the_retry_append_still_starts_the_next_attempt() {
     );
     assert!(
         clock
-            .sleeps
-            .lock()
-            .expect("sleep recorder is available")
+            .sleeps()
             .iter()
             .all(|duration| *duration >= Duration::from_secs(1)),
         "an already-interrupted run never arms the sub-second retry delay"
     );
-    let appends = repository.appends.borrow();
-    assert!(matches!(
-        appends[1].facts(),
-        [
-            ModelRunFactInputDto::ProviderAttemptFailed { .. },
-            ModelRunFactInputDto::RetryScheduled {
-                failed_attempt: 1,
-                next_attempt: 2
-            },
-        ]
-    ));
-    assert!(matches!(
-        appends[2].facts(),
-        [ModelRunFactInputDto::InterruptNoticeRecorded { .. }]
-    ));
-    drop(appends);
+    let messages = repository.messages.borrow();
     assert_eq!(
-        repository
-            .transitions
-            .borrow()
+        messages
             .iter()
-            .map(TransitionRunInputDto::status)
+            .map(|message| (message.kind(), message.text()))
             .collect::<Vec<_>>(),
-        vec![RunStatusDto::Completed]
+        vec![(MessageKindDto::Notice, intention_runtime::INTERRUPT_NOTICE)]
     );
 }
 
@@ -2578,7 +2246,7 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
         ],
     ]);
     let port = ScriptedPort::new(vec![Ok(
-        ToolResultOutcomeDto::succeeded("hello").expect("content is valid")
+        ToolResultOutcomeDto::completed("hello").expect("content is valid")
     )]);
 
     let outcome = execute(
@@ -2591,22 +2259,17 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
     )
     .expect("a finished round with tool calls continues the loop");
 
-    assert_eq!(
+    assert!(matches!(
         outcome,
-        ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(5)
-        }
-    );
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
     assert_eq!(
         *driver.executions.borrow(),
         2,
         "the finished-with-calls round drives the continuation round"
     );
     assert_eq!(
-        port.calls
-            .lock()
-            .expect("port call recorder is available")
-            .as_slice(),
+        port.calls().as_slice(),
         &[(session_id, run_id, call.clone())]
     );
     let reasoning = AssistantReasoningDto::new(vec![call.call_id()], "plan ")
@@ -2630,27 +2293,9 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
         ]
     );
     drop(requests);
-    let appends = repository.appends.borrow();
-    assert!(matches!(
-        appends[1].facts(),
-        [ModelRunFactInputDto::ReasoningDeltaRecorded { content, .. }] if content == "plan "
-    ));
-    assert!(matches!(
-        appends[2].facts(),
-        [ModelRunFactInputDto::ToolCallRecorded { call: recorded }] if *recorded == call
-    ));
-    assert!(matches!(
-        appends[3].facts(),
-        [ModelRunFactInputDto::ToolResultRecorded {
-            call_id,
-            outcome: ToolResultOutcomeDto::Succeeded { content },
-        }] if *call_id == call.call_id() && content == "hello"
-    ));
-    assert!(matches!(
-        appends[4].facts(),
-        [ModelRunFactInputDto::Finished { .. }]
-    ));
-    assert_eq!(appends[4].status(), Some(RunStatusDto::Completing));
+    let finishes = repository.finishes.borrow();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].status(), RunStatusDto::Completed);
 }
 
 #[test]
@@ -2663,7 +2308,7 @@ fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
     repository
         .pending
         .borrow_mut()
-        .push_back((TurnId::new(), "pending message".to_owned()));
+        .push_back(pending_user_message(session_id, run_id, "pending message"));
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
             Ok(ModelEventDto::started()),
@@ -2675,7 +2320,7 @@ fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
         ],
     ]);
     let port = ScriptedPort::new(vec![Ok(
-        ToolResultOutcomeDto::succeeded("tool output").expect("content is valid")
+        ToolResultOutcomeDto::completed("tool output").expect("content is valid")
     )]);
 
     let outcome = execute(
@@ -2702,10 +2347,7 @@ fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
         message.role() == ModelRoleDto::User && message.content() == "pending message"
     }));
     drop(requests);
-    assert!(repository.pending_facts.borrow().iter().any(|fact| matches!(
-        fact.input(),
-        ModelRunFactInputDto::UserMessageAppended { content, .. } if content == "pending message"
-    )));
+    assert_eq!(*repository.pending_consumes.borrow(), 2);
     assert!(repository.pending.borrow().is_empty());
 }
 
@@ -2718,7 +2360,11 @@ fn a_pending_message_at_the_finish_boundary_continues_instead_of_completing() {
     repository
         .pending
         .borrow_mut()
-        .push_back((TurnId::new(), "arrived before completion".to_owned()));
+        .push_back(pending_user_message(
+            session_id,
+            run_id,
+            "arrived before completion",
+        ));
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
             Ok(ModelEventDto::started()),
@@ -2755,16 +2401,28 @@ fn a_pending_message_at_the_finish_boundary_continues_instead_of_completing() {
         message.role() == ModelRoleDto::User && message.content() == "arrived before completion"
     }));
     drop(requests);
-    assert!(matches!(
-        repository.pending_facts.borrow().as_slice(),
-        [fact] if matches!(
-            fact.input(),
-            ModelRunFactInputDto::UserMessageAppended { .. }
-        )
-    ));
-    let appends = repository.appends.borrow();
-    assert!(matches!(
-        appends.last().expect("finished append").facts(),
-        [ModelRunFactInputDto::Finished { .. }]
-    ));
+    let finishes = repository.finishes.borrow();
+    assert_eq!(
+        finishes.len(),
+        1,
+        "the run completes exactly once after the joined step"
+    );
+    assert_eq!(finishes[0].status(), RunStatusDto::Completed);
+}
+
+fn pending_user_message(
+    session_id: SessionId,
+    run_id: RunId,
+    content: &str,
+) -> MessageProjectionDto {
+    MessageProjectionDto::new(
+        session_id,
+        Some(run_id),
+        MessageKindDto::User,
+        content,
+        None,
+        None,
+        None,
+    )
+    .expect("fixture pending message is valid")
 }

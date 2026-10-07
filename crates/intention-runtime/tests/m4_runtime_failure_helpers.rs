@@ -1,6 +1,6 @@
 #![allow(
     clippy::expect_used,
-    reason = "Focused runtime scheduling fixtures use expect for precise diagnostics."
+    reason = "Scheduling failure-helper fixtures use expect for precise diagnostics."
 )]
 
 use std::cell::RefCell;
@@ -8,30 +8,22 @@ use std::cell::RefCell;
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
-use intention_domain::{
-    DomainEventDto, ModelRunFactDto, ModelRunFactInputDto, ModelRunProjectionDto,
-    RunEventCursorDto, RunProjectionDto, RunSnapshotDto, RunStatusDto, SessionProjectionDto,
-};
+use intention_domain::{RunProjectionDto, RunStatusDto, SessionProjectionDto};
 use intention_runtime::fail_starting_run;
-use intention_storage::{
-    AcceptUserTurnInputDto, AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto,
-    CommittedChangeDto, CreateSessionInputDto, RecoverUnfinishedRunsInputDto, RemoveTurnInputDto,
-    StorageRepositoryDto, TransitionRunInputDto,
-};
+use intention_storage::{FinishRunInputDto, StorageRepositoryDto};
 use intention_types::{
-    ConfigRevisionId, DtoResult, ErrorDto, ErrorRetryDto, RunId, SchemaVersionDto,
-    SessionEventSequenceDto, SessionId, TimestampDto, TurnId,
+    ConfigRevisionId, DtoResult, ErrorDto, RunId, SchemaVersionDto, SessionId, TimestampDto, TurnId,
 };
 
 fn time() -> TimestampDto {
-    TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid")
+    TimestampDto::from_unix_seconds(9).expect("fixture timestamp is valid")
 }
 
 fn snapshot() -> ConfigSnapshotDto {
     let source = ConfigSourceDto::Explicit(
         ConfigPathDto::parse(
             std::env::temp_dir()
-                .join("intention-runtime-scheduling-test.toml")
+                .join("intention-runtime-failure-helper.toml")
                 .to_string_lossy()
                 .into_owned(),
         )
@@ -51,13 +43,12 @@ fn snapshot() -> ConfigSnapshotDto {
     .expect("fixture snapshot is valid")
 }
 
+/// Records every terminal commit so the helper's exact write count is visible.
 struct FakeRepository {
     session_id: SessionId,
     run_id: RunId,
-    config: ConfigSnapshotDto,
     status: RefCell<RunStatusDto>,
-    cursor: RefCell<RunEventCursorDto>,
-    appends: RefCell<Vec<AppendModelRunFactsInputDto>>,
+    finishes: RefCell<Vec<FinishRunInputDto>>,
 }
 
 impl FakeRepository {
@@ -65,113 +56,153 @@ impl FakeRepository {
         Self {
             session_id: SessionId::new(),
             run_id: RunId::new(),
-            config: snapshot(),
             status: RefCell::new(status),
-            cursor: RefCell::new(RunEventCursorDto::new(4)),
-            appends: RefCell::new(Vec::new()),
+            finishes: RefCell::new(Vec::new()),
         }
     }
 
-    fn replay(&self) -> DtoResult<RunSnapshotDto> {
-        let run = RunProjectionDto::new(
+    fn projection(&self) -> RunProjectionDto {
+        RunProjectionDto::new(
             self.session_id,
             self.run_id,
             TurnId::new(),
             *self.status.borrow(),
-            self.config.revision_id(),
-        );
-        let cursor = *self.cursor.borrow();
-        let projection = ModelRunProjectionDto::new(run, cursor, None, "", None, None, None)?;
-        let snapshot = RunSnapshotDto::new(
-            self.session_id,
-            self.run_id,
-            SessionEventSequenceDto::new(cursor.value()),
-            projection,
-        )?;
-        Ok(snapshot)
+            snapshot().revision_id(),
+        )
     }
 }
 
 impl StorageRepositoryDto for FakeRepository {
-    fn create_session(&self, _input: CreateSessionInputDto) -> DtoResult<CommittedChangeDto> {
-        Err(unused())
-    }
-
-    fn accept_user_turn(&self, _input: AcceptUserTurnInputDto) -> DtoResult<CommittedChangeDto> {
-        Err(unused())
-    }
-
-    fn remove_turn(&self, _input: RemoveTurnInputDto) -> DtoResult<CommittedChangeDto> {
-        Err(unused())
-    }
-
-    fn transition_run(&self, _input: TransitionRunInputDto) -> DtoResult<CommittedChangeDto> {
-        Err(unused())
-    }
-
-    fn append_model_run_facts(
+    fn create_session(
         &self,
-        input: AppendModelRunFactsInputDto,
-    ) -> DtoResult<AppendModelRunFactsOutcomeDto> {
-        assert_eq!(input.expected_cursor(), *self.cursor.borrow());
-        assert_eq!(input.status(), Some(RunStatusDto::Failed));
-        let facts = input
-            .facts()
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(offset, fact)| {
-                ModelRunFactDto::new(
-                    RunEventCursorDto::new(input.expected_cursor().value() + offset as u64 + 1),
-                    fact,
-                )
-            })
-            .collect::<DtoResult<Vec<_>>>()?;
-        let cursor = facts
-            .last()
-            .map_or_else(|| input.expected_cursor(), ModelRunFactDto::cursor);
-        *self.cursor.borrow_mut() = cursor;
-        *self.status.borrow_mut() = RunStatusDto::Failed;
-        self.appends.borrow_mut().push(input);
-        let replay = self.replay()?;
-        AppendModelRunFactsOutcomeDto::new(cursor, replay, facts)
+        _input: intention_storage::CreateSessionInputDto,
+    ) -> DtoResult<SessionProjectionDto> {
+        unused()
     }
 
-    fn load_current_run_snapshot(
+    fn accept_user_turn(
         &self,
-        session_id: SessionId,
-        run_id: RunId,
-    ) -> DtoResult<RunSnapshotDto> {
-        assert_eq!((session_id, run_id), (self.session_id, self.run_id));
-        self.replay()
+        _input: intention_storage::AcceptUserTurnInputDto,
+    ) -> DtoResult<intention_storage::AcceptedTurnOutcomeDto> {
+        unused()
+    }
+
+    fn remove_turn(
+        &self,
+        _input: intention_storage::RemoveTurnInputDto,
+    ) -> DtoResult<intention_domain::PendingTurnProjectionDto> {
+        unused()
+    }
+
+    fn consume_pending_user_turns(
+        &self,
+        _input: intention_storage::ConsumePendingUserTurnsInputDto,
+    ) -> DtoResult<Vec<intention_domain::MessageProjectionDto>> {
+        unused()
+    }
+
+    fn transition_run(
+        &self,
+        _input: intention_storage::TransitionRunInputDto,
+    ) -> DtoResult<RunProjectionDto> {
+        unused()
+    }
+
+    fn finish_run(&self, input: FinishRunInputDto) -> DtoResult<RunProjectionDto> {
+        *self.status.borrow_mut() = input.status();
+        self.finishes.borrow_mut().push(input);
+        Ok(self.projection())
+    }
+
+    fn append_message(
+        &self,
+        _input: intention_storage::AppendMessageInputDto,
+    ) -> DtoResult<intention_domain::MessageProjectionDto> {
+        unused()
+    }
+
+    fn write_tool_result(
+        &self,
+        _input: intention_storage::WriteToolResultInputDto,
+    ) -> DtoResult<intention_storage::ToolResultEvidenceDto> {
+        unused()
+    }
+
+    fn load_tool_result(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+        _call_id: intention_types::ToolCallId,
+    ) -> DtoResult<intention_storage::ToolResultEvidenceDto> {
+        unused()
+    }
+
+    fn load_run_config_snapshot(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+    ) -> DtoResult<ConfigSnapshotDto> {
+        unused()
+    }
+
+    fn load_starting_run_model_context(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+    ) -> DtoResult<intention_storage::StartingRunModelContextDto> {
+        unused()
+    }
+
+    fn load_run_projection(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+    ) -> DtoResult<RunProjectionDto> {
+        Ok(self.projection())
+    }
+
+    fn load_session_projection(
+        &self,
+        _session_id: SessionId,
+    ) -> DtoResult<intention_domain::SessionProjectionDto> {
+        unused()
+    }
+
+    fn load_recent_messages(
+        &self,
+        _session_id: SessionId,
+        _limit: u32,
+    ) -> DtoResult<Vec<intention_domain::MessageProjectionDto>> {
+        unused()
+    }
+
+    fn load_run_messages(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+        _limit: u32,
+    ) -> DtoResult<Vec<intention_domain::MessageProjectionDto>> {
+        unused()
     }
 
     fn recover_unfinished_runs(
         &self,
-        _input: RecoverUnfinishedRunsInputDto,
-    ) -> DtoResult<Vec<CommittedChangeDto>> {
-        Err(unused())
-    }
-
-    fn load_session_snapshot(&self, _session_id: SessionId) -> DtoResult<SessionProjectionDto> {
-        Err(unused())
-    }
-
-    fn load_tail(
-        &self,
-        _session_id: SessionId,
-        _after_sequence: SessionEventSequenceDto,
-    ) -> DtoResult<Vec<intention_types::EventEnvelopeDto<DomainEventDto>>> {
-        Err(unused())
+        _input: intention_storage::RecoverUnfinishedRunsInputDto,
+    ) -> DtoResult<Vec<RunProjectionDto>> {
+        unused()
     }
 
     fn accept_configuration_revision(&self, _snapshot: ConfigSnapshotDto) -> DtoResult<()> {
-        Err(unused())
+        unused()
     }
 }
 
+fn unused<T>() -> DtoResult<T> {
+    Err(ErrorDto::unavailable("fixture_unused", "unused"))
+}
+
 #[test]
-fn failure_helper_appends_one_manual_failure_only_for_the_exact_starting_run() {
+fn failure_helper_commits_one_terminal_failure_only_for_the_exact_starting_run() {
     let repository = FakeRepository::new(RunStatusDto::Starting);
     let outcome = fail_starting_run(
         &repository,
@@ -182,16 +213,15 @@ fn failure_helper_appends_one_manual_failure_only_for_the_exact_starting_run() {
     )
     .expect("starting run can fail atomically");
 
-    assert_eq!(outcome.cursor(), RunEventCursorDto::new(5));
-    let appends = repository.appends.borrow();
-    assert_eq!(appends.len(), 1);
-    assert!(matches!(
-        appends[0].facts(),
-        [ModelRunFactInputDto::Failed { failure }]
-            if failure.code() == "model_scheduling_unavailable"
-                && failure.retry() == ErrorRetryDto::Manual
-    ));
-    assert_eq!(appends[0].status(), Some(RunStatusDto::Failed));
+    assert_eq!(outcome.status(), RunStatusDto::Failed);
+    let finishes = repository.finishes.borrow();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].status(), RunStatusDto::Failed);
+    assert_eq!(
+        finishes[0].error_code(),
+        Some("model_scheduling_unavailable")
+    );
+    assert_eq!(finishes[0].occurred_at(), time());
 
     let wrong_state = FakeRepository::new(RunStatusDto::Running);
     let error = fail_starting_run(
@@ -203,9 +233,5 @@ fn failure_helper_appends_one_manual_failure_only_for_the_exact_starting_run() {
     )
     .expect_err("running run must not be failed by scheduling recovery");
     assert_eq!(error.code(), "invalid_starting_run_failure_state");
-    assert!(wrong_state.appends.borrow().is_empty());
-}
-
-fn unused() -> ErrorDto {
-    ErrorDto::unavailable("fixture_unused", "unused")
+    assert!(wrong_state.finishes.borrow().is_empty());
 }

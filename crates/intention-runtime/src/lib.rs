@@ -1,12 +1,16 @@
-//! Deterministic model-run execution over DTO-only storage.
+//! Deterministic model-run execution over DTO-only current-state storage.
 //!
 //! This crate has no provider, tool, timer, worker-loop, or scheduling
-//! dependency. It decides durable transitions and delegates atomic commits to
-//! the semantic storage repository.
+//! dependency. It commits one transcript row, run transition, or terminal run
+//! outcome per repository transaction and publishes only the values those
+//! commits returned. Assistant text and reasoning accumulate in memory and
+//! become one `assistant` row per completed model step; a crash mid-step loses
+//! the in-flight step text.
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
-    ModelRunFactInputDto, RunEventCursorDto, RunFailureDto, RunStatusDto, ToolResultOutcomeDto,
+    MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto,
+    ToolResultMetadataEntryDto,
 };
 pub use intention_model::{
     AssistantReasoningDto, ModelCancellationSignal, ModelEventDto, ModelExecutionDriver,
@@ -14,12 +18,12 @@ pub use intention_model::{
     ModelToolDefinitionDto,
 };
 use intention_storage::{
-    AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto, AppendPendingUserTurnsInputDto,
+    AppendMessageInputDto, ConsumePendingUserTurnsInputDto, FinishRunInputDto,
     StorageRepositoryDto, TransitionRunInputDto,
 };
 use intention_types::{
-    AssistantTurnId, DtoResult, ErrorDto, ErrorRetryDto, FinishReasonDto, RunId, SessionId,
-    TimestampDto, ToolCallDto,
+    DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, ProviderErrorDto, RunId,
+    SessionId, TimestampDto, ToolCallDto, UsageDto,
 };
 
 mod context_window;
@@ -34,20 +38,18 @@ pub const INTERRUPT_NOTICE: &str = "[The call was stopped before a final result.
 /// model-requested tool call starts.
 pub const TOOL_INTERRUPT_NOTICE: &str = "[The tool call was stopped before a final result.]";
 
-const MAX_ASSISTANT_CONTENT_BYTES: usize = 4 * 1024;
+/// The bounded delay between two provider attempts.
 const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Maximum bytes of one round's accumulated reasoning echo.
 ///
 /// This per-round bound matches the transient `AssistantReasoningDto`
-/// representable bound and the durable per-reasoning-fact bound (512 KiB), so
-/// an echo inside it is always attachable. The durable per-fact and per-run
-/// bounds remain the append authority; a round that crosses this bound
-/// terminalizes as a typed failed run instead of aborting `execute` with a
-/// DTO validation error (architecture 08).
+/// representable bound, so an echo inside it is always attachable. A round
+/// that crosses this bound terminalizes as a typed failed run instead of
+/// aborting `execute` with a DTO validation error (architecture 08).
 const MAX_ROUND_REASONING_ECHO_BYTES: usize = 512 * 1024;
 
-/// Appends one atomic manual-retry failure for exactly a current starting run.
+/// Commits one terminal `Failed` outcome for exactly a current starting run.
 ///
 /// This narrow helper is used by application scheduling when a committed run
 /// cannot acquire context or enter the daemon-owned dispatch queue.
@@ -55,31 +57,32 @@ const MAX_ROUND_REASONING_ECHO_BYTES: usize = 512 * 1024;
 /// # Errors
 ///
 /// Returns a typed error when the exact run is unavailable, no longer
-/// `Starting`, or the atomic failure append cannot commit.
+/// `Starting`, or the terminal outcome cannot commit.
 pub fn fail_starting_run<Repository>(
     repository: &Repository,
     session_id: SessionId,
     run_id: RunId,
     failure_code: impl Into<String>,
     occurred_at: TimestampDto,
-) -> DtoResult<AppendModelRunFactsOutcomeDto>
+) -> DtoResult<RunProjectionDto>
 where
     Repository: StorageRepositoryDto,
 {
-    let replay = repository.load_current_run_snapshot(session_id, run_id)?;
-    if replay.run_projection().status() != RunStatusDto::Starting {
+    let run = repository.load_run_projection(session_id, run_id)?;
+    if run.status() != RunStatusDto::Starting {
         return Err(ErrorDto::validation(
             "invalid_starting_run_failure_state",
             "scheduling failure requires the exact run to remain starting",
         ));
     }
-    let failure = RunFailureDto::new(failure_code, ErrorRetryDto::Manual, None)?;
-    repository.append_model_run_facts(AppendModelRunFactsInputDto::new(
+    repository.finish_run(FinishRunInputDto::new(
         session_id,
         run_id,
-        replay.cursor(),
-        vec![ModelRunFactInputDto::failed(failure)],
-        Some(RunStatusDto::Failed),
+        RunStatusDto::Failed,
+        None,
+        None,
+        Some(failure_code.into()),
+        Some("the starting run could not be scheduled".to_owned()),
         occurred_at,
     )?)
 }
@@ -100,6 +103,105 @@ pub trait ModelTimePort {
 /// Provider-neutral delay future owned by a [`ModelTimePort`].
 pub type ModelSleepFuture<'a> =
     std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
+
+/// Safe terminal outcome of one tool call returned by the execution port.
+///
+/// The port selects the bounded, credential-free content the runtime commits as
+/// the call's durable result and delivers to the model. A `Failed` outcome
+/// carries the safe error that terminalizes the run; `Completed`, `Partial`,
+/// and `Cancelled` keep the run going with the returned content.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ToolResultOutcomeDto {
+    /// The call completed with bounded model-visible content.
+    Completed {
+        /// The bounded, credential-free result content.
+        content: String,
+        /// Approved credential-free structured metadata entries.
+        metadata: Vec<ToolResultMetadataEntryDto>,
+    },
+    /// The call stopped before a final result; content carries the captured
+    /// output with its interruption notice.
+    Partial {
+        /// The bounded captured output with its interruption notice.
+        content: String,
+        /// Approved credential-free structured metadata entries.
+        metadata: Vec<ToolResultMetadataEntryDto>,
+    },
+    /// The call was cancelled before it produced a final result.
+    Cancelled {
+        /// The bounded, credential-free content answering the call.
+        content: String,
+        /// Approved credential-free structured metadata entries.
+        metadata: Vec<ToolResultMetadataEntryDto>,
+    },
+    /// The call failed safely; the error terminalizes the run.
+    Failed {
+        /// The safe failure that terminalizes the run.
+        error: ErrorDto,
+    },
+}
+
+impl ToolResultOutcomeDto {
+    /// Creates a completed tool outcome with non-blank content.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the content is blank.
+    pub fn completed(content: impl Into<String>) -> DtoResult<Self> {
+        Ok(Self::Completed {
+            content: tool_result_content(content.into())?,
+            metadata: Vec::new(),
+        })
+    }
+
+    /// Creates a partial tool outcome with non-blank content.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the content is blank.
+    pub fn partial(content: impl Into<String>) -> DtoResult<Self> {
+        Ok(Self::Partial {
+            content: tool_result_content(content.into())?,
+            metadata: Vec::new(),
+        })
+    }
+
+    /// Creates a cancelled tool outcome with non-blank content.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the content is blank.
+    pub fn cancelled(content: impl Into<String>) -> DtoResult<Self> {
+        Ok(Self::Cancelled {
+            content: tool_result_content(content.into())?,
+            metadata: Vec::new(),
+        })
+    }
+
+    /// Creates a safe failed tool outcome.
+    #[must_use]
+    pub const fn failed(error: ErrorDto) -> Self {
+        Self::Failed { error }
+    }
+
+    /// Attaches approved credential-free metadata entries to the outcome.
+    #[must_use]
+    pub fn with_metadata(mut self, metadata: Vec<ToolResultMetadataEntryDto>) -> Self {
+        match &mut self {
+            Self::Completed {
+                metadata: current, ..
+            }
+            | Self::Partial {
+                metadata: current, ..
+            }
+            | Self::Cancelled {
+                metadata: current, ..
+            } => *current = metadata,
+            Self::Failed { .. } => {}
+        }
+        self
+    }
+}
 
 /// Executes one provider-normalized tool call for the model-tool loop.
 ///
@@ -174,78 +276,51 @@ impl ModelRunExecutionInputDto {
     }
 }
 
-/// Safe terminal evidence from one model execution.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Safe terminal evidence from one model execution, carrying the committed run.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModelRunExecutionOutcomeDto {
     /// The provider finished and the run reached completed state.
-    Completed { cursor: RunEventCursorDto },
+    Completed {
+        /// The committed run projection.
+        run: RunProjectionDto,
+    },
     /// The run safely reached failed state.
-    Failed { cursor: RunEventCursorDto },
+    Failed {
+        /// The committed run projection.
+        run: RunProjectionDto,
+        /// The safe failure recorded for the run.
+        error: ErrorDto,
+    },
 }
 
-/// Safe evidence that a model execution write or state transition committed.
+/// Safe evidence that one model-execution commit happened.
 ///
-/// The snapshot is limited to safe run identity, cursor, and status evidence.
-/// Implementers independently reload the durable run scope before publication;
-/// this observer receives neither a repository transaction nor provider/runtime
+/// The content variant carries the transcript row the repository committed;
+/// the status variant carries the run status the repository committed. The
+/// observer receives neither a repository transaction nor provider/runtime
 /// resources, so it cannot publish an uncommitted mutation.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ModelRunCommitDto {
-    session_id: SessionId,
-    run_id: RunId,
-    cursor: RunEventCursorDto,
-    snapshot: intention_domain::RunSnapshotDto,
-}
-
-impl ModelRunCommitDto {
-    /// Creates provider-neutral committed execution evidence.
-    #[must_use]
-    pub const fn new(
+pub enum ModelRunCommitDto {
+    /// One committed transcript row.
+    Content(MessageProjectionDto),
+    /// One committed run status.
+    Status {
+        /// The owning session identity.
         session_id: SessionId,
+        /// The committed run identity.
         run_id: RunId,
-        cursor: RunEventCursorDto,
-        snapshot: intention_domain::RunSnapshotDto,
-    ) -> Self {
-        Self {
-            session_id,
-            run_id,
-            cursor,
-            snapshot,
-        }
-    }
-
-    /// Returns the owning session identity.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-
-    /// Returns the committed run identity.
-    #[must_use]
-    pub const fn run_id(&self) -> RunId {
-        self.run_id
-    }
-
-    /// Returns the latest durable run cursor known to the executor.
-    #[must_use]
-    pub const fn cursor(&self) -> RunEventCursorDto {
-        self.cursor
-    }
-
-    /// Returns a committed safe run snapshot suitable for independent reread.
-    #[must_use]
-    pub const fn snapshot(&self) -> &intention_domain::RunSnapshotDto {
-        &self.snapshot
-    }
+        /// The committed run status.
+        status: RunStatusDto,
+    },
 }
 
 /// Receives only durable model-execution commit evidence after a successful write.
 ///
-/// A daemon publisher uses this provider-neutral seam to independently reread
-/// the run scope before delivering a live update.
+/// A daemon publisher uses this provider-neutral seam to deliver live updates
+/// from the committed values the repository returned.
 pub trait ModelRunCommitObserver: Send + Sync {
-    /// Observes a successful fact append or execution-driven state transition.
-    fn observe_model_run_commit(&self, committed: ModelRunCommitDto);
+    /// Observes one committed transcript row or run status.
+    fn observe_model_run_commit(&self, commit: &ModelRunCommitDto);
 }
 
 /// DTO-only executor over injected storage, selected driver, time port, optional
@@ -306,7 +381,7 @@ where
     ///
     /// # Errors
     ///
-    /// Returns typed storage or cursor-conflict errors without retrying writes.
+    /// Returns typed storage or validation errors without retrying writes.
     #[expect(
         clippy::future_not_send,
         reason = "The DTO-only execution service accepts deterministic non-Sync test repositories; daemon composition owns any Send runtime boundary."
@@ -315,11 +390,9 @@ where
         &self,
         input: ModelRunExecutionInputDto,
     ) -> DtoResult<ModelRunExecutionOutcomeDto> {
-        let replay = self
+        let run = self
             .repository
-            .load_current_run_snapshot(input.session_id, input.run_id)?;
-        let run = replay.run_projection();
-        let mut cursor = replay.cursor();
+            .load_run_projection(input.session_id, input.run_id)?;
         if run.status() != RunStatusDto::Starting {
             return Err(ErrorDto::validation(
                 "invalid_model_run_execution_state",
@@ -329,8 +402,7 @@ where
         if input.request.run_id() != input.run_id
             || input.request.model() != input.safe_config.resolved().provider().model()
         {
-            cursor = self.configuration_failure(input.session_id, input.run_id, cursor)?;
-            return Ok(ModelRunExecutionOutcomeDto::Failed { cursor });
+            return self.failed_outcome(&input, provider_configuration_unavailable());
         }
         let persisted = match self
             .repository
@@ -338,41 +410,37 @@ where
         {
             Ok(snapshot) => snapshot,
             Err(_) => {
-                cursor = self.configuration_failure(input.session_id, input.run_id, cursor)?;
-                return Ok(ModelRunExecutionOutcomeDto::Failed { cursor });
+                return self.failed_outcome(&input, provider_configuration_unavailable());
             }
         };
         if !same_execution_selection(&persisted, &input.safe_config) {
-            cursor = self.configuration_failure(input.session_id, input.run_id, cursor)?;
-            return Ok(ModelRunExecutionOutcomeDto::Failed { cursor });
+            return self.failed_outcome(&input, provider_configuration_unavailable());
         }
         if let Err(error) = self.driver.preflight(&input.request) {
-            cursor = self.fail(
-                input.session_id,
-                input.run_id,
-                cursor,
-                failure_from_error(&error)?,
-            )?;
-            return Ok(ModelRunExecutionOutcomeDto::Failed { cursor });
+            return self.failed_outcome(&input, error);
         }
 
         let policy = persisted.resolved().provider_execution();
         let context_window = persisted.resolved().context_window();
-        let assistant_turn_id = AssistantTurnId::new();
+        // Uncommitted assistant text stays live across a retryable attempt
+        // boundary, while its absence keeps the attempt budget open.
         let mut pending_text = String::new();
+        let mut usage: Option<UsageDto> = None;
         let mut durable_output = false;
         // Context additions that must survive a retryable attempt boundary:
         // joined pending user messages and interruption notices. The live
         // context of the run stays continuous across provider attempts.
         let mut extra_messages: Vec<ModelMessageDto> = Vec::new();
         for attempt in 1..=u16::from(policy.max_attempts()) {
-            cursor = self.append(
-                input.session_id,
-                input.run_id,
-                cursor,
-                vec![ModelRunFactInputDto::provider_attempt_started(attempt)?],
-                (attempt == 1).then_some(RunStatusDto::Running),
-            )?;
+            if attempt == 1 {
+                let running = self.repository.transition_run(TransitionRunInputDto::new(
+                    input.session_id,
+                    input.run_id,
+                    RunStatusDto::Running,
+                    self.time.now(),
+                ))?;
+                self.publish_status(input.session_id, input.run_id, running.status());
+            }
             let result = self
                 .drive_attempt(
                     &input,
@@ -382,66 +450,37 @@ where
                         context_window.capacity_tokens(),
                     ),
                     AttemptState {
-                        cursor,
-                        assistant_turn_id,
                         pending_text: &mut pending_text,
+                        usage: &mut usage,
                         durable_output: &mut durable_output,
                     },
                     &mut extra_messages,
                 )
                 .await?;
             match result {
-                AttemptResult::Completed { cursor } => {
-                    return Ok(ModelRunExecutionOutcomeDto::Completed { cursor });
+                AttemptResult::Completed { run } => {
+                    return Ok(ModelRunExecutionOutcomeDto::Completed { run });
                 }
-                AttemptResult::FailedTerminal { cursor } => {
-                    return Ok(ModelRunExecutionOutcomeDto::Failed { cursor });
+                AttemptResult::FailedTerminal { run, error } => {
+                    return Ok(ModelRunExecutionOutcomeDto::Failed { run, error });
                 }
-                AttemptResult::Failed {
-                    cursor: failure_cursor,
-                    failure,
-                    retryable,
-                } => {
+                AttemptResult::Failed { error, retryable } => {
                     let retry = retryable
                         && !durable_output
                         && pending_text.is_empty()
                         && attempt < u16::from(policy.max_attempts());
                     if retry {
-                        cursor = self.append(
-                            input.session_id,
-                            input.run_id,
-                            failure_cursor,
-                            vec![
-                                ModelRunFactInputDto::provider_attempt_failed(attempt, failure)?,
-                                ModelRunFactInputDto::retry_scheduled(attempt, attempt + 1)?,
-                            ],
-                            None,
-                        )?;
-                        cursor = self
-                            .wait_for_retry(&input, cursor, &mut extra_messages)
-                            .await?;
+                        self.wait_for_retry(&input, &mut extra_messages).await?;
                     } else {
-                        let mut cursor = self.flush_text(
-                            input.session_id,
-                            input.run_id,
-                            failure_cursor,
-                            assistant_turn_id,
-                            &mut pending_text,
+                        self.commit_step(&input, &mut pending_text, None)?;
+                        let run = self.finish_run(
+                            &input,
+                            RunStatusDto::Failed,
+                            None,
+                            Some(&error),
+                            usage.as_ref(),
                         )?;
-                        cursor = self.append(
-                            input.session_id,
-                            input.run_id,
-                            cursor,
-                            vec![
-                                ModelRunFactInputDto::provider_attempt_failed(
-                                    attempt,
-                                    failure.clone(),
-                                )?,
-                                ModelRunFactInputDto::failed(failure),
-                            ],
-                            Some(RunStatusDto::Failed),
-                        )?;
-                        return Ok(ModelRunExecutionOutcomeDto::Failed { cursor });
+                        return Ok(ModelRunExecutionOutcomeDto::Failed { run, error });
                     }
                 }
             }
@@ -462,9 +501,8 @@ where
         extra_messages: &mut Vec<ModelMessageDto>,
     ) -> DtoResult<AttemptResult> {
         let AttemptState {
-            mut cursor,
-            assistant_turn_id,
             pending_text,
+            usage,
             durable_output,
         } = state;
         let mut messages: Vec<ModelMessageDto> = input.request.messages().to_vec();
@@ -481,90 +519,69 @@ where
                     request.clone(),
                     input,
                     timeout_seconds,
-                    assistant_turn_id,
                     pending_text,
+                    usage,
                     durable_output,
                     &mut context_window,
-                    cursor,
                 )
                 .await?;
             match outcome {
-                RoundOutcome::Finished {
-                    cursor: finished_cursor,
-                    reason,
-                } => {
-                    cursor = finished_cursor;
+                RoundOutcome::Finished { reason, assistant } => {
+                    *durable_output |= assistant.is_some();
                     // A pending message is the nearest-boundary continuation:
                     // it joins the live context in FIFO order and the run
                     // continues instead of completing. An interruption that
                     // raced the finish is answered with its notice first.
                     if input.cancellation.is_cancelled() {
-                        cursor = self.record_interrupt_notice(input, cursor)?;
+                        self.record_interrupt_notice(input)?;
                         messages.push(interrupt_notice_message()?);
                         extra_messages.push(interrupt_notice_message()?);
                         context_window.apply(&mut messages)?;
                         request = continuation_request(input, &messages, &reasoning_attachments)?;
                         continue;
                     }
-                    let (next_cursor, joined) = self.consume_pending_user_turns(
-                        input,
-                        cursor,
-                        &mut messages,
-                        extra_messages,
-                    )?;
-                    cursor = next_cursor;
-                    if joined {
+                    if self.consume_pending_user_turns(input, &mut messages, extra_messages)? {
                         context_window.apply(&mut messages)?;
                         request = continuation_request(input, &messages, &reasoning_attachments)?;
                         continue;
                     }
-                    cursor = self.append(
-                        input.session_id,
-                        input.run_id,
-                        cursor,
-                        vec![ModelRunFactInputDto::finished(reason)],
-                        Some(RunStatusDto::Completing),
+                    let run = self.finish_run(
+                        input,
+                        RunStatusDto::Completed,
+                        Some(reason),
+                        None,
+                        usage.as_ref(),
                     )?;
-                    self.transition_completed(input.session_id, input.run_id, cursor)?;
-                    return Ok(AttemptResult::Completed { cursor });
+                    return Ok(AttemptResult::Completed { run });
                 }
-                RoundOutcome::Interrupted {
-                    cursor: interrupted_cursor,
-                } => {
-                    cursor = self.record_interrupt_notice(input, interrupted_cursor)?;
+                RoundOutcome::Interrupted { assistant } => {
+                    *durable_output |= assistant.is_some();
+                    self.record_interrupt_notice(input)?;
                     messages.push(interrupt_notice_message()?);
                     extra_messages.push(interrupt_notice_message()?);
                     context_window.apply(&mut messages)?;
                     request = continuation_request(input, &messages, &reasoning_attachments)?;
                 }
-                RoundOutcome::Failed {
-                    cursor: failed_cursor,
-                    failure,
-                    retryable,
-                } => {
+                RoundOutcome::Failed { error, retryable } => {
                     if tool_round == 0 {
-                        return Ok(AttemptResult::Failed {
-                            cursor: failed_cursor,
-                            failure,
-                            retryable,
-                        });
+                        return Ok(AttemptResult::Failed { error, retryable });
                     }
-                    let facts = vec![ModelRunFactInputDto::failed(failure)];
-                    let cursor = self.append(
-                        input.session_id,
-                        input.run_id,
-                        failed_cursor,
-                        facts,
-                        Some(RunStatusDto::Failed),
+                    self.commit_step(input, pending_text, None)?;
+                    let run = self.finish_run(
+                        input,
+                        RunStatusDto::Failed,
+                        None,
+                        Some(&error),
+                        usage.as_ref(),
                     )?;
-                    return Ok(AttemptResult::FailedTerminal { cursor });
+                    return Ok(AttemptResult::FailedTerminal { run, error });
                 }
                 RoundOutcome::ToolCalls {
-                    cursor: calls_cursor,
                     calls,
                     reasoning,
+                    assistant,
                 } => {
-                    cursor = calls_cursor;
+                    *durable_output |= assistant.is_some();
                     tool_round += 1;
                     messages.push(ModelMessageDto::assistant_tool_calls(None, calls.clone())?);
                     // Attachments are per-round and ordered: each assistant
@@ -575,89 +592,68 @@ where
                     }
                     let mut interrupted_tool = false;
                     for call in calls {
-                        let facts = vec![ModelRunFactInputDto::tool_call_recorded(call.clone())];
-                        cursor =
-                            self.append(input.session_id, input.run_id, cursor, facts, None)?;
                         // An interrupt that arrived before this call started
                         // never begins a new effect: the call is answered with
                         // the stopped-call notice as its partial result, so the
-                        // assistant tool-call message stays fully answered.
+                        // assistant tool-call message stays fully answered. The
+                        // tool path owns every dispatched call's durable
+                        // tool-call and tool-result rows.
                         let outcome = if input.cancellation.is_cancelled() {
                             ToolResultOutcomeDto::partial(TOOL_INTERRUPT_NOTICE)?
                         } else {
-                            match self
+                            let outcome = self
                                 .tool_executor
                                 .execute_tool(input.session_id, input.run_id, call.clone())
-                                .await
-                            {
+                                .await;
+                            // The tool path committed this call's evidence, so
+                            // the run holds irreversible output from here on.
+                            *durable_output = true;
+                            match outcome {
                                 Ok(outcome) => outcome,
                                 Err(error) => {
                                     // A tool infrastructure error is a typed failed
-                                    // tool result: record it first, then terminalize.
-                                    let failure = failure_from_error(&error)?;
-                                    let outcome = ToolResultOutcomeDto::failed(failure.clone());
-                                    let fact = ModelRunFactInputDto::tool_result_recorded(
-                                        call.call_id(),
-                                        outcome,
-                                    )?;
-                                    cursor = self.append(
-                                        input.session_id,
-                                        input.run_id,
-                                        cursor,
-                                        vec![fact],
+                                    // tool result committed by the tool path: the
+                                    // run terminalizes without retrying.
+                                    let run = self.finish_run(
+                                        input,
+                                        RunStatusDto::Failed,
                                         None,
+                                        Some(&error),
+                                        usage.as_ref(),
                                     )?;
-                                    *durable_output = true;
-                                    let facts = vec![ModelRunFactInputDto::failed(failure)];
-                                    cursor = self.append(
-                                        input.session_id,
-                                        input.run_id,
-                                        cursor,
-                                        facts,
-                                        Some(RunStatusDto::Failed),
-                                    )?;
-                                    return Ok(AttemptResult::FailedTerminal { cursor });
+                                    return Ok(AttemptResult::FailedTerminal { run, error });
                                 }
                             }
                         };
-                        if matches!(outcome, ToolResultOutcomeDto::Partial { .. }) {
-                            interrupted_tool = true;
-                        }
-                        let fact = ModelRunFactInputDto::tool_result_recorded(
-                            call.call_id(),
-                            outcome.clone(),
-                        )?;
-                        let facts = vec![fact];
-                        cursor =
-                            self.append(input.session_id, input.run_id, cursor, facts, None)?;
-                        *durable_output = true;
                         match outcome {
-                            // A partial tool result answers its call like a
-                            // completed one: the model owns the decision about
-                            // what the captured output means, and the loop
-                            // continues instead of terminalizing the run.
-                            ToolResultOutcomeDto::Succeeded { content }
-                            | ToolResultOutcomeDto::Partial { content } => {
-                                let message =
-                                    ModelMessageDto::tool_result(call.call_id(), content)?;
-                                messages.push(message);
-                                // Every added tool result re-runs the window
-                                // pass, so the continuation request carries a
-                                // trimmed context and recomputed breakpoints.
-                                context_window.apply(&mut messages)?;
-                            }
-                            ToolResultOutcomeDto::Failed { failure } => {
-                                let facts = vec![ModelRunFactInputDto::failed(failure)];
-                                cursor = self.append(
-                                    input.session_id,
-                                    input.run_id,
-                                    cursor,
-                                    facts,
-                                    Some(RunStatusDto::Failed),
+                            ToolResultOutcomeDto::Failed { error } => {
+                                let run = self.finish_run(
+                                    input,
+                                    RunStatusDto::Failed,
+                                    None,
+                                    Some(&error),
+                                    usage.as_ref(),
                                 )?;
-                                return Ok(AttemptResult::FailedTerminal { cursor });
+                                return Ok(AttemptResult::FailedTerminal { run, error });
+                            }
+                            ToolResultOutcomeDto::Completed { content, .. } => {
+                                messages
+                                    .push(ModelMessageDto::tool_result(call.call_id(), content)?);
+                            }
+                            ToolResultOutcomeDto::Partial { content, .. } => {
+                                interrupted_tool = true;
+                                messages
+                                    .push(ModelMessageDto::tool_result(call.call_id(), content)?);
+                            }
+                            ToolResultOutcomeDto::Cancelled { content, .. } => {
+                                messages
+                                    .push(ModelMessageDto::tool_result(call.call_id(), content)?);
                             }
                         }
+                        // Every added tool result re-runs the window pass, so
+                        // the continuation request carries a trimmed context
+                        // and recomputed breakpoints.
+                        context_window.apply(&mut messages)?;
                     }
                     // A tool batch is the second bounded interruption
                     // boundary. A partial tool result already carries the
@@ -668,18 +664,12 @@ where
                         if interrupted_tool {
                             input.cancellation.reset();
                         } else {
-                            cursor = self.record_interrupt_notice(input, cursor)?;
+                            self.record_interrupt_notice(input)?;
                             messages.push(interrupt_notice_message()?);
                             extra_messages.push(interrupt_notice_message()?);
                         }
                     }
-                    let (next_cursor, _joined) = self.consume_pending_user_turns(
-                        input,
-                        cursor,
-                        &mut messages,
-                        extra_messages,
-                    )?;
-                    cursor = next_cursor;
+                    self.consume_pending_user_turns(input, &mut messages, extra_messages)?;
                     context_window.apply(&mut messages)?;
                     request = continuation_request(input, &messages, &reasoning_attachments)?;
                 }
@@ -687,7 +677,7 @@ where
         }
     }
 
-    /// Appends one durable interruption notice and clears the run's signal.
+    /// Commits one durable interruption notice and clears the run's signal.
     ///
     /// The notice tells the model that its current call was stopped before a
     /// final result; the run stays `Running` and continues with the next step.
@@ -695,31 +685,34 @@ where
     /// # Errors
     ///
     /// Returns a typed validation or storage error when the notice cannot be
-    /// appended durably.
+    /// committed.
     fn record_interrupt_notice(
         &self,
         input: &ModelRunExecutionInputDto,
-        cursor: RunEventCursorDto,
-    ) -> DtoResult<RunEventCursorDto> {
-        let cursor = self.append(
+    ) -> DtoResult<MessageProjectionDto> {
+        input.cancellation.reset();
+        let message = MessageProjectionDto::new(
             input.session_id,
-            input.run_id,
-            cursor,
-            vec![ModelRunFactInputDto::interrupt_notice_recorded(
-                INTERRUPT_NOTICE,
-            )?],
+            Some(input.run_id),
+            MessageKindDto::Notice,
+            INTERRUPT_NOTICE,
+            None,
+            None,
             None,
         )?;
-        input.cancellation.reset();
-        Ok(cursor)
+        let committed = self
+            .repository
+            .append_message(AppendMessageInputDto::new(message, self.time.now()))?;
+        self.publish_content(&committed);
+        Ok(committed)
     }
 
-    /// Appends every pending user message to the live run context.
+    /// Commits every pending user message into the live run context.
     ///
-    /// The storage transaction marks the turns as appended and assigns their
-    /// durable fact cursors atomically, so a message can join exactly one run
-    /// context. The returned cursor is the run cursor after the append and the
-    /// flag reports whether any message joined.
+    /// The storage transaction marks the turns as appended in the same commit
+    /// that appends their user messages, so a turn joins exactly one run
+    /// context. Every returned message is published exactly once, and the flag
+    /// reports whether any message joined.
     ///
     /// # Errors
     ///
@@ -727,35 +720,33 @@ where
     fn consume_pending_user_turns(
         &self,
         input: &ModelRunExecutionInputDto,
-        cursor: RunEventCursorDto,
         messages: &mut Vec<ModelMessageDto>,
         extra_messages: &mut Vec<ModelMessageDto>,
-    ) -> DtoResult<(RunEventCursorDto, bool)> {
-        let outcome =
+    ) -> DtoResult<bool> {
+        let joined_messages =
             self.repository
-                .append_pending_user_turns(AppendPendingUserTurnsInputDto::new(
+                .consume_pending_user_turns(ConsumePendingUserTurnsInputDto::new(
                     input.session_id,
                     input.run_id,
-                    cursor,
                     self.time.now(),
                 ))?;
         let mut joined = false;
-        for fact in outcome.facts() {
-            if let ModelRunFactInputDto::UserMessageAppended { content, .. } = fact.input() {
-                let message = ModelMessageDto::new(ModelRoleDto::User, content)?;
-                messages.push(message.clone());
-                extra_messages.push(message);
-                joined = true;
-            }
+        for message in &joined_messages {
+            self.publish_content(message);
+            let live = ModelMessageDto::new(ModelRoleDto::User, message.text())?;
+            messages.push(live.clone());
+            extra_messages.push(live);
+            joined = true;
         }
-        Ok((outcome.cursor(), joined))
+        Ok(joined)
     }
 
-    /// Drives one provider round: a single stream with its own start event.
+    /// Drives one provider round and commits the completed model step.
     ///
     /// Tool-call events are only collected here; durable recording and
     /// execution happen in [`Self::drive_attempt`] against the mandatory tool
-    /// executor.
+    /// executor. The round's accumulated text and reasoning commit once, when
+    /// the round closes, as one assistant transcript row.
     #[expect(
         clippy::too_many_arguments,
         reason = "The round helper carries the attempt's mutable state explicitly so the caller owns the tool loop."
@@ -769,11 +760,10 @@ where
         request: ModelRequestDto,
         input: &ModelRunExecutionInputDto,
         timeout_seconds: u8,
-        assistant_turn_id: AssistantTurnId,
         pending_text: &mut String,
+        usage: &mut Option<UsageDto>,
         durable_output: &mut bool,
         context_window: &mut ContextWindowState,
-        mut cursor: RunEventCursorDto,
     ) -> DtoResult<RoundOutcome> {
         use futures_util::{FutureExt, StreamExt, future::Either};
 
@@ -792,14 +782,10 @@ where
         loop {
             if input.cancellation.is_cancelled() {
                 drop(stream);
-                let cursor = self.flush_text(
-                    input.session_id,
-                    input.run_id,
-                    cursor,
-                    assistant_turn_id,
-                    pending_text,
-                )?;
-                return Ok(RoundOutcome::Interrupted { cursor });
+                let assistant =
+                    self.commit_step(input, pending_text, step_reasoning(&reasoning_text))?;
+                *durable_output |= assistant.is_some();
+                return Ok(RoundOutcome::Interrupted { assistant });
             }
             let next = stream.next().fuse();
             let cancelled = input.cancellation.cancelled().fuse();
@@ -812,25 +798,19 @@ where
             {
                 Either::Left(((), _)) => {
                     drop(stream);
-                    let cursor = self.flush_text(
-                        input.session_id,
-                        input.run_id,
-                        cursor,
-                        assistant_turn_id,
-                        pending_text,
-                    )?;
-                    return Ok(RoundOutcome::Interrupted { cursor });
+                    let assistant =
+                        self.commit_step(input, pending_text, step_reasoning(&reasoning_text))?;
+                    *durable_output |= assistant.is_some();
+                    return Ok(RoundOutcome::Interrupted { assistant });
                 }
                 Either::Right((Either::Left((item, _)), _)) => item,
                 Either::Right((Either::Right(((), _)), _)) => {
                     drop(stream);
                     return Ok(RoundOutcome::Failed {
-                        cursor,
-                        failure: RunFailureDto::new(
+                        error: ErrorDto::unavailable(
                             "provider_attempt_timed_out",
-                            ErrorRetryDto::Delayed,
-                            None,
-                        )?,
+                            "the provider attempt timed out",
+                        ),
                         retryable: true,
                     });
                 }
@@ -839,43 +819,42 @@ where
                 Some(Ok(event)) => event,
                 Some(Err(error)) => {
                     return Ok(RoundOutcome::Failed {
-                        cursor,
                         retryable: error.retry() == ErrorRetryDto::Delayed,
-                        failure: RunFailureDto::from_provider(error),
+                        error: provider_failure(&error)?,
                     });
                 }
                 None => {
                     if calls.is_empty() {
                         return Ok(RoundOutcome::Failed {
-                            cursor,
-                            failure: RunFailureDto::new(
+                            error: ErrorDto::unavailable(
                                 "provider_stream_ended",
-                                ErrorRetryDto::Never,
-                                None,
-                            )?,
+                                "the provider stream ended without a final result",
+                            ),
                             retryable: false,
                         });
                     }
                     let reasoning = match round_reasoning_attachment(
                         reasoning_channel_seen,
-                        reasoning_text,
+                        &reasoning_text,
                         &calls,
                         reasoning_echo_exceeds_round_bound,
                     ) {
                         Ok(reasoning) => reasoning,
-                        Err(_) => return unrepresentable_reasoning_round(cursor),
+                        Err(_) => return Ok(unrepresentable_reasoning_round()),
                     };
+                    let assistant =
+                        self.commit_step(input, pending_text, step_reasoning(&reasoning_text))?;
+                    *durable_output |= assistant.is_some();
                     return Ok(RoundOutcome::ToolCalls {
-                        cursor,
                         calls,
                         reasoning,
+                        assistant,
                     });
                 }
             };
             if let Err(error) = lifecycle.accept(&event) {
                 return Ok(RoundOutcome::Failed {
-                    cursor,
-                    failure: failure_from_error(&error)?,
+                    error,
                     retryable: false,
                 });
             }
@@ -883,30 +862,19 @@ where
                 ModelEventDto::Started => {}
                 ModelEventDto::TextDelta { content } => {
                     pending_text.push_str(&content);
-                    let next_cursor = self.flush_full_text(
-                        input.session_id,
-                        input.run_id,
-                        cursor,
-                        assistant_turn_id,
-                        pending_text,
-                    )?;
-                    *durable_output |= next_cursor != cursor;
-                    cursor = next_cursor;
                 }
                 ModelEventDto::ReasoningDelta { content } => {
                     // The reasoning channel marks a presence even when it
                     // carries no text: the continuation request must send the
                     // channel back on the assistant tool-call message. Empty
-                    // fragments never become durable facts because the fact
-                    // constructors reject blank content.
+                    // fragments never become durable content.
                     reasoning_channel_seen = true;
                     if !content.is_empty() {
                         // The accumulated echo is bounded per round at the
                         // attachment's representable bound. Once it is crossed
                         // the round is unrepresentable and terminalizes as a
                         // typed failed run at round end; the echo is never
-                        // truncated and the durable per-fact and per-run bounds
-                        // stay with the append authority.
+                        // truncated.
                         if reasoning_echo_exceeds_round_bound
                             || reasoning_text.len() + content.len() > MAX_ROUND_REASONING_ECHO_BYTES
                         {
@@ -914,61 +882,40 @@ where
                         } else {
                             reasoning_text.push_str(&content);
                         }
-                        cursor = self.append(
-                            input.session_id,
-                            input.run_id,
-                            cursor,
-                            vec![ModelRunFactInputDto::reasoning_delta_recorded(content)?],
-                            None,
-                        )?;
-                        *durable_output = true;
                     }
                 }
-                ModelEventDto::Usage { usage } => {
-                    cursor = self.append(
-                        input.session_id,
-                        input.run_id,
-                        cursor,
-                        vec![ModelRunFactInputDto::usage_recorded(usage)],
-                        None,
-                    )?;
-                    context_window.observe_usage(usage, request_characters);
-                    *durable_output = true;
+                ModelEventDto::Usage { usage: reported } => {
+                    context_window.observe_usage(reported, request_characters);
+                    if matches!(reported, UsageDto::Reported { .. }) {
+                        *usage = Some(reported);
+                    }
                 }
                 ModelEventDto::ToolCall { call } => {
-                    cursor = self.flush_text(
-                        input.session_id,
-                        input.run_id,
-                        cursor,
-                        assistant_turn_id,
-                        pending_text,
-                    )?;
                     calls.push(call);
                 }
                 ModelEventDto::Finished { reason } => {
-                    cursor = self.flush_text(
-                        input.session_id,
-                        input.run_id,
-                        cursor,
-                        assistant_turn_id,
-                        pending_text,
-                    )?;
                     if calls.is_empty() {
-                        return Ok(RoundOutcome::Finished { cursor, reason });
+                        let assistant =
+                            self.commit_step(input, pending_text, step_reasoning(&reasoning_text))?;
+                        *durable_output |= assistant.is_some();
+                        return Ok(RoundOutcome::Finished { reason, assistant });
                     }
                     let reasoning = match round_reasoning_attachment(
                         reasoning_channel_seen,
-                        reasoning_text,
+                        &reasoning_text,
                         &calls,
                         reasoning_echo_exceeds_round_bound,
                     ) {
                         Ok(reasoning) => reasoning,
-                        Err(_) => return unrepresentable_reasoning_round(cursor),
+                        Err(_) => return Ok(unrepresentable_reasoning_round()),
                     };
+                    let assistant =
+                        self.commit_step(input, pending_text, step_reasoning(&reasoning_text))?;
+                    *durable_output |= assistant.is_some();
                     return Ok(RoundOutcome::ToolCalls {
-                        cursor,
                         calls,
                         reasoning,
+                        assistant,
                     });
                 }
             }
@@ -977,12 +924,12 @@ where
 
     /// Waits out one scheduled retry delay, or handles an interruption.
     ///
-    /// An interruption during the wait appends its durable notice, clears the
-    /// signal, and returns so the next provider attempt starts immediately.
+    /// An interruption during the wait commits its notice, clears the signal,
+    /// and returns so the next provider attempt starts immediately.
     ///
     /// # Errors
     ///
-    /// Returns a typed storage error when the notice cannot be appended.
+    /// Returns a typed storage error when the notice cannot be committed.
     #[expect(
         clippy::future_not_send,
         reason = "The DTO-only execution service accepts deterministic non-Sync test repositories; daemon composition owns any Send runtime boundary."
@@ -990,16 +937,15 @@ where
     async fn wait_for_retry(
         &self,
         input: &ModelRunExecutionInputDto,
-        cursor: RunEventCursorDto,
         extra_messages: &mut Vec<ModelMessageDto>,
-    ) -> DtoResult<RunEventCursorDto> {
+    ) -> DtoResult<()> {
         use futures_util::{FutureExt, future::Either};
 
         if input.cancellation.is_cancelled() {
             let message = interrupt_notice_message()?;
-            let cursor = self.record_interrupt_notice(input, cursor)?;
+            self.record_interrupt_notice(input)?;
             extra_messages.push(message);
-            return Ok(cursor);
+            return Ok(());
         }
         let delay = self.time.sleep(RETRY_DELAY).fuse();
         let cancelled = input.cancellation.cancelled().fuse();
@@ -1007,207 +953,174 @@ where
         match futures_util::future::select(cancelled, delay).await {
             Either::Left(((), _)) => {
                 let message = interrupt_notice_message()?;
-                let cursor = self.record_interrupt_notice(input, cursor)?;
+                self.record_interrupt_notice(input)?;
                 extra_messages.push(message);
-                Ok(cursor)
+                Ok(())
             }
-            Either::Right(((), _)) => Ok(cursor),
+            Either::Right(((), _)) => Ok(()),
         }
     }
 
-    fn append(
+    /// Commits the accumulated assistant step as one transcript row.
+    ///
+    /// The step's text and reasoning accumulate in memory and become one
+    /// committed `assistant` message; a step without non-blank text commits
+    /// nothing, because the transcript shape requires assistant content.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or storage error when the row cannot commit.
+    fn commit_step(
         &self,
-        session_id: SessionId,
-        run_id: RunId,
-        cursor: RunEventCursorDto,
-        facts: Vec<ModelRunFactInputDto>,
-        status: Option<RunStatusDto>,
-    ) -> DtoResult<RunEventCursorDto> {
-        let outcome = self
-            .repository
-            .append_model_run_facts(AppendModelRunFactsInputDto::new(
-                session_id,
-                run_id,
-                cursor,
-                facts,
-                status,
-                self.time.now(),
-            )?)?;
-        let cursor = outcome.cursor();
-        self.observe_snapshot(session_id, run_id, cursor, outcome.snapshot().clone());
-        Ok(cursor)
-    }
-
-    fn transition_completed(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        cursor: RunEventCursorDto,
-    ) -> DtoResult<()> {
-        self.repository.transition_run(TransitionRunInputDto::new(
-            session_id,
-            run_id,
-            RunStatusDto::Completed,
-            self.time.now(),
-        ))?;
-        self.observe_current_replay(session_id, run_id, cursor)
-    }
-
-    fn observe_snapshot(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        cursor: RunEventCursorDto,
-        snapshot: intention_domain::RunSnapshotDto,
-    ) {
-        if let Some(observer) = self.observer {
-            observer.observe_model_run_commit(ModelRunCommitDto::new(
-                session_id, run_id, cursor, snapshot,
-            ));
+        input: &ModelRunExecutionInputDto,
+        pending_text: &mut String,
+        reasoning: Option<&str>,
+    ) -> DtoResult<Option<MessageProjectionDto>> {
+        if pending_text.trim().is_empty() {
+            pending_text.clear();
+            return Ok(None);
         }
-    }
-
-    fn observe_current_replay(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        cursor: RunEventCursorDto,
-    ) -> DtoResult<()> {
-        let replay = self
-            .repository
-            .load_current_run_snapshot(session_id, run_id)?;
-        self.observe_snapshot(session_id, run_id, cursor, replay);
-        Ok(())
-    }
-
-    fn fail(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        cursor: RunEventCursorDto,
-        failure: RunFailureDto,
-    ) -> DtoResult<RunEventCursorDto> {
-        self.append(
-            session_id,
-            run_id,
-            cursor,
-            vec![ModelRunFactInputDto::failed(failure)],
-            Some(RunStatusDto::Failed),
-        )
-    }
-
-    fn configuration_failure(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        cursor: RunEventCursorDto,
-    ) -> DtoResult<RunEventCursorDto> {
-        self.fail(
-            session_id,
-            run_id,
-            cursor,
-            RunFailureDto::new(
-                "provider_configuration_unavailable",
-                ErrorRetryDto::Never,
-                None,
-            )?,
-        )
-    }
-
-    fn flush_full_text(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        mut cursor: RunEventCursorDto,
-        assistant_turn_id: AssistantTurnId,
-        pending: &mut String,
-    ) -> DtoResult<RunEventCursorDto> {
-        while pending.len() >= MAX_ASSISTANT_CONTENT_BYTES {
-            let end = valid_boundary_at_or_before(pending, MAX_ASSISTANT_CONTENT_BYTES);
-            let content = pending.drain(..end).collect::<String>();
-            cursor = self.append(
-                session_id,
-                run_id,
-                cursor,
-                vec![ModelRunFactInputDto::assistant_content_appended(
-                    assistant_turn_id,
-                    content,
-                )?],
-                None,
-            )?;
-        }
-        Ok(cursor)
-    }
-
-    fn flush_text(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        cursor: RunEventCursorDto,
-        assistant_turn_id: AssistantTurnId,
-        pending: &mut String,
-    ) -> DtoResult<RunEventCursorDto> {
-        let cursor =
-            self.flush_full_text(session_id, run_id, cursor, assistant_turn_id, pending)?;
-        if pending.is_empty() {
-            return Ok(cursor);
-        }
-        let content = std::mem::take(pending);
-        self.append(
-            session_id,
-            run_id,
-            cursor,
-            vec![ModelRunFactInputDto::assistant_content_appended(
-                assistant_turn_id,
-                content,
-            )?],
+        let message = MessageProjectionDto::new(
+            input.session_id,
+            Some(input.run_id),
+            MessageKindDto::Assistant,
+            std::mem::take(pending_text),
+            reasoning.map(str::to_owned),
             None,
-        )
+            None,
+        )?;
+        let committed = self
+            .repository
+            .append_message(AppendMessageInputDto::new(message, self.time.now()))?;
+        self.publish_content(&committed);
+        Ok(Some(committed))
+    }
+
+    /// Commits one terminal run outcome and publishes the committed status.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or storage error when the outcome cannot commit.
+    fn finish_run(
+        &self,
+        input: &ModelRunExecutionInputDto,
+        status: RunStatusDto,
+        finish_reason: Option<FinishReasonDto>,
+        error: Option<&ErrorDto>,
+        usage: Option<&UsageDto>,
+    ) -> DtoResult<RunProjectionDto> {
+        let run = self.repository.finish_run(FinishRunInputDto::new(
+            input.session_id,
+            input.run_id,
+            status,
+            usage.copied(),
+            finish_reason,
+            error.map(|error| error.code().to_owned()),
+            error.map(|error| error.message().to_owned()),
+            self.time.now(),
+        )?)?;
+        self.publish_status(input.session_id, input.run_id, run.status());
+        Ok(run)
+    }
+
+    /// Commits one terminal `Failed` outcome carrying the supplied safe error.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when the outcome cannot commit.
+    fn failed_outcome(
+        &self,
+        input: &ModelRunExecutionInputDto,
+        error: ErrorDto,
+    ) -> DtoResult<ModelRunExecutionOutcomeDto> {
+        let run = self.finish_run(input, RunStatusDto::Failed, None, Some(&error), None)?;
+        Ok(ModelRunExecutionOutcomeDto::Failed { run, error })
+    }
+
+    /// Publishes one committed transcript row.
+    fn publish_content(&self, message: &MessageProjectionDto) {
+        if let Some(observer) = self.observer {
+            observer.observe_model_run_commit(&ModelRunCommitDto::Content(message.clone()));
+        }
+    }
+
+    /// Publishes one committed run status.
+    fn publish_status(&self, session_id: SessionId, run_id: RunId, status: RunStatusDto) {
+        if let Some(observer) = self.observer {
+            observer.observe_model_run_commit(&ModelRunCommitDto::Status {
+                session_id,
+                run_id,
+                status,
+            });
+        }
     }
 }
 
+/// Mutable per-attempt state carried across the provider attempt loop.
 struct AttemptState<'a> {
-    cursor: RunEventCursorDto,
-    assistant_turn_id: AssistantTurnId,
+    /// Accumulated uncommitted assistant text of the current model step.
     pending_text: &'a mut String,
+    /// The last reported provider usage of the run.
+    usage: &'a mut Option<UsageDto>,
+    /// Whether this run committed irreversible content in an earlier step.
     durable_output: &'a mut bool,
 }
 
+/// The outcome of one provider attempt.
 enum AttemptResult {
-    Completed {
-        cursor: RunEventCursorDto,
-    },
-    Failed {
-        cursor: RunEventCursorDto,
-        failure: RunFailureDto,
-        retryable: bool,
-    },
+    /// The run reached completed state with its committed projection.
+    Completed { run: RunProjectionDto },
+    /// The attempt failed without terminalizing the run; the caller owns retry.
+    Failed { error: ErrorDto, retryable: bool },
+    /// The attempt failed and the run reached failed state.
     FailedTerminal {
-        cursor: RunEventCursorDto,
+        run: RunProjectionDto,
+        error: ErrorDto,
     },
 }
 
-/// The outcome of one provider round, carrying the round's ending cursor.
+/// The outcome of one provider round.
 enum RoundOutcome {
     /// The provider finished the round without tool calls. The caller owns
     /// the completion decision, because pending user messages continue the
-    /// run instead of completing it.
+    /// run instead of completing it. The committed assistant step row is
+    /// carried when the step had text.
     Finished {
-        cursor: RunEventCursorDto,
         reason: FinishReasonDto,
+        assistant: Option<MessageProjectionDto>,
     },
     /// The round was interrupted before a final result; the run continues.
-    Interrupted { cursor: RunEventCursorDto },
-    Failed {
-        cursor: RunEventCursorDto,
-        failure: RunFailureDto,
-        retryable: bool,
+    Interrupted {
+        assistant: Option<MessageProjectionDto>,
     },
+    /// The round failed safely; no step row committed with it.
+    Failed { error: ErrorDto, retryable: bool },
+    /// The round closed with model-requested tool calls.
     ToolCalls {
-        cursor: RunEventCursorDto,
         calls: Vec<ToolCallDto>,
         reasoning: Option<AssistantReasoningDto>,
+        assistant: Option<MessageProjectionDto>,
     },
+}
+
+/// Returns the durable reasoning text of one step, when it carried any.
+fn step_reasoning(reasoning: &str) -> Option<&str> {
+    (!reasoning.is_empty()).then_some(reasoning)
+}
+
+/// Validates one tool result content and returns it unchanged.
+///
+/// # Errors
+///
+/// Returns a validation error when the content is blank.
+fn tool_result_content(content: String) -> DtoResult<String> {
+    if content.trim().is_empty() {
+        return Err(ErrorDto::validation(
+            "invalid_tool_result_content",
+            "tool result content must not be empty",
+        ));
+    }
+    Ok(content)
 }
 
 /// Builds one round's transient reasoning attachment for the tool-loop
@@ -1226,7 +1139,7 @@ enum RoundOutcome {
 /// typed failed run instead of propagating the validation error.
 fn round_reasoning_attachment(
     reasoning_channel_seen: bool,
-    text: String,
+    text: &str,
     calls: &[ToolCallDto],
     echo_exceeds_round_bound: bool,
 ) -> DtoResult<Option<AssistantReasoningDto>> {
@@ -1236,7 +1149,7 @@ fn round_reasoning_attachment(
     if echo_exceeds_round_bound {
         return Err(ErrorDto::validation(
             "invalid_round_reasoning_echo",
-            "the round's reasoning echo exceeds the per-round attachment bound",
+            "the round reasoning echo exceeds the per-round attachment bound",
         ));
     }
     let tool_call_ids = calls.iter().map(ToolCallDto::call_id).collect();
@@ -1251,28 +1164,39 @@ fn round_reasoning_attachment(
 /// `reasoning_attachment_unrepresentable` code instead of aborting `execute`
 /// with a DTO validation error, and the echo is never truncated or silently
 /// omitted.
+fn unrepresentable_reasoning_round() -> RoundOutcome {
+    RoundOutcome::Failed {
+        error: ErrorDto::validation(
+            "reasoning_attachment_unrepresentable",
+            "the round reasoning echo cannot become a continuation attachment",
+        ),
+        retryable: false,
+    }
+}
+
+/// Converts one provider-normalized safe error into a run failure.
 ///
 /// # Errors
 ///
-/// Returns a validation error only when the static failure code is rejected.
-fn unrepresentable_reasoning_round(cursor: RunEventCursorDto) -> DtoResult<RoundOutcome> {
-    Ok(RoundOutcome::Failed {
-        cursor,
-        failure: RunFailureDto::new(
-            "reasoning_attachment_unrepresentable",
-            ErrorRetryDto::Never,
-            None,
-        )?,
-        retryable: false,
-    })
+/// Returns a validation error only when the provider code cannot form a safe
+/// error, which the provider boundary already rejects.
+fn provider_failure(error: &ProviderErrorDto) -> DtoResult<ErrorDto> {
+    ErrorDto::new(
+        error.code(),
+        ErrorCategoryDto::Unavailable,
+        "the provider stream failed",
+        error.retry(),
+        error.correlation_id(),
+    )
 }
 
-const fn valid_boundary_at_or_before(value: &str, maximum: usize) -> usize {
-    let mut end = maximum;
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    end
+/// Returns the safe failure used when the persisted configuration cannot drive
+/// the run.
+fn provider_configuration_unavailable() -> ErrorDto {
+    ErrorDto::unavailable(
+        "provider_configuration_unavailable",
+        "the provider configuration is unavailable",
+    )
 }
 
 fn same_execution_selection(persisted: &ConfigSnapshotDto, current: &ConfigSnapshotDto) -> bool {
@@ -1286,10 +1210,6 @@ fn same_execution_selection(persisted: &ConfigSnapshotDto, current: &ConfigSnaps
         && persisted_execution.attempt_timeout_seconds()
             == current_execution.attempt_timeout_seconds()
         && persisted_execution.max_attempts() == current_execution.max_attempts()
-}
-
-fn failure_from_error(error: &ErrorDto) -> DtoResult<RunFailureDto> {
-    RunFailureDto::new(error.code(), error.retry(), error.correlation_id())
 }
 
 /// Returns the durable context notice for one interrupted call.
