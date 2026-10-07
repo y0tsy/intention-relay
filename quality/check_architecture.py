@@ -632,9 +632,9 @@ def ordering_authority_failures(
 ) -> list[str]:
     """Returns failures for ordering-authority types outside the declared set.
 
-    The set of durable ordering authorities is closed: a record
-    family orders by the session event sequence, belongs to exactly one container
-    and orders by that container's journal, or has no durable order.
+    The set of durable ordering authorities is closed. Every record family
+    orders by SQLite row insertion order, so a production type whose name ends
+    in a guarded suffix is a reintroduced ordering family.
 
     This is a name-level guard over production type declarations of every
     visibility, including aliases. It does not inspect fields, SQL columns, or
@@ -665,16 +665,20 @@ def ordering_authority_failures(
 
 def self_test_ordering_authorities() -> None:
     """Proves the ordering-authority check can fail before it is trusted."""
-    declared = ["SessionEventSequenceDto"]
     suffixes = ["SequenceDto"]
-    clean = {Path("crates/fixture/src/lib.rs"): "pub struct SessionEventSequenceDto(u64);\n"}
+    unrelated = {Path("crates/fixture/src/lib.rs"): "pub struct UnrelatedDto(u64);\n"}
     undeclared = {Path("crates/fixture/src/lib.rs"): "pub struct ExtraSequenceDto(u64);\n"}
-    missing = {Path("crates/fixture/src/lib.rs"): "pub struct UnrelatedDto(u64);\n"}
-    if ordering_authority_failures(declared, suffixes, clean):
-        fail("ordering-authority self-test: the declared set must pass")
-    if not ordering_authority_failures(declared, suffixes, undeclared):
+    if ordering_authority_failures([], suffixes, unrelated):
+        fail("ordering-authority self-test: an unrelated type must pass")
+    if not ordering_authority_failures([], suffixes, undeclared):
         fail("ordering-authority self-test: an undeclared authority must fail")
-    if not ordering_authority_failures(declared, suffixes, missing):
+    declared = ["SessionEventSequenceDto"]
+    declared_source = {
+        Path("crates/fixture/src/lib.rs"): "pub struct SessionEventSequenceDto(u64);\n"
+    }
+    if ordering_authority_failures(declared, suffixes, declared_source):
+        fail("ordering-authority self-test: the declared set must pass")
+    if not ordering_authority_failures(declared, suffixes, unrelated):
         fail("ordering-authority self-test: a missing declared authority must fail")
 
 

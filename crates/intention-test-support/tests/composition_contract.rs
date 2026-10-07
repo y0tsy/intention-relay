@@ -6,18 +6,16 @@
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto, RemoveTurnCommandDto,
-    RunModeDto, SendUserTurnCommandDto,
+    CreateSessionCommandDto, GetSessionSnapshotQueryDto, RemoveTurnCommandDto, RunModeDto,
+    SendUserTurnCommandDto,
 };
 use intention_protocol::{
-    ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto, ProtocolQueryResultDto,
-    SendUserTurnOutcomeDto, SessionResyncReasonDto, SessionSubscriptionResponseDto,
+    ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto,
+    ProtocolQueryResultDto, SendUserTurnOutcomeDto, SessionSubscriptionResponseDto,
     SubscribeSessionCommandDto,
 };
-use intention_test_support::{durable_events, fixture_workspace_root, open_facade};
-use intention_types::{
-    ProjectId, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TurnId, WorkspaceId,
-};
+use intention_test_support::{fixture_workspace_root, open_facade, session_messages};
+use intention_types::{IdempotencyKey, ProjectId, RunId, SchemaVersionDto, SessionId, WorkspaceId};
 use tempfile::TempDir;
 
 const SCHEMA: SchemaVersionDto = SchemaVersionDto::new(1, 0);
@@ -49,62 +47,61 @@ fn create(facade: &intention::DaemonApplicationFacade, session_id: SessionId) {
     assert!(matches!(result, ProtocolCommandResultDto::Accepted(_)));
 }
 
-#[test]
-fn durable_lifecycle_and_replay_contracts_hold() {
-    let (_directory, facade) = facade();
-    let session_id = SessionId::new();
-    create(&facade, session_id);
-    let active_run = match facade.command(ProtocolCommandDto::SendUserTurn(
-        SendUserTurnCommandDto::new(session_id, TurnId::new(), "active").expect("turn is valid"),
+fn send_turn(
+    facade: &intention::DaemonApplicationFacade,
+    session_id: SessionId,
+    content: &str,
+) -> SendUserTurnOutcomeDto {
+    match facade.command(ProtocolCommandDto::SendUserTurn(
+        SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), content)
+            .expect("turn is valid"),
     )) {
         ProtocolCommandResultDto::Accepted(accepted) => match accepted.result() {
-            intention_protocol::ProtocolAcceptedResultDto::SendUserTurn(turn) => {
-                match turn.outcome() {
-                    SendUserTurnOutcomeDto::Started { run_id, .. } => run_id,
-                    SendUserTurnOutcomeDto::Pending => panic!("first turn starts"),
-                }
-            }
+            ProtocolAcceptedResultDto::SendUserTurn(turn) => turn.outcome(),
             _ => panic!("turn result expected"),
         },
         ProtocolCommandResultDto::Rejected(error) => panic!("turn rejected: {error}"),
+    }
+}
+
+#[test]
+fn durable_lifecycle_reads_current_state_without_positions() {
+    let (_directory, facade) = facade();
+    let session_id = SessionId::new();
+    create(&facade, session_id);
+    let active_run = match send_turn(&facade, session_id, "active") {
+        SendUserTurnOutcomeDto::Started { run_id, .. } => run_id,
+        SendUserTurnOutcomeDto::Pending => panic!("first turn starts"),
     };
-    let pending_turn = TurnId::new();
+    let pending_content = "pending";
+    let pending_turn = match send_turn(&facade, session_id, pending_content) {
+        SendUserTurnOutcomeDto::Pending => {
+            let snapshot = facade
+                .session_snapshot(session_id, None)
+                .expect("session projection reads");
+            snapshot
+                .projection()
+                .pending_turns()
+                .first()
+                .map(intention_domain::PendingTurnProjectionDto::turn_id)
+                .expect("the waiting turn is projected as pending")
+        }
+        SendUserTurnOutcomeDto::Started { .. } => panic!("a busy session keeps the turn pending"),
+    };
+    // Only the admitted turn reaches the transcript: a pending turn stays
+    // durable input until a run consumes it.
+    let messages = session_messages(&facade, session_id).expect("session transcript reads");
+    assert_eq!(messages.len(), 1, "one admitted user row is committed");
+    assert_eq!(messages[0].text(), "active");
+    assert_eq!(messages[0].run_id(), Some(active_run));
+
     assert!(matches!(
-        facade.command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, pending_turn, "pending")
-                .expect("turn is valid")
-        )),
-        ProtocolCommandResultDto::Accepted(_)
-    ));
-    facade
-        .interrupt_run_for_daemon_host(session_id, active_run)
-        .expect("host interrupt reaches the active run");
-    let events = durable_events(&facade, session_id).expect("durable event tail loads");
-    // An interrupt is transient: it ends the in-flight operation, records a
-    // notice, and leaves the run active. Without a daemon task registry the
-    // pending message stays durable input and no terminal status is written.
-    assert!(events.iter().any(|event| matches!(
-        event.payload(),
-        DomainEventDto::UserTurnPending(pending) if pending.turn_id() == pending_turn
-    )));
-    assert!(events.iter().all(|event| !matches!(
-        event.payload(),
-        DomainEventDto::RunStatusChanged(change)
-            if change.status().is_terminal()
-    )));
-    assert!(matches!(
-        facade.query(ProtocolQueryDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id))),
+        facade.query(ProtocolQueryDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(
+            session_id
+        ))),
         ProtocolQueryResultDto::SessionSnapshot(snapshot)
             if snapshot.projection().active_run().is_some()
-    ));
-    assert!(matches!(
-        facade.subscribe(SubscribeSessionCommandDto::new(
-            SCHEMA,
-            session_id,
-            Some(SessionEventSequenceDto::new(0)),
-            RunModeDto::Build,
-        )),
-        SessionSubscriptionResponseDto::Snapshot(_)
+                && snapshot.projection().pending_turns().len() == 1
     ));
     for (scoped_session, run_id) in [
         (session_id, Some(active_run)),
@@ -112,14 +109,51 @@ fn durable_lifecycle_and_replay_contracts_hold() {
         (SessionId::new(), Some(active_run)),
         (SessionId::new(), Some(RunId::new())),
     ] {
-        assert!(matches!(
-            facade.subscribe(SubscribeSessionCommandDto::with_run_id(
-                SCHEMA, scoped_session, run_id, Some(SessionEventSequenceDto::new(u64::MAX)), RunModeDto::Build,
-            )),
-            SessionSubscriptionResponseDto::ResyncRequired(resync)
-                if resync.reason() == SessionResyncReasonDto::HistoryUnavailable
+        let response = facade.subscribe(SubscribeSessionCommandDto::with_run_id(
+            SCHEMA,
+            scoped_session,
+            run_id,
+            RunModeDto::Build,
         ));
+        if scoped_session == session_id && run_id == Some(active_run) {
+            assert!(matches!(
+                response,
+                SessionSubscriptionResponseDto::Snapshot(_)
+            ));
+        } else {
+            assert!(
+                matches!(
+                    response,
+                    SessionSubscriptionResponseDto::Error(error)
+                        if error.code() == "storage_record_not_found"
+                ),
+                "a re-subscription outside durable state is refused with a typed error"
+            );
+        }
     }
+
+    assert!(matches!(
+        facade.command(ProtocolCommandDto::RemoveTurn(RemoveTurnCommandDto::new(
+            session_id,
+            pending_turn
+        ))),
+        ProtocolCommandResultDto::Accepted(_)
+    ));
+    let projection = facade
+        .session_snapshot(session_id, None)
+        .expect("session projection reads")
+        .projection()
+        .clone();
+    assert!(
+        projection.pending_turns().is_empty(),
+        "a removed turn leaves the pending projection and never reaches the transcript"
+    );
+    assert_eq!(
+        session_messages(&facade, session_id)
+            .expect("session transcript reads")
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -131,7 +165,7 @@ fn restart_interrupts_unfinished_work_before_ready() {
         let facade = open_facade(&database, snapshot()).expect("first facade opens");
         create(&facade, session_id);
         let _ = facade.command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, TurnId::new(), "unfinished")
+            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "unfinished")
                 .expect("turn valid"),
         ));
     }
@@ -140,25 +174,5 @@ fn restart_interrupts_unfinished_work_before_ready() {
         reopened.query(ProtocolQueryDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id))),
         ProtocolQueryResultDto::SessionSnapshot(snapshot)
             if snapshot.projection().active_run().is_none()
-    ));
-}
-
-#[test]
-fn pending_turn_removal_is_accepted() {
-    let (_directory, facade) = facade();
-    let session_id = SessionId::new();
-    create(&facade, session_id);
-    let _ = facade.command(ProtocolCommandDto::SendUserTurn(
-        SendUserTurnCommandDto::new(session_id, TurnId::new(), "active").expect("turn valid"),
-    ));
-    let pending = TurnId::new();
-    let _ = facade.command(ProtocolCommandDto::SendUserTurn(
-        SendUserTurnCommandDto::new(session_id, pending, "pending").expect("turn valid"),
-    ));
-    assert!(matches!(
-        facade.command(ProtocolCommandDto::RemoveTurn(RemoveTurnCommandDto::new(
-            session_id, pending
-        ))),
-        ProtocolCommandResultDto::Accepted(_)
     ));
 }

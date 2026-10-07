@@ -41,7 +41,7 @@ skeleton_crates = [
 ]
 
 [non_production_test_external_dependencies]
-"intention-test-support" = ["serde_json", "tempfile"]
+"intention-test-support" = ["serde_json", "tempfile", "tokio"]
 
 [forbidden]
 source_patterns = [
@@ -100,7 +100,7 @@ test_only_source_patterns = [
 packages = ["intention-tauri", "intention-tui"]
 allowed_workspace_dependencies = ["intention-client", "intention-protocol", "intention-transport", "intention-types"]
 allowed_test_workspace_dependencies = ["intention-daemon", "intention-domain", "intention-test-support"]
-allowed_external_dependencies = ["serde_json"]
+allowed_external_dependencies = ["serde_json", "tokio"]
 forbidden_source_patterns = [
   "intention_application::",
   "intention_runtime::",
@@ -153,14 +153,12 @@ provider_sdk_resource_patterns = [
 ]
 
 [ordering_authorities]
-# The closed set of durable ordering-authority type names. A record family
-# either orders by the session event sequence, belongs to exactly one container
-# and orders by that container's journal, or has no durable order; there is no
-# fourth option.
-declared = [
-  "SessionEventSequenceDto",
-  "RunEventCursorDto",
-]
+# The closed set of durable ordering-authority type names. Every record family
+# orders by SQLite row insertion order, so the declared set is empty: no
+# production type may name itself a durable ordering authority, and the suffix
+# guard rejects a reintroduced sequence, cursor, position, ticket, watermark,
+# order, epoch, or journal family.
+declared = []
 name_suffixes = [
   "SequenceDto",
   "CursorDto",
@@ -174,11 +172,11 @@ name_suffixes = [
 
 [[future_crates]]
 name = "intention-types"
-test_targets = ["contracts", "error_contracts", "m3_contracts", "m4_model_values"]
+test_targets = ["contracts", "error_contracts", "m4_model_values"]
 
 [[future_crates]]
 name = "intention-domain"
-test_targets = ["contracts", "event_fixtures", "m3_contracts", "m4_durable_facts", "m4_durable_fact_wires", "m5_tool_results"]
+test_targets = ["contracts", "m3_contracts", "m5_tool_results"]
 
 # Active M3 application lifecycle targets are checked against Cargo metadata.
 [[future_crates]]
@@ -191,11 +189,11 @@ test_targets = ["m3_runtime", "m4_model_execution", "m4_runtime_failure_helpers"
 
 [[future_crates]]
 name = "intention-storage"
-test_targets = ["contracts", "m4_run_replay_contracts", "opaque_json_guard"]
+test_targets = ["contracts", "opaque_json_guard"]
 
 [[future_crates]]
 name = "intention-storage-sqlite"
-test_targets = ["m4_durable_facts", "m4_model_context", "m4_run_safe_config", "sqlite_contracts"]
+test_targets = ["m4_model_context", "m4_run_safe_config", "sqlite_contracts"]
 
 [[future_crates]]
 name = "intention-config"
@@ -239,7 +237,7 @@ test_targets = []
 
 [[future_crates]]
 name = "intention-protocol"
-test_targets = ["contracts", "m3_contracts", "m4_run_stream_contracts"]
+test_targets = ["contracts", "m3_contracts"]
 
 [[future_crates]]
 name = "intention-transport"

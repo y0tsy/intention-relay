@@ -1,7 +1,6 @@
-//! Non-production fixtures for durable M3 integration tests.
+//! Non-production fixtures for durable integration tests.
 
 use std::path::Path;
-use std::thread;
 
 use tempfile::TempDir;
 
@@ -9,13 +8,15 @@ use intention::DaemonApplicationFacade;
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
-use intention_daemon::serve_test_connection;
-use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
+use intention_daemon::TestHostLifecycle;
+use intention_domain::{
+    CreateSessionCommandDto, MessageProjectionDto, RunModeDto, WorkspaceRootDto,
+};
 use intention_protocol::{
     DaemonReadinessDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto,
     ProtocolQueryResultDto,
 };
-use intention_transport::{LocalEndpoint, LocalListener};
+use intention_transport::{AsyncLocalListener, LocalEndpoint};
 use intention_types::{
     ConfigRevisionId, DtoResult, ProjectId, SchemaVersionDto, SessionId, TimestampDto, WorkspaceId,
 };
@@ -119,22 +120,24 @@ pub fn fixture_ready(facade: &DaemonApplicationFacade) -> bool {
     )
 }
 
-/// Loads the fixture session's durable event history through the test-only facade seam.
+/// Loads the fixture session's committed transcript rows through the facade.
 ///
 /// # Errors
 ///
-/// Returns the typed durable-history failure.
-pub fn durable_events(
+/// Returns the typed read failure when the session is unknown or storage fails.
+pub fn session_messages(
     facade: &DaemonApplicationFacade,
     session_id: SessionId,
-) -> DtoResult<Vec<intention_types::EventEnvelopeDto<intention_domain::DomainEventDto>>> {
-    facade.durable_events_for_test_support(session_id)
+) -> DtoResult<Vec<MessageProjectionDto>> {
+    let snapshot = facade.session_snapshot(session_id, None)?;
+    Ok(snapshot.messages().to_vec())
 }
 
-/// Owns a durable fixture database and its configured session lifetime.
+/// Owns a durable fixture database, one configured session, and its fixture host.
 pub struct FixtureHost {
     directory: TempDir,
     facade: DaemonApplicationFacade,
+    lifecycle: TestHostLifecycle,
 }
 
 impl FixtureHost {
@@ -152,37 +155,45 @@ impl FixtureHost {
         })?;
         let facade = open_fixture_facade(directory.path().join("fixture.sqlite"))?;
         create_fixture_session(&facade, session_id)?;
-        Ok(Self { directory, facade })
-    }
-
-    /// Starts a bounded local fixture host and transfers database ownership to the serving thread.
-    #[must_use]
-    pub fn spawn(
-        self,
-        endpoint: LocalEndpoint,
-        connection_count: usize,
-    ) -> thread::JoinHandle<DtoResult<()>> {
-        thread::spawn(move || {
-            let Self { directory, facade } = self;
-            let _directory = directory;
-            serve_fixture_connections(endpoint, facade, connection_count)
+        let lifecycle = intention_daemon::test_host_lifecycle(facade.clone());
+        Ok(Self {
+            directory,
+            facade,
+            lifecycle,
         })
     }
-}
 
-/// Serves a bounded fixture connection count through the real daemon dispatch path.
-///
-/// # Errors
-///
-/// Returns a typed listener or connection failure.
-fn serve_fixture_connections(
-    endpoint: LocalEndpoint,
-    facade: DaemonApplicationFacade,
-    connection_count: usize,
-) -> DtoResult<()> {
-    let listener = LocalListener::bind(endpoint)?;
-    for _ in 0..connection_count {
-        serve_test_connection(listener.accept()?, facade.clone());
+    /// Returns the fixture composition facade.
+    #[must_use]
+    pub const fn facade(&self) -> &DaemonApplicationFacade {
+        &self.facade
     }
-    Ok(())
+
+    /// Returns the bounded fixture host that owns every task this host creates.
+    #[must_use]
+    pub const fn lifecycle(&self) -> &TestHostLifecycle {
+        &self.lifecycle
+    }
+
+    /// Serves a bounded fixture connection count through the real daemon dispatch path.
+    ///
+    /// The database directory stays owned by this call, so a fixture that serves
+    /// for the whole scenario keeps its durable storage alive.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed listener failure.
+    pub async fn serve(self, endpoint: LocalEndpoint, connection_count: usize) -> DtoResult<()> {
+        let listener = AsyncLocalListener::bind(endpoint)?;
+        let Self {
+            directory,
+            facade: _facade,
+            lifecycle,
+        } = self;
+        let _directory = directory;
+        lifecycle
+            .serve_connections(listener, connection_count)
+            .await;
+        Ok(())
+    }
 }
