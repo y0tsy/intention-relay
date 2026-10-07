@@ -1,13 +1,15 @@
-//! Application command/query orchestration over DTO-only durable storage.
+//! Application command/query orchestration over DTO-only current-state storage.
 //!
 //! This crate maps committed repository outcomes into protocol-ready DTOs. It
 //! neither owns database resources nor reimplements repository idempotency.
+//! Every tool call commits its `tool_call` row before dispatch and exactly one
+//! terminal result row with its answering `tool_result` message afterwards.
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
-    CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto,
-    RemoveTurnCommandDto, RunEventCursorDto, RunEventTailPageDto, RunSnapshotDto,
-    SendUserTurnCommandDto,
+    CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageKindDto,
+    MessageProjectionDto, RemoveTurnCommandDto, SendUserTurnCommandDto, ToolResultMetadataEntryDto,
+    ToolResultStatusDto,
 };
 use intention_hooks::{
     HookObservability, Outcome as HookOutcome, PhaseContext, Registry as HookRegistry,
@@ -21,12 +23,12 @@ use intention_runtime::{
     ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, fail_starting_run,
 };
 use intention_storage::{
-    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendToolLifecycleEventInputDto,
-    CreateSessionInputDto, ModelContextRoleDto, RemoveTurnInputDto, StorageRepositoryDto,
-    ToolResultEvidenceDto, ToolResultKindDto,
+    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto, CreateSessionInputDto,
+    RemoveTurnInputDto, StorageRepositoryDto, ToolResultEvidenceDto, WriteToolResultInputDto,
 };
 use intention_tools::{
-    CancellationSignal, InterruptCause, ToolDispatchOutcome, ToolInput, ToolResult, ToolService,
+    CancellationSignal, InterruptCause, ToolDispatchOutcome, ToolInput, ToolProjectedContent,
+    ToolResult, ToolService,
 };
 use intention_types::ToolCallId;
 use intention_types::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
@@ -253,10 +255,16 @@ pub struct InvokeLocalToolInputDto {
     input: ToolInput,
     occurred_at: TimestampDto,
     cancellation: CancellationSignal,
+    arguments_json: String,
 }
 
 impl InvokeLocalToolInputDto {
     /// Creates a local tool invocation input.
+    ///
+    /// The canonical arguments document defaults to an empty JSON object; a
+    /// caller that holds the model's original arguments attaches them with
+    /// [`Self::with_arguments_json`] so the committed `tool_call` row carries
+    /// the exact requested arguments.
     #[must_use]
     pub fn new(
         workspace: intention_workspace::WorkspaceRoot,
@@ -276,7 +284,15 @@ impl InvokeLocalToolInputDto {
             input,
             occurred_at,
             cancellation: CancellationSignal::new(),
+            arguments_json: "{}".to_owned(),
         }
+    }
+
+    /// Attaches the canonical JSON arguments document the model requested.
+    #[must_use]
+    pub fn with_arguments_json(mut self, arguments_json: impl Into<String>) -> Self {
+        self.arguments_json = arguments_json.into();
+        self
     }
 
     /// Requests cancellation of this invocation.
@@ -419,6 +435,7 @@ where
             mut input,
             occurred_at,
             cancellation,
+            arguments_json,
         } = input;
         if tool_id != expected_tool_id(&input) {
             return Err(ErrorDto::validation(
@@ -426,37 +443,23 @@ where
                 "tool identifier does not match typed tool input",
             ));
         }
-        let admitted = intention_domain::ToolLifecycleEventDto::new(
+        // The tool-call row commits before any dispatch: the model's requested
+        // call is durable evidence even when every later phase fails.
+        self.append_tool_call(
             session_id,
             run_id,
             call_id,
-            tool_id.clone(),
-            intention_domain::ToolLifecycleStatusDto::Admitted,
-            "local tool invocation admitted",
+            &tool_id,
+            &arguments_json,
             occurred_at,
         )?;
-        self.repository
-            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(admitted))?;
         let invocation = PhaseContext::Invocation {
             call: call_id,
             input: input.clone(),
         };
         match dispatch_hooks(&self.hooks, &invocation, observer) {
-            Err(error) => {
-                append_tool_rejected(
-                    self.repository,
-                    session_id,
-                    run_id,
-                    call_id,
-                    &tool_id,
-                    &error,
-                    occurred_at,
-                )?;
-                return Err(error);
-            }
-            Ok(HookOutcome::Reject(error)) => {
-                append_tool_rejected(
-                    self.repository,
+            Err(error) | Ok(HookOutcome::Reject(error)) => {
+                self.append_tool_failure(
                     session_id,
                     run_id,
                     call_id,
@@ -471,8 +474,7 @@ where
                     "invalid_hook_outcome",
                     "result transformation is not valid before execution",
                 );
-                append_tool_rejected(
-                    self.repository,
+                self.append_tool_failure(
                     session_id,
                     run_id,
                     call_id,
@@ -492,8 +494,7 @@ where
         self.workspace_boundary
             .resolve(&workspace)
             .inspect_err(|error| {
-                let _ = append_tool_rejected(
-                    self.repository,
+                let _ = self.append_tool_failure(
                     session_id,
                     run_id,
                     call_id,
@@ -504,8 +505,7 @@ where
             })?;
         match dispatch_hooks(&self.hooks, &workspace_context, observer) {
             Err(error) => {
-                append_tool_rejected(
-                    self.repository,
+                self.append_tool_failure(
                     session_id,
                     run_id,
                     call_id,
@@ -517,8 +517,7 @@ where
             }
             Ok(HookOutcome::TransformInput(value)) => input = value,
             Ok(HookOutcome::Reject(error)) => {
-                append_tool_rejected(
-                    self.repository,
+                self.append_tool_failure(
                     session_id,
                     run_id,
                     call_id,
@@ -533,8 +532,7 @@ where
                     "invalid_hook_outcome",
                     "result transformation is not valid before execution",
                 );
-                append_tool_rejected(
-                    self.repository,
+                self.append_tool_failure(
                     session_id,
                     run_id,
                     call_id,
@@ -551,9 +549,8 @@ where
             input: input.clone(),
         };
         match dispatch_hooks(&self.hooks, &resolved, observer) {
-            Err(error) => {
-                append_tool_rejected(
-                    self.repository,
+            Err(error) | Ok(HookOutcome::Reject(error)) => {
+                self.append_tool_failure(
                     session_id,
                     run_id,
                     call_id,
@@ -563,27 +560,12 @@ where
                 )?;
                 return Err(error);
             }
-            Ok(HookOutcome::Reject(error)) => {
-                let event = intention_domain::ToolLifecycleEventDto::new(
-                    session_id,
-                    run_id,
-                    call_id,
-                    tool_id,
-                    intention_domain::ToolLifecycleStatusDto::Rejected,
-                    error.code(),
-                    occurred_at,
-                )?;
-                self.repository
-                    .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(event))?;
-                return Err(error);
-            }
             Ok(HookOutcome::TransformResult(_)) => {
                 let error = ErrorDto::validation(
                     "invalid_hook_outcome",
                     "result transformation is not valid before execution",
                 );
-                append_tool_rejected(
-                    self.repository,
+                self.append_tool_failure(
                     session_id,
                     run_id,
                     call_id,
@@ -602,8 +584,7 @@ where
         };
         let transformed_input = match dispatch_hooks(&self.hooks, &before_execution, observer) {
             Err(error) | Ok(HookOutcome::Reject(error)) => {
-                append_tool_rejected(
-                    self.repository,
+                self.append_tool_failure(
                     session_id,
                     run_id,
                     call_id,
@@ -620,8 +601,7 @@ where
                     "invalid_hook_outcome",
                     "result transformation is not valid before execution",
                 );
-                append_tool_rejected(
-                    self.repository,
+                self.append_tool_failure(
                     session_id,
                     run_id,
                     call_id,
@@ -632,17 +612,6 @@ where
                 return Err(error);
             }
         };
-        let started = intention_domain::ToolLifecycleEventDto::new(
-            session_id,
-            run_id,
-            call_id,
-            tool_id.clone(),
-            intention_domain::ToolLifecycleStatusDto::Started,
-            "local tool invocation started",
-            occurred_at,
-        )?;
-        self.repository
-            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(started))?;
         let service = ToolService::new(workspace);
         let outcome = service.dispatch_with_cancellation(
             call_id,
@@ -657,18 +626,7 @@ where
                     result: value.clone(),
                 };
                 match dispatch_hooks(&self.hooks, &context, observer) {
-                    Err(error) => {
-                        append_tool_failed(
-                            self.repository,
-                            session_id,
-                            run_id,
-                            call_id,
-                            &tool_id,
-                            &error,
-                            occurred_at,
-                        )?;
-                        return Err(error);
-                    }
+                    Err(error) | Ok(HookOutcome::Reject(error)) => Err(error),
                     Ok(outcome) => match outcome {
                         HookOutcome::TransformResult(value) => Ok(value),
                         HookOutcome::Reject(error) => Err(error),
@@ -684,15 +642,16 @@ where
                 // An interrupted dispatch is a durable partial outcome, not a
                 // typed failure: the call ends with whatever output was
                 // captured and the run continues with the next model step.
-                let code = interruption_detail_code(cause);
                 let stopped = cause == InterruptCause::Stopped || cancellation.is_cancelled();
-                append_tool_partial(
-                    self.repository,
+                let content = partial_tool_result_content(stopped, partial.as_ref())?;
+                self.commit_tool_result(
                     session_id,
                     run_id,
                     call_id,
                     &tool_id,
-                    code,
+                    ToolResultStatusDto::Partial,
+                    content,
+                    Vec::new(),
                     occurred_at,
                 )?;
                 return Ok(LocalToolInvocationOutcomeDto::Partial {
@@ -701,108 +660,70 @@ where
                 });
             }
             Err(error) => {
-                append_tool_terminal(
-                    self.repository,
-                    ToolTerminalInput {
-                        session_id,
-                        run_id,
-                        call_id,
-                        tool_id: &tool_id,
-                        error: &error,
-                        status: terminal_status_for_error(&error),
-                        occurred_at,
-                    },
+                self.append_tool_failure(
+                    session_id,
+                    run_id,
+                    call_id,
+                    &tool_id,
+                    &error,
+                    occurred_at,
                 )?;
                 return Err(error);
             }
         };
-        if let Ok(mut value) = result {
+        if result.is_ok() {
+            let Ok(checked) = &result else {
+                unreachable!("the result is checked before the post-execution phases");
+            };
+            let mut value = checked.clone();
+            let mut failure: Option<ErrorDto> = None;
             for phase in [
                 intention_hooks::Phase::BeforeToolResultPersist,
                 intention_hooks::Phase::BeforeToolResultModelContext,
             ] {
                 let context = result_phase_context(phase, call_id, &value);
-                let outcome = match dispatch_hooks(&self.hooks, &context, observer) {
-                    Ok(outcome) => outcome,
-                    Err(error) => {
-                        append_tool_failed(
-                            self.repository,
-                            session_id,
-                            run_id,
-                            call_id,
-                            &tool_id,
-                            &error,
-                            occurred_at,
-                        )?;
-                        return Err(error);
-                    }
-                };
-                match outcome {
-                    HookOutcome::Reject(error) => {
-                        append_tool_failed(
-                            self.repository,
-                            session_id,
-                            run_id,
-                            call_id,
-                            &tool_id,
-                            &error,
-                            occurred_at,
-                        )?;
-                        return Err(error);
-                    }
-                    HookOutcome::TransformResult(next) => value = next,
-                    HookOutcome::Continue => {}
-                    HookOutcome::TransformInput(_) => {
-                        let error = ErrorDto::validation(
+                match dispatch_hooks(&self.hooks, &context, observer) {
+                    Ok(HookOutcome::Continue) => {}
+                    Ok(HookOutcome::TransformResult(next)) => value = next,
+                    Ok(HookOutcome::TransformInput(_)) => {
+                        failure = Some(ErrorDto::validation(
                             "invalid_hook_outcome",
                             "input transformation is not valid after execution",
-                        );
-                        append_tool_failed(
-                            self.repository,
-                            session_id,
-                            run_id,
-                            call_id,
-                            &tool_id,
-                            &error,
-                            occurred_at,
-                        )?;
-                        return Err(error);
+                        ));
+                        break;
+                    }
+                    Ok(HookOutcome::Reject(error)) | Err(error) => {
+                        failure = Some(error);
+                        break;
                     }
                 }
             }
-            result = Ok(value);
+            result = failure.map_or(Ok(value), Err);
         }
-        let (status, detail) = match &result {
-            Ok(_) => (
-                intention_domain::ToolLifecycleStatusDto::Completed,
-                "local tool invocation completed",
+        // The terminal result commits once, with its answering transcript row,
+        // before any publication.
+        let (status, content, metadata) = match &result {
+            Ok(value) => (
+                ToolResultStatusDto::Completed,
+                tool_result_content(value)?,
+                tool_result_metadata(value)?,
             ),
             Err(error) => (
-                intention_domain::ToolLifecycleStatusDto::Failed,
-                error.code(),
+                terminal_status_for_error(error),
+                error.code().to_owned(),
+                Vec::new(),
             ),
         };
-        // The typed result evidence commits atomically with its terminal
-        // lifecycle event at this boundary, before any publication.
-        let evidence = durable_tool_result_evidence(
+        self.commit_tool_result(
             session_id,
             run_id,
             call_id,
             &tool_id,
-            result.as_ref(),
-            occurred_at,
-        )?;
-        let event = intention_domain::ToolLifecycleEventDto::new(
-            session_id,
-            run_id,
-            call_id,
-            tool_id,
             status,
-            detail,
+            content,
+            metadata,
             occurred_at,
         )?;
-        let append = AppendToolLifecycleEventInputDto::new(event).with_result(evidence)?;
-        self.repository.append_tool_lifecycle_event(append)?;
         if let Ok(value) = &result {
             let publication =
                 ToolResultPublicationInputDto::new(session_id, run_id, call_id, value.clone());
@@ -824,6 +745,107 @@ where
         }
         result.map(LocalToolInvocationOutcomeDto::Completed)
     }
+
+    /// Commits one tool-call row before the call is dispatched.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or storage error when the row cannot commit.
+    fn append_tool_call(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        call_id: ToolCallId,
+        tool_id: &str,
+        arguments_json: &str,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<MessageProjectionDto> {
+        let message = MessageProjectionDto::new(
+            session_id,
+            Some(run_id),
+            MessageKindDto::ToolCall,
+            arguments_json,
+            None,
+            Some(call_id),
+            Some(tool_id.to_owned()),
+        )?;
+        self.repository
+            .append_message(AppendMessageInputDto::new(message, occurred_at))
+    }
+
+    /// Commits one terminal failed result for a call that never produced output.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or storage error when the result cannot commit.
+    fn append_tool_failure(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        call_id: ToolCallId,
+        tool_id: &str,
+        error: &ErrorDto,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<()> {
+        self.commit_tool_result(
+            session_id,
+            run_id,
+            call_id,
+            tool_id,
+            terminal_status_for_error(error),
+            error.code().to_owned(),
+            Vec::new(),
+            occurred_at,
+        )
+        .map(|_| ())
+    }
+
+    /// Commits one terminal tool result with its answering transcript row.
+    ///
+    /// Exactly one transaction writes the `tool_results` row and the
+    /// `tool_result` message the model reads.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or storage error when the result cannot commit.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One flat terminal-result payload keeps the single transaction at one call site."
+    )]
+    fn commit_tool_result(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        call_id: ToolCallId,
+        tool_id: &str,
+        status: ToolResultStatusDto,
+        content: String,
+        metadata: Vec<ToolResultMetadataEntryDto>,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<ToolResultEvidenceDto> {
+        let evidence = ToolResultEvidenceDto::new(
+            session_id,
+            run_id,
+            call_id,
+            tool_id.to_owned(),
+            status,
+            content.clone(),
+            metadata,
+            occurred_at,
+        )?;
+        let message = MessageProjectionDto::new(
+            session_id,
+            Some(run_id),
+            MessageKindDto::ToolResult,
+            content,
+            None,
+            Some(call_id),
+            Some(tool_id.to_owned()),
+        )?;
+        self.repository
+            .write_tool_result(WriteToolResultInputDto::new(evidence, message)?)
+    }
+
     /// Creates an application facade around a DTO-only durable repository.
     #[must_use]
     pub fn new(repository: &'a Repository) -> Self {
@@ -859,25 +881,27 @@ where
         &self,
         input: CreateSessionWorkflowInputDto,
     ) -> DtoResult<ProtocolAcceptedResultDto> {
-        let change = self.repository.create_session(CreateSessionInputDto::new(
+        let projection = self.repository.create_session(CreateSessionInputDto::new(
             input.command.clone(),
             input.occurred_at,
         ))?;
         Ok(ProtocolAcceptedResultDto::CreateSession(
             CreateSessionAcceptedDto::new(
-                input.command.project_id(),
-                input.command.workspace_id(),
-                input.command.session_id(),
-                change.position(),
+                projection.project_id(),
+                projection.workspace_id(),
+                projection.session_id(),
             ),
         ))
     }
 
     /// Accepts a user turn and schedules an exactly-started run only after its initial commit.
     ///
-    /// Pending outcomes and idempotent retry evidence never load model context or
-    /// dispatch. Any post-commit context or dispatch failure is durably recorded
-    /// against the exact `Starting` run and this method still returns the original
+    /// A pending outcome returns immediately. A started outcome reads the model
+    /// context of the exact `Starting` run and dispatches it, so an acceptance
+    /// whose run has already left `Starting` neither reads context nor
+    /// dispatches and a repeated acceptance never schedules one run twice. Any
+    /// post-commit context or dispatch failure is durably recorded against the
+    /// exact `Starting` run and this method still returns the original
     /// acceptance.
     ///
     /// # Errors
@@ -894,26 +918,23 @@ where
         Dispatch: ModelRunDispatchPort,
     {
         let occurred_at = input.occurred_at();
-        let change = self
+        let outcome = self
             .repository
             .accept_user_turn(AcceptUserTurnInputDto::new(
                 command.session_id(),
-                command.turn_id(),
+                command.idempotency_key(),
                 command.content(),
                 input.proposed_run_id,
                 input.config_snapshot,
                 input.occurred_at,
             )?)?;
-        let accepted = accepted_user_turn(&command, &change)?;
+        let accepted = accepted_user_turn(&command, &outcome)?;
         let ProtocolAcceptedResultDto::SendUserTurn(accepted_turn) = accepted else {
             unreachable!("accepted user turn always returns user-turn acceptance")
         };
         let SendUserTurnOutcomeDto::Started { run_id, .. } = accepted_turn.outcome() else {
             return Ok(ProtocolAcceptedResultDto::SendUserTurn(accepted_turn));
         };
-        if !started_run_committed_in(&change, run_id) {
-            return Ok(ProtocolAcceptedResultDto::SendUserTurn(accepted_turn));
-        }
         let session_id = accepted_turn.session_id();
         let schedule = match self
             .repository
@@ -967,19 +988,18 @@ where
         command: RemoveTurnCommandDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<ProtocolAcceptedResultDto> {
-        let change = self
+        let turn = self
             .repository
             .remove_turn(RemoveTurnInputDto::new(command, occurred_at))?;
         Ok(ProtocolAcceptedResultDto::RemoveTurn(
-            RemoveTurnAcceptedDto::new(command.session_id(), command.turn_id(), change.position()),
+            RemoveTurnAcceptedDto::new(turn.session_id(), turn.turn_id()),
         ))
     }
 
     /// Accepts an interruption request for one exact active run.
     ///
     /// Interruption is not a durable run state: the run stays active and the
-    /// daemon host signals the registered executor after this validation. The
-    /// returned position is the session position observed at acceptance.
+    /// daemon host signals the registered executor after this validation.
     ///
     /// # Errors
     ///
@@ -991,7 +1011,7 @@ where
     ) -> DtoResult<ProtocolAcceptedResultDto> {
         let projection = self
             .repository
-            .load_session_snapshot(command.session_id())?;
+            .load_session_projection(command.session_id())?;
         let active = projection
             .active_run()
             .filter(|run| run.run_id() == command.run_id())
@@ -1002,46 +1022,8 @@ where
                 )
             })?;
         Ok(ProtocolAcceptedResultDto::InterruptRun(
-            InterruptRunAcceptedDto::new(
-                command.session_id(),
-                active.run_id(),
-                projection.at_sequence(),
-            ),
+            InterruptRunAcceptedDto::new(command.session_id(), active.run_id()),
         ))
-    }
-
-    /// Loads the current internal run-scoped durable snapshot.
-    ///
-    /// This application-facing read deliberately does not alter the M3 public
-    /// protocol subscription surface.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed repository error when the requested scoped replay is
-    /// absent, mismatched, or unavailable.
-    pub fn load_current_run_snapshot(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-    ) -> DtoResult<RunSnapshotDto> {
-        self.repository
-            .load_current_run_snapshot(session_id, run_id)
-    }
-
-    /// Loads one bounded internal run-scoped fact tail.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed repository error when the requested tail cannot be
-    /// read for this exact session/run identity and cursor.
-    pub fn load_run_tail(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        after_cursor: RunEventCursorDto,
-    ) -> DtoResult<RunEventTailPageDto> {
-        self.repository
-            .load_run_tail(session_id, run_id, after_cursor)
     }
 
     /// Reconstructs the exact durable context for one current `Starting` run.
@@ -1074,63 +1056,41 @@ where
         &self,
         query: GetSessionSnapshotQueryDto,
     ) -> DtoResult<SessionSnapshotDto> {
-        let projection = self.repository.load_session_snapshot(query.session_id())?;
+        let projection = self
+            .repository
+            .load_session_projection(query.session_id())?;
+        let messages = self
+            .repository
+            .load_recent_messages(query.session_id(), SESSION_SNAPSHOT_MESSAGES)?;
         SessionSnapshotDto::with_projection(
             CURRENT_DTO_SCHEMA_VERSION,
             query.session_id(),
-            projection.at_sequence(),
             projection,
+            messages,
         )
     }
 }
 
-fn accepted_user_turn(
+/// Committed transcript rows returned with one session snapshot.
+const SESSION_SNAPSHOT_MESSAGES: u32 = 256;
+
+const fn accepted_user_turn(
     command: &SendUserTurnCommandDto,
-    change: &intention_storage::CommittedChangeDto,
+    outcome: &AcceptedTurnOutcomeDto,
 ) -> DtoResult<ProtocolAcceptedResultDto> {
-    let outcome = change.turn_outcome().ok_or_else(|| {
-        ErrorDto::validation(
-            "missing_accepted_turn_outcome",
-            "durable turn acceptance did not include an outcome",
-        )
-    })?;
-    let outcome = match outcome {
-        AcceptedTurnOutcomeDto::Started(run) => SendUserTurnOutcomeDto::Started {
-            run_id: run.run_id(),
-            config_revision_id: run.config_revision_id(),
-        },
-        AcceptedTurnOutcomeDto::Pending => SendUserTurnOutcomeDto::Pending,
+    let (turn_id, outcome) = match outcome {
+        AcceptedTurnOutcomeDto::Started { run, .. } => (
+            run.turn_id(),
+            SendUserTurnOutcomeDto::Started {
+                run_id: run.run_id(),
+                config_revision_id: run.config_revision_id(),
+            },
+        ),
+        AcceptedTurnOutcomeDto::Pending(turn) => (turn.turn_id(), SendUserTurnOutcomeDto::Pending),
     };
     Ok(ProtocolAcceptedResultDto::SendUserTurn(
-        SendUserTurnAcceptedDto::new(
-            command.session_id(),
-            command.turn_id(),
-            change.position(),
-            outcome,
-        ),
+        SendUserTurnAcceptedDto::new(command.session_id(), turn_id, outcome),
     ))
-}
-
-fn append_tool_rejected<R: StorageRepositoryDto>(
-    r: &R,
-    s: SessionId,
-    run: RunId,
-    call: ToolCallId,
-    id: &str,
-    e: &ErrorDto,
-    at: TimestampDto,
-) -> DtoResult<()> {
-    let event = intention_domain::ToolLifecycleEventDto::new(
-        s,
-        run,
-        call,
-        id.to_owned(),
-        intention_domain::ToolLifecycleStatusDto::Rejected,
-        e.code(),
-        at,
-    )?;
-    r.append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(event))
-        .map(|_| ())
 }
 
 const fn expected_tool_id(input: &ToolInput) -> &'static str {
@@ -1144,331 +1104,123 @@ const fn expected_tool_id(input: &ToolInput) -> &'static str {
     }
 }
 
-fn terminal_status_for_error(error: &ErrorDto) -> intention_domain::ToolLifecycleStatusDto {
+/// Maps one terminal error to its closed durable tool-result status.
+fn terminal_status_for_error(error: &ErrorDto) -> ToolResultStatusDto {
     match error.code() {
-        "tool_execution_interrupted" | "tool_cancelled" => {
-            intention_domain::ToolLifecycleStatusDto::Partial
-        }
-        _ => intention_domain::ToolLifecycleStatusDto::Failed,
+        "tool_execution_interrupted" | "tool_cancelled" => ToolResultStatusDto::Cancelled,
+        _ => ToolResultStatusDto::Failed,
     }
 }
 
-/// Returns the stable detail code recorded for one interrupted dispatch.
-const fn interruption_detail_code(cause: InterruptCause) -> &'static str {
-    match cause {
-        InterruptCause::Stopped => "tool_cancelled",
-        InterruptCause::Lost => "tool_execution_interrupted",
-    }
-}
-
-/// Appends the terminal `Partial` lifecycle evidence for one interrupted call.
+/// Renders one typed tool result into its bounded model-visible content.
 ///
-/// The durable document keeps the compact failure shape
-/// (`{"result":"partial","value":{"code":…}}`); the captured partial output
-/// travels to the model through the runtime tool-result fact.
-fn append_tool_partial<R: StorageRepositoryDto>(
-    r: &R,
-    s: SessionId,
-    run: RunId,
-    call: ToolCallId,
-    id: &str,
-    code: &str,
-    at: TimestampDto,
-) -> DtoResult<()> {
-    let evidence = ToolResultEvidenceDto::new(
-        s,
-        run,
-        call,
-        ToolResultKindDto::parse(id)?,
-        canonical_failure_document("partial", code),
-        at,
-    )?;
-    let event = intention_domain::ToolLifecycleEventDto::new(
-        s,
-        run,
-        call,
-        id.to_owned(),
-        intention_domain::ToolLifecycleStatusDto::Partial,
-        code,
-        at,
-    )?;
-    let append = AppendToolLifecycleEventInputDto::new(event).with_result(evidence)?;
-    r.append_tool_lifecycle_event(append).map(|_| ())
-}
-
-fn append_tool_failed<R: StorageRepositoryDto>(
-    r: &R,
-    s: SessionId,
-    run: RunId,
-    call: ToolCallId,
-    id: &str,
-    e: &ErrorDto,
-    at: TimestampDto,
-) -> DtoResult<()> {
-    append_tool_terminal(
-        r,
-        ToolTerminalInput {
-            session_id: s,
-            run_id: run,
-            call_id: call,
-            tool_id: id,
-            error: e,
-            status: intention_domain::ToolLifecycleStatusDto::Failed,
-            occurred_at: at,
-        },
-    )
-}
-
-struct ToolTerminalInput<'a> {
-    session_id: SessionId,
-    run_id: RunId,
-    call_id: ToolCallId,
-    tool_id: &'a str,
-    error: &'a ErrorDto,
-    status: intention_domain::ToolLifecycleStatusDto,
-    occurred_at: TimestampDto,
-}
-
-fn append_tool_terminal<R: StorageRepositoryDto>(
-    r: &R,
-    input: ToolTerminalInput<'_>,
-) -> DtoResult<()> {
-    let evidence = durable_tool_result_evidence(
-        input.session_id,
-        input.run_id,
-        input.call_id,
-        input.tool_id,
-        Err(input.error),
-        input.occurred_at,
-    )?;
-    let event = intention_domain::ToolLifecycleEventDto::new(
-        input.session_id,
-        input.run_id,
-        input.call_id,
-        input.tool_id.to_owned(),
-        input.status,
-        input.error.code(),
-        input.occurred_at,
-    )?;
-    let append = AppendToolLifecycleEventInputDto::new(event).with_result(evidence)?;
-    r.append_tool_lifecycle_event(append).map(|_| ())
-}
-
-/// Durable canonical result-document ceiling; mirrors the storage evidence bound.
-const MAX_DURABLE_TOOL_RESULT_BYTES: usize = 512 * 1024;
-/// Characters reserved for closing tokens when truncating a durable document.
-const DOCUMENT_RESERVE_BYTES: usize = 64;
-/// Raw-byte share of the durable bound granted to one truncated text value.
+/// The projection is redacted and workspace-relative by construction: text and
+/// search payloads keep their own bounds, truncated content keeps its explicit
+/// marker, and mutations report their byte count.
 ///
-/// Escaped control characters expand at most sixfold, so one eighth of the
-/// bound can never exceed it after escaping.
-const TRUNCATED_TEXT_BUDGET_DIVISOR: usize = 8;
-
-/// Builds the typed result evidence committed with one terminal lifecycle event.
+/// # Errors
 ///
-/// Successful outcomes serialize their typed result; failed, cancelled, and
-/// unknown-effect outcomes serialize their stable terminal classification. The
-/// evidence carries the exact session/run/call identity of the invocation.
-fn durable_tool_result_evidence(
-    session_id: SessionId,
-    run_id: RunId,
-    call_id: ToolCallId,
-    tool_id: &str,
-    outcome: Result<&ToolResult, &ErrorDto>,
-    occurred_at: TimestampDto,
-) -> DtoResult<ToolResultEvidenceDto> {
-    let kind = ToolResultKindDto::parse(tool_id)?;
-    let content = match outcome {
-        Ok(result) => canonical_tool_result_document(result),
-        Err(error) => canonical_failure_document(terminal_error_tag(error), error.code()),
-    };
-    ToolResultEvidenceDto::new(session_id, run_id, call_id, kind, content, occurred_at)
-}
-
-/// Maps a terminal error to its closed durable document discriminator.
-fn terminal_error_tag(error: &ErrorDto) -> &'static str {
-    match terminal_status_for_error(error) {
-        intention_domain::ToolLifecycleStatusDto::Cancelled => "cancelled",
-        intention_domain::ToolLifecycleStatusDto::Partial => "partial",
-        _ => "failed",
-    }
-}
-
-/// Serializes one typed terminal failure into its canonical durable document.
-fn canonical_failure_document(tag: &str, code: &str) -> String {
-    let mut document = String::new();
-    document.push_str("{\"result\":\"");
-    document.push_str(tag);
-    document.push_str("\",\"value\":{\"code\":");
-    write_json_string(&mut document, code);
-    document.push_str("}}");
-    document
-}
-
-/// Serializes one typed result into its bounded canonical durable document.
-///
-/// The document mirrors the typed result wire shape (`{"result":kind,"value":…}`).
-/// Oversized text, path lists, and match lists are cut in place with an honest
-/// `truncated` marker so the document always fits the durable bound.
-fn canonical_tool_result_document(result: &ToolResult) -> String {
-    let mut document = String::new();
-    match result {
-        ToolResult::Read(value) | ToolResult::Execute(value) => {
-            let tag = match result {
-                ToolResult::Read(_) => "read",
-                _ => "execute",
-            };
-            document.push_str("{\"result\":\"");
-            document.push_str(tag);
-            document.push_str("\",\"value\":{\"text\":");
-            let budget = MAX_DURABLE_TOOL_RESULT_BYTES
-                .saturating_sub(document.len() + DOCUMENT_RESERVE_BYTES)
-                .max(DOCUMENT_RESERVE_BYTES)
-                / TRUNCATED_TEXT_BUDGET_DIVISOR;
-            let complete = write_bounded_json_string(&mut document, value.text.as_str(), budget);
-            document.push_str(",\"truncated\":");
-            document.push_str(if value.truncated || !complete {
-                "true"
+/// Returns a validation error when the rendered content is blank, because a
+/// tool result row must always answer its call with readable content.
+fn tool_result_content(result: &ToolResult) -> DtoResult<String> {
+    let content = match result.projection().content {
+        ToolProjectedContent::Text { text, truncated } => {
+            if truncated {
+                format!("{}\n[truncated]", text.as_str())
             } else {
-                "false"
-            });
-            document.push_str("}}");
-        }
-        ToolResult::Glob(value) => {
-            document.push_str("{\"result\":\"glob\",\"value\":{\"paths\":[");
-            let mut emitted = 0_usize;
-            for path in &value.paths {
-                if !append_fitting_json_string(&mut document, path.as_str(), &mut emitted) {
-                    break;
-                }
+                text.as_str().to_owned()
             }
-            finish_truncated_array(
-                &mut document,
-                value.truncated || emitted < value.paths.len(),
-            );
         }
-        ToolResult::Grep(value) => {
-            document.push_str("{\"result\":\"grep\",\"value\":{\"matches\":[");
-            let mut emitted = 0_usize;
-            for matched in &value.matches {
-                let mut probe = String::new();
-                probe.push_str("{\"path\":");
-                write_json_string(&mut probe, matched.path.as_str());
-                probe.push_str(",\"line\":");
-                probe.push_str(&matched.line.to_string());
-                probe.push_str(",\"column\":");
-                probe.push_str(&matched.column.to_string());
-                probe.push_str(",\"fragment\":");
-                write_json_string(&mut probe, matched.fragment.as_str());
-                probe.push('}');
-                if document.len() + probe.len() + DOCUMENT_RESERVE_BYTES
-                    > MAX_DURABLE_TOOL_RESULT_BYTES
-                {
-                    break;
-                }
-                if emitted > 0 {
-                    document.push(',');
-                }
-                document.push_str(&probe);
-                emitted += 1;
-            }
-            finish_truncated_array(
-                &mut document,
-                value.truncated || emitted < value.matches.len(),
-            );
+        ToolProjectedContent::Paths { paths, truncated } => {
+            let mut content = paths
+                .iter()
+                .map(intention_types::WorkspaceRelativePathDto::as_str)
+                .collect::<Vec<_>>()
+                .join("\n");
+            append_truncation_marker(&mut content, truncated);
+            content
         }
-        ToolResult::Write(value) | ToolResult::Edit(value) => {
-            let tag = match result {
-                ToolResult::Write(_) => "write",
-                _ => "edit",
-            };
-            document.push_str("{\"result\":\"");
-            document.push_str(tag);
-            document.push_str("\",\"value\":{\"bytes\":");
-            document.push_str(&value.bytes.to_string());
-            document.push_str("}}");
+        ToolProjectedContent::Matches { matches, truncated } => {
+            let mut content = matches
+                .iter()
+                .map(|matched| {
+                    format!(
+                        "{}:{}:{}: {}",
+                        matched.path.as_str(),
+                        matched.line,
+                        matched.column,
+                        matched.fragment.as_str()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            append_truncation_marker(&mut content, truncated);
+            content
         }
+        ToolProjectedContent::Mutation { bytes } => format!("{bytes} bytes"),
+    };
+    if content.trim().is_empty() {
+        return Err(ErrorDto::validation(
+            "invalid_tool_result_content",
+            "tool result content must not be empty",
+        ));
     }
-    document
+    Ok(content)
 }
 
-/// Closes one result array document with its honest truncation marker.
-fn finish_truncated_array(document: &mut String, truncated: bool) {
-    document.push_str("],\"truncated\":");
-    document.push_str(if truncated { "true" } else { "false" });
-    document.push_str("}}");
+/// Appends the honest truncation marker to one bounded list projection.
+fn append_truncation_marker(content: &mut String, truncated: bool) {
+    if truncated {
+        if !content.is_empty() {
+            content.push('\n');
+        }
+        content.push_str("[truncated]");
+    }
 }
 
-/// Appends one escaped JSON string element when it still fits the durable bound.
+/// Builds the approved credential-free metadata entries of one tool result.
 ///
-/// Returns whether the element was appended.
-fn append_fitting_json_string(document: &mut String, value: &str, emitted: &mut usize) -> bool {
-    let mut probe = String::new();
-    write_json_string(&mut probe, value);
-    if document.len() + probe.len() + DOCUMENT_RESERVE_BYTES > MAX_DURABLE_TOOL_RESULT_BYTES {
-        return false;
-    }
-    if *emitted > 0 {
-        document.push(',');
-    }
-    document.push_str(&probe);
-    *emitted += 1;
-    true
-}
-
-/// Writes one compact JSON string with serde-compatible escaping.
-fn write_json_string(document: &mut String, value: &str) {
-    document.push('"');
-    for character in value.chars() {
-        push_escaped_character(document, character);
-    }
-    document.push('"');
-}
-
-/// Writes one JSON string cut to the raw-byte budget at a character boundary.
+/// # Errors
 ///
-/// Returns whether the entire value fit without cutting.
-fn write_bounded_json_string(document: &mut String, value: &str, raw_budget: usize) -> bool {
-    document.push('"');
-    let mut raw = 0_usize;
-    let mut complete = true;
-    for character in value.chars() {
-        if raw + character.len_utf8() > raw_budget {
-            complete = false;
-            break;
-        }
-        raw += character.len_utf8();
-        push_escaped_character(document, character);
-    }
-    document.push('"');
-    complete
-}
-
-fn push_escaped_character(document: &mut String, character: char) {
-    match character {
-        '"' => document.push_str("\\\""),
-        '\\' => document.push_str("\\\\"),
-        '\u{8}' => document.push_str("\\b"),
-        '\t' => document.push_str("\\t"),
-        '\n' => document.push_str("\\n"),
-        '\u{c}' => document.push_str("\\f"),
-        '\r' => document.push_str("\\r"),
-        control if (control as u32) < 0x20 => {
-            const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
-            let code = control as u32;
-            document.push_str("\\u00");
-            document.push(HEX_DIGITS[(code >> 4) as usize] as char);
-            document.push(HEX_DIGITS[(code & 0xf) as usize] as char);
-        }
-        other => document.push(other),
+/// Returns a validation error only when the static `truncated` entry is
+/// rejected, which the metadata constructor cannot do.
+fn tool_result_metadata(result: &ToolResult) -> DtoResult<Vec<ToolResultMetadataEntryDto>> {
+    let truncated = match result.projection().content {
+        ToolProjectedContent::Text { truncated, .. }
+        | ToolProjectedContent::Paths { truncated, .. }
+        | ToolProjectedContent::Matches { truncated, .. } => truncated,
+        ToolProjectedContent::Mutation { .. } => false,
+    };
+    if truncated {
+        Ok(vec![ToolResultMetadataEntryDto::new("truncated", "true")?])
+    } else {
+        Ok(Vec::new())
     }
 }
 
-fn started_run_committed_in(change: &intention_storage::CommittedChangeDto, run_id: RunId) -> bool {
-    change
-        .events()
-        .iter()
-        .any(|event| event.run_id() == Some(run_id))
+/// Renders the durable partial result of one interrupted dispatch.
+///
+/// The captured output precedes the exact interruption notice selected by doc
+/// 15 for the stopped/lost and captured/uncaptured cases.
+///
+/// # Errors
+///
+/// Returns a validation error when the captured output cannot render.
+fn partial_tool_result_content(stopped: bool, result: Option<&ToolResult>) -> DtoResult<String> {
+    let notice = match (stopped, result.is_some()) {
+        (true, true) => {
+            "[The tool call was stopped before a final result; the output above is partial.]"
+        }
+        (false, true) => {
+            "[The tool call did not receive a final result; the output above is partial.]"
+        }
+        (true, false) => "[The tool call was stopped before a final result.]",
+        (false, false) => "[The tool call did not receive a final result.]",
+    };
+    match result {
+        Some(result) => Ok(format!("{}\n{notice}", tool_result_content(result)?)),
+        None => Ok(notice.to_owned()),
+    }
 }
 
 fn preserve_accepted_after_scheduling_failure<Repository>(
@@ -1494,12 +1246,19 @@ fn schedule_from_context(
         .iter()
         .map(|message| {
             ModelMessageDto::new(
-                match message.role() {
-                    ModelContextRoleDto::User => ModelRoleDto::User,
-                    ModelContextRoleDto::Assistant => ModelRoleDto::Assistant,
-                    ModelContextRoleDto::Notice => ModelRoleDto::Notice,
+                match message.kind() {
+                    intention_domain::MessageKindDto::User => ModelRoleDto::User,
+                    intention_domain::MessageKindDto::Assistant => ModelRoleDto::Assistant,
+                    intention_domain::MessageKindDto::Notice => ModelRoleDto::Notice,
+                    intention_domain::MessageKindDto::ToolCall
+                    | intention_domain::MessageKindDto::ToolResult => {
+                        return Err(ErrorDto::validation(
+                            "invalid_model_context",
+                            "a starting run context carries no tool exchange rows",
+                        ));
+                    }
                 },
-                message.content(),
+                message.text(),
             )
         })
         .collect::<DtoResult<Vec<_>>>()?;
@@ -1571,28 +1330,33 @@ fn result_phase_context(
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::expect_used,
+        reason = "Rendering fixtures use expect to provide precise failures."
+    )]
+
     use super::{
-        MAX_DURABLE_TOOL_RESULT_BYTES, canonical_tool_result_document, result_phase_context,
+        partial_tool_result_content, result_phase_context, tool_result_content,
+        tool_result_metadata,
     };
     use intention_hooks::{Phase, PhaseContext};
-    use intention_tools::ToolResult;
-    use intention_types::ToolCallId;
+    use intention_tools::{BoundedText, TextResult, ToolResult};
+    use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 
-    fn bounded(value: &str) -> intention_tools::BoundedText {
-        intention_tools::BoundedText::new(value)
-            .unwrap_or_else(|_| unreachable!("fixture tool text is bounded"))
+    fn bounded(value: &str) -> BoundedText {
+        BoundedText::new(value).unwrap_or_else(|_| unreachable!("fixture tool text is bounded"))
     }
 
-    fn relative(value: &str) -> intention_types::WorkspaceRelativePathDto {
-        intention_types::WorkspaceRelativePathDto::parse(value)
+    fn relative(value: &str) -> WorkspaceRelativePathDto {
+        WorkspaceRelativePathDto::parse(value)
             .unwrap_or_else(|_| unreachable!("fixture relative path is valid"))
     }
 
     #[test]
     fn maps_result_phases_to_their_contexts() {
         let call = ToolCallId::new();
-        let result = ToolResult::Read(intention_tools::TextResult {
-            text: match intention_tools::BoundedText::new("ok") {
+        let result = ToolResult::Read(TextResult {
+            text: match BoundedText::new("ok") {
                 Ok(text) => text,
                 Err(_) => return,
             },
@@ -1613,30 +1377,30 @@ mod tests {
     }
 
     #[test]
-    fn canonical_documents_cover_each_typed_result_family() {
-        let read = ToolResult::Read(intention_tools::TextResult {
+    fn tool_result_content_covers_each_typed_result_family() {
+        let read = ToolResult::Read(TextResult {
             text: bounded("hello"),
             truncated: false,
         });
         assert_eq!(
-            canonical_tool_result_document(&read),
-            "{\"result\":\"read\",\"value\":{\"text\":\"hello\",\"truncated\":false}}"
+            tool_result_content(&read).expect("read content renders"),
+            "hello"
         );
-        let execute = ToolResult::Execute(intention_tools::TextResult {
+        let truncated = ToolResult::Execute(TextResult {
             text: bounded("done"),
             truncated: true,
         });
         assert_eq!(
-            canonical_tool_result_document(&execute),
-            "{\"result\":\"execute\",\"value\":{\"text\":\"done\",\"truncated\":true}}"
+            tool_result_content(&truncated).expect("execute content renders"),
+            "done\n[truncated]"
         );
         let glob = ToolResult::Glob(intention_tools::PathsResult {
             paths: vec![relative("src/a.rs"), relative("src/b.rs")],
-            truncated: false,
+            truncated: true,
         });
         assert_eq!(
-            canonical_tool_result_document(&glob),
-            "{\"result\":\"glob\",\"value\":{\"paths\":[\"src/a.rs\",\"src/b.rs\"],\"truncated\":false}}"
+            tool_result_content(&glob).expect("glob content renders"),
+            "src/a.rs\nsrc/b.rs\n[truncated]"
         );
         let grep = ToolResult::Grep(intention_tools::GrepResult {
             matches: vec![intention_tools::GrepMatch {
@@ -1648,77 +1412,70 @@ mod tests {
             truncated: false,
         });
         assert_eq!(
-            canonical_tool_result_document(&grep),
-            "{\"result\":\"grep\",\"value\":{\"matches\":[{\"path\":\"src/a.rs\",\"line\":3,\"column\":5,\"fragment\":\"needle\"}],\"truncated\":false}}"
+            tool_result_content(&grep).expect("grep content renders"),
+            "src/a.rs:3:5: needle"
         );
         let write = ToolResult::Write(intention_tools::WriteResult { bytes: 17 });
         assert_eq!(
-            canonical_tool_result_document(&write),
-            "{\"result\":\"write\",\"value\":{\"bytes\":17}}"
+            tool_result_content(&write).expect("write content renders"),
+            "17 bytes"
         );
         let edit = ToolResult::Edit(intention_tools::WriteResult { bytes: 2 });
         assert_eq!(
-            canonical_tool_result_document(&edit),
-            "{\"result\":\"edit\",\"value\":{\"bytes\":2}}"
+            tool_result_content(&edit).expect("edit content renders"),
+            "2 bytes"
         );
     }
 
     #[test]
-    fn canonical_documents_escape_json_special_characters() {
-        let read = ToolResult::Read(intention_tools::TextResult {
-            text: bounded("quote\"back\\slash\nend\u{1}"),
+    fn blank_tool_result_content_is_rejected() {
+        let read = ToolResult::Read(TextResult {
+            text: bounded(""),
+            truncated: false,
+        });
+        let error = tool_result_content(&read).expect_err("blank content is rejected");
+        assert_eq!(error.code(), "invalid_tool_result_content");
+    }
+
+    #[test]
+    fn truncation_is_reported_as_approved_metadata() {
+        let truncated = ToolResult::Glob(intention_tools::PathsResult {
+            paths: Vec::new(),
+            truncated: true,
+        });
+        let metadata = tool_result_metadata(&truncated).expect("truncation metadata is valid");
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(metadata[0].key(), "truncated");
+        assert_eq!(metadata[0].value(), "true");
+        let complete = ToolResult::Write(intention_tools::WriteResult { bytes: 1 });
+        assert!(
+            tool_result_metadata(&complete)
+                .expect("complete metadata is valid")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn partial_content_carries_the_exact_interruption_notice() {
+        let captured = ToolResult::Read(TextResult {
+            text: bounded("half a line"),
             truncated: false,
         });
         assert_eq!(
-            canonical_tool_result_document(&read),
-            "{\"result\":\"read\",\"value\":{\"text\":\"quote\\\"back\\\\slash\\nend\\u0001\",\"truncated\":false}}"
+            partial_tool_result_content(true, Some(&captured)).expect("partial content renders"),
+            "half a line\n[The tool call was stopped before a final result; the output above is partial.]"
         );
-    }
-
-    #[test]
-    fn oversized_text_truncates_within_the_durable_bound() {
-        let read = ToolResult::Read(intention_tools::TextResult {
-            text: bounded(&"x".repeat(1024 * 1024)),
-            truncated: false,
-        });
-        let document = canonical_tool_result_document(&read);
-        assert!(document.len() <= MAX_DURABLE_TOOL_RESULT_BYTES);
-        assert!(document.starts_with("{\"result\":\"read\",\"value\":{\"text\":\""));
-        assert!(document.ends_with("\"truncated\":true}}"));
-    }
-
-    #[test]
-    fn oversized_path_lists_truncate_within_the_durable_bound() {
-        let paths = (0..20_000)
-            .map(|index| relative(&format!("dir-{index}/long-file-name-{index}.txt")))
-            .collect();
-        let glob = ToolResult::Glob(intention_tools::PathsResult {
-            paths,
-            truncated: false,
-        });
-        let document = canonical_tool_result_document(&glob);
-        assert!(document.len() <= MAX_DURABLE_TOOL_RESULT_BYTES);
-        assert!(document.starts_with("{\"result\":\"glob\",\"value\":{\"paths\":[\""));
-        assert!(document.ends_with("\"truncated\":true}}"));
-    }
-
-    #[test]
-    fn oversized_match_lists_truncate_within_the_durable_bound() {
-        let matches = (0..512)
-            .map(|index| intention_tools::GrepMatch {
-                path: relative(&format!("dir-{index}/file.rs")),
-                line: index + 1,
-                column: 1,
-                fragment: bounded(&"y".repeat(64 * 1024)),
-            })
-            .collect();
-        let grep = ToolResult::Grep(intention_tools::GrepResult {
-            matches,
-            truncated: false,
-        });
-        let document = canonical_tool_result_document(&grep);
-        assert!(document.len() <= MAX_DURABLE_TOOL_RESULT_BYTES);
-        assert!(document.starts_with("{\"result\":\"grep\",\"value\":{\"matches\":[{\"path\":"));
-        assert!(document.ends_with("\"truncated\":true}}"));
+        assert_eq!(
+            partial_tool_result_content(false, Some(&captured)).expect("partial content renders"),
+            "half a line\n[The tool call did not receive a final result; the output above is partial.]"
+        );
+        assert_eq!(
+            partial_tool_result_content(true, None).expect("partial content renders"),
+            "[The tool call was stopped before a final result.]"
+        );
+        assert_eq!(
+            partial_tool_result_content(false, None).expect("partial content renders"),
+            "[The tool call did not receive a final result.]"
+        );
     }
 }

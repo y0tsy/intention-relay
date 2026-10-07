@@ -9,7 +9,7 @@ provider capabilities rather than forcing all models into a lowest-common-denomi
 
 `intention-model` owns typed requests, stream events, capabilities, and the provider-driver trait. `intention-types`
 owns provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and `ProviderErrorDto`, which `intention-model`
-re-exports for source compatibility. `intention-domain` owns the durable fact, projection, and replay representation.
+re-exports for source compatibility. `intention-domain` owns the durable projections and the transcript-row representation.
 Domain, storage, and protocol retain no dependency on `intention-model`.
 
 ```text
@@ -19,11 +19,12 @@ ModelDriver
 ```
 
 M4 defines text-only `ModelMessageDto` context, an optional system context, explicit requested capability flags, and
-`ModelStreamLifecycleDto`. Providers must emit `Started` first, then zero or more text/reasoning/tool/usage facts,
-followed by exactly one terminal `Finished` fact. A second start, a fact before start or after finish, duplicate usage,
+`ModelStreamLifecycleDto`. Providers must emit `Started` first, then zero or more text/reasoning/tool/usage events,
+followed by exactly one terminal `Finished` event. A second start, a fact before start or after finish, duplicate usage,
 or a second finish fails validation. `ModelRunExecutionService` consumes an injected stream, performs preflight only
 after exact persisted/current safe-selection equality, owns cancellation late-event suppression, deadlines, and retries,
-and persists only validated facts through the DTO-only storage contract. Its `ModelTimePort` exposes fresh
+and commits only current-state rows (assistant transcript rows, run status, usage, finish, and failure) through the
+DTO-only storage contract. Its `ModelTimePort` exposes fresh
 provider-neutral delay futures and safe timestamps, never Tokio. The service does not select a provider or own a Tokio
 runtime; the daemon-owned composition host supplies those private execution resources.
 
@@ -33,7 +34,7 @@ Core DTO families:
 | --- | --- |
 | `ModelRequestDto` | System context, text messages, advertised typed `ModelToolDefinitionDto` tool definitions, the transient same-run assistant reasoning attachment, requested reasoning/multimodal/tool/vendor-extension capabilities, and run identity. |
 | `ModelCapabilitiesDto` | Supported input, output, reasoning, tool, multimodal, vendor-extension, and streaming capability declarations. |
-| `ModelEventDto` | Text, reasoning, tool, usage, lifecycle, and provider-normalized stream facts. |
+| `ModelEventDto` | Text, reasoning, tool, usage, lifecycle, and provider-normalized stream events. |
 | `ToolCallDto` | Typed tool identity and typed tool input. |
 | `UsageDto` | Provider-normalized usage values with explicit unknown/not-reported states. |
 | `FinishReasonDto` | Typed terminal reason. |
@@ -75,7 +76,7 @@ sequenceDiagram
   P->>X: Provider-native request
   X-->>P: Native stream
   P-->>M: ModelEvent DTO stream
-  M-->>R: Typed stream facts
+  M-->>R: Typed stream events
 ```
 
 The provider adapter translates native formats into typed DTOs. It must not erase a capability merely because another
@@ -90,7 +91,7 @@ requested feature is valid.
 
 - OpenRouter configuration translation;
 -  private SDK request construction and fixture normalization for text, reasoning, usage, finish, tool-call, and error
-facts;
+events;
 - provider-specific model discovery/capability metadata where available; and
 - safe diagnostics and correlation identifiers.
 
@@ -104,7 +105,7 @@ typed wire. It owns:
 
 - generic endpoint/auth/config translation;
 -  private SDK request construction and fixture normalization for text, advertised tool definitions, usage, finish,
-`tool_calls` tool-call, `reasoning_content` reasoning, same-run assistant tool-call reasoning echo, and error facts;
+`tool_calls` tool-call, `reasoning_content` reasoning, same-run assistant tool-call reasoning echo, and error events;
 - documented capability limitations; and
 - normalized failures.
 
@@ -138,11 +139,11 @@ explicit, tested runtime transition is introduced.
 
 ## Streaming and tool calls
 
-The model stream can emit content, reasoning, tool-call, usage, and terminal events. Runtime owns ordering, stable
-assistant-turn identity, persistence, and conversion of a model tool call into typed durable evidence and execution
-through the daemon-owned registry: it records `ToolCallRecorded` before the local effect, persists the correlated
-`ToolResultRecorded`, and continues the provider exchange with assistant-tool-call and tool-role messages until the
-provider finishes.
+The model stream can emit content, reasoning, tool-call, usage, and terminal events. Runtime owns ordering,
+persistence, and conversion of a model tool call into typed durable rows and execution through the daemon-owned
+registry: it commits the assistant tool-call row, the application commits the call's `tool_results` row and its
+answering tool-result row in one transaction, and the runtime continues the provider exchange with
+assistant-tool-call and tool-role messages until the provider finishes.
 
 Ordinary production requests advertise the active registered tools: the request carries validated typed
 `ModelToolDefinitionDto` definitions built by `intention_tools::model_visible_descriptors()` in registry order (`read`,
@@ -166,9 +167,8 @@ at that same 512 KiB per-round bound. A round that exceeds the bound or carries 
 of aborting with a DTO validation error; the echo is never truncated or silently omitted.
 
 Provider drivers do not invoke local tools directly. The application builds the typed invocation from a provider-emitted
-tool call, and the daemon-owned registry executes it under `WorkspaceRoot` with typed hooks. The M4 no-port denial path
-remains byte-identical: without a tool executor, the runtime records the tool-call facts and appends the terminal
-`tool_execution_unavailable` failure.
+tool call, and the daemon-owned registry executes it under `WorkspaceRoot` with typed hooks. Execution requires an
+injected `ToolExecutionPort`; there is no no-port fallback and a tool round without an executor cannot start.
 
 ## Dynamic context window and prompt caching
 

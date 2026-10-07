@@ -16,28 +16,30 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto,
-    RemoveTurnCommandDto, RunEventCursorDto, RunEventTailPageDto, RunModeDto, RunProjectionDto,
-    RunSnapshotDto, RunStartedEventDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto,
-    WorkspaceRootDto,
+    CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageKindDto,
+    MessageProjectionDto, PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto,
+    RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto,
+    ToolResultStatusDto, WorkspaceRootDto,
 };
 use intention_hooks::{
     FailurePolicy, Hook, HookObservability, Outcome as HookOutcome, Phase, PhaseContext, Registry,
 };
-use intention_protocol::{ProtocolAcceptedResultDto, SendUserTurnOutcomeDto};
+use intention_protocol::{
+    CURRENT_DTO_SCHEMA_VERSION, ProtocolAcceptedResultDto, SendUserTurnOutcomeDto,
+};
 use intention_runtime::{ModelMessageDto, ModelRequestDto, ModelRoleDto};
 use intention_storage::{
-    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendModelRunFactsInputDto,
-    AppendModelRunFactsOutcomeDto, CommittedChangeDto, CreateSessionInputDto,
-    ModelContextMessageDto, ModelContextRoleDto, RecoverUnfinishedRunsInputDto, RemoveTurnInputDto,
-    StartingRunModelContextDto, StorageRepositoryDto, ToolResultEvidenceDto, ToolResultKindDto,
-    TransitionRunInputDto,
+    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,
+    ConsumePendingUserTurnsInputDto, CreateSessionInputDto, FinishRunInputDto,
+    RecoverUnfinishedRunsInputDto, RemoveTurnInputDto, StartingRunModelContextDto,
+    StorageRepositoryDto, ToolResultEvidenceDto, TransitionRunInputDto, WriteToolResultInputDto,
 };
-use intention_tools::{ReadInput, ToolInput};
-use intention_types::ToolCallId;
+use intention_tools::{
+    BoundedText, CancellationSignal, ExecuteInput, ReadInput, TextResult, ToolInput, ToolResult,
+};
 use intention_types::{
-    ConfigRevisionId, DtoResult, ErrorDto, EventEnvelopeDto, EventId, EventMetadataDto, ProjectId,
-    RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto, TurnId, WorkspaceId,
+    ConfigRevisionId, DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SchemaVersionDto,
+    SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
 };
 use intention_workspace::WorkspaceRoot;
 
@@ -135,7 +137,7 @@ fn fixture_time() -> TimestampDto {
 }
 
 /// Unwraps one completed invocation outcome; a partial outcome is a fixture error.
-fn completed_outcome(outcome: LocalToolInvocationOutcomeDto) -> intention_tools::ToolResult {
+fn completed_outcome(outcome: LocalToolInvocationOutcomeDto) -> ToolResult {
     match outcome {
         LocalToolInvocationOutcomeDto::Completed(result) => result,
         LocalToolInvocationOutcomeDto::Partial { .. } => {
@@ -181,8 +183,7 @@ fn workspace_root() -> WorkspaceRootDto {
 fn projection(
     session_id: SessionId,
     active_run: Option<RunProjectionDto>,
-    pending_turns: Vec<intention_domain::PendingTurnProjectionDto>,
-    position: u64,
+    pending_turns: Vec<PendingTurnProjectionDto>,
 ) -> SessionProjectionDto {
     SessionProjectionDto::new(
         ProjectId::new(),
@@ -193,136 +194,175 @@ fn projection(
         active_run.map(RunProjectionDto::config_revision_id),
         active_run,
         pending_turns,
-        SessionEventSequenceDto::new(position),
     )
     .expect("fixture projection is valid")
 }
 
-fn change(
-    projection: SessionProjectionDto,
-    outcome: Option<AcceptedTurnOutcomeDto>,
-) -> CommittedChangeDto {
-    CommittedChangeDto::new(
-        projection.clone(),
-        projection.at_sequence(),
-        Vec::new(),
-        outcome,
-    )
-    .expect("fixture change is valid")
-}
-
+/// Fixture repository over the current-state transactional repository contract.
+///
+/// It records every committed transcript row and tool result, serves the
+/// command/query fixtures, and can fail selected commit ordinals so ordering
+/// guarantees stay observable.
 struct FakeRepository {
-    accepted: RefCell<DtoResult<CommittedChangeDto>>,
+    created: RefCell<Option<SessionProjectionDto>>,
+    accepted: RefCell<DtoResult<AcceptedTurnOutcomeDto>>,
     accepted_inputs: RefCell<Vec<AcceptUserTurnInputDto>>,
-    created: RefCell<Option<CommittedChangeDto>>,
-    removed: RefCell<Option<CommittedChangeDto>>,
-    transitioned: RefCell<Option<CommittedChangeDto>>,
-    loaded_snapshot: RefCell<Option<SessionProjectionDto>>,
+    removed: RefCell<Option<PendingTurnProjectionDto>>,
+    loaded_projection: RefCell<Option<SessionProjectionDto>>,
+    recent_messages: RefCell<Vec<MessageProjectionDto>>,
     starting_context: RefCell<Option<StartingRunModelContextDto>>,
-    tool_events: RefCell<Vec<intention_domain::ToolLifecycleEventDto>>,
-    result_evidence: RefCell<Vec<Option<ToolResultEvidenceDto>>>,
-    tool_error: RefCell<Option<ErrorDto>>,
-    append_calls: RefCell<usize>,
-    append_failures: RefCell<Vec<usize>>,
+    run: RefCell<Option<RunProjectionDto>>,
+    finishes: RefCell<Vec<FinishRunInputDto>>,
+    messages: RefCell<Vec<MessageProjectionDto>>,
+    tool_results: RefCell<Vec<ToolResultEvidenceDto>>,
+    commit_calls: RefCell<usize>,
+    commit_failures: RefCell<Vec<usize>>,
+    commit_error: RefCell<Option<ErrorDto>>,
 }
 
 impl FakeRepository {
-    const fn with_accepted(accepted: DtoResult<CommittedChangeDto>) -> Self {
+    const fn with_accepted(accepted: DtoResult<AcceptedTurnOutcomeDto>) -> Self {
         Self {
+            created: RefCell::new(None),
             accepted: RefCell::new(accepted),
             accepted_inputs: RefCell::new(Vec::new()),
-            created: RefCell::new(None),
             removed: RefCell::new(None),
-            transitioned: RefCell::new(None),
-            loaded_snapshot: RefCell::new(None),
+            loaded_projection: RefCell::new(None),
+            recent_messages: RefCell::new(Vec::new()),
             starting_context: RefCell::new(None),
-            tool_events: RefCell::new(Vec::new()),
-            result_evidence: RefCell::new(Vec::new()),
-            tool_error: RefCell::new(None),
-            append_calls: RefCell::new(0),
-            append_failures: RefCell::new(Vec::new()),
+            run: RefCell::new(None),
+            finishes: RefCell::new(Vec::new()),
+            messages: RefCell::new(Vec::new()),
+            tool_results: RefCell::new(Vec::new()),
+            commit_calls: RefCell::new(0),
+            commit_failures: RefCell::new(Vec::new()),
+            commit_error: RefCell::new(None),
         }
     }
-}
 
-impl StorageRepositoryDto for FakeRepository {
-    fn append_tool_lifecycle_event(
-        &self,
-        input: intention_storage::AppendToolLifecycleEventInputDto,
-    ) -> DtoResult<intention_types::EventEnvelopeDto<DomainEventDto>> {
-        if let Some(error) = self.tool_error.borrow().clone() {
+    /// Returns the next one-based commit ordinal, or the selected injected failure.
+    fn next_commit(&self) -> DtoResult<usize> {
+        if let Some(error) = self.commit_error.borrow().clone() {
             return Err(error);
         }
-        let call = {
-            let mut calls = self.append_calls.borrow_mut();
+        let ordinal = {
+            let mut calls = self.commit_calls.borrow_mut();
             *calls += 1;
             *calls
         };
-        if self.append_failures.borrow().contains(&call) {
+        if self.commit_failures.borrow().contains(&ordinal) {
             return Err(ErrorDto::unavailable(
                 "append_unavailable",
                 "append refused at the selected call",
             ));
         }
-        let event = input.event().clone();
-        self.tool_events.borrow_mut().push(event.clone());
-        self.result_evidence
-            .borrow_mut()
-            .push(input.result().cloned());
-        Ok(intention_types::EventEnvelopeDto::new(
-            intention_types::EventMetadataDto::new(
-                SchemaVersionDto::new(1, 0),
-                intention_types::EventId::new(),
-                event.session_id(),
-                Some(event.run_id()),
-                None,
-                SessionEventSequenceDto::new(self.tool_events.borrow().len() as u64 + 1),
-                event.occurred_at(),
-            ),
-            DomainEventDto::ToolLifecycle(event),
-        ))
+        Ok(ordinal)
     }
-    fn create_session(&self, _input: CreateSessionInputDto) -> DtoResult<CommittedChangeDto> {
+
+    fn committed_messages(&self) -> Vec<MessageProjectionDto> {
+        self.messages.borrow().clone()
+    }
+
+    fn committed_results(&self) -> Vec<ToolResultEvidenceDto> {
+        self.tool_results.borrow().clone()
+    }
+
+    fn completed_result_count(&self) -> usize {
+        self.committed_results()
+            .iter()
+            .filter(|row| row.status() == ToolResultStatusDto::Completed)
+            .count()
+    }
+}
+
+impl StorageRepositoryDto for FakeRepository {
+    fn create_session(&self, _input: CreateSessionInputDto) -> DtoResult<SessionProjectionDto> {
         self.created.borrow().clone().ok_or_else(|| {
             ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
         })
     }
 
-    fn accept_user_turn(&self, input: AcceptUserTurnInputDto) -> DtoResult<CommittedChangeDto> {
+    fn accept_user_turn(&self, input: AcceptUserTurnInputDto) -> DtoResult<AcceptedTurnOutcomeDto> {
         self.accepted_inputs.borrow_mut().push(input);
         self.accepted.borrow().clone()
     }
 
-    fn remove_turn(&self, _input: RemoveTurnInputDto) -> DtoResult<CommittedChangeDto> {
+    fn remove_turn(&self, _input: RemoveTurnInputDto) -> DtoResult<PendingTurnProjectionDto> {
         self.removed.borrow().clone().ok_or_else(|| {
             ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
         })
     }
 
-    fn transition_run(&self, _input: TransitionRunInputDto) -> DtoResult<CommittedChangeDto> {
-        self.transitioned.borrow().clone().ok_or_else(|| {
-            ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
-        })
-    }
-
-    fn append_model_run_facts(
+    fn consume_pending_user_turns(
         &self,
-        _input: AppendModelRunFactsInputDto,
-    ) -> DtoResult<AppendModelRunFactsOutcomeDto> {
+        _input: ConsumePendingUserTurnsInputDto,
+    ) -> DtoResult<Vec<MessageProjectionDto>> {
         Err(ErrorDto::unavailable(
             "fixture_unused",
-            "model facts are not used by this fixture",
+            "pending joins are not used by this fixture",
         ))
     }
 
-    fn load_current_run_snapshot(
+    fn transition_run(&self, _input: TransitionRunInputDto) -> DtoResult<RunProjectionDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "transitions are not used by this fixture",
+        ))
+    }
+
+    fn finish_run(&self, input: FinishRunInputDto) -> DtoResult<RunProjectionDto> {
+        let run = (*self.run.borrow()).ok_or_else(|| {
+            ErrorDto::unavailable("fixture_missing_result", "fixture run missing")
+        })?;
+        let status = input.status();
+        self.finishes.borrow_mut().push(input);
+        Ok(RunProjectionDto::new(
+            run.session_id(),
+            run.run_id(),
+            run.turn_id(),
+            status,
+            run.config_revision_id(),
+        ))
+    }
+
+    fn append_message(&self, input: AppendMessageInputDto) -> DtoResult<MessageProjectionDto> {
+        self.next_commit()?;
+        let message = input.message().clone();
+        self.messages.borrow_mut().push(message.clone());
+        Ok(message)
+    }
+
+    fn write_tool_result(
+        &self,
+        input: WriteToolResultInputDto,
+    ) -> DtoResult<ToolResultEvidenceDto> {
+        self.next_commit()?;
+        let evidence = input.evidence().clone();
+        self.tool_results.borrow_mut().push(evidence.clone());
+        self.messages.borrow_mut().push(input.message().clone());
+        Ok(evidence)
+    }
+
+    fn load_tool_result(
         &self,
         _session_id: SessionId,
         _run_id: RunId,
-    ) -> DtoResult<RunSnapshotDto> {
+        _call_id: ToolCallId,
+    ) -> DtoResult<ToolResultEvidenceDto> {
         Err(ErrorDto::unavailable(
-            "fixture_missing_result",
-            "fixture result missing",
+            "fixture_unused",
+            "tool result loads are not used by this fixture",
+        ))
+    }
+
+    fn load_run_config_snapshot(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+    ) -> DtoResult<ConfigSnapshotDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "run configuration loads are not used by this fixture",
         ))
     }
 
@@ -339,116 +379,168 @@ impl StorageRepositoryDto for FakeRepository {
         })
     }
 
-    fn load_run_tail(
+    fn load_run_projection(
         &self,
-        session_id: SessionId,
-        run_id: RunId,
-        _after_cursor: RunEventCursorDto,
-    ) -> DtoResult<RunEventTailPageDto> {
-        RunEventTailPageDto::new(
-            session_id,
-            run_id,
-            RunEventCursorDto::new(0),
-            Vec::new(),
-            RunEventCursorDto::new(0),
-            false,
-        )
+        _session_id: SessionId,
+        _run_id: RunId,
+    ) -> DtoResult<RunProjectionDto> {
+        (*self.run.borrow())
+            .ok_or_else(|| ErrorDto::unavailable("fixture_missing_result", "fixture run missing"))
+    }
+
+    fn load_session_projection(&self, _session_id: SessionId) -> DtoResult<SessionProjectionDto> {
+        self.loaded_projection.borrow().clone().ok_or_else(|| {
+            ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
+        })
+    }
+
+    fn load_recent_messages(
+        &self,
+        _session_id: SessionId,
+        _limit: u32,
+    ) -> DtoResult<Vec<MessageProjectionDto>> {
+        Ok(self.recent_messages.borrow().clone())
+    }
+
+    fn load_run_messages(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+        _limit: u32,
+    ) -> DtoResult<Vec<MessageProjectionDto>> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "run message loads are not used by this fixture",
+        ))
     }
 
     fn recover_unfinished_runs(
         &self,
         _input: RecoverUnfinishedRunsInputDto,
-    ) -> DtoResult<Vec<CommittedChangeDto>> {
+    ) -> DtoResult<Vec<RunProjectionDto>> {
         Err(ErrorDto::unavailable(
             "fixture_unused",
             "recovery is not used by this fixture",
         ))
     }
 
-    fn load_session_snapshot(&self, _session_id: SessionId) -> DtoResult<SessionProjectionDto> {
-        self.loaded_snapshot.borrow().clone().ok_or_else(|| {
-            ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
-        })
-    }
-
-    fn load_tail(
-        &self,
-        _session_id: SessionId,
-        _after_sequence: SessionEventSequenceDto,
-    ) -> DtoResult<Vec<intention_types::EventEnvelopeDto<DomainEventDto>>> {
-        Err(ErrorDto::unavailable(
-            "fixture_unused",
-            "tail is not used by this fixture",
-        ))
-    }
-
     fn accept_configuration_revision(&self, _snapshot: ConfigSnapshotDto) -> DtoResult<()> {
         Err(ErrorDto::unavailable(
             "fixture_unused",
-            "config is not used by this fixture",
+            "configuration acceptance is not used by this fixture",
         ))
     }
+}
+
+fn hello_tool_root(tag: &str) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!("intention-publish-{tag}-{}", SessionId::new()));
+    fs::create_dir_all(&root).expect("root");
+    fs::write(root.join("hello.txt"), "hello").expect("hello fixture");
+    root
+}
+
+fn hello_workspace(root: &std::path::Path) -> WorkspaceRoot {
+    WorkspaceRoot::resolve(&WorkspaceRootDto::parse(root.to_string_lossy()).expect("dto"))
+        .expect("workspace")
+}
+
+fn hello_read_result() -> ToolResult {
+    ToolResult::Read(TextResult {
+        text: BoundedText::new("hello").expect("text"),
+        truncated: false,
+    })
+}
+
+fn managed_read_input(path: &str) -> ToolInput {
+    ToolInput::Read(ReadInput {
+        path: intention_types::WorkspaceRelativePathDto::parse(path).expect("path"),
+    })
+}
+
+fn cancelled_execute_input() -> ToolInput {
+    ToolInput::Execute(ExecuteInput {
+        program: BoundedText::new("sh").expect("program"),
+        args: vec![
+            BoundedText::new("-c").expect("arg"),
+            BoundedText::new("sleep 1").expect("arg"),
+        ],
+    })
+}
+
+fn sleeping_execute_input() -> ToolInput {
+    ToolInput::Execute(ExecuteInput {
+        program: BoundedText::new(if cfg!(windows) { "ping" } else { "sh" }).expect("program"),
+        args: vec![
+            BoundedText::new(if cfg!(windows) { "-n" } else { "-c" }).expect("arg"),
+            BoundedText::new(if cfg!(windows) { "2" } else { "sleep 1" }).expect("arg"),
+            #[cfg(windows)]
+            BoundedText::new("127.0.0.1").expect("arg"),
+        ],
+    })
 }
 
 #[test]
 fn local_tool_success_records_admission_and_completion() {
-    let root_path = std::env::temp_dir().join(format!("intention-app-{}", SessionId::new()));
-    fs::create_dir_all(&root_path).expect("fixture workspace can be created");
-    fs::write(root_path.join("hello.txt"), "hello").expect("fixture file can be written");
-    let root = WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root_path.to_string_lossy()).expect("workspace dto"),
-    )
-    .expect("workspace is valid");
+    let root = hello_tool_root("success");
     let session = SessionId::new();
     let run = RunId::new();
     let call = ToolCallId::new();
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    // The fake only records lifecycle inputs; make the append operation succeed.
     let result = ApplicationService::new(&repository)
         .invoke_local_tool(InvokeLocalToolInputDto::new(
-            root,
+            hello_workspace(&root),
             session,
             run,
             call,
             "read",
-            ToolInput::Read(ReadInput {
-                path: intention_types::WorkspaceRelativePathDto::parse("hello.txt").expect("path"),
-            }),
+            managed_read_input("hello.txt"),
             fixture_time(),
         ))
         .expect("tool succeeds");
     let result = completed_outcome(result);
-    assert!(matches!(result, intention_tools::ToolResult::Read(_)));
-    assert_eq!(repository.tool_events.borrow().len(), 3);
+    assert_eq!(result, hello_read_result());
+
+    // Exactly two transactions commit: the call row before dispatch, then the
+    // terminal result row with its answering transcript row.
+    let messages = repository.committed_messages();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].kind(), MessageKindDto::ToolCall);
+    assert_eq!(messages[0].tool_call_id(), Some(call));
+    assert_eq!(messages[0].tool_id(), Some("read"));
+    assert_eq!(messages[1].kind(), MessageKindDto::ToolResult);
+    assert_eq!(messages[1].text(), "hello");
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
+    assert_eq!(results[0].content(), "hello");
+    assert_eq!(results[0].session_id(), session);
+    assert_eq!(results[0].run_id(), run);
+    assert_eq!(results[0].call_id(), call);
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
 fn local_tool_rejects_storage_before_execution() {
+    let root = hello_tool_root("storage-reject");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    *repository.tool_error.borrow_mut() =
+    *repository.commit_error.borrow_mut() =
         Some(ErrorDto::unavailable("storage_down", "storage unavailable"));
     let error = ApplicationService::new(&repository)
-        .invoke_local_tool(InvokeLocalToolInputDto::new(
-            WorkspaceRoot::resolve(
-                &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy())
-                    .expect("workspace dto"),
-            )
-            .expect("workspace is valid"),
-            SessionId::new(),
-            RunId::new(),
-            ToolCallId::new(),
-            "read",
-            ToolInput::Read(ReadInput {
-                path: intention_types::WorkspaceRelativePathDto::parse("missing").expect("path"),
-            }),
-            fixture_time(),
+        .invoke_local_tool(invoke_read_input_in_workspace(
+            &hello_workspace(&root),
+            "hello.txt",
         ))
         .expect_err("storage failure is propagated");
     assert_eq!(error.code(), "storage_down");
+    // The call row commits before dispatch, so a refused admission leaves no
+    // trace and the readable file was never invoked.
+    assert!(repository.committed_messages().is_empty());
+    assert!(repository.committed_results().is_empty());
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn lifecycle_details_redact_absolute_workspace_root_and_os_error_text() {
+fn committed_rows_redact_absolute_workspace_root_and_os_error_text() {
     let root = std::env::temp_dir().join(format!("intention-redaction-{}", SessionId::new()));
     fs::create_dir_all(&root).expect("root");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
@@ -461,20 +553,18 @@ fn lifecycle_details_redact_absolute_workspace_root_and_os_error_text() {
             "missing",
         ))
         .expect_err("read must fail");
-    let details = repository
-        .tool_events
-        .borrow()
-        .iter()
-        .map(|event| event.detail().to_owned())
-        .collect::<Vec<_>>();
-    let rendered = format!("{error:?} {details:?}");
+    let rendered = format!(
+        "{error:?} {:?} {:?}",
+        repository.committed_messages(),
+        repository.committed_results()
+    );
     assert!(!rendered.contains(&root.to_string_lossy().to_string()));
     assert!(!rendered.contains("No such file or directory"));
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn lifecycle_events_preserve_exact_correlation_identity_across_terminal_outcome() {
+fn committed_rows_preserve_exact_correlation_identity_across_terminal_outcome() {
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let session_id = SessionId::new();
     let run_id = RunId::new();
@@ -490,22 +580,31 @@ fn lifecycle_events_preserve_exact_correlation_identity_across_terminal_outcome(
             run_id,
             call_id,
             "read",
-            ToolInput::Read(ReadInput {
-                path: intention_types::WorkspaceRelativePathDto::parse("missing").expect("path"),
-            }),
+            managed_read_input("missing"),
             fixture_time(),
         ))
         .expect_err("missing file fails");
     assert_eq!(error.code(), "tool_read_failed");
-    let events = repository.tool_events.borrow();
-    assert!(events.len() >= 3);
-    assert!(events.iter().all(|event| {
-        event.session_id() == session_id && event.run_id() == run_id && event.call_id() == call_id
-    }));
-    assert!(matches!(
-        events.last().expect("terminal event").status(),
-        intention_domain::ToolLifecycleStatusDto::Failed
-    ));
+    let messages = repository.committed_messages();
+    assert_eq!(messages.len(), 2);
+    assert!(
+        messages
+            .iter()
+            .all(|row| row.session_id() == session_id && row.run_id() == Some(run_id))
+    );
+    assert!(
+        messages
+            .iter()
+            .all(|row| row.tool_call_id() == Some(call_id))
+    );
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
+    assert_eq!(results[0].session_id(), session_id);
+    assert_eq!(results[0].run_id(), run_id);
+    assert_eq!(results[0].call_id(), call_id);
+    assert_eq!(results[0].tool_id(), "read");
+    assert_eq!(results[0].content(), "tool_read_failed");
 }
 
 #[test]
@@ -522,53 +621,47 @@ fn local_tool_rejects_unknown_or_mismatched_id_before_effects() {
             RunId::new(),
             ToolCallId::new(),
             "unknown",
-            ToolInput::Read(ReadInput {
-                path: intention_types::WorkspaceRelativePathDto::parse("missing").expect("path"),
-            }),
+            managed_read_input("missing"),
             fixture_time(),
         ))
         .expect_err("mismatched tool id is rejected");
     assert_eq!(error.code(), "tool_id_mismatch");
-    assert!(repository.tool_events.borrow().is_empty());
+    assert!(repository.committed_messages().is_empty());
+    assert!(repository.committed_results().is_empty());
 }
 
 #[test]
 fn local_tool_hook_rejection_is_durable_and_skips_execution() {
+    let root = hello_tool_root("hook-reject");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let mut hooks = Registry::new();
     hooks
         .register(Box::new(RejectHook))
         .expect("hook registers");
+    // The readable file would have completed; the hook rejection is recorded
+    // as the terminal failed result of the already-committed call.
     let error = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool(InvokeLocalToolInputDto::new(
-            WorkspaceRoot::resolve(
-                &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy())
-                    .expect("workspace dto"),
-            )
-            .expect("workspace"),
-            SessionId::new(),
-            RunId::new(),
-            ToolCallId::new(),
-            "read",
-            ToolInput::Read(ReadInput {
-                path: intention_types::WorkspaceRelativePathDto::parse("missing").expect("path"),
-            }),
-            fixture_time(),
+        .invoke_local_tool(invoke_read_input_in_workspace(
+            &hello_workspace(&root),
+            "hello.txt",
         ))
         .expect_err("hook rejects");
     assert_eq!(error.code(), "blocked_by_hook");
-    let events = repository.tool_events.borrow();
-    assert_eq!(events.len(), 2);
-    assert_eq!(
-        *events[1].status(),
-        intention_domain::ToolLifecycleStatusDto::Rejected
-    );
-    assert_eq!(events[1].detail(), "blocked_by_hook");
+    let messages = repository.committed_messages();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].kind(), MessageKindDto::ToolCall);
+    assert_eq!(messages[1].kind(), MessageKindDto::ToolResult);
+    assert_eq!(messages[1].text(), "blocked_by_hook");
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
+    assert_eq!(results[0].content(), "blocked_by_hook");
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
 fn public_dto_constructors_and_schedule_validation_cover_mismatch_paths() {
-    let command = SendUserTurnCommandDto::new(SessionId::new(), TurnId::new(), "hello")
+    let command = SendUserTurnCommandDto::new(SessionId::new(), IdempotencyKey::new(), "hello")
         .expect("command is valid");
     let input = SendUserTurnWorkflowInputDto::new(RunId::new(), snapshot(), fixture_time());
     assert_eq!(input.occurred_at(), fixture_time());
@@ -636,8 +729,8 @@ fn pre_execution_hook_matrix_covers_errors_transforms_and_rejections_per_phase()
         Phase::AfterWorkspaceResolution,
         Phase::BeforeToolExecution,
     ] {
-        // Operational hook failures fail closed and record a durable rejection
-        // without starting execution.
+        // Operational hook failures fail closed and record the terminal failed
+        // result of the committed call without starting execution.
         let root = hello_tool_root("matrix-error");
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
@@ -652,6 +745,11 @@ fn pre_execution_hook_matrix_covers_errors_transforms_and_rejections_per_phase()
             ))
             .expect_err("hook dispatch errors fail closed");
         assert_eq!(error.code(), "hook_failed");
+        assert_eq!(repository.committed_messages().len(), 2);
+        let results = repository.committed_results();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
+        assert_eq!(results[0].content(), "hook_failed");
         let _ = fs::remove_dir_all(root);
 
         // Input transformations reroute the invocation to an existing file and
@@ -664,10 +762,7 @@ fn pre_execution_hook_matrix_covers_errors_transforms_and_rejections_per_phase()
             .register(Box::new(PhaseOutcomeHook {
                 phase,
                 id: "matrix-input",
-                outcome: HookOutcome::TransformInput(ToolInput::Read(ReadInput {
-                    path: intention_types::WorkspaceRelativePathDto::parse("hello.txt")
-                        .expect("path"),
-                })),
+                outcome: HookOutcome::TransformInput(managed_read_input("hello.txt")),
             }))
             .expect("hook registers");
         let result = ApplicationService::with_hooks(&repository, hooks)
@@ -678,11 +773,12 @@ fn pre_execution_hook_matrix_covers_errors_transforms_and_rejections_per_phase()
             .expect("transformed input is executed");
         let result = completed_outcome(result);
         assert_eq!(result, hello_read_result());
+        assert_eq!(repository.committed_results()[0].content(), "hello");
         let _ = fs::remove_dir_all(root);
 
         // Result transformations are incompatible before execution: the hook
         // registry fails closed before the invocation starts and the tolerated
-        // typed failure is durably recorded as a rejection.
+        // typed failure is durably recorded as the call's terminal result.
         let root = hello_tool_root("matrix-result");
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
@@ -691,12 +787,10 @@ fn pre_execution_hook_matrix_covers_errors_transforms_and_rejections_per_phase()
             .register(Box::new(PhaseOutcomeHook {
                 phase,
                 id: "matrix-result",
-                outcome: HookOutcome::TransformResult(intention_tools::ToolResult::Read(
-                    intention_tools::TextResult {
-                        text: intention_tools::BoundedText::new("changed").expect("text"),
-                        truncated: false,
-                    },
-                )),
+                outcome: HookOutcome::TransformResult(ToolResult::Read(TextResult {
+                    text: BoundedText::new("changed").expect("text"),
+                    truncated: false,
+                })),
             }))
             .expect("hook registers");
         let error = ApplicationService::with_hooks(&repository, hooks)
@@ -709,6 +803,10 @@ fn pre_execution_hook_matrix_covers_errors_transforms_and_rejections_per_phase()
         assert_eq!(
             error.message(),
             "hook outcome is incompatible with its phase"
+        );
+        assert_eq!(
+            repository.committed_results()[0].content(),
+            "invalid_hook_outcome"
         );
         let _ = fs::remove_dir_all(root);
     }
@@ -723,9 +821,7 @@ fn executed_phase_hook_outcomes_cover_invalid_input_and_error_paths() {
         .register(Box::new(PhaseOutcomeHook {
             phase: Phase::AfterToolExecution,
             id: "executed-invalid-input",
-            outcome: HookOutcome::TransformInput(ToolInput::Read(ReadInput {
-                path: intention_types::WorkspaceRelativePathDto::parse("other.txt").expect("path"),
-            })),
+            outcome: HookOutcome::TransformInput(managed_read_input("other.txt")),
         }))
         .expect("hook registers");
     let error = ApplicationService::with_hooks(&repository, hooks)
@@ -739,12 +835,10 @@ fn executed_phase_hook_outcomes_cover_invalid_input_and_error_paths() {
         error.message(),
         "input transformation is incompatible with its phase"
     );
-    let events = repository.tool_events.borrow();
-    assert_eq!(
-        events.last().expect("terminal event").status(),
-        &intention_domain::ToolLifecycleStatusDto::Failed
-    );
-    drop(events);
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
+    assert_eq!(results[0].content(), "invalid_hook_outcome");
     let _ = fs::remove_dir_all(root);
 
     let root = hello_tool_root("executed-error");
@@ -762,6 +856,10 @@ fn executed_phase_hook_outcomes_cover_invalid_input_and_error_paths() {
         ))
         .expect_err("post-execution hook errors fail closed");
     assert_eq!(error.code(), "hook_failed");
+    assert_eq!(
+        repository.committed_results()[0].status(),
+        ToolResultStatusDto::Failed
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -771,8 +869,8 @@ fn post_execution_result_phases_cover_rejection_and_invalid_input() {
         Phase::BeforeToolResultPersist,
         Phase::BeforeToolResultModelContext,
     ] {
-        // Hook rejections after execution durably record the failure without a
-        // completed terminal event.
+        // Hook rejections after execution record the failed terminal result
+        // without any completed result.
         let root = hello_tool_root("post-reject");
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
@@ -794,12 +892,11 @@ fn post_execution_result_phases_cover_rejection_and_invalid_input() {
             ))
             .expect_err("post-execution rejections surface");
         assert_eq!(error.code(), "result_phase_blocked");
-        let events = repository.tool_events.borrow();
-        assert_eq!(
-            events.last().expect("terminal event").status(),
-            &intention_domain::ToolLifecycleStatusDto::Failed
-        );
-        drop(events);
+        let results = repository.committed_results();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
+        assert_eq!(results[0].content(), "result_phase_blocked");
+        assert_eq!(repository.completed_result_count(), 0);
         let _ = fs::remove_dir_all(root);
 
         // Input transformations remain invalid for result phases.
@@ -811,10 +908,7 @@ fn post_execution_result_phases_cover_rejection_and_invalid_input() {
             .register(Box::new(PhaseOutcomeHook {
                 phase,
                 id: "post-input",
-                outcome: HookOutcome::TransformInput(ToolInput::Read(ReadInput {
-                    path: intention_types::WorkspaceRelativePathDto::parse("other.txt")
-                        .expect("path"),
-                })),
+                outcome: HookOutcome::TransformInput(managed_read_input("other.txt")),
             }))
             .expect("hook registers");
         let error = ApplicationService::with_hooks(&repository, hooks)
@@ -828,12 +922,10 @@ fn post_execution_result_phases_cover_rejection_and_invalid_input() {
             error.message(),
             "input transformation is incompatible with its phase"
         );
-        let events = repository.tool_events.borrow();
-        assert_eq!(
-            events.last().expect("terminal event").status(),
-            &intention_domain::ToolLifecycleStatusDto::Failed
-        );
-        drop(events);
+        let results = repository.committed_results();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
+        assert_eq!(results[0].content(), "invalid_hook_outcome");
         let _ = fs::remove_dir_all(root);
     }
 }
@@ -853,14 +945,25 @@ fn interrupt_and_snapshot_workflows_map_durable_results() {
             config.revision_id(),
         )),
         Vec::new(),
-        5,
     );
+    let messages = vec![
+        MessageProjectionDto::new(
+            session_id,
+            Some(run_id),
+            MessageKindDto::User,
+            "hello",
+            None,
+            None,
+            None,
+        )
+        .expect("fixture row is valid"),
+    ];
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable(
         "fixture_unused",
         "accept is not used by this fixture",
     )));
-    *repository.loaded_snapshot.borrow_mut() = Some(state.clone());
-    *repository.transitioned.borrow_mut() = Some(change(state.clone(), None));
+    *repository.loaded_projection.borrow_mut() = Some(state.clone());
+    *repository.recent_messages.borrow_mut() = messages.clone();
     let application = ApplicationService::new(&repository);
 
     let interrupted = application
@@ -869,16 +972,16 @@ fn interrupt_and_snapshot_workflows_map_durable_results() {
     assert!(matches!(
         interrupted,
         ProtocolAcceptedResultDto::InterruptRun(value)
-            if value.session_id() == session_id
-                && value.run_id() == run_id
-                && value.at_sequence() == state.at_sequence()
+            if value.session_id() == session_id && value.run_id() == run_id
     ));
 
     let snapshot = application
         .get_session_snapshot(GetSessionSnapshotQueryDto::new(session_id))
         .expect("snapshot maps");
     assert_eq!(snapshot.session_id(), session_id);
+    assert_eq!(snapshot.schema_version(), CURRENT_DTO_SCHEMA_VERSION);
     assert_eq!(snapshot.projection(), &state);
+    assert_eq!(snapshot.messages(), messages.as_slice());
 }
 
 #[test]
@@ -888,7 +991,7 @@ fn interrupt_run_rejects_a_run_that_is_not_active() {
         "fixture_unused",
         "accept is not used by this fixture",
     )));
-    *repository.loaded_snapshot.borrow_mut() = Some(projection(session_id, None, Vec::new(), 5));
+    *repository.loaded_projection.borrow_mut() = Some(projection(session_id, None, Vec::new()));
     assert_eq!(
         ApplicationService::new(&repository)
             .interrupt_run(InterruptRunCommandDto::new(session_id, RunId::new()))
@@ -902,14 +1005,12 @@ fn interrupt_run_rejects_a_run_that_is_not_active() {
 fn create_and_remove_workflows_map_committed_results() {
     let session_id = SessionId::new();
     let pending_turn = TurnId::new();
-    let repository = FakeRepository::with_accepted(Ok(change(
-        projection(session_id, None, Vec::new(), 3),
-        Some(AcceptedTurnOutcomeDto::Pending),
-    )));
-    *repository.created.borrow_mut() =
-        Some(change(projection(session_id, None, Vec::new(), 1), None));
-    *repository.removed.borrow_mut() =
-        Some(change(projection(session_id, None, Vec::new(), 4), None));
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository.created.borrow_mut() = Some(projection(session_id, None, Vec::new()));
+    *repository.removed.borrow_mut() = Some(
+        PendingTurnProjectionDto::new(session_id, pending_turn, "later")
+            .expect("fixture pending turn is valid"),
+    );
     let application = ApplicationService::new(&repository);
     let create = CreateSessionCommandDto::new(
         ProjectId::new(),
@@ -924,7 +1025,7 @@ fn create_and_remove_workflows_map_committed_results() {
         .expect("create maps");
     assert!(matches!(
         created,
-        ProtocolAcceptedResultDto::CreateSession(_)
+        ProtocolAcceptedResultDto::CreateSession(value) if value.session_id() == session_id
     ));
     let removed = application
         .remove_turn(
@@ -932,63 +1033,50 @@ fn create_and_remove_workflows_map_committed_results() {
             fixture_time(),
         )
         .expect("removal maps");
-    assert!(matches!(removed, ProtocolAcceptedResultDto::RemoveTurn(_)));
+    assert!(matches!(
+        removed,
+        ProtocolAcceptedResultDto::RemoveTurn(value)
+            if value.session_id() == session_id && value.turn_id() == pending_turn
+    ));
 }
 
 #[test]
 fn local_tool_after_execution_transform_is_applied() {
-    let root = std::env::temp_dir().join(format!("intention-app-hooks-{}", SessionId::new()));
-    fs::create_dir_all(&root).expect("root");
-    fs::write(root.join("hello.txt"), "hello").expect("file");
-    let workspace =
-        WorkspaceRoot::resolve(&WorkspaceRootDto::parse(root.to_string_lossy()).expect("dto"))
-            .expect("workspace");
+    let root = hello_tool_root("execution-transform");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let mut hooks = Registry::new();
     hooks
         .register(Box::new(PhaseOutcomeHook {
             phase: Phase::AfterToolExecution,
             id: "execution-transform",
-            outcome: HookOutcome::TransformResult(intention_tools::ToolResult::Read(
-                intention_tools::TextResult {
-                    text: intention_tools::BoundedText::new("changed").expect("text"),
-                    truncated: false,
-                },
-            )),
+            outcome: HookOutcome::TransformResult(ToolResult::Read(TextResult {
+                text: BoundedText::new("changed").expect("text"),
+                truncated: false,
+            })),
         }))
         .expect("hook");
     let result = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool(InvokeLocalToolInputDto::new(
-            workspace,
-            SessionId::new(),
-            RunId::new(),
-            ToolCallId::new(),
-            "read",
-            ToolInput::Read(ReadInput {
-                path: intention_types::WorkspaceRelativePathDto::parse("hello.txt").expect("path"),
-            }),
-            fixture_time(),
+        .invoke_local_tool(invoke_read_input_in_workspace(
+            &hello_workspace(&root),
+            "hello.txt",
         ))
         .expect("transformed read succeeds");
     let result = completed_outcome(result);
     assert_eq!(
         result,
-        intention_tools::ToolResult::Read(intention_tools::TextResult {
-            text: intention_tools::BoundedText::new("changed").expect("text"),
+        ToolResult::Read(TextResult {
+            text: BoundedText::new("changed").expect("text"),
             truncated: false,
         })
     );
+    assert_eq!(repository.committed_results()[0].content(), "changed");
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
 fn local_tool_covers_workspace_reject_and_all_post_execution_outcomes() {
-    let root = std::env::temp_dir().join(format!("intention-app-branches-{}", SessionId::new()));
-    fs::create_dir_all(&root).expect("root");
-    fs::write(root.join("hello.txt"), "hello").expect("file");
-    let workspace =
-        WorkspaceRoot::resolve(&WorkspaceRootDto::parse(root.to_string_lossy()).expect("dto"))
-            .expect("workspace");
+    let root = hello_tool_root("branches");
+    let workspace = hello_workspace(&root);
 
     for (phase, outcome, expected) in [
         (
@@ -998,12 +1086,10 @@ fn local_tool_covers_workspace_reject_and_all_post_execution_outcomes() {
         ),
         (
             Phase::AfterWorkspaceResolution,
-            HookOutcome::TransformResult(intention_tools::ToolResult::Read(
-                intention_tools::TextResult {
-                    text: intention_tools::BoundedText::new("x").expect("text"),
-                    truncated: false,
-                },
-            )),
+            HookOutcome::TransformResult(ToolResult::Read(TextResult {
+                text: BoundedText::new("x").expect("text"),
+                truncated: false,
+            })),
             "invalid_hook_outcome",
         ),
         (
@@ -1013,9 +1099,7 @@ fn local_tool_covers_workspace_reject_and_all_post_execution_outcomes() {
         ),
         (
             Phase::BeforeToolResultModelContext,
-            HookOutcome::TransformInput(ToolInput::Read(ReadInput {
-                path: intention_types::WorkspaceRelativePathDto::parse("hello.txt").expect("path"),
-            })),
+            HookOutcome::TransformInput(managed_read_input("hello.txt")),
             "invalid_hook_outcome",
         ),
     ] {
@@ -1036,26 +1120,23 @@ fn local_tool_covers_workspace_reject_and_all_post_execution_outcomes() {
                 RunId::new(),
                 ToolCallId::new(),
                 "read",
-                ToolInput::Read(ReadInput {
-                    path: intention_types::WorkspaceRelativePathDto::parse("hello.txt")
-                        .expect("path"),
-                }),
+                managed_read_input("hello.txt"),
                 fixture_time(),
             ))
             .expect_err("hook branch rejects");
         assert_eq!(error.code(), expected);
+        let results = repository.committed_results();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
+        assert_eq!(results[0].content(), expected);
     }
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
 fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
-    let root = std::env::temp_dir().join(format!("intention-app-dispatch-{}", SessionId::new()));
-    fs::create_dir_all(&root).expect("root");
-    fs::write(root.join("hello.txt"), "hello").expect("file");
-    let workspace =
-        WorkspaceRoot::resolve(&WorkspaceRootDto::parse(root.to_string_lossy()).expect("dto"))
-            .expect("workspace");
+    let root = hello_tool_root("dispatch-errors");
+    let workspace = hello_workspace(&root);
     for phase in [
         Phase::BeforeToolExecution,
         Phase::BeforeWorkspaceResolution,
@@ -1078,10 +1159,7 @@ fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
                 RunId::new(),
                 ToolCallId::new(),
                 "read",
-                ToolInput::Read(ReadInput {
-                    path: intention_types::WorkspaceRelativePathDto::parse("hello.txt")
-                        .expect("path"),
-                }),
+                managed_read_input("hello.txt"),
                 fixture_time(),
             ))
             .expect_err("dispatch error");
@@ -1098,12 +1176,10 @@ fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
             .register(Box::new(PhaseOutcomeHook {
                 phase,
                 id: "post-transform",
-                outcome: HookOutcome::TransformResult(intention_tools::ToolResult::Read(
-                    intention_tools::TextResult {
-                        text: intention_tools::BoundedText::new("changed").expect("text"),
-                        truncated: false,
-                    },
-                )),
+                outcome: HookOutcome::TransformResult(ToolResult::Read(TextResult {
+                    text: BoundedText::new("changed").expect("text"),
+                    truncated: false,
+                })),
             }))
             .expect("hook");
         let result = ApplicationService::with_hooks(&repository, hooks)
@@ -1113,21 +1189,22 @@ fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
                 RunId::new(),
                 ToolCallId::new(),
                 "read",
-                ToolInput::Read(ReadInput {
-                    path: intention_types::WorkspaceRelativePathDto::parse("hello.txt")
-                        .expect("path"),
-                }),
+                managed_read_input("hello.txt"),
                 fixture_time(),
             ))
             .expect("transformed result");
         let result = completed_outcome(result);
         assert_eq!(
             result,
-            intention_tools::ToolResult::Read(intention_tools::TextResult {
-                text: intention_tools::BoundedText::new("changed").expect("text"),
+            ToolResult::Read(TextResult {
+                text: BoundedText::new("changed").expect("text"),
                 truncated: false,
             })
         );
+        let results = repository.committed_results();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
+        assert_eq!(results[0].content(), "changed");
     }
 
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
@@ -1146,26 +1223,20 @@ fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
             RunId::new(),
             ToolCallId::new(),
             "read",
-            ToolInput::Read(ReadInput {
-                path: intention_types::WorkspaceRelativePathDto::parse("hello.txt").expect("path"),
-            }),
+            managed_read_input("hello.txt"),
             fixture_time(),
         ))
         .expect("published Continue is valid");
     let result = completed_outcome(result);
-    assert!(matches!(result, intention_tools::ToolResult::Read(_)));
+    assert!(matches!(result, ToolResult::Read(_)));
+    assert_eq!(repository.completed_result_count(), 1);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
 fn local_tool_covers_invocation_and_pre_effect_hook_errors_and_rejections() {
-    let root = std::env::temp_dir().join(format!("intention-app-pre-hooks-{}", SessionId::new()));
-    fs::create_dir_all(&root).expect("root");
-    fs::write(root.join("hello.txt"), "hello").expect("file");
-    let workspace = WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root.to_string_lossy()).expect("workspace"),
-    )
-    .expect("workspace is valid");
+    let root = hello_tool_root("pre-hooks");
+    let workspace = hello_workspace(&root);
     for phase in [
         Phase::BeforeToolInvocation,
         Phase::BeforeWorkspaceResolution,
@@ -1186,6 +1257,7 @@ fn local_tool_covers_invocation_and_pre_effect_hook_errors_and_rejections() {
             .invoke_local_tool(invoke_read_input_in_workspace(&workspace, "hello.txt"))
             .expect_err("hook rejection");
         assert_eq!(error.code(), "hook_rejected");
+        assert_eq!(repository.committed_results()[0].content(), "hook_rejected");
 
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
@@ -1206,7 +1278,7 @@ fn local_tool_records_partial_terminal_status_on_interruption() {
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     // The cancellation is observed after the child has been spawned, so the
     // call ends with whatever output was captured before the stop.
-    let signal = intention_tools::CancellationSignal::new();
+    let signal = CancellationSignal::new();
     let cancellation = signal.clone();
     let canceller = std::thread::spawn(move || {
         // Wait for a confirmed child spawn instead of racing a fixed sleep:
@@ -1229,26 +1301,7 @@ fn local_tool_records_partial_terminal_status_on_interruption() {
                 RunId::new(),
                 ToolCallId::new(),
                 "execute",
-                ToolInput::Execute(intention_tools::ExecuteInput {
-                    program: intention_tools::BoundedText::new(if cfg!(windows) {
-                        "ping"
-                    } else {
-                        "sh"
-                    })
-                    .expect("program"),
-                    args: vec![
-                        intention_tools::BoundedText::new(if cfg!(windows) { "-n" } else { "-c" })
-                            .expect("arg"),
-                        intention_tools::BoundedText::new(if cfg!(windows) {
-                            "2"
-                        } else {
-                            "sleep 1"
-                        })
-                        .expect("arg"),
-                        #[cfg(windows)]
-                        intention_tools::BoundedText::new("127.0.0.1").expect("arg"),
-                    ],
-                }),
+                sleeping_execute_input(),
                 fixture_time(),
             )
             .with_cancellation(signal),
@@ -1259,10 +1312,13 @@ fn local_tool_records_partial_terminal_status_on_interruption() {
         unreachable!("the stopped execute must be a partial outcome")
     };
     assert!(stopped);
-    assert!(repository.tool_events.borrow().iter().any(|event| matches!(
-        event.status(),
-        intention_domain::ToolLifecycleStatusDto::Partial
-    )));
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status(), ToolResultStatusDto::Partial);
+    assert!(results[0].content().contains(
+        "[The tool call was stopped before a final result; the output above is partial.]"
+    ));
+    assert_eq!(repository.completed_result_count(), 0);
 }
 
 #[test]
@@ -1313,16 +1369,10 @@ fn cancelled_tool_lifecycle_is_terminal_and_not_completed_or_replayed() {
                 run_id,
                 call_id,
                 "execute",
-                ToolInput::Execute(intention_tools::ExecuteInput {
-                    program: intention_tools::BoundedText::new("sh").expect("program"),
-                    args: vec![
-                        intention_tools::BoundedText::new("-c").expect("arg"),
-                        intention_tools::BoundedText::new("sleep 1").expect("arg"),
-                    ],
-                }),
+                cancelled_execute_input(),
                 fixture_time(),
             )
-            .with_cancellation(intention_tools::CancellationSignal::cancelled()),
+            .with_cancellation(CancellationSignal::cancelled()),
         )
         .expect("a pre-start cancellation is a partial outcome");
     assert_eq!(
@@ -1333,30 +1383,29 @@ fn cancelled_tool_lifecycle_is_terminal_and_not_completed_or_replayed() {
         }
     );
 
-    let events = repository.tool_events.borrow();
+    // The call row is durable before the cancellation is observed, and the
+    // partial result is the one terminal row the call records.
+    let messages = repository.committed_messages();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].kind(), MessageKindDto::ToolCall);
     assert!(
-        !events.is_empty(),
-        "admission is durable before cancellation"
-    );
-    assert!(events.iter().all(|event| event.session_id() == session_id));
-    assert!(events.iter().all(|event| event.run_id() == run_id));
-    assert!(events.iter().all(|event| event.call_id() == call_id));
-    assert_eq!(
-        events
+        messages
             .iter()
-            .filter(|event| matches!(
-                event.status(),
-                intention_domain::ToolLifecycleStatusDto::Completed
-            ))
-            .count(),
-        0,
-        "cancellation cannot produce a duplicate completion"
+            .all(|row| row.session_id() == session_id && row.run_id() == Some(run_id))
     );
-    assert!(events.iter().any(|event| matches!(
-        event.status(),
-        intention_domain::ToolLifecycleStatusDto::Partial
-            | intention_domain::ToolLifecycleStatusDto::Failed
-    )));
+    assert!(
+        messages
+            .iter()
+            .all(|row| row.tool_call_id() == Some(call_id))
+    );
+    assert_eq!(repository.completed_result_count(), 0);
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status(), ToolResultStatusDto::Partial);
+    assert_eq!(
+        results[0].content(),
+        "[The tool call was stopped before a final result.]"
+    );
 }
 
 struct FailOpenFailingHook {
@@ -1398,12 +1447,7 @@ impl HookObservationPort for RecordingObserver {
 
 #[test]
 fn fail_open_hook_failures_reach_the_observation_boundary_with_redacted_metadata() {
-    let root = std::env::temp_dir().join(format!("intention-app-failopen-{}", SessionId::new()));
-    fs::create_dir_all(&root).expect("root");
-    fs::write(root.join("hello.txt"), "hello").expect("file");
-    let workspace =
-        WorkspaceRoot::resolve(&WorkspaceRootDto::parse(root.to_string_lossy()).expect("dto"))
-            .expect("workspace");
+    let root = hello_tool_root("fail-open");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let mut hooks = Registry::new();
     hooks
@@ -1423,23 +1467,12 @@ fn fail_open_hook_failures_reach_the_observation_boundary_with_redacted_metadata
     };
     let result = ApplicationService::with_hooks(&repository, hooks)
         .invoke_local_tool_with_observation(
-            InvokeLocalToolInputDto::new(
-                workspace,
-                SessionId::new(),
-                RunId::new(),
-                ToolCallId::new(),
-                "read",
-                ToolInput::Read(ReadInput {
-                    path: intention_types::WorkspaceRelativePathDto::parse("hello.txt")
-                        .expect("path"),
-                }),
-                fixture_time(),
-            ),
+            invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt"),
             &observer,
         )
         .expect("fail-open failures continue execution");
     let result = completed_outcome(result);
-    assert!(matches!(result, intention_tools::ToolResult::Read(_)));
+    assert!(matches!(result, ToolResult::Read(_)));
 
     // Metadata is not discarded: every tolerated failure reaches the boundary
     // with its exact safe identity, in registry-deterministic order.
@@ -1461,16 +1494,13 @@ fn fail_open_hook_failures_reach_the_observation_boundary_with_redacted_metadata
             },
         ]
     );
-    // The durable lifecycle events stay redacted: the tolerated hook error's
-    // code and message detail, and absolute filesystem paths, never cross the
-    // durable boundary even though the failure carried them as input.
-    let events = repository.tool_events.borrow();
-    assert_eq!(events.len(), 3);
-    assert!(matches!(
-        events[2].status(),
-        intention_domain::ToolLifecycleStatusDto::Completed
-    ));
-    let rendered = format!("{events:?}");
+    // The committed rows stay redacted: the tolerated hook error's code and
+    // message detail, and absolute filesystem paths, never cross the durable
+    // boundary even though the failure carried them as input.
+    let messages = repository.committed_messages();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(repository.completed_result_count(), 1);
+    let rendered = format!("{messages:?} {:?}", repository.committed_results());
     assert!(!rendered.contains("FAKE_SECRET"));
     assert!(!rendered.contains(&root.to_string_lossy().to_string()));
     assert!(!rendered.contains("fail_open_failure"));
@@ -1535,42 +1565,9 @@ impl Hook for FailOpenPublishedHook {
     }
 }
 
-fn hello_tool_root(tag: &str) -> std::path::PathBuf {
-    let root = std::env::temp_dir().join(format!("intention-publish-{tag}-{}", SessionId::new()));
-    fs::create_dir_all(&root).expect("root");
-    fs::write(root.join("hello.txt"), "hello").expect("hello fixture");
-    root
-}
-
-fn hello_workspace(root: &std::path::Path) -> WorkspaceRoot {
-    WorkspaceRoot::resolve(&WorkspaceRootDto::parse(root.to_string_lossy()).expect("dto"))
-        .expect("workspace")
-}
-
-fn hello_read_result() -> intention_tools::ToolResult {
-    intention_tools::ToolResult::Read(intention_tools::TextResult {
-        text: intention_tools::BoundedText::new("hello").expect("text"),
-        truncated: false,
-    })
-}
-
-fn completed_terminal_event_count(repository: &FakeRepository) -> usize {
-    repository
-        .tool_events
-        .borrow()
-        .iter()
-        .filter(|event| {
-            matches!(
-                event.status(),
-                intention_domain::ToolLifecycleStatusDto::Completed
-            )
-        })
-        .count()
-}
-
 #[test]
 fn publication_failure_propagates_after_the_durable_completed_commit() {
-    let root = hello_tool_root("failure");
+    let root = hello_tool_root("publication-failure");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let publisher = CapturingPublisher::failing(ErrorDto::unavailable(
         "publication_unavailable",
@@ -1587,20 +1584,17 @@ fn publication_failure_propagates_after_the_durable_completed_commit() {
     // The committed result reached the boundary exactly once even though the
     // caller sees the publication error.
     assert_eq!(publisher.published().len(), 1);
-    // Terminal completion stays durable; no extra failure event is appended.
-    let events = repository.tool_events.borrow();
-    assert_eq!(events.len(), 3);
-    assert_eq!(
-        events.last().expect("terminal event").status(),
-        &intention_domain::ToolLifecycleStatusDto::Completed
-    );
-    drop(events);
+    // Terminal completion stays durable; no extra failure row is committed.
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
+    assert_eq!(repository.completed_result_count(), 1);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
 fn after_publish_hook_rejection_surfaces_after_the_completed_commit() {
-    let root = hello_tool_root("reject");
+    let root = hello_tool_root("publish-reject");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let mut hooks = Registry::new();
     hooks
@@ -1625,13 +1619,9 @@ fn after_publish_hook_rejection_surfaces_after_the_completed_commit() {
     // Publication already happened before the post-publish hook ran.
     assert_eq!(publisher.published().len(), 1);
     // The completed commit is preserved and not duplicated as a failure.
-    let events = repository.tool_events.borrow();
-    assert_eq!(events.len(), 3);
-    assert_eq!(
-        events.last().expect("terminal event").status(),
-        &intention_domain::ToolLifecycleStatusDto::Completed
-    );
-    drop(events);
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1640,26 +1630,22 @@ fn after_publish_transform_outcomes_are_invalidated_without_extra_failures() {
     // Result transformations reach the application boundary and are refused
     // after publication; input transformations are already refused by the hook
     // registry as incompatible with the published phase. Both stay fail-closed
-    // without appending any post-completion lifecycle record.
+    // without committing any post-completion row.
     let outcomes = [
         (
-            HookOutcome::TransformResult(intention_tools::ToolResult::Read(
-                intention_tools::TextResult {
-                    text: intention_tools::BoundedText::new("changed").expect("text"),
-                    truncated: false,
-                },
-            )),
+            HookOutcome::TransformResult(ToolResult::Read(TextResult {
+                text: BoundedText::new("changed").expect("text"),
+                truncated: false,
+            })),
             "published result cannot be transformed",
         ),
         (
-            HookOutcome::TransformInput(ToolInput::Read(ReadInput {
-                path: intention_types::WorkspaceRelativePathDto::parse("elsewhere").expect("path"),
-            })),
+            HookOutcome::TransformInput(managed_read_input("elsewhere")),
             "input transformation is incompatible with its phase",
         ),
     ];
     for (outcome, expected_message) in outcomes {
-        let root = hello_tool_root("transform");
+        let root = hello_tool_root("publish-transform");
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
         let mut hooks = Registry::new();
@@ -1678,21 +1664,17 @@ fn after_publish_transform_outcomes_are_invalidated_without_extra_failures() {
             .expect_err("published results cannot be transformed");
         assert_eq!(error.code(), "invalid_hook_outcome");
         assert_eq!(error.message(), expected_message);
-        // Completion stays durable and exactly one terminal record exists.
-        let events = repository.tool_events.borrow();
-        assert_eq!(events.len(), 3);
-        assert_eq!(
-            events.last().expect("terminal event").status(),
-            &intention_domain::ToolLifecycleStatusDto::Completed
-        );
-        drop(events);
+        // Completion stays durable and exactly one terminal row exists.
+        let results = repository.committed_results();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
         let _ = fs::remove_dir_all(root);
     }
 }
 
 #[test]
 fn after_publish_hook_error_fails_closed_on_the_completed_commit() {
-    let root = hello_tool_root("dispatch-error");
+    let root = hello_tool_root("publish-dispatch-error");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let mut hooks = Registry::new();
     hooks
@@ -1707,20 +1689,16 @@ fn after_publish_hook_error_fails_closed_on_the_completed_commit() {
         )
         .expect_err("post-publish dispatch error surfaces");
     assert_eq!(error.code(), "hook_failed");
-    let events = repository.tool_events.borrow();
-    assert_eq!(events.len(), 3);
-    assert_eq!(
-        events.last().expect("terminal event").status(),
-        &intention_domain::ToolLifecycleStatusDto::Completed
-    );
-    drop(events);
-    assert_eq!(completed_terminal_event_count(&repository), 1);
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
+    assert_eq!(repository.completed_result_count(), 1);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
 fn fail_open_failures_in_the_published_phase_reach_the_observer() {
-    let root = hello_tool_root("observation");
+    let root = hello_tool_root("published-observation");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let mut hooks = Registry::new();
     hooks
@@ -1747,141 +1725,80 @@ fn fail_open_failures_in_the_published_phase_reach_the_observer() {
             failure_policy: FailurePolicy::FailOpen,
         }]
     );
-    let events = repository.tool_events.borrow();
-    assert_eq!(events.len(), 3);
-    assert_eq!(
-        events.last().expect("terminal event").status(),
-        &intention_domain::ToolLifecycleStatusDto::Completed
-    );
-    drop(events);
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
     let _ = fs::remove_dir_all(root);
 }
 
 enum MatrixHook {
     None,
-    DispatchError(Phase),
     Reject(Phase),
 }
 
 #[test]
-fn selected_append_failures_propagate_from_each_lifecycle_commit_point() {
+fn selected_commit_failures_propagate_from_each_commit_point() {
+    // The call row commits first and the terminal result row second; each
+    // selected failure must surface and leave only the earlier commit durable.
     let scenarios: Vec<(&str, usize, MatrixHook, usize)> = vec![
+        ("tool-call-commit", 1, MatrixHook::None, 0),
+        ("completed-commit", 2, MatrixHook::None, 1),
         (
-            "invocation-dispatch-error",
-            2,
-            MatrixHook::DispatchError(Phase::BeforeToolInvocation),
-            1,
-        ),
-        (
-            "invocation-rejection",
+            "invocation-rejection-commit",
             2,
             MatrixHook::Reject(Phase::BeforeToolInvocation),
             1,
         ),
         (
-            "workspace-resolution-dispatch-error",
+            "execution-rejection-commit",
             2,
-            MatrixHook::DispatchError(Phase::BeforeWorkspaceResolution),
+            MatrixHook::Reject(Phase::BeforeToolExecution),
             1,
         ),
-        (
-            "workspace-resolution-rejection",
-            2,
-            MatrixHook::Reject(Phase::BeforeWorkspaceResolution),
-            1,
-        ),
-        (
-            "workspace-resolved-dispatch-error",
-            2,
-            MatrixHook::DispatchError(Phase::AfterWorkspaceResolution),
-            1,
-        ),
-        (
-            "workspace-resolved-rejection",
-            2,
-            MatrixHook::Reject(Phase::AfterWorkspaceResolution),
-            1,
-        ),
-        ("started-commit", 2, MatrixHook::None, 1),
-        (
-            "executed-dispatch-error",
-            3,
-            MatrixHook::DispatchError(Phase::AfterToolExecution),
-            2,
-        ),
-        (
-            "persist-dispatch-error",
-            3,
-            MatrixHook::DispatchError(Phase::BeforeToolResultPersist),
-            2,
-        ),
-        (
-            "model-context-dispatch-error",
-            3,
-            MatrixHook::DispatchError(Phase::BeforeToolResultModelContext),
-            2,
-        ),
-        (
-            "persist-rejection",
-            3,
-            MatrixHook::Reject(Phase::BeforeToolResultPersist),
-            2,
-        ),
-        (
-            "model-context-rejection",
-            3,
-            MatrixHook::Reject(Phase::BeforeToolResultModelContext),
-            2,
-        ),
-        ("completed-commit", 3, MatrixHook::None, 2),
     ];
-    for (label, failing_call, hook, expected_events) in scenarios {
-        let root = hello_tool_root("append-failure");
+    for (label, failing_call, hook, expected_messages) in scenarios {
+        let root = hello_tool_root("commit-failure");
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        *repository.append_failures.borrow_mut() = vec![failing_call];
+        *repository.commit_failures.borrow_mut() = vec![failing_call];
         let mut hooks = Registry::new();
-        match hook {
-            MatrixHook::None => {}
-            MatrixHook::DispatchError(phase) => {
-                hooks
-                    .register(Box::new(DispatchErrorHook { phase }))
-                    .expect("hook registers");
-            }
-            MatrixHook::Reject(phase) => {
-                hooks
-                    .register(Box::new(PhaseOutcomeHook {
-                        phase,
-                        id: "append-failure-reject",
-                        outcome: HookOutcome::Reject(ErrorDto::validation(
-                            "append_scenario_blocked",
-                            "blocked",
-                        )),
-                    }))
-                    .expect("hook registers");
-            }
+        if let MatrixHook::Reject(phase) = hook {
+            hooks
+                .register(Box::new(PhaseOutcomeHook {
+                    phase,
+                    id: "commit-failure-reject",
+                    outcome: HookOutcome::Reject(ErrorDto::validation(
+                        "commit_scenario_blocked",
+                        "blocked",
+                    )),
+                }))
+                .expect("hook registers");
         }
         let error = ApplicationService::with_hooks(&repository, hooks)
             .invoke_local_tool(invoke_read_input_in_workspace(
                 &hello_workspace(&root),
                 "hello.txt",
             ))
-            .expect_err("the selected append failure must propagate");
+            .expect_err("the selected commit failure must propagate");
         assert_eq!(error.code(), "append_unavailable", "scenario {label}");
         assert_eq!(
-            repository.tool_events.borrow().len(),
-            expected_events,
+            repository.committed_messages().len(),
+            expected_messages,
+            "scenario {label}"
+        );
+        assert!(
+            repository.committed_results().is_empty(),
             "scenario {label}"
         );
         let _ = fs::remove_dir_all(root);
     }
 }
 
-/// Publication probe that records the durable evidence length at publish time.
+/// Publication probe that records the committed result-row count at publish time.
 struct TerminalOrderingProbe<'a> {
     repository: &'a FakeRepository,
     publications: RefCell<Vec<ToolResultPublicationInputDto>>,
-    evidence_at_publish: RefCell<Vec<usize>>,
+    results_at_publish: RefCell<Vec<usize>>,
 }
 
 impl<'a> TerminalOrderingProbe<'a> {
@@ -1889,53 +1806,59 @@ impl<'a> TerminalOrderingProbe<'a> {
         Self {
             repository,
             publications: RefCell::new(Vec::new()),
-            evidence_at_publish: RefCell::new(Vec::new()),
+            results_at_publish: RefCell::new(Vec::new()),
         }
+    }
+
+    fn published(&self) -> Vec<ToolResultPublicationInputDto> {
+        self.publications.borrow().clone()
     }
 }
 
 impl ToolResultPublicationPort for TerminalOrderingProbe<'_> {
     fn publish_tool_result(&self, input: &ToolResultPublicationInputDto) -> DtoResult<()> {
-        self.evidence_at_publish
+        self.results_at_publish
             .borrow_mut()
-            .push(self.repository.tool_events.borrow().len());
+            .push(self.repository.committed_results().len());
         self.publications.borrow_mut().push(input.clone());
         Ok(())
     }
 }
 
-/// Asserts exactly one terminal event exists, is last, and correlates exactly.
-fn assert_single_terminal_event(
+/// Asserts exactly one terminal-result row exists with exact correlation and
+/// that its answering transcript row committed with it.
+fn assert_single_terminal_result(
     repository: &FakeRepository,
     session_id: SessionId,
     run_id: RunId,
     call_id: ToolCallId,
-    status: &intention_domain::ToolLifecycleStatusDto,
+    tool_id: &str,
+    status: ToolResultStatusDto,
 ) {
-    let events = repository.tool_events.borrow();
-    let terminal = events
-        .iter()
-        .filter(|event| {
-            matches!(
-                event.status(),
-                intention_domain::ToolLifecycleStatusDto::Completed
-                    | intention_domain::ToolLifecycleStatusDto::Failed
-                    | intention_domain::ToolLifecycleStatusDto::Partial
-                    | intention_domain::ToolLifecycleStatusDto::Cancelled
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(terminal.len(), 1, "exactly one terminal event is persisted");
-    let terminal = terminal[0];
-    assert_eq!(events.last(), Some(terminal), "terminal evidence is last");
+    let results = repository.committed_results();
+    assert_eq!(
+        results.len(),
+        1,
+        "exactly one terminal result row is committed"
+    );
+    let terminal = &results[0];
     assert_eq!(terminal.status(), status);
     assert_eq!(terminal.session_id(), session_id);
     assert_eq!(terminal.run_id(), run_id);
     assert_eq!(terminal.call_id(), call_id);
+    assert_eq!(terminal.tool_id(), tool_id);
+    let messages = repository.committed_messages();
+    let answering = messages
+        .last()
+        .expect("the terminal result commits with its answering row");
+    assert_eq!(answering.kind(), MessageKindDto::ToolResult);
+    assert_eq!(answering.tool_call_id(), Some(call_id));
+    assert_eq!(answering.tool_id(), Some(tool_id));
+    assert_eq!(answering.text(), terminal.content());
 }
 
 #[test]
-fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
+fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
     let root = hello_tool_root("terminal-matrix");
     let session_id = SessionId::new();
     let run_id = RunId::new();
@@ -1952,10 +1875,7 @@ fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
                 run_id,
                 call_id,
                 "read",
-                ToolInput::Read(ReadInput {
-                    path: intention_types::WorkspaceRelativePathDto::parse("hello.txt")
-                        .expect("path"),
-                }),
+                managed_read_input("hello.txt"),
                 fixture_time(),
             ),
             &publisher,
@@ -1963,27 +1883,27 @@ fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
         .expect("read succeeds");
     let result = completed_outcome(result);
     assert_eq!(result, hello_read_result());
-    assert_single_terminal_event(
+    assert_single_terminal_result(
         &repository,
         session_id,
         run_id,
         call_id,
-        &intention_domain::ToolLifecycleStatusDto::Completed,
+        "read",
+        ToolResultStatusDto::Completed,
     );
-    // Three events are durable (admitted, started, completed) when publication
-    // runs, proving the terminal commit precedes the publication boundary.
-    assert_eq!(*publisher.evidence_at_publish.borrow(), vec![3]);
-    let publications = publisher.publications.borrow();
+    // Exactly one terminal result row exists when publication runs, proving
+    // the terminal commit precedes the publication boundary.
+    assert_eq!(*publisher.results_at_publish.borrow(), vec![1]);
+    let publications = publisher.published();
     assert_eq!(publications.len(), 1);
     assert_eq!(publications[0].session_id(), session_id);
     assert_eq!(publications[0].run_id(), run_id);
     assert_eq!(publications[0].call_id(), call_id);
     assert_eq!(publications[0].result(), &hello_read_result());
-    drop(publications);
     drop(publisher);
     drop(repository);
 
-    // A failed outcome persists correlated Failed evidence and never publishes.
+    // A failed outcome commits correlated Failed evidence and never publishes.
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let publisher = TerminalOrderingProbe::new(&repository);
     let error = ApplicationService::new(&repository)
@@ -1994,25 +1914,23 @@ fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
                 run_id,
                 call_id,
                 "read",
-                ToolInput::Read(ReadInput {
-                    path: intention_types::WorkspaceRelativePathDto::parse("missing.txt")
-                        .expect("path"),
-                }),
+                managed_read_input("missing.txt"),
                 fixture_time(),
             ),
             &publisher,
         )
         .expect_err("missing file fails");
     assert_eq!(error.code(), "tool_read_failed");
-    assert_single_terminal_event(
+    assert_single_terminal_result(
         &repository,
         session_id,
         run_id,
         call_id,
-        &intention_domain::ToolLifecycleStatusDto::Failed,
+        "read",
+        ToolResultStatusDto::Failed,
     );
-    assert!(publisher.publications.borrow().is_empty());
-    assert!(publisher.evidence_at_publish.borrow().is_empty());
+    assert!(publisher.published().is_empty());
+    assert!(publisher.results_at_publish.borrow().is_empty());
     drop(publisher);
     drop(repository);
 
@@ -2028,13 +1946,10 @@ fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
                 run_id,
                 call_id,
                 "execute",
-                ToolInput::Execute(intention_tools::ExecuteInput {
-                    program: intention_tools::BoundedText::new("sh").expect("program"),
-                    args: vec![],
-                }),
+                cancelled_execute_input(),
                 fixture_time(),
             )
-            .with_cancellation(intention_tools::CancellationSignal::cancelled()),
+            .with_cancellation(CancellationSignal::cancelled()),
             &publisher,
         )
         .expect("a pre-start cancellation is a partial outcome");
@@ -2045,15 +1960,16 @@ fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
             result: None,
         }
     );
-    assert_single_terminal_event(
+    assert_single_terminal_result(
         &repository,
         session_id,
         run_id,
         call_id,
-        &intention_domain::ToolLifecycleStatusDto::Partial,
+        "execute",
+        ToolResultStatusDto::Partial,
     );
-    assert!(publisher.publications.borrow().is_empty());
-    assert!(publisher.evidence_at_publish.borrow().is_empty());
+    assert!(publisher.published().is_empty());
+    assert!(publisher.results_at_publish.borrow().is_empty());
     drop(publisher);
     drop(repository);
 
@@ -2062,12 +1978,9 @@ fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
     // never reaches the publication boundary.
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let publisher = TerminalOrderingProbe::new(&repository);
-    let signal = intention_tools::CancellationSignal::new();
+    let signal = CancellationSignal::new();
     let cancellation = signal.clone();
     let canceller = std::thread::spawn(move || {
-        // Wait for a confirmed child spawn instead of racing a fixed sleep:
-        // the cancellation then provably lands while the external process is
-        // running, so the interruption cause is an observed stop.
         assert!(
             cancellation.wait_until_spawn_observed(std::time::Duration::from_secs(10)),
             "execute child was never observed after spawn"
@@ -2082,26 +1995,7 @@ fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
                 run_id,
                 call_id,
                 "execute",
-                ToolInput::Execute(intention_tools::ExecuteInput {
-                    program: intention_tools::BoundedText::new(if cfg!(windows) {
-                        "ping"
-                    } else {
-                        "sh"
-                    })
-                    .expect("program"),
-                    args: vec![
-                        intention_tools::BoundedText::new(if cfg!(windows) { "-n" } else { "-c" })
-                            .expect("arg"),
-                        intention_tools::BoundedText::new(if cfg!(windows) {
-                            "2"
-                        } else {
-                            "sleep 1"
-                        })
-                        .expect("arg"),
-                        #[cfg(windows)]
-                        intention_tools::BoundedText::new("127.0.0.1").expect("arg"),
-                    ],
-                }),
+                sleeping_execute_input(),
                 fixture_time(),
             )
             .with_cancellation(signal),
@@ -2113,19 +2007,17 @@ fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
         unreachable!("cancellation must interrupt the invocation");
     };
     assert!(stopped);
-    assert!(matches!(
-        result,
-        Some(intention_tools::ToolResult::Execute(_))
-    ));
-    assert_single_terminal_event(
+    assert!(matches!(result, Some(ToolResult::Execute(_))));
+    assert_single_terminal_result(
         &repository,
         session_id,
         run_id,
         call_id,
-        &intention_domain::ToolLifecycleStatusDto::Partial,
+        "execute",
+        ToolResultStatusDto::Partial,
     );
-    assert!(publisher.publications.borrow().is_empty());
-    assert!(publisher.evidence_at_publish.borrow().is_empty());
+    assert!(publisher.published().is_empty());
+    assert!(publisher.results_at_publish.borrow().is_empty());
 
     let _ = fs::remove_dir_all(root);
 }
@@ -2137,8 +2029,8 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
     let run_id = RunId::new();
     let call_id = ToolCallId::new();
 
-    // Success: the terminal Completed commit atomically carries the typed
-    // result document with the exact invocation identity.
+    // Success: the terminal Completed commit atomically carries the rendered
+    // result content with the exact invocation identity.
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let publisher = TerminalOrderingProbe::new(&repository);
     ApplicationService::new(&repository)
@@ -2149,33 +2041,22 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
                 run_id,
                 call_id,
                 "read",
-                ToolInput::Read(ReadInput {
-                    path: intention_types::WorkspaceRelativePathDto::parse("hello.txt")
-                        .expect("path"),
-                }),
+                managed_read_input("hello.txt"),
                 fixture_time(),
             ),
             &publisher,
         )
         .expect("read succeeds");
-    let evidence = repository.result_evidence.borrow();
-    assert_eq!(evidence.len(), 3);
-    assert!(evidence[..2].iter().all(Option::is_none));
-    let completed = evidence[2]
-        .as_ref()
-        .expect("terminal evidence commits atomically");
-    assert_eq!(completed.session_id(), session_id);
-    assert_eq!(completed.run_id(), run_id);
-    assert_eq!(completed.call_id(), call_id);
-    assert_eq!(completed.kind(), ToolResultKindDto::Read);
-    assert_eq!(
-        completed.content(),
-        "{\"result\":\"read\",\"value\":{\"text\":\"hello\",\"truncated\":false}}"
-    );
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    let completed = &results[0];
+    assert_eq!(completed.status(), ToolResultStatusDto::Completed);
+    assert_eq!(completed.content(), "hello");
+    assert_eq!(completed.tool_id(), "read");
     assert_eq!(completed.occurred_at(), fixture_time());
-    drop(evidence);
+    assert!(completed.metadata().is_empty());
     // The evidence-carrying terminal commit is durable before publication.
-    assert_eq!(*publisher.evidence_at_publish.borrow(), vec![3]);
+    assert_eq!(*publisher.results_at_publish.borrow(), vec![1]);
     drop(publisher);
     drop(repository);
 
@@ -2190,33 +2071,25 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
                 run_id,
                 call_id,
                 "read",
-                ToolInput::Read(ReadInput {
-                    path: intention_types::WorkspaceRelativePathDto::parse("missing.txt")
-                        .expect("path"),
-                }),
+                managed_read_input("missing.txt"),
                 fixture_time(),
             ),
             &publisher,
         )
         .expect_err("missing file fails");
     assert_eq!(error.code(), "tool_read_failed");
-    let evidence = repository.result_evidence.borrow();
-    assert!(evidence[..2].iter().all(Option::is_none));
-    let failed = evidence[2]
-        .as_ref()
-        .expect("failed evidence commits atomically");
-    assert_eq!(failed.kind(), ToolResultKindDto::Read);
-    assert_eq!(
-        failed.content(),
-        "{\"result\":\"failed\",\"value\":{\"code\":\"tool_read_failed\"}}"
-    );
-    drop(evidence);
-    assert!(publisher.publications.borrow().is_empty());
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    let failed = &results[0];
+    assert_eq!(failed.status(), ToolResultStatusDto::Failed);
+    assert_eq!(failed.content(), "tool_read_failed");
+    assert!(failed.metadata().is_empty());
+    assert!(publisher.published().is_empty());
     drop(publisher);
     drop(repository);
 
     // A pre-start cancellation: the terminal Partial commit classifies the
-    // interrupted call with its stable interruption code.
+    // interrupted call with the exact stopped notice.
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let publisher = TerminalOrderingProbe::new(&repository);
     let outcome = ApplicationService::new(&repository)
@@ -2227,13 +2100,10 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
                 run_id,
                 call_id,
                 "execute",
-                ToolInput::Execute(intention_tools::ExecuteInput {
-                    program: intention_tools::BoundedText::new("sh").expect("program"),
-                    args: vec![],
-                }),
+                cancelled_execute_input(),
                 fixture_time(),
             )
-            .with_cancellation(intention_tools::CancellationSignal::cancelled()),
+            .with_cancellation(CancellationSignal::cancelled()),
             &publisher,
         )
         .expect("a pre-start cancellation is a partial outcome");
@@ -2244,30 +2114,24 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
             result: None,
         }
     );
-    let evidence = repository.result_evidence.borrow();
-    let partial = evidence[2]
-        .as_ref()
-        .expect("partial evidence commits atomically");
-    assert_eq!(partial.kind(), ToolResultKindDto::Execute);
+    let results = repository.committed_results();
+    let partial = &results[0];
+    assert_eq!(partial.status(), ToolResultStatusDto::Partial);
     assert_eq!(
         partial.content(),
-        "{\"result\":\"partial\",\"value\":{\"code\":\"tool_cancelled\"}}"
+        "[The tool call was stopped before a final result.]"
     );
-    drop(evidence);
-    assert!(publisher.publications.borrow().is_empty());
+    assert!(publisher.published().is_empty());
     drop(publisher);
     drop(repository);
 
-    // An interrupted external process: the terminal Partial commit classifies
-    // the captured output and never publishes.
+    // An interrupted external process: the terminal Partial commit keeps the
+    // captured output and never publishes.
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let publisher = TerminalOrderingProbe::new(&repository);
-    let signal = intention_tools::CancellationSignal::new();
+    let signal = CancellationSignal::new();
     let cancellation = signal.clone();
     let canceller = std::thread::spawn(move || {
-        // Wait for a confirmed child spawn instead of racing a fixed sleep:
-        // the cancellation then provably lands while the external process is
-        // running, so the interruption cause is an observed stop.
         assert!(
             cancellation.wait_until_spawn_observed(std::time::Duration::from_secs(10)),
             "execute child was never observed after spawn"
@@ -2282,26 +2146,7 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
                 run_id,
                 call_id,
                 "execute",
-                ToolInput::Execute(intention_tools::ExecuteInput {
-                    program: intention_tools::BoundedText::new(if cfg!(windows) {
-                        "ping"
-                    } else {
-                        "sh"
-                    })
-                    .expect("program"),
-                    args: vec![
-                        intention_tools::BoundedText::new(if cfg!(windows) { "-n" } else { "-c" })
-                            .expect("arg"),
-                        intention_tools::BoundedText::new(if cfg!(windows) {
-                            "2"
-                        } else {
-                            "sleep 1"
-                        })
-                        .expect("arg"),
-                        #[cfg(windows)]
-                        intention_tools::BoundedText::new("127.0.0.1").expect("arg"),
-                    ],
-                }),
+                sleeping_execute_input(),
                 fixture_time(),
             )
             .with_cancellation(signal),
@@ -2313,22 +2158,49 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
         unreachable!("cancellation must interrupt the invocation");
     };
     assert!(stopped);
-    assert!(matches!(
-        result,
-        Some(intention_tools::ToolResult::Execute(_))
+    assert!(matches!(result, Some(ToolResult::Execute(_))));
+    let results = repository.committed_results();
+    let partial = &results[0];
+    assert_eq!(partial.status(), ToolResultStatusDto::Partial);
+    assert!(partial.content().contains("stdout:"));
+    assert!(partial.content().contains(
+        "[The tool call was stopped before a final result; the output above is partial.]"
     ));
-    let evidence = repository.result_evidence.borrow();
-    let partial = evidence[2]
-        .as_ref()
-        .expect("partial evidence commits atomically");
-    assert_eq!(partial.kind(), ToolResultKindDto::Execute);
-    assert_eq!(
-        partial.content(),
-        "{\"result\":\"partial\",\"value\":{\"code\":\"tool_cancelled\"}}"
-    );
-    drop(evidence);
-    assert!(publisher.publications.borrow().is_empty());
+    assert!(publisher.published().is_empty());
 
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn tool_call_row_commits_the_canonical_arguments_document() {
+    let root = hello_tool_root("arguments");
+    let call = ToolCallId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    ApplicationService::new(&repository)
+        .invoke_local_tool(
+            invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt")
+                .with_arguments_json(r#"{"path":"hello.txt"}"#),
+        )
+        .expect("read succeeds");
+    let messages = repository.committed_messages();
+    assert_eq!(messages[0].kind(), MessageKindDto::ToolCall);
+    assert_eq!(messages[0].text(), r#"{"path":"hello.txt"}"#);
+    assert_eq!(messages[0].tool_id(), Some("read"));
+
+    // A caller without the model's arguments still commits a well-formed row.
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    ApplicationService::new(&repository)
+        .invoke_local_tool(InvokeLocalToolInputDto::new(
+            hello_workspace(&root),
+            SessionId::new(),
+            RunId::new(),
+            call,
+            "read",
+            managed_read_input("hello.txt"),
+            fixture_time(),
+        ))
+        .expect("read succeeds");
+    assert_eq!(repository.committed_messages()[0].text(), "{}");
     let _ = fs::remove_dir_all(root);
 }
 
@@ -2356,8 +2228,9 @@ impl WorkspaceBoundaryPort for RejectingWorkspaceBoundary {
     }
 }
 
-fn send_command(session_id: SessionId, turn_id: TurnId) -> SendUserTurnCommandDto {
-    SendUserTurnCommandDto::new(session_id, turn_id, "latest").expect("fixture command is valid")
+fn send_command(session_id: SessionId) -> SendUserTurnCommandDto {
+    SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "latest")
+        .expect("fixture command is valid")
 }
 
 const fn starting_run(
@@ -2375,6 +2248,19 @@ const fn starting_run(
     )
 }
 
+fn latest_message(session_id: SessionId, run_id: RunId) -> MessageProjectionDto {
+    MessageProjectionDto::new(
+        session_id,
+        Some(run_id),
+        MessageKindDto::User,
+        "latest",
+        None,
+        None,
+        None,
+    )
+    .expect("fixture message is valid")
+}
+
 fn starting_context(
     session_id: SessionId,
     run_id: RunId,
@@ -2385,67 +2271,39 @@ fn starting_context(
         run_id,
         config.clone(),
         vec![
-            ModelContextMessageDto::new(ModelContextRoleDto::User, "first")
-                .expect("context message is valid"),
-            ModelContextMessageDto::new(ModelContextRoleDto::Assistant, "answer")
-                .expect("context message is valid"),
-            ModelContextMessageDto::new(ModelContextRoleDto::User, "latest")
-                .expect("context message is valid"),
+            MessageProjectionDto::new(
+                session_id,
+                None,
+                MessageKindDto::User,
+                "first",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            MessageProjectionDto::new(
+                session_id,
+                None,
+                MessageKindDto::Assistant,
+                "answer",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            MessageProjectionDto::new(
+                session_id,
+                Some(run_id),
+                MessageKindDto::User,
+                "latest",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
         ],
     )
     .expect("fixture context is valid")
-}
-
-fn started_change(
-    session_id: SessionId,
-    run: RunProjectionDto,
-    position: u64,
-) -> CommittedChangeDto {
-    let state = projection(session_id, Some(run), Vec::new(), position);
-    let run_started = EventEnvelopeDto::new(
-        EventMetadataDto::new(
-            SchemaVersionDto::new(1, 0),
-            EventId::new(),
-            session_id,
-            Some(run.run_id()),
-            Some(run.turn_id()),
-            SessionEventSequenceDto::new(position),
-            fixture_time(),
-        ),
-        DomainEventDto::RunStarted(RunStartedEventDto::new(
-            session_id,
-            run.run_id(),
-            run.turn_id(),
-            run.config_revision_id(),
-            fixture_time(),
-        )),
-    );
-    CommittedChangeDto::new(
-        state.clone(),
-        state.at_sequence(),
-        vec![run_started],
-        Some(AcceptedTurnOutcomeDto::Started(run)),
-    )
-    .expect("fixture started change is valid")
-}
-
-#[test]
-fn send_user_turn_and_schedule_rejects_acceptance_without_a_turn_outcome() {
-    let session_id = SessionId::new();
-    let repository = FakeRepository::with_accepted(Ok(change(
-        projection(session_id, None, Vec::new(), 3),
-        None,
-    )));
-    let dispatch = RecordingDispatchPort::default();
-    let error = ApplicationService::new(&repository)
-        .send_user_turn_and_schedule(
-            send_command(session_id, TurnId::new()),
-            SendUserTurnWorkflowInputDto::new(RunId::new(), snapshot(), fixture_time()),
-            &dispatch,
-        )
-        .expect_err("acceptance without durable outcome evidence is malformed");
-    assert_eq!(error.code(), "missing_accepted_turn_outcome");
-    assert!(dispatch.inputs.borrow().is_empty());
 }
 
 #[test]
@@ -2458,27 +2316,33 @@ fn send_user_turn_and_schedule_propagates_admission_failures() {
     let dispatch = RecordingDispatchPort::default();
     let error = ApplicationService::new(&repository)
         .send_user_turn_and_schedule(
-            send_command(session_id, TurnId::new()),
+            send_command(session_id),
             SendUserTurnWorkflowInputDto::new(RunId::new(), snapshot(), fixture_time()),
             &dispatch,
         )
         .expect_err("admission failure is propagated");
     assert_eq!(error.code(), "turn_admission_denied");
-    assert_eq!(repository.accepted_inputs.borrow().len(), 1);
+    let inputs = repository.accepted_inputs.borrow();
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].session_id(), session_id);
+    assert_eq!(inputs[0].content(), "latest");
+    drop(inputs);
     assert!(dispatch.inputs.borrow().is_empty());
+    assert!(repository.finishes.borrow().is_empty());
 }
 
 #[test]
 fn send_user_turn_and_schedule_returns_queued_acceptance_without_dispatching() {
     let session_id = SessionId::new();
-    let repository = FakeRepository::with_accepted(Ok(change(
-        projection(session_id, None, Vec::new(), 3),
-        Some(AcceptedTurnOutcomeDto::Pending),
+    let turn_id = TurnId::new();
+    let repository = FakeRepository::with_accepted(Ok(AcceptedTurnOutcomeDto::Pending(
+        PendingTurnProjectionDto::new(session_id, turn_id, "latest")
+            .expect("fixture pending turn is valid"),
     )));
     let dispatch = RecordingDispatchPort::default();
     let accepted = ApplicationService::new(&repository)
         .send_user_turn_and_schedule(
-            send_command(session_id, TurnId::new()),
+            send_command(session_id),
             SendUserTurnWorkflowInputDto::new(RunId::new(), snapshot(), fixture_time()),
             &dispatch,
         )
@@ -2486,11 +2350,13 @@ fn send_user_turn_and_schedule_returns_queued_acceptance_without_dispatching() {
     assert!(matches!(
         accepted,
         ProtocolAcceptedResultDto::SendUserTurn(value)
-            if value.outcome()
-                == SendUserTurnOutcomeDto::Pending
+            if value.session_id() == session_id
+                && value.turn_id() == turn_id
+                && value.outcome() == SendUserTurnOutcomeDto::Pending
     ));
     assert_eq!(repository.accepted_inputs.borrow().len(), 1);
     assert!(dispatch.inputs.borrow().is_empty());
+    assert!(repository.finishes.borrow().is_empty());
 }
 
 #[test]
@@ -2500,12 +2366,15 @@ fn send_user_turn_and_schedule_dispatches_the_committed_starting_run() {
     let run_id = RunId::new();
     let config = snapshot();
     let run = starting_run(session_id, run_id, turn_id, &config);
-    let repository = FakeRepository::with_accepted(Ok(started_change(session_id, run, 2)));
+    let repository = FakeRepository::with_accepted(Ok(AcceptedTurnOutcomeDto::Started {
+        run,
+        message: latest_message(session_id, run_id),
+    }));
     *repository.starting_context.borrow_mut() = Some(starting_context(session_id, run_id, &config));
     let dispatch = RecordingDispatchPort::default();
     let accepted = ApplicationService::new(&repository)
         .send_user_turn_and_schedule(
-            send_command(session_id, turn_id),
+            send_command(session_id),
             SendUserTurnWorkflowInputDto::new(run_id, config.clone(), fixture_time()),
             &dispatch,
         )
@@ -2537,37 +2406,7 @@ fn send_user_turn_and_schedule_dispatches_the_committed_starting_run() {
         .as_slice()
     );
     assert!(!request.tools().is_empty());
-}
-
-#[test]
-fn send_user_turn_and_schedule_requires_the_started_run_event_in_the_commit() {
-    let session_id = SessionId::new();
-    let turn_id = TurnId::new();
-    let run_id = RunId::new();
-    let config = snapshot();
-    let run = starting_run(session_id, run_id, turn_id, &config);
-    let repository = FakeRepository::with_accepted(Ok(change(
-        projection(session_id, Some(run), Vec::new(), 3),
-        Some(AcceptedTurnOutcomeDto::Started(run)),
-    )));
-    let dispatch = RecordingDispatchPort::default();
-    let accepted = ApplicationService::new(&repository)
-        .send_user_turn_and_schedule(
-            send_command(session_id, turn_id),
-            SendUserTurnWorkflowInputDto::new(run_id, config.clone(), fixture_time()),
-            &dispatch,
-        )
-        .expect("uncommitted run evidence preserves the acceptance");
-    assert!(matches!(
-        accepted,
-        ProtocolAcceptedResultDto::SendUserTurn(value)
-            if value.outcome()
-                == SendUserTurnOutcomeDto::Started {
-                    run_id,
-                    config_revision_id: config.revision_id(),
-                }
-    ));
-    assert!(dispatch.inputs.borrow().is_empty());
+    assert!(repository.finishes.borrow().is_empty());
 }
 
 #[test]
@@ -2578,7 +2417,11 @@ fn send_user_turn_and_schedule_preserves_acceptance_when_context_is_unusable() {
         let run_id = RunId::new();
         let config = snapshot();
         let run = starting_run(session_id, run_id, turn_id, &config);
-        let repository = FakeRepository::with_accepted(Ok(started_change(session_id, run, 2)));
+        let repository = FakeRepository::with_accepted(Ok(AcceptedTurnOutcomeDto::Started {
+            run,
+            message: latest_message(session_id, run_id),
+        }));
+        *repository.run.borrow_mut() = Some(run);
         if mismatched {
             *repository.starting_context.borrow_mut() =
                 Some(starting_context(SessionId::new(), RunId::new(), &config));
@@ -2586,7 +2429,7 @@ fn send_user_turn_and_schedule_preserves_acceptance_when_context_is_unusable() {
         let dispatch = RecordingDispatchPort::default();
         let accepted = ApplicationService::new(&repository)
             .send_user_turn_and_schedule(
-                send_command(session_id, turn_id),
+                send_command(session_id),
                 SendUserTurnWorkflowInputDto::new(run_id, config, fixture_time()),
                 &dispatch,
             )
@@ -2596,6 +2439,14 @@ fn send_user_turn_and_schedule_preserves_acceptance_when_context_is_unusable() {
             ProtocolAcceptedResultDto::SendUserTurn(_)
         ));
         assert!(dispatch.inputs.borrow().is_empty());
+        // The exact starting run is terminalized once so the committed
+        // acceptance never leaves an unschedulable live run behind.
+        let finishes = repository.finishes.borrow();
+        assert_eq!(finishes.len(), 1);
+        assert_eq!(finishes[0].session_id(), session_id);
+        assert_eq!(finishes[0].run_id(), run_id);
+        assert_eq!(finishes[0].status(), RunStatusDto::Failed);
+        assert_eq!(finishes[0].error_code(), Some("model_context_unavailable"));
     }
 }
 
@@ -2606,8 +2457,12 @@ fn send_user_turn_and_schedule_preserves_acceptance_when_dispatch_fails() {
     let run_id = RunId::new();
     let config = snapshot();
     let run = starting_run(session_id, run_id, turn_id, &config);
-    let repository = FakeRepository::with_accepted(Ok(started_change(session_id, run, 2)));
+    let repository = FakeRepository::with_accepted(Ok(AcceptedTurnOutcomeDto::Started {
+        run,
+        message: latest_message(session_id, run_id),
+    }));
     *repository.starting_context.borrow_mut() = Some(starting_context(session_id, run_id, &config));
+    *repository.run.borrow_mut() = Some(run);
     let dispatch = RecordingDispatchPort::default();
     *dispatch.failure.borrow_mut() = Some(ErrorDto::unavailable(
         "dispatch_unavailable",
@@ -2615,7 +2470,7 @@ fn send_user_turn_and_schedule_preserves_acceptance_when_dispatch_fails() {
     ));
     let accepted = ApplicationService::new(&repository)
         .send_user_turn_and_schedule(
-            send_command(session_id, turn_id),
+            send_command(session_id),
             SendUserTurnWorkflowInputDto::new(run_id, config, fixture_time()),
             &dispatch,
         )
@@ -2625,6 +2480,13 @@ fn send_user_turn_and_schedule_preserves_acceptance_when_dispatch_fails() {
         ProtocolAcceptedResultDto::SendUserTurn(_)
     ));
     assert_eq!(dispatch.inputs.borrow().len(), 1);
+    let finishes = repository.finishes.borrow();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].status(), RunStatusDto::Failed);
+    assert_eq!(
+        finishes[0].error_code(),
+        Some("model_scheduling_unavailable")
+    );
 }
 
 #[test]
@@ -2680,35 +2542,36 @@ fn workspace_boundary_failure_is_durably_rejected_before_execution() {
         .invoke_local_tool(invoke_read_input("missing"))
         .expect_err("workspace boundary failure is propagated");
     assert_eq!(error.code(), "workspace_boundary_unavailable");
-    let events = repository.tool_events.borrow();
-    assert_eq!(events.len(), 2);
-    assert_eq!(
-        events[1].status(),
-        &intention_domain::ToolLifecycleStatusDto::Rejected
-    );
-    assert_eq!(events[1].detail(), "workspace_boundary_unavailable");
+    let messages = repository.committed_messages();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[1].kind(), MessageKindDto::ToolResult);
+    assert_eq!(messages[1].text(), "workspace_boundary_unavailable");
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
 }
 
 #[test]
-fn terminal_append_failure_propagates_from_the_tool_error_path() {
+fn terminal_commit_failure_propagates_from_the_tool_error_path() {
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    *repository.append_failures.borrow_mut() = vec![3];
+    *repository.commit_failures.borrow_mut() = vec![2];
     let error = ApplicationService::new(&repository)
         .invoke_local_tool(invoke_read_input("missing"))
-        .expect_err("terminal append failure replaces the tool error");
+        .expect_err("terminal commit failure replaces the tool error");
     assert_eq!(error.code(), "append_unavailable");
-    assert_eq!(repository.tool_events.borrow().len(), 2);
+    assert_eq!(repository.committed_messages().len(), 1);
+    assert!(repository.committed_results().is_empty());
 }
 
 #[test]
-fn pre_execution_rejection_append_failure_propagates() {
+fn pre_execution_rejection_commit_failure_propagates() {
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    *repository.append_failures.borrow_mut() = vec![2];
+    *repository.commit_failures.borrow_mut() = vec![2];
     let mut hooks = Registry::new();
     hooks
         .register(Box::new(PhaseOutcomeHook {
             phase: Phase::BeforeToolExecution,
-            id: "rejection-append-failure",
+            id: "rejection-commit-failure",
             outcome: HookOutcome::Reject(ErrorDto::validation(
                 "execution_blocked",
                 "blocked before execution",
@@ -2717,13 +2580,14 @@ fn pre_execution_rejection_append_failure_propagates() {
         .expect("hook registers");
     let error = ApplicationService::with_hooks(&repository, hooks)
         .invoke_local_tool(invoke_read_input("missing"))
-        .expect_err("rejection append failure is propagated");
+        .expect_err("rejection commit failure is propagated");
     assert_eq!(error.code(), "append_unavailable");
-    assert_eq!(repository.tool_events.borrow().len(), 1);
+    assert_eq!(repository.committed_messages().len(), 1);
+    assert!(repository.committed_results().is_empty());
 }
 
 #[test]
-fn lifecycle_evidence_escapes_json_control_characters_in_tool_text() {
+fn committed_tool_result_content_preserves_control_characters_as_text() {
     let root = std::env::temp_dir().join(format!("intention-app-escape-{}", SessionId::new()));
     fs::create_dir_all(&root).expect("root");
     fs::write(root.join("control.txt"), "\u{8}\t\u{c}\r").expect("fixture file");
@@ -2735,17 +2599,11 @@ fn lifecycle_evidence_escapes_json_control_characters_in_tool_text() {
         ))
         .expect("control characters are readable text");
     let result = completed_outcome(result);
-    assert!(matches!(result, intention_tools::ToolResult::Read(_)));
-    let evidence = repository.result_evidence.borrow();
-    let completed = evidence
-        .last()
-        .expect("terminal evidence exists")
-        .as_ref()
-        .expect("terminal evidence carries the result document");
-    assert_eq!(
-        completed.content(),
-        "{\"result\":\"read\",\"value\":{\"text\":\"\\b\\t\\f\\r\",\"truncated\":false}}"
-    );
-    drop(evidence);
+    assert!(matches!(result, ToolResult::Read(_)));
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
+    assert_eq!(results[0].content(), "\u{8}\t\u{c}\r");
+    assert_eq!(repository.committed_messages()[1].text(), "\u{8}\t\u{c}\r");
     let _ = fs::remove_dir_all(root);
 }
