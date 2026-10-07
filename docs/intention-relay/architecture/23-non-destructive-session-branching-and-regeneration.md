@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 23. Decisions: ADR 0014.
+Owner: architecture 23.
 
 This document owns future ordinary Session branching, conversation lineage, frozen fork context, regeneration, lineage
 audit, and branch presentation. It applies to future ordinary Session branching only.
@@ -10,8 +10,8 @@ audit, and branch presentation. It applies to future ordinary Session branching 
 ## Ownership and non-authorities
 
 Architecture 04 owns current Session/Run persistence and recovery. Run-execution meaning and historical compatibility
-left no live path: their canonical framing was removed by [ADR
-0012](../decisions/0012-typed-serde-json-contracts.md). Architectures 15, 18, 19, and 20 own tool, MCP, bridge, and
+left no live path: their canonical framing was removed under [architecture
+02](02-dto-and-contract-policy.md). Architectures 15, 18, 19, and 20 own tool, MCP, bridge, and
 kernel semantics. Architecture 21 owns Goal/Skill/context source, audience, and disclosure semantics. Architecture 22
 owns provider/profile/capability/reasoning semantics.
 
@@ -76,9 +76,9 @@ Missing, corrupt, unknown, or incompatible data blocks dependent work before an 
 source, current catalog, provider, file, index, memory, registry, bridge, kernel, MCP, or UI state.
 
 Fork snapshot, preview, and command records are typed serde JSON shapes; the former `typed-tlv` framing,
-canonicalization-version byte, and SHA-256 digest construction were removed by [ADR
-0012](../decisions/0012-typed-serde-json-contracts.md), and under the single-version policy ([ADR
-0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md)) there is one live shape per record, carrying
+canonicalization-version byte, and SHA-256 digest construction were removed under [architecture
+02](02-dto-and-contract-policy.md), and under the single-version policy ([architecture
+00](00-principles-and-scope.md)) there is one live shape per record, carrying
 the typed, ordered, compatibility-bound inherited reasoning references. References carry source identity, category,
 and size and never reasoning text. Architecture 22 owns reasoning compatibility; this document owns only the
 immutable fork-reference transfer.
@@ -108,12 +108,13 @@ Archive requires an idle session; archived sources remain readable and forkable.
 
 Session lineage is ordinary-session structure only; it never constrains run admission or child creation. A fork carries
 no depth, descendant-count, source-boundary rate, or base-snapshot size limit
-([ADR 0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md)). Title and page bounds remain intrinsic
+([architecture 09](09-configuration-security-and-observability.md), [architecture
+15](15-tool-registry-and-model-tool-loop.md)). Title and page bounds remain intrinsic
 representation/protocol constraints where their owning field table requires them.
 
 The typed fork preview, fork, ordinary regeneration, tree page, rename, archive, and restore DTOs are exposed as
 ordinary JSON-RPC methods over the single local connection; the former `session_fork_v1` negotiated family and its
-capability gate were removed by [ADR 0011](../decisions/0011-local-json-rpc-2-0-transport.md). Tree reads are bounded
+capability gate were removed under [architecture 03](03-daemon-transport-and-adapters.md). Tree reads are bounded
 immediate-child projections with stable continuation order. They are not tree-wide event streams. A peer that does not
 speak protocol 1.0 receives the typed version-mismatch error before any method is served.
 
@@ -181,9 +182,9 @@ stored title and uses only the stable presentation fallback until renamed. Renam
 ### Field tables
 
 Fork snapshot, preview, and command records are typed serde JSON shapes; the former `typed-tlv` framing, type tags,
-length encoding, canonicalization-version byte, and SHA-256 digest construction were removed by [ADR
-0012](../decisions/0012-typed-serde-json-contracts.md). Under the single-version policy ([ADR
-0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md)) each record keeps exactly one live shape,
+length encoding, canonicalization-version byte, and SHA-256 digest construction were removed under [architecture
+02](02-dto-and-contract-policy.md). Under the single-version policy ([architecture
+00](00-principles-and-scope.md)) each record keeps exactly one live shape,
 which carries the typed, ordered, compatibility-bound inherited reasoning references.
 
 - `fork-base-snapshot`: `1 schema_version`, `2 context_schema_version`, `3 source_session_id`,
@@ -202,15 +203,15 @@ source head observed during the fork operation.
 `5 title_present`, `6 requested_title`, `7 future_profile_override_present`, `8 future_profile_override`.
 
 The former `canonical_snapshot_digest`, `model_context_digest`, and `fork-command` digest construction are removed with
-the codec ([ADR 0012](../decisions/0012-typed-serde-json-contracts.md)). A command binds to the exact source state the
+the codec ([architecture 02](02-dto-and-contract-policy.md)). A command binds to the exact source state the
 client accepted through `expected_source_sequence` and `expected_preview_binding`; a later activating specification may
-define a canonical binding for the preview together with its first real consumer under the RFC 8785 policy (ADR 0012),
-and no canonical digest is part of the current contract.
+define a canonical binding for the preview together with its first real consumer under the RFC 8785 policy
+([architecture 02](02-dto-and-contract-policy.md)), and no canonical digest is part of the current contract.
 
 `effective_instruction_projection` and `materialized_effective_instruction_projection` carry the typed
-`InstructionProjectionV1` of [architecture 30](30-instruction-sources-and-system-context.md) ([ADR
-0010](../decisions/0010-instruction-sources-and-system-context.md)): the exact ordered contributions with their source
-revisions, the declared audience, and the projection revision identity, materialized when the fork is created. A child
+`InstructionProjectionV1` of [architecture 30](30-instruction-sources-and-system-context.md): the exact ordered
+contributions with their source revisions, the declared audience, and the projection revision identity, materialized
+when the fork is created. A child
 inherits the projection verbatim; no fork, regeneration, or later run re-derives it from current configuration,
 current project instructions, or current session state.
 
@@ -226,7 +227,8 @@ unstructured storage error:
 | Session title | 128 NFC Unicode scalar values | Reject invalid title before the presentation event. |
 
 The conversation tree has no depth, descendant-count, or source-boundary rate limit, and a base snapshot has no
-canonical size limit ([ADR 0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md)): a fork is bounded
+canonical size limit ([architecture 09](09-configuration-security-and-observability.md), [architecture
+15](15-tool-registry-and-model-tool-loop.md)): a fork is bounded
 only by the page and title representation bounds above. Boundaries, base snapshots, lineage, and idempotency records
 remain indefinitely readable under the initial archive-only retention policy.
 

@@ -5,7 +5,7 @@
 This is a dependency-aware delivery roadmap, not a time estimate. The first implementation milestone is the reproducible
 quality foundation. Every later milestone begins with failing tests and is accepted only after its applicable `make
 verify` evidence passes. This roadmap owns milestone order, dependencies, activation, and status only: required quality
-commands, pinned tools, the coverage policy ([ADR 0016](../decisions/0016-per-crate-coverage-tiers.md)), lint policy,
+commands, pinned tools, the coverage policy, lint policy,
 feature profiles, architecture checks, and supply-chain gates live in [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md); test-first and outcome-verification rules live in [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md).
@@ -53,14 +53,14 @@ flowchart TD
 
 Every milestone after Milestone 0 follows the test-first rules of [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md) and the quality policy of [Quality Gates and
-Makefile](12-quality-gates-and-makefile.md): new production crates meet the tier floor declared for them before merge
-([ADR 0016](../decisions/0016-per-crate-coverage-tiers.md)), new optional Cargo features are classified in the
+Makefile](12-quality-gates-and-makefile.md): new production crates meet the tier floor declared for them before merge,
+new optional Cargo features are classified in the
 feature-profile policy in the same change, only pinned dependencies and tools are used, `make quick` runs during
 development and `make verify` before acceptance, and any policy exception is recorded in a reviewed, versioned policy
 file with rationale and equivalent test evidence.
 
-The coverage policy is the per-crate tiers declared in `quality/coverage.toml` ([ADR
-0016](../decisions/0016-per-crate-coverage-tiers.md)).
+The coverage policy is the per-crate tiers declared in `quality/coverage.toml`
+([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ## Milestone 5+: Post-M5 retrospective alignment
 
@@ -68,8 +68,8 @@ The coverage policy is the per-crate tiers declared in `quality/coverage.toml` (
 delivery of Milestones 6-9; it is their declared prerequisite in the dependency graph and activates only preparatory
 foundation work, never direct M6-M9 boundary implementation. The remaining post-M4 package implementations are not part
 of its slices: they are delivered by Milestones 11 and 12, which consume this milestone's foundation.
-The activation decision is [ADR 0004](../decisions/0004-m5plus-complete-foundation-activation.md), extended by [ADR
-0010](../decisions/0010-instruction-sources-and-system-context.md) for the fifth slice.
+The activation decision is the Milestone 5+ package, extended by [architecture
+30](30-instruction-sources-and-system-context.md) for the fifth slice.
 
 ### Slices
 
@@ -81,12 +81,13 @@ milestone that implements it.
 
 -  **Slice 1 — Contracts and versions — activated.** The typed serde JSON contract and version foundation: the JSON-RPC
 2.0 local wire at exact protocol version 1.0, its method/notification table, and the removed capability plane
-([ADR 0011](../decisions/0011-local-json-rpc-2-0-transport.md)); explicit DTO schema versions with exact-equality
-comparison; SQLite as one live storage schema created directly on open ([ADR
-0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md)); and crate ownership, feature-profile, and
-coverage declarations under [ADR 0016](../decisions/0016-per-crate-coverage-tiers.md) for every activated family. The
+([architecture 03](03-daemon-transport-and-adapters.md)); explicit DTO schema versions with exact-equality
+comparison; SQLite as one live storage schema created directly on open
+([architecture 00](00-principles-and-scope.md)); and crate ownership, feature-profile, and
+coverage declarations under [Quality Gates and Makefile](12-quality-gates-and-makefile.md) for every activated
+family. The
 former contract ledger, `run-execution-meaning-v4` field tables, capability families, `typed-tlv-v1`/SHA-256 tags, and
-digests were deleted by [ADR 0012](../decisions/0012-typed-serde-json-contracts.md): no ledger, tag registry, canonical
+digests were deleted ([architecture 02](02-dto-and-contract-policy.md)): no ledger, tag registry, canonical
 digest, or identity record remains, and every future contract family is typed serde JSON with RFC 8785 canonicalization
 only when a first real consumer appears.
 -  **Slice 1.5 — Core simplification — not activated.** It adds no product behavior: it collapses the workspace to ten
@@ -115,8 +116,8 @@ typed preservation-control, server-side-parser, Responses reasoning-mode, reason
 contracts, the protocol-only reasoning/header/parser duplicates, the eight producer-less control-plane event DTOs, and
 the `provider_profile_tombstoned` wire code.
 -  **Slice 3 — Goal domain — not activated.** The Goal domain (architecture 28). The slice also activates the
-tool-descriptor, tool-registry, and model-tool-loop contracts as amended by [ADR
-0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md) (architecture 15), the bridge-invocation and
+tool-descriptor, tool-registry, and model-tool-loop contracts as amended under [architecture
+15](15-tool-registry-and-model-tool-loop.md), the bridge-invocation and
 MCP-method-catalog selections (architectures 19/18), and work/requeue after client disconnection.
 -  **Slice 4 — UI foundation — not activated.** Session branching, reasoning/catalog delivery, and adapter boundaries
 (architectures 23/22 plus architecture 03's flat activity journal and notification list): `session_fork_v1`;
@@ -124,8 +125,7 @@ normalized reasoning delivery; and the exact typed client/protocol surface M6 co
 clone/rebind (architecture 23) and the physical deletion/GC retention policy for historical work under architecture 04's
 retention rules.
 -  **Slice 5 — Instruction sources and system context — last slice; not activated.** The instruction channel of
-[architecture 30](30-instruction-sources-and-system-context.md), adopted by [ADR
-0010](../decisions/0010-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
+[architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
 deployment instruction profile adapted from the legacy Antibusy static prompt set, user-editable fragments at user,
 project, and session scope, workspace `AGENTS.md` project instructions read through the `WorkspaceRoot` anchor, and the
 reserved `Mode` and `Vfr` contributions owned by architectures 07 and 06; immutable profile revisions with typed
@@ -152,10 +152,19 @@ storage/schema treatment, and evidence together.
 -  No M6-M9 boundary behavior is implemented, and no second runtime, registry, persistence authority, or sandbox is
 introduced.
 -  The fifth slice proves instruction text is advisory-only, typed, and materialized for frozen context, with no
-untrusted material entering the instruction channel and no authority created (ADR 0010).
+untrusted material entering the instruction channel and no authority created
+([architecture 30](30-instruction-sources-and-system-context.md)).
 -  Milestones 11 and 12 are this milestone's successors for the remaining post-M4 packages; their activating
 specifications, contracts, and evidence stay owned by those milestones. M7 and M8 consume only the declared `Mode` and
 `Vfr` contributions while M12 keeps the Skill and context-disclosure boundary.
+
+### Failure semantics
+
+- Each slice fails closed before effect when its contract is unsupported or inconsistent; no partial contract or partial
+  projection is delivered.
+- Recovery never resumes, retries, reattaches, or reruns work under any slice.
+- A slice that cannot be completed atomically (contracts, tests, policy, and evidence together) is not accepted; the
+  milestone remains on the prior accepted slice.
 
 ## Milestone 6: Tauri bridge and primary desktop UI
 
@@ -169,7 +178,7 @@ instruction-source slices.
 activity-journal and notification projections;
 - TUI/REPL remains a contract-equivalent client;
 -  instruction-fragment editing and effective-projection preview in the primary UI over the fifth Milestone 5+ slice's
-control-plane surface ([ADR 0010](../decisions/0010-instruction-sources-and-system-context.md));
+control-plane surface ([architecture 30](30-instruction-sources-and-system-context.md));
 -  post-M4 activity-journal and notification contracts are delivered by the Milestone 5+ UI-foundation slice and
 consumed here, while the durable `SessionProviderProfileChanged` delivery stays reserved to M6.
 
@@ -200,8 +209,7 @@ consumes and never redefines.
 the plan submission/approval/rejection state flow;
 - Plan-mode normal filesystem mutation restrictions;
 -  Plan `execute` availability with advisory focus instruction and trusted-local audit; the focus instruction is the
-`Mode` contribution of [architecture 30](30-instruction-sources-and-system-context.md) ([ADR
-0010](../decisions/0010-instruction-sources-and-system-context.md));
+`Mode` contribution of [architecture 30](30-instruction-sources-and-system-context.md);
 -  automatic same-Session fresh Build start after approval, and the optional full-context implementation handoff to a
 new Session.
 
@@ -214,8 +222,8 @@ new Session.
 - Plan `execute` focus/audit tests;
 - same-Session approval-to-fresh-Build tests with a new `RunId` and pinned plan revision;
 - optional handoff snapshot, lineage, redaction, and no-live-state-transfer tests;
--  coverage fixtures for plan policy and artifact integrity under the per-crate tier floors ([ADR
-0016](../decisions/0016-per-crate-coverage-tiers.md)).
+-  coverage fixtures for plan policy and artifact integrity under the per-crate tier floors
+([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ### Exit criteria
 
@@ -224,8 +232,8 @@ project file;
 - Plan `execute` remains available and is not represented as a sandbox; model context excludes plan frontmatter;
 -  approving a plan starts Build Autopilot in the same Session with a new `RunId`; the optional handoff creates an
 independent Session from a safe frozen context;
--  plan policy/artifact crates meet their declared tier floors ([ADR
-0016](../decisions/0016-per-crate-coverage-tiers.md)) with mandatory captured-context and denial scenarios.
+-  plan policy/artifact crates meet their declared tier floors
+([Quality Gates and Makefile](12-quality-gates-and-makefile.md)) with mandatory captured-context and denial scenarios.
 
 ## Milestone 8: VFR and Headroom extensions
 
@@ -234,8 +242,7 @@ Goal: independently enabled hook extensions over the base tool pipeline.
 ### Deliver
 
 -  VFR hook, mapping, expansion/raw tools, and model instructions as the `Vfr` contribution of [architecture
-30](30-instruction-sources-and-system-context.md) ([ADR
-0010](../decisions/0010-instruction-sources-and-system-context.md));
+30](30-instruction-sources-and-system-context.md);
 - Headroom hook, CCR retention contract, and retrieve tool;
 - deterministic composition with the workspace/tool pipeline;
 - adapter/model representation policy.
@@ -246,15 +253,15 @@ Goal: independently enabled hook extensions over the base tool pipeline.
 - Headroom retention/retrieval/expiry fixtures;
 - full hook-order integration test;
 - UI/model representation distinction test;
--  coverage fixtures for transform, expiry, retrieval, and error paths under the per-crate tier floors ([ADR
-0016](../decisions/0016-per-crate-coverage-tiers.md)).
+-  coverage fixtures for transform, expiry, retrieval, and error paths under the per-crate tier floors
+([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ### Exit criteria
 
 -  VFR and Headroom operate as independently enabled hook extensions; `retrieve` returns retained content while valid,
 with typed expiry behavior afterward;
 - base tools do not import VFR or Headroom implementation crates;
--  extension crates meet their declared tier floors ([ADR 0016](../decisions/0016-per-crate-coverage-tiers.md)) and
+-  extension crates meet their declared tier floors ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)) and
 feature-profile checks.
 
 ## Milestone 9: Hardening and acceptance verification
@@ -275,16 +282,17 @@ coordination, and stale-listener recovery;
 -  closure of the open policy decisions of architecture 09: event/log retention and diagnostic-export policy, TOML
 include/import policy, and non-Unix configuration permissions;
 - the post-M4 evidence obligations of architecture 10 for the remaining post-M4 packages; and
--  the removal-program evidence anchor of [ADR 0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md)
-for the single-version policy across every versioned system (EVD-066).
+-  the removal-program evidence anchor for the single-version policy across every versioned system
+([architecture 00](00-principles-and-scope.md); EVD-066).
 
 ### Tests first
 
 -  the full result-oriented scenario suite from [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md);
 - the real-binary daemon-host model-tool-loop outcome test; the broader M9 scenario suite remains;
--  a recorded opt-in live-provider e2e run against a real provider API ([ADR
-0007](../decisions/0007-opt-in-live-provider-e2e.md); manual, non-hermetic, never blocking) reporting date, commit,
+-  a recorded opt-in live-provider e2e run against a real provider API
+([Quality Gates and Makefile](12-quality-gates-and-makefile.md); manual, non-hermetic, never blocking) reporting date,
+commit,
 provider, model, and run URL;
 - secret injection regression suite;
 - daemon restart and reconnect endurance fixtures;
@@ -304,23 +312,22 @@ same change;
 ## Milestone 11: Tool registry, model-tool loop, and Gateway/RLM bridge
 
 **Depends on Milestone 5+ as foundation.** It delivers the post-M4 tool-registry and Gateway/RLM bridge packages
-(architectures 15/19) under decision 0001, and the worker/process supervision topology
+(architectures 15/19), and the worker/process supervision topology
 direction. It starts only when an
 activating specification per [architecture 12](12-quality-gates-and-makefile.md) is accepted.
 
 ### Deliver
 
 -  the fixed fourteen-slot registry, typed descriptor and registry revisions, frozen tool selection, and
-`WorkspaceRoot` semantics (architecture 15, decision 0001);
+`WorkspaceRoot` semantics (architecture 15);
 -  the model-tool loop: sequential steps, one ordered group per tool-calling step, durable `ToolCall`/`ToolResult`
-evidence, no-retry and no-resume recovery, and `RunToolHistoryPageDto` replay delivery (architectures 15,  as amended by
-[ADR 0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md));
+evidence, no-retry and no-resume recovery, and `RunToolHistoryPageDto` replay delivery (architecture 15);
 -  bridge attachment and typed handshake, the ephemeral daemon-issued grant, immutable bridge-contract selection,
 durable operation correlation, the one-path ingress into registry admission and tool-loop facts (including `sub_agent`
 ingress), safe replay, cancellation propagation, recovery, and the closed `bridge_*` failures (architecture 19);
 -  worker/process supervision topology, never a second runtime, registry, persistence authority, or sandbox (architecture 03);
--  crate ownership, feature-profile, and coverage declarations under [ADR
-0016](../decisions/0016-per-crate-coverage-tiers.md), plus quality-policy declarations for every activated family.
+-  crate ownership, feature-profile, and coverage declarations under [Quality Gates and
+Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations for every activated family.
 
 ### Tests first
 
@@ -349,12 +356,12 @@ verify`, and Linux/Windows CI;
 ## Milestone 12: Capabilities and context — MCP, kernel, and Skills/context
 
 **Depends on Milestone 11.** It delivers the post-M4 MCP, kernel, and context packages (architectures 18/20/21), the
-project script library of [decision
-0009](../decisions/0009-project-script-library-for-kernel-cells.md), and the architecture 22 provider work that remains
+project script library of [architecture
+20](20-ipython-kernel-lifecycle.md), and the architecture 22 provider work that remains
 not activated: the `responses` driver, `SafeHeader` live wire injection, and the
 user-kind parser. It starts only when an activating specification per [architecture
 12](12-quality-gates-and-makefile.md) is accepted; that activating change also declares the kernel contract families as
-typed serde JSON contracts ([ADR 0012](../decisions/0012-typed-serde-json-contracts.md)).
+typed serde JSON contracts ([architecture 02](02-dto-and-contract-policy.md)).
 
 ### Deliver
 
@@ -365,7 +372,7 @@ recovery (architecture 18);
 cancellation, recovery, and no-resume semantics (architecture 20);
 -  the project script library (`.ir/scripts`): agent-authored modules persisted as ordinary project files through the
 frozen tool descriptors, an exact import surface, bounded script-import evidence published as run facts, and no
-executable payload in checkpoint payload or metadata (decision 0009);
+executable payload in checkpoint payload or metadata ([architecture 20](20-ipython-kernel-lifecycle.md));
 -  rich MIME/raw kernel output projection, bounded and credential-free, never substituting for the closed text-only safe
 projection;
 -  scoped Goal acceptance and evidence, immutable untrusted Skill selection and progressive disclosure, admission-source
@@ -373,8 +380,8 @@ context manifests, model-step safe projections, typed memory, and immutable comp
 (architecture 21), with the Goal domain itself owned by architecture 28;
 -  the canonical `responses` provider driver, `SafeHeader` live wire injection, and the user-kind parser (architecture
 22);
--  crate ownership, feature-profile, and coverage declarations under [ADR
-0016](../decisions/0016-per-crate-coverage-tiers.md), plus quality-policy declarations for every activated family.
+-  crate ownership, feature-profile, and coverage declarations under [Quality Gates and
+Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations for every activated family.
 
 ### Tests first
 

@@ -10,8 +10,8 @@ Owner: architecture 28.
 
 ## Ownership and non-authorities
 
-The removed run-execution meaning layer (its canonical codec was removed by [ADR
-0012](../decisions/0012-typed-serde-json-contracts.md)) leaves no live path. Architecture 15 owns the registry and tool loop, architecture 18
+The removed run-execution meaning layer (its canonical codec was removed under [architecture
+02](02-dto-and-contract-policy.md)) leaves no live path. Architecture 15 owns the registry and tool loop, architecture 18
 MCP lifecycle, architecture 21 context selection and projection (Goal context selection, Skills, memory/compaction
 selection), and architecture 03 activity-journal and notification projections.
 
@@ -114,8 +114,8 @@ admission. A verification run has that one Goal with kind `VerificationOnly`; it
 alter Goal, memory, Skill, role, template, or connection state.
 
 A run's immutable selections are typed serde JSON records rather than one canonical execution-meaning envelope; the
-former `run-execution-meaning-v4` carrier was removed with the canonical codec by [ADR
-0012](../decisions/0012-typed-serde-json-contracts.md). The applicable records are `GoalRunSelectionV1` and
+former `run-execution-meaning-v4` carrier was removed with the canonical codec under [architecture
+02](02-dto-and-contract-policy.md). The applicable records are `GoalRunSelectionV1` and
 `McpMethodCatalogSelectionV1`; an absent record means the feature does not apply, and historical M4 records gain
 nothing.
 
@@ -295,7 +295,7 @@ records, not a work-authorization plane. All directions affect fresh runs only.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 14, 15, 18, 21, and 24 plus decision 0001. Non-goals: Goal persistence,
+This document depends on architectures 14, 15, 18, 21, and 24. Non-goals: Goal persistence,
 search/index/vector retrieval, prompt assembly, SQL/wire tags, migrations, retention/deletion/encryption, source-page
 sizes, resource values, provider evolution, session branching, activity-journal and UI delivery, Plan artifacts, MCP
 administration, Python/Jupyter process behavior, Cargo, Makefile/CI, production activation, attachments/images/binary/

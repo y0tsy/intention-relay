@@ -26,8 +26,8 @@ erDiagram
 ## Core invariants
 
 1.  Each session has one mandatory stable `WorkspaceId` and declared `WorkspaceRootDto`; M3 persists the identity/root
-association, while M5 owns the workspace addressing policy — the root as an anchor, not a containment boundary (ADR
-0013).
+association, while M5 owns the workspace addressing policy — the root as an anchor, not a containment boundary
+([architecture 05](05-tools-workspace-and-hooks.md)).
 2. A session has at most one run in an active state.
 3. Every turn, run, plan, tool call, todo, permission, question, and message carries stable typed identity.
 4.  Every state-changing repository method commits its change in one SQLite transaction, or changes nothing. No
@@ -97,7 +97,8 @@ context; and
 ## Persistence model
 
 SQLite is the `intention-storage` implementation. It uses bundled SQLite and creates the complete current storage
-schema directly on open; there is no migration chain and no version gate (ADR 0005). Storage combines:
+schema directly on open; there is no migration chain and no version gate
+([architecture 00](00-principles-and-scope.md)). Storage combines:
 
 - normalized current-state tables for projects, workspace roots, sessions, runs, and turns;
 - the `messages` transcript for user content, assistant content, reasoning text, tool-call and tool-result messages, and
@@ -132,6 +133,9 @@ If a write fails before commit, nothing changes. The daemon host publishes run f
 returned by the repository; a publisher failure never rolls back committed state. A later read observes only committed
 state.
 
+Catalog and lineage audit records are read through their own bounded queries; they never enter run publication merely
+because they relate to the same user operation.
+
 ## Transcript, tool results, and model context
 
 `messages.kind` is a closed set: `user`, `assistant`, `tool_call`, `tool_result`, and `notice`. Assistant rows carry the
@@ -157,6 +161,11 @@ durable `Starting` run and deduplicates repeated admission. `run.interrupt` vali
 that exact task; an interrupt that arrives before admission finds no in-flight operation to stop, changes no durable
 state, and the run's next boundary continues normally. A tool call interrupted before it starts is answered with the
 stopped-tool-call notice as a `Partial` result, so no effect starts and the assistant tool-call message stays answered.
+The fixed notice for a stopped provider stream or another call without its own result is
+`[The call was stopped before a final result.]`; the tool-call notices are owned by [architecture
+15](15-tool-registry-and-model-tool-loop.md). `run.interrupt` is accepted only for an exact active run
+(`active_run_not_found` otherwise), reports the session position, and is never dispatched through the synchronous
+command path, which rejects it with `invalid_interrupt_dispatch`.
 An interrupt that arrives during a retry wait records the notice and starts the next attempt immediately. The executor
 owns suppression of late results from the stopped call. Recovery never admits old work to a provider.
 
@@ -189,8 +198,8 @@ tool and run evidence is evidence of intent and observed state, not proof of ext
 ## Quality-gate integration
 
 Session, run, turn, transcript, and transaction tests are mandatory `make verify` inputs under the coverage policy of
-[12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate tiers, [ADR
-0016](../decisions/0016-per-crate-coverage-tiers.md)), and must exercise every declared feature profile. Numeric
+[12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate tiers), and must exercise every declared
+feature profile. Numeric
 coverage does not excuse missing fault-injection, recovery, ordering, or durable turn outcome tests.
 
 ## Non-goals

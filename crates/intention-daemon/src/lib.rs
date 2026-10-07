@@ -562,7 +562,7 @@ impl HostState {
             // The per-connection queue is full, so the correlated reply cannot
             // be delivered. The subscriber is removed and the failure is
             // reported through the same typed error every other registration
-            // failure uses (ADR 0011 invariant 5, C-03).
+                        // failure uses.
             self.remove_subscriber(key, id);
             if sender
                 .try_send(run_subscription_response(
@@ -1762,8 +1762,8 @@ mod tests {
     async fn a_full_subscriber_queue_fails_closed_instead_of_waiting_silently() {
         // C-03: when the per-connection queue cannot accept the correlated
         // reply, the registration fails closed: no subscriber is left
-        // registered and the connection is told to end, so the peer never
-        // waits for a reply that cannot arrive (ADR 0011 invariant 5).
+                // registered and the connection is told to end, so the peer never
+        // waits for a reply that cannot arrive.
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
         let (session_id, run_id) = create_and_start(&facade);
         let host = host_for_test(facade);

@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 20. Decisions: ADR 0009.
+Owner: architecture 20.
 
 This document owns future run-scoped IPython kernel epochs, foreground cells, namespace checkpoints, kernel-local
 background work, safe kernel projections, and kernel recovery. It applies only to future run execution. Retained
@@ -11,7 +11,8 @@ architectures 14--19.
 
 ## Ownership and non-authorities
 
-The removed execution-meaning machinery (ADR 0012) leaves no live path; 15 owns registry
+The removed execution-meaning machinery ([architecture
+02](02-dto-and-contract-policy.md)) leaves no live path; 15 owns registry
 selection, direct tool admission, `ToolCallId`, generic tool-loop records, the committed call start, and publication;
 18 owns MCP lifecycle; 19 owns bridge attachment, grants, operation identity, ingress, delivery, and bridge recovery.
 
@@ -29,7 +30,7 @@ only an explicitly verified checkpoint projection may seed it. Session-scoped ke
 in retained research are historical provenance, not future run policy.
 
 This document owns the semantic fields of the credential-free kernel selection in the future typed run record
-(typed serde JSON, ADR 0012):
+(typed serde JSON, [architecture 02](02-dto-and-contract-policy.md)):
 
 ```text
 KernelSelectionV1
@@ -51,8 +52,8 @@ unsupported, or mismatched selection blocks dependent kernel work before process
 back to current state.
 
 One additive bounded reference joins the selection: `script_library_reference` points at a `KernelScriptLibraryV1` value
-(contract, import-surface, and evidence revisions for the logical workspace-relative path `.ir/scripts`, [ADR
-0009](../decisions/0009-project-script-library-for-kernel-cells.md)). It is credential-free and content-free, carries no
+(contract, import-surface, and evidence revisions for the logical workspace-relative path `.ir/scripts`). It is
+credential-free and content-free, carries no
 absolute or symlink-target path, and its absence means an empty import surface.
 
 A `KernelEpochId` is created lazily only after a supported active run is reread, the exact kernel/bridge/tool selections
@@ -121,20 +122,24 @@ kernel disposal, and restart prevent new host requests.
 
 Agent-authored reusable modules live as ordinary project files under the logical workspace-relative path `.ir/scripts`
 (`.ir` is the project-local hidden root), created and edited only through the frozen `write` and `edit` descriptors and
-run through `execute` or a foreground cell ([ADR 0009](../decisions/0009-project-script-library-for-kernel-cells.md)).
+run through `execute` or a foreground cell.
 The library is file material, not kernel state: it is never a namespace, checkpoint, epoch, task, or host-request
 resource, and no selection, cell, or checkpoint carries its source.
 
 An epoch's import surface is exactly the library directory named by `script_library_reference`; the parent, the
 workspace root as a second library, and any other path never enter it. The directory is addressed as
-`WorkspaceRoot.join('.ir/scripts')`; `WorkspaceRoot` is an addressing anchor and not a security boundary (ADR 0013), so
+`WorkspaceRoot.join('.ir/scripts')`; `WorkspaceRoot` is an addressing anchor and not a security boundary
+([architecture 05](05-tools-workspace-and-hooks.md)), so
 no lexical symlink or containment check gates the surface. A missing library directory yields an empty import surface,
 so a project without saved modules behaves as if the capability were absent; an unreadable library directory fails
 before effect with `kernel_script_library_unavailable`. Python-level import errors inside a cell stay ordinary safe
 `Error` output under the closed text-only projection. A fresh run reuses a module by reading the file inside its own
 epoch; namespace, cell, task, grant, and checkpoint state are never carried over to provide reuse, and the trusted-local
 model is unchanged: library code is project material, not a sandbox, and direct Python OS APIs remain outside the
-facade.
+facade. A library path, an import, or a persisted module grants no lifecycle, tool, MCP, bridge, or confirmation
+authority, and it never substitutes for a frozen registry selection. No secret material enters the library: credentials,
+tokens, endpoints, and provider values are never written into it, and the redaction rules of [architecture
+09](09-configuration-security-and-observability.md) apply to every path and error this capability produces.
 
 Every foreground cell that imports library modules records bounded script-import evidence: for each imported module the
 logical workspace-relative path, inside bounded counts and sizes. Evidence contains no source text, no absolute or
@@ -171,8 +176,8 @@ Payload is deterministic, typed, versioned, bounded, and private. The first-scop
 serializer. Payload and metadata contain no executable payload or code, open file/process/socket/task handle,
 provider/MCP/Jupyter resource, raw Jupyter frame, provider SDK object, bridge grant, credential, endpoint, raw
 traceback, or implementation resource; unsupported or non-serializable values are explicitly omitted with typed safe
-metadata, never guessed or stringified. Verified metadata may additionally carry the project script-library reference
-([ADR 0009](../decisions/0009-project-script-library-for-kernel-cells.md)); the payload never carries script source.
+metadata, never guessed or stringified. Verified metadata may additionally carry the project script-library reference;
+the payload never carries script source.
 Payload, metadata, verification, generation promotion, and publication are atomic: a failed generation leaves the prior
 verified one intact and never becomes latest verified. Checkpoint payload stays private to the daemon-owned session
 kernel service; public artifacts contain only safe generation, schema, bounded size, and restoration status.
@@ -219,7 +224,8 @@ unfinished effect; a child may receive only a separately selected verified check
 independent, and child-local. Kernel-originated MCP work still uses the fixed `mcp` slot through
 architectures 19, 15, and 18; checkpoints never contain live MCP state and later runs reacquire capabilities.
 
-Future kernel delivery uses typed JSON-RPC 2.0 methods (ADR 0011): correlated results followed by live notifications.
+Future kernel delivery uses typed JSON-RPC 2.0 methods ([architecture 03](03-daemon-transport-and-adapters.md)):
+correlated results followed by live notifications.
 Reconnect re-reads current state; there is no event tail, cursor, or resynchronization. Delivery is read-only: it cannot
 create a kernel, restore a namespace, execute a cell, issue a grant, repeat a host request, start a child, or invoke
 MCP. Partial delivery is never permitted. M3/M4 and retained IPython/RLM records gain no kernel selection, epoch,
@@ -278,8 +284,8 @@ implementation detail.
 
 ## Dependencies, non-goals, and evidence
 
-This document depends on architectures 14, 15, 18, and 19, decisions 0001 and 0009 for the project script library path,
-selection, and evidence contract. It does not define Python/Jupyter dependencies, process supervision, storage/wire
+This document depends on architectures 14, 15, 18, and 19 and owns the project script library path, selection, and
+evidence contract. It does not define Python/Jupyter dependencies, process supervision, storage/wire
 tags, migrations, retention, encryption, resource-limit values, RLM executor topology, Skills/Goals/context, provider
 evolution, session forks, activity-journal and UI delivery, direct MCP administration, Cargo, Makefile/CI, or production
 activation.

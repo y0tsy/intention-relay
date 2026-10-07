@@ -46,7 +46,7 @@ flowchart TD
 | **Turn** | A causally identified unit of conversation, such as a user request or assistant response. |
 | **Pending turn** | A user turn accepted while a session run is active: durable input that joins that run's live context at the next model boundary and is removed only before it is seen. |
 | **Run** | One agent execution lifecycle started from an accepted user turn. |
-| **WorkspaceRoot** | The required addressing anchor and process CWD for every session tool: relative paths join the root, `execute` starts there, and pathless `glob`/`grep` search from there (ADR 0013). |
+| **WorkspaceRoot** | The required addressing anchor and process CWD for every session tool: relative paths join the root, `execute` starts there, and pathless `glob`/`grep` search from there ([architecture 05](05-tools-workspace-and-hooks.md)). |
 | **Artifact** | A durable work product associated with a session or run. Plans are artifacts. |
 | **Hook** | A typed, ordered extension point around tool execution and result processing. |
 | **Plan** | A physical, revisioned artifact produced by a planning-focused mode; ordinary project writes remain denied, while `execute` is available as trusted-local, advisory-guided execution. |
@@ -94,7 +94,7 @@ flowchart TD
 1. [Quality gates and Makefile](12-quality-gates-and-makefile.md)
 2. [Test-driven delivery and verification](10-test-driven-delivery-and-verification.md)
 3. [Implementation roadmap](11-implementation-roadmap.md)
-4. [Architecture decision records](../decisions/README.md)
+
 
 ## Document map
 

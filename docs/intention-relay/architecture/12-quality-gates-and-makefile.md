@@ -223,7 +223,7 @@ supported OS instead of being gated to Unix.
 ### Per-crate coverage tiers
 
 `quality/coverage.toml` declares the numeric ladder in `[tiers]` and assigns every active production crate and both
-presentation adapters to one rung in `[crate_tiers]` ([ADR 0016](../decisions/0016-per-crate-coverage-tiers.md)):
+presentation adapters to one rung in `[crate_tiers]`:
 
 | Tier | Minimum line coverage | Crates |
 | --- | ---: | --- |
@@ -277,7 +277,7 @@ out-of-source-root, absent, unreported, and all-source-removing exclusions. The 
 `intention-daemon/src/main.rs`: it is a thin process adapter whose unsafe-argument and concurrent bootstrap behavior are
 exercised through the real binary in `daemon_bootstrap`; the entry point carries no library logic, and those real-binary
 tests are accepted as equivalent coverage evidence. All daemon library behavior remains subject to the `standard` tier
-floor ([ADR 0016](../decisions/0016-per-crate-coverage-tiers.md)).
+floor.
 
 ## Cargo feature-profile policy
 
@@ -338,12 +338,12 @@ shell behavior and label each command as mutating or non-mutating.
 | `make ci-coverage-no-default` | No | Run the CI coverage job for the no-default profile: job-scoped metrics, `coverage-no-default`, generated-artifact cleanup, then job-scoped metrics finalize. |
 | `make ci-coverage-all` | No | Run the CI coverage job for the all-features profile: job-scoped metrics, `coverage-all`, generated-artifact cleanup, then job-scoped metrics finalize. |
 | `make ci-deps` | No | Run the CI dependency job: job-scoped metrics, `deps`, then job-scoped metrics finalize. |
-| `make e2e-real-api` | Yes, networked; writes a local run report | MUTATING/NETWORKED/OPT-IN: run the ignored `real_api_e2e` daemon integration test against a real provider API; requires `INTENTION_REAL_API_KEY` and `INTENTION_REAL_API_MODEL` from the environment or from a local gitignored `.env` file (explicit environment values take precedence), exports the `INTENTION_REAL_API_E2E=1` opt-in itself, accepts optional `INTENTION_REAL_API_KIND`/`INTENTION_REAL_API_ENDPOINT` selectors, and writes only the gitignored `quality/reports/real-api-e2e` run report; never a prerequisite of `quick`, `check`, `verify`, `ci`, or a `ci-*` alias ([ADR 0007](../decisions/0007-opt-in-live-provider-e2e.md)). |
+| `make e2e-real-api` | Yes, networked; writes a local run report | MUTATING/NETWORKED/OPT-IN: run the ignored `real_api_e2e` daemon integration test against a real provider API; requires `INTENTION_REAL_API_KEY` and `INTENTION_REAL_API_MODEL` from the environment or from a local gitignored `.env` file (explicit environment values take precedence), exports the `INTENTION_REAL_API_E2E=1` opt-in itself, accepts optional `INTENTION_REAL_API_KIND`/`INTENTION_REAL_API_ENDPOINT` selectors, and writes only the gitignored `quality/reports/real-api-e2e` run report; never a prerequisite of `quick`, `check`, `verify`, `ci`, or a `ci-*` alias. |
 
 **Removed 2026-10-02: the quality self-test suite.** The expected-failure fixture suite `quality/self_test.py`, its
 `quality-self-test` and `quality-self-test-in-place` targets, its `ci-selftest` CI job, and its `selftest` tool scope no
-longer exist. No gate requires them: the remaining gates are the targets listed above, and decision records that name the self-test
-describe completed historical work.
+longer exist. No gate requires them: the remaining gates are the targets listed above, and historical references to the
+self-test describe completed work.
 
 **Added 2026-10-05: focused coverage-checker self-tests.** `quality/test_check_coverage.py` proves the tier decisions
 with synthetic reports: each tier floor passes at its percentage and fails below it, an exempt crate is rejected from
@@ -428,7 +428,8 @@ while `syn@2.0.119` is required by `async-openai 0.42.0 -> async-openai-macros 0
 through `wasm-bindgen 0.2.128` on WASM targets. Native bundled SQLite instead resolves `rusqlite 0.40.2 -> hashlink
 0.12.2 -> hashbrown 0.17.1`; the independently required native proc-macro path retains `syn@3.0.6`. The native daemon
 continues to use bundled SQLite through `rusqlite` with its `bundled` feature; `rusqlite_migration 2.6.0` is no longer
-in the graph because the schema-migration machinery was removed (ADR 0005, Wave 4); these exceptions do not replace
+in the graph because the schema-migration machinery was removed under the single-live-version policy
+([architecture 00](00-principles-and-scope.md)); these exceptions do not replace
 either dependency or relax duplicate bans for other crates or versions. Reassess both exceptions whenever `rusqlite`,
 `sqlite-wasm-rs`, `rsqlite-vfs`, `wasm-bindgen`, or their supported target selection changes; record the locked native
 and WASM validation trees with the review. Ignoring a failing gate, using a broad CI bypass, or silently allowing a tool
@@ -438,8 +439,7 @@ failure is prohibited.
 
 Every implementation slice must:
 
-1.  identify the owning architecture document and the applicable coverage declarations under [ADR
-   0016](../decisions/0016-per-crate-coverage-tiers.md);
+1.  identify the owning architecture document and the applicable coverage declarations;
 2. create or update DTO/contract fixtures first;
 3. create failing domain, architecture, and outcome tests appropriate to the change;
 4. implement the smallest code that makes those tests pass;
@@ -463,7 +463,7 @@ dependency, documentation, and Cargo resource contention would make their result
 
 ### Opt-in live-provider e2e
 
-[ADR 0007](../decisions/0007-opt-in-live-provider-e2e.md) adds one ignored integration target to the machine-readable
+The opt-in live-provider e2e channel adds one ignored integration target to the machine-readable
 policy: `intention-daemon` `real_api_e2e` (`crates/intention-daemon/tests/real_api_e2e.rs`). Ignored tests are compiled
 by every test build but are never executed by `make test`, `make coverage`, `make quick`, or `make verify`; executing
 them requires the explicit `make e2e-real-api` opt-in with `INTENTION_REAL_API_KEY` and `INTENTION_REAL_API_MODEL` (the
@@ -484,7 +484,8 @@ An activating specification declares the exact crates, DTO/wire/storage versions
 fixtures, and outcome evidence, and passes `make quick`, `make verify`, and Linux/Windows CI.
 
 Activation order and package status live in the [Implementation Roadmap](11-implementation-roadmap.md); plan, Build
-Autopilot, provider control-plane, and instruction-channel decisions live in their ADRs. When a later package activates
+Autopilot, provider control-plane, and instruction-channel decisions live in their owner architecture documents. When
+a later package activates
 a production boundary, the activating change updates the existing machine-readable architecture, test-target, coverage,
 and feature policies together with its focused expected-failure architecture fixtures and outcome evidence; research or
 a reconciliation row alone is not a quality-policy declaration. M5's focused tool, workspace, hook, and typed-result

@@ -1195,7 +1195,7 @@ impl ProtocolMethodDto {
 
     /// Returns the payload a parameterless request of this method carries.
     ///
-    /// Only `daemon.health` is genuinely parameterless (ADR 0011); every other
+    /// Only `daemon.health` is genuinely parameterless; every other
     /// method requires its typed payload, so an absent `params` member stays an
     /// invalid-params failure.
     const fn empty_payload(self) -> Option<ProtocolRequestPayloadDto> {

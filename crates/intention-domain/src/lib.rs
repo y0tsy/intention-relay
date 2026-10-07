@@ -133,8 +133,8 @@ impl WorkspaceRootDto {
     /// Parses an absolute, non-empty native workspace path without resolving it.
     ///
     /// Resolution and root validation belong to `intention-workspace`, where
-    /// the root is an addressing anchor rather than a containment boundary
-    /// (ADR 0013).
+/// the root is an addressing anchor rather than a containment boundary
+/// (architecture 05).
     ///
     /// # Errors
     ///

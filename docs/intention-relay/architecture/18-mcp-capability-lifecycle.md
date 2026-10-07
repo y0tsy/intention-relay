@@ -11,7 +11,8 @@ provenance, not future MCP capability state.
 
 ## Ownership and non-authorities
 
-The removed execution-meaning envelope, canonical framing, decoders, and compatibility classes (ADR 0012) leave no
+The removed execution-meaning envelope, canonical framing, decoders, and compatibility classes
+([architecture 02](02-dto-and-contract-policy.md)) leave no
 live path. Architecture 15 owns the fixed `mcp` slot, composition-only activation, direct
 admission, `ToolCallId`, generic tool loop, and effect/publication boundary.
 
@@ -29,8 +30,9 @@ retained requirements for user-created catalogs, complete-at-admission method se
 quota gates, and it preserves the one gateway, typed boundary, private resources, idempotency,
 redaction, publication after commit, cancellation/disposal, and no-resume law.
 
-Typed serde JSON (ADR 0012) supplies the record shape; the removed `IRCR` / `typed-tlv-v1` / SHA-256 canonical policy is
-not revived. This document owns the field semantics of these conceptual records. The concept2 names
+Typed serde JSON ([architecture 02](02-dto-and-contract-policy.md)) supplies the record shape; the removed `IRCR` /
+`typed-tlv-v1` / SHA-256 canonical policy is not revived. This document owns the field semantics of these conceptual
+records. The concept2 names
 `McpCapabilitySourceDto`, `McpDiscoveryDto`, and `McpCapabilityRevisionDto` are research-only; the
 authoritative names are the `V1` records below, whose fields (private endpoint/credential generation references,
 acquisition operation identity, requesting run and tool call, server revision reference, attempt evidence, effect
@@ -204,7 +206,8 @@ never a live process, connection, credential handle, accumulated selection, invo
 controls cannot invoke, widen, or inspect private resources, and an interrupted child MCP call's partial result remains
 child-local.
 
-Future MCP projections use typed JSON-RPC 2.0 methods (ADR 0011) layered with the `model_tool_loop_v1` descriptor/model
+Future MCP projections use typed JSON-RPC 2.0 methods ([architecture 03](03-daemon-transport-and-adapters.md))
+layered with the `model_tool_loop_v1` descriptor/model
 capability: live notifications through one post-commit gate; reconnect re-reads current state, and there is no event
 tail, cursor, or resynchronization. No caller receives a partial ordinary snapshot. M3/M4 and retained bounded-MCP/RLM
 records gain no synthetic source, discovery, capability, selection, process, or authority state; historical M4 tool
@@ -260,7 +263,7 @@ Milestone 5+ as an explicit durable contract that never silently resumes old ext
 
 ## Dependencies and non-goals
 
-This document depends on architectures 14 and 15 and decision 0001. It defines no direct MCP
+This document depends on architectures 14 and 15. It defines no direct MCP
 administration, an MCP listener/inbound daemon attachment, raw string-method transport, arbitrary maps/headers/schemas,
 plugins/installations, dynamic ToolIds, long-lived workers/supervision, provider evolution, bridge/IPython,
 Skills/Goals/context semantics, session forks, activity/UI, schema, migrations, crates, Cargo, Makefile/CI, or

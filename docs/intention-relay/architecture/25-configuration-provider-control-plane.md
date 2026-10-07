@@ -3,18 +3,18 @@
 **Approved future design. Not implemented; activation requires an activating specification.** Architecture 25 owns the
 configuration and provider control-plane cluster: controlled configuration live reload, credential rotation, provider
 health checks, provider/model discovery, pricing and budget policy, and the configuration control-plane surface. The
-slice is not activated; activation requires an activating specification (activation sequence: [ADR
-0004](../decisions/0004-m5plus-complete-foundation-activation.md), [ADR
-0010](../decisions/0010-instruction-sources-and-system-context.md)).
+slice is not activated; activation requires an activating specification (activation sequence: [architecture
+11](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment), [architecture
+30](30-instruction-sources-and-system-context.md)).
 
-Owner: architecture 25. Decisions: ADR 0010.
+Owner: architecture 25.
 
 ## Ownership and non-authorities
 
 Architecture 09 owns TOML parsing, schema validation, configuration discovery, redaction, and startup-only application.
 Architecture 22 owns future provider kinds, profiles, catalogs, selections, and driver compatibility; the removed
-run-execution meaning layer (its canonical codec was removed by [ADR
-0012](../decisions/0012-typed-serde-json-contracts.md)) leaves no live path. Architecture 15 owns the tool loop, and architecture 03 owns the
+run-execution meaning layer (its canonical codec was removed under [architecture
+02](02-dto-and-contract-policy.md)) leaves no live path. Architecture 15 owns the tool loop, and architecture 03 owns the
 flat activity journal, the notification list, and adapter behavior.
 
 This document owns only the accepted future directions below: no second runtime, registry, persistence authority, or
@@ -30,8 +30,8 @@ Controlled live reload is the accepted direction that applies a validated TOML c
 - reload is an explicit command, contract, transaction, and outcome test: the
 daemon re-parses and validates a candidate configuration revision against the current single configuration shape,
 commits the new accepted revision in one transaction, and applies it to fresh runs only; configuration has no migration
-path, unversioned or legacy documents fail closed under [ADR
-0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md), and there is no watcher, polling,
+path, unversioned or legacy documents fail closed under [architecture
+00](00-principles-and-scope.md), and there is no watcher, polling,
 auto-restart, or automatic re-application;
 - a candidate that cannot be applied atomically fails closed and leaves the
 daemon on its recorded configuration revision; a candidate that changes catalog-affecting configuration is rejected with
@@ -131,7 +131,7 @@ material, SDK objects, or raw provider payloads on durable/public surfaces.
 ## Instruction-fragment editing and preview
 
 The instruction configuration surface of [architecture 30](30-instruction-sources-and-system-context.md) is edited
-through this control plane, per [ADR 0010](../decisions/0010-instruction-sources-and-system-context.md); architecture 30
+through this control plane; architecture 30
 owns the fragment operations and the non-admitting preview, and the surface ships with the fifth Milestone 5+ slice and
 its activating specification. Validate an edit before it commits and reject an invalid, inconsistent, or over-bound edit
 with a typed failure, leaving the running daemon on its recorded profile revision; keep the surface credential-free,

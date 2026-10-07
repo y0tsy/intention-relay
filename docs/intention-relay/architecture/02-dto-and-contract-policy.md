@@ -110,9 +110,11 @@ Provider SDK request/response/stream types and raw `serde_json::Value` cannot cr
 model/provider contracts use validated text context, requested/declared capability DTOs, ordered stream facts, usage,
 finish reasons, safe provider errors, and typed JSON-object tool-call text. A request advertises tool definitions as a
 validated JSON Schema descriptor (`ModelToolDefinitionDto`), never as raw `serde_json::Value`; the advertised set is
-transient request state with no durable representation (ADR 0006). A request may additionally carry the current round's
+transient request state with no durable representation ([architecture 08](08-model-protocol-and-providers.md)). A
+request may additionally carry the current round's
 accepted provider reasoning as transient same-run attachment state with no durable representation: the runtime may
-attach it to the assistant tool-call message of the same-run continuation (ADR 0008), and it is never durable history,
+attach it to the assistant tool-call message of the same-run continuation ([architecture
+08](08-model-protocol-and-providers.md)), and it is never durable history,
 message text, or cross-turn transfer. `intention-types` owns the shared safe usage, finish-reason, tool-call, and
 provider-error values; `intention-model` re-exports them for source compatibility. Native SDK decoding and JSON values
 may exist only inside the owning provider implementation before being normalized to those DTOs.
@@ -130,16 +132,18 @@ are enforced at the boundary that owns them and again at admission before any ef
 cannot assume the producer decoded through the same boundary.
 
 There is no binary canonical form: the wire and domain contracts are the serde JSON DTOs themselves, and no tag
-registry, canonical digest, or identity layer exists (ADR 0012). Canonicalization is introduced only when a first real
+registry, canonical digest, or identity layer exists. Canonicalization is introduced only when a first real
 consumer needs canonical bytes, and then only as RFC 8785 JSON Canonicalization (`serde_json_canonicalizer`); no
 canonicalization dependency is added before that consumer exists. The public DTOs that declare invariants beyond their
 field types are validated at admission; extending decode-time enforcement to them remains a recorded follow-up card.
+Until a real canonicalization consumer exists, no component hashes JSON for identity, addressing, or comparison:
+equality is typed structural equality, and record identity is a typed revision identity rather than a digest.
 
 Validation occurs at the boundary that has the necessary context.
 
 The error category follows the boundary that detected a version mismatch: the JSON-RPC 2.0 handshake fails an
 incompatible protocol version as the typed `-32001` error with `ErrorDto { category: unavailable }` (architecture 03,
-"Protocol lifecycle"; ADR 0011), while an `incompatible_protocol_version` decode rejection at a public DTO boundary is a
+"Protocol lifecycle"), while an `incompatible_protocol_version` decode rejection at a public DTO boundary is a
 `validation` failure. The difference is intentional.
 
 Validation cannot be delegated only to UI. Tauri and TUI may provide ergonomic pre-validation, but daemon validation is
@@ -178,7 +182,8 @@ configuration schema explicitly documents `deny_unknown_fields`. Required fields
 closed variants, and any schema/protocol version other than the current one always fail safely.
 - The daemon/client JSON-RPC 2.0 handshake accepts only the exact current
 protocol version (1.0) and rejects any other version with the typed `-32001` version error before closing the connection
-(ADR 0011); the public DTO schema compares by exact equality (no same-major tolerance).
+([architecture 03](03-daemon-transport-and-adapters.md)); the public DTO schema compares by exact equality (no
+same-major tolerance).
 - SQLite storage is the single live schema (logical version 1) created
 directly on open; there is no migration chain, no version gate, and no opening of older schemas, and persisted rows keep
 their recorded meaning.
@@ -198,8 +203,8 @@ cases;
 ## Quality-gate integration
 
 DTO compatibility, validation, redaction, and public-API boundary tests are blocking `make verify` inputs. Every
-DTO-owning crate is subject to its declared coverage tier ([ADR
-0016](../decisions/0016-per-crate-coverage-tiers.md)), and contract fixtures run across the required feature profiles.
+DTO-owning crate is subject to its declared coverage tier, and contract fixtures run across the required feature
+profiles.
 See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Outcome criteria

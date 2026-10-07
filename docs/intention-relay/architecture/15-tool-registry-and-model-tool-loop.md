@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 15. Decisions: ADR 0001, ADR 0014.
+Owner: architecture 15.
 
 This document owns the unified tool registry, immutable tool selection, tool admission on the ordinary run path,
 `WorkspaceRoot` semantics, the model-tool-model loop, and the tool-effect recovery boundary. It applies to future
@@ -21,8 +21,7 @@ shapes, not implementation selection.
 
 Providers, models, adapters, bridge/kernel code, child work, MCP sources, Skills, and primitive owners cannot create a
 second registry, private model-function collection, direct primitive path, persistence authority, or publication
-authority. Every invocation reaches the one daemon-owned, Rust-owned capability path required by [decision
-0001](../decisions/0001-rust-owned-capability-plane-and-fixed-tool-registry.md).
+authority. Every invocation reaches the one daemon-owned, Rust-owned capability path.
 
 ## Fixed registry and descriptor revisions
 
@@ -103,8 +102,9 @@ get no fictional workspace path; their owners may require typed URL, question, t
 child-agent, or MCP-method references instead. Plan denies ordinary `write`/`edit`; plan mutation remains plan-policy
 work.
 
-`ToolDescriptorRevisionId`, `ToolRegistryRevisionId`, and selection records are typed serde JSON values (ADR
-0012); the removed `IRCR` / `typed-tlv-v1` / SHA-256 canonical codec is not replaced by a competing codec. Semantic
+`ToolDescriptorRevisionId`, `ToolRegistryRevisionId`, and selection records are typed serde JSON values
+([architecture 02](02-dto-and-contract-policy.md)); the removed `IRCR` / `typed-tlv-v1` / SHA-256 canonical codec is not
+replaced by a competing codec. Semantic
 changes require a new record version; labels, executor handles, live readiness, and opaque owner resources are excluded
 from identity.
 
@@ -165,11 +165,12 @@ dependent work before effect while unrelated readable history remains available.
 ## Validation ownership and limit classification
 
 Validation is layered: transport owns wire shape and protocol-version equality; this package owns fixed slots,
-descriptor revisions, selection ordering, and tool admission; typed serde JSON owns record shape (ADR 0012);
-runtime/application owns live readiness and mode preconditions; primitive owners validate typed inputs/outputs; storage
+descriptor revisions, selection ordering, and tool admission; typed serde JSON owns record shape
+([architecture 02](02-dto-and-contract-policy.md)); runtime/application owns live readiness and mode preconditions;
+primitive owners validate typed inputs/outputs; storage
 owns persistence constraints. No layer may bypass or replace another. Every numeric value is classified before
 activation as an intrinsic representation/protocol bound, typed capacity availability, or a liveness safeguard with
-recorded rationale (ADR 0014); future product ceilings, retry budgets, and successful-result truncation to fit a
+recorded rationale; future product ceilings, retry budgets, and successful-result truncation to fit a
 ceiling are not permitted.
 
 ## Tool admission and WorkspaceRoot
@@ -195,7 +196,7 @@ The workspace rule is the same for every run:
 | Relative paths | Default base: `workspace_root.join(path)`. |
 | `execute` | Initial CWD; the child process starts in the root. |
 | glob/grep | Default scope root when no path is supplied. |
-| Containment | None. The anchor does not contain: no symlink parser, containment check, or path-based denial remains, and a path inside the root may resolve outside it through a symbolic link. The typed input still rejects absolute and parent (`..`) paths — `WorkspaceRelativePathDto` for tool paths and the search-pattern validator for `glob`/`grep` patterns — as an input-shape rule, not a boundary; `WorkspaceRoot` is not a security boundary (ADR 0013). |
+| Containment | None. The anchor does not contain: no symlink parser, containment check, or path-based denial remains, and a path inside the root may resolve outside it through a symbolic link. The typed input still rejects absolute and parent (`..`) paths — `WorkspaceRelativePathDto` for tool paths and the search-pattern validator for `glob`/`grep` patterns — as an input-shape rule, not a boundary; `WorkspaceRoot` is not a security boundary ([architecture 05](05-tools-workspace-and-hooks.md)). |
 
 For path-bearing calls, typed safe observation may record path form, base reference, effective path/CWD subject to
 redaction, and observation completeness: audit evidence, not authorization, neither tracking descendants nor forming a
@@ -207,7 +208,7 @@ physical-plan mutation stays a plan-owner operation. `execute` is admissible whe
 sandbox; `ask_user` is normal `user_interaction` tooling, and the run remains `Running`
 after it starts.
 
-The project script library (`.ir/scripts`, [ADR 0009](../decisions/0009-project-script-library-for-kernel-cells.md))
+The project script library (`.ir/scripts`, [architecture 20](20-ipython-kernel-lifecycle.md))
 follows these same tool-admission semantics: its logical relative path is a default base for existing frozen descriptors
 and never an access boundary, `write`/`edit` create or change a module while `execute` or a kernel foreground cell runs
 it, and no new `ToolId`, registry slot, listener, or primitive path is admitted. Per-cell script-import evidence for
@@ -275,8 +276,39 @@ It carries only safe model-visible projection and approved typed metadata; no va
 `Succeeded`, `Deferred`, known denials, known pre-effect failures, and `Partial` may enter the next typed exchange; a
 `Partial` result carries the bounded captured output with its interruption notice, never blocks another model step, and
 is never retried. `Deferred` is the asynchronous `sub_agent` acceptance outcome: it carries the child session handle,
-permits the next model step, and never changes category when the child's terminal markdown answer arrives later as the
-committed child-result message.
+permits the next model step, and never changes category when the child's terminal markdown answer arrives later as the committed child-result message.
+
+Failure semantics are closed: invalid tool input, workspace denial, or hook denial produces a typed failed tool result
+and the run terminalizes `Failed` without retry, and a tool infrastructure error produces a safe normalized failure
+without leaking provider or OS text.
+
+#### Lifecycle vocabulary and interruption notices
+
+The tool lifecycle vocabulary is closed: `ToolLifecycleStatusDto` is `Admitted`, `Rejected`, `Started`, `Completed`,
+`Failed`, `Cancelled`, or `Partial`, and `ToolResultStatusDto` is `Completed`, `Failed`, `Cancelled`, or `Partial`,
+mapping one to one onto the matching terminal lifecycle member. The transition set is closed: none to `Admitted`;
+`Admitted` to `Cancelled`, `Started`, or `Rejected`; `Started` to `Completed`, `Failed`, or `Partial`. A `Partial`
+result records one execution that was interrupted before a final result, requires non-blank content exactly like a
+successful result, never terminalizes the run, and is never retried. Two interruption codes are recorded:
+`tool_cancelled` when the caller stopped the call and `tool_execution_interrupted` when the call lost its process
+evidence; the durable tag of a canonical partial document or terminal error is `partial`.
+
+Every interrupted call reaches the model with a bracketed daemon notice that follows the captured output in the
+tool-message content answering the call:
+
+| Case | Notice |
+| --- | --- |
+| stopped with captured output | `[The tool call was stopped before a final result; the output above is partial.]` |
+| lost with captured output | `[The tool call did not receive a final result; the output above is partial.]` |
+| stopped without captured output | `[The tool call was stopped before a final result.]` |
+| lost without captured output | `[The tool call did not receive a final result.]` |
+
+A partial tool message answers its call exactly like a completed one and the loop continues; the notices render as
+user-role notice content with the text unchanged. Recovery reports a call whose latest committed state is started
+without a terminal result through one notice per call, `[The tool call "<tool_id>" did not receive a final result.]`,
+and writes no new record for it: nothing follows a `Partial` fact for that call, no further result is recorded for it,
+and recovery never changes the call's recorded lifecycle. Blank partial content fails construction with
+`invalid_tool_result_content`.
 
 ### Tool result delivery
 
@@ -286,7 +318,8 @@ no tool-history page, cursor, snapshot frame, or resynchronization; a re-subscri
 continues live.
 
 `model_tool_loop_v1` is a descriptor/model capability, not a wire capability: there is no protocol capability
-negotiation or family gate (ADR 0011). A subscriber to a run containing model-tool-loop content receives the current
+negotiation or family gate ([architecture 03](03-daemon-transport-and-adapters.md)). A subscriber to a run containing
+model-tool-loop content receives the current
 typed state or a typed error, never a partially understood snapshot or live stream. New run-selection provenance records
 the descriptor/model `model_tool_loop_v1` support needed to reconstruct local exchanges.
 
@@ -328,8 +361,9 @@ and its notice, and the old call is never retried.
 
 ## Compatibility and protocol boundary
 
-`model_tool_loop_v1` is a descriptor/model capability delivered through JSON-RPC 2.0 run subscriptions (ADR 0011): the
-correlated current run snapshot, then live `run.frame` notifications. A client that cannot represent loop content
+`model_tool_loop_v1` is a descriptor/model capability delivered through JSON-RPC 2.0 run subscriptions
+([architecture 03](03-daemon-transport-and-adapters.md)): the correlated current run snapshot, then live `run.frame`
+notifications. A client that cannot represent loop content
 receives a typed error without partial state. Snapshots stay compact and safe; exact wire tags and storage schema remain
 deferred.
 
@@ -339,7 +373,7 @@ beyond the eight identity newtypes and the plain step and group indices.
 
 ## Dependencies and non-goals
 
-This document depends on the one-capability-path decisions. It retains the `sub_agent` slot, descriptor, admission, and
+This document depends on the one-capability-path rules. It retains the `sub_agent` slot, descriptor, admission, and
 generic tool-effect boundary. Architecture 18 owns the `mcp` descriptor's source/discovery/capability/invocation
 semantics; this document retains fixed-slot, descriptor, admission, and generic loop ownership. Architecture 19 owns
 Gateway/RLM attachment, grants, bridge operation correlation, and bridge-visible delivery; its ingress must use this

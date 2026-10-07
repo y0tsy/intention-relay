@@ -32,6 +32,7 @@
 
 - Backward compatibility is neither required nor in demand. Nothing built or run from this project exists outside the development machine: no deployed users, no externally persisted data, and no third-party consumers.
 - When an execution path becomes outdated, remove it. Do not add compatibility layers, fallback branches, or migration paths to keep old behavior readable, replayable, or upgradeable.
+- The existence of databases is not an argument for keeping DB migrations or old-schema compatibility.
 - Until every roadmap milestone is complete and fully closed, each versioned system keeps exactly one live version — version 1:
   - Database schemas: exactly one schema version, version 1. Tables, columns, and indexes are removed, updated, and added only within that version. There are no migrations, no versioned upgrade steps, and no opening of older schema versions.
   - The same single-version rule applies to protocol versions, wire formats, configuration formats, storage formats, and any other versioned system: evolve in place, never carry two versions at once.
@@ -60,7 +61,7 @@
 ## Test-first and architectural boundaries
 
 - Follow TDD/TTD: establish applicable contract, architecture, and outcome tests before implementation.
-- Every new production crate must be declared in the machine-readable policy with its responsibility and test target before production code is accepted; the crate's coverage tier applies ([ADR 0016](docs/intention-relay/decisions/0016-per-crate-coverage-tiers.md)).
+- Every new production crate must be declared in the machine-readable policy with its responsibility and test target before production code is accepted; the crate's coverage tier applies ([coverage policy](docs/intention-relay/architecture/12-quality-gates-and-makefile.md)).
 - Never bypass `WorkspaceRoot`, DTO-first, or adapter-isolation rules.
 - Follow existing data, configuration, and dependency patterns. Do not hard-code values that are genuinely configurable, and do not add configuration unless configurability is a requirement.
 - Check the workspace `Cargo.toml` and existing dependency graph before adding a dependency.

@@ -5,4 +5,3 @@ This directory is the authoritative source for product, architecture, quality, a
 ## Contents
 
 - [`architecture/`](architecture/README.md): the approved target architecture, crate boundaries, quality gates, Makefile contract, TDD/verification policy, and implementation roadmap for the current Intention Relay implementation.
-- [`decisions/`](decisions/README.md): accepted cross-document architecture decisions and their provenance.

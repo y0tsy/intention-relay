@@ -42,7 +42,7 @@ tools (`read`, `write`, `edit`, `execute`, `glob`, and `grep`) and the workspace
 the application path but does not select implementations. The remaining registry slots are reserved and unavailable.
 
 The M1-M5 activation notes are historical records: the coverage policy is now the per-crate tiers declared in
-`quality/coverage.toml` ([ADR 0016](../decisions/0016-per-crate-coverage-tiers.md)).
+`quality/coverage.toml` ([12 Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ## Planned crates
 
@@ -183,7 +183,7 @@ transaction closure, SQL connection, filesystem path, or backend resource.
 -  `intention-storage-sqlite` owns bundled SQLite opening and direct creation of the single current storage schema,
 single-transaction state writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId
 -> WorkspaceRootDto` association; the workspace addressing policy — the root as an anchor, not a containment boundary
-(ADR 0013) — remains M5 policy ownership.
+([architecture 05](05-tools-workspace-and-hooks.md)) — remains M5 policy ownership.
 -  `intention-runtime` decides valid run state edges and owns interruption handling: a stopped provider stream or tool
 call records a notice, resets its signal, and the run continues with its next model step. The repository owns run
 creation, pending-turn context joins, and recovery. It has no provider, tool, timer, or stream dependency in
@@ -241,8 +241,8 @@ The workspace must have tests that fail when these rules are broken:
 8. every declared boundary is enforced by the architecture checker against the machine-readable policy.
 
 The exact test strategy and minimum test portfolio are defined in [10 Test-Driven Delivery and
-Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (per-crate tiers,
-[ADR 0016](../decisions/0016-per-crate-coverage-tiers.md)), feature profiles, lint policy, and
+Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (per-crate tiers),
+feature profiles, lint policy, and
 Makefile/CI contract in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Non-goals

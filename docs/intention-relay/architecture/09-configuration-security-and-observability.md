@@ -85,8 +85,7 @@ The `[provider]` table carries the dynamic context-window policy as the optional
 value outside that range fails closed with the typed `invalid_provider_context_window_tokens` or
 `invalid_provider_context_capacity_tokens` validation error. The policy resolves into the credential-free
 `ContextWindowPolicyDto` included in `ResolvedConfigDto` and therefore in every `ConfigSnapshotDto`. [Architecture
-08](08-model-protocol-and-providers.md) owns the window mechanics that consume it ([ADR
-0018](../decisions/0018-dynamic-context-window-and-prompt-caching.md)).
+08](08-model-protocol-and-providers.md) owns the window mechanics that consume it.
 
 ## Open-text provider credentials
 
@@ -102,9 +101,30 @@ normal logs. `execute` is trusted-local and may inherit the invoking process env
 name-filtered or copied into evidence or logs;
 - errors, logs, and diagnostic bundles use centralized redaction;
 - configuration displays do not log values while rendering or validation fails;
--  hermetic test fixtures use fake credentials only; the single opt-in live-provider e2e channel ([ADR
-0007](../decisions/0007-opt-in-live-provider-e2e.md)) injects a real credential from the environment (or a CI repository
-secret) into a private temporary configuration file only and remains subject to every protection in this section.
+-  hermetic test fixtures use fake credentials only; the single opt-in live-provider e2e channel
+([12 Quality Gates and Makefile](12-quality-gates-and-makefile.md)) injects a real credential from the environment
+(or a CI repository secret) into a private temporary configuration file only and remains subject to every protection
+in this section.
+
+## Limits by precedent
+
+Every numeric value is classified before activation as an intrinsic representation or protocol bound, typed capacity
+availability, or a liveness safeguard with recorded rationale. Product ceilings, hidden admission policy, retry budgets,
+and truncation of a successful result to fit a ceiling are not permitted; a new limit needs a real demonstrated
+precedent or a liveness reason, and the reasoning is recorded with the value. No runtime content scanning or filtering
+for credential-shaped strings exists: secrets are protected structurally, and a recognizable fake secret is a
+regression fixture rather than a scan target.
+
+The current bounds are:
+
+| Bound | Class and purpose |
+| --- | --- |
+| Transport message cap (`MAX_MESSAGE_BYTES`, 1 MiB) | Liveness: rejects an over-size frame before unbounded allocation. |
+| Tool read and output windows (`MAX_TOOL_OUTPUT_BYTES`, `MAX_EDIT_TARGET_BYTES`, `MAX_GREP_AGGREGATE_BYTES`) | Representation: bounds one tool read or rendered result; a cut is marked, never hidden. |
+| Assistant-message bound (`MAX_ASSISTANT_CONTENT_BYTES`) | Representation: bounds one committed assistant message; long assistant text is split at this size. |
+| Process timeout and drain windows (`EXECUTE_TIMEOUT` 30 s, `READER_DRAIN_GRACE` 5 s) | Liveness: a child process that stops producing progress or never exits cannot hang the loop. |
+| Provider progress and retry timeouts | Liveness: a live provider request that stops producing progress fails typed. |
+| Subscriber queue and write deadline (`SUBSCRIBER_QUEUE_CAPACITY` 64, `SUBSCRIBER_WRITE_DEADLINE` 10 s) | Liveness: isolates a slow local peer from execution, persistence, and healthy delivery. |
 
 ## Data classification
 
@@ -175,8 +195,8 @@ atomicity.
 
 ## Quality-gate integration
 
-`intention-config` remains subject to its `standard` tier floor ([ADR
-0016](../decisions/0016-per-crate-coverage-tiers.md)). TOML parsing, M1 revision serialization, permissions, redaction,
+`intention-config` remains subject to its `standard` tier floor. TOML parsing, M1 revision serialization, permissions,
+redaction,
 and safe observability tests are blocking `make verify` inputs; M3 adds canonical revision persistence, restart-only
 application, and per-run configuration-selection coverage. A recognizable fake secret is a mandatory regression
 fixture across logs, errors, persisted state, and adapter DTOs. See [12 Quality Gates and

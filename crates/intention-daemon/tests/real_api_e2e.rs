@@ -12,13 +12,12 @@
 //! provider credential.
 //!
 //! When the configured model runs in thinking mode, the same tool loop also
-//! proves the ADR 0008 reasoning round trip: the gateway rejects a tool-loop
+//! proves the same-run reasoning round trip: the gateway rejects a tool-loop
 //! continuation whose assistant tool-call message does not carry the round's
 //! accepted `reasoning_content`, so a completed live tool loop means the
 //! runtime attached that reasoning and the generic adapter serialized it.
 //!
-//! This file is the single opt-in live channel recorded by ADR 0007
-//! (`docs/intention-relay/decisions/0007-opt-in-live-provider-e2e.md`). It is
+//! This file is the single opt-in live channel recorded by architecture 10. It is
 //! never part of the hermetic gates: both tests carry `#[ignore]` and return
 //! silently unless `INTENTION_REAL_API_E2E=1`, so an ordinary test run,
 //! including `--run-ignored all`, never fails without the operator opt-in.
@@ -1183,8 +1182,8 @@ const INVALID_CREDENTIAL_FAILURE_CODES: [&str; 4] = [
 /// or terminal-failure shape whose failure re-validates through the durable
 /// DTO constructors and carries one of the normalized closed-set provider
 /// failure codes. A content-bearing fact would mean raw provider output
-/// reached durable state, which the containment invariant of ADR 0007
-/// decision 7 forbids; the guard fails rather than silently accepting a new
+/// reached durable state, which the containment invariant recorded in
+/// architecture 10 forbids; the guard fails rather than silently accepting a new
 /// fact shape. The non-empty requirement keeps the invariant from passing
 /// vacuously when the terminal snapshot carries no delivered facts.
 fn assert_invalid_credential_facts_are_normalized(facts: &[ModelRunFactDto]) {
@@ -1265,7 +1264,7 @@ fn assert_normalized_provider_failure(failure: &RunFailureDto) {
 /// bounded attempt in a fresh session; any other failed run or a timeout fails
 /// the test.
 #[tokio::test]
-#[ignore = "opt-in live-provider e2e; see ADR 0007; run via make e2e-real-api"]
+#[ignore = "opt-in live-provider e2e; see architecture 10; run via make e2e-real-api"]
 async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_restart() {
     let Some(provider) = LiveProviderConfig::from_env() else {
         return;
@@ -1543,7 +1542,7 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
 /// the terminal projection must carry no assistant text, so raw provider
 /// output cannot have reached durable state.
 #[tokio::test]
-#[ignore = "opt-in live-provider e2e; see ADR 0007; run via make e2e-real-api"]
+#[ignore = "opt-in live-provider e2e; see architecture 10; run via make e2e-real-api"]
 async fn real_provider_rejects_invalid_credential_without_leak() {
     let Some(mut provider) = LiveProviderConfig::from_env() else {
         return;

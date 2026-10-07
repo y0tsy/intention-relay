@@ -40,7 +40,7 @@ silently merges into an in-flight request.
 A session has an obligatory `WorkspaceRoot`. All filesystem tools resolve paths against it, reject absolute and parent
 (`..`) paths at the typed input, and never fall back to process `pwd`. Process execution receives it as CWD. The root is
 an addressing anchor, not a containment boundary: a path may leave it through a symbolic link, and v1 is trusted local
-execution, not a sandbox (ADR 0013).
+execution, not a sandbox ([architecture 05](05-tools-workspace-and-hooks.md)).
 
 ### 7. Cross-cutting features use typed hooks
 
@@ -68,7 +68,7 @@ delivery and verification](10-test-driven-delivery-and-verification.md).
 ### 11. Reproducible quality gates are architectural
 
 Before production functionality is accepted, the workspace must have a pinned toolchain, strict pragmatic linting, the
-per-crate line-coverage tiers ([ADR 0016](../decisions/0016-per-crate-coverage-tiers.md)), feature-profile checks,
+per-crate line-coverage tiers, feature-profile checks,
 documentation checks, architecture checks, and supply-chain verification. The root Makefile orchestrates these
 non-mutating gates. GitHub Actions runs the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default`,
 `ci-coverage-no-default`, `ci-coverage-all`, `ci-deps`) as parallel matrix jobs in `.github/workflows/quality.yml`, and
@@ -127,8 +127,9 @@ work; the second stays owned by the named slice.
 | Topic | Settled decision and source |
 | --- | --- |
 | Turn input | A user turn accepted during an active run is recorded as a durable pending turn and joins that run's live context in FIFO order at the next model boundary; removal of a not-yet-seen pending turn stays explicit, `run.interrupt` stops the in-flight call with a notice while the run continues, and no automatic retry or resume exists ([architecture 04](04-sessions-runs-events-and-storage.md), "Pending turns"). |
-| Risk policy | Build runs without a per-action confirmation barrier for configured active capabilities, while Plan keeps hard-denied project writes and an advisory-guided `execute` (decision [0017](../decisions/0002-build-autopilot-and-plan-focus-continuity.md)); the exact capability taxonomy and audit policy for `execute`, network, and destructive file actions remains listed as open in [architecture 05](05-tools-workspace-and-hooks.md). |
-| AppData location | Production SQLite state lives in the platform AppData/state location with no process-CWD fallback (roadmap M3), and the migration half of the question is closed by the single-live-schema rule in [ADR 0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md). |
+| Risk policy | Build runs without a per-action confirmation barrier for configured active capabilities, while Plan keeps hard-denied project writes and an advisory-guided `execute` ([architecture 07](07-plan-and-build-modes.md)); the exact capability taxonomy and audit policy for `execute`, network, and destructive file actions remains listed as open in [architecture 05](05-tools-workspace-and-hooks.md). |
+| AppData location | Production SQLite state lives in the platform AppData/state location with no process-CWD fallback (roadmap M3), and the migration half of the question is closed by the single-live-schema rule. |
+| Schema history | The existence of databases is not an argument for keeping DB migrations or old-schema compatibility; every versioned system keeps exactly one live version and evolves in place. |
 | Plan revision mechanics | Each edit rewrites the single full-file `plan.md` artifact, preserves controlled metadata, increments the frontmatter revision, and persists a matching typed plan revision ([architecture 07](07-plan-and-build-modes.md)); no patch-record family exists, and Plan mode itself is M7 scope. |
 | Provider retries | Runtime owns at most one retry for a delayed or retryable provider failure before any durable fact, with a fixed 250 ms delay and `max_attempts` 1..=2 / `attempt_timeout_seconds` 1..=60 ([architecture 08](08-model-protocol-and-providers.md), [architecture 09](09-configuration-security-and-observability.md)). |
 

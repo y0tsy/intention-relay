@@ -30,7 +30,7 @@ conflated.
 Architecture 05 owns the tool pipeline, hook phases, and workspace policy, so VFR and Headroom attach only through
 declared hook APIs and base tools never import or link either extension implementation crate. Architecture 30 owns the
 effective instruction projection and its assembly; this document contributes the `Vfr` contribution contract and no
-assembly order ([ADR 0010](../decisions/0010-instruction-sources-and-system-context.md)).
+assembly order.
 
 ## `intention-vfr`
 
@@ -44,8 +44,7 @@ assembly order ([ADR 0010](../decisions/0010-instruction-sources-and-system-cont
 - expansion and raw-read tool contracts;
 - a VFR-specific typed instruction contribution with its own revision
 identity, assembled into the effective instruction projection by [architecture
-30](30-instruction-sources-and-system-context.md) ([ADR
-0010](../decisions/0010-instruction-sources-and-system-context.md));
+30](30-instruction-sources-and-system-context.md);
 - tests proving loss-aware, deterministic transformations.
 
 ### Required behavior
@@ -136,8 +135,8 @@ original/retrieved content.
 
 ## Quality-gate integration
 
-Both crates are subject to the coverage tier declared when they are activated ([ADR
-0016](../decisions/0016-per-crate-coverage-tiers.md)); their transform, retrieval, expiry, ordering, and adapter/model
+Both crates are subject to the coverage tier declared when they are activated; their transform, retrieval, expiry,
+ordering, and adapter/model
 distinction tests are blocking `make verify` inputs under every relevant feature profile. Architecture checks must prove
 base tools do not import either extension implementation crate. See [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md).

@@ -7,8 +7,7 @@ frontmatter, and plan lifecycle behavior.
 ## Mode model
 
 Plan and Build are separate modes, not separate applications or persistence models. Plan is a planning focus policy;
-Build may run as the single user-authorized Autopilot policy described in [ADR
-0002](../decisions/0002-build-autopilot-and-plan-focus-continuity.md).
+Build may run as the single user-authorized Autopilot policy.
 
 ```mermaid
 flowchart LR
@@ -128,7 +127,8 @@ state beyond tool-level path policy. Plan therefore has a product focus, not a s
 
 Mode does not currently filter the tool definitions advertised in model requests: both Plan and Build requests advertise
 all six active registered tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`). Mode-based advertisement filtering
-is not part of the ordinary request path (ADR 0006); runtime tool policy, including Plan-mode
+is not part of the ordinary request path ([architecture 08](08-model-protocol-and-providers.md)); runtime tool policy,
+including Plan-mode
 `write` and `edit` denial, remains enforced at execution and is unchanged.
 
 ### Plan focus instruction
@@ -143,10 +143,30 @@ This instruction is advisory. It cannot authorize, prevent, or prove the absence
 or external effects.
 
 It is the `Mode` contribution of the effective instruction projection ([architecture
-30](30-instruction-sources-and-system-context.md), [ADR
-0010](../decisions/0010-instruction-sources-and-system-context.md)): architecture 30 owns the assembly order and the
+30](30-instruction-sources-and-system-context.md)): architecture 30 owns the assembly order and the
 materialization of the projection, while this document keeps the instruction text and its advisory meaning. The
 contribution cannot widen or narrow tool policy, and a Build run's projection never inherits the Plan contribution.
+
+## Mode invariants
+
+1. Plan `execute` is available and audited but is never described as sandboxed or guaranteed read-only.
+2. Plan project `write`/`edit` remain incompatible through ordinary typed tools.
+3. Plan prompt guidance cannot create authority, change mode, or prevent side effects.
+4. Build Autopilot has no per-action confirmation barrier for configured active capabilities.
+5. Build Autopilot authority originates only from an explicit user Plan approval or Build start transition.
+6. Plan approval records the exact session-scoped plan number, its revision, and the digest.
+7. Same-Session continuation preserves `SessionId` but creates a new `RunId`.
+8. The old Plan run, provider request, tool call, process, kernel, MCP, and bridge state are never resumed or reattached.
+9. The Build run binds an immutable mode, Autopilot policy, plan reference, and safe context projection.
+10. Optional handoff uses a bounded immutable safe projection and creates an independent Session; it transfers no
+authority or live resources.
+11. All effects remain behind the single daemon-owned typed capability path.
+12. No external effect occurs inside a durable transaction.
+13. A started operation interrupted or lost before a final result commits a bounded partial result and permits the next
+model step; it is never automatically retried, resumed, or treated as rolled back.
+14. Recovery always uses a new `RunId`.
+15. Audit is evidence, not proof of rollback or the absence of external effects.
+16. No secret, raw provider resource, live handle, or hidden plan frontmatter crosses a public or durable projection.
 
 ## Plan lifecycle
 
@@ -191,8 +211,8 @@ resources or authority.
 
 ## Quality-gate integration
 
-Plan policy and artifact crates are subject to the coverage tier declared when they are activated ([ADR
-0016](../decisions/0016-per-crate-coverage-tiers.md)). Frontmatter hiding, plan-number allocation, ordinary mutation
+Plan policy and artifact crates are subject to the coverage tier declared when they are activated. Frontmatter
+hiding, plan-number allocation, ordinary mutation
 denial, Plan `execute` audit, revision integrity, and same-Session Autopilot continuation are blocking `make verify`
 inputs. Coverage cannot replace captured model-context assertions or policy-denial tests. See [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md).

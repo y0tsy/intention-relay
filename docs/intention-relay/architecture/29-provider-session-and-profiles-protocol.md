@@ -3,19 +3,19 @@
 **Approved future design. Not implemented; activation requires an activating specification.** Architecture 29 owns the
 provider session-selection and profiles protocol layer: session default selection, per-turn and fork overrides,
 profile-keyed usage, and safe presentation. The layer is not activated; activation
-requires an activating specification (activation sequence: [ADR
-0004](../decisions/0004-m5plus-complete-foundation-activation.md), [ADR
-0010](../decisions/0010-instruction-sources-and-system-context.md)). The unavailable-queue promotion and reconciliation
-and the held-run admission path are not part of the direction ([ADR
-0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md)), and the negotiated capability plane is removed
-by [ADR 0011](../decisions/0011-local-json-rpc-2-0-transport.md).
+requires an activating specification (activation sequence: [architecture
+11](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment), [architecture
+30](30-instruction-sources-and-system-context.md)). The unavailable-queue promotion and reconciliation
+and the held-run admission path are not part of the direction ([architecture
+09](09-configuration-security-and-observability.md), [architecture 15](15-tool-registry-and-model-tool-loop.md)), and the
+negotiated capability plane is removed under [architecture 03](03-daemon-transport-and-adapters.md).
 
-Owner: architecture 29. Decisions: ADR 0011, ADR 0014.
+Owner: architecture 29.
 
 ## Ownership and non-authorities
 
-The removed run-execution meaning layer (its canonical codec was removed by [ADR
-0012](../decisions/0012-typed-serde-json-contracts.md)) leaves no live path.
+The removed run-execution meaning layer (its canonical codec was removed under [architecture
+02](02-dto-and-contract-policy.md)) leaves no live path.
 Architecture 15 owns the registry and tool loop, and architecture 23 session branching.
 Architecture 22 owns provider kinds, profiles, catalogs, selections, and driver compatibility;
 architecture 25 owns the configuration/provider control plane.
@@ -75,8 +75,8 @@ resolution service belong to this not-activated layer; the fork wire commands re
 
 The profiles protocol serves paginated catalog reads, catalog status, session default query/command, safe
 per-turn and fork overrides, resolved-selection projections, and pending-removal accept/reject. It is not gated on the
-capability plane: the negotiated `provider_profiles_v1` capability mechanism is removed by [ADR
-0011](../decisions/0011-local-json-rpc-2-0-transport.md), so the surface uses plain typed methods with no
+capability plane: the negotiated `provider_profiles_v1` capability mechanism is removed under [architecture
+03](03-daemon-transport-and-adapters.md), so the surface uses plain typed methods with no
 capability or family gate. It does not imply live reload, configuration editing, profile testing, credential entry, or
 model discovery; configuration editing belongs to the [architecture 25](25-configuration-provider-control-plane.md)
 atomic reload contract and is not part of this surface. The daemon advertises and serves no `provider_profiles_v1`
@@ -120,8 +120,9 @@ of the one pending candidate. A crash after acceptance produces `ProviderCatalog
 reconstruction and `ProviderCatalogRecoveryCompleted` only after the exact accepted catalog is active; a mismatch stays
 `activation_recovery_required`. The closed degraded reasons are `removal_candidate_pending`,
 `removal_candidate_rejected`, `removal_candidate_expired`, and `activation_recovery_required`. The layer does not
-include the held-run admission path (`AdmitRecoveredRunCommandDto`); [ADR
-0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md) keeps it out of the direction, and the
+include the held-run admission path (`AdmitRecoveredRunCommandDto`); the limits-by-precedent rule ([architecture
+09](09-configuration-security-and-observability.md), [architecture 15](15-tool-registry-and-model-tool-loop.md)) keeps
+it out of the direction, and the
 ordinary recovery path is the only one.
 
 ## Compatibility and historical preservation

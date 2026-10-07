@@ -2,9 +2,9 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.** Architecture 30 owns the
 instruction channel of a model request: instruction sources, profile revisions, canonical assembly, the effective
-instruction projection, its bounds, failures, and observability. It follows the single live version and no-backward-compatibility policy ([ADR 0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md)); delivery belongs to the fifth activating slice of Milestone 5+.
+instruction projection, its bounds, failures, and observability. It follows the single live version and no-backward-compatibility policy ([architecture 00](00-principles-and-scope.md)); delivery belongs to the fifth activating slice of Milestone 5+.
 
-Owner: architecture 30. Decisions: ADR 0010, ADR 0002, ADR 0003.
+Owner: architecture 30.
 
 ## Ownership and non-authorities
 
@@ -62,9 +62,9 @@ resource. Instruction text is UTF-8 configuration content; a source that is not 
 closed.
 
 The records in this document are typed serde JSON; the former `typed-tlv` framing, canonical bytes, SHA-256 digests, and
-goldens were removed by [ADR 0012](../decisions/0012-typed-serde-json-contracts.md), and no canonical digest or identity
+goldens were removed under [architecture 02](02-dto-and-contract-policy.md), and no canonical digest or identity
 layer exists. Any content addressing or canonicalization is introduced only with its first real consumer under the RFC
-8785 policy (ADR 0012).
+8785 policy ([architecture 02](02-dto-and-contract-policy.md)).
 
 ## Profile revisions and immutable configuration
 
@@ -80,7 +80,7 @@ InstructionProfileRevisionV1
 ```
 
 The profile is durable configuration with exactly one live format version; no migration, no second format, and no
-compatibility layer exists ([ADR 0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md)). The profile
+compatibility layer exists ([architecture 00](00-principles-and-scope.md)). The profile
 revision identity is the only profile data that may leave the configuration surface; fragments themselves stay readable
 only where the user edits them.
 
@@ -138,8 +138,8 @@ is recorded as safe usage provenance. It introduces no lifecycle transition and 
 projection that comes from project material.
 
 - The file is addressed by joining its path onto the session's `WorkspaceRoot`;
-the root is an addressing anchor, not a security boundary, and no symlink or containment check exists ([ADR
-0013](../decisions/0013-workspace-root-addressing-anchor.md)); an unreadable or non-regular file fails closed.
+the root is an addressing anchor, not a security boundary, and no symlink or containment check exists
+([architecture 05](05-tools-workspace-and-hooks.md)); an unreadable or non-regular file fails closed.
 - The file is read as bounded UTF-8 text; its content is never executed, never
 parsed as configuration, and never treated as a hook, tool definition, or policy input.
 - An absent file contributes nothing and is not a failure; a project without
@@ -179,13 +179,13 @@ through the context-manifest, Skill-disclosure, and evidence rules of architectu
 
 Because the channel is the target of prompt injection rather than its source, three rules are normative:
 
-1. instruction text is advisory and creates no authority (ADR 0002);
+1. instruction text is advisory and creates no authority ([architecture 07](07-plan-and-build-modes.md));
 2. a configured instruction source cannot widen policy or permissions, and the
-workspace source is labeled project material (ADR 0003 boundary);
+workspace source is labeled project material;
 3. a provider cannot scan, inject, rewrite, or reorder the projection, and no
 driver may add framing or templating of its own; the daemon-owned request marks the end of the leading instruction block
-with the ephemeral prompt-cache breakpoint of [architecture 08](08-model-protocol-and-providers.md) ([ADR
-0018](../decisions/0018-dynamic-context-window-and-prompt-caching.md)), which adds no text and changes no projection.
+with the ephemeral prompt-cache breakpoint of [architecture 08](08-model-protocol-and-providers.md), which adds no text
+and changes no projection.
 
 ## Bounds and deterministic assembly
 
@@ -244,7 +244,7 @@ instruction contract.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 04, 06, 07, 08, 09, 14, 21, 23, and 25 and on decisions 0010 and 0018.
+This document depends on architectures 04, 06, 07, 08, 09, 14, 21, 23, and 25.
 Non-goals: Goal, Skill, context-manifest, memory, or compaction semantics; fork lineage or lineage projection rules;
 the model request contract or driver translation; configuration storage, reload, or credential handling; activity,
 notification, or adapter behavior; few-shot example selection, memory-derived prompt material, MCP-provided prompts,

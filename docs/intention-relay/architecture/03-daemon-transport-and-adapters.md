@@ -34,7 +34,7 @@ design out of the initial product.
 
 ### JSON-RPC 2.0 protocol
 
-The wire is JSON-RPC 2.0 ([ADR 0011](../decisions/0011-local-json-rpc-2-0-transport.md)): every message is one UTF-8
+The wire is JSON-RPC 2.0: every message is one UTF-8
 JSON line terminated by a newline. A request carries `"jsonrpc":"2.0"`, a numeric `id`, a `method`, and typed `params`;
 a response echoes the `id` and carries exactly one of `result` or `error`; a notification carries `"jsonrpc":"2.0"`, a
 `method`, and `params` with no `id`. The envelopes are `JsonRpcRequest<T>`, `JsonRpcResponse<T>`, `JsonRpcError`, and
@@ -62,14 +62,15 @@ params, and the application-defined `-32001` incompatible protocol version. The 
 `error.data`, so the stable `data.code`, category, retry guidance, and safe message remain available to clients without
 changing the JSON-RPC error shape.
 
+The daemon sends notifications only and never server-initiated requests. Batch arrays are not part of this transport.
+
 ### Serving and liveness bounds
 
 The daemon host accepts each local connection, completes the JSON-RPC 2.0 `hello` handshake, and serves typed requests.
 A one-shot connection reads one request, writes the correlated response, and closes; a long-lived connection may send
-further requests and receive subscription notifications. Each connection carries bounded liveness safeguards, not
-contract bureaucracy (ADR 0014):
+further requests and receive subscription notifications. Each connection carries bounded liveness safeguards, not contract bureaucracy ([architecture 09](09-configuration-security-and-observability.md)):
 
-- `MAX_MESSAGE_BYTES` (1 MiB) rejects an over-size message before unbounded allocation;
+- `MAX_MESSAGE_BYTES` (1 MiB) rejects an over-size message before unbounded allocation; it is a transport liveness cap, not a contract limit on message content;
 - `CONNECT_TIMEOUT` (500 ms) bounds the connect wait;
 -  `SYNC_IO_TIMEOUT` (ten seconds) bounds read and write deadlines, applied to client connect and listener accept on
   Unix-domain sockets;
@@ -177,7 +178,7 @@ sequenceDiagram
 
 At connection time the client sends `hello` carrying exactly the protocol version and the local adapter name, never an
 application account. The daemon accepts only the exact current protocol version, 1.0, and answers `hello` before serving
-any other method; there are no capability DTOs, feature flags, family gates, or connection modes (ADR 0011).
+any other method; there are no capability DTOs, feature flags, family gates, or connection modes.
 
 An incompatible protocol version fails closed with the typed JSON-RPC error `-32001`, carrying `ErrorDto { category:
 unavailable }` in `error.data`, before the daemon closes the connection. The adapter should offer a safe
@@ -296,8 +297,8 @@ follow-up run.
 ## Quality-gate integration
 
 The daemon, transport, client, and adapter tests in this document are blocking `make verify` inputs under the coverage
-policy of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate tiers,
-[ADR 0016](../decisions/0016-per-crate-coverage-tiers.md)). Tauri and TUI carry the `edge` tier floor in addition to
+policy of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate tiers). Tauri and TUI carry the
+`edge` tier floor in addition to
 their mapping contracts and fixture-daemon outcome scenarios; the floor never replaces that evidence.
 
 ## Open implementation decisions
@@ -321,8 +322,7 @@ section freezes the target; the text above stays current policy until the slice 
   session and run subscriptions return current-state snapshots, and a re-subscribing client re-reads current state. The
   `RunResyncDto`, `RunSnapshotFrameDto`, `RunEventTailPageDto`, and cursor DTOs are removed; the wire keeps its eight
   methods.
-- Protocol version 1.0. The single live protocol version is 1.0 ([ADR
-  0011](../decisions/0011-local-json-rpc-2-0-transport.md) amendment); the wire, the method table, and exact-equality
+- Protocol version 1.0. The single live protocol version is 1.0; the wire, the method table, and exact-equality
   negotiation are unchanged by the renumbering.
 - Fully asynchronous client. `intention-client` exposes one asynchronous API covering every protocol command and query
   plus the `run.frame` notification stream, and its blocking API is removed. Daemon end-to-end tests drive the real

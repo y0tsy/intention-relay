@@ -40,12 +40,10 @@ Core DTO families:
 | `ProviderErrorDto` | Safe normalized failure, retry category, and correlation data. |
 
 The optional system context is the effective instruction projection of [architecture
-30](30-instruction-sources-and-system-context.md) ([ADR
-0010](../decisions/0010-instruction-sources-and-system-context.md)): the daemon assembles it once per admitted run from
+30](30-instruction-sources-and-system-context.md): the daemon assembles it once per admitted run from
 declared instruction sources, it is bounded and credential-free, and the current drivers keep translating it into the
 leading system message with no driver-specific framing, rewrite, or provider-side scan; the request marks the end of
-that instruction block as an ephemeral prompt-cache breakpoint under [ADR
-0018](../decisions/0018-dynamic-context-window-and-prompt-caching.md). Historical M3/M4 requests keep the system context
+that instruction block as an ephemeral prompt-cache breakpoint. Historical M3/M4 requests keep the system context
 absent. A driver never synthesizes, substitutes, reorders, or truncates instruction text, and a provider cannot inject
 or extend it.
 
@@ -122,8 +120,8 @@ finish reasons, `tool_calls` tool-call fragments, and textual `reasoning_content
 extensions fail preflight before any outbound request is prepared. Reasoning output is normalized as
 `ModelEventDto::ReasoningDelta` (`Primary`), and when a configured thinking-mode gateway requires it the adapter
 serializes the same round's accepted reasoning as `reasoning_content` on the assistant tool-call message of the same-run
-continuation, as transient request state with no durable representation; an empty channel is only a presence marker (ADR
-0008). The OpenRouter adapter ignores the transient attachment because its pinned SDK request type has no reasoning
+continuation, as transient request state with no durable representation; an empty channel is only a presence marker.
+The OpenRouter adapter ignores the transient attachment because its pinned SDK request type has no reasoning
 field and its wire does not require the echo. OpenRouter declares text, reasoning, tool-call, and streaming capability
 while its M4 foundation rejects multimodal context. Execution-time capability behavior belongs to the selected provider
 driver and runtime policy.
@@ -151,12 +149,21 @@ Ordinary production requests advertise the active registered tools: the request 
 `write`, `edit`, `execute`, `glob`, `grep`). A non-empty advertisement forces the requested `tool_calls` capability, so
 a driver that does not declare tool-call support fails closed at preflight with `unsupported_model_capability`. Both
 current adapters translate the definitions into their private SDK request and omit `tool_choice`; an empty advertisement
-preserves the previous request shape (ADR 0006).
+preserves the previous request shape. A definition validates its input: the name is an ASCII `[A-Za-z0-9_-]` token of
+at most 64 characters (`invalid_tool_definition_name`), the description is non-blank
+(`invalid_tool_definition_description`), and the schema text is non-empty JSON-object text of at most 64 KiB
+(`invalid_tool_definition_parameters`). A model-visible descriptor without a schema fails with
+`model_tool_schema_unavailable`. Advertisement is transient request state: it creates no durable record, digest, or
+storage row, and it never reconstructs a stored selection from the current registry.
 
 The same-run continuation is the one place provider reasoning returns to a request: the runtime attaches the current
 round's accepted reasoning to the assistant tool-call message (`assistant_reasoning`), and no prior-turn reasoning is
 transferred. The attachment is transient request state with no durable representation and never becomes message text or
-durable history; cross-turn transfer remains future work (ADR 0008).
+durable history; cross-turn transfer remains future work. The request validates at least one unique tool-call identity
+and control-character-safe text bounded at 512 KiB per attachment, and the runtime bounds each round's accumulated echo
+at that same 512 KiB per-round bound. A round that exceeds the bound or carries a control character other than `\n`,
+`\r`, or `\t` terminalizes as a typed failed run with the dedicated `reasoning_attachment_unrepresentable` code instead
+of aborting with a DTO validation error; the echo is never truncated or silently omitted.
 
 Provider drivers do not invoke local tools directly. The application builds the typed invocation from a provider-emitted
 tool call, and the daemon-owned registry executes it under `WorkspaceRoot` with typed hooks. The M4 no-port denial path
@@ -167,14 +174,13 @@ remains byte-identical: without a tool executor, the runtime records the tool-ca
 
 Each provider attempt windows its message list before every outbound request. The runtime owns the pass, the
 provider-neutral message shape carries the transient marker and the in-place content replacement, and the selected
-driver translates the result into its private request. The optional system context is not part of the window: the
-instruction projection of architecture 30 stays the stable leading block.
+driver translates the result into its private request. The optional system context is not part of the window: the instruction projection of architecture 30 stays the stable leading block. It is never compressed and never
+re-derived.
 
 The `[provider]` configuration keys `context_window_tokens` (default `250000`) and `context_capacity_tokens` (default
 `1000000`) resolve into the credential-free `ContextWindowPolicyDto` of every `ConfigSnapshotDto`; resolution requires a
 positive capacity and `0 < window < capacity`, and a value outside that range fails closed with a typed validation error
-([architecture 09](09-configuration-security-and-observability.md), [ADR
-0018](../decisions/0018-dynamic-context-window-and-prompt-caching.md)).
+([architecture 09](09-configuration-security-and-observability.md)).
 
 Token accounting estimates one request's input from its character count at four characters per token, rounded up,
 calibrated by provider usage: a reported `UsageDto::Reported` input count replaces the estimate for the request that
@@ -184,12 +190,15 @@ whole estimate character-based.
 While the estimate exceeds `context_window_tokens`, the longest tool-role result whose replacement is shorter is
 compressed in place, repeatedly, down to a floor that keeps its first 16 characters and appends a fixed compression
 marker. Messages are never removed or reordered, and an assistant tool-call message and its tool replies stay paired.
+When nothing printable remains, a compressed result becomes a fixed placeholder, so a compressed tool message is never
+blank.
 The pass runs after the starting context is built and again after every appended tool result; only the in-memory request
 is windowed, and every durable tool-result fact keeps its full recorded content.
 
 An estimate above `context_capacity_tokens` invokes the named `compress_context` pass. That pass is not implemented: it
 changes nothing, fails nothing, and records nothing, so an over-capacity estimate remains windowed exactly like a
 window-only crossing; compression is a future capability with a named owner.
+The window pass introduces no new durable order, event, schema version, or compatibility path.
 
 Prompt-cache breakpoints are part of the request. The window pass clears every earlier marker and then marks at most two
 messages with `{"type": "ephemeral"}`: the last leading system-role message when the list begins with one closes the
@@ -237,8 +246,8 @@ wait starts the next attempt immediately.
 
 ## Quality-gate integration
 
-`intention-model` and provider adapters are subject to their `standard` tier floor ([ADR
-0016](../decisions/0016-per-crate-coverage-tiers.md)). Stream normalization, capability validation, retry,
+`intention-model` and provider adapters are subject to their `standard` tier floor. Stream normalization, capability
+validation, retry,
 SDK-isolation, and secret-redaction fixtures are blocking `make verify` inputs under every relevant feature profile.
 Dependency and public-API checks must prevent provider SDK types and secrets from escaping their crate. See [12 Quality
 Gates and Makefile](12-quality-gates-and-makefile.md).
