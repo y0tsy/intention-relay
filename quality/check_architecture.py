@@ -672,9 +672,9 @@ def self_test_ordering_authorities() -> None:
         fail("ordering-authority self-test: an unrelated type must pass")
     if not ordering_authority_failures([], suffixes, undeclared):
         fail("ordering-authority self-test: an undeclared authority must fail")
-    declared = ["SessionEventSequenceDto"]
+    declared = ["FixtureSequenceDto"]
     declared_source = {
-        Path("crates/fixture/src/lib.rs"): "pub struct SessionEventSequenceDto(u64);\n"
+        Path("crates/fixture/src/lib.rs"): "pub struct FixtureSequenceDto(u64);\n"
     }
     if ordering_authority_failures(declared, suffixes, declared_source):
         fail("ordering-authority self-test: the declared set must pass")
