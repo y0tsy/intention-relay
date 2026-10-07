@@ -470,7 +470,7 @@ fn opaque_json_guard_flags_every_json_shaped_carrier_field() {
         );
     }
     for clean in [
-        "struct Fixture { pub snapshot: RunSnapshotDto }",
+        "struct Fixture { pub snapshot: SessionSnapshotDto }",
         "struct Fixture { pub revision_id: String }",
         "struct Fixture { pub outcomes: Vec<ToolResultOutcomeDto> }",
         "struct Fixture { pub payload: Box<str> }",

@@ -232,8 +232,8 @@ impl ModelMessageDto {
 
 /// Maximum bytes of one transient assistant-reasoning attachment.
 ///
-/// 512 KiB matches the durable per-reasoning-fact bound, so a round-tripped
-/// attachment never exceeds what the durable reasoning path already accepts.
+/// The bound caps the reasoning text one provider response may attach to its
+/// tool calls for the same-run tool-loop continuation.
 const MAX_MODEL_ASSISTANT_REASONING_BYTES: usize = 512 * 1024;
 
 /// Transient assistant reasoning attached to the tool calls of one provider

@@ -1369,7 +1369,7 @@ mod tests {
                 )
                 .await
             {
-                Ok(_) => panic!("a stale peer is rejected"),
+                Ok(_) => panic!("a future-version peer is rejected"),
                 Err(error) => error,
             }
         });
@@ -1385,10 +1385,10 @@ mod tests {
             .expect("raw client connects");
         client
             .write_all(
-                b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"hello\",\"params\":{\"version\":{\"major\":1,\"minor\":1},\"adapter_name\":\"old\"}}\n",
+                b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"hello\",\"params\":{\"version\":{\"major\":1,\"minor\":1},\"adapter_name\":\"future\"}}\n",
             )
             .await
-            .expect("raw stale hello writes");
+            .expect("raw future hello writes");
         let mut reply = Vec::new();
         let mut byte = [0_u8; 1];
         loop {

@@ -451,7 +451,7 @@ pub enum ProtocolCommandDto {
     RemoveTurn(RemoveTurnCommandDto),
     /// Requests interruption of an active daemon-owned run's current operation.
     InterruptRun(InterruptRunCommandDto),
-    /// Begins a typed session event subscription.
+    /// Begins a session subscription answered by the current session state.
     SubscribeSession(SubscribeSessionCommandDto),
 }
 
@@ -847,7 +847,7 @@ pub enum ProtocolMethodDto {
     TurnRemove,
     /// Interruption of an active daemon-owned run's current operation.
     RunInterrupt,
-    /// Session event subscription.
+    /// One-shot current-state session snapshot subscription.
     SessionSubscribe,
     /// Dedicated run-stream subscription.
     RunSubscribe,

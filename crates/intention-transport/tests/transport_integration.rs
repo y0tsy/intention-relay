@@ -291,9 +291,9 @@ fn incompatible_protocol_version_answers_with_a_typed_error_before_closing() {
     client
         .send_message(&encode_hello_request(
             1,
-            hello_at(ProtocolVersionDto::new(1, 1), "stale-client"),
+            hello_at(ProtocolVersionDto::new(1, 1), "future-client"),
         ))
-        .expect("stale client hello sends");
+        .expect("future client hello sends");
     let line = client
         .receive_line()
         .expect("the daemon answers the version mismatch before closing");
