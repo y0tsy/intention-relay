@@ -152,7 +152,13 @@ impl HostState {
             let observer = HostCommitObserver {
                 host: Arc::clone(&host),
             };
-            let executor = DaemonToolExecutor::new(host.facade.clone());
+            let executor = DaemonToolExecutor::with_publication(
+                host.facade.clone(),
+                HostTranscriptPublisher {
+                    facade: host.facade.clone(),
+                    host: Arc::clone(&host),
+                },
+            );
             let result = host
                 .facade
                 .execute_scheduled_model_run_for_daemon_with_tool_executor(
@@ -527,27 +533,82 @@ impl ModelRunCommitObserver for HostCommitObserver {
     }
 }
 
-/// Executes provider-normalized tool calls through the durable daemon-owned tool path.
-///
-/// Each call is decoded into the typed daemon tool input and executed through
-/// the facade's durable local-tool lifecycle, which publishes only independently
-/// reread committed evidence. The blocking tool effect runs on a spawned worker
-/// so the async execution loop is never stalled.
-#[doc(hidden)]
+/// Publishes committed tool transcript rows to the host's live subscribers.
 #[derive(Clone)]
-pub struct DaemonToolExecutor {
+struct HostTranscriptPublisher {
     facade: DaemonApplicationFacade,
+    host: Arc<HostState>,
 }
 
-impl DaemonToolExecutor {
-    /// Binds one durable facade to the daemon tool-execution path.
-    #[must_use]
-    pub const fn new(facade: DaemonApplicationFacade) -> Self {
-        Self { facade }
+impl intention_application::ToolResultPublicationPort for HostTranscriptPublisher {
+    fn publish_committed_message(
+        &self,
+        message: &intention_domain::MessageProjectionDto,
+    ) -> DtoResult<()> {
+        // A committed tool-result row is verified against the durable structured
+        // evidence of its own call before its frame is broadcast; a tool-call
+        // row has no structured result yet and is published as committed.
+        if message.kind() == intention_domain::MessageKindDto::ToolResult {
+            let (Some(run_id), Some(call_id)) = (message.run_id(), message.tool_call_id()) else {
+                return Err(ErrorDto::unavailable(
+                    "tool_result_evidence_unavailable",
+                    "committed tool result evidence is unavailable",
+                ));
+            };
+            let evidence =
+                self.facade
+                    .load_tool_result_for_daemon(message.session_id(), run_id, call_id)?;
+            if evidence.call_id() != call_id || evidence.run_id() != run_id {
+                return Err(ErrorDto::unavailable(
+                    "tool_result_evidence_unavailable",
+                    "committed tool result evidence is unavailable",
+                ));
+            }
+        }
+        self.host.publish_content(message);
+        Ok(())
     }
 }
 
-impl intention_runtime::ToolExecutionPort for DaemonToolExecutor {
+/// Executes provider-normalized tool calls through the durable daemon-owned tool path.
+///
+/// Each call is decoded into the typed daemon tool input and executed through
+/// the facade's durable local-tool lifecycle, which hands every committed
+/// transcript row to the configured publication boundary. The blocking tool
+/// effect runs on a spawned worker so the async execution loop is never stalled.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct DaemonToolExecutor<P = ()> {
+    facade: DaemonApplicationFacade,
+    publisher: P,
+}
+
+impl DaemonToolExecutor<()> {
+    /// Binds one durable facade to the daemon tool-execution path without a
+    /// publication boundary, so committed rows stay unpublished.
+    #[must_use]
+    pub const fn new(facade: DaemonApplicationFacade) -> Self {
+        Self {
+            facade,
+            publisher: (),
+        }
+    }
+}
+
+impl<P: intention_application::ToolResultPublicationPort + Clone + Send + Sync + 'static>
+    DaemonToolExecutor<P>
+{
+    /// Binds one durable facade and the host publication boundary, so every
+    /// committed transcript row of a tool call reaches the live subscribers.
+    #[must_use]
+    pub const fn with_publication(facade: DaemonApplicationFacade, publisher: P) -> Self {
+        Self { facade, publisher }
+    }
+}
+
+impl<P: intention_application::ToolResultPublicationPort + Clone + Send + Sync + 'static>
+    intention_runtime::ToolExecutionPort for DaemonToolExecutor<P>
+{
     fn execute_tool(
         &self,
         session_id: SessionId,
@@ -557,6 +618,7 @@ impl intention_runtime::ToolExecutionPort for DaemonToolExecutor {
         Box<dyn std::future::Future<Output = DtoResult<ToolResultOutcomeDto>> + Send + '_>,
     > {
         let facade = self.facade.clone();
+        let publisher = self.publisher.clone();
         Box::pin(async move {
             let tool_id = call.name().to_owned();
             let call_id = call.call_id();
@@ -564,8 +626,8 @@ impl intention_runtime::ToolExecutionPort for DaemonToolExecutor {
             let input = parse_tool_input(&tool_id, &arguments)?;
             let result = tokio::task::spawn_blocking(move || {
                 let workspace = facade.resolve_workspace_root_for_daemon(session_id)?;
-                facade.invoke_local_tool_for_daemon(
-                    session_id, run_id, call_id, tool_id, input, workspace, arguments,
+                facade.invoke_local_tool_for_daemon_with_publication(
+                    session_id, run_id, call_id, tool_id, input, workspace, arguments, &publisher,
                 )
             })
             .await

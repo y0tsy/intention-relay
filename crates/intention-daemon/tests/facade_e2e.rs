@@ -680,6 +680,36 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
             "the committed assistant content is published as a live content frame"
         );
     }
+    // The committed tool round is current state for the subscriber: the tool
+    // call and its one result row are carried by the snapshot or published as
+    // live content frames after their own commits.
+    let subscriber_messages = reducer.messages();
+    assert!(
+        subscriber_messages
+            .iter()
+            .any(|message| message.kind() == MessageKindDto::ToolCall),
+        "the subscriber's transcript holds the committed tool call"
+    );
+    assert!(
+        subscriber_messages
+            .iter()
+            .any(|message| message.kind() == MessageKindDto::ToolResult),
+        "the subscriber's transcript holds the committed tool result"
+    );
+    if !observation
+        .snapshot_messages
+        .iter()
+        .any(|message| message.kind() == MessageKindDto::ToolResult)
+    {
+        assert!(
+            observation.frames.iter().any(|frame| matches!(
+                frame,
+                RunStreamFrameDto::Content(message)
+                    if message.kind() == MessageKindDto::ToolResult
+            )),
+            "the committed tool result is published as a live content frame"
+        );
+    }
     assert!(
         has_assistant_step(reducer.messages()),
         "the subscriber's current transcript holds the committed assistant step"
