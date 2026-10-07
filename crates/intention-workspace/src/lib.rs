@@ -57,6 +57,26 @@ impl WorkspaceRoot {
         self.root.join(path.as_str())
     }
 
+    /// Re-authorizes this anchor and returns the bound root.
+    ///
+    /// The composition root binds the workspace between the two
+    /// workspace-resolution hook phases, so the root one invocation addresses is
+    /// authorized at that boundary rather than only when it was first resolved.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe validation error when the root is unavailable or is not a directory.
+    pub fn rebind(&self) -> DtoResult<Self> {
+        let declared =
+            WorkspaceRootDto::parse(self.root.to_string_lossy().into_owned()).map_err(|_| {
+                ErrorDto::validation(
+                    "workspace_root_unavailable",
+                    "workspace root is unavailable",
+                )
+            })?;
+        Self::resolve(&declared)
+    }
+
     /// Addresses a new file under the root with the same join rule as
     /// [`Self::resolve_path`].
     #[must_use]

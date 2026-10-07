@@ -5,12 +5,13 @@
 
 use std::cell::RefCell;
 use std::fs;
+use std::sync::{Arc, Mutex};
 
 use intention_application::{
     ApplicationService, CreateSessionWorkflowInputDto, HookObservationPort,
     InvokeLocalToolInputDto, LocalToolInvocationOutcomeDto, ModelRunDispatchPort,
-    ScheduleModelRunDto, SendUserTurnWorkflowInputDto, ToolResultPublicationInputDto,
-    ToolResultPublicationPort, WorkspaceBoundaryPort,
+    ScheduleModelRunDto, SendUserTurnWorkflowInputDto, ToolResultPublicationPort,
+    WorkspaceBoundaryPort,
 };
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
@@ -1508,7 +1509,7 @@ fn fail_open_hook_failures_reach_the_observation_boundary_with_redacted_metadata
 }
 
 struct CapturingPublisher {
-    publications: RefCell<Vec<ToolResultPublicationInputDto>>,
+    publications: RefCell<Vec<MessageProjectionDto>>,
     failure: RefCell<Option<ErrorDto>>,
 }
 
@@ -1527,14 +1528,14 @@ impl CapturingPublisher {
         }
     }
 
-    fn published(&self) -> Vec<ToolResultPublicationInputDto> {
+    fn published(&self) -> Vec<MessageProjectionDto> {
         self.publications.borrow().clone()
     }
 }
 
 impl ToolResultPublicationPort for CapturingPublisher {
-    fn publish_tool_result(&self, input: &ToolResultPublicationInputDto) -> DtoResult<()> {
-        self.publications.borrow_mut().push(input.clone());
+    fn publish_committed_message(&self, message: &MessageProjectionDto) -> DtoResult<()> {
+        self.publications.borrow_mut().push(message.clone());
         self.failure
             .borrow()
             .as_ref()
@@ -1566,7 +1567,7 @@ impl Hook for FailOpenPublishedHook {
 }
 
 #[test]
-fn publication_failure_propagates_after_the_durable_completed_commit() {
+fn publication_failure_propagates_after_the_committed_tool_call_row() {
     let root = hello_tool_root("publication-failure");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let publisher = CapturingPublisher::failing(ErrorDto::unavailable(
@@ -1581,14 +1582,14 @@ fn publication_failure_propagates_after_the_durable_completed_commit() {
         .expect_err("publication failure must surface");
     assert_eq!(error.code(), "publication_unavailable");
 
-    // The committed result reached the boundary exactly once even though the
-    // caller sees the publication error.
-    assert_eq!(publisher.published().len(), 1);
-    // Terminal completion stays durable; no extra failure row is committed.
-    let results = repository.committed_results();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
-    assert_eq!(repository.completed_result_count(), 1);
+    // The committed call row reached the boundary exactly once; the caller sees
+    // the publication error and the tool never dispatches.
+    let published = publisher.published();
+    assert_eq!(published.len(), 1);
+    assert_eq!(published[0].kind(), MessageKindDto::ToolCall);
+    // The committed call row stays durable and no terminal row is committed.
+    assert!(repository.committed_results().is_empty());
+    assert_eq!(repository.completed_result_count(), 0);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1616,8 +1617,12 @@ fn after_publish_hook_rejection_surfaces_after_the_completed_commit() {
         .expect_err("post-publish rejection surfaces");
     assert_eq!(error.code(), "after_publish_blocked");
     assert_eq!(error.message(), "hook refuses after publication");
-    // Publication already happened before the post-publish hook ran.
-    assert_eq!(publisher.published().len(), 1);
+    // The committed call and result rows were published before the post-publish
+    // hook ran.
+    let published = publisher.published();
+    assert_eq!(published.len(), 2);
+    assert_eq!(published[0].kind(), MessageKindDto::ToolCall);
+    assert_eq!(published[1].kind(), MessageKindDto::ToolResult);
     // The completed commit is preserved and not duplicated as a failure.
     let results = repository.committed_results();
     assert_eq!(results.len(), 1);
@@ -1797,7 +1802,7 @@ fn selected_commit_failures_propagate_from_each_commit_point() {
 /// Publication probe that records the committed result-row count at publish time.
 struct TerminalOrderingProbe<'a> {
     repository: &'a FakeRepository,
-    publications: RefCell<Vec<ToolResultPublicationInputDto>>,
+    publications: RefCell<Vec<MessageProjectionDto>>,
     results_at_publish: RefCell<Vec<usize>>,
 }
 
@@ -1810,17 +1815,31 @@ impl<'a> TerminalOrderingProbe<'a> {
         }
     }
 
-    fn published(&self) -> Vec<ToolResultPublicationInputDto> {
+    fn published(&self) -> Vec<MessageProjectionDto> {
         self.publications.borrow().clone()
+    }
+
+    /// Asserts the boundary saw the committed call row before execution and the
+    /// committed terminal row after its own commit, in that order.
+    fn assert_call_row_then_one_terminal(&self) {
+        let published = self.published();
+        assert_eq!(published.len(), 2, "the call row and one terminal row");
+        assert_eq!(published[0].kind(), MessageKindDto::ToolCall);
+        assert_eq!(published[1].kind(), MessageKindDto::ToolResult);
+        assert_eq!(
+            *self.results_at_publish.borrow(),
+            vec![0, 1],
+            "the terminal row publishes after its own durable commit"
+        );
     }
 }
 
 impl ToolResultPublicationPort for TerminalOrderingProbe<'_> {
-    fn publish_tool_result(&self, input: &ToolResultPublicationInputDto) -> DtoResult<()> {
+    fn publish_committed_message(&self, message: &MessageProjectionDto) -> DtoResult<()> {
         self.results_at_publish
             .borrow_mut()
             .push(self.repository.committed_results().len());
-        self.publications.borrow_mut().push(input.clone());
+        self.publications.borrow_mut().push(message.clone());
         Ok(())
     }
 }
@@ -1893,13 +1912,15 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
     );
     // Exactly one terminal result row exists when publication runs, proving
     // the terminal commit precedes the publication boundary.
-    assert_eq!(*publisher.results_at_publish.borrow(), vec![1]);
+    assert_eq!(*publisher.results_at_publish.borrow(), vec![0, 1]);
     let publications = publisher.published();
-    assert_eq!(publications.len(), 1);
-    assert_eq!(publications[0].session_id(), session_id);
-    assert_eq!(publications[0].run_id(), run_id);
-    assert_eq!(publications[0].call_id(), call_id);
-    assert_eq!(publications[0].result(), &hello_read_result());
+    assert_eq!(publications.len(), 2);
+    let terminal = &publications[1];
+    assert_eq!(terminal.kind(), MessageKindDto::ToolResult);
+    assert_eq!(terminal.session_id(), session_id);
+    assert_eq!(terminal.run_id(), Some(run_id));
+    assert_eq!(terminal.tool_call_id(), Some(call_id));
+    assert_eq!(terminal.text(), "hello");
     drop(publisher);
     drop(repository);
 
@@ -1929,8 +1950,7 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
         "read",
         ToolResultStatusDto::Failed,
     );
-    assert!(publisher.published().is_empty());
-    assert!(publisher.results_at_publish.borrow().is_empty());
+    publisher.assert_call_row_then_one_terminal();
     drop(publisher);
     drop(repository);
 
@@ -1968,8 +1988,7 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
         "execute",
         ToolResultStatusDto::Partial,
     );
-    assert!(publisher.published().is_empty());
-    assert!(publisher.results_at_publish.borrow().is_empty());
+    publisher.assert_call_row_then_one_terminal();
     drop(publisher);
     drop(repository);
 
@@ -2016,8 +2035,7 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
         "execute",
         ToolResultStatusDto::Partial,
     );
-    assert!(publisher.published().is_empty());
-    assert!(publisher.results_at_publish.borrow().is_empty());
+    publisher.assert_call_row_then_one_terminal();
 
     let _ = fs::remove_dir_all(root);
 }
@@ -2056,7 +2074,7 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
     assert_eq!(completed.occurred_at(), fixture_time());
     assert!(completed.metadata().is_empty());
     // The evidence-carrying terminal commit is durable before publication.
-    assert_eq!(*publisher.results_at_publish.borrow(), vec![1]);
+    assert_eq!(*publisher.results_at_publish.borrow(), vec![0, 1]);
     drop(publisher);
     drop(repository);
 
@@ -2084,7 +2102,7 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
     assert_eq!(failed.status(), ToolResultStatusDto::Failed);
     assert_eq!(failed.content(), "tool_read_failed");
     assert!(failed.metadata().is_empty());
-    assert!(publisher.published().is_empty());
+    publisher.assert_call_row_then_one_terminal();
     drop(publisher);
     drop(repository);
 
@@ -2121,7 +2139,7 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
         partial.content(),
         "[The tool call was stopped before a final result.]"
     );
-    assert!(publisher.published().is_empty());
+    publisher.assert_call_row_then_one_terminal();
     drop(publisher);
     drop(repository);
 
@@ -2166,7 +2184,7 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
     assert!(partial.content().contains(
         "[The tool call was stopped before a final result; the output above is partial.]"
     ));
-    assert!(publisher.published().is_empty());
+    publisher.assert_call_row_then_one_terminal();
 
     let _ = fs::remove_dir_all(root);
 }
@@ -2220,12 +2238,147 @@ impl ModelRunDispatchPort for RecordingDispatchPort {
 struct RejectingWorkspaceBoundary;
 
 impl WorkspaceBoundaryPort for RejectingWorkspaceBoundary {
-    fn resolve(&self, _: &WorkspaceRoot) -> DtoResult<()> {
+    fn resolve(&self, _: &WorkspaceRoot) -> DtoResult<WorkspaceRoot> {
         Err(ErrorDto::unavailable(
             "workspace_boundary_unavailable",
             "workspace boundary refused the invocation",
         ))
     }
+}
+
+/// Records the dispatch order of the hook phases it declares.
+struct OrderRecordingHook {
+    order: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl Hook for OrderRecordingHook {
+    fn id(&self) -> &'static str {
+        "order-recorder"
+    }
+
+    fn phases(&self) -> &'static [Phase] {
+        &[
+            Phase::BeforeToolInvocation,
+            Phase::BeforeWorkspaceResolution,
+            Phase::AfterWorkspaceResolution,
+            Phase::BeforeToolExecution,
+            Phase::AfterToolExecution,
+            Phase::BeforeToolResultPersist,
+            Phase::BeforeToolResultModelContext,
+            Phase::AfterToolResultPublished,
+        ]
+    }
+
+    fn priority(&self) -> u32 {
+        0
+    }
+
+    fn run(&self, context: &PhaseContext) -> DtoResult<HookOutcome> {
+        self.order
+            .lock()
+            .expect("order lock is available")
+            .push(phase_name(context));
+        Ok(HookOutcome::Continue)
+    }
+}
+
+const fn phase_name(context: &PhaseContext) -> &'static str {
+    match context {
+        PhaseContext::Invocation { .. } => "invocation",
+        PhaseContext::WorkspaceResolution { .. } => "workspace_resolution",
+        PhaseContext::WorkspaceResolved { .. } => "workspace_resolved",
+        PhaseContext::Execution { .. } => "execution",
+        PhaseContext::Executed { .. } => "executed",
+        PhaseContext::Persist { .. } => "persist",
+        PhaseContext::ModelContext { .. } => "model_context",
+        PhaseContext::Published { .. } => "published",
+    }
+}
+
+/// Records its own resolution between the two workspace hook phases.
+struct OrderRecordingBoundary {
+    order: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl WorkspaceBoundaryPort for OrderRecordingBoundary {
+    fn resolve(&self, workspace: &WorkspaceRoot) -> DtoResult<WorkspaceRoot> {
+        self.order
+            .lock()
+            .expect("order lock is available")
+            .push("boundary");
+        Ok(workspace.clone())
+    }
+}
+
+#[test]
+fn hook_phases_dispatch_in_order_around_identity_validation_and_the_workspace_boundary() {
+    let root = hello_tool_root("phase-order");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let mut hooks = Registry::new();
+    hooks
+        .register(Box::new(OrderRecordingHook {
+            order: Arc::clone(&order),
+        }))
+        .expect("hook registers");
+    ApplicationService::with_hooks(&repository, hooks)
+        .with_workspace_boundary(OrderRecordingBoundary {
+            order: Arc::clone(&order),
+        })
+        .invoke_local_tool(invoke_read_input_in_workspace(
+            &hello_workspace(&root),
+            "hello.txt",
+        ))
+        .expect("read succeeds");
+    assert_eq!(
+        *order.lock().expect("order lock is available"),
+        vec![
+            "invocation",
+            "workspace_resolution",
+            "boundary",
+            "workspace_resolved",
+            "execution",
+            "executed",
+            "persist",
+            "model_context",
+            "published",
+        ],
+        "the entry phase precedes the boundary, and the terminal phases follow execution"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn the_invocation_phase_dispatches_before_identity_validation() {
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let mut hooks = Registry::new();
+    hooks
+        .register(Box::new(OrderRecordingHook {
+            order: Arc::clone(&order),
+        }))
+        .expect("hook registers");
+    let error = ApplicationService::with_hooks(&repository, hooks)
+        .invoke_local_tool(InvokeLocalToolInputDto::new(
+            WorkspaceRoot::resolve(
+                &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy())
+                    .expect("workspace dto"),
+            )
+            .expect("workspace is valid"),
+            SessionId::new(),
+            RunId::new(),
+            ToolCallId::new(),
+            "unknown",
+            managed_read_input("missing"),
+            fixture_time(),
+        ))
+        .expect_err("mismatched tool id is rejected");
+    assert_eq!(error.code(), "tool_id_mismatch");
+    assert_eq!(
+        *order.lock().expect("order lock is available"),
+        vec!["invocation"],
+        "the entry phase runs before the identity check rejects the call"
+    );
 }
 
 fn send_command(session_id: SessionId) -> SendUserTurnCommandDto {

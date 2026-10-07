@@ -150,60 +150,19 @@ pub trait HookObservationPort {
     fn observe_hook_failure(&self, observation: HookObservability);
 }
 
-/// Publication seam invoked after the durable result has been committed.
+/// Publication seam invoked with each transcript row after it has committed.
 pub trait ToolResultPublicationPort {
-    /// Publishes the committed tool result.
+    /// Publishes one committed transcript row to the live subscribers.
     ///
     /// # Errors
     ///
-    /// Returns the typed error reported by the daemon-owned publication boundary.
-    fn publish_tool_result(&self, input: &ToolResultPublicationInputDto) -> DtoResult<()>;
-}
-
-/// Typed identity and payload passed to the publication boundary.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ToolResultPublicationInputDto {
-    session_id: SessionId,
-    run_id: RunId,
-    call_id: ToolCallId,
-    result: ToolResult,
-}
-
-impl ToolResultPublicationInputDto {
-    #[must_use]
-    pub const fn new(
-        session_id: SessionId,
-        run_id: RunId,
-        call_id: ToolCallId,
-        result: ToolResult,
-    ) -> Self {
-        Self {
-            session_id,
-            run_id,
-            call_id,
-            result,
-        }
-    }
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-    #[must_use]
-    pub const fn run_id(&self) -> RunId {
-        self.run_id
-    }
-    #[must_use]
-    pub const fn call_id(&self) -> ToolCallId {
-        self.call_id
-    }
-    #[must_use]
-    pub const fn result(&self) -> &ToolResult {
-        &self.result
-    }
+    /// Returns the typed error reported by the composition-owned publication
+    /// boundary when the committed row cannot be published.
+    fn publish_committed_message(&self, message: &MessageProjectionDto) -> DtoResult<()>;
 }
 
 impl ToolResultPublicationPort for () {
-    fn publish_tool_result(&self, _: &ToolResultPublicationInputDto) -> DtoResult<()> {
+    fn publish_committed_message(&self, _: &MessageProjectionDto) -> DtoResult<()> {
         Ok(())
     }
 }
@@ -212,21 +171,31 @@ impl HookObservationPort for () {
     fn observe_hook_failure(&self, _: HookObservability) {}
 }
 
-/// Composition-owned boundary that resolves the authorized workspace before
-/// the post-resolution hook phase. Canonical paths never enter hook contexts.
+/// Composition-owned boundary that binds the authorized workspace between the
+/// two workspace-resolution hook phases.
+///
+/// Canonical paths never enter hook contexts: the resolved root is returned to
+/// the application, not to a hook.
 pub trait WorkspaceBoundaryPort {
-    /// Resolves the authorized workspace before post-resolution hooks run.
+    /// Binds the authorized workspace after the pre-resolution phase and
+    /// returns the root the invocation addresses.
     ///
     /// # Errors
     ///
     /// Returns a typed workspace-resolution error when the workspace cannot be
     /// authorized or prepared for the invocation.
-    fn resolve(&self, workspace: &intention_workspace::WorkspaceRoot) -> DtoResult<()>;
+    fn resolve(
+        &self,
+        workspace: &intention_workspace::WorkspaceRoot,
+    ) -> DtoResult<intention_workspace::WorkspaceRoot>;
 }
 
 impl WorkspaceBoundaryPort for () {
-    fn resolve(&self, _: &intention_workspace::WorkspaceRoot) -> DtoResult<()> {
-        Ok(())
+    fn resolve(
+        &self,
+        workspace: &intention_workspace::WorkspaceRoot,
+    ) -> DtoResult<intention_workspace::WorkspaceRoot> {
+        Ok(workspace.clone())
     }
 }
 
@@ -437,6 +406,48 @@ where
             cancellation,
             arguments_json,
         } = input;
+        // The invocation phase dispatches at the application entry, before the
+        // typed input identity is validated.
+        let invocation = PhaseContext::Invocation {
+            call: call_id,
+            input: input.clone(),
+        };
+        match dispatch_hooks(&self.hooks, &invocation, observer) {
+            Err(error) | Ok(HookOutcome::Reject(error)) => {
+                self.append_rejected_invocation(
+                    session_id,
+                    run_id,
+                    call_id,
+                    &tool_id,
+                    &arguments_json,
+                    &error,
+                    occurred_at,
+                    publisher,
+                )?;
+                return Err(error);
+            }
+            Ok(HookOutcome::TransformResult(_)) => {
+                let error = ErrorDto::validation(
+                    "invalid_hook_outcome",
+                    "result transformation is not valid before execution",
+                );
+                self.append_rejected_invocation(
+                    session_id,
+                    run_id,
+                    call_id,
+                    &tool_id,
+                    &arguments_json,
+                    &error,
+                    occurred_at,
+                    publisher,
+                )?;
+                return Err(error);
+            }
+            Ok(HookOutcome::TransformInput(value)) => input = value,
+            Ok(HookOutcome::Continue) => {}
+        }
+        // The input identity is validated after the entry phase, so its owner
+        // can rewrite the input the application admits.
         if tool_id != expected_tool_id(&input) {
             return Err(ErrorDto::validation(
                 "tool_id_mismatch",
@@ -452,57 +463,12 @@ where
             &tool_id,
             &arguments_json,
             occurred_at,
+            publisher,
         )?;
-        let invocation = PhaseContext::Invocation {
-            call: call_id,
-            input: input.clone(),
-        };
-        match dispatch_hooks(&self.hooks, &invocation, observer) {
-            Err(error) | Ok(HookOutcome::Reject(error)) => {
-                self.append_tool_failure(
-                    session_id,
-                    run_id,
-                    call_id,
-                    &tool_id,
-                    &error,
-                    occurred_at,
-                )?;
-                return Err(error);
-            }
-            Ok(HookOutcome::TransformResult(_)) => {
-                let error = ErrorDto::validation(
-                    "invalid_hook_outcome",
-                    "result transformation is not valid before execution",
-                );
-                self.append_tool_failure(
-                    session_id,
-                    run_id,
-                    call_id,
-                    &tool_id,
-                    &error,
-                    occurred_at,
-                )?;
-                return Err(error);
-            }
-            Ok(HookOutcome::TransformInput(value)) => input = value,
-            Ok(HookOutcome::Continue) => {}
-        }
         let workspace_context = PhaseContext::WorkspaceResolution {
             call: call_id,
             input: input.clone(),
         };
-        self.workspace_boundary
-            .resolve(&workspace)
-            .inspect_err(|error| {
-                let _ = self.append_tool_failure(
-                    session_id,
-                    run_id,
-                    call_id,
-                    &tool_id,
-                    error,
-                    occurred_at,
-                );
-            })?;
         match dispatch_hooks(&self.hooks, &workspace_context, observer) {
             Err(error) => {
                 self.append_tool_failure(
@@ -512,6 +478,7 @@ where
                     &tool_id,
                     &error,
                     occurred_at,
+                    publisher,
                 )?;
                 return Err(error);
             }
@@ -524,6 +491,7 @@ where
                     &tool_id,
                     &error,
                     occurred_at,
+                    publisher,
                 )?;
                 return Err(error);
             }
@@ -539,11 +507,28 @@ where
                     &tool_id,
                     &error,
                     occurred_at,
+                    publisher,
                 )?;
                 return Err(error);
             }
             Ok(HookOutcome::Continue) => {}
         }
+        // The workspace owner binds the authorized root between the two phases,
+        // and the invocation addresses only that bound root.
+        let workspace = self
+            .workspace_boundary
+            .resolve(&workspace)
+            .inspect_err(|error| {
+                let _ = self.append_tool_failure(
+                    session_id,
+                    run_id,
+                    call_id,
+                    &tool_id,
+                    error,
+                    occurred_at,
+                    publisher,
+                );
+            })?;
         let resolved = PhaseContext::WorkspaceResolved {
             call: call_id,
             input: input.clone(),
@@ -557,6 +542,7 @@ where
                     &tool_id,
                     &error,
                     occurred_at,
+                    publisher,
                 )?;
                 return Err(error);
             }
@@ -572,6 +558,7 @@ where
                     &tool_id,
                     &error,
                     occurred_at,
+                    publisher,
                 )?;
                 return Err(error);
             }
@@ -591,6 +578,7 @@ where
                     &tool_id,
                     &error,
                     occurred_at,
+                    publisher,
                 )?;
                 return Err(error);
             }
@@ -608,6 +596,7 @@ where
                     &tool_id,
                     &error,
                     occurred_at,
+                    publisher,
                 )?;
                 return Err(error);
             }
@@ -653,7 +642,24 @@ where
                     content,
                     Vec::new(),
                     occurred_at,
+                    publisher,
                 )?;
+                if let Some(value) = &partial {
+                    let context = PhaseContext::Published {
+                        call: call_id,
+                        result: value.clone(),
+                    };
+                    match dispatch_hooks(&self.hooks, &context, observer)? {
+                        HookOutcome::Continue => {}
+                        HookOutcome::TransformResult(_) | HookOutcome::TransformInput(_) => {
+                            return Err(ErrorDto::validation(
+                                "invalid_hook_outcome",
+                                "published result cannot be transformed",
+                            ));
+                        }
+                        HookOutcome::Reject(error) => return Err(error),
+                    }
+                }
                 return Ok(LocalToolInvocationOutcomeDto::Partial {
                     stopped,
                     result: partial,
@@ -667,6 +673,7 @@ where
                     &tool_id,
                     &error,
                     occurred_at,
+                    publisher,
                 )?;
                 return Err(error);
             }
@@ -677,6 +684,9 @@ where
             };
             let mut value = checked.clone();
             let mut failure: Option<ErrorDto> = None;
+            // `BeforeToolResultPersist` and `BeforeToolResultModelContext`
+            // dispatch immediately before the one transaction that writes the
+            // evidence row together with the transcript message answering it.
             for phase in [
                 intention_hooks::Phase::BeforeToolResultPersist,
                 intention_hooks::Phase::BeforeToolResultModelContext,
@@ -701,7 +711,7 @@ where
             result = failure.map_or(Ok(value), Err);
         }
         // The terminal result commits once, with its answering transcript row,
-        // before any publication.
+        // and the committed row is published immediately after that commit.
         let (status, content, metadata) = match &result {
             Ok(value) => (
                 ToolResultStatusDto::Completed,
@@ -723,11 +733,11 @@ where
             content,
             metadata,
             occurred_at,
+            publisher,
         )?;
         if let Ok(value) = &result {
-            let publication =
-                ToolResultPublicationInputDto::new(session_id, run_id, call_id, value.clone());
-            publisher.publish_tool_result(&publication)?;
+            // The committed result row is published before this phase runs, so
+            // the phase observes a frame that already reached subscribers.
             let context = PhaseContext::Published {
                 call: call_id,
                 result: value.clone(),
@@ -746,12 +756,58 @@ where
         result.map(LocalToolInvocationOutcomeDto::Completed)
     }
 
-    /// Commits one tool-call row before the call is dispatched.
+    /// Commits the durable call evidence and its terminal failure for an
+    /// invocation the entry phase rejected before identity validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or storage error when either row cannot commit.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One flat rejection payload keeps the ordered pair of commits at one call site."
+    )]
+    fn append_rejected_invocation<P: ToolResultPublicationPort>(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        call_id: ToolCallId,
+        tool_id: &str,
+        arguments_json: &str,
+        error: &ErrorDto,
+        occurred_at: TimestampDto,
+        publisher: &P,
+    ) -> DtoResult<()> {
+        self.append_tool_call(
+            session_id,
+            run_id,
+            call_id,
+            tool_id,
+            arguments_json,
+            occurred_at,
+            publisher,
+        )?;
+        self.append_tool_failure(
+            session_id,
+            run_id,
+            call_id,
+            tool_id,
+            error,
+            occurred_at,
+            publisher,
+        )
+    }
+
+    /// Commits one tool-call row before the call is dispatched, then publishes
+    /// the committed row.
     ///
     /// # Errors
     ///
     /// Returns a typed validation or storage error when the row cannot commit.
-    fn append_tool_call(
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One flat call payload keeps the single call-row commit at one call site."
+    )]
+    fn append_tool_call<P: ToolResultPublicationPort>(
         &self,
         session_id: SessionId,
         run_id: RunId,
@@ -759,6 +815,7 @@ where
         tool_id: &str,
         arguments_json: &str,
         occurred_at: TimestampDto,
+        publisher: &P,
     ) -> DtoResult<MessageProjectionDto> {
         let message = MessageProjectionDto::new(
             session_id,
@@ -769,8 +826,11 @@ where
             Some(call_id),
             Some(tool_id.to_owned()),
         )?;
-        self.repository
-            .append_message(AppendMessageInputDto::new(message, occurred_at))
+        let committed = self
+            .repository
+            .append_message(AppendMessageInputDto::new(message, occurred_at))?;
+        publisher.publish_committed_message(&committed)?;
+        Ok(committed)
     }
 
     /// Commits one terminal failed result for a call that never produced output.
@@ -778,7 +838,11 @@ where
     /// # Errors
     ///
     /// Returns a typed validation or storage error when the result cannot commit.
-    fn append_tool_failure(
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One flat failure payload keeps the single failure commit at one call site."
+    )]
+    fn append_tool_failure<P: ToolResultPublicationPort>(
         &self,
         session_id: SessionId,
         run_id: RunId,
@@ -786,6 +850,7 @@ where
         tool_id: &str,
         error: &ErrorDto,
         occurred_at: TimestampDto,
+        publisher: &P,
     ) -> DtoResult<()> {
         self.commit_tool_result(
             session_id,
@@ -796,11 +861,13 @@ where
             error.code().to_owned(),
             Vec::new(),
             occurred_at,
+            publisher,
         )
         .map(|_| ())
     }
 
-    /// Commits one terminal tool result with its answering transcript row.
+    /// Commits one terminal tool result with its answering transcript row, then
+    /// publishes that committed row.
     ///
     /// Exactly one transaction writes the `tool_results` row and the
     /// `tool_result` message the model reads.
@@ -812,7 +879,7 @@ where
         clippy::too_many_arguments,
         reason = "One flat terminal-result payload keeps the single transaction at one call site."
     )]
-    fn commit_tool_result(
+    fn commit_tool_result<P: ToolResultPublicationPort>(
         &self,
         session_id: SessionId,
         run_id: RunId,
@@ -822,6 +889,7 @@ where
         content: String,
         metadata: Vec<ToolResultMetadataEntryDto>,
         occurred_at: TimestampDto,
+        publisher: &P,
     ) -> DtoResult<ToolResultEvidenceDto> {
         let evidence = ToolResultEvidenceDto::new(
             session_id,
@@ -842,8 +910,11 @@ where
             Some(call_id),
             Some(tool_id.to_owned()),
         )?;
-        self.repository
-            .write_tool_result(WriteToolResultInputDto::new(evidence, message)?)
+        let committed = self
+            .repository
+            .write_tool_result(WriteToolResultInputDto::new(evidence, message.clone())?)?;
+        publisher.publish_committed_message(&message)?;
+        Ok(committed)
     }
 
     /// Creates an application facade around a DTO-only durable repository.

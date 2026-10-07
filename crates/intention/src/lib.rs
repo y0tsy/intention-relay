@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use intention_application::{
     ApplicationService, CreateSessionWorkflowInputDto, InvokeLocalToolInputDto,
     ModelRunDispatchPort, ScheduleModelRunDto, SendUserTurnWorkflowInputDto,
-    ToolResultPublicationInputDto, ToolResultPublicationPort, WorkspaceBoundaryPort,
+    ToolResultPublicationPort, WorkspaceBoundaryPort,
 };
 #[cfg(test)]
 use intention_config::ConfigPathDto;
@@ -205,10 +205,11 @@ impl ModelRunDispatchPort for PrivateModelRunDispatch {
 
 struct SafeWorkspaceBoundary;
 impl WorkspaceBoundaryPort for SafeWorkspaceBoundary {
-    fn resolve(&self, _workspace: &WorkspaceRoot) -> DtoResult<()> {
-        // WorkspaceRoot::resolve has already performed canonical resolution
-        // and directory validation before this application boundary is called.
-        Ok(())
+    fn resolve(&self, workspace: &WorkspaceRoot) -> DtoResult<WorkspaceRoot> {
+        // The session's declared anchor is re-authorized between the two
+        // workspace-resolution phases, and the invocation addresses only the
+        // root this boundary returns.
+        workspace.rebind()
     }
 }
 
@@ -265,44 +266,6 @@ fn production_hooks() -> DtoResult<HookRegistry> {
     Ok(registry)
 }
 
-/// Verifies that the committed tool-result row answers the exact invocation.
-///
-/// Publication follows commit plus a durable reread of that invocation's own
-/// row, and the application dispatches `AfterToolResultPublished` only after
-/// this verification succeeds.
-struct DurableToolResultPublisher<'a> {
-    repository: &'a SqliteStorageRepository,
-}
-
-impl ToolResultPublicationPort for DurableToolResultPublisher<'_> {
-    fn publish_tool_result(&self, input: &ToolResultPublicationInputDto) -> DtoResult<()> {
-        let evidence = self.repository.load_tool_result(
-            input.session_id(),
-            input.run_id(),
-            input.call_id(),
-        )?;
-        committed_tool_result_evidence(&evidence, input)
-    }
-}
-
-/// Verifies that the durable evidence belongs to the exact invocation identity.
-fn committed_tool_result_evidence(
-    evidence: &ToolResultEvidenceDto,
-    input: &ToolResultPublicationInputDto,
-) -> DtoResult<()> {
-    if evidence.session_id() == input.session_id()
-        && evidence.run_id() == input.run_id()
-        && evidence.call_id() == input.call_id()
-    {
-        Ok(())
-    } else {
-        Err(ErrorDto::unavailable(
-            "tool_result_evidence_unavailable",
-            "committed tool result evidence is unavailable",
-        ))
-    }
-}
-
 /// Run-scoped interruption shared between daemon-host interrupts and admitted local tools.
 struct LocalToolCancellationEntry {
     signal: CancellationSignal,
@@ -311,12 +274,13 @@ struct LocalToolCancellationEntry {
 }
 
 impl DaemonApplicationFacade {
-    /// Executes one explicit local tool call through the one-transaction path.
+    /// Executes one explicit local tool call through the one-transaction path
+    /// without publishing its committed rows.
     ///
-    /// Publication independently rereads the committed result row of the exact
-    /// invocation, and the application dispatches `AfterToolResultPublished`
-    /// only after that verification succeeds. This API is an internal,
-    /// caller-admitted single invocation and never starts a loop.
+    /// This API is an internal, caller-admitted single invocation and never
+    /// starts a loop. The daemon host uses
+    /// [`Self::invoke_local_tool_for_daemon_with_publication`] so every
+    /// committed transcript row reaches the live subscribers.
     #[doc(hidden)]
     #[expect(
         clippy::too_many_arguments,
@@ -332,12 +296,43 @@ impl DaemonApplicationFacade {
         workspace: WorkspaceRoot,
         arguments_json: impl Into<String>,
     ) -> DtoResult<LocalToolInvocationOutcomeDto> {
-        // The reread is scoped to this invocation's own row, so publication can
-        // only observe this call's committed evidence.
+        self.invoke_local_tool_for_daemon_with_publication(
+            session_id,
+            run_id,
+            call_id,
+            tool_id,
+            input,
+            workspace,
+            arguments_json,
+            &(),
+        )
+    }
+
+    /// Executes one explicit local tool call through the one-transaction path
+    /// and hands every committed transcript row to the publication boundary.
+    ///
+    /// Publication follows each row's own commit, so every published frame
+    /// carries a committed value, and the application dispatches
+    /// `AfterToolResultPublished` only after the terminal row was published.
+    /// This API is an internal, caller-admitted single invocation and never
+    /// starts a loop.
+    #[doc(hidden)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The daemon bridge keeps the flat tool-invocation payload in one call."
+    )]
+    pub fn invoke_local_tool_for_daemon_with_publication<P: ToolResultPublicationPort>(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        call_id: intention_types::ToolCallId,
+        tool_id: impl Into<String>,
+        input: ToolInput,
+        workspace: WorkspaceRoot,
+        arguments_json: impl Into<String>,
+        publisher: &P,
+    ) -> DtoResult<LocalToolInvocationOutcomeDto> {
         let cancellation = self.bind_local_tool_cancellation(session_id, run_id)?;
-        let publisher = DurableToolResultPublisher {
-            repository: &self.inner.repository,
-        };
         let result = intention_application::ApplicationService::with_hooks(
             &self.inner.repository,
             production_hooks()?,
@@ -355,7 +350,7 @@ impl DaemonApplicationFacade {
             )
             .with_arguments_json(arguments_json)
             .with_cancellation(cancellation),
-            &publisher,
+            publisher,
         );
         self.release_local_tool_cancellation(session_id, run_id);
         result
@@ -483,6 +478,28 @@ impl DaemonApplicationFacade {
         WorkspaceRoot::resolve(projection.workspace_root())
     }
 
+    /// Reads the committed structured evidence of one tool call for the daemon
+    /// host's publication path.
+    ///
+    /// The host verifies a committed tool-result row against this read before it
+    /// broadcasts the row, so the durable structured view is read by production
+    /// code rather than written only.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when the committed row does not exist.
+    #[doc(hidden)]
+    pub fn load_tool_result_for_daemon(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        call_id: intention_types::ToolCallId,
+    ) -> DtoResult<ToolResultEvidenceDto> {
+        self.inner
+            .repository
+            .load_tool_result(session_id, run_id, call_id)
+    }
+
     /// Executes one scheduled run through the privately selected provider
     /// driver with the mandatory tool executor.
     ///
@@ -560,8 +577,8 @@ impl DaemonApplicationFacade {
     /// Terminalizes one still-active run as durably `Failed` for the daemon
     /// task registry.
     ///
-    /// An executor error must never leave a `Starting`/`Running`/`WaitingInput`
-    /// run without an owner: this bridge commits the terminal `Failed` run row.
+    /// An executor error must never leave a `Starting`/`Running` run without
+    /// an owner: this bridge commits the terminal `Failed` run row.
     /// The failure code is the executor error's stable code, so deterministic
     /// bound and semantic failures (for example
     /// `reasoning_output_limit_exceeded`) become the durable failed outcome
@@ -984,7 +1001,8 @@ mod tests {
     use super::*;
 
     use intention_domain::{
-        GetSessionSnapshotQueryDto, MessageKindDto, SendUserTurnCommandDto, ToolResultStatusDto,
+        GetSessionSnapshotQueryDto, MessageKindDto, MessageProjectionDto, SendUserTurnCommandDto,
+        ToolResultStatusDto,
     };
     use intention_storage::ConsumePendingUserTurnsInputDto;
     use tempfile::TempDir;
@@ -1066,7 +1084,7 @@ mod tests {
         })
     }
 
-    /// Builds an in-memory read result used only to fabricate publication inputs.
+    /// Builds the exact read result the `hello.txt` fixture invocation produces.
     fn hello_read_result() -> ToolResult {
         ToolResult::Read(intention_tools::TextResult {
             text: intention_tools::BoundedText::new("hello").expect("fixture text"),
@@ -2149,16 +2167,17 @@ mod tests {
     }
 
     #[test]
-    fn tool_result_publication_requires_evidence_for_the_exact_committed_call() {
+    fn committed_tool_rows_are_published_and_read_back_for_the_exact_call() {
         let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
-        let run_id = started_run(&facade, session_id, "exact correlation");
+        let run_id = started_run(&facade, session_id, "publication path");
         let (_workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
         let call_id = intention_types::ToolCallId::new();
-        facade
-            .invoke_local_tool_for_daemon(
+        let publisher = RecordingPublisher::new();
+        let completed = facade
+            .invoke_local_tool_for_daemon_with_publication(
                 session_id,
                 run_id,
                 call_id,
@@ -2166,66 +2185,80 @@ mod tests {
                 read_hello_input(),
                 workspace,
                 "{}",
+                &publisher,
             )
             .expect("read completes");
-
-        let publisher = DurableToolResultPublisher {
-            repository: &facade.inner.repository,
-        };
-        let uncommitted = ToolResultPublicationInputDto::new(
-            session_id,
-            run_id,
-            intention_types::ToolCallId::new(),
-            hello_read_result(),
+        assert_eq!(
+            completed,
+            LocalToolInvocationOutcomeDto::Completed(hello_read_result())
         );
-        let error = publisher
-            .publish_tool_result(&uncommitted)
-            .expect_err("an uncommitted call identity cannot publish");
-        assert_eq!(error.code(), "tool_result_not_found");
 
-        let cross_run = ToolResultPublicationInputDto::new(
-            session_id,
-            RunId::new(),
-            call_id,
-            hello_read_result(),
+        // Every committed tool row reached the boundary in commit order, so a
+        // live frame always carries a committed value.
+        let published = publisher.published();
+        assert_eq!(published.len(), 2);
+        assert_eq!(published[0].kind(), MessageKindDto::ToolCall);
+        assert_eq!(published[0].tool_call_id(), Some(call_id));
+        assert_eq!(published[1].kind(), MessageKindDto::ToolResult);
+        assert_eq!(published[1].tool_call_id(), Some(call_id));
+        assert_eq!(published[1].text(), "hello");
+        let committed: Vec<_> = run_messages(&facade, session_id, run_id)
+            .into_iter()
+            .filter(|message| message.tool_call_id() == Some(call_id))
+            .collect();
+        assert_eq!(
+            published, committed,
+            "published rows are the committed rows"
         );
-        let error = publisher
-            .publish_tool_result(&cross_run)
-            .expect_err("a cross-run identity cannot publish");
+
+        // The host reads the committed structured evidence of the exact call
+        // before it broadcasts that call's result frame.
+        let evidence = facade
+            .load_tool_result_for_daemon(session_id, run_id, call_id)
+            .expect("committed evidence is readable");
+        assert_eq!(evidence.call_id(), call_id);
+        assert_eq!(evidence.run_id(), run_id);
+        assert_eq!(evidence.status(), ToolResultStatusDto::Completed);
+        assert_eq!(evidence.content(), "hello");
+
+        // A foreign identity never resolves to this call's evidence.
+        let error = facade
+            .load_tool_result_for_daemon(session_id, RunId::new(), call_id)
+            .expect_err("a cross-run identity cannot read this evidence");
         assert_eq!(error.code(), "tool_result_not_found");
-
-        let cross_session = ToolResultPublicationInputDto::new(
-            SessionId::new(),
-            run_id,
-            call_id,
-            hello_read_result(),
-        );
-        let error = publisher
-            .publish_tool_result(&cross_session)
-            .expect_err("a cross-session identity cannot publish");
+        let error = facade
+            .load_tool_result_for_daemon(SessionId::new(), run_id, call_id)
+            .expect_err("a cross-session identity cannot read this evidence");
         assert_eq!(error.code(), "tool_result_not_found");
+    }
 
-        // The verification step rejects committed evidence whose durable
-        // identity does not answer the requested invocation.
-        let mismatched_evidence = ToolResultEvidenceDto::new(
-            session_id,
-            run_id,
-            intention_types::ToolCallId::new(),
-            "read",
-            ToolResultStatusDto::Completed,
-            "hello",
-            Vec::new(),
-            TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid"),
-        )
-        .expect("fixture evidence is valid");
-        let error = committed_tool_result_evidence(&mismatched_evidence, &uncommitted)
-            .expect_err("mismatched committed evidence cannot publish");
-        assert_eq!(error.code(), "tool_result_evidence_unavailable");
+    /// Records every committed transcript row handed to the publication boundary.
+    struct RecordingPublisher {
+        publications: Mutex<Vec<MessageProjectionDto>>,
+    }
 
-        let exact =
-            ToolResultPublicationInputDto::new(session_id, run_id, call_id, hello_read_result());
-        publisher
-            .publish_tool_result(&exact)
-            .expect("the exact committed identity correlates");
+    impl RecordingPublisher {
+        fn new() -> Self {
+            Self {
+                publications: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn published(&self) -> Vec<MessageProjectionDto> {
+            self.publications
+                .lock()
+                .expect("publication lock is available")
+                .clone()
+        }
+    }
+
+    impl ToolResultPublicationPort for RecordingPublisher {
+        fn publish_committed_message(&self, message: &MessageProjectionDto) -> DtoResult<()> {
+            self.publications
+                .lock()
+                .expect("publication lock is available")
+                .push(message.clone());
+            Ok(())
+        }
     }
 }
