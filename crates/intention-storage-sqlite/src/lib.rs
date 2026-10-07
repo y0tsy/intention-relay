@@ -17,13 +17,15 @@ use std::sync::Mutex;
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
-    MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, RunModeDto, RunProjectionDto,
-    RunStatusDto, SessionProjectionDto, ToolResultMetadataEntryDto, ToolResultStatusDto,
-    WorkspaceRootDto, validate_run_status_transition,
+    ToolResultMetadataEntryDto, ToolResultStatusDto, validate_run_status_transition,
 };
 use intention_proto::{
     ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto,
     ProjectId, RunId, SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
+};
+use intention_proto::{
+    MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, RunModeDto, RunProjectionDto,
+    RunStatusDto, SessionProjectionDto, WorkspaceRootDto,
 };
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,
@@ -1726,7 +1728,7 @@ mod tests {
     )]
     use super::*;
     use intention_config::{ConfigPathDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto};
-    use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
+    use intention_proto::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
     use intention_proto::{IdempotencyKey, ProjectId, SchemaVersionDto, UsageDto, WorkspaceId};
     use intention_storage::{
         AppendMessageInputDto, CreateSessionInputDto, StorageRepositoryDto, WriteToolResultInputDto,

@@ -16,7 +16,6 @@ members = [
   "crates/intention-vfr",
   "crates/intention-headroom",
   "crates/intention-plans",
-  "crates/intention-protocol",
   "crates/intention-transport",
   "crates/intention-client",
   "crates/intention",
@@ -29,7 +28,6 @@ members = [
 default-members = [
   "crates/intention-proto",
   "crates/intention-domain",
-  "crates/intention-protocol",
   "crates/intention-config",
 ]
 resolver = "3"

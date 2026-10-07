@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use intention_domain::WorkspaceRootDto;
+use intention_proto::WorkspaceRootDto;
 use intention_proto::{DtoResult, ErrorDto, WorkspaceRelativePathDto};
 
 /// A workspace root used as an addressing anchor.

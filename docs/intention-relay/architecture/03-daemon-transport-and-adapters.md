@@ -26,7 +26,7 @@ v1 uses:
   semantics and is verified by the required Windows CI named-pipe fixture;
 -  JSON-RPC 2.0 over NDJSON framing: one typed message per `\n`-terminated UTF-8 JSON line, with a 1 MiB transport
   message cap (`MAX_MESSAGE_BYTES`);
-- a versioned JSON-RPC protocol carrying only `intention-protocol` DTOs;
+- a versioned JSON-RPC protocol carrying only `intention-proto` protocol DTOs;
 - OS-user filesystem permissions as the local access boundary.
 
 No TCP listener is opened in v1. This avoids treating localhost as an authentication boundary and keeps remote API
@@ -38,7 +38,7 @@ The wire is JSON-RPC 2.0: every message is one UTF-8
 JSON line terminated by a newline. A request carries `"jsonrpc":"2.0"`, a numeric `id`, a `method`, and typed `params`;
 a response echoes the `id` and carries exactly one of `result` or `error`; a notification carries `"jsonrpc":"2.0"`, a
 `method`, and `params` with no `id`. The envelopes are `JsonRpcRequest<T>`, `JsonRpcResponse<T>`, `JsonRpcError`, and
-`JsonRpcNotification<T>`; `params` and `result` are the existing typed `intention-protocol` DTOs, and no untyped
+`JsonRpcNotification<T>`; `params` and `result` are the existing typed `intention-proto` DTOs, and no untyped
 `serde_json::Value` crosses the boundary.
 
 | Method | Params DTO | Result |

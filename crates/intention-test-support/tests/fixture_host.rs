@@ -6,13 +6,13 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use intention_domain::{GetSessionSnapshotQueryDto, RunModeDto};
-use intention_proto::{RunId, SchemaVersionDto, SessionId};
-use intention_protocol::{
+use intention_proto::{GetSessionSnapshotQueryDto, RunModeDto};
+use intention_proto::{
     ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto,
     ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, SessionSubscriptionResponseDto,
     SubscribeSessionCommandDto, decode_response, encode_request,
 };
+use intention_proto::{RunId, SchemaVersionDto, SessionId};
 use intention_test_support::FixtureHost;
 use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncRequestSender, LocalEndpoint,
@@ -87,7 +87,7 @@ async fn fixture_host_serves_current_session_state_and_typed_scoped_refusals() {
         .send_message(&encode_request(
             1,
             ProtocolRequestPayloadDto::Command(
-                intention_protocol::ProtocolCommandDto::SubscribeSession(
+                intention_proto::ProtocolCommandDto::SubscribeSession(
                     SubscribeSessionCommandDto::with_run_id(
                         SchemaVersionDto::new(1, 1),
                         session_id,

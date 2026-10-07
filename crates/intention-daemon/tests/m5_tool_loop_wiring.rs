@@ -15,16 +15,16 @@ use intention::DaemonApplicationFacade;
 use intention_application::ScheduleModelRunDto;
 use intention_config::ConfigSnapshotDto;
 use intention_daemon::DaemonToolExecutor;
-use intention_domain::{
-    MessageKindDto, MessageProjectionDto, RunStatusDto, SendUserTurnCommandDto, WorkspaceRootDto,
-};
 use intention_model::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
     ModelToolDefinitionDto, ToolCallDto,
 };
 use intention_proto::{IdempotencyKey, RunId, SessionId, TimestampDto, ToolCallId};
-use intention_protocol::{
+use intention_proto::{
+    MessageKindDto, MessageProjectionDto, RunStatusDto, SendUserTurnCommandDto, WorkspaceRootDto,
+};
+use intention_proto::{
     ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, SendUserTurnOutcomeDto,
 };
 use intention_runtime::{
@@ -220,13 +220,13 @@ fn create_session(
     session_id: SessionId,
     workspace: &std::path::Path,
 ) {
-    let create = ProtocolCommandDto::CreateSession(intention_domain::CreateSessionCommandDto::new(
+    let create = ProtocolCommandDto::CreateSession(intention_proto::CreateSessionCommandDto::new(
         intention_proto::ProjectId::new(),
         session_id,
         intention_proto::WorkspaceId::new(),
         WorkspaceRootDto::parse(workspace.to_string_lossy().into_owned())
             .expect("fixture workspace is absolute"),
-        intention_domain::RunModeDto::Build,
+        intention_proto::RunModeDto::Build,
     ));
     assert!(matches!(
         facade.command(create),

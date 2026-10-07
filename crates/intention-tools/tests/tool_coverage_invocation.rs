@@ -4,7 +4,7 @@
     reason = "Coverage fixtures use infallible setup values; failures indicate broken test setup."
 )]
 
-use intention_domain::WorkspaceRootDto;
+use intention_proto::WorkspaceRootDto;
 use intention_proto::{RunId, SessionId, ToolCallId, WorkspaceRelativePathDto};
 use intention_tools::{
     BoundedText, GlobInput, TOOL_SCHEMA_VERSION, ToolContext, ToolExecutionMetadata, ToolInput,

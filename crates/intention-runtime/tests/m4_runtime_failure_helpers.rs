@@ -8,10 +8,10 @@ use std::cell::RefCell;
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
-use intention_domain::{RunProjectionDto, RunStatusDto, SessionProjectionDto};
 use intention_proto::{
     ConfigRevisionId, DtoResult, ErrorDto, RunId, SchemaVersionDto, SessionId, TimestampDto, TurnId,
 };
+use intention_proto::{RunProjectionDto, RunStatusDto, SessionProjectionDto};
 use intention_runtime::fail_starting_run;
 use intention_storage::{FinishRunInputDto, StorageRepositoryDto};
 
@@ -90,14 +90,14 @@ impl StorageRepositoryDto for FakeRepository {
     fn remove_turn(
         &self,
         _input: intention_storage::RemoveTurnInputDto,
-    ) -> DtoResult<intention_domain::PendingTurnProjectionDto> {
+    ) -> DtoResult<intention_proto::PendingTurnProjectionDto> {
         unused()
     }
 
     fn consume_pending_user_turns(
         &self,
         _input: intention_storage::ConsumePendingUserTurnsInputDto,
-    ) -> DtoResult<Vec<intention_domain::MessageProjectionDto>> {
+    ) -> DtoResult<Vec<intention_proto::MessageProjectionDto>> {
         unused()
     }
 
@@ -117,7 +117,7 @@ impl StorageRepositoryDto for FakeRepository {
     fn append_message(
         &self,
         _input: intention_storage::AppendMessageInputDto,
-    ) -> DtoResult<intention_domain::MessageProjectionDto> {
+    ) -> DtoResult<intention_proto::MessageProjectionDto> {
         unused()
     }
 
@@ -164,7 +164,7 @@ impl StorageRepositoryDto for FakeRepository {
     fn load_session_projection(
         &self,
         _session_id: SessionId,
-    ) -> DtoResult<intention_domain::SessionProjectionDto> {
+    ) -> DtoResult<intention_proto::SessionProjectionDto> {
         unused()
     }
 
@@ -172,7 +172,7 @@ impl StorageRepositoryDto for FakeRepository {
         &self,
         _session_id: SessionId,
         _limit: u32,
-    ) -> DtoResult<Vec<intention_domain::MessageProjectionDto>> {
+    ) -> DtoResult<Vec<intention_proto::MessageProjectionDto>> {
         unused()
     }
 
@@ -181,7 +181,7 @@ impl StorageRepositoryDto for FakeRepository {
         _session_id: SessionId,
         _run_id: RunId,
         _limit: u32,
-    ) -> DtoResult<Vec<intention_domain::MessageProjectionDto>> {
+    ) -> DtoResult<Vec<intention_proto::MessageProjectionDto>> {
         unused()
     }
 

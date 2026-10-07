@@ -1,7 +1,9 @@
 //! Shared, dependency-light DTOs for every Intention Relay boundary.
 //!
-//! This crate owns validated identifiers, schema versions, safe errors, and
-//! temporal values. It deliberately has no domain, persistence, provider,
+//! This crate owns validated identifiers, schema versions, safe errors,
+//! temporal values, the shared value and wire types used by the domain,
+//! protocol, storage, and runtime boundaries, and the versioned public
+//! local-protocol DTOs. It deliberately has no domain, persistence, provider,
 //! runtime, or presentation dependency.
 
 use std::fmt::{Display, Formatter};
@@ -9,9 +11,43 @@ use std::fmt::{Display, Formatter};
 use serde::{Deserialize, Deserializer, Serialize, de};
 use uuid::Uuid;
 
+pub mod jsonrpc;
 mod model;
+mod projection;
+pub mod protocol;
+mod run;
+mod turn;
+mod workspace;
 
+pub use jsonrpc::{
+    JSONRPC_INVALID_PARAMS, JSONRPC_INVALID_REQUEST, JSONRPC_METHOD_NOT_FOUND, JSONRPC_PARSE_ERROR,
+    JSONRPC_VERSION, JSONRPC_VERSION_MISMATCH, JsonRpcErrorDto, JsonRpcNotificationDto,
+    JsonRpcRequestDto, JsonRpcRequestFailure, JsonRpcResponseDto, is_notification_line,
+};
 pub use model::{FinishReasonDto, ProviderErrorDto, ToolCallDto, UsageDto};
+pub use projection::{
+    MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, SessionProjectionDto,
+};
+pub use protocol::{
+    CURRENT_DTO_SCHEMA_VERSION, CURRENT_PROTOCOL_VERSION, CreateSessionAcceptedDto,
+    DaemonHealthDto, DaemonReadinessDto, InterruptRunAcceptedDto, PROTOCOL_HELLO_METHOD,
+    ProtocolAcceptedDto, ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto,
+    ProtocolDaemonMessageDto, ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto,
+    ProtocolQueryResultDto, ProtocolRequestDto, ProtocolRequestPayloadDto,
+    ProtocolResponsePayloadDto, ProtocolVersionDto, RUN_FRAME_METHOD, RemoveTurnAcceptedDto,
+    RunStatusFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto, RunSubscriptionSnapshotDto,
+    SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionSnapshotDto,
+    SessionSubscriptionResponseDto, SubscribeRunCommandDto, SubscribeSessionCommandDto,
+    decode_hello_request, decode_hello_response, decode_request_line, decode_response,
+    encode_hello_request, encode_hello_response, encode_request, encode_response,
+    parse_run_frame_notification,
+};
+pub use run::{RunModeDto, RunProjectionDto, RunStatusDto};
+pub use turn::{
+    CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto,
+    RemoveTurnCommandDto, SendUserTurnCommandDto,
+};
+pub use workspace::WorkspaceRootDto;
 
 /// A safe result whose failure can cross a crate or process boundary.
 pub type DtoResult<T> = Result<T, ErrorDto>;

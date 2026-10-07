@@ -26,18 +26,19 @@ use std::time::{Duration, Instant};
 use intention_client::{
     IntentionClient, ProcessDaemonLauncher, RunStreamClient, RunStreamSubscription,
 };
-use intention_domain::{
+use intention_domain::run_status_is_terminal;
+use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunStatusDto,
     SendUserTurnCommandDto, WorkspaceRootDto,
 };
 use intention_proto::{
-    DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId,
-};
-use intention_protocol::{
     DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto,
     ProtocolHelloDto, ProtocolMethodDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
     RunStreamFrameDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto, decode_response,
     encode_request,
+};
+use intention_proto::{
+    DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId,
 };
 use intention_transport::{
     LocalConnection, LocalEndpoint, local_protocol_version, negotiate_client,
@@ -523,7 +524,7 @@ struct LiveRunObservation {
 impl LiveRunObservation {
     /// Returns whether the correlated snapshot already reported a terminal run.
     fn snapshot_is_terminal(&self) -> bool {
-        self.snapshot_status.is_some_and(RunStatusDto::is_terminal)
+        self.snapshot_status.is_some_and(run_status_is_terminal)
     }
 
     /// Returns whether any received status frame reported a committed status.
@@ -549,7 +550,7 @@ async fn observe_run_until_terminal(
 ) -> LiveRunObservation {
     let mut subscription = client
         .subscribe(SubscribeRunCommandDto::new(
-            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+            intention_proto::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
         ))
@@ -562,7 +563,7 @@ async fn observe_run_until_terminal(
         if subscription
             .reducer()
             .status()
-            .is_some_and(RunStatusDto::is_terminal)
+            .is_some_and(run_status_is_terminal)
         {
             return LiveRunObservation {
                 subscription,

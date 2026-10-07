@@ -7,8 +7,8 @@
     reason = "Test setup failures are reported with local context."
 )]
 
-use intention_domain::WorkspaceRootDto;
 use intention_proto::WorkspaceRelativePathDto;
+use intention_proto::WorkspaceRootDto;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 struct TempDir(std::path::PathBuf);

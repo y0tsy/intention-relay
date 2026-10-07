@@ -21,28 +21,29 @@ use intention_config::{
     ConfigPathResolver, ConfigSnapshotDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto,
     ResolvedConfigDto, StartupProviderMaterial,
 };
-use intention_domain::RunStatusDto;
-#[cfg(test)]
-use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
+use intention_domain::run_status_is_terminal;
 use intention_hooks::{
     Hook, Outcome as HookOutcome, Phase, PhaseContext, Registry as HookRegistry,
 };
 use intention_model::{ModelCancellationSignal, ModelExecutionDriver};
 #[cfg(any(test, feature = "test-support"))]
 use intention_model::{ModelCapabilitiesDto, ModelDriver, ModelEventStream};
+use intention_proto::RunStatusDto;
+#[cfg(test)]
+use intention_proto::SendUserTurnOutcomeDto;
 use intention_proto::{
     ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, RunId, SchemaVersionDto, SessionId,
     TimestampDto,
 };
 #[cfg(test)]
-use intention_proto::{ProjectId, WorkspaceId};
-#[cfg(test)]
-use intention_protocol::SendUserTurnOutcomeDto;
-use intention_protocol::{
+use intention_proto::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
+use intention_proto::{
     DaemonHealthDto, DaemonReadinessDto, ProtocolAcceptedDto, ProtocolAcceptedResultDto,
     ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto, ProtocolQueryResultDto,
     SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
 };
+#[cfg(test)]
+use intention_proto::{ProjectId, WorkspaceId};
 use intention_provider_generic_chat::GenericChatDriver;
 use intention_provider_openrouter::OpenRouterDriver;
 use intention_runtime::{
@@ -58,9 +59,9 @@ use intention_tools::ToolResult;
 use intention_tools::{CancellationSignal, ToolInput};
 use intention_workspace::WorkspaceRoot;
 
-const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
-const PROTOCOL_VERSION: intention_protocol::ProtocolVersionDto =
-    intention_protocol::CURRENT_PROTOCOL_VERSION;
+const SCHEMA_VERSION: SchemaVersionDto = intention_proto::CURRENT_DTO_SCHEMA_VERSION;
+const PROTOCOL_VERSION: intention_proto::ProtocolVersionDto =
+    intention_proto::CURRENT_PROTOCOL_VERSION;
 /// The single live configuration snapshot schema (intention-config current schema).
 const CONFIG_SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 0);
 const DATABASE_FILENAME: &str = "intention-relay.sqlite";
@@ -561,7 +562,7 @@ impl DaemonApplicationFacade {
             )
         })?;
         let accepted = ApplicationService::new(&self.inner.repository).interrupt_run(
-            intention_domain::InterruptRunCommandDto::new(session_id, run_id),
+            intention_proto::InterruptRunCommandDto::new(session_id, run_id),
         )?;
         // An invocation bound to this exact run observes the interruption and
         // ends with a partial result; the binding is released when that
@@ -605,7 +606,7 @@ impl DaemonApplicationFacade {
             .inner
             .repository
             .load_run_projection(session_id, run_id)?;
-        if run.status().is_terminal() {
+        if run_status_is_terminal(run.status()) {
             return Ok(());
         }
         self.inner
@@ -659,7 +660,7 @@ impl DaemonApplicationFacade {
         &self,
         session_id: SessionId,
         run_id: RunId,
-    ) -> DtoResult<intention_domain::RunProjectionDto> {
+    ) -> DtoResult<intention_proto::RunProjectionDto> {
         self.inner
             .repository
             .load_run_projection(session_id, run_id)
@@ -675,7 +676,7 @@ impl DaemonApplicationFacade {
         &self,
         session_id: SessionId,
         run_id: RunId,
-    ) -> DtoResult<intention_protocol::RunSubscriptionSnapshotDto> {
+    ) -> DtoResult<intention_proto::RunSubscriptionSnapshotDto> {
         let run = self
             .inner
             .repository
@@ -685,7 +686,7 @@ impl DaemonApplicationFacade {
             run_id,
             SESSION_SNAPSHOT_MESSAGES,
         )?;
-        intention_protocol::RunSubscriptionSnapshotDto::new(run, messages)
+        intention_proto::RunSubscriptionSnapshotDto::new(run, messages)
     }
 
     /// Loads the committed transcript rows of one run for the private daemon host.
@@ -695,7 +696,7 @@ impl DaemonApplicationFacade {
         session_id: SessionId,
         run_id: RunId,
         limit: u32,
-    ) -> DtoResult<Vec<intention_domain::MessageProjectionDto>> {
+    ) -> DtoResult<Vec<intention_proto::MessageProjectionDto>> {
         self.inner
             .repository
             .load_run_messages(session_id, run_id, limit)
@@ -810,7 +811,7 @@ impl DaemonApplicationFacade {
         &self,
         session_id: SessionId,
         run_id: Option<RunId>,
-    ) -> DtoResult<intention_protocol::SessionSnapshotDto> {
+    ) -> DtoResult<intention_proto::SessionSnapshotDto> {
         let projection = self.inner.repository.load_session_projection(session_id)?;
         let messages = match run_id {
             Some(run_id) => self.inner.repository.load_run_messages(
@@ -823,7 +824,7 @@ impl DaemonApplicationFacade {
                 .repository
                 .load_recent_messages(session_id, SESSION_SNAPSHOT_MESSAGES)?,
         };
-        intention_protocol::SessionSnapshotDto::with_projection(
+        intention_proto::SessionSnapshotDto::with_projection(
             SCHEMA_VERSION,
             session_id,
             projection,
@@ -1000,9 +1001,9 @@ mod tests {
 
     use super::*;
 
-    use intention_domain::{
+    use intention_domain::ToolResultStatusDto;
+    use intention_proto::{
         GetSessionSnapshotQueryDto, MessageKindDto, MessageProjectionDto, SendUserTurnCommandDto,
-        ToolResultStatusDto,
     };
     use intention_storage::ConsumePendingUserTurnsInputDto;
     use tempfile::TempDir;
@@ -1127,7 +1128,7 @@ mod tests {
         facade: &DaemonApplicationFacade,
         session_id: SessionId,
         run_id: RunId,
-    ) -> Vec<intention_domain::MessageProjectionDto> {
+    ) -> Vec<intention_proto::MessageProjectionDto> {
         facade
             .load_run_messages_for_daemon(session_id, run_id, u32::MAX)
             .expect("committed run transcript reads")
@@ -1714,14 +1715,14 @@ mod tests {
         };
         assert!(matches!(
             facade.command(ProtocolCommandDto::RemoveTurn(
-                intention_domain::RemoveTurnCommandDto::new(session_id, pending_turn_id)
+                intention_proto::RemoveTurnCommandDto::new(session_id, pending_turn_id)
             )),
             ProtocolCommandResultDto::Accepted(_)
         ));
         // Interrupts never dispatch through the synchronous command path; the
         // daemon host owns reaching the in-flight operation.
         assert!(matches!(facade.command(ProtocolCommandDto::InterruptRun(
-                intention_domain::InterruptRunCommandDto::new(session_id, run_id)
+                intention_proto::InterruptRunCommandDto::new(session_id, run_id)
             )), ProtocolCommandResultDto::Rejected(error) if error.code() == "invalid_interrupt_dispatch"));
         facade
             .interrupt_run_for_daemon_host(session_id, run_id)
@@ -1939,13 +1940,13 @@ mod tests {
 
         assert!(matches!(
             facade.command(ProtocolCommandDto::InterruptRun(
-                intention_domain::InterruptRunCommandDto::new(session_id, unknown)
+                intention_proto::InterruptRunCommandDto::new(session_id, unknown)
             )),
             ProtocolCommandResultDto::Rejected(_)
         ));
         assert!(matches!(
             facade.command(ProtocolCommandDto::RemoveTurn(
-                intention_domain::RemoveTurnCommandDto::new(
+                intention_proto::RemoveTurnCommandDto::new(
                     session_id,
                     intention_proto::TurnId::new(),
                 )

@@ -4,7 +4,7 @@
     reason = "Integration tests use expect and unwrap only for deterministic fixture setup; failures indicate a broken test fixture."
 )]
 
-use intention_domain::WorkspaceRootDto;
+use intention_proto::WorkspaceRootDto;
 use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
 use intention_tools::{
     BoundedText, CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepMatch,

@@ -10,5 +10,4 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-intention-domain = { path = "../intention-domain", version = "=0.0.0" }
 intention-proto = { path = "../intention-proto", version = "=0.0.0" }

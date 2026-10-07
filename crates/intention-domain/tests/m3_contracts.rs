@@ -6,12 +6,14 @@
 //! Session, run, and transcript projection contracts.
 
 use intention_domain::{
-    MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, PlanStatusDto, RunModeDto,
-    RunProjectionDto, RunStatusDto, SessionProjectionDto, WorkspaceRootDto,
-    validate_plan_status_transition, validate_run_status_transition,
+    PlanStatusDto, validate_plan_status_transition, validate_run_status_transition,
 };
 use intention_proto::{
     ConfigRevisionId, ProjectId, RunId, SessionId, ToolCallId, TurnId, WorkspaceId,
+};
+use intention_proto::{
+    MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, RunModeDto, RunProjectionDto,
+    RunStatusDto, SessionProjectionDto, WorkspaceRootDto,
 };
 
 fn workspace_root() -> WorkspaceRootDto {

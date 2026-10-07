@@ -28,7 +28,6 @@ use intention_application::ScheduleModelRunDto;
 use intention_client::RunStreamClient;
 use intention_config::ConfigSnapshotDto;
 use intention_daemon::DaemonToolExecutor;
-use intention_domain::{MessageKindDto, RunStatusDto, SendUserTurnCommandDto};
 use intention_model::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
@@ -36,11 +35,12 @@ use intention_model::{
 #[cfg(feature = "test-support")]
 use intention_proto::TurnId;
 use intention_proto::{IdempotencyKey, RunId, SessionId, TimestampDto};
-use intention_protocol::{
+use intention_proto::{MessageKindDto, RunStatusDto, SendUserTurnCommandDto};
+use intention_proto::{
     ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, SendUserTurnOutcomeDto,
 };
 #[cfg(feature = "test-support")]
-use intention_protocol::{
+use intention_proto::{
     ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto,
     ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, RunSubscriptionResponseDto,
     SubscribeRunCommandDto, decode_response, encode_request,
@@ -275,15 +275,15 @@ fn schedule(
 
 fn create_and_start(facade: &DaemonApplicationFacade) -> (SessionId, RunId) {
     let session_id = SessionId::new();
-    let create = ProtocolCommandDto::CreateSession(intention_domain::CreateSessionCommandDto::new(
+    let create = ProtocolCommandDto::CreateSession(intention_proto::CreateSessionCommandDto::new(
         intention_proto::ProjectId::new(),
         session_id,
         intention_proto::WorkspaceId::new(),
-        intention_domain::WorkspaceRootDto::parse(
+        intention_proto::WorkspaceRootDto::parse(
             std::env::temp_dir().to_string_lossy().into_owned(),
         )
         .expect("fixture workspace is absolute"),
-        intention_domain::RunModeDto::Build,
+        intention_proto::RunModeDto::Build,
     ));
     assert!(matches!(
         facade.command(create),
@@ -373,7 +373,7 @@ async fn interrupt_run_through_host(
         "m4-host-interrupt-test",
         1,
         ProtocolRequestPayloadDto::Command(ProtocolCommandDto::InterruptRun(
-            intention_domain::InterruptRunCommandDto::new(session_id, run_id),
+            intention_proto::InterruptRunCommandDto::new(session_id, run_id),
         )),
     )
     .await;
@@ -503,7 +503,7 @@ async fn real_async_host_snapshot_answers_a_subscription_and_a_resubscribe_rerea
     let client = RunStreamClient::new(endpoint, "m4-host-test").expect("stream client is valid");
     let subscription = client
         .subscribe(SubscribeRunCommandDto::new(
-            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+            intention_proto::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
         ))
@@ -522,7 +522,7 @@ async fn real_async_host_snapshot_answers_a_subscription_and_a_resubscribe_rerea
     // same current durable state.
     let reconnected = client
         .subscribe(SubscribeRunCommandDto::new(
-            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+            intention_proto::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
         ))
@@ -541,15 +541,15 @@ async fn accepted_host_turn_executes_once_then_streams_committed_content_and_com
     let session_id = SessionId::new();
     assert!(matches!(
         facade.command(ProtocolCommandDto::CreateSession(
-            intention_domain::CreateSessionCommandDto::new(
+            intention_proto::CreateSessionCommandDto::new(
                 intention_proto::ProjectId::new(),
                 session_id,
                 intention_proto::WorkspaceId::new(),
-                intention_domain::WorkspaceRootDto::parse(
+                intention_proto::WorkspaceRootDto::parse(
                     std::env::temp_dir().to_string_lossy().into_owned(),
                 )
                 .expect("fixture workspace is absolute"),
-                intention_domain::RunModeDto::Build,
+                intention_proto::RunModeDto::Build,
             ),
         )),
         ProtocolCommandResultDto::Accepted(_)
@@ -569,7 +569,7 @@ async fn accepted_host_turn_executes_once_then_streams_committed_content_and_com
         RunStreamClient::new(endpoint, "m4-host-outcome-test").expect("stream client is valid");
     let mut subscription = client
         .subscribe(SubscribeRunCommandDto::new(
-            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+            intention_proto::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
         ))
@@ -596,7 +596,7 @@ async fn accepted_host_turn_executes_once_then_streams_committed_content_and_com
 
     let reconnected = client
         .subscribe(SubscribeRunCommandDto::new(
-            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+            intention_proto::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
         ))
@@ -621,15 +621,15 @@ async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
     let session_id = SessionId::new();
     assert!(matches!(
         facade.command(ProtocolCommandDto::CreateSession(
-            intention_domain::CreateSessionCommandDto::new(
+            intention_proto::CreateSessionCommandDto::new(
                 intention_proto::ProjectId::new(),
                 session_id,
                 intention_proto::WorkspaceId::new(),
-                intention_domain::WorkspaceRootDto::parse(
+                intention_proto::WorkspaceRootDto::parse(
                     std::env::temp_dir().to_string_lossy().into_owned(),
                 )
                 .expect("fixture workspace is absolute"),
-                intention_domain::RunModeDto::Build,
+                intention_proto::RunModeDto::Build,
             ),
         )),
         ProtocolCommandResultDto::Accepted(_)
@@ -710,15 +710,15 @@ async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
     let session_id = SessionId::new();
     assert!(matches!(
         facade.command(ProtocolCommandDto::CreateSession(
-            intention_domain::CreateSessionCommandDto::new(
+            intention_proto::CreateSessionCommandDto::new(
                 intention_proto::ProjectId::new(),
                 session_id,
                 intention_proto::WorkspaceId::new(),
-                intention_domain::WorkspaceRootDto::parse(
+                intention_proto::WorkspaceRootDto::parse(
                     std::env::temp_dir().to_string_lossy().into_owned(),
                 )
                 .expect("fixture workspace is absolute"),
-                intention_domain::RunModeDto::Build,
+                intention_proto::RunModeDto::Build,
             ),
         )),
         ProtocolCommandResultDto::Accepted(_)
@@ -836,15 +836,15 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
     let session_id = SessionId::new();
     assert!(matches!(
         first_facade.command(ProtocolCommandDto::CreateSession(
-            intention_domain::CreateSessionCommandDto::new(
+            intention_proto::CreateSessionCommandDto::new(
                 intention_proto::ProjectId::new(),
                 session_id,
                 intention_proto::WorkspaceId::new(),
-                intention_domain::WorkspaceRootDto::parse(
+                intention_proto::WorkspaceRootDto::parse(
                     std::env::temp_dir().to_string_lossy().into_owned(),
                 )
                 .expect("fixture workspace is absolute"),
-                intention_domain::RunModeDto::Build,
+                intention_proto::RunModeDto::Build,
             ),
         )),
         ProtocolCommandResultDto::Accepted(_)
@@ -947,7 +947,7 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
         .send_message(&encode_request(
             1,
             ProtocolRequestPayloadDto::RunSubscription(SubscribeRunCommandDto::new(
-                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+                intention_proto::CURRENT_DTO_SCHEMA_VERSION,
                 session_id,
                 first_run,
             )),
@@ -964,7 +964,7 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
         .send_message(&encode_request(
             2,
             ProtocolRequestPayloadDto::RunSubscription(SubscribeRunCommandDto::new(
-                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+                intention_proto::CURRENT_DTO_SCHEMA_VERSION,
                 session_id,
                 RunId::new(),
             )),
@@ -1016,7 +1016,7 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
 #[cfg(feature = "test-support")]
 #[tokio::test]
 async fn host_answers_socket_level_method_not_found_and_invalid_params_errors() {
-    use intention_protocol::{
+    use intention_proto::{
         JSONRPC_INVALID_PARAMS, JSONRPC_METHOD_NOT_FOUND, JsonRpcRequestDto, JsonRpcResponseDto,
     };
     use intention_transport::{AsyncLocalClientConnection, local_protocol_version};
@@ -1093,7 +1093,7 @@ async fn host_answers_socket_level_method_not_found_and_invalid_params_errors() 
 #[cfg(feature = "test-support")]
 #[tokio::test]
 async fn host_does_not_answer_an_id_less_jsonrpc_notification() {
-    use intention_protocol::{JsonRpcNotificationDto, JsonRpcRequestDto, JsonRpcResponseDto};
+    use intention_proto::{JsonRpcNotificationDto, JsonRpcRequestDto, JsonRpcResponseDto};
     use intention_transport::{AsyncLocalClientConnection, local_protocol_version};
 
     // W-06: a request line without an id is a JSON-RPC notification, so the
@@ -1146,7 +1146,7 @@ async fn host_does_not_answer_an_id_less_jsonrpc_notification() {
     assert!(matches!(
         decode_response(&line, ProtocolMethodDto::DaemonHealth, 13),
         Ok(ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(health)))
-            if health.readiness() == intention_protocol::DaemonReadinessDto::Ready
+            if health.readiness() == intention_proto::DaemonReadinessDto::Ready
     ));
     server.await.expect("host serves the notification peer");
 }
@@ -1154,7 +1154,7 @@ async fn host_does_not_answer_an_id_less_jsonrpc_notification() {
 #[cfg(feature = "test-support")]
 #[tokio::test]
 async fn host_answers_an_explicit_null_id_request_with_the_correlated_error() {
-    use intention_protocol::{JSONRPC_INVALID_REQUEST, JsonRpcResponseDto};
+    use intention_proto::{JSONRPC_INVALID_REQUEST, JsonRpcResponseDto};
     use intention_transport::{AsyncLocalClientConnection, local_protocol_version};
 
     // W-06 boundary: an explicit `"id": null` member is a request rather than

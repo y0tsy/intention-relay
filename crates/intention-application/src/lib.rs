@@ -6,21 +6,21 @@
 //! terminal result row with its answering `tool_result` message afterwards.
 
 use intention_config::ConfigSnapshotDto;
-use intention_domain::{
-    CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageKindDto,
-    MessageProjectionDto, RemoveTurnCommandDto, SendUserTurnCommandDto, ToolResultMetadataEntryDto,
-    ToolResultStatusDto,
-};
+use intention_domain::{ToolResultMetadataEntryDto, ToolResultStatusDto};
 use intention_hooks::{
     HookObservability, Outcome as HookOutcome, PhaseContext, Registry as HookRegistry,
 };
 use intention_proto::ToolCallId;
-use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
-use intention_protocol::{
+use intention_proto::{
     CURRENT_DTO_SCHEMA_VERSION, CreateSessionAcceptedDto, InterruptRunAcceptedDto,
     ProtocolAcceptedResultDto, RemoveTurnAcceptedDto, SendUserTurnAcceptedDto,
     SendUserTurnOutcomeDto, SessionSnapshotDto,
 };
+use intention_proto::{
+    CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageKindDto,
+    MessageProjectionDto, RemoveTurnCommandDto, SendUserTurnCommandDto,
+};
+use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
 use intention_runtime::{
     ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, fail_starting_run,
 };
@@ -1318,11 +1318,11 @@ fn schedule_from_context(
         .map(|message| {
             ModelMessageDto::new(
                 match message.kind() {
-                    intention_domain::MessageKindDto::User => ModelRoleDto::User,
-                    intention_domain::MessageKindDto::Assistant => ModelRoleDto::Assistant,
-                    intention_domain::MessageKindDto::Notice => ModelRoleDto::Notice,
-                    intention_domain::MessageKindDto::ToolCall
-                    | intention_domain::MessageKindDto::ToolResult => {
+                    intention_proto::MessageKindDto::User => ModelRoleDto::User,
+                    intention_proto::MessageKindDto::Assistant => ModelRoleDto::Assistant,
+                    intention_proto::MessageKindDto::Notice => ModelRoleDto::Notice,
+                    intention_proto::MessageKindDto::ToolCall
+                    | intention_proto::MessageKindDto::ToolResult => {
                         return Err(ErrorDto::validation(
                             "invalid_model_context",
                             "a starting run context carries no tool exchange rows",

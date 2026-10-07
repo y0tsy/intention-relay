@@ -5,12 +5,12 @@
 )]
 
 use intention_config::ConfigSnapshotDto;
-use intention_domain::{
+use intention_proto::{
     CreateSessionCommandDto, GetSessionSnapshotQueryDto, RemoveTurnCommandDto, RunModeDto,
     SendUserTurnCommandDto,
 };
 use intention_proto::{IdempotencyKey, ProjectId, RunId, SchemaVersionDto, SessionId, WorkspaceId};
-use intention_protocol::{
+use intention_proto::{
     ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto,
     ProtocolQueryResultDto, SendUserTurnOutcomeDto, SessionSubscriptionResponseDto,
     SubscribeSessionCommandDto,
@@ -83,7 +83,7 @@ fn durable_lifecycle_reads_current_state_without_positions() {
                 .projection()
                 .pending_turns()
                 .first()
-                .map(intention_domain::PendingTurnProjectionDto::turn_id)
+                .map(intention_proto::PendingTurnProjectionDto::turn_id)
                 .expect("the waiting turn is projected as pending")
         }
         SendUserTurnOutcomeDto::Started { .. } => panic!("a busy session keeps the turn pending"),

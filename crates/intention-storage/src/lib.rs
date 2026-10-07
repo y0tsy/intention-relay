@@ -14,14 +14,14 @@
 //! behind the typed field, and only the typed value is visible to callers.
 
 use intention_config::ConfigSnapshotDto;
-use intention_domain::{
-    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
-    RemoveTurnCommandDto, RunProjectionDto, RunStatusDto, SessionProjectionDto,
-    ToolResultMetadataEntryDto, ToolResultStatusDto,
-};
+use intention_domain::{ToolResultMetadataEntryDto, ToolResultStatusDto, run_status_is_terminal};
 use intention_proto::{
     ConfigRevisionId, DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, RunId, SessionId,
     TimestampDto, ToolCallId, UsageDto,
+};
+use intention_proto::{
+    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
+    RemoveTurnCommandDto, RunProjectionDto, RunStatusDto, SessionProjectionDto,
 };
 
 /// The maximum durable tool result content size in bytes.
@@ -440,7 +440,7 @@ impl FinishRunInputDto {
         error_message: Option<String>,
         occurred_at: TimestampDto,
     ) -> DtoResult<Self> {
-        if !status.is_terminal() {
+        if !run_status_is_terminal(status) {
             return Err(ErrorDto::validation(
                 "invalid_run_outcome",
                 "a terminal run outcome needs a terminal status",

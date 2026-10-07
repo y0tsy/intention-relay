@@ -16,21 +16,21 @@ use intention_application::{
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
-use intention_domain::{
-    CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageKindDto,
-    MessageProjectionDto, PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto,
-    RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto,
-    ToolResultStatusDto, WorkspaceRootDto,
-};
+use intention_domain::ToolResultStatusDto;
 use intention_hooks::{
     FailurePolicy, Hook, HookObservability, Outcome as HookOutcome, Phase, PhaseContext, Registry,
+};
+use intention_proto::{
+    CURRENT_DTO_SCHEMA_VERSION, ProtocolAcceptedResultDto, SendUserTurnOutcomeDto,
 };
 use intention_proto::{
     ConfigRevisionId, DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SchemaVersionDto,
     SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
 };
-use intention_protocol::{
-    CURRENT_DTO_SCHEMA_VERSION, ProtocolAcceptedResultDto, SendUserTurnOutcomeDto,
+use intention_proto::{
+    CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageKindDto,
+    MessageProjectionDto, PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto,
+    RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto, WorkspaceRootDto,
 };
 use intention_runtime::{ModelMessageDto, ModelRequestDto, ModelRoleDto};
 use intention_storage::{

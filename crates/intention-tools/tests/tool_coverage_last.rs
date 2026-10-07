@@ -5,7 +5,7 @@
 //! is Unix-only so the declared test target stays valid on both platforms
 //! instead of leaving its fixture helpers unused under `-D warnings`.
 
-use intention_domain::WorkspaceRootDto;
+use intention_proto::WorkspaceRootDto;
 use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
 use intention_tools::{
     BoundedText, CancellationSignal, ToolDispatchOutcome, ToolInput, ToolResult, ToolService,

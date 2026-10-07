@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use intention_proto::ErrorDto;
-use intention_protocol::{
+use intention_proto::{
     JsonRpcErrorDto, JsonRpcRequestDto, JsonRpcResponseDto, ProtocolDaemonMessageDto,
     ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto,
     ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, ProtocolVersionDto, RunStreamFrameDto,
@@ -301,7 +301,7 @@ fn incompatible_protocol_version_answers_with_a_typed_error_before_closing() {
         JsonRpcResponseDto::parse(&line).expect("error response parses");
     assert!(response.result_value().is_none());
     let error = response.error_value().expect("an error object is present");
-    assert_eq!(error.code(), intention_protocol::JSONRPC_VERSION_MISMATCH);
+    assert_eq!(error.code(), intention_proto::JSONRPC_VERSION_MISMATCH);
     assert_eq!(
         error.data().map(ErrorDto::code),
         Some("incompatible_protocol_version")
@@ -340,7 +340,7 @@ fn a_first_request_that_is_not_hello_is_answered_with_the_invalid_request_code()
     assert!(response.result_value().is_none());
     assert_eq!(response.id(), Some(1), "the recovered identity is echoed");
     let error = response.error_value().expect("an error object is present");
-    assert_eq!(error.code(), intention_protocol::JSONRPC_INVALID_REQUEST);
+    assert_eq!(error.code(), intention_proto::JSONRPC_INVALID_REQUEST);
     assert_eq!(
         error.data().map(ErrorDto::code),
         Some("jsonrpc_hello_required")
@@ -495,10 +495,10 @@ fn client_negotiation_rejects_an_incompatible_daemon_response() {
         let line = connection.receive_line().expect("server receives hello");
         let request: JsonRpcRequestDto<ProtocolHelloDto> =
             JsonRpcRequestDto::parse(&line).expect("hello parses");
-        assert_eq!(request.method(), intention_protocol::PROTOCOL_HELLO_METHOD);
+        assert_eq!(request.method(), intention_proto::PROTOCOL_HELLO_METHOD);
         assert_eq!(request.params().adapter_name(), "fixture-client");
         let error = JsonRpcErrorDto::from_error(
-            intention_protocol::JSONRPC_VERSION_MISMATCH,
+            intention_proto::JSONRPC_VERSION_MISMATCH,
             ErrorDto::unavailable(
                 "incompatible_protocol_version",
                 "protocol version must equal the current version",

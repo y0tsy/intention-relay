@@ -4,14 +4,14 @@
 )]
 
 use intention_config::ConfigSnapshotDto;
-use intention_domain::{
-    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
-    RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto, ToolResultMetadataEntryDto,
-    ToolResultStatusDto, WorkspaceRootDto,
-};
+use intention_domain::{ToolResultMetadataEntryDto, ToolResultStatusDto};
 use intention_proto::{
     ConfigRevisionId, ErrorCategoryDto, FinishReasonDto, IdempotencyKey, ProjectId, RunId,
     SessionId, TimestampDto, ToolCallId, TurnId, UsageDto, WorkspaceId,
+};
+use intention_proto::{
+    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
+    RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto, WorkspaceRootDto,
 };
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,

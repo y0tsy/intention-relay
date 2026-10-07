@@ -1,7 +1,7 @@
 //! NDJSON-framed, local-only IPC for Intention Relay.
 //!
 //! The public surface carries serialized JSON-RPC 2.0 envelopes defined by
-//! `intention-protocol`; one envelope is written per NDJSON line. Framing stays
+//! `intention-proto`; one envelope is written per NDJSON line. Framing stays
 //! private to this crate, and the underlying Unix-domain socket or Windows
 //! named pipe never crosses its crate boundary.
 
@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto};
-use intention_protocol::{
+use intention_proto::{
     JsonRpcRequestDto, JsonRpcResponseDto, ProtocolHelloDto, ProtocolVersionDto,
     decode_hello_request, decode_hello_response, encode_hello_request, encode_hello_response,
 };
@@ -557,7 +557,7 @@ pub fn negotiate_daemon(
 /// Returns the currently implemented local protocol version.
 #[must_use]
 pub const fn local_protocol_version() -> ProtocolVersionDto {
-    intention_protocol::CURRENT_PROTOCOL_VERSION
+    intention_proto::CURRENT_PROTOCOL_VERSION
 }
 
 fn listener_options(endpoint: &LocalEndpoint) -> DtoResult<ListenerOptions<'_>> {
@@ -1402,7 +1402,7 @@ mod tests {
         let response: JsonRpcResponseDto<ProtocolHelloDto> =
             JsonRpcResponseDto::parse(&line).expect("error response parses");
         let error = response.error_value().expect("an error object is present");
-        assert_eq!(error.code(), intention_protocol::JSONRPC_VERSION_MISMATCH);
+        assert_eq!(error.code(), intention_proto::JSONRPC_VERSION_MISMATCH);
         assert_eq!(
             error.data().map(intention_proto::ErrorDto::code),
             Some("incompatible_protocol_version")
@@ -1418,12 +1418,12 @@ mod tests {
         for (line, expected_code, expected_data_code) in [
             (
                 b"{\n".to_vec(),
-                intention_protocol::JSONRPC_PARSE_ERROR,
+                intention_proto::JSONRPC_PARSE_ERROR,
                 "jsonrpc_parse_error",
             ),
             (
                 b"{}\n".to_vec(),
-                intention_protocol::JSONRPC_INVALID_REQUEST,
+                intention_proto::JSONRPC_INVALID_REQUEST,
                 "jsonrpc_invalid_request",
             ),
         ] {

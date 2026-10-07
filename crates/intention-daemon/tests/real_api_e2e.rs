@@ -60,18 +60,19 @@ use intention_client::{IntentionClient, ProcessDaemonLauncher, RunStreamClient};
 use intention_config::{
     ConfigPathDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto,
 };
-use intention_domain::{
+use intention_domain::run_status_is_terminal;
+use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto,
     RunStatusDto, SendUserTurnCommandDto, WorkspaceRootDto,
 };
 use intention_proto::{
-    DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId,
-};
-use intention_protocol::{
     DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto,
     ProtocolHelloDto, ProtocolMethodDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
     SendUserTurnOutcomeDto, SessionSnapshotDto, SubscribeRunCommandDto, decode_response,
     encode_request,
+};
+use intention_proto::{
+    DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId,
 };
 use intention_transport::{
     LocalConnection, LocalEndpoint, local_protocol_version, negotiate_client,
@@ -876,7 +877,7 @@ async fn collect_run_frames(
     };
     let Ok(mut subscription) = client
         .subscribe(SubscribeRunCommandDto::new(
-            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+            intention_proto::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
         ))
@@ -888,7 +889,7 @@ async fn collect_run_frames(
         if subscription
             .reducer()
             .status()
-            .is_some_and(RunStatusDto::is_terminal)
+            .is_some_and(run_status_is_terminal)
         {
             let run = *subscription
                 .reducer()
@@ -1264,7 +1265,7 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_survives_resta
     let subscription = tokio::time::timeout_at(
         tokio::time::Instant::from_std(Instant::now() + RESUBSCRIBE_DEADLINE),
         stream_client.subscribe(SubscribeRunCommandDto::new(
-            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+            intention_proto::CURRENT_DTO_SCHEMA_VERSION,
             read_session,
             run_id,
         )),

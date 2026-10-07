@@ -8,12 +8,12 @@ use std::cell::RefCell;
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
-use intention_domain::{
-    RunModeDto, RunProjectionDto, RunStatusDto, SessionProjectionDto, WorkspaceRootDto,
-};
 use intention_proto::{
     ConfigRevisionId, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto, SessionId,
     TimestampDto, TurnId, WorkspaceId,
+};
+use intention_proto::{
+    RunModeDto, RunProjectionDto, RunStatusDto, SessionProjectionDto, WorkspaceRootDto,
 };
 use intention_runtime::fail_starting_run;
 use intention_storage::{CreateSessionInputDto, FinishRunInputDto, StorageRepositoryDto};
@@ -104,7 +104,7 @@ impl StorageRepositoryDto for FakeRepository {
     fn remove_turn(
         &self,
         _input: intention_storage::RemoveTurnInputDto,
-    ) -> DtoResult<intention_domain::PendingTurnProjectionDto> {
+    ) -> DtoResult<intention_proto::PendingTurnProjectionDto> {
         Err(ErrorDto::unavailable(
             "fixture_unused",
             "remove is not used by this fixture",
@@ -114,7 +114,7 @@ impl StorageRepositoryDto for FakeRepository {
     fn consume_pending_user_turns(
         &self,
         _input: intention_storage::ConsumePendingUserTurnsInputDto,
-    ) -> DtoResult<Vec<intention_domain::MessageProjectionDto>> {
+    ) -> DtoResult<Vec<intention_proto::MessageProjectionDto>> {
         Err(ErrorDto::unavailable(
             "fixture_unused",
             "consume is not used by this fixture",
@@ -150,7 +150,7 @@ impl StorageRepositoryDto for FakeRepository {
     fn append_message(
         &self,
         _input: intention_storage::AppendMessageInputDto,
-    ) -> DtoResult<intention_domain::MessageProjectionDto> {
+    ) -> DtoResult<intention_proto::MessageProjectionDto> {
         Err(ErrorDto::unavailable(
             "fixture_unused",
             "append is not used by this fixture",
@@ -233,7 +233,7 @@ impl StorageRepositoryDto for FakeRepository {
         &self,
         _session_id: SessionId,
         _limit: u32,
-    ) -> DtoResult<Vec<intention_domain::MessageProjectionDto>> {
+    ) -> DtoResult<Vec<intention_proto::MessageProjectionDto>> {
         Err(ErrorDto::unavailable(
             "fixture_unused",
             "messages are not used by this fixture",
@@ -245,7 +245,7 @@ impl StorageRepositoryDto for FakeRepository {
         _session_id: SessionId,
         _run_id: RunId,
         _limit: u32,
-    ) -> DtoResult<Vec<intention_domain::MessageProjectionDto>> {
+    ) -> DtoResult<Vec<intention_proto::MessageProjectionDto>> {
         Err(ErrorDto::unavailable(
             "fixture_unused",
             "messages are not used by this fixture",

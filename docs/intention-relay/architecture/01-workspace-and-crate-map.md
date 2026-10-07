@@ -64,7 +64,6 @@ The M1-M5 activation notes are historical records: the coverage policy is now th
 | `intention-vfr` | VFR hook, mapping, expansion/raw-read tools. | Hooks, tools, domain, types. |
 | `intention-headroom` | Headroom hook, CCR contracts, retrieve tool. | Hooks, tools, storage contracts, domain, types. |
 | `intention-plans` | Plan artifacts, hidden frontmatter, Plan/Build policy hooks. | Hooks, tools, storage contracts, domain, types. |
-| `intention-protocol` | Versioned public transport commands, queries, and notifications. | Domain, types. |
 | `intention-transport` | Socket/pipe framing, server/client protocol, subscriptions. | Protocol, types. |
 | `intention-client` | Bootstrap, connection, dispatch, subscription, reconnect. | Protocol, transport, types. |
 | `intention-daemon` | Daemon host binary: process lifecycle, private model-task registry, and typed connection/stream hosting. | Composition facade; application/runtime/model/domain/protocol/transport/type DTO contracts; private Tokio/future support. Never concrete provider or storage implementations. |
@@ -235,7 +234,7 @@ The workspace must have tests that fail when these rules are broken:
 2. the required v1 crate set exists, and every crate has a single declared responsibility;
 3. adapters do not import forbidden implementation crates or declare forbidden workspace/external dependencies;
 4. only `intention` selects concrete storage/provider/tool extension implementations;
-5. `intention-protocol` has no dependency on Tauri, SQLite, provider SDKs, or UI crates;
+5. `intention-proto` has no dependency on Tauri, SQLite, provider SDKs, or UI crates;
 6. public cross-crate methods accept/return DTOs, not implementation resources or provider SDK types;
 7. every planned crate has a stated test target before implementation begins;
 8. every declared boundary is enforced by the architecture checker against the machine-readable policy.

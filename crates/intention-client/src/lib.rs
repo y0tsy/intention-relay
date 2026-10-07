@@ -10,16 +10,16 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use intention_domain::{
-    GetSessionSnapshotQueryDto, MessageProjectionDto, RunProjectionDto, RunStatusDto,
-};
-use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, RunId, SessionId};
-use intention_protocol::{
+use intention_proto::{
     DaemonHealthDto, DaemonReadinessDto, ProtocolCommandDto, ProtocolHelloDto, ProtocolMethodDto,
     ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestPayloadDto,
     ProtocolResponsePayloadDto, RunStatusFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
     SessionSnapshotDto, SessionSubscriptionResponseDto, SubscribeRunCommandDto,
     SubscribeSessionCommandDto, decode_response, encode_request, parse_run_frame_notification,
+};
+use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, RunId, SessionId};
+use intention_proto::{
+    GetSessionSnapshotQueryDto, MessageProjectionDto, RunProjectionDto, RunStatusDto,
 };
 use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncRequestSender, LocalEndpoint,

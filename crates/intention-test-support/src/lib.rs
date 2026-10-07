@@ -9,13 +9,13 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_daemon::TestHostLifecycle;
-use intention_domain::{
-    CreateSessionCommandDto, MessageProjectionDto, RunModeDto, WorkspaceRootDto,
-};
 use intention_proto::{
     ConfigRevisionId, DtoResult, ProjectId, SchemaVersionDto, SessionId, TimestampDto, WorkspaceId,
 };
-use intention_protocol::{
+use intention_proto::{
+    CreateSessionCommandDto, MessageProjectionDto, RunModeDto, WorkspaceRootDto,
+};
+use intention_proto::{
     DaemonReadinessDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto,
     ProtocolQueryResultDto,
 };

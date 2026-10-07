@@ -1,16 +1,17 @@
 //! Versioned public local-protocol DTOs for Intention Relay.
 //!
-//! This crate defines typed wire contracts only. It contains no socket framing,
-//! client bootstrap, daemon lifecycle, runtime actors, or presentation logic.
+//! This module defines typed wire contracts only. It contains no socket
+//! framing, client bootstrap, daemon lifecycle, runtime actors, or
+//! presentation logic.
 
-use intention_domain::{
+use crate::{
+    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto,
+    SessionId, TurnId, WorkspaceId,
+};
+use crate::{
     CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto,
     MessageProjectionDto, RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
     SendUserTurnCommandDto, SessionProjectionDto,
-};
-use intention_proto::{
-    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto,
-    SessionId, TurnId, WorkspaceId,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
@@ -72,8 +73,7 @@ where
     }
 }
 
-pub mod jsonrpc;
-pub use jsonrpc::{
+pub use crate::jsonrpc::{
     JSONRPC_INVALID_PARAMS, JSONRPC_INVALID_REQUEST, JSONRPC_METHOD_NOT_FOUND, JSONRPC_PARSE_ERROR,
     JSONRPC_VERSION, JSONRPC_VERSION_MISMATCH, JsonRpcErrorDto, JsonRpcNotificationDto,
     JsonRpcRequestDto, JsonRpcRequestFailure, JsonRpcResponseDto, is_notification_line,
@@ -1064,7 +1064,7 @@ pub fn encode_request(
 /// Parses one wire line into a decoded client request.
 ///
 /// A line whose request envelope omits the `id` member is a notification, not a
-/// request: [`jsonrpc::is_notification_line`] classifies it, and a server must
+/// request: [`crate::jsonrpc::is_notification_line`] classifies it, and a server must
 /// not answer it.
 ///
 /// # Errors
@@ -1073,7 +1073,7 @@ pub fn encode_request(
 /// non-conformant envelope, a method-not-found error for an unknown method,
 /// and an invalid-params error when the payload or its method pairing fails.
 pub fn decode_request_line(line: &str) -> Result<ProtocolRequestDto, JsonRpcRequestFailure> {
-    let header = jsonrpc::JsonRpcRequestHeader::parse(line)?;
+    let header = crate::jsonrpc::JsonRpcRequestHeader::parse(line)?;
     let method = ProtocolMethodDto::parse_with_id(header.method(), header.id())?;
     let request: JsonRpcRequestDto<ProtocolRequestPayloadDto> = match method.empty_payload() {
         Some(empty) => JsonRpcRequestDto::parse_allowing_absent_params(line, empty)?,
@@ -1228,12 +1228,12 @@ mod tests {
     )]
 
     use super::*;
-    use intention_domain::MessageKindDto;
+    use crate::MessageKindDto;
 
-    fn fixture_workspace_root() -> intention_domain::WorkspaceRootDto {
-        intention_domain::WorkspaceRootDto::parse(
+    fn fixture_workspace_root() -> crate::WorkspaceRootDto {
+        crate::WorkspaceRootDto::parse(
             std::env::temp_dir()
-                .join("intention-protocol-unit-workspace")
+                .join("intention-proto-unit-workspace")
                 .to_string_lossy()
                 .into_owned(),
         )
@@ -1407,7 +1407,10 @@ mod tests {
         );
         let line = serde_json::to_string(&mismatched).expect("mismatched request serializes");
         let failure = decode_request_line(&line).expect_err("method and payload must match");
-        assert_eq!(failure.error().code(), jsonrpc::JSONRPC_INVALID_PARAMS);
+        assert_eq!(
+            failure.error().code(),
+            crate::jsonrpc::JSONRPC_INVALID_PARAMS
+        );
         assert_eq!(failure.id(), Some(6));
 
         let hello = ProtocolHelloDto::new(CURRENT_PROTOCOL_VERSION, "fixture").expect("hello");

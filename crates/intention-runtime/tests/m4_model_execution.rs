@@ -9,10 +9,6 @@ use futures_util::{StreamExt, stream};
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
-use intention_domain::{
-    MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto, RunStatusDto,
-    SessionProjectionDto, WorkspaceRootDto,
-};
 use intention_model::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
@@ -21,6 +17,10 @@ use intention_model::{
 use intention_proto::{
     ConfigRevisionId, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto, SessionId,
     TimestampDto, TurnId, WorkspaceId,
+};
+use intention_proto::{
+    MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto, RunStatusDto,
+    SessionProjectionDto, WorkspaceRootDto,
 };
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,
@@ -163,7 +163,7 @@ impl StorageRepositoryDto for FakeRepository {
     fn remove_turn(
         &self,
         _input: RemoveTurnInputDto,
-    ) -> DtoResult<intention_domain::PendingTurnProjectionDto> {
+    ) -> DtoResult<intention_proto::PendingTurnProjectionDto> {
         Err(ErrorDto::unavailable("fixture_unused", "unused"))
     }
 

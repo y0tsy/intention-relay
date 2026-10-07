@@ -5,15 +5,7 @@
 
 //! Test-first protocol contract and current-version wire evidence.
 
-use intention_domain::{
-    GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
-    RunModeDto, RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto,
-};
 use intention_proto::{
-    ConfigRevisionId, CorrelationIdDto, ErrorDto, IdempotencyKey, ProjectId, RunId,
-    SchemaVersionDto, SessionId, TurnId, WorkspaceId,
-};
-use intention_protocol::{
     CURRENT_DTO_SCHEMA_VERSION, CURRENT_PROTOCOL_VERSION, DaemonHealthDto, DaemonReadinessDto,
     InterruptRunAcceptedDto, JsonRpcErrorDto, JsonRpcRequestDto, JsonRpcResponseDto,
     PROTOCOL_HELLO_METHOD, ProtocolAcceptedDto, ProtocolAcceptedResultDto, ProtocolCommandDto,
@@ -25,11 +17,19 @@ use intention_protocol::{
     decode_response, encode_hello_request, encode_request, encode_response, is_notification_line,
     parse_run_frame_notification,
 };
+use intention_proto::{
+    ConfigRevisionId, CorrelationIdDto, ErrorDto, IdempotencyKey, ProjectId, RunId,
+    SchemaVersionDto, SessionId, TurnId, WorkspaceId,
+};
+use intention_proto::{
+    GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
+    RunModeDto, RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto,
+};
 
-fn fixture_workspace_root() -> intention_domain::WorkspaceRootDto {
-    intention_domain::WorkspaceRootDto::parse(
+fn fixture_workspace_root() -> intention_proto::WorkspaceRootDto {
+    intention_proto::WorkspaceRootDto::parse(
         std::env::temp_dir()
-            .join("intention-protocol-contracts-workspace")
+            .join("intention-proto-contracts-workspace")
             .to_string_lossy()
             .into_owned(),
     )
@@ -95,7 +95,7 @@ fn protocol_hello_round_trips_with_the_current_version() {
 
 #[test]
 fn only_the_exact_current_protocol_version_passes_negotiation_equality() {
-    let current = intention_protocol::CURRENT_PROTOCOL_VERSION;
+    let current = intention_proto::CURRENT_PROTOCOL_VERSION;
     assert_eq!(current, ProtocolVersionDto::new(1, 0));
     assert_ne!(ProtocolVersionDto::new(1, 1), current);
     assert_ne!(ProtocolVersionDto::new(2, 1), current);
@@ -144,7 +144,7 @@ fn method_payload(method: ProtocolMethodDto) -> ProtocolRequestPayloadDto {
     let run_id = RunId::new();
     match method {
         ProtocolMethodDto::SessionCreate => ProtocolRequestPayloadDto::Command(
-            ProtocolCommandDto::CreateSession(intention_domain::CreateSessionCommandDto::new(
+            ProtocolCommandDto::CreateSession(intention_proto::CreateSessionCommandDto::new(
                 ProjectId::new(),
                 session_id,
                 WorkspaceId::new(),
@@ -160,7 +160,7 @@ fn method_payload(method: ProtocolMethodDto) -> ProtocolRequestPayloadDto {
         }
         ProtocolMethodDto::TurnRemove => {
             ProtocolRequestPayloadDto::Command(ProtocolCommandDto::RemoveTurn(
-                intention_domain::RemoveTurnCommandDto::new(session_id, TurnId::new()),
+                intention_proto::RemoveTurnCommandDto::new(session_id, TurnId::new()),
             ))
         }
         ProtocolMethodDto::RunInterrupt => ProtocolRequestPayloadDto::Command(
@@ -253,7 +253,7 @@ fn jsonrpc_method_table_covers_every_request_variant_exactly_once() {
         let failure = decode_request_line(&line).expect_err("a foreign payload is rejected");
         assert_eq!(
             failure.error().code(),
-            intention_protocol::JSONRPC_INVALID_PARAMS,
+            intention_proto::JSONRPC_INVALID_PARAMS,
             "{} is a known method, so only its payload pairing may fail",
             method.as_str()
         );
@@ -328,10 +328,7 @@ fn subscribe_command_carries_optional_run_scope_on_the_current_shape() {
         serde_json::from_str(&encoded).expect("test deserialization must succeed");
 
     assert_eq!(decoded, command);
-    assert_eq!(
-        decoded.requested_mode(),
-        intention_domain::RunModeDto::Build
-    );
+    assert_eq!(decoded.requested_mode(), intention_proto::RunModeDto::Build);
 }
 
 #[test]
@@ -472,7 +469,7 @@ fn jsonrpc_error_responses_map_to_stable_typed_errors() {
     let failure = JsonRpcResponseDto::<ProtocolResponsePayloadDto>::error(
         Some(id),
         JsonRpcErrorDto::from_error(
-            intention_protocol::JSONRPC_METHOD_NOT_FOUND,
+            intention_proto::JSONRPC_METHOD_NOT_FOUND,
             ErrorDto::validation("fixture_daemon_error", "fixture daemon failure"),
         ),
     );
@@ -484,7 +481,7 @@ fn jsonrpc_error_responses_map_to_stable_typed_errors() {
     let untyped = JsonRpcResponseDto::<ProtocolResponsePayloadDto>::error(
         Some(id),
         JsonRpcErrorDto::new(
-            intention_protocol::JSONRPC_METHOD_NOT_FOUND,
+            intention_proto::JSONRPC_METHOD_NOT_FOUND,
             "fixture failure",
             None,
         ),
@@ -516,7 +513,7 @@ fn jsonrpc_error_responses_map_to_stable_typed_errors() {
     let failure = decode_request_line(unknown).expect_err("unknown methods fail");
     assert_eq!(
         failure.error().code(),
-        intention_protocol::JSONRPC_METHOD_NOT_FOUND
+        intention_proto::JSONRPC_METHOD_NOT_FOUND
     );
     assert_eq!(failure.id(), Some(9));
 }
@@ -533,7 +530,7 @@ fn run_frame_notifications_tag_content_and_status_kinds() {
     ));
 
     for (frame, kind) in [(&content, "content"), (&status, "status")] {
-        let notification = intention_protocol::ProtocolDaemonMessageDto::run_frame(frame.clone());
+        let notification = intention_proto::ProtocolDaemonMessageDto::run_frame(frame.clone());
         let line = serde_json::to_string(&notification).expect("notification serializes");
         assert!(line.contains(r#""method":"run.frame""#));
         let value: serde_json::Value =
@@ -612,10 +609,7 @@ fn hello_version_mismatch_answers_with_the_typed_32001_error() {
     let decoded: JsonRpcRequestDto<ProtocolHelloDto> =
         JsonRpcRequestDto::parse(&line).expect("stale hello parses");
     let mismatch = decode_hello_request(&decoded).expect_err("version mismatch is typed");
-    assert_eq!(
-        mismatch.code(),
-        intention_protocol::JSONRPC_VERSION_MISMATCH
-    );
+    assert_eq!(mismatch.code(), intention_proto::JSONRPC_VERSION_MISMATCH);
     assert_eq!(
         mismatch.data().map(ErrorDto::code),
         Some("incompatible_protocol_version")
@@ -624,7 +618,7 @@ fn hello_version_mismatch_answers_with_the_typed_32001_error() {
     let skipped_hello = JsonRpcRequestDto::new(1, "daemon.health", current);
     let required = decode_hello_request(&skipped_hello)
         .expect_err("the first request on a connection must be hello");
-    assert_eq!(required.code(), intention_protocol::JSONRPC_INVALID_REQUEST);
+    assert_eq!(required.code(), intention_proto::JSONRPC_INVALID_REQUEST);
 }
 
 #[test]
@@ -689,7 +683,7 @@ fn parameterless_daemon_health_decodes_without_a_params_member() {
             .expect_err("an explicit null params member is not parameterless");
     assert_eq!(
         explicit_null.error().code(),
-        intention_protocol::JSONRPC_INVALID_PARAMS
+        intention_proto::JSONRPC_INVALID_PARAMS
     );
 
     // Every other method requires its typed payload.
@@ -697,7 +691,7 @@ fn parameterless_daemon_health_decodes_without_a_params_member() {
         .expect_err("a method with a required payload rejects an absent params member");
     assert_eq!(
         missing.error().code(),
-        intention_protocol::JSONRPC_INVALID_PARAMS
+        intention_proto::JSONRPC_INVALID_PARAMS
     );
     assert_eq!(missing.id(), Some(2));
 }
@@ -721,7 +715,7 @@ fn a_request_without_an_id_member_is_a_notification() {
         .expect_err("the numeric-id profile rejects a null identity with a reply");
     assert_eq!(
         failure.error().code(),
-        intention_protocol::JSONRPC_INVALID_REQUEST
+        intention_proto::JSONRPC_INVALID_REQUEST
     );
     assert_eq!(failure.id(), None);
 

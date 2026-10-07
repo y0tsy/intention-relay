@@ -109,10 +109,11 @@ newtypes (`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallI
 `IdempotencyKey`; every state change commits in one SQLite transaction and the daemon publishes `run.frame`
 notifications built from the committed values; the single live protocol version is 1.0 with no cursors, and a
 re-subscribing client receives current run state and bounded recent messages, then continues live; `intention-client`
-is a fully asynchronous client that implements every protocol method with its blocking API removed, daemon end-to-end
-tests drive the real client instead of the low-level transport, and the `intention-tui` proof adapter is migrated
-mechanically without rework; and the eight hook phases are wired into the real tool cycle. What remains before the
-slice can activate is the ten-production-crate consolidation and the removal of the composition facade, so the daemon
+is an asynchronous client with its blocking API removed whose connect/health, session snapshot, and run-subscription
+surface is live, and whose `intention-tui` proof adapter is migrated mechanically; the remaining protocol command
+methods and the daemon end-to-end tests that drive them through the real client rather than the low-level transport are
+still ahead; and the eight hook phases are wired into the real tool cycle. What remains before the slice can activate is
+those client methods, the ten-production-crate consolidation, and the removal of the composition facade, so the daemon
 host calls the engine directly; the single storage schema evolves in place with no migration or compatibility path.
 -  **Slice 2 — Control plane — not activated.** The cluster and provider session selection (architectures 25/29/22):
 controlled live reload, credential rotation, provider health checks, model discovery, pricing policy, provider profile

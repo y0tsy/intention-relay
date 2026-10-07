@@ -4,11 +4,11 @@
 )]
 
 use intention_client::{DaemonLauncher, IntentionClient};
-use intention_domain::RunModeDto;
-use intention_proto::{DtoResult, ErrorDto, SchemaVersionDto, SessionId};
-use intention_protocol::{
+use intention_proto::RunModeDto;
+use intention_proto::{
     DaemonReadinessDto, SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
 };
+use intention_proto::{DtoResult, ErrorDto, SchemaVersionDto, SessionId};
 use intention_test_support::FixtureHost;
 use intention_transport::LocalEndpoint;
 use intention_tui::TuiProofClient;

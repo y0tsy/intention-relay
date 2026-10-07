@@ -6,7 +6,6 @@ non_production_test_crates = ["intention-test-support"]
 active_production_crates = [
   "intention-proto",
   "intention-domain",
-  "intention-protocol",
   "intention-config",
   "intention-transport",
   "intention-client",
@@ -34,8 +33,6 @@ skeleton_crates = [
   "intention",
   "intention-config",
   "intention-daemon",
-  "intention-domain",
-  "intention-protocol",
   "intention-transport",
   "intention-proto",
 ]
@@ -60,27 +57,25 @@ test_only_source_patterns = [
 "intention-proto" = []
 "intention-domain" = ["intention-proto"]
 "intention-config" = ["intention-proto"]
-"intention-protocol" = ["intention-proto", "intention-domain"]
 "intention-storage" = ["intention-config", "intention-domain", "intention-proto"]
-"intention-transport" = ["intention-protocol", "intention-proto"]
-"intention-client" = ["intention-domain", "intention-protocol", "intention-transport", "intention-proto"]
-"intention" = ["intention-application", "intention-config", "intention-domain", "intention-hooks", "intention-model", "intention-protocol", "intention-provider-generic-chat", "intention-provider-openrouter", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-tools", "intention-proto", "intention-workspace"]
-"intention-daemon" = ["intention", "intention-application", "intention-client", "intention-config", "intention-domain", "intention-model", "intention-protocol", "intention-runtime", "intention-tools", "intention-transport", "intention-proto"]
-"intention-application" = ["intention-config", "intention-domain", "intention-hooks", "intention-protocol", "intention-runtime", "intention-storage", "intention-tools", "intention-proto", "intention-workspace"]
+"intention-transport" = ["intention-proto"]
+"intention-client" = ["intention-transport", "intention-proto"]
+"intention" = ["intention-application", "intention-config", "intention-domain", "intention-hooks", "intention-model", "intention-provider-generic-chat", "intention-provider-openrouter", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-tools", "intention-proto", "intention-workspace"]
+"intention-daemon" = ["intention", "intention-application", "intention-client", "intention-config", "intention-domain", "intention-model", "intention-runtime", "intention-tools", "intention-transport", "intention-proto"]
+"intention-application" = ["intention-config", "intention-domain", "intention-hooks", "intention-runtime", "intention-storage", "intention-tools", "intention-proto", "intention-workspace"]
 "intention-runtime" = ["intention-config", "intention-domain", "intention-model", "intention-storage", "intention-proto"]
 "intention-storage-sqlite" = ["intention-config", "intention-domain", "intention-storage", "intention-proto"]
 "intention-model" = ["intention-proto"]
 "intention-provider-openrouter" = ["intention-config", "intention-model", "intention-proto"]
 "intention-provider-generic-chat" = ["intention-config", "intention-model", "intention-proto"]
-"intention-tools" = ["intention-domain", "intention-proto", "intention-workspace"]
-"intention-workspace" = ["intention-domain", "intention-proto"]
+"intention-tools" = ["intention-proto", "intention-workspace"]
+"intention-workspace" = ["intention-proto"]
 "intention-hooks" = ["intention-tools", "intention-proto"]
 
 [external_dependencies]
 "intention-proto" = ["serde", "serde_json", "uuid"]
 "intention-domain" = ["serde", "serde_json"]
 "intention-config" = ["serde", "serde_json", "toml"]
-"intention-protocol" = ["serde", "serde_json"]
 "intention-transport" = ["interprocess", "serde", "serde_json", "tempfile", "tokio"]
 "intention-client" = ["fs4", "tempfile", "tokio"]
 "intention" = ["futures-util", "tempfile"]
@@ -98,8 +93,8 @@ test_only_source_patterns = [
 
 [adapter_boundaries]
 packages = ["intention-tauri", "intention-tui"]
-allowed_workspace_dependencies = ["intention-client", "intention-protocol", "intention-transport", "intention-proto"]
-allowed_test_workspace_dependencies = ["intention-daemon", "intention-domain", "intention-test-support"]
+allowed_workspace_dependencies = ["intention-client", "intention-transport", "intention-proto"]
+allowed_test_workspace_dependencies = ["intention-daemon", "intention-test-support"]
 allowed_external_dependencies = ["serde_json", "tokio"]
 forbidden_source_patterns = [
   "intention_application::",
@@ -113,9 +108,9 @@ forbidden_source_patterns = [
 ]
 
 [protocol_boundary]
-package = "intention-protocol"
-allowed_workspace_dependencies = ["intention-proto", "intention-domain"]
-allowed_external_dependencies = ["serde", "serde_json"]
+package = "intention-proto"
+allowed_workspace_dependencies = []
+allowed_external_dependencies = ["serde", "serde_json", "uuid"]
 forbidden_source_patterns = [
   "tauri::",
   "rusqlite::",
@@ -172,7 +167,7 @@ name_suffixes = [
 
 [[future_crates]]
 name = "intention-proto"
-test_targets = ["contracts", "error_contracts", "m4_model_values"]
+test_targets = ["contracts", "error_contracts", "m3_contracts", "m4_model_values", "protocol_contracts"]
 
 [[future_crates]]
 name = "intention-domain"
@@ -234,10 +229,6 @@ test_targets = []
 [[future_crates]]
 name = "intention-plans"
 test_targets = []
-
-[[future_crates]]
-name = "intention-protocol"
-test_targets = ["contracts", "m3_contracts"]
 
 [[future_crates]]
 name = "intention-transport"

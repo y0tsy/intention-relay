@@ -6,7 +6,8 @@
 
 //! Test-first domain DTO and invariant evidence.
 
-use intention_domain::{
+use intention_domain::run_status_is_terminal;
+use intention_proto::{
     CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto,
     RemoveTurnCommandDto, RunModeDto, RunStatusDto, SendUserTurnCommandDto, WorkspaceRootDto,
 };
@@ -99,7 +100,7 @@ fn send_turn_wire_values_require_content_and_idempotency_key() {
 
 #[test]
 fn run_status_terminal_classification_covers_all_statuses() {
-    use intention_domain::RunStatusDto as S;
+    use intention_proto::RunStatusDto as S;
     let all = [
         S::Starting,
         S::Running,
@@ -109,7 +110,7 @@ fn run_status_terminal_classification_covers_all_statuses() {
     ];
     for status in all {
         assert_eq!(
-            status.is_terminal(),
+            run_status_is_terminal(status),
             matches!(status, S::Completed | S::Failed | S::Interrupted)
         );
         let wire = serde_json::to_string(&status).expect("status serializes");

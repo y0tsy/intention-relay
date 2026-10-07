@@ -18,7 +18,7 @@
 //! a server must not answer one; an explicit `"id": null` is a request, not a
 //! notification.
 
-use intention_proto::ErrorDto;
+use crate::ErrorDto;
 use serde::de::{self, IgnoredAny};
 use serde::{Deserialize, Deserializer, Serialize};
 

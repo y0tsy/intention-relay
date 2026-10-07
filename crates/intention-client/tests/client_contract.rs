@@ -11,18 +11,18 @@ use std::thread;
 use std::time::Duration;
 
 use intention_client::{DaemonLauncher, IntentionClient, ProcessDaemonLauncher};
-use intention_domain::{MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto};
-use intention_proto::{DtoResult, ErrorDto, ProjectId, SchemaVersionDto, SessionId, WorkspaceId};
-use intention_protocol::{
+use intention_proto::{
     DaemonHealthDto, DaemonReadinessDto, JsonRpcErrorDto, JsonRpcRequestDto, JsonRpcResponseDto,
     PROTOCOL_HELLO_METHOD, ProtocolHelloDto, ProtocolQueryResultDto, ProtocolResponsePayloadDto,
     ProtocolVersionDto, SessionSnapshotDto, SessionSubscriptionResponseDto,
     SubscribeSessionCommandDto, decode_request_line, encode_hello_response, encode_response,
 };
+use intention_proto::{DtoResult, ErrorDto, ProjectId, SchemaVersionDto, SessionId, WorkspaceId};
+use intention_proto::{MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto};
 use intention_transport::{LocalEndpoint, LocalListener, local_protocol_version, negotiate_daemon};
 use tempfile::TempDir;
 
-const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
+const SCHEMA_VERSION: SchemaVersionDto = intention_proto::CURRENT_DTO_SCHEMA_VERSION;
 /// Bound that turns a hanging client call into a visible test failure.
 const TEST_REPLY_BOUND: Duration = Duration::from_secs(5);
 
@@ -31,7 +31,7 @@ fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
         ProjectId::new(),
         session_id,
         WorkspaceId::new(),
-        intention_domain::WorkspaceRootDto::parse(
+        intention_proto::WorkspaceRootDto::parse(
             std::env::temp_dir()
                 .join("intention-client-fixture-workspace")
                 .to_string_lossy()
@@ -161,7 +161,7 @@ fn serve_fixture_connection(
         assert_eq!(request.method(), PROTOCOL_HELLO_METHOD);
         if matches!(response, FixtureResponse::ProtocolMismatch) {
             let error = JsonRpcErrorDto::from_error(
-                intention_protocol::JSONRPC_VERSION_MISMATCH,
+                intention_proto::JSONRPC_VERSION_MISMATCH,
                 ErrorDto::unavailable(
                     "incompatible_protocol_version",
                     "protocol version must equal the current version",
@@ -205,7 +205,7 @@ fn serve_fixture_connection(
         FixtureResponse::Invalid
         | FixtureResponse::CorrelationMismatch
         | FixtureResponse::Disconnect => ProtocolResponsePayloadDto::CommandResult(
-            intention_protocol::ProtocolCommandResultDto::Rejected(ErrorDto::validation(
+            intention_proto::ProtocolCommandResultDto::Rejected(ErrorDto::validation(
                 "fixture_invalid_response",
                 "fixture intentionally returns a mismatched payload",
             )),

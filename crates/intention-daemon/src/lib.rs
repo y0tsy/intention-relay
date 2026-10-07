@@ -11,12 +11,13 @@ use std::{
 };
 
 use intention::{DaemonApplicationFacade, LocalToolInvocationOutcomeDto};
-use intention_domain::RunStatusDto;
+use intention_domain::run_status_is_terminal;
 use intention_model::ModelCancellationSignal;
+use intention_proto::RunStatusDto;
 use intention_proto::{
     CorrelationIdDto, DtoResult, ErrorDto, RunId, SessionId, TimestampDto, ToolCallDto,
 };
-use intention_protocol::{
+use intention_proto::{
     JsonRpcResponseDto, ProtocolAcceptedDto, ProtocolCommandDto, ProtocolCommandResultDto,
     ProtocolDaemonMessageDto, ProtocolHelloDto, ProtocolRequestPayloadDto,
     ProtocolResponsePayloadDto, RunStatusFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
@@ -176,7 +177,7 @@ impl HostState {
                 let active = host
                     .facade
                     .load_run_projection_for_daemon(key.0, key.1)
-                    .map_or(true, |run| !run.status().is_terminal());
+                    .map_or(true, |run| !run_status_is_terminal(run.status()));
                 if active
                     && host
                         .facade
@@ -212,7 +213,7 @@ impl HostState {
         self: &Arc<Self>,
         session_id: SessionId,
         run_id: RunId,
-    ) -> DtoResult<intention_protocol::ProtocolAcceptedResultDto> {
+    ) -> DtoResult<intention_proto::ProtocolAcceptedResultDto> {
         let accepted = self
             .facade
             .interrupt_run_for_daemon_host(session_id, run_id)?;
@@ -353,7 +354,7 @@ impl HostState {
     }
 
     /// Publishes one committed transcript row to live subscribers.
-    fn publish_content(&self, message: &intention_domain::MessageProjectionDto) {
+    fn publish_content(&self, message: &intention_proto::MessageProjectionDto) {
         let Some(run_id) = message.run_id() else {
             return;
         };
@@ -525,7 +526,7 @@ impl ModelRunCommitObserver for HostCommitObserver {
                 status,
             } => {
                 self.host.publish_status(*session_id, *run_id, *status);
-                if status.is_terminal() {
+                if run_status_is_terminal(*status) {
                     self.host.on_terminal(*session_id);
                 }
             }
@@ -543,12 +544,12 @@ struct HostTranscriptPublisher {
 impl intention_application::ToolResultPublicationPort for HostTranscriptPublisher {
     fn publish_committed_message(
         &self,
-        message: &intention_domain::MessageProjectionDto,
+        message: &intention_proto::MessageProjectionDto,
     ) -> DtoResult<()> {
         // A committed tool-result row is verified against the durable structured
         // evidence of its own call before its frame is broadcast; a tool-call
         // row has no structured result yet and is published as committed.
-        if message.kind() == intention_domain::MessageKindDto::ToolResult {
+        if message.kind() == intention_proto::MessageKindDto::ToolResult {
             let (Some(run_id), Some(call_id)) = (message.run_id(), message.tool_call_id()) else {
                 return Err(ErrorDto::unavailable(
                     "tool_result_evidence_unavailable",
@@ -959,9 +960,9 @@ fn dispatch_request(
             let result = host.facade.command(command.clone());
             if let ProtocolCommandDto::SendUserTurn(_) = command
                 && let ProtocolCommandResultDto::Accepted(accepted) = &result
-                && let intention_protocol::ProtocolAcceptedResultDto::SendUserTurn(turn) =
+                && let intention_proto::ProtocolAcceptedResultDto::SendUserTurn(turn) =
                     accepted.result()
-                && let intention_protocol::SendUserTurnOutcomeDto::Started { run_id, .. } =
+                && let intention_proto::SendUserTurnOutcomeDto::Started { run_id, .. } =
                     turn.outcome()
             {
                 host.schedule_if_starting(turn.session_id(), run_id);
@@ -1205,10 +1206,6 @@ mod tests {
     use intention_config::{
         ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
     };
-    use intention_domain::{
-        CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto,
-        SendUserTurnCommandDto, WorkspaceRootDto,
-    };
     use intention_model::{
         FinishReasonDto, ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelEventStream,
         ModelExecutionDriver,
@@ -1216,7 +1213,11 @@ mod tests {
     use intention_proto::{
         ConfigRevisionId, IdempotencyKey, ProjectId, SchemaVersionDto, TimestampDto, WorkspaceId,
     };
-    use intention_protocol::{
+    use intention_proto::{
+        CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto,
+        SendUserTurnCommandDto, WorkspaceRootDto,
+    };
+    use intention_proto::{
         ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolHelloDto,
         ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestPayloadDto,
         ProtocolResponsePayloadDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto,
@@ -1388,7 +1389,7 @@ mod tests {
             .send_message(&encode_request(
                 1,
                 ProtocolRequestPayloadDto::RunSubscription(SubscribeRunCommandDto::new(
-                    intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+                    intention_proto::CURRENT_DTO_SCHEMA_VERSION,
                     session_id,
                     run_id,
                 )),
@@ -1423,7 +1424,7 @@ mod tests {
         assert!(matches!(
             decode_response(&line, ProtocolMethodDto::DaemonHealth, 2),
             Ok(ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(health)))
-                if health.readiness() == intention_protocol::DaemonReadinessDto::Ready
+                if health.readiness() == intention_proto::DaemonReadinessDto::Ready
         ));
         server.await.expect("host serves the merged connection");
     }
@@ -1441,7 +1442,7 @@ mod tests {
         let error = match connection
             .negotiate(
                 ProtocolHelloDto::new(
-                    intention_protocol::ProtocolVersionDto::new(1, 1),
+                    intention_proto::ProtocolVersionDto::new(1, 1),
                     "stale-daemon-test",
                 )
                 .expect("stale hello is valid"),

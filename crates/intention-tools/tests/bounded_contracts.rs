@@ -9,7 +9,7 @@
 //! Deserialize at the JSON boundary, and file-processing tools stay
 //! memory-bounded.
 
-use intention_domain::WorkspaceRootDto;
+use intention_proto::WorkspaceRootDto;
 use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
 use intention_tools::{
     BoundedText, CancellationSignal, EditInput, GlobInput, GrepInput, GrepMatch, GrepScope,

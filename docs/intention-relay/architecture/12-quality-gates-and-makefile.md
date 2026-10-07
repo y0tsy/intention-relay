@@ -74,7 +74,7 @@ aggregate report is informational and never a threshold authority.
 | `core` | 75% | `intention-storage-sqlite`, `intention-runtime`, `intention-transport`, `intention-storage`, `intention-application`, `intention-domain` |
 | `standard` | 60% | `intention-model`, `intention-tools`, `intention-workspace`, `intention-config`, `intention-daemon`, `intention-hooks`, `intention-provider-openrouter`, `intention-provider-generic-chat` |
 | `edge` | 20% | `intention-tauri`, `intention-tui`, `intention`, `intention-client` |
-| `exempt` | 0% (not collected) | `intention-proto`, `intention-protocol` |
+| `exempt` | 0% (not collected) | `intention-proto` |
 
 - Every required feature profile contributes to coverage where the crate supports that profile; a coverage decrease
   below a crate's tier floor fails `make coverage` and `make verify`.

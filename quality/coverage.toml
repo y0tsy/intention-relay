@@ -31,7 +31,6 @@ exempt = 0.0
 "intention" = "edge"
 "intention-client" = "edge"
 "intention-proto" = "exempt"
-"intention-protocol" = "exempt"
 
 [[exclusions]]
 enabled = true

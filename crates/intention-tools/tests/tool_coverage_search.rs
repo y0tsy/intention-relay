@@ -4,8 +4,8 @@
     reason = "Coverage fixtures use infallible setup values; failures indicate broken test setup."
 )]
 
-use intention_domain::WorkspaceRootDto;
 use intention_proto::ToolCallId;
+use intention_proto::WorkspaceRootDto;
 use intention_tools::*;
 use tempfile::TempDir;
 

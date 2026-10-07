@@ -6,11 +6,11 @@
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
-use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
 use intention_proto::{
     ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, IdempotencyKey, ProjectId, RunId, SessionId,
     TimestampDto, WorkspaceId,
 };
+use intention_proto::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
 use intention_storage::{AcceptUserTurnInputDto, CreateSessionInputDto, StorageRepositoryDto};
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use tempfile::TempDir;

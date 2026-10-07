@@ -8,9 +8,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use intention_client::{RunStreamClient, RunSubscriptionReducer};
-use intention_domain::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
 use intention_proto::{ConfigRevisionId, ErrorDto, RunId, SchemaVersionDto, SessionId, TurnId};
-use intention_protocol::{
+use intention_proto::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
+use intention_proto::{
     ProtocolDaemonMessageDto, ProtocolHelloDto, ProtocolRequestPayloadDto,
     ProtocolResponsePayloadDto, RunStatusFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
     RunSubscriptionSnapshotDto, SubscribeRunCommandDto, decode_request_line, encode_response,
@@ -19,7 +19,7 @@ use intention_transport::{
     AsyncLocalListener, AsyncRequestReceiver, LocalEndpoint, local_protocol_version,
 };
 
-const SCHEMA: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
+const SCHEMA: SchemaVersionDto = intention_proto::CURRENT_DTO_SCHEMA_VERSION;
 /// Bound that turns a hanging subscription call into a visible test failure.
 const TEST_REPLY_BOUND: Duration = Duration::from_secs(5);
 static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(0);

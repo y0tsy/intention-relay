@@ -5,7 +5,7 @@
 
 use intention_client::IntentionClient;
 use intention_proto::DtoResult;
-use intention_protocol::{
+use intention_proto::{
     DaemonHealthDto, SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
 };
 

@@ -8,10 +8,7 @@
 //! the in-flight step text.
 
 use intention_config::ConfigSnapshotDto;
-use intention_domain::{
-    MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto,
-    ToolResultMetadataEntryDto,
-};
+use intention_domain::ToolResultMetadataEntryDto;
 pub use intention_model::{
     AssistantReasoningDto, ModelCancellationSignal, ModelEventDto, ModelExecutionDriver,
     ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
@@ -21,6 +18,7 @@ use intention_proto::{
     DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, ProviderErrorDto, RunId,
     SessionId, TimestampDto, ToolCallDto, UsageDto,
 };
+use intention_proto::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
 use intention_storage::{
     AppendMessageInputDto, ConsumePendingUserTurnsInputDto, FinishRunInputDto,
     StorageRepositoryDto, TransitionRunInputDto,

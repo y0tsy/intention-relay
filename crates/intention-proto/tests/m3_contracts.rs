@@ -3,24 +3,24 @@
     reason = "M3 contract fixtures use expect for precise test diagnostics."
 )]
 
-use intention_domain::{
-    MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto, WorkspaceRootDto,
-};
 use intention_proto::{
-    ConfigRevisionId, CorrelationIdDto, ProjectId, RunId, SchemaVersionDto, SessionId, TurnId,
-    WorkspaceId,
-};
-use intention_protocol::{
     CURRENT_PROTOCOL_VERSION, CreateSessionAcceptedDto, InterruptRunAcceptedDto,
     ProtocolAcceptedDto, ProtocolAcceptedResultDto, ProtocolVersionDto, RemoveTurnAcceptedDto,
     SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionSnapshotDto,
     SessionSubscriptionResponseDto,
 };
+use intention_proto::{
+    ConfigRevisionId, CorrelationIdDto, ProjectId, RunId, SchemaVersionDto, SessionId, TurnId,
+    WorkspaceId,
+};
+use intention_proto::{
+    MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto, WorkspaceRootDto,
+};
 
 fn workspace_root() -> WorkspaceRootDto {
     WorkspaceRootDto::parse(
         std::env::temp_dir()
-            .join("intention-protocol-m3-workspace")
+            .join("intention-proto-m3-workspace")
             .to_string_lossy()
             .into_owned(),
     )

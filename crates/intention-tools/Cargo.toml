@@ -17,7 +17,6 @@ serde_json = "1.0.149"
 rustix = { version = "1.1.4", default-features = false, features = ["std", "process"] }
 
 [dev-dependencies]
-intention-domain = { path = "../intention-domain", version = "=0.0.0" }
 tempfile = "3.23.0"
 
 [lints]

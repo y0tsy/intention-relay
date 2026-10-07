@@ -772,7 +772,6 @@ dependencies = [
  "intention-hooks",
  "intention-model",
  "intention-proto",
- "intention-protocol",
  "intention-provider-generic-chat",
  "intention-provider-openrouter",
  "intention-runtime",
@@ -791,7 +790,6 @@ dependencies = [
  "intention-domain",
  "intention-hooks",
  "intention-proto",
- "intention-protocol",
  "intention-runtime",
  "intention-storage",
  "intention-tools",
@@ -803,9 +801,7 @@ name = "intention-client"
 version = "0.0.0"
 dependencies = [
  "fs4",
- "intention-domain",
  "intention-proto",
- "intention-protocol",
  "intention-transport",
  "tempfile",
  "tokio",
@@ -833,7 +829,6 @@ dependencies = [
  "intention-domain",
  "intention-model",
  "intention-proto",
- "intention-protocol",
  "intention-runtime",
  "intention-tools",
  "intention-transport",
@@ -886,16 +881,6 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
-]
-
-[[package]]
-name = "intention-protocol"
-version = "0.0.0"
-dependencies = [
- "intention-domain",
- "intention-proto",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -972,9 +957,7 @@ dependencies = [
  "intention",
  "intention-config",
  "intention-daemon",
- "intention-domain",
  "intention-proto",
- "intention-protocol",
  "intention-transport",
  "serde_json",
  "tempfile",
@@ -986,7 +969,6 @@ name = "intention-tools"
 version = "0.0.0"
 dependencies = [
  "glob",
- "intention-domain",
  "intention-proto",
  "intention-workspace",
  "rustix",
@@ -1000,7 +982,6 @@ name = "intention-transport"
 version = "0.0.0"
 dependencies = [
  "intention-proto",
- "intention-protocol",
  "interprocess",
  "serde",
  "serde_json",
@@ -1013,9 +994,7 @@ name = "intention-tui"
 version = "0.0.0"
 dependencies = [
  "intention-client",
- "intention-domain",
  "intention-proto",
- "intention-protocol",
  "intention-test-support",
  "intention-transport",
  "tokio",
@@ -1029,7 +1008,6 @@ version = "0.0.0"
 name = "intention-workspace"
 version = "0.0.0"
 dependencies = [
- "intention-domain",
  "intention-proto",
 ]
 
