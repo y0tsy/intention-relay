@@ -190,8 +190,7 @@ roadmap](11-implementation-roadmap.md) owns activation order and status.
   future ordinary Session lineage, frozen fork context, regeneration, and bounded lineage projections.
 -  [25 Configuration and provider control plane](25-configuration-provider-control-plane.md): accepted post-M5
   directions — controlled live reload, credential rotation, provider health checks, discovery, pricing policy, and the
-  profile UI/control plane; the Slice
-  2 activation was reverted and re-introduction requires a new activating specification.
+  profile UI/control plane; not activated; activating slice 2 (ADR 0004).
 -  [28 Goal domain and verification](28-goal-domain-and-verification.md): the accepted post-M5 Goal aggregate domain —
   Goal identity/scope/tree, lifecycle/readiness/user decision, leading-goal run selection, delegated Verification
   verification gates, working memory/roles/templates, model proposals, and the conversation-compaction working
@@ -199,8 +198,7 @@ roadmap](11-implementation-roadmap.md) owns activation order and status.
   records, not the work-authorization plane.
 -  [29 Provider session selection and profiles protocol](29-provider-session-and-profiles-protocol.md): the accepted
   post-M5 provider session-selection layer — session defaults, per-turn/fork overrides, profile-keyed usage, the
-  provider profiles protocol, and pending-removal/degraded recovery; the Slice 2 activation was reverted
-  and re-introduction requires a new activating specification.
+  provider profiles protocol, and pending-removal/degraded recovery; not activated; activating slice 2.
 -  [30 Instruction sources and system context](30-instruction-sources-and-system-context.md): the instruction channel of
   a model request — closed instruction source kinds and scopes, the deployment profile, workspace `AGENTS.md` project
   instructions read through the `WorkspaceRoot` anchor, the `Mode` and `Vfr` contributions of architectures 07 and 06,

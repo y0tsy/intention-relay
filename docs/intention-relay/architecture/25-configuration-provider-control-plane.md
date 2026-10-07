@@ -2,8 +2,8 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.** Architecture 25 owns the
 configuration and provider control-plane cluster: controlled configuration live reload, credential rotation, provider
-health checks, provider/model discovery, pricing and budget policy, and the configuration control-plane surface. The M5+
-Slice 2 activation was reverted; re-introduction requires a new activating specification (activation sequence: [ADR
+health checks, provider/model discovery, pricing and budget policy, and the configuration control-plane surface. The
+slice is not activated; activation requires an activating specification (activation sequence: [ADR
 0004](../decisions/0004-m5plus-complete-foundation-activation.md), [ADR
 0010](../decisions/0010-instruction-sources-and-system-context.md)).
 
@@ -60,10 +60,10 @@ The configured private credential source is the daemon's own configuration file.
 credential inside its private loading boundary at open and retains it in a non-serde, non-`Debug` in-memory slot; a
 rotation command re-reads the file through that boundary, replaces the composition's private material only when the
 frozen-meaning checks pass, and rebuilds the provider driver's private client. The rebuild keeps the driver options the
-composition's provider-option seam applied at construction (PR24-057): rotation preflights the active profile's declared
-options through the seam and replaces only the private SDK client, so it never silently drops or ignores declared driver
-options. Facades opened without a file-backed source (test-support hosts) keep the fail-closed
-`credential_rotation_source_unavailable` behavior. No credential handling beyond the M3/M4 startup boundary exists in
+composition's provider-option seam applies at construction: rotation preflights the active profile's declared options
+through the seam and replaces only the private SDK client, so it never silently drops or ignores declared driver
+options. Facades opened without a file-backed source (test-support hosts) fail closed with
+`credential_rotation_source_unavailable`. No credential handling beyond the M3/M4 startup boundary may exist in
 the tree, and no credential, file content, or source path may appear in a DTO, error, log, snapshot, projection, or
 durable surface.
 
@@ -141,8 +141,8 @@ it.
 M3/M4 startup-only application, `ConfigSnapshotDto` revisions, persisted run snapshots, provider kinds, retries, model
 facts, cursors, replay, recovery, and `ToolCallRecorded -> tool_execution_unavailable` retain their recorded ordinary
 semantics and stay unchanged; no direction rewrites historical bytes, assigns new meaning to a closed variant, or
-reconstructs missing meaning from current state. All directions affect fresh runs only; the Slice 2 activation was
-reverted and re-introduction requires a new activating specification.
+reconstructs missing meaning from current state. All directions affect fresh runs only; the slice is not activated and
+activation requires an activating specification.
 
 ## Dependencies and non-goals
 

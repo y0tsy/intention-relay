@@ -2,12 +2,12 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.** Architecture 29 owns the
 provider session-selection and profiles protocol layer: session default selection, per-turn and fork overrides,
-profile-keyed usage, and safe presentation. The M5+ Slice 2 activation of this layer was reverted; re-introduction
-requires a new activating specification (activation sequence: [ADR
+profile-keyed usage, and safe presentation. The layer is not activated; activation
+requires an activating specification (activation sequence: [ADR
 0004](../decisions/0004-m5plus-complete-foundation-activation.md), [ADR
 0010](../decisions/0010-instruction-sources-and-system-context.md)). The unavailable-queue promotion and reconciliation
-and the held-run admission path were removed from the direction by [ADR
-0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md), and the negotiated capability plane is removed
+and the held-run admission path are not part of the direction ([ADR
+0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md)), and the negotiated capability plane is removed
 by [ADR 0011](../decisions/0011-local-json-rpc-2-0-transport.md).
 
 Owner: architecture 29. Decisions: ADR 0011, ADR 0014. Research: `m4plus_concept.md`.
@@ -69,18 +69,17 @@ rerouted to a current default or new revision. Usage is keyed by exact profile i
 profile into one bounded entry per `(revision, model)` identity and separately by revision/model, with no price,
 currency, or estimated cost; different profiles sharing all safe fields remain independent clients, selection
 identities, and usage groups. The fork override fields on `ForkSessionCommandDto` and `StartForkRunCommandDto` and their
-resolution service were part of the reverted layer; the fork wire commands remain Slice 4 and were never activated by
-Slice 2.
+resolution service belong to this not-activated layer; the fork wire commands remain Slice 4.
 
 ## Public protocol and presentation
 
-The reverted profiles protocol served paginated catalog reads, catalog status, session default query/command, safe
-per-turn and fork overrides, resolved-selection projections, and pending-removal accept/reject. It was the additive
-negotiated capability `provider_profiles_v1`; that capability mechanism was removed by [ADR
-0011](../decisions/0011-local-json-rpc-2-0-transport.md), so a re-introduced surface uses plain typed methods with no
-capability or family gate. It did not imply live reload, configuration editing, profile testing, credential entry, or
-model discovery. Configuration editing belonged to the [architecture 25](25-configuration-provider-control-plane.md)
-atomic reload contract and was not part of this surface. The daemon advertises and serves no `provider_profiles_v1`
+The profiles protocol serves paginated catalog reads, catalog status, session default query/command, safe
+per-turn and fork overrides, resolved-selection projections, and pending-removal accept/reject. It is not gated on the
+capability plane: the negotiated `provider_profiles_v1` capability mechanism is removed by [ADR
+0011](../decisions/0011-local-json-rpc-2-0-transport.md), so the surface uses plain typed methods with no
+capability or family gate. It does not imply live reload, configuration editing, profile testing, credential entry, or
+model discovery; configuration editing belongs to the [architecture 25](25-configuration-provider-control-plane.md)
+atomic reload contract and is not part of this surface. The daemon advertises and serves no `provider_profiles_v1`
 capability today.
 
 A catalog list is bounded, paginated by an opaque token, sorted by stable `ProfileId`, carries the active
@@ -119,18 +118,18 @@ changes, admission, and default changes are rejected with `execution_not_ready`,
 of the one pending candidate. A crash after acceptance produces `ProviderCatalogActivationRecoveryRequired` before
 reconstruction and `ProviderCatalogRecoveryCompleted` only after the exact accepted catalog is active; a mismatch stays
 `activation_recovery_required`. The closed degraded reasons are `removal_candidate_pending`,
-`removal_candidate_rejected`, `removal_candidate_expired`, and `activation_recovery_required`. The reverted layer also
-held a recovery-promoted `Starting` run for explicit `AdmitRecoveredRunCommandDto` admission; [ADR
-0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md) removed that held-run admission path, and the
-ordinary recovery path is again the only one.
+`removal_candidate_rejected`, `removal_candidate_expired`, and `activation_recovery_required`. The layer does not
+include the held-run admission path (`AdmitRecoveredRunCommandDto`); [ADR
+0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md) keeps it out of the direction, and the
+ordinary recovery path is the only one.
 
 ## Compatibility and historical preservation
 
 M3/M4 bytes, sessions, runs, events, snapshots, replay, recovery, and `ToolCallRecorded ->
 tool_execution_unavailable` remain authoritative and unchanged, and no historical selection gains a synthetic
 profile/catalog/session-default state. A per-turn or fork override affects only its run; existing persisted runs retain
-their recorded immutable selection. All directions affect fresh runs only; the Slice 2 activation was reverted and
-re-introduction requires a new activating specification.
+their recorded immutable selection. All directions affect fresh runs only; the layer is not activated and activation
+requires an activating specification.
 
 ## Dependencies and non-goals
 
@@ -139,8 +138,8 @@ Non-goals: a `responses` SDK/driver, user-kind parser, catalog database, profile
 presentation, credential entry/keychain, health test, discovery, pricing, telemetry, live reload, multimodal or
 structured output, plugin drivers, remote continuation, and production behavior. The catalog database, the single
 current storage schema (logical version 1), credential rotation, health checks, discovery, pricing, controlled live
-reload, and typed header policy belonged to the reverted Slice 2; the typed server-side-parser and preservation-control
-contracts were removed as unconsumed by the unconsumed-surface audit (2026-09), so no parser-configuration surface is
-activated.
+reload, and typed header policy belong to the not-activated Slice 2; the typed server-side-parser and
+preservation-control contracts were removed as unconsumed by the unconsumed-surface audit (2026-09), so no
+parser-configuration surface is activated.
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).

@@ -88,16 +88,14 @@ value outside that range fails closed with the typed `invalid_provider_context_w
 08](08-model-protocol-and-providers.md) owns the window mechanics that consume it ([ADR
 0018](../decisions/0018-dynamic-context-window-and-prompt-caching.md)).
 
-### M5+ typed-edit rendering and reload status (reverted)
+### M5+ typed-edit rendering and reload status (not activated)
 
-The M5+ Slice 2 activation rendered typed-edit candidate documents inside `intention-config` (the accepted decision:
-render from the safe snapshot AST inside the crate) and added a `ConfigurationProjectionDto.reload_status` vocabulary.
-Slice 2 was reverted: the typed-edit renderer, the private credential-restore helper, the `configuration_edit_invalid`
-failure, and the reload-status vocabulary are removed from the tree. Configuration editing is again an accepted future
-direction ([architecture
-25](25-configuration-provider-control-plane.md)) with no live implementation, and controlled reload is again only the
+Configuration editing is an accepted future direction ([architecture
+25](25-configuration-provider-control-plane.md)) with no live implementation, and controlled reload is only the
 accepted future direction described
-in the M3 lifecycle rules above. A re-introduction through a new activating specification must restore the recorded
+in the M3 lifecycle rules above. The M5+ Slice 2 direction renders typed-edit candidate documents inside
+`intention-config` (the accepted decision: render from the safe snapshot AST inside the crate) and adds a
+`ConfigurationProjectionDto.reload_status` vocabulary. Its activating specification must implement the recorded
 rules:
 
 -  a typed-edit candidate is rendered from the safe snapshot AST inside the configuration crate, and the composition
@@ -199,7 +197,6 @@ atomicity.
 | Path selection | Config and platform-state location fixtures. | Config/storage locations use explicit absolute override or platform locations, never CWD. |
 | Permission safety | Filesystem permission test on Unix. | Created config is user-readable only or fails safely. |
 | Redaction | Table-driven secret injection plus raw SQLite persistence fixtures. | Recognizable fake credentials are absent from configuration-revision JSON, session/run snapshot JSON, event envelopes, errors, logs, and presentation DTOs. |
-| Typed-edit rendering and reload status | Config and composition typed-edit fixtures. | Values with TOML-significant characters round-trip through the rendered document, fields the edit does not name survive, non-representable values yield typed edit errors, and an unknown reload status is rejected at decode. |
 | Safe observability | Daemon status contract test. | Health/usage/tool state is visible without credentials. |
 
 ## Quality-gate integration

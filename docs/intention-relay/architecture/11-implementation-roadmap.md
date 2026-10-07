@@ -179,15 +179,14 @@ former contract ledger, `run-execution-meaning-v4` field tables, capability fami
 digests were deleted by [ADR 0012](../decisions/0012-typed-serde-json-contracts.md): no ledger, tag registry, canonical
 digest, or identity record remains, and every future contract family is typed serde JSON with RFC 8785 canonicalization
 only when a first real consumer appears.
-2. **Control plane — reverted.** The cluster and provider session selection (architectures 25/29/22):
+2. **Control plane — not activated.** The cluster and provider session selection (architectures 25/29/22):
 controlled live reload, credential rotation, provider health checks, model discovery, pricing policy, provider profile
 UI and raw-TOML/configuration editing, arbitrary authentication headers, session defaults and per-turn/fork overrides,
 the provider profiles protocol, pending-removal and degraded recovery, and the provider reasoning/catalog surface. The
-Slice 2 activation was reverted and re-introduction requires a new activating specification; its code, DTOs, test
-targets, goldens, and control-plane tables are removed. The unconsumed-surface audit (2026-09) removed the unconsumed
+unconsumed-surface audit (2026-09) removed the unconsumed
 typed preservation-control, server-side-parser, Responses reasoning-mode, reasoning-usage, and model-capability-envelope
 contracts, the protocol-only reasoning/header/parser duplicates, the eight producer-less control-plane event DTOs, and
-the `provider_profile_tombstoned` wire code; that removal is not reverted.
+the `provider_profile_tombstoned` wire code.
 3. **Goal domain — not activated.** The Goal domain (architecture 28). The slice also activates the
 tool-descriptor, tool-registry, and model-tool-loop contracts as amended by [ADR
 0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md) (architecture 15), the bridge-invocation and
@@ -216,8 +215,9 @@ Each slice declares its contracts, versions, fixtures, and outcome evidence per 
 -  Slice 1: JSON-RPC 2.0 conformance fixtures (envelope shape, 1:1 method coverage of the command and query variants,
 notifications, and error codes), exact protocol-version equality with a typed `-32001` mismatch error, typed serde JSON
 DTO round trips, and current-schema creation fixtures.
--  Slice 2: reverted; its test targets and goldens no longer exist, and a re-introduction must restore its non-authority
-fixtures.
+-  Slice 2: not activated; its activating specification declares the reload transaction fault-injection, rotation
+no-frozen-meaning and fail-closed, health/discovery/pricing non-authority, catalog acceptance/recovery, control-plane
+safe-projection, and current-schema creation fixtures with their policy declarations.
 -  Slices 3-5: each activating specification declares its fixtures and outcome evidence; slice 5 additionally proves
 deterministic assembly, ordering, and separator stability, profile-revision immutability for every edit operation with
 typed validation failures, absence/unreadability/non-text/oversize behavior of `AGENTS.md`, projection freeze with reuse
@@ -232,9 +232,9 @@ errors, snapshots, events, and adapter DTOs.
 schema, crate-boundary, migration, or quality-policy change.
 -  M3/M4 startup-only configuration, recorded revisions, persisted run snapshots, sessions, runs, events,
 and bytes remain authoritative and unchanged; SQLite storage is the single live schema created directly on open.
--  The reverted Slice 2 health, discovery, and pricing surfaces were non-authorizing: they create no RunId, tool
-permission, MCP capability, bridge grant, kernel epoch, context projection, or branch; a re-introduction must restore
-their non-authority fixtures.
+-  The Slice 2 health, discovery, and pricing surfaces are non-authorizing: they create no RunId, tool
+permission, MCP capability, bridge grant, kernel epoch, context projection, or branch, and the activating
+specification must prove that non-authority.
 -  Applicable crates meet their declared tier floors without excluding policy or boundary logic; every activated slice
 passes `make quick`, `make verify`, and Linux/Windows CI.
 -  No slice ships half-ready: every activated contract ships with its version, owner, tests, policy mapping,
@@ -272,18 +272,16 @@ The unconsumed-surface audit (2026-09) keeps exactly one audited surface for thi
 so no M6-M9 slice claims them:
 
 -  **Durable session-event delivery (`SessionProviderProfileChanged`) — claimed by Milestone 6.** The control-plane
-event family was activated for Slice 2 only as a boundary-validated session-event publication with no durable copy; the
-Slice 2 activation was reverted and re-introduction requires a new activating specification, so no session-default
-change exists to produce it. The durable append/delivery layer remains reserved to the first M6-M9 milestone that
-consumes session state and reconnect delivery. Anchors: `m4plus_concept.md` (session selection, runs, queues, and
-usage), [architecture 29](29-provider-session-and-profiles-protocol.md) (session selection, runs, queues, and usage).
-Until Milestone 6 lands the layer, and until a new activating specification re-introduces a session-default change, no
-control-plane event is produced or validated.
+event family is a boundary-validated session-event publication with no durable copy and belongs to the not-activated
+Slice 2, so no session-default change exists to produce it. The durable append/delivery layer remains reserved to the
+first M6-M9 milestone that consumes session state and reconnect delivery. Anchors: `m4plus_concept.md` (session
+selection, runs, queues, and usage), [architecture 29](29-provider-session-and-profiles-protocol.md) (session selection,
+runs, queues, and usage). Until Milestone 6 lands the layer and Slice 2 is activated, no control-plane event is produced
+or validated.
 -  **Deleted groups — no M6-M9 slice claims them.** The protocol reasoning/header/parser duplicates, the eight
 producer-less control-plane event DTOs, the six unconsumed model types, and the `provider_profile_tombstoned` wire code
-were deleted by the unconsumed-surface audit (2026-09); the Slice 2 revert also removed the `configuration_audit` table
-with the rest of the control-plane schema, so no durable catalog audit evidence exists until a new activating
-specification re-introduces it.
+were deleted by the unconsumed-surface audit (2026-09). The `configuration_audit` table belongs to the not-activated
+Slice 2 control-plane schema, so no durable catalog audit evidence exists until Slice 2 is activated.
 
 ## Milestone 6: Tauri bridge and primary desktop UI
 
@@ -479,7 +477,7 @@ verify`, and Linux/Windows CI;
 **Depends on Milestone 11.** It delivers the post-M4 MCP, kernel, and context packages (architectures 18/20/21), the
 project script library of [decision
 0009](../decisions/0009-project-script-library-for-kernel-cells.md), and the architecture 22 provider work that remains
-not activated after the Slice 2 revert: the `responses` driver, `SafeHeader` live wire injection, and the
+not activated: the `responses` driver, `SafeHeader` live wire injection, and the
 user-kind parser. It starts only when an activating specification per [architecture
 12](12-quality-gates-and-makefile.md) is accepted; that activating change also declares the kernel contract families as
 typed serde JSON contracts ([ADR 0012](../decisions/0012-typed-serde-json-contracts.md)).
@@ -549,8 +547,8 @@ supply-chain checks;
 
 Post-M4 package status uses separate terms: architecture documents are `Documentation-approved`, implementation remains
 not authorized, and evidence is `Planned` unless an exact artifact and observed result is cited. The immutable
-`m4plus_concept.md` is research provenance and is not used as an implementation acceptance target; apart from the Slice
-2 revert annotation, its research content is not edited. The ordinary M5-M9 delivery sequence remains the historical
+`m4plus_concept.md` is research provenance and is not used as an implementation acceptance target; its research content
+is not edited. The ordinary M5-M9 delivery sequence remains the historical
 delivery record, and its Plan/Build policy wording is superseded by [ADR
 0002](../decisions/0002-build-autopilot-and-plan-focus-continuity.md)/[ADR
 0002](../decisions/0002-build-autopilot-and-plan-focus-continuity.md) for the accepted Autopilot transition: Plan is a focus
@@ -583,13 +581,13 @@ operational tuples are operational metadata, not ordering authorities.
 | Provider evolution, profiles, and reasoning | [architecture 22](22-provider-evolution-profiles-and-reasoning.md) | Documentation-approved; not activated; the remaining provider work (`responses` driver, `SafeHeader` live wire injection, user-kind parser) is delivered by Milestone 12. | Foundation |
 | Non-destructive session branching and regeneration | [architecture 23](23-non-destructive-session-branching-and-regeneration.md) | Documentation-approved; not activated; activating slice 4 (`session_fork_v1`). | ordinary Session/storage compatibility; context; provider evolution |
 | Goal domain and verification | [architecture 28](28-goal-domain-and-verification.md) | Documentation-approved; not activated; activating slice 3. | fixed tool loop; MCP; context; provider evolution; activity-journal and notification delivery |
-| Provider session selection and profiles protocol | [architecture 29](29-provider-session-and-profiles-protocol.md) | The Slice 2 activation was reverted and re-introduction requires a new activating specification; not activated. | provider evolution; session branching; configuration/provider control plane |
+| Provider session selection and profiles protocol | [architecture 29](29-provider-session-and-profiles-protocol.md) | Documentation-approved; not activated; activating slice 2. | provider evolution; session branching; configuration/provider control plane |
 | Base-tool contracts and tool-loop bounds | [architecture 15](15-tool-registry-and-model-tool-loop.md) | Documentation-approved; slice 3 activates the reserved contracts; tool-loop implementation is Milestone 11. | architecture 15; M5+ activation |
 | Session-branching detail | [architecture 23](23-non-destructive-session-branching-and-regeneration.md) | Documentation-approved; not activated; activating slice 4. | extends architecture 23 |
 | Kernel, bridge, and MCP detail | [architectures 18](18-mcp-capability-lifecycle.md)/[19](19-gateway-rlm-bridge.md)/[20](20-ipython-kernel-lifecycle.md) | Documentation-approved; slice 3 activates the bridge-invocation and MCP-method-catalog contracts; bridge implementation is Milestone 11, MCP and kernel implementation Milestone 12. | extends architectures 18/19/20 |
 | Provider reasoning and catalog detail | [architecture 22](22-provider-evolution-profiles-and-reasoning.md) | Documentation-approved; not activated; the typed `ReasoningUsageDto` was removed by the unconsumed-surface audit (2026-09). | extends architecture 22 |
 | Accepted deferred directions | [architectures 22](22-provider-evolution-profiles-and-reasoning.md)/[19](19-gateway-rlm-bridge.md) | Documentation-approved; not activated; the directions are non-authorizing. | extends architectures 22 and 19 |
-| Accepted execution directions | [architectures 25](25-configuration-provider-control-plane.md)/[22](22-provider-evolution-profiles-and-reasoning.md)/[23](23-non-destructive-session-branching-and-regeneration.md)/[28](28-goal-domain-and-verification.md)/[18](18-mcp-capability-lifecycle.md)/[29](29-provider-session-and-profiles-protocol.md) | Documentation-approved; the control-plane items were reverted with Slice 2 and require a new activating specification; the work/requeue items activate in slice 3, and export plus cross-workspace clone/rebind and RLM packaging in slice 4. | extends architectures 25, 22, 23, 28, 18, and 29 |
+| Accepted execution directions | [architectures 25](25-configuration-provider-control-plane.md)/[22](22-provider-evolution-profiles-and-reasoning.md)/[23](23-non-destructive-session-branching-and-regeneration.md)/[28](28-goal-domain-and-verification.md)/[18](18-mcp-capability-lifecycle.md)/[29](29-provider-session-and-profiles-protocol.md) | Documentation-approved; the control-plane items activate in slice 2; the work/requeue items activate in slice 3, and export plus cross-workspace clone/rebind and RLM packaging in slice 4. | extends architectures 25, 22, 23, 28, 18, and 29 |
 | Accepted retained-deferral directions | [architectures 20](20-ipython-kernel-lifecycle.md)/[04](04-sessions-runs-events-and-storage.md)/[03](03-daemon-transport-and-adapters.md) | Documentation-approved; rich MIME/raw kernel output projection is Milestone 12, worker/process supervision topology is Milestone 11, and the physical deletion/GC retention policy is slice 4. | extends architectures 20, 04, and 03 |
 | Instruction sources and system context | [architecture 30](30-instruction-sources-and-system-context.md) | Documentation-approved; not activated; fifth and last slice ([ADR 0010](../decisions/0010-instruction-sources-and-system-context.md)). | extends architectures 30, 00, 02, 04, 06, 07, 08, 09, 14, 21, 23, and 25 |
 

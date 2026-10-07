@@ -203,7 +203,7 @@ suite passing. Gates: `make quick`, `make verify`, `docs-check`, `make architect
 The retired names survive only as historical prose: the queue-and-cancellation wording of the closed M3/M4/M5
 milestone records ([M3](../closeout/m3-closure-evidence.md), [M4](../closeout/m4-closure-evidence.md),
 [M5](../closeout/m5-closure-evidence.md)); the removal ledgers of [ADR
-0005](0005-no-backward-compatibility-and-legacy-removal.md); the reverted Slice 2 descriptions in ADR 0004;
+0005](0005-no-backward-compatibility-and-legacy-removal.md); the Slice 2 descriptions in ADR 0004;
 the superseded text of ; the historical
 audit [`complexity-audit.md`](../complexity-audit.md); and the preserved research tree under
 [`../../reference/`](../../reference/README.md). Editing a historical record to hide a name it reported would destroy

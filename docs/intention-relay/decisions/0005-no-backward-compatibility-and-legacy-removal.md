@@ -7,9 +7,8 @@ machinery from the project, in accordance with the [AGENTS.md](../../../AGENTS.m
 (main commit `b5fa71e`). It is subordinate to [ADR 0004](0004-m5plus-complete-foundation-activation.md), which remains
 the activation home and slice-sequence authority.
 
-Amended 2026-09-30: the removal program below has fully executed. The Slice 2 control plane was activated and then
-reverted (Slice 2 revert), and the transport, codec, root, and limit records of ADRs 0011 to 0014 postdate this record's
-wave plan. The single-version policy and every wave removal stand.
+Amended 2026-09-30: the removal program below has fully executed, and the transport, codec, root, and limit records of
+ADRs 0011 to 0014 postdate this record's wave plan. The single-version policy and every wave removal stand.
 
 ## Decision
 
@@ -33,7 +32,7 @@ version other than the current one are not maintained.
 
 | Removed commitment | Replacement |
 | --- | --- |
-| SQLite schema 3 to 4 additive migration, `user_version` tracking, and future-schema rejection (architecture 04; roadmap Slice 1/2 rows) | One live schema (logical version 1) created directly on open; no migration chain, no `user_version` gate, no opening of older schemas |
+| SQLite schema 3 to 4 additive migration, `user_version` tracking, and future-schema rejection (architecture 04; roadmap slice rows) | One live schema (logical version 1) created directly on open; no migration chain, no `user_version` gate, no opening of older schemas |
 | M3/M4 byte-preservation evidence (schema-3 reopen fixtures, migration rollback fixtures, `TEST_SCHEMA_3_SQL`, standalone `M3_SCHEMA_SQL` fixture block) | Removed with the migration machinery; current-schema round-trip tests remain |
 | Legacy M4 selection bridge (tag `legacy-m4-selection-binding` 0x020C; `LegacyM4SelectionBindingDto`; `legacy_m4_selection_bindings` table; `LegacyBindingRepositoryDto`; `load_config_revision_records`; application `LegacyM4Bridge`; composition `SnapshotBindingSource` mirror derivation) | Removed entirely; tag 0x020C returns to unallocated and is removed from the ledger and `PUBLIC_WIRE_CONTRACT_FAMILIES`; no synthetic bindings are ever materialized |
 | Protocol same-major compatibility (1.0 to 1.1) via `ensure_compatible_with` on protocol and DTO schema versions | Exact current-version equality on negotiation; no minor tolerance (protocol 2.0 after [ADR 0011](0011-local-json-rpc-2-0-transport.md)) |
@@ -60,18 +59,17 @@ caller). The one-shot session-subscription surface itself is retained (current, 
 shorthand constructor, `fail_starting_run` (the preserve-accepted helper), the `compatibility_id` manifest fields
 (current manifest identity, not version compatibility), and OpenRouter empty reasoning-details handling (`openrouter`
 `lib.rs:749`).
-5. `SnapshotBindingSource` is removed because a catalog-runtime-backed binding
-source was implemented and tested first; its five call sites in `crates/intention/src/lib.rs` (including its test)
-switched to the replacement.
+5. `SnapshotBindingSource` is removed with the legacy chain; its five call sites in
+`crates/intention/src/lib.rs` (including its test) were updated in the same change.
 
 ### Out of scope (retained)
 
-- The ordinary runtime that survives the Slice 2 revert and ADRs 0011 to 0014,
+- The ordinary runtime that ADRs 0011 to 0014 leave in place,
 including the M4 normalized reasoning events of [ADR 0008](0008-same-run-reasoning-round-trip.md). The Slice 2 control
 plane (catalog controller, private registry, control-plane gate, degraded readiness, unavailable-queue promotion and
 reconciliation, usage aggregation, held recovered-run admission, session profile selection, provider control-plane
-services, `provider_profiles_v1` gates, and the protocol 1.1 surface) is reverted; the capability plane is removed by
-[ADR 0011](0011-local-json-rpc-2-0-transport.md); the canonical codec is removed by [ADR
+services, `provider_profiles_v1` gates, and the protocol 1.1 surface) is not activated; the capability plane is removed
+by [ADR 0011](0011-local-json-rpc-2-0-transport.md); the canonical codec is removed by [ADR
 0012](0012-typed-serde-json-contracts.md); and the speculative contract limits are removed by [ADR
 0014](0014-limits-by-precedent-and-no-content-scanning.md).
 - Roadmap scope for slices 3 and 4. The slice scope itself is untouched; the
@@ -120,17 +118,18 @@ matrix ran after each wave.
 | Tooling and meta | intention-tools + intention-workspace + tests/ + docs archive | The bare-result compatibility trio (`dispatch`, `invoke`, `invoke_with_context`), the legacy `exit_code:` rendering and `-1` sentinel, `resolve_path_for_tool`, and the orphan top-level `tests/` tree |
 | Policy/docs consolidation | quality/ + docs registers + final validation | The `quality/architecture.toml` target and wording rows, self-test fixtures, reconciliation registers, coverage re-verification, and the final validation matrix |
 
-Post-revert state (2026-09-30): the legacy M4 bridge removal stands, and the tag ledger it edited is itself removed by
+Later state (2026-09-30): the legacy M4 bridge removal stands, and the tag ledger it edited is itself removed by
 [ADR 0012](0012-typed-serde-json-contracts.md); the whole execution-meaning codec and its goldens are removed by [ADR
 0012](0012-typed-serde-json-contracts.md), not only the V3 record; the capability gates named in Wave 3 are removed by
 [ADR 0011](0011-local-json-rpc-2-0-transport.md), the protocol version is 2.0, and the "keep the 1.1 negotiation gates"
 instruction is void; the single live SQLite schema stays, while the control-plane tables and
-`control_plane::SCHEMA_M5_SQL` were reverted with the M5+ Slice 2 control plane; the single-TOML-shape removal stands,
-while the control-plane candidate machinery in its keep list was reverted; the provider and reasoning single-path
-removals stand, except the Slice 2 reasoning/catalog families, which were reverted; Wave 7's selection-carrying-only
-instruction and its Slice 2 keep list (catalog, queue promotion and reconciliation, held-run admission) are superseded,
-and selection-less turn acceptance is the only live path; the tooling and meta removals stand, with the removed glob
-match cap covered by [ADR 0014](0014-limits-by-precedent-and-no-content-scanning.md); and the policy and pin
+`control_plane::SCHEMA_M5_SQL` belong to the not-activated M5+ Slice 2 control plane; the single-TOML-shape removal
+stands, and the control-plane candidate machinery in its keep list belongs to that same not-activated slice; the
+provider and reasoning single-path removals stand, while the Slice 2 reasoning/catalog families belong to the
+not-activated slice; Wave 7's selection-carrying-only instruction and its Slice 2 keep list (catalog, queue promotion
+and reconciliation, held-run admission) are superseded, and selection-less turn acceptance is the only live path; the
+tooling and meta removals stand, with the removed glob match cap covered by [ADR
+0014](0014-limits-by-precedent-and-no-content-scanning.md); and the policy and pin
 consolidation stands under the protocol, codec, root, and limit changes of ADRs 0011 to 0014. The wave rows name the
 removed surfaces at family granularity; the exact per-symbol inventories live in the wave commits.
 
@@ -143,9 +142,9 @@ path; and `dispatch_with_cancellation` / `invoke_enveloped_with_cancellation` wi
 which the coverage call sites migrated.
 
 The Slice 2 candidate machinery that Wave 5's keep list named (`parse_candidate`, `semantic_equivalence`,
-`classify_changed_fields`, `reject_catalog_affecting_edits`, and the candidate DTOs) was reverted with the control
-plane; the credential-free `redacted_safe_digest`, the dead `CandidateAcceptanceOutcomeDto` projection, and config's
-private SHA-256 module were removed in the PR 24 repair run because no production surface consumed them (PR24-037/038).
+`classify_changed_fields`, `reject_catalog_affecting_edits`, and the candidate DTOs) belongs to the not-activated
+control plane and is not implemented; the credential-free `redacted_safe_digest`, the dead
+`CandidateAcceptanceOutcomeDto` projection, and config's private SHA-256 module have no production consumer.
 
 The final validation matrix: `cargo test --workspace`, `cargo nextest --workspace --all-targets --locked
 --no-fail-fast`, `cargo clippy --workspace --all-targets --locked -- -Dwarnings`, `cargo fmt --all -- --check`, `make
@@ -171,7 +170,7 @@ same-change documentation updates listed per wave.
 ## Non-goals
 
 This record does not implement M6-M9 behavior, does not introduce a second runtime, registry, scheduler, persistence
-authority, or sandbox, and does not remove any roadmap reservation, approved skeleton crate, or current Slice 1/2
+authority, or sandbox, and does not remove any roadmap reservation, approved skeleton crate, or current Slice 1
 functionality.
 
 ## Resolution notes

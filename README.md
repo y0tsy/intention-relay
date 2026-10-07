@@ -10,9 +10,7 @@ implemented through the closed M0-M5 milestones, the M5+ retrospective stack
 advertisement, the opt-in live-provider channel, the same-run reasoning round
 trip, and the project script library for kernel cells) is merged, and the
 post-M5 foundation (Milestone 5+) is in progress with one of its five slices
-delivered. The Slice 2 provider control plane was activated and then reverted;
-it is not delivered, and a new activating specification is required to
-re-introduce it. No user-facing UI or released product exists yet.
+delivered. No user-facing UI or released product exists yet.
 
 Everything here is development-machine software: there are no deployed users,
 no externally persisted data, and no third-party consumers. Backward
@@ -58,7 +56,7 @@ below is detailed in its closure document under
 | M3 SQLite sessions, events, snapshots, queue | Closed | Durable SQLite-backed sessions, append-only events, snapshots, turn queueing, canonical credential-free config revisions, recovery-before-ready, durable one-shot replay. |
 | M4 Model contract, providers, one streaming run | Closed | Provider-neutral model contracts and validated stream facts; private OpenRouter and generic Chat Completions drivers; durable model facts; one daemon-owned streaming run with reconnect/replay and run-scoped delivery. |
 | M5 Typed tools, WorkspaceRoot, hooks | Closed | Production model-tool loop hosted by the real daemon binary: six executable tools, fail-closed `WorkspaceRoot` resolution, deterministic typed hooks, durable and redacted tool-result evidence, daemon-host end-to-end tests on Linux and Windows. |
-| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (ADR 0004, amended by ADR 0010) delivered as five slices: 1) contracts and versions, 2) control plane, 3) Goal domain, 4) UI foundation, 5) instruction sources and system context. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slice 2 (controlled live reload, credential rotation, health checks, provider discovery and pricing, raw-TOML configuration editing, canonical config revisions, session defaults and per-turn overrides) was merged and then **reverted**; it is not delivered, and a new activating specification is required to re-introduce it. Slices 3-5 are not implemented. |
+| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (ADR 0004, amended by ADR 0010) delivered as five slices: 1) contracts and versions, 2) control plane, 3) Goal domain, 4) UI foundation, 5) instruction sources and system context. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slices 2-5 are not implemented. |
 | M6-M9 | Planned | M6 Tauri bridge and primary desktop UI; M7 Plan/Build policies, physical plans, and Build Autopilot; M8 VFR and Headroom; M9 hardening and acceptance verification. See the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md). |
 
 Everything beyond M5 is roadmap direction recorded in
@@ -193,12 +191,11 @@ Notes:
   parsing, credentials are not serialized, displayed, or included in errors,
   DTOs, events, snapshots, diagnostics, or protocol frames. Public
   projections expose only `credential_configured`.
-- Configuration is read at daemon startup. The M5+ Slice 2 control plane
-  added controlled reload with canonical config revisions, credential
-  rotation, health checks, provider discovery and pricing, raw-TOML
-  configuration editing, and session defaults with per-turn overrides, but
-  that activation was reverted; a new activating specification is required to
-  re-introduce it. Fork override commands remain Slice 4 work. Nothing else
+- Configuration is read at daemon startup. Controlled reload with canonical
+  config revisions, credential rotation, health checks, provider discovery and
+  pricing, raw-TOML configuration editing, and session defaults with per-turn
+  overrides are the accepted M5+ Slice 2 direction; that slice is not
+  implemented. Fork override commands remain Slice 4 work. Nothing else
   changes configuration after startup.
 - Malformed TOML or a future schema version fails typed validation, and the
   configuration file content is deliberately omitted from error output.

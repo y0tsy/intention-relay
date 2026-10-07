@@ -22,9 +22,9 @@ schema version; the TOML configuration and SQLite storage schemas; and every non
 | [ADR 0005](0005-no-backward-compatibility-and-legacy-removal.md) | The local-protocol row of the version ledger, the "Protocol same-major compatibility" superseded commitment, and the Wave 3 instruction to keep the 1.1 negotiation gates | Protocol 2.0 exact equality; the single-version policy is unchanged |
 | [ADR 0006](0006-request-side-tool-advertisement.md), [ADR 0007](0007-opt-in-live-provider-e2e.md), [ADR 0008](0008-same-run-reasoning-round-trip.md) | Their compatibility lines "Local protocol 1.1 ... unchanged" | Protocol 2.0 exact equality; the feature records otherwise stand |
 
-The protocol-version clauses of ADRs 0006, 0007, and 0008 are read through this record. The M5+ Slice 2 control plane
-was activated and then reverted (Slice 2 revert); the capability and connection-role surfaces this record removes were
-the remaining live pieces of that negotiated plane.
+The protocol-version clauses of ADRs 0006, 0007, and 0008 are read through this record. The capability and
+connection-role surfaces this record removes were the negotiated-plane pieces of the not-activated M5+ Slice 2 control
+plane.
 
 ## Decision
 

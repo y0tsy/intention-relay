@@ -143,7 +143,7 @@ the durable reader would read.
 ### T5 — Documentation describing code that does not exist
 
 - Z6-F01 (architecture 14: 127 lines, entire subject is deleted machinery, still in the reading
-  path), Z6-F04, Z6-F06 (architecture 29 specifies a reverted surface in the present tense),
+  path), Z6-F04, Z6-F06 (architecture 29 specifies a not-activated surface in the present tense),
   Z6-F09 (removed codec re-narrated in 24 of 32 documents).
 - Z7-04 (dangling references to deleted artifacts in 54 documents, including a then-live ADR),
   Z7-11 ("fake-secret absence tests" named as live evidence in nine documents but names no
@@ -192,7 +192,7 @@ Three phases. Phase 1 needs no product decision; phase 2 needs one named decisio
 | 7 | Z6 | Z6-F03 future-mechanism sections inside shipped docs | SIMPLIFY | — | — | ~500 | low |
 | 8 | Z6 | Z6-F04 closed failure-code fences for unbuilt systems | DELETE | — | — | ~280 | 0% |
 | 9 | Z6 | Z6-F01 delete architecture 14 | DELETE | — | — | ~127 | ~0% |
-| 10 | Z6 | Z6-F05/F08/F06/F09/F02/F07 (roadmap restatement, CI narrative, reverted detail, codec re-narration, stale facts, README invariants) | SIMPLIFY | — | — | ~385 | 0–low |
+| 10 | Z6 | Z6-F05/F08/F06/F09/F02/F07 (roadmap restatement, CI narrative, not-activated detail, codec re-narration, stale facts, README invariants) | SIMPLIFY | — | — | ~385 | 0–low |
 | 11 | Z1 | Z1-F01/F02/F03/F04/F07/F08/F09/F10 dead vocabularies and unreachable states | DELETE | ~1,110 | — | — | 0% |
 | 12 | Z3 | Z3-F01 write-only canonical tool-result document + orphan reader | DELETE | ~424 | ~933 | — | 0% |
 | 13 | Z3 | Z3-F03 six inline hook-phase ladders → one | SIMPLIFY | ~180 | — | — | 0% |
@@ -449,7 +449,7 @@ in this document.
 | Z6-F03 | Future mechanisms restated inside shipped documents | SIMPLIFY | ~500 | low |
 | Z6-F04 | 121 closed failure codes for zero code; none exist | DELETE | ~280 | 0% |
 | Z6-F05 | Roadmap states the same mapping in four places | SIMPLIFY | ~100 | low |
-| Z6-F06 | Architecture 29 specifies a reverted surface | SIMPLIFY | ~70 | 0% |
+| Z6-F06 | Architecture 29 specifies a not-activated surface | SIMPLIFY | ~70 | 0% |
 | Z6-F07 | README re-owns cross-domain invariants | SIMPLIFY | ~20 | low |
 | Z6-F08 | Architecture 12 restates the CI implementation | SIMPLIFY | ~90 | low |
 | Z6-F09 | Removed codec re-narrated in 24 of 32 documents | SIMPLIFY | ~80 | near zero |

@@ -1,9 +1,8 @@
 # Provider Evolution, Profiles, and Reasoning
 
-**Approved future design. Not implemented; activation requires an activating specification.** The M5+ Slice 2 activation
-was reverted; the catalog, selection, capability-taxonomy, reasoning-history, and header contracts are again accepted
-directions awaiting a new activating specification; none of those surfaces exists in the tree (`responses` driver
-remains not activated).
+**Approved future design. Not implemented; activation requires an activating specification.** The catalog, selection,
+capability-taxonomy, reasoning-history, and header contracts are accepted directions awaiting an activating
+specification; none of those surfaces exists in the tree (`responses` driver remains not activated).
 
 Owner: architecture 22. Research: m4plus_concept.md.
 
@@ -159,20 +158,20 @@ capability meaning, or credential transport requires a new major; every executab
 and fixtures, and same family/major is insufficient. Composition alone resolves private driver entries by exact profile
 revision, descriptor revision, and driver contract; no SDK/client/credential resource crosses a boundary.
 
-The reverted Slice 2 option seam (PR24-057) applied validated, credential-free driver options (`OpenRouterDriverOptions`
+The Slice 2 option seam applies validated, credential-free driver options (`OpenRouterDriverOptions`
 and `GenericChatDriverOptions`) only through the composition's single seam translation at startup selected-provider
 construction, at every catalog activation through the composition driver factory, and on credential-driven rebuilds, so
-a declared option was never silently defaulted or ignored. Its closed declaration vocabulary was the profile's
+a declared option is never silently defaulted or ignored. Its closed declaration vocabulary is the profile's
 credential transport (bearer, or one descriptor-selected safe header whose complete value is the credential) and an
-empty reasoning-effort slot (no Slice 2 declaration surface; RSN-011); a declaration the executing adapter could not
-apply failed closed at the seam with the adapter's typed error, live `SafeHeader` wire injection was not activated
-(EXC-057), and adapter applicability remains adapter-owned. The Slice 2 revert removed the seam and every Slice 2
-declaration; a re-introduction must restore the option seam under a new activating specification.
+empty reasoning-effort slot (no declaration surface; RSN-011); a declaration the executing adapter cannot
+apply fails closed at the seam with the adapter's typed error, live `SafeHeader` wire injection is not activated,
+and adapter applicability remains adapter-owned. The option seam and every declaration belong to the not-activated
+Slice 2 and must be implemented under an activating specification.
 
-The catalog was startup-only, and acceptance was all-or-nothing: the auto-accept path built and pre-validated the
-replacement registry and its admissions map before durable acceptance, so a build or validation failure left the durable
-catalog revision unadvanced and only a successful build committed the acceptance and swapped the in-memory registry and
-gate:
+The catalog is startup-only, and acceptance is all-or-nothing: the auto-accept path builds and pre-validates the
+replacement registry and its admissions map before durable acceptance, so a build or validation failure leaves the
+durable catalog revision unadvanced and only a successful build commits the acceptance and swaps the in-memory registry
+and gate:
 
 ```mermaid
 flowchart LR
@@ -189,22 +188,22 @@ flowchart LR
   C --> S
 ```
 
-Candidate construction could parse endpoints and create private clients but could not perform DNS, HTTP, credential
-testing, telemetry, model discovery, or background provider work; a semantically equal safe catalog created no new
-revision; valid non-removal changes could auto-accept at startup; and a removal created one pending candidate requiring
-explicit accept/reject against exact revisions, where rejection/expiry could not reconstruct omitted credentials or
+Candidate construction may parse endpoints and create private clients but cannot perform DNS, HTTP, credential
+testing, telemetry, model discovery, or background provider work; a semantically equal safe catalog creates no new
+revision; valid non-removal changes auto-accept at startup; and a removal creates one pending candidate requiring
+explicit accept/reject against exact revisions, where rejection/expiry cannot reconstruct omitted credentials or
 prior readiness.
 
-Acceptance atomically wrote safe revisions, tombstones, current projection, and a separate configuration-audit sequence,
-after which registry activation swapped the exact accepted private entries. A crash after acceptance but before
-activation left `activation_recovery_required`, a changed current file could not be adopted, and fresh provider
-readiness was unavailable until exact recovery succeeded. Catalog/default/enablement changes affected fresh selection
-only: they neither rewrote stored selection nor revoked an already admitted run, and explicit Run cancellation
-remained the stopping authority. No private binding survived restart. The Slice 2 revert removed the catalog, its
-tables, and the configuration-audit sequence. The reverted audit taxonomy (candidate prepared, removal
-pending/accepted/rejected/expired, catalog accepted/activated, activation recovery required, recovery completed) was the
+Acceptance atomically writes safe revisions, tombstones, current projection, and a separate configuration-audit
+sequence, after which registry activation swaps the exact accepted private entries. A crash after acceptance but before
+activation leaves `activation_recovery_required`, a changed current file cannot be adopted, and fresh provider
+readiness is unavailable until exact recovery succeeds. Catalog/default/enablement changes affect fresh selection
+only: they neither rewrite stored selection nor revoke an already admitted run, and explicit Run cancellation
+remains the stopping authority. No private binding survives restart. The catalog, its tables, and the
+configuration-audit sequence belong to the not-activated Slice 2. The audit taxonomy (candidate prepared, removal
+pending/accepted/rejected/expired, catalog accepted/activated, activation recovery required, recovery completed) is the
 durable `configuration_audit.audit_kind` vocabulary written by the storage path, not protocol events, and no wire event
-DTO carried those names; it was not one of the two ordering authorities and had no container journal. Numeric
+DTO carries those names; it is not one of the two ordering authorities and has no container journal. Numeric
 catalog/parser/page bounds must be explicitly classified as intrinsic representation bounds, protocol bounds, or actual
 capacity, never admission quotas.
 
@@ -236,9 +235,9 @@ round's own accepted reasoning to the assistant tool-call message of that in-fli
 (ADR 0008); prior-run, cross-turn, and fork reasoning injection remains forbidden.
 
 The future normalized stream uses one run container journal (`RunEventCursorDto`) for text, reasoning, summaries, tool
-calls, usage, and terminal facts. The Slice 2 provider-neutral reasoning DTO surface was owned by `intention-model` and
-was removed by the Slice 2 revert: the closed fragment category and the summary delta no longer exist, and the live
-normalized reasoning event is the M4 `ModelEventDto::ReasoningDelta { content }`. The reverted shape was:
+calls, usage, and terminal facts. The Slice 2 provider-neutral reasoning DTO surface is owned by `intention-model`; the
+closed fragment category and the summary delta do not exist yet, and the live
+normalized reasoning event is the M4 `ModelEventDto::ReasoningDelta { content }`. The Slice 2 shape is:
 
 ```text
 ReasoningFragmentCategoryDto
@@ -418,10 +417,10 @@ Each accepted fragment maps to the future normalized reasoning path. No encrypte
 vLLM/SGLang parser config, raw provider JSON, or generic request templates. Cross-turn policy is limited to the explicit
 typed textual history contract; provider-native `preserve_thinking`, `thinking.keep`, remote continuation identifiers,
 and non-fitting assistant-history requirements are excluded. Arbitrary authentication headers are an accepted post-M5
-direction, activated for M5+ Slice 2
-as a closed code-owned typed header policy (the `intention-model` `AuthenticationHeaderPolicyV1` consumed by both
-provider adapters; the protocol-only duplicate was removed by the unconsumed-surface audit (2026-09)). The Slice 2
-revert removed that policy with the rest of Slice 2, so the direction is again documentation-only until a new activating
+direction for M5+ Slice 2:
+a closed code-owned typed header policy (the `intention-model` `AuthenticationHeaderPolicyV1` consumed by both
+provider adapters; the protocol-only duplicate was removed by the unconsumed-surface audit (2026-09)). That policy
+belongs to the not-activated Slice 2, so the direction is documentation-only until an activating
 specification. The typed provider-native preservation-control and server-side-parser contracts were removed by the
 unconsumed-surface audit (2026-09): no preservation-control or parser-configuration surface is activated. Live wire
 header injection (`SafeHeader`) and provider-native live extraction beyond the declared paths remain not activated. The
@@ -434,11 +433,11 @@ parsing, or provider SDK data outside its owner adapter.
 
 ## Catalog lifecycle detail: limits, tombstones, and audit
 
-The reverted activation's fixed catalog caps (profile/kind/display-name lengths, catalog and registry counts, candidate
+The Slice 2 fixed catalog caps (profile/kind/display-name lengths, catalog and registry counts, candidate
 and page sizes, validation-issue counts, pending-removal lifetime, and its queue-promotion and reconciliation pages) are
 not part of the direction: [ADR 0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md) removes
 speculative contract limits and requires any future numeric bound to record the failure mode it prevents, its unit, and
-its behavior at the bound. A re-introduction must not restore the caps.
+its behavior at the bound. The activating specification must not restore the caps.
 
 `ProviderKindId` is immutable after its first accepted declaration; changing closed
 stream/reasoning/activation/budget-effort/credential-transport parts fails with `provider_kind_immutable_mismatch`; the
@@ -446,7 +445,7 @@ valid path is a new kind ID plus reassignment. Credential-free catalog/profile-r
 SQLite history. Removal writes a removal-history `ProviderProfileTombstoneDto` (safe identity, removed catalog
 revision/time, provenance). Durable tombstones are append-only removal events keyed by (id, removed catalog revision);
 admission authority is the current active projection, so an identifier reintroduced by a later accepted catalog is
-admitted again and its next removal records a fresh history row (PR24-017). Kind removal while referenced fails
+admitted again and its next removal records a fresh history row. Kind removal while referenced fails
 `provider_kind_has_dependents`; after removing or reassigning all dependents in the same candidate, accepted kind
 removal writes a removal-history `ProviderKindTombstoneDto`. The audit taxonomy is:
 
@@ -484,8 +483,8 @@ created for historical runs.
 ## Session selection, degraded recovery, and protocol
 
 The provider session-selection layer (session default, per-turn/fork overrides, profile-keyed usage, and pending-removal
-accept/reject) is owned by [architecture 29](29-provider-session-and-profiles-protocol.md); it was activated under
-Milestone 5+ and then reverted.
+accept/reject) is owned by [architecture 29](29-provider-session-and-profiles-protocol.md); it belongs to the
+not-activated Slice 2.
 
 ## Child, MCP, bridge, kernel, context, and compatibility boundaries
 
@@ -506,15 +505,15 @@ This document depends on architectures 14, 15, and 21 plus decision 0001. It doe
 not define a Responses SDK/driver, user-kind parser, profile picker/editor presentation, credential entry/keychain,
 telemetry, multimodal or structured output, plugin drivers, or remote continuation. The catalog database, the single
 current storage schema (logical version 1), credential rotation, health checks, discovery, pricing, controlled live
-reload, and typed header policy were activated by Slice 2 and then removed; the typed preservation-control and
+reload, and typed header policy belong to the not-activated Slice 2; the typed preservation-control and
 server-side-parser contracts were removed as unconsumed by the unconsumed-surface audit (2026-09), and no
 parser-configuration surface is activated.
 Semantic content inspection of reasoning or provider content is an accepted post-M5 future direction,
 bound to Milestone 5+; it is not activated here, never substitutes for central redaction, and never rewrites stored
 facts. The profile picker/editor, credential rotation, health test, discovery, pricing, telemetry, and live reload items
 are accepted post-M5 directions owned by [architecture 25](25-configuration-provider-control-plane.md) under [Milestone
-5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment) and were activated for Slice 2 and then
-reverted, so they are again documentation-only; the profile picker/editor presentation and telemetry remain not
+5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment) and belong to the not-activated Slice 2,
+so they are documentation-only; the profile picker/editor presentation and telemetry remain not
 activated. Architecture 23 owns forks and lineage and architecture 29 owns session defaults/overrides and the profiles
 protocol. UI, Cargo, Makefile/CI, or production activation beyond the accepted directions remain outside this document.
 

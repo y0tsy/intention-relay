@@ -9,9 +9,8 @@ a fifth activating slice, instruction sources and system context, without changi
 
 Amended 2026-09-30 by [ADR 0011](0011-local-json-rpc-2-0-transport.md), [ADR 0012](0012-typed-serde-json-contracts.md),
 and [ADR 0014](0014-limits-by-precedent-and-no-content-scanning.md): the Slice 1 canonical-codec and capability-family
-items, the Slice 2 control-plane reversion, the queue-audit and corridor wording, and the numeric contract limits are
-reconciled in the slice list below without changing the five-slice order. The M5+ Slice 2 control plane was activated
-and then reverted; re-introduction requires a new activating specification (fifth slice: ADR 0010; activation sequence:
+items, the queue-audit and corridor wording, and the numeric contract limits are
+reconciled in the slice list below without changing the five-slice order (fifth slice: ADR 0010; activation sequence:
 ADR 0004).
 
 ## Decision
@@ -31,10 +30,10 @@ digests are removed by those records.
 2. **Control plane** — the control-plane cluster and provider session selection
 (architectures 25/29/22): controlled live reload, credential rotation, provider health checks, model discovery, pricing
 policy, profile UI and raw-TOML/configuration editing, arbitrary authentication headers, session defaults and
-per-turn/fork overrides, pending-removal and degraded recovery, and the provider reasoning/catalog surface. The Slice 2
-activation is reverted and can return only through a new activating specification; the queue-audit, queue-promotion,
-reconciliation, and held-run admission wording is removed by [ADR
-0014](0014-limits-by-precedent-and-no-content-scanning.md). The unconsumed-surface audit (2026-09) removed the
+per-turn/fork overrides, pending-removal and degraded recovery, and the provider reasoning/catalog surface. Slice 2
+is not activated and requires an activating specification; the queue-audit, queue-promotion,
+reconciliation, and held-run admission wording is not part of the direction ([ADR
+0014](0014-limits-by-precedent-and-no-content-scanning.md)). The unconsumed-surface audit (2026-09) removed the
 unconsumed provider-native preservation-control and server-side-parser contracts, the Responses reasoning-mode
 projection, the reasoning-usage DTOs, and the model-capability envelope.
 3. **Goal domain** — Goal domain (architecture 28): the Goal tree.

@@ -17,11 +17,11 @@ documentation-only corridor, reservation, calendar-period, and queue-audit surfa
 
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |
-| [ADR 0004](0004-m5plus-complete-foundation-activation.md) | The Slice 2 queue-promotion and reconciliation wording and the Slice 3 "corridors and reservations" wording | The Slice 2 revert and the precedent rule below |
+| [ADR 0004](0004-m5plus-complete-foundation-activation.md) | The Slice 2 queue-promotion and reconciliation wording and the Slice 3 "corridors and reservations" wording | The precedent rule below |
 
 The fixed-limit rows of the removed Slice 1 ledger (activity, run, and tool-loop limit records) are removed with
 the ledger; no limit record remains. The unavailable-queue promotion and reconciliation, held-run admission, and related
-queue audits were reverted (Slice 2 revert); this record removes their documentation remnants.
+queue audits are not part of the Slice 2 direction; this record removes their documentation remnants.
 
 ## Decision
 
@@ -74,7 +74,7 @@ and the recorded state; they are not runtime content scanners.
 Day/Week/Month period engine never existed in code: a repository search finds zero occurrences. They are removed from
 the documentation instead of being kept as unimplemented direction.
 9. The unavailable-queue promotion and reconciliation, held-run admission,
-and related queue audits exist only in documentation after the Slice 2 revert (`AdmitRecoveredRun`). They are removed
+and related queue audits exist only in documentation (`AdmitRecoveredRun`). They are removed
 from the documentation. The live M3 turn input has since been replaced by pending turns joined to the live run context
 by [ADR 0019](0019-pending-turns-and-cooperative-interruption.md).
 10. This removal is documentation-only: no queue behavior changes, and no new
@@ -101,9 +101,9 @@ a soft cap, a counter, or a periodic audit.
 
 M3/M4 durable behavior, replay, and storage bytes are unchanged; the M3 queue, its tickets, and its promotion were
 later removed by [ADR 0019](0019-pending-turns-and-cooperative-interruption.md). The removed limits were
-either speculative contract vocabulary never enforced on the live path or clauses of the reverted Slice 2 surface. Where
-a real bound exists on a live path and is retained, its value is unchanged. No protocol, DTO, configuration, or storage
-schema version changes.
+either speculative contract vocabulary never enforced on the live path or clauses of the not-activated Slice 2
+surface. Where a real bound exists on a live path and is retained, its value is unchanged. No protocol, DTO,
+configuration, or storage schema version changes.
 
 ## Security and failure behavior
 

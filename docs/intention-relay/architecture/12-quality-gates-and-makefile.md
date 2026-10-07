@@ -463,21 +463,20 @@ package-scoped `make focus PACKAGES=...` target remains unimplemented and may no
 no simultaneous full `make verify` executions may claim independent acceptance on the same host because coverage,
 dependency, documentation, and Cargo resource contention would make their results impractical to interpret.
 
-### M5+ Slice 2 test targets and evidence requirements (reverted)
+### M5+ Slice 2 test targets and evidence requirements (not activated)
 
-The M5+ Slice 2 control-plane activation added the integration test targets `intention-domain`
-`m5_control_plane_canonical`, `m5_control_plane_rejections`, `m5_session_selection_overrides`; `intention-protocol`
-`control_plane_contracts`; `intention-config` `m5_control_plane_config`; `intention-application` `m5_catalog_runtime`,
-`m5_control_plane_runtime`, `m5_session_selection`; `intention-client` `control_plane_client`,
-`session_selection_client`; `intention-model` `m6_reasoning_surface`; and `intention-storage-sqlite`
-`m5_control_plane_repos`. **Those targets no longer exist**: the activation was reverted, its targets and goldens were
-removed from the tree, and the corresponding declarations were removed from the machine-readable policy. The
-current-schema tests in the existing `sqlite_contracts` target remain. The revert added no CI job, Makefile target,
-crate, dependency, feature profile, or exclusion: the existing check count and the `make quick`, `make verify`,
-`docs-check`, and `architecture` gates are the revert's acceptance gate. Re-introduction through a new activating
-specification must restore the reload transaction fault-injection, rotation no-frozen-meaning and fail-closed fixtures,
-health/discovery/pricing non-authority fixtures, catalog acceptance/recovery fixtures, control-plane safe-projection
-fixtures, and current-schema creation fixtures with their policy declarations.
+The not-activated M5+ Slice 2 control plane declares its integration test targets and goldens at activation: the
+`intention-domain` `m5_control_plane_canonical`, `m5_control_plane_rejections`, and `m5_session_selection_overrides`
+targets; `intention-protocol` `control_plane_contracts`; `intention-config` `m5_control_plane_config`;
+`intention-application` `m5_catalog_runtime`, `m5_control_plane_runtime`, and `m5_session_selection`;
+`intention-client` `control_plane_client` and `session_selection_client`; `intention-model` `m6_reasoning_surface`; and
+`intention-storage-sqlite` `m5_control_plane_repos`. None of those targets exists today. Its activating specification
+declares them in the machine-readable policy together with the reload transaction fault-injection, rotation
+no-frozen-meaning and fail-closed fixtures, health/discovery/pricing non-authority fixtures, catalog
+acceptance/recovery fixtures, control-plane safe-projection fixtures, and current-schema creation fixtures. Activation
+adds no CI job, Makefile target, crate, dependency, feature profile, or exclusion beyond those declarations, so the
+existing check count and the `make quick`, `make verify`, `docs-check`, and `architecture` gates remain the acceptance
+gate.
 
 ### Opt-in live-provider e2e
 
@@ -492,7 +491,7 @@ file, when present, supplies any of these variables that are not already set in 
 schedule, is never a required status check, takes its credential only from the repository secret
 `REAL_API_E2E_PROVIDER_KEY`, and never alters the blocking Quality workflow. The channel adds no blocking CI job, no
 required check, no exclusion, and no dependency, so the required status checks and the `ci-*` alias list stay exactly as
-documented; the reverted Slice 2 activation also added no CI job or Makefile target, so the blocking gate is unchanged.
+documented; the not-activated Slice 2 adds no CI job or Makefile target, so the blocking gate is unchanged.
 A recorded live run reports date, commit, provider, model, and its run identifier, the workflow run URL for the manual
 dispatch or the gitignored local run report for a local `make e2e-real-api` run, and never the credential.
 

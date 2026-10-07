@@ -156,9 +156,8 @@ requires at least one executable test or a justified documented exception.
 ## Post-M4 foundation principles
 
 Principles 12–22 govern future authoritative post-M4 packages without changing closed M4 or current ordinary-run
-behavior. Principle 20's provider-selection evidence was delivered by the M5+ Slice 2 control plane and then reverted,
-so it is again future work. The authoritative source and package boundaries for these principles are their owning
-architecture documents and decision records.
+behavior. Principle 20's provider-selection evidence remains future work. The authoritative source and package
+boundaries for these principles are their owning architecture documents and decision records.
 
 ### 12. Durable transitions and effects are separate
 
