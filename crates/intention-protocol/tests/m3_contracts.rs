@@ -3,7 +3,9 @@
     reason = "M3 contract fixtures use expect for precise test diagnostics."
 )]
 
-use intention_domain::{RunModeDto, SessionProjectionDto, WorkspaceRootDto};
+use intention_domain::{
+    MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto, WorkspaceRootDto,
+};
 use intention_protocol::{
     CURRENT_PROTOCOL_VERSION, CreateSessionAcceptedDto, InterruptRunAcceptedDto,
     ProtocolAcceptedDto, ProtocolAcceptedResultDto, ProtocolVersionDto, RemoveTurnAcceptedDto,
@@ -11,8 +13,8 @@ use intention_protocol::{
     SessionSubscriptionResponseDto,
 };
 use intention_types::{
-    ConfigRevisionId, CorrelationIdDto, ProjectId, RunId, SchemaVersionDto,
-    SessionEventSequenceDto, SessionId, TurnId, WorkspaceId,
+    ConfigRevisionId, CorrelationIdDto, ProjectId, RunId, SchemaVersionDto, SessionId, TurnId,
+    WorkspaceId,
 };
 
 fn workspace_root() -> WorkspaceRootDto {
@@ -25,10 +27,7 @@ fn workspace_root() -> WorkspaceRootDto {
     .expect("native fixture workspace is valid")
 }
 
-fn fixture_projection(
-    session_id: SessionId,
-    at_sequence: SessionEventSequenceDto,
-) -> SessionProjectionDto {
+fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
     SessionProjectionDto::new(
         ProjectId::new(),
         session_id,
@@ -38,9 +37,21 @@ fn fixture_projection(
         None,
         None,
         Vec::new(),
-        at_sequence,
     )
     .expect("fixture projection is coherent")
+}
+
+fn fixture_message(session_id: SessionId, run_id: RunId) -> MessageProjectionDto {
+    MessageProjectionDto::new(
+        session_id,
+        Some(run_id),
+        MessageKindDto::Notice,
+        "fixture notice",
+        None,
+        None,
+        None,
+    )
+    .expect("fixture message is coherent")
 }
 
 #[test]
@@ -48,18 +59,12 @@ fn typed_acceptance_results_carry_required_durable_evidence() {
     let correlation = CorrelationIdDto::new();
     let session_id = SessionId::new();
     let workspace_id = WorkspaceId::new();
-    let created = CreateSessionAcceptedDto::new(
-        ProjectId::new(),
-        workspace_id,
-        session_id,
-        SessionEventSequenceDto::new(2),
-    );
+    let created = CreateSessionAcceptedDto::new(ProjectId::new(), workspace_id, session_id);
     assert_eq!(created.workspace_id(), workspace_id);
-    assert_eq!(created.committed_sequence().value(), 2);
+    assert_eq!(created.session_id(), session_id);
     let started = SendUserTurnAcceptedDto::new(
         session_id,
         TurnId::new(),
-        SessionEventSequenceDto::new(5),
         SendUserTurnOutcomeDto::Started {
             run_id: RunId::new(),
             config_revision_id: ConfigRevisionId::new(),
@@ -69,12 +74,8 @@ fn typed_acceptance_results_carry_required_durable_evidence() {
         started.outcome(),
         SendUserTurnOutcomeDto::Started { .. }
     ));
-    let pending = SendUserTurnAcceptedDto::new(
-        session_id,
-        TurnId::new(),
-        SessionEventSequenceDto::new(6),
-        SendUserTurnOutcomeDto::Pending,
-    );
+    let pending =
+        SendUserTurnAcceptedDto::new(session_id, TurnId::new(), SendUserTurnOutcomeDto::Pending);
     assert_eq!(pending.outcome(), SendUserTurnOutcomeDto::Pending);
     let accepted = ProtocolAcceptedDto::with_result(
         correlation,
@@ -89,13 +90,17 @@ fn typed_acceptance_results_carry_required_durable_evidence() {
         serde_json::from_str::<ProtocolAcceptedDto>(&encoded).expect("accepted result decodes")
             == accepted
     );
+    assert!(
+        !encoded.contains("sequence"),
+        "acceptance evidence carries no committed sequence"
+    );
 }
 
 #[test]
 fn current_protocol_version_is_pinned_to_the_wire_literal() {
     assert_eq!(
         CURRENT_PROTOCOL_VERSION,
-        ProtocolVersionDto::new(2, 0),
+        ProtocolVersionDto::new(1, 0),
         "the wire protocol version is pinned independently of the fixture constant"
     );
 }
@@ -107,70 +112,66 @@ fn accepted_dto_accessors_preserve_typed_identity() {
     let session_id = SessionId::new();
     let turn_id = TurnId::new();
     let run_id = RunId::new();
-    let sequence = SessionEventSequenceDto::new(7);
 
-    let created = CreateSessionAcceptedDto::new(project_id, workspace_id, session_id, sequence);
+    let created = CreateSessionAcceptedDto::new(project_id, workspace_id, session_id);
     assert_eq!(created.project_id(), project_id);
     assert_eq!(created.workspace_id(), workspace_id);
     assert_eq!(created.session_id(), session_id);
-    assert_eq!(created.committed_sequence(), sequence);
 
-    let accepted = SendUserTurnAcceptedDto::new(
-        session_id,
-        turn_id,
-        sequence,
-        SendUserTurnOutcomeDto::Pending,
-    );
+    let accepted =
+        SendUserTurnAcceptedDto::new(session_id, turn_id, SendUserTurnOutcomeDto::Pending);
     assert_eq!(accepted.session_id(), session_id);
     assert_eq!(accepted.turn_id(), turn_id);
-    assert_eq!(accepted.committed_sequence(), sequence);
 
-    let removed = RemoveTurnAcceptedDto::new(session_id, turn_id, sequence);
+    let removed = RemoveTurnAcceptedDto::new(session_id, turn_id);
     assert_eq!(removed.session_id(), session_id);
     assert_eq!(removed.turn_id(), turn_id);
-    assert_eq!(removed.committed_sequence(), sequence);
 
-    let interrupted = InterruptRunAcceptedDto::new(session_id, run_id, sequence);
+    let interrupted = InterruptRunAcceptedDto::new(session_id, run_id);
     assert_eq!(interrupted.session_id(), session_id);
     assert_eq!(interrupted.run_id(), run_id);
-    assert_eq!(interrupted.at_sequence(), sequence);
 }
 
 #[test]
 fn snapshots_validate_the_required_m3_projection() {
     let session_id = SessionId::new();
+    let run_id = RunId::new();
     let snapshot = SessionSnapshotDto::with_projection(
         SchemaVersionDto::new(1, 1),
         session_id,
-        SessionEventSequenceDto::new(4),
-        fixture_projection(session_id, SessionEventSequenceDto::new(4)),
+        fixture_projection(session_id),
+        vec![fixture_message(session_id, run_id)],
     )
     .expect("matching projection is valid");
     assert_eq!(snapshot.projection().session_id(), session_id);
-    assert_eq!(
-        snapshot.projection().at_sequence(),
-        SessionEventSequenceDto::new(4)
-    );
+    assert_eq!(snapshot.session_id(), session_id);
+    assert_eq!(snapshot.messages().len(), 1);
     assert!(
         serde_json::from_str::<SessionSnapshotDto>(
-            r#"{"schema_version":{"major":1,"minor":1},"session_id":"11111111-1111-4111-8111-111111111111","at_sequence":4}"#
+            r#"{"schema_version":{"major":1,"minor":1},"session_id":"11111111-1111-4111-8111-111111111111","projection":null,"messages":[]}"#
         )
         .is_err(),
         "a snapshot without its required projection must fail closed"
+    );
+    assert!(
+        serde_json::from_str::<SessionSnapshotDto>(
+            r#"{"schema_version":{"major":1,"minor":1},"session_id":"11111111-1111-4111-8111-111111111111","projection":{"project_id":"11111111-1111-4111-8111-111111111111","session_id":"11111111-1111-4111-8111-111111111111","workspace_id":"11111111-1111-4111-8111-111111111111","workspace_root":"/fixture","mode":"build","pending_turns":[]}}"#
+        )
+        .is_err(),
+        "a snapshot without its required messages must fail closed"
     );
 }
 
 #[test]
 fn session_snapshot_validation_covers_m3_failure_boundaries() {
     let session_id = SessionId::new();
-    let sequence = SessionEventSequenceDto::new(7);
 
     assert_eq!(
         SessionSnapshotDto::with_projection(
             SchemaVersionDto::new(1, 1),
             session_id,
-            sequence,
-            fixture_projection(SessionId::new(), sequence),
+            fixture_projection(SessionId::new()),
+            Vec::new(),
         )
         .expect_err("projection session mismatch rejects")
         .code(),
@@ -185,8 +186,8 @@ fn subscription_snapshot_remains_an_unboxed_compatible_wire_value() {
     let snapshot = SessionSnapshotDto::with_projection(
         schema_version,
         session_id,
-        SessionEventSequenceDto::new(0),
-        fixture_projection(session_id, SessionEventSequenceDto::new(0)),
+        fixture_projection(session_id),
+        vec![fixture_message(session_id, RunId::new())],
     )
     .expect("fixture snapshot is valid");
     let response = SessionSubscriptionResponseDto::snapshot(snapshot);

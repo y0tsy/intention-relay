@@ -4,13 +4,13 @@
 //! client bootstrap, daemon lifecycle, runtime actors, or presentation logic.
 
 use intention_domain::{
-    CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto, ModelRunFactDto,
-    RemoveTurnCommandDto, RunEventCursorDto, RunModeDto, RunSnapshotDto, SendUserTurnCommandDto,
-    SessionProjectionDto,
+    CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto,
+    MessageProjectionDto, RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
+    SendUserTurnCommandDto, SessionProjectionDto,
 };
 use intention_types::{
     ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto,
-    SessionEventSequenceDto, SessionId, TurnId, WorkspaceId,
+    SessionId, TurnId, WorkspaceId,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
@@ -48,7 +48,7 @@ impl ProtocolVersionDto {
 /// stay required, and decoding tolerates unknown additive fields. There is no
 /// capability negotiation; a differing version is answered with a typed
 /// JSON-RPC mismatch error before the daemon closes the connection.
-pub const CURRENT_PROTOCOL_VERSION: ProtocolVersionDto = ProtocolVersionDto::new(2, 0);
+pub const CURRENT_PROTOCOL_VERSION: ProtocolVersionDto = ProtocolVersionDto::new(1, 0);
 /// The currently activated public DTO schema version.
 pub const CURRENT_DTO_SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 1);
 
@@ -201,27 +201,23 @@ pub struct SubscribeSessionCommandDto {
     session_id: SessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     run_id: Option<RunId>,
-    after_sequence: Option<SessionEventSequenceDto>,
     requested_mode: RunModeDto,
 }
 
 impl SubscribeSessionCommandDto {
     /// Creates a typed session-wide subscription request.
     ///
-    /// This preserves the version-one constructor shape. Use
-    /// [`Self::with_run_id`] to scope a subscription to a particular run.
+    /// Use [`Self::with_run_id`] to scope a subscription to a particular run.
     #[must_use]
     pub const fn new(
         schema_version: SchemaVersionDto,
         session_id: SessionId,
-        after_sequence: Option<SessionEventSequenceDto>,
         requested_mode: RunModeDto,
     ) -> Self {
         Self {
             schema_version,
             session_id,
             run_id: None,
-            after_sequence,
             requested_mode,
         }
     }
@@ -232,14 +228,12 @@ impl SubscribeSessionCommandDto {
         schema_version: SchemaVersionDto,
         session_id: SessionId,
         run_id: Option<RunId>,
-        after_sequence: Option<SessionEventSequenceDto>,
         requested_mode: RunModeDto,
     ) -> Self {
         Self {
             schema_version,
             session_id,
             run_id,
-            after_sequence,
             requested_mode,
         }
     }
@@ -262,12 +256,6 @@ impl SubscribeSessionCommandDto {
         self.run_id
     }
 
-    /// Returns the last durable sequence already observed, if any.
-    #[must_use]
-    pub const fn after_sequence(self) -> Option<SessionEventSequenceDto> {
-        self.after_sequence
-    }
-
     /// Returns the requesting adapter's current mode projection.
     #[must_use]
     pub const fn requested_mode(self) -> RunModeDto {
@@ -282,24 +270,20 @@ pub struct SubscribeRunCommandDto {
     schema_version: SchemaVersionDto,
     session_id: SessionId,
     run_id: RunId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    after_cursor: Option<RunEventCursorDto>,
 }
 
 impl SubscribeRunCommandDto {
-    /// Creates a run-scoped subscription request from an optional known cursor.
+    /// Creates a run-scoped subscription request.
     #[must_use]
     pub const fn new(
         schema_version: SchemaVersionDto,
         session_id: SessionId,
         run_id: RunId,
-        after_cursor: Option<RunEventCursorDto>,
     ) -> Self {
         Self {
             schema_version,
             session_id,
             run_id,
-            after_cursor,
         }
     }
 
@@ -320,44 +304,24 @@ impl SubscribeRunCommandDto {
     pub const fn run_id(self) -> RunId {
         self.run_id
     }
-
-    /// Returns the last accepted run-fact cursor, if any.
-    #[must_use]
-    pub const fn after_cursor(self) -> Option<RunEventCursorDto> {
-        self.after_cursor
-    }
 }
 
-/// The closed reason a run subscriber must discard its current run state.
+/// A committed run-status change published as an uncorrelated run-stream frame.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RunResyncReasonDto {
-    /// The requested run history is unavailable for a contiguous replay.
-    HistoryUnavailable,
-    /// The requested run cursor is invalid.
-    InvalidCursor,
-    /// The receiver observed a non-contiguous fact range.
-    CursorGap,
-    /// The daemon could not retain this subscriber safely.
-    SubscriberTooSlow,
-}
-
-/// A typed run-scoped resynchronization instruction.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RunResyncDto {
+pub struct RunStatusFrameDto {
     session_id: SessionId,
     run_id: RunId,
-    reason: RunResyncReasonDto,
+    status: RunStatusDto,
 }
 
-impl RunResyncDto {
-    /// Creates a typed run resynchronization instruction.
+impl RunStatusFrameDto {
+    /// Creates a committed status frame for one run.
     #[must_use]
-    pub const fn new(session_id: SessionId, run_id: RunId, reason: RunResyncReasonDto) -> Self {
+    pub const fn new(session_id: SessionId, run_id: RunId, status: RunStatusDto) -> Self {
         Self {
             session_id,
             run_id,
-            reason,
+            status,
         }
     }
 
@@ -373,194 +337,81 @@ impl RunResyncDto {
         self.run_id
     }
 
-    /// Returns the closed resynchronization reason.
+    /// Returns the committed run lifecycle status.
     #[must_use]
-    pub const fn reason(self) -> RunResyncReasonDto {
-        self.reason
-    }
-}
-
-/// A non-empty, contiguous run-fact range emitted after durable commit.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct RunLiveBatchDto {
-    session_id: SessionId,
-    run_id: RunId,
-    after_cursor: RunEventCursorDto,
-    facts: Vec<ModelRunFactDto>,
-    next_after_cursor: RunEventCursorDto,
-}
-
-impl<'de> Deserialize<'de> for RunLiveBatchDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawRunLiveBatchDto {
-            session_id: SessionId,
-            run_id: RunId,
-            after_cursor: RunEventCursorDto,
-            facts: Vec<ModelRunFactDto>,
-            next_after_cursor: RunEventCursorDto,
-        }
-        let raw = RawRunLiveBatchDto::deserialize(deserializer)?;
-        Self::new(
-            raw.session_id,
-            raw.run_id,
-            raw.after_cursor,
-            raw.facts,
-            raw.next_after_cursor,
-        )
-        .map_err(de::Error::custom)
-    }
-}
-
-impl RunLiveBatchDto {
-    /// Creates a non-empty contiguous range of positive run facts.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when facts are empty, non-contiguous, or the
-    /// continuation does not equal the final fact cursor.
-    pub fn new(
-        session_id: SessionId,
-        run_id: RunId,
-        after_cursor: RunEventCursorDto,
-        facts: Vec<ModelRunFactDto>,
-        next_after_cursor: RunEventCursorDto,
-    ) -> DtoResult<Self> {
-        if facts.is_empty() {
-            return Err(ErrorDto::validation(
-                "invalid_run_live_batch",
-                "run live batches must contain at least one fact",
-            ));
-        }
-        let mut expected = after_cursor.value();
-        for fact in &facts {
-            expected = expected.checked_add(1).ok_or_else(|| {
-                ErrorDto::validation("invalid_run_live_batch", "run fact cursor overflow")
-            })?;
-            if fact.cursor().value() != expected {
-                return Err(ErrorDto::validation(
-                    "invalid_run_live_batch",
-                    "run live batch facts must be contiguous after the cursor",
-                ));
-            }
-        }
-        if next_after_cursor.value() != expected {
-            return Err(ErrorDto::validation(
-                "invalid_run_live_batch",
-                "run live batch continuation must equal its final fact cursor",
-            ));
-        }
-        Ok(Self {
-            session_id,
-            run_id,
-            after_cursor,
-            facts,
-            next_after_cursor,
-        })
-    }
-
-    /// Returns the scoped session identity.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-    /// Returns the scoped run identity.
-    #[must_use]
-    pub const fn run_id(&self) -> RunId {
-        self.run_id
-    }
-    /// Returns the cursor preceding this range.
-    #[must_use]
-    pub const fn after_cursor(&self) -> RunEventCursorDto {
-        self.after_cursor
-    }
-    /// Returns the contiguous durable facts.
-    #[must_use]
-    pub fn facts(&self) -> &[ModelRunFactDto] {
-        &self.facts
-    }
-    /// Returns the cursor after the range.
-    #[must_use]
-    pub const fn next_after_cursor(&self) -> RunEventCursorDto {
-        self.next_after_cursor
-    }
-}
-
-/// A daemon-authoritative run snapshot emitted for status-only durable commits.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct RunSnapshotFrameDto {
-    snapshot: RunSnapshotDto,
-}
-
-impl<'de> Deserialize<'de> for RunSnapshotFrameDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawRunSnapshotFrameDto {
-            snapshot: RunSnapshotDto,
-        }
-        let raw = RawRunSnapshotFrameDto::deserialize(deserializer)?;
-        Ok(Self::new(raw.snapshot))
-    }
-}
-
-impl RunSnapshotFrameDto {
-    /// Creates an authoritative status snapshot frame.
-    #[must_use]
-    pub const fn new(snapshot: RunSnapshotDto) -> Self {
-        Self { snapshot }
-    }
-    /// Returns the authoritative daemon snapshot.
-    #[must_use]
-    pub const fn snapshot(&self) -> &RunSnapshotDto {
-        &self.snapshot
-    }
-    /// Returns the scoped session identity.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.snapshot.session_id()
-    }
-    /// Returns the scoped run identity.
-    #[must_use]
-    pub const fn run_id(&self) -> RunId {
-        self.snapshot.run_id()
+    pub const fn status(self) -> RunStatusDto {
+        self.status
     }
 }
 
 /// A server-originated, uncorrelated run-stream frame.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+///
+/// The wire tag is `kind` with `content` for one committed transcript row and
+/// `status` for one committed run-status change; the payload travels in `data`
+/// and carries no event position.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum RunStreamFrameDto {
-    /// A contiguous range of committed run facts.
-    LiveBatch(RunLiveBatchDto),
-    /// An authoritative run status snapshot.
-    Snapshot(RunSnapshotFrameDto),
-    /// An instruction to clear local run state.
-    Resync(RunResyncDto),
+    /// One committed transcript row.
+    Content(MessageProjectionDto),
+    /// One committed run-status change.
+    Status(RunStatusFrameDto),
 }
 
-impl<'de> Deserialize<'de> for RunStreamFrameDto {
+/// The compact current run state returned by a dedicated run subscription.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RunSubscriptionSnapshotDto {
+    run: RunProjectionDto,
+    messages: Vec<MessageProjectionDto>,
+}
+
+impl<'de> Deserialize<'de> for RunSubscriptionSnapshotDto {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
-        enum RawRunStreamFrameDto {
-            LiveBatch(RunLiveBatchDto),
-            Snapshot(RunSnapshotFrameDto),
-            Resync(RunResyncDto),
+        struct RawRunSubscriptionSnapshotDto {
+            run: RunProjectionDto,
+            messages: Vec<MessageProjectionDto>,
         }
-        Ok(match RawRunStreamFrameDto::deserialize(deserializer)? {
-            RawRunStreamFrameDto::LiveBatch(batch) => Self::LiveBatch(batch),
-            RawRunStreamFrameDto::Snapshot(snapshot) => Self::Snapshot(snapshot),
-            RawRunStreamFrameDto::Resync(resync) => Self::Resync(resync),
-        })
+        let raw = RawRunSubscriptionSnapshotDto::deserialize(deserializer)?;
+        Self::new(raw.run, raw.messages).map_err(de::Error::custom)
+    }
+}
+
+impl RunSubscriptionSnapshotDto {
+    /// Creates a coherent run snapshot scoped to one session and run.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when a carried transcript row belongs to a
+    /// different session or to a different run.
+    pub fn new(run: RunProjectionDto, messages: Vec<MessageProjectionDto>) -> DtoResult<Self> {
+        if messages.iter().any(|message| {
+            message.session_id() != run.session_id()
+                || message
+                    .run_id()
+                    .is_some_and(|run_id| run_id != run.run_id())
+        }) {
+            return Err(ErrorDto::validation(
+                "invalid_run_subscription_snapshot",
+                "run snapshot messages must belong to the snapshot session and run",
+            ));
+        }
+        Ok(Self { run, messages })
+    }
+
+    /// Returns the current run projection.
+    #[must_use]
+    pub const fn run(&self) -> &RunProjectionDto {
+        &self.run
+    }
+
+    /// Returns the bounded committed transcript rows of the run.
+    #[must_use]
+    pub fn messages(&self) -> &[MessageProjectionDto] {
+        &self.messages
     }
 }
 
@@ -568,12 +419,24 @@ impl<'de> Deserialize<'de> for RunStreamFrameDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum RunSubscriptionResponseDto {
-    /// The authoritative current run snapshot; later facts arrive as live batches.
-    Replay(RunSnapshotDto),
-    /// A typed initial resynchronization requirement.
-    Resync(RunResyncDto),
-    /// A safe scoped request error, including `run_replay_not_found`.
+    /// The current run state; later committed state arrives as live frames.
+    Snapshot(RunSubscriptionSnapshotDto),
+    /// A safe scoped request error.
     Error(ErrorDto),
+}
+
+impl RunSubscriptionResponseDto {
+    /// Creates a current run-state snapshot response.
+    #[must_use]
+    pub const fn snapshot(snapshot: RunSubscriptionSnapshotDto) -> Self {
+        Self::Snapshot(snapshot)
+    }
+
+    /// Creates a typed run-subscription error response.
+    #[must_use]
+    pub const fn error(error: ErrorDto) -> Self {
+        Self::Error(error)
+    }
 }
 
 /// A typed protocol command wrapper with no transport-specific resources.
@@ -686,7 +549,6 @@ pub struct CreateSessionAcceptedDto {
     project_id: ProjectId,
     workspace_id: WorkspaceId,
     session_id: SessionId,
-    committed_sequence: SessionEventSequenceDto,
 }
 impl CreateSessionAcceptedDto {
     /// Creates durable session acceptance evidence.
@@ -695,13 +557,11 @@ impl CreateSessionAcceptedDto {
         project_id: ProjectId,
         workspace_id: WorkspaceId,
         session_id: SessionId,
-        committed_sequence: SessionEventSequenceDto,
     ) -> Self {
         Self {
             project_id,
             workspace_id,
             session_id,
-            committed_sequence,
         }
     }
     /// Returns the owning project identity.
@@ -718,11 +578,6 @@ impl CreateSessionAcceptedDto {
     #[must_use]
     pub const fn session_id(self) -> SessionId {
         self.session_id
-    }
-    /// Returns the final sequence committed by this operation.
-    #[must_use]
-    pub const fn committed_sequence(self) -> SessionEventSequenceDto {
-        self.committed_sequence
     }
 }
 
@@ -744,7 +599,6 @@ pub enum SendUserTurnOutcomeDto {
 pub struct SendUserTurnAcceptedDto {
     session_id: SessionId,
     turn_id: TurnId,
-    committed_sequence: SessionEventSequenceDto,
     outcome: SendUserTurnOutcomeDto,
 }
 impl SendUserTurnAcceptedDto {
@@ -753,13 +607,11 @@ impl SendUserTurnAcceptedDto {
     pub const fn new(
         session_id: SessionId,
         turn_id: TurnId,
-        committed_sequence: SessionEventSequenceDto,
         outcome: SendUserTurnOutcomeDto,
     ) -> Self {
         Self {
             session_id,
             turn_id,
-            committed_sequence,
             outcome,
         }
     }
@@ -773,11 +625,6 @@ impl SendUserTurnAcceptedDto {
     pub const fn turn_id(self) -> TurnId {
         self.turn_id
     }
-    /// Returns the final sequence committed by this operation.
-    #[must_use]
-    pub const fn committed_sequence(self) -> SessionEventSequenceDto {
-        self.committed_sequence
-    }
     /// Returns whether the turn started a run or became a pending message.
     #[must_use]
     pub const fn outcome(self) -> SendUserTurnOutcomeDto {
@@ -790,20 +637,14 @@ impl SendUserTurnAcceptedDto {
 pub struct RemoveTurnAcceptedDto {
     session_id: SessionId,
     turn_id: TurnId,
-    committed_sequence: SessionEventSequenceDto,
 }
 impl RemoveTurnAcceptedDto {
     /// Creates complete pending-turn removal acceptance evidence.
     #[must_use]
-    pub const fn new(
-        session_id: SessionId,
-        turn_id: TurnId,
-        committed_sequence: SessionEventSequenceDto,
-    ) -> Self {
+    pub const fn new(session_id: SessionId, turn_id: TurnId) -> Self {
         Self {
             session_id,
             turn_id,
-            committed_sequence,
         }
     }
     /// Returns the owning session identity.
@@ -816,11 +657,6 @@ impl RemoveTurnAcceptedDto {
     pub const fn turn_id(self) -> TurnId {
         self.turn_id
     }
-    /// Returns the final sequence committed by this operation.
-    #[must_use]
-    pub const fn committed_sequence(self) -> SessionEventSequenceDto {
-        self.committed_sequence
-    }
 }
 
 /// Typed acceptance evidence for a run interruption request.
@@ -828,21 +664,12 @@ impl RemoveTurnAcceptedDto {
 pub struct InterruptRunAcceptedDto {
     session_id: SessionId,
     run_id: RunId,
-    at_sequence: SessionEventSequenceDto,
 }
 impl InterruptRunAcceptedDto {
     /// Creates complete interruption acceptance evidence.
     #[must_use]
-    pub const fn new(
-        session_id: SessionId,
-        run_id: RunId,
-        at_sequence: SessionEventSequenceDto,
-    ) -> Self {
-        Self {
-            session_id,
-            run_id,
-            at_sequence,
-        }
+    pub const fn new(session_id: SessionId, run_id: RunId) -> Self {
+        Self { session_id, run_id }
     }
     /// Returns the owning session identity.
     #[must_use]
@@ -854,20 +681,15 @@ impl InterruptRunAcceptedDto {
     pub const fn run_id(self) -> RunId {
         self.run_id
     }
-    /// Returns the durable session position observed at acceptance.
-    #[must_use]
-    pub const fn at_sequence(self) -> SessionEventSequenceDto {
-        self.at_sequence
-    }
 }
 
-/// A versioned current position for a durable session projection.
+/// A versioned current session projection with its committed transcript rows.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SessionSnapshotDto {
     schema_version: SchemaVersionDto,
     session_id: SessionId,
-    at_sequence: SessionEventSequenceDto,
     projection: SessionProjectionDto,
+    messages: Vec<MessageProjectionDto>,
 }
 
 impl<'de> Deserialize<'de> for SessionSnapshotDto {
@@ -880,15 +702,15 @@ impl<'de> Deserialize<'de> for SessionSnapshotDto {
             #[serde(deserialize_with = "current_schema_version")]
             schema_version: SchemaVersionDto,
             session_id: SessionId,
-            at_sequence: SessionEventSequenceDto,
             projection: SessionProjectionDto,
+            messages: Vec<MessageProjectionDto>,
         }
         let raw = RawSessionSnapshotDto::deserialize(deserializer)?;
         Self::with_projection(
             raw.schema_version,
             raw.session_id,
-            raw.at_sequence,
             raw.projection,
+            raw.messages,
         )
         .map_err(de::Error::custom)
     }
@@ -899,25 +721,25 @@ impl SessionSnapshotDto {
     ///
     /// # Errors
     ///
-    /// Returns a validation error when projection session identity or durable
-    /// sequence differs from this snapshot checkpoint.
+    /// Returns a validation error when the projection session identity differs
+    /// from this snapshot session.
     pub fn with_projection(
         schema_version: SchemaVersionDto,
         session_id: SessionId,
-        at_sequence: SessionEventSequenceDto,
         projection: SessionProjectionDto,
+        messages: Vec<MessageProjectionDto>,
     ) -> DtoResult<Self> {
-        if projection.session_id() != session_id || projection.at_sequence() != at_sequence {
+        if projection.session_id() != session_id {
             return Err(ErrorDto::validation(
                 "invalid_session_snapshot_projection",
-                "snapshot projection must share the snapshot session and sequence",
+                "snapshot projection must share the snapshot session",
             ));
         }
         Ok(Self {
             schema_version,
             session_id,
-            at_sequence,
             projection,
+            messages,
         })
     }
 
@@ -931,11 +753,6 @@ impl SessionSnapshotDto {
     pub const fn session_id(&self) -> SessionId {
         self.session_id
     }
-    /// Returns the durable event sequence included by the snapshot.
-    #[must_use]
-    pub const fn at_sequence(&self) -> SessionEventSequenceDto {
-        self.at_sequence
-    }
     /// Returns the public state projection carried by the snapshot.
     ///
     /// `projection` is a required field of the current DTO shape, so the
@@ -945,86 +762,34 @@ impl SessionSnapshotDto {
     pub const fn projection(&self) -> &SessionProjectionDto {
         &self.projection
     }
-}
-
-/// The reviewed reason why a subscriber must obtain a fresh snapshot.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionResyncReasonDto {
-    /// The requested event history is no longer available for replay.
-    HistoryUnavailable,
-    /// The request did not identify a usable contiguous event position.
-    InvalidPosition,
-}
-
-/// A typed instruction to discard local subscription state and resynchronize.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct SessionResyncDto {
-    #[serde(deserialize_with = "current_schema_version")]
-    schema_version: SchemaVersionDto,
-    session_id: SessionId,
-    reason: SessionResyncReasonDto,
-}
-
-impl SessionResyncDto {
-    /// Creates a safe, typed session resynchronization instruction.
+    /// Returns the bounded committed transcript rows of the session.
     #[must_use]
-    pub const fn new(
-        schema_version: SchemaVersionDto,
-        session_id: SessionId,
-        reason: SessionResyncReasonDto,
-    ) -> Self {
-        Self {
-            schema_version,
-            session_id,
-            reason,
-        }
-    }
-
-    /// Returns the resynchronization schema version.
-    #[must_use]
-    pub const fn schema_version(self) -> SchemaVersionDto {
-        self.schema_version
-    }
-
-    /// Returns the session that must be resynchronized.
-    #[must_use]
-    pub const fn session_id(self) -> SessionId {
-        self.session_id
-    }
-
-    /// Returns the reviewed typed reason for resynchronization.
-    #[must_use]
-    pub const fn reason(self) -> SessionResyncReasonDto {
-        self.reason
+    pub fn messages(&self) -> &[MessageProjectionDto] {
+        &self.messages
     }
 }
 
-/// A subscription response containing either a consistent snapshot or a resync instruction.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Snapshot is an established public DTO variant; boxing it would break Rust consumers without changing the serde wire format."
-)]
+/// A subscription response containing either a current snapshot or a safe error.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum SessionSubscriptionResponseDto {
-    /// A consistent session checkpoint.
+    /// A consistent current session snapshot.
     Snapshot(SessionSnapshotDto),
-    /// The subscriber must discard local state and request a new snapshot.
-    ResyncRequired(SessionResyncDto),
+    /// A safe scoped subscription error.
+    Error(ErrorDto),
 }
 
 impl SessionSubscriptionResponseDto {
-    /// Creates a consistent session checkpoint response.
+    /// Creates a consistent session snapshot response.
     #[must_use]
     pub const fn snapshot(snapshot: SessionSnapshotDto) -> Self {
         Self::Snapshot(snapshot)
     }
 
-    /// Creates a typed subscription resynchronization response.
+    /// Creates a typed session-subscription error response.
     #[must_use]
-    pub const fn resync_required(resync: SessionResyncDto) -> Self {
-        Self::ResyncRequired(resync)
+    pub const fn error(error: ErrorDto) -> Self {
+        Self::Error(error)
     }
 }
 
@@ -1463,6 +1228,7 @@ mod tests {
     )]
 
     use super::*;
+    use intention_domain::MessageKindDto;
 
     fn fixture_workspace_root() -> intention_domain::WorkspaceRootDto {
         intention_domain::WorkspaceRootDto::parse(
@@ -1474,10 +1240,7 @@ mod tests {
         .expect("fixture workspace root is valid")
     }
 
-    fn fixture_projection(
-        session_id: SessionId,
-        at_sequence: SessionEventSequenceDto,
-    ) -> SessionProjectionDto {
+    fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
         SessionProjectionDto::new(
             ProjectId::new(),
             session_id,
@@ -1487,15 +1250,37 @@ mod tests {
             None,
             None,
             Vec::new(),
-            at_sequence,
         )
         .expect("fixture projection is valid")
     }
 
+    fn fixture_message(session_id: SessionId, run_id: RunId) -> MessageProjectionDto {
+        MessageProjectionDto::new(
+            session_id,
+            Some(run_id),
+            MessageKindDto::Notice,
+            "fixture notice",
+            None,
+            None,
+            None,
+        )
+        .expect("fixture message is valid")
+    }
+
+    fn fixture_run(session_id: SessionId, run_id: RunId) -> RunProjectionDto {
+        RunProjectionDto::new(
+            session_id,
+            run_id,
+            TurnId::new(),
+            RunStatusDto::Running,
+            ConfigRevisionId::new(),
+        )
+    }
+
     #[test]
     fn protocol_versions_and_hello_validate_all_paths() {
-        let version = ProtocolVersionDto::new(2, 0);
-        assert_eq!(version.major(), 2);
+        let version = ProtocolVersionDto::new(1, 0);
+        assert_eq!(version.major(), 1);
         assert_eq!(version.minor(), 0);
         assert_eq!(version, crate::CURRENT_PROTOCOL_VERSION);
         assert_ne!(
@@ -1514,34 +1299,57 @@ mod tests {
     }
 
     #[test]
-    fn current_versions_are_protocol_2_0_and_dto_schema_1_1() {
-        assert_eq!(CURRENT_PROTOCOL_VERSION, ProtocolVersionDto::new(2, 0));
+    fn current_versions_are_protocol_1_0_and_dto_schema_1_1() {
+        assert_eq!(CURRENT_PROTOCOL_VERSION, ProtocolVersionDto::new(1, 0));
         assert_eq!(CURRENT_DTO_SCHEMA_VERSION, SchemaVersionDto::new(1, 1));
     }
 
     #[test]
-    fn subscription_responses_round_trip_snapshots_and_resync() {
+    fn subscription_responses_round_trip_current_state_snapshots() {
         let schema = SchemaVersionDto::new(1, 1);
         let session_id = SessionId::new();
+        let run_id = RunId::new();
         let snapshot = SessionSnapshotDto::with_projection(
             schema,
             session_id,
-            SessionEventSequenceDto::new(2),
-            fixture_projection(session_id, SessionEventSequenceDto::new(2)),
+            fixture_projection(session_id),
+            vec![fixture_message(session_id, run_id)],
         )
         .expect("fixture snapshot is valid");
-        assert!(matches!(
-            SessionSubscriptionResponseDto::snapshot(snapshot),
-            SessionSubscriptionResponseDto::Snapshot(_)
-        ));
+        assert_eq!(snapshot.messages().len(), 1);
+        let response = SessionSubscriptionResponseDto::snapshot(snapshot);
+        assert_eq!(
+            serde_json::from_str::<SessionSubscriptionResponseDto>(
+                &serde_json::to_string(&response).expect("response serializes")
+            )
+            .expect("response deserializes"),
+            response
+        );
+
+        let run_snapshot = RunSubscriptionSnapshotDto::new(
+            fixture_run(session_id, run_id),
+            vec![fixture_message(session_id, run_id)],
+        )
+        .expect("fixture run snapshot is valid");
+        let response = RunSubscriptionResponseDto::snapshot(run_snapshot);
+        assert_eq!(
+            serde_json::from_str::<RunSubscriptionResponseDto>(
+                &serde_json::to_string(&response).expect("run response serializes")
+            )
+            .expect("run response deserializes"),
+            response
+        );
     }
 
     #[test]
     fn wire_helpers_round_trip_responses_notifications_and_hello() {
         let session_id = SessionId::new();
         let run_id = RunId::new();
-        let resync = RunResyncDto::new(session_id, run_id, RunResyncReasonDto::CursorGap);
-        let frame = RunStreamFrameDto::Resync(resync);
+        let frame = RunStreamFrameDto::Status(RunStatusFrameDto::new(
+            session_id,
+            run_id,
+            RunStatusDto::Completed,
+        ));
         let notification = ProtocolDaemonMessageDto::run_frame(frame.clone());
         let line = serde_json::to_string(&notification).expect("notification serializes");
         assert_eq!(
@@ -1549,15 +1357,21 @@ mod tests {
             frame
         );
 
-        let response_payload =
-            ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Resync(resync));
+        let run_snapshot = RunSubscriptionSnapshotDto::new(
+            fixture_run(session_id, run_id),
+            vec![fixture_message(session_id, run_id)],
+        )
+        .expect("fixture run snapshot is valid");
+        let response_payload = ProtocolResponsePayloadDto::RunSubscription(
+            RunSubscriptionResponseDto::snapshot(run_snapshot),
+        );
         let response = encode_response(7, response_payload);
         let line = serde_json::to_string(&response).expect("response serializes");
         let decoded =
             decode_response(&line, ProtocolMethodDto::RunSubscribe, 7).expect("response decodes");
         assert!(matches!(
             decoded,
-            ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Resync(_))
+            ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Snapshot(_))
         ));
         assert!(
             decode_response(&line, ProtocolMethodDto::DaemonHealth, 7).is_err(),
@@ -1632,23 +1446,23 @@ mod tests {
     fn remaining_constructor_and_deserialization_error_paths_are_checked() {
         let session = SessionId::new();
         let run = RunId::new();
-        let batch = RunLiveBatchDto::new(
-            session,
-            run,
-            RunEventCursorDto::new(u64::MAX),
-            vec![
-                ModelRunFactDto::new(
-                    RunEventCursorDto::new(1),
-                    intention_domain::ModelRunFactInputDto::provider_attempt_started(1)
-                        .expect("fixture fact input is valid"),
-                )
-                .expect("fixture fact is valid"),
-            ],
-            RunEventCursorDto::new(u64::MAX),
+        assert_eq!(
+            RunSubscriptionSnapshotDto::new(
+                fixture_run(session, run),
+                vec![fixture_message(SessionId::new(), run)]
+            )
+            .expect_err("a message from another session is rejected")
+            .code(),
+            "invalid_run_subscription_snapshot"
         );
         assert_eq!(
-            batch.expect_err("cursor overflow is rejected").code(),
-            "invalid_run_live_batch"
+            RunSubscriptionSnapshotDto::new(
+                fixture_run(session, run),
+                vec![fixture_message(session, RunId::new())]
+            )
+            .expect_err("a message bound to another run is rejected")
+            .code(),
+            "invalid_run_subscription_snapshot"
         );
         assert!(
             serde_json::from_str::<RunStreamFrameDto>(r#"{"kind":"unknown","data":{}}"#).is_err()

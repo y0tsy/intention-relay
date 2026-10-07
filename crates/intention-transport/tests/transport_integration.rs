@@ -11,10 +11,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use intention_protocol::{
     JsonRpcErrorDto, JsonRpcRequestDto, JsonRpcResponseDto, ProtocolDaemonMessageDto,
     ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto,
-    ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, ProtocolVersionDto, RunResyncDto,
-    RunResyncReasonDto, RunStreamFrameDto, decode_request_line, decode_response,
-    encode_hello_request, encode_hello_response, encode_request, encode_response,
-    parse_run_frame_notification,
+    ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, ProtocolVersionDto, RunStreamFrameDto,
+    decode_request_line, decode_response, encode_hello_request, encode_hello_response,
+    encode_request, encode_response, parse_run_frame_notification,
 };
 use intention_transport::{
     AsyncLocalClientConnection, AsyncLocalListener, LocalConnection, LocalEndpoint, LocalListener,
@@ -60,6 +59,19 @@ fn unavailable_response(id: u64) -> JsonRpcResponseDto<ProtocolResponsePayloadDt
     encode_response(id, rejected_payload())
 }
 
+/// Builds one current-state status frame from its wire shape so this crate
+/// keeps exercising framing without depending on the domain vocabulary.
+fn running_status_frame(
+    session_id: intention_types::SessionId,
+    run_id: intention_types::RunId,
+) -> RunStreamFrameDto {
+    serde_json::from_value(serde_json::json!({
+        "kind": "status",
+        "data": { "session_id": session_id, "run_id": run_id, "status": "running" },
+    }))
+    .expect("current-state status frame decodes")
+}
+
 #[tokio::test]
 async fn async_connection_preserves_correlated_replies_then_uncorrelated_stream_frames() {
     let directory = TempDir::new().expect("temporary directory is available");
@@ -88,13 +100,9 @@ async fn async_connection_preserves_correlated_replies_then_uncorrelated_stream_
             .await
             .expect("server sends correlated response");
         messages
-            .send_message(&ProtocolDaemonMessageDto::run_frame(
-                RunStreamFrameDto::Resync(RunResyncDto::new(
-                    session_id,
-                    run_id,
-                    RunResyncReasonDto::SubscriberTooSlow,
-                )),
-            ))
+            .send_message(&ProtocolDaemonMessageDto::run_frame(running_status_frame(
+                session_id, run_id,
+            )))
             .await
             .expect("server sends stream frame");
     });
@@ -117,8 +125,8 @@ async fn async_connection_preserves_correlated_replies_then_uncorrelated_stream_
     let line = messages.receive_line().await.expect("stream frame arrives");
     assert!(matches!(
         parse_run_frame_notification(&line).expect("stream frame parses"),
-        RunStreamFrameDto::Resync(resync)
-            if resync.session_id() == session_id && resync.run_id() == run_id
+        RunStreamFrameDto::Status(status)
+            if status.session_id() == session_id && status.run_id() == run_id
     ));
     server.await.expect("server task completes");
 }

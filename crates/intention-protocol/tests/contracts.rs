@@ -6,23 +6,24 @@
 //! Test-first protocol contract and current-version wire evidence.
 
 use intention_domain::{
-    GetSessionSnapshotQueryDto, InterruptRunCommandDto, RunModeDto, SendUserTurnCommandDto,
-    SessionProjectionDto,
+    GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
+    RunModeDto, RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto,
 };
 use intention_protocol::{
     CURRENT_DTO_SCHEMA_VERSION, CURRENT_PROTOCOL_VERSION, DaemonHealthDto, DaemonReadinessDto,
-    JsonRpcErrorDto, JsonRpcRequestDto, JsonRpcResponseDto, PROTOCOL_HELLO_METHOD,
-    ProtocolAcceptedDto, ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto,
-    ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto,
-    ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, ProtocolVersionDto, RunResyncDto,
-    RunResyncReasonDto, RunStreamFrameDto, SessionResyncDto, SessionResyncReasonDto,
-    SessionSnapshotDto, SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
-    decode_hello_request, decode_request_line, decode_response, encode_hello_request,
-    encode_request, encode_response, is_notification_line, parse_run_frame_notification,
+    InterruptRunAcceptedDto, JsonRpcErrorDto, JsonRpcRequestDto, JsonRpcResponseDto,
+    PROTOCOL_HELLO_METHOD, ProtocolAcceptedDto, ProtocolAcceptedResultDto, ProtocolCommandDto,
+    ProtocolCommandResultDto, ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto,
+    ProtocolQueryResultDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
+    ProtocolVersionDto, RunStatusFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
+    RunSubscriptionSnapshotDto, SessionSnapshotDto, SessionSubscriptionResponseDto,
+    SubscribeRunCommandDto, SubscribeSessionCommandDto, decode_hello_request, decode_request_line,
+    decode_response, encode_hello_request, encode_request, encode_response, is_notification_line,
+    parse_run_frame_notification,
 };
 use intention_types::{
-    CorrelationIdDto, ErrorDto, ProjectId, SchemaVersionDto, SessionEventSequenceDto, SessionId,
-    WorkspaceId,
+    ConfigRevisionId, CorrelationIdDto, ErrorDto, IdempotencyKey, ProjectId, RunId,
+    SchemaVersionDto, SessionId, TurnId, WorkspaceId,
 };
 
 fn fixture_workspace_root() -> intention_domain::WorkspaceRootDto {
@@ -35,10 +36,7 @@ fn fixture_workspace_root() -> intention_domain::WorkspaceRootDto {
     .expect("fixture workspace root is valid")
 }
 
-fn fixture_projection(
-    session_id: SessionId,
-    at_sequence: SessionEventSequenceDto,
-) -> SessionProjectionDto {
+fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
     SessionProjectionDto::new(
         ProjectId::new(),
         session_id,
@@ -48,9 +46,31 @@ fn fixture_projection(
         None,
         None,
         Vec::new(),
-        at_sequence,
     )
     .expect("fixture projection is valid")
+}
+
+fn fixture_message(session_id: SessionId, run_id: RunId) -> MessageProjectionDto {
+    MessageProjectionDto::new(
+        session_id,
+        Some(run_id),
+        MessageKindDto::Notice,
+        "fixture notice",
+        None,
+        None,
+        None,
+    )
+    .expect("fixture message is valid")
+}
+
+fn fixture_run(session_id: SessionId, run_id: RunId) -> RunProjectionDto {
+    RunProjectionDto::new(
+        session_id,
+        run_id,
+        TurnId::new(),
+        RunStatusDto::Running,
+        ConfigRevisionId::new(),
+    )
 }
 
 #[test]
@@ -65,7 +85,7 @@ fn protocol_hello_round_trips_with_the_current_version() {
     assert_eq!(decoded, hello);
     // Compared against a literal rather than the constant the fixture was
     // built from, so this assertion can fail: the wire is pinned to 2.0.
-    assert_eq!(decoded.version(), ProtocolVersionDto::new(2, 0));
+    assert_eq!(decoded.version(), ProtocolVersionDto::new(1, 0));
     assert_eq!(decoded.adapter_name(), "fixture-tui");
     assert!(
         !encoded.contains("capabilit"),
@@ -76,7 +96,7 @@ fn protocol_hello_round_trips_with_the_current_version() {
 #[test]
 fn only_the_exact_current_protocol_version_passes_negotiation_equality() {
     let current = intention_protocol::CURRENT_PROTOCOL_VERSION;
-    assert_eq!(current, ProtocolVersionDto::new(2, 0));
+    assert_eq!(current, ProtocolVersionDto::new(1, 0));
     assert_ne!(ProtocolVersionDto::new(1, 1), current);
     assert_ne!(ProtocolVersionDto::new(2, 1), current);
     // A non-current peer fails the daemon/client negotiation gate with the
@@ -121,7 +141,7 @@ const EVERY_METHOD: [ProtocolMethodDto; 8] = [
 fn method_payload(method: ProtocolMethodDto) -> ProtocolRequestPayloadDto {
     let schema = SchemaVersionDto::new(1, 1);
     let session_id = SessionId::new();
-    let run_id = intention_types::RunId::new();
+    let run_id = RunId::new();
     match method {
         ProtocolMethodDto::SessionCreate => ProtocolRequestPayloadDto::Command(
             ProtocolCommandDto::CreateSession(intention_domain::CreateSessionCommandDto::new(
@@ -134,26 +154,25 @@ fn method_payload(method: ProtocolMethodDto) -> ProtocolRequestPayloadDto {
         ),
         ProtocolMethodDto::TurnSend => {
             ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
-                SendUserTurnCommandDto::new(session_id, intention_types::TurnId::new(), "hello")
+                SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "hello")
                     .expect("fixture turn is valid"),
             ))
         }
-        ProtocolMethodDto::TurnRemove => ProtocolRequestPayloadDto::Command(
-            ProtocolCommandDto::RemoveTurn(intention_domain::RemoveTurnCommandDto::new(
-                session_id,
-                intention_types::TurnId::new(),
-            )),
-        ),
+        ProtocolMethodDto::TurnRemove => {
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::RemoveTurn(
+                intention_domain::RemoveTurnCommandDto::new(session_id, TurnId::new()),
+            ))
+        }
         ProtocolMethodDto::RunInterrupt => ProtocolRequestPayloadDto::Command(
             ProtocolCommandDto::InterruptRun(InterruptRunCommandDto::new(session_id, run_id)),
         ),
         ProtocolMethodDto::SessionSubscribe => {
             ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(
-                SubscribeSessionCommandDto::new(schema, session_id, None, RunModeDto::Build),
+                SubscribeSessionCommandDto::new(schema, session_id, RunModeDto::Build),
             ))
         }
         ProtocolMethodDto::RunSubscribe => ProtocolRequestPayloadDto::RunSubscription(
-            intention_protocol::SubscribeRunCommandDto::new(schema, session_id, run_id, None),
+            SubscribeRunCommandDto::new(schema, session_id, run_id),
         ),
         ProtocolMethodDto::DaemonHealth => {
             ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth)
@@ -172,7 +191,7 @@ fn foreign_payload(method: ProtocolMethodDto) -> ProtocolRequestPayloadDto {
     match method {
         ProtocolMethodDto::DaemonHealth => {
             ProtocolRequestPayloadDto::Command(ProtocolCommandDto::InterruptRun(
-                InterruptRunCommandDto::new(SessionId::new(), intention_types::RunId::new()),
+                InterruptRunCommandDto::new(SessionId::new(), RunId::new()),
             ))
         }
         _ => ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
@@ -260,13 +279,16 @@ fn daemon_health_and_session_snapshot_contracts_round_trip() {
     );
 
     let session_id = SessionId::new();
+    let run_id = RunId::new();
     let snapshot = SessionSnapshotDto::with_projection(
         schema,
         session_id,
-        SessionEventSequenceDto::new(2),
-        fixture_projection(session_id, SessionEventSequenceDto::new(2)),
+        fixture_projection(session_id),
+        vec![fixture_message(session_id, run_id)],
     )
     .expect("fixture snapshot is valid");
+    assert_eq!(snapshot.session_id(), session_id);
+    assert_eq!(snapshot.messages().len(), 1);
     let response = SessionSubscriptionResponseDto::snapshot(snapshot);
 
     let encoded = serde_json::to_string(&response).expect("response serializes");
@@ -277,15 +299,31 @@ fn daemon_health_and_session_snapshot_contracts_round_trip() {
 
 #[test]
 fn subscribe_command_carries_optional_run_scope_on_the_current_shape() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
     let command = SubscribeSessionCommandDto::with_run_id(
         SchemaVersionDto::new(1, 1),
-        SessionId::new(),
-        Some(intention_types::RunId::new()),
-        Some(SessionEventSequenceDto::new(3)),
-        intention_domain::RunModeDto::Build,
+        session_id,
+        Some(run_id),
+        RunModeDto::Build,
+    );
+    assert_eq!(command.run_id(), Some(run_id));
+    assert_eq!(
+        SubscribeSessionCommandDto::new(
+            SchemaVersionDto::new(1, 1),
+            session_id,
+            RunModeDto::Build,
+        )
+        .run_id(),
+        None,
+        "the session-wide constructor requests no run scope"
     );
 
     let encoded = serde_json::to_string(&command).expect("test serialization must succeed");
+    assert!(
+        !encoded.contains("cursor") && !encoded.contains("sequence"),
+        "the subscription carries no cursor or sequence position"
+    );
     let decoded: SubscribeSessionCommandDto =
         serde_json::from_str(&encoded).expect("test deserialization must succeed");
 
@@ -297,25 +335,43 @@ fn subscribe_command_carries_optional_run_scope_on_the_current_shape() {
 }
 
 #[test]
+fn run_subscription_command_carries_only_the_run_scope() {
+    let command =
+        SubscribeRunCommandDto::new(SchemaVersionDto::new(1, 1), SessionId::new(), RunId::new());
+
+    let encoded = serde_json::to_string(&command).expect("test serialization must succeed");
+    assert!(
+        !encoded.contains("cursor"),
+        "the run subscription carries no cursor"
+    );
+    let decoded: SubscribeRunCommandDto =
+        serde_json::from_str(&encoded).expect("test deserialization must succeed");
+    assert_eq!(decoded, command);
+}
+
+#[test]
 fn protocol_request_and_response_variants_round_trip_through_jsonrpc_envelopes() {
     let schema = SchemaVersionDto::new(1, 1);
     let session_id = SessionId::new();
-    let run_id = intention_types::RunId::new();
+    let run_id = RunId::new();
     let correlation_id = CorrelationIdDto::new();
     let request_variants = [
         ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, intention_types::TurnId::new(), "hello")
+            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "hello")
                 .expect("fixture turn is valid"),
         )),
         ProtocolRequestPayloadDto::Command(ProtocolCommandDto::InterruptRun(
             InterruptRunCommandDto::new(session_id, run_id),
         )),
         ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(
-            SubscribeSessionCommandDto::new(schema, session_id, None, RunModeDto::Build),
+            SubscribeSessionCommandDto::new(schema, session_id, RunModeDto::Build),
         )),
         ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
         ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetSessionSnapshot(
             GetSessionSnapshotQueryDto::new(session_id),
+        )),
+        ProtocolRequestPayloadDto::RunSubscription(SubscribeRunCommandDto::new(
+            schema, session_id, run_id,
         )),
     ];
 
@@ -331,23 +387,24 @@ fn protocol_request_and_response_variants_round_trip_through_jsonrpc_envelopes()
     let snapshot = SessionSnapshotDto::with_projection(
         schema,
         session_id,
-        SessionEventSequenceDto::new(0),
-        fixture_projection(session_id, SessionEventSequenceDto::new(0)),
+        fixture_projection(session_id),
+        vec![fixture_message(session_id, run_id)],
     )
     .expect("fixture snapshot is valid");
+    let run_snapshot = RunSubscriptionSnapshotDto::new(
+        fixture_run(session_id, run_id),
+        vec![fixture_message(session_id, run_id)],
+    )
+    .expect("fixture run snapshot is valid");
     let responses = [
         (
             ProtocolMethodDto::TurnSend,
             ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(
                 ProtocolAcceptedDto::with_result(
                     correlation_id,
-                    ProtocolAcceptedResultDto::InterruptRun(
-                        intention_protocol::InterruptRunAcceptedDto::new(
-                            session_id,
-                            run_id,
-                            SessionEventSequenceDto::new(1),
-                        ),
-                    ),
+                    ProtocolAcceptedResultDto::InterruptRun(InterruptRunAcceptedDto::new(
+                        session_id, run_id,
+                    )),
                 ),
             )),
         ),
@@ -370,7 +427,7 @@ fn protocol_request_and_response_variants_round_trip_through_jsonrpc_envelopes()
         (
             ProtocolMethodDto::SessionSnapshot,
             ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::SessionSnapshot(
-                snapshot,
+                snapshot.clone(),
             )),
         ),
         (
@@ -381,13 +438,21 @@ fn protocol_request_and_response_variants_round_trip_through_jsonrpc_envelopes()
         ),
         (
             ProtocolMethodDto::SessionSubscribe,
-            ProtocolResponsePayloadDto::Subscription(
-                SessionSubscriptionResponseDto::resync_required(SessionResyncDto::new(
-                    schema,
-                    session_id,
-                    SessionResyncReasonDto::HistoryUnavailable,
-                )),
-            ),
+            ProtocolResponsePayloadDto::Subscription(SessionSubscriptionResponseDto::snapshot(
+                snapshot,
+            )),
+        ),
+        (
+            ProtocolMethodDto::RunSubscribe,
+            ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::snapshot(
+                run_snapshot,
+            )),
+        ),
+        (
+            ProtocolMethodDto::RunSubscribe,
+            ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::error(
+                ErrorDto::validation("run_not_found", "fixture run rejection"),
+            )),
         ),
     ];
 
@@ -457,21 +522,33 @@ fn jsonrpc_error_responses_map_to_stable_typed_errors() {
 }
 
 #[test]
-fn run_frame_notifications_round_trip_and_reject_other_methods() {
+fn run_frame_notifications_tag_content_and_status_kinds() {
     let session_id = SessionId::new();
-    let run_id = intention_types::RunId::new();
-    let frame = RunStreamFrameDto::Resync(RunResyncDto::new(
+    let run_id = RunId::new();
+    let content = RunStreamFrameDto::Content(fixture_message(session_id, run_id));
+    let status = RunStreamFrameDto::Status(RunStatusFrameDto::new(
         session_id,
         run_id,
-        RunResyncReasonDto::SubscriberTooSlow,
+        RunStatusDto::Running,
     ));
-    let notification = intention_protocol::ProtocolDaemonMessageDto::run_frame(frame.clone());
-    let line = serde_json::to_string(&notification).expect("notification serializes");
-    assert!(line.contains(r#""method":"run.frame""#));
-    assert_eq!(
-        parse_run_frame_notification(&line).expect("run frame parses"),
-        frame
-    );
+
+    for (frame, kind) in [(&content, "content"), (&status, "status")] {
+        let notification = intention_protocol::ProtocolDaemonMessageDto::run_frame(frame.clone());
+        let line = serde_json::to_string(&notification).expect("notification serializes");
+        assert!(line.contains(r#""method":"run.frame""#));
+        let value: serde_json::Value =
+            serde_json::from_str(&line).expect("notification line is JSON");
+        assert_eq!(value["params"]["kind"], kind);
+        assert!(value["params"]["data"].is_object());
+        assert!(
+            !line.contains("cursor") && !line.contains("sequence"),
+            "a run frame carries no position"
+        );
+        assert_eq!(
+            parse_run_frame_notification(&line).expect("run frame parses"),
+            *frame
+        );
+    }
 
     let foreign = JsonRpcResponseDto::<ProtocolResponsePayloadDto>::error(
         Some(1),
@@ -481,6 +558,36 @@ fn run_frame_notifications_round_trip_and_reject_other_methods() {
     assert!(
         parse_run_frame_notification(&line).is_err(),
         "a response is never accepted as a run frame"
+    );
+}
+
+#[test]
+fn run_subscription_snapshots_round_trip_and_validate_scope() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let run = fixture_run(session_id, run_id);
+    let snapshot = RunSubscriptionSnapshotDto::new(run, vec![fixture_message(session_id, run_id)])
+        .expect("coherent run snapshot is valid");
+    assert_eq!(snapshot.run().run_id(), run_id);
+    assert_eq!(snapshot.messages().len(), 1);
+
+    let response = RunSubscriptionResponseDto::snapshot(snapshot);
+    let encoded = serde_json::to_string(&response).expect("response serializes");
+    let decoded: RunSubscriptionResponseDto =
+        serde_json::from_str(&encoded).expect("response deserializes");
+    assert_eq!(decoded, response);
+
+    assert_eq!(
+        RunSubscriptionSnapshotDto::new(run, vec![fixture_message(SessionId::new(), run_id)])
+            .expect_err("a message from another session fails closed")
+            .code(),
+        "invalid_run_subscription_snapshot"
+    );
+    assert_eq!(
+        RunSubscriptionSnapshotDto::new(run, vec![fixture_message(session_id, RunId::new())])
+            .expect_err("a message from another run fails closed")
+            .code(),
+        "invalid_run_subscription_snapshot"
     );
 }
 
@@ -523,7 +630,7 @@ fn hello_version_mismatch_answers_with_the_typed_32001_error() {
 #[test]
 fn unknown_additive_hello_fields_remain_tolerated() {
     let hello: ProtocolHelloDto = serde_json::from_str(
-        r#"{"version":{"major":2,"minor":0},"adapter_name":"fixture","future_additive":true}"#,
+        r#"{"version":{"major":1,"minor":0},"adapter_name":"fixture","future_additive":true}"#,
     )
     .expect("unknown additive protocol fields are ignored for compatibility");
     assert_eq!(hello.adapter_name(), "fixture");
@@ -532,22 +639,36 @@ fn unknown_additive_hello_fields_remain_tolerated() {
 
 #[test]
 fn malformed_protocol_payload_fields_and_closed_variants_are_rejected() {
-    for wire in [
-        r#"{"kind":"command","data":{"kind":"send_user_turn","data":{"session_id":"11111111-1111-4111-8111-111111111111","turn_id":"11111111-1111-4111-8111-111111111111","content":" "}}}"#,
-        r#"{"kind":"query","data":{"kind":"unknown_query"}}"#,
-        r#"{"status":"unknown","data":{}}"#,
-        r#"{"kind":"subscription","data":{"kind":"snapshot","data":{"schema_version":{"major":1,"minor":1},"session_id":"11111111-1111-4111-8111-111111111111","at_sequence":0}}}"#,
-    ] {
-        if wire.contains("unknown_query") {
-            assert!(serde_json::from_str::<ProtocolRequestPayloadDto>(wire).is_err());
-        } else if wire.contains("unknown") {
-            assert!(serde_json::from_str::<ProtocolCommandResultDto>(wire).is_err());
-        } else if wire.contains("subscription") {
-            assert!(serde_json::from_str::<ProtocolResponsePayloadDto>(wire).is_err());
-        } else {
-            assert!(serde_json::from_str::<ProtocolRequestPayloadDto>(wire).is_err());
-        }
-    }
+    assert!(
+        serde_json::from_str::<ProtocolRequestPayloadDto>(
+            r#"{"kind":"command","data":{"kind":"send_user_turn","data":{"session_id":"11111111-1111-4111-8111-111111111111","idempotency_key":"11111111-1111-4111-8111-111111111111","content":" "}}}"#
+        )
+        .is_err(),
+        "a blank turn command fails closed"
+    );
+    assert!(
+        serde_json::from_str::<ProtocolRequestPayloadDto>(
+            r#"{"kind":"query","data":{"kind":"unknown_query"}}"#
+        )
+        .is_err(),
+        "a closed query table rejects unknown variants"
+    );
+    assert!(
+        serde_json::from_str::<ProtocolCommandResultDto>(r#"{"status":"unknown","data":{}}"#)
+            .is_err(),
+        "a closed command result table rejects unknown variants"
+    );
+    assert!(
+        serde_json::from_str::<ProtocolResponsePayloadDto>(
+            r#"{"kind":"subscription","data":{"kind":"snapshot","data":{"schema_version":{"major":1,"minor":1},"session_id":"11111111-1111-4111-8111-111111111111"}}}"#
+        )
+        .is_err(),
+        "a session snapshot without its projection and messages fails closed"
+    );
+    assert!(
+        serde_json::from_str::<RunStreamFrameDto>(r#"{"kind":"unknown","data":{}}"#).is_err(),
+        "a closed run-frame table rejects unknown kinds"
+    );
 }
 
 #[test]
@@ -636,11 +757,12 @@ fn assert_schema_version_is_rejected<T: serde::de::DeserializeOwned + std::fmt::
 fn a_payload_schema_version_other_than_the_current_one_is_rejected_on_decode() {
     assert_eq!(CURRENT_DTO_SCHEMA_VERSION, SchemaVersionDto::new(1, 1));
     let session_id = SessionId::new();
+    let run_id = RunId::new();
     let snapshot = SessionSnapshotDto::with_projection(
         CURRENT_DTO_SCHEMA_VERSION,
         session_id,
-        SessionEventSequenceDto::new(0),
-        fixture_projection(session_id, SessionEventSequenceDto::new(0)),
+        fixture_projection(session_id),
+        vec![fixture_message(session_id, run_id)],
     )
     .expect("fixture snapshot is valid");
     let current = serde_json::to_value(&snapshot).expect("snapshot serializes");
@@ -661,23 +783,15 @@ fn a_payload_schema_version_other_than_the_current_one_is_rejected_on_decode() {
     let subscription = serde_json::to_value(SubscribeSessionCommandDto::new(
         CURRENT_DTO_SCHEMA_VERSION,
         session_id,
-        None,
         RunModeDto::Build,
     ))
     .expect("subscription serializes");
-    let run_subscription = serde_json::to_value(intention_protocol::SubscribeRunCommandDto::new(
+    let run_subscription = serde_json::to_value(SubscribeRunCommandDto::new(
         CURRENT_DTO_SCHEMA_VERSION,
         session_id,
-        intention_types::RunId::new(),
-        None,
+        run_id,
     ))
     .expect("run subscription serializes");
-    let resync = serde_json::to_value(SessionResyncDto::new(
-        CURRENT_DTO_SCHEMA_VERSION,
-        session_id,
-        SessionResyncReasonDto::HistoryUnavailable,
-    ))
-    .expect("resync serializes");
 
     for stale in [
         serde_json::json!({"major": 1, "minor": 0}),
@@ -698,12 +812,6 @@ fn a_payload_schema_version_other_than_the_current_one_is_rejected_on_decode() {
 
         let mut wire = run_subscription.clone();
         wire["schema_version"] = stale.clone();
-        assert_schema_version_is_rejected::<intention_protocol::SubscribeRunCommandDto>(
-            wire, &stale,
-        );
-
-        let mut wire = resync.clone();
-        wire["schema_version"] = stale.clone();
-        assert_schema_version_is_rejected::<SessionResyncDto>(wire, &stale);
+        assert_schema_version_is_rejected::<SubscribeRunCommandDto>(wire, &stale);
     }
 }
