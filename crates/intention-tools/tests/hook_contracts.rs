@@ -7,9 +7,9 @@
     reason = "Contract test setup failures are reported with local context."
 )]
 
-use intention_hooks::{FailurePolicy, Hook, Outcome, Phase, PhaseContext, Registry};
 use intention_proto::{ErrorDto, ToolCallId};
 use intention_tools::{BoundedText, ExecuteInput, ToolInput, ToolResult};
+use intention_tools::{FailurePolicy, Hook, HookRegistry, Outcome, Phase, PhaseContext};
 
 struct RejectingHook;
 impl Hook for RejectingHook {
@@ -75,7 +75,7 @@ fn rejection_skips_later_hook_effects() {
             args: vec![],
         }),
     };
-    let mut registry = Registry::default();
+    let mut registry = HookRegistry::default();
     registry
         .register(Box::new(RejectingHook))
         .expect("register");
@@ -164,7 +164,7 @@ fn every_hook_phase_maps_to_its_typed_context() {
 #[test]
 fn hooks_order_by_priority_then_id() {
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let mut registry = Registry::new();
+    let mut registry = HookRegistry::new();
     for hook in [
         OrderingHook("z", 1, seen.clone()),
         OrderingHook("a", 1, seen.clone()),
@@ -213,7 +213,7 @@ fn registration_revision_is_safe_metadata_and_ordering_tiebreaker() {
         }
     }
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let mut registry = Registry::new();
+    let mut registry = HookRegistry::new();
     registry
         .register(Box::new(RevisionHook("new", 2, seen.clone())))
         .expect("register");
@@ -324,7 +324,7 @@ fn input_transforms_are_rejected_for_every_result_phase() {
         Phase::BeforeToolResultModelContext,
         Phase::AfterToolResultPublished,
     ] {
-        let mut registry = Registry::new();
+        let mut registry = HookRegistry::new();
         registry
             .register(Box::new(OutcomeHook {
                 id: "input",
@@ -355,7 +355,7 @@ fn result_transforms_are_rejected_for_every_input_phase() {
         Phase::AfterWorkspaceResolution,
         Phase::BeforeToolExecution,
     ] {
-        let mut registry = Registry::new();
+        let mut registry = HookRegistry::new();
         registry
             .register(Box::new(OutcomeHook {
                 id: "result",
@@ -374,7 +374,7 @@ fn result_transforms_are_rejected_for_every_input_phase() {
 #[test]
 fn rejection_is_not_swallowed_and_emits_no_failure_metadata() {
     for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
-        let mut registry = Registry::new();
+        let mut registry = HookRegistry::new();
         registry
             .register(Box::new(OutcomeHook {
                 id: "failure",
@@ -416,7 +416,7 @@ fn fail_open_records_operational_failure_without_leaking_error_details() {
             ))
         }
     }
-    let mut registry = Registry::new();
+    let mut registry = HookRegistry::new();
     registry.register(Box::new(F)).expect("register");
     let result = registry
         .dispatch_with_observability(&input_context(Phase::BeforeToolExecution))
@@ -458,7 +458,7 @@ fn fail_open_continues_to_later_hooks_and_preserves_ordered_observability() {
         }
     }
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let mut registry = Registry::new();
+    let mut registry = HookRegistry::new();
     registry
         .register(Box::new(F {
             id: "open",
@@ -522,7 +522,7 @@ fn fail_closed_operational_error_short_circuits_later_hooks() {
         }
     }
     let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let mut registry = Registry::new();
+    let mut registry = HookRegistry::new();
     registry
         .register(Box::new(F(called.clone())))
         .expect("register");

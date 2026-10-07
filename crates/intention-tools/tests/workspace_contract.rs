@@ -30,8 +30,8 @@ impl TempDir {
     }
 }
 
-fn resolve(root: &std::path::Path) -> intention_workspace::WorkspaceRoot {
-    intention_workspace::WorkspaceRoot::resolve(
+fn resolve(root: &std::path::Path) -> intention_tools::WorkspaceRoot {
+    intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
     )
     .expect("workspace")
@@ -103,15 +103,14 @@ fn unavailable_and_non_directory_roots_fail_safely() {
     ));
     let missing_dto =
         WorkspaceRootDto::parse(missing.to_string_lossy().into_owned()).expect("root");
-    let error =
-        intention_workspace::WorkspaceRoot::resolve(&missing_dto).expect_err("missing root");
+    let error = intention_tools::WorkspaceRoot::resolve(&missing_dto).expect_err("missing root");
     assert_eq!(error.code(), "workspace_root_unavailable");
 
     let file =
         std::env::temp_dir().join(format!("intention-workspace-file-{}", std::process::id()));
     std::fs::write(&file, "not a directory").expect("file root");
     let file_dto = WorkspaceRootDto::parse(file.to_string_lossy().into_owned()).expect("root");
-    let error = intention_workspace::WorkspaceRoot::resolve(&file_dto).expect_err("file root");
+    let error = intention_tools::WorkspaceRoot::resolve(&file_dto).expect_err("file root");
     assert_eq!(error.code(), "workspace_root_not_directory");
     let _ = std::fs::remove_file(file);
 }

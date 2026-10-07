@@ -164,7 +164,7 @@ def main() -> None:
             # implementation lives in lib.rs. Cargo test executes both the
             # library harness and integration targets in one coverage run.
             coverage_command = (
-                "test" if crate in {"intention-daemon", "intention-workspace"} else "nextest"
+                "test" if crate in {"intention-daemon", "intention-tools"} else "nextest"
             )
             coverage_flags = [*flags]
             if crate == "intention-daemon" and "--all-features" not in coverage_flags:

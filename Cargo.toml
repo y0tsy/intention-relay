@@ -9,8 +9,6 @@ members = [
   "crates/intention-config",
   "crates/intention-providers",
   "crates/intention-tools",
-  "crates/intention-workspace",
-  "crates/intention-hooks",
   "crates/intention-vfr",
   "crates/intention-headroom",
   "crates/intention-plans",

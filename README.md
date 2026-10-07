@@ -103,9 +103,7 @@ exempt at 0% and outside collection.
 
 | Crate | Responsibility |
 | --- | --- |
-| [intention-tools](crates/intention-tools) | Typed, bounded tool contracts and the fixed registry; `read`, `write`, `edit`, `execute`, `glob`, and `grep` are executable; remaining fixed slots are reserved. |
-| [intention-workspace](crates/intention-workspace) | `WorkspaceRoot` addressing anchor: relative-path resolution, child-process CWD, and default search scope (owned by [architecture 05](docs/intention-relay/architecture/05-tools-workspace-and-hooks.md)). |
-| [intention-hooks](crates/intention-hooks) | Typed, deterministic hook registration and dispatch around tool execution. |
+| [intention-tools](crates/intention-tools) | Tool registry and contracts with JSON Schema descriptors, the typed hook phases and dispatcher, and the `WorkspaceRoot` addressing anchor (owned by [architecture 05](docs/intention-relay/architecture/05-tools-workspace-and-hooks.md)). |
 
 ### Transport, client, and daemon (active)
 

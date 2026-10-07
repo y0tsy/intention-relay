@@ -184,8 +184,8 @@ fn advertised_tool_definitions() -> Vec<ModelToolDefinitionDto> {
                 descriptor.id().as_str(),
                 descriptor.description(),
                 descriptor
-                    .model_parameters_schema()
-                    .expect("model-visible descriptors advertise parameter schemas"),
+                    .input_schema()
+                    .expect("model-visible descriptors advertise input schemas"),
             )
             .expect("fixture tool definition is valid")
         })

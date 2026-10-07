@@ -17,9 +17,6 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::ToolResultStatusDto;
-use intention_hooks::{
-    FailurePolicy, Hook, HookObservability, Outcome as HookOutcome, Phase, PhaseContext, Registry,
-};
 use intention_proto::{
     CURRENT_DTO_SCHEMA_VERSION, ProtocolAcceptedResultDto, SendUserTurnOutcomeDto,
 };
@@ -40,9 +37,10 @@ use intention_storage::{
     StorageRepositoryDto, ToolResultEvidenceDto, TransitionRunInputDto, WriteToolResultInputDto,
 };
 use intention_tools::{
-    BoundedText, CancellationSignal, ExecuteInput, ReadInput, TextResult, ToolInput, ToolResult,
+    BoundedText, CancellationSignal, ExecuteInput, FailurePolicy, Hook, HookObservability,
+    HookRegistry, Outcome as HookOutcome, Phase, PhaseContext, ReadInput, TextResult, ToolInput,
+    ToolResult, WorkspaceRoot,
 };
-use intention_workspace::WorkspaceRoot;
 
 struct RejectHook;
 impl Hook for RejectHook {
@@ -635,7 +633,7 @@ fn local_tool_rejects_unknown_or_mismatched_id_before_effects() {
 fn local_tool_hook_rejection_is_durable_and_skips_execution() {
     let root = hello_tool_root("hook-reject");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = Registry::new();
+    let mut hooks = HookRegistry::new();
     hooks
         .register(Box::new(RejectHook))
         .expect("hook registers");
@@ -735,7 +733,7 @@ fn pre_execution_hook_matrix_covers_errors_transforms_and_rejections_per_phase()
         let root = hello_tool_root("matrix-error");
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = Registry::new();
+        let mut hooks = HookRegistry::new();
         hooks
             .register(Box::new(DispatchErrorHook { phase }))
             .expect("hook registers");
@@ -758,7 +756,7 @@ fn pre_execution_hook_matrix_covers_errors_transforms_and_rejections_per_phase()
         let root = hello_tool_root("matrix-input");
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = Registry::new();
+        let mut hooks = HookRegistry::new();
         hooks
             .register(Box::new(PhaseOutcomeHook {
                 phase,
@@ -783,7 +781,7 @@ fn pre_execution_hook_matrix_covers_errors_transforms_and_rejections_per_phase()
         let root = hello_tool_root("matrix-result");
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = Registry::new();
+        let mut hooks = HookRegistry::new();
         hooks
             .register(Box::new(PhaseOutcomeHook {
                 phase,
@@ -817,7 +815,7 @@ fn pre_execution_hook_matrix_covers_errors_transforms_and_rejections_per_phase()
 fn executed_phase_hook_outcomes_cover_invalid_input_and_error_paths() {
     let root = hello_tool_root("executed-invalid");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = Registry::new();
+    let mut hooks = HookRegistry::new();
     hooks
         .register(Box::new(PhaseOutcomeHook {
             phase: Phase::AfterToolExecution,
@@ -844,7 +842,7 @@ fn executed_phase_hook_outcomes_cover_invalid_input_and_error_paths() {
 
     let root = hello_tool_root("executed-error");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = Registry::new();
+    let mut hooks = HookRegistry::new();
     hooks
         .register(Box::new(DispatchErrorHook {
             phase: Phase::AfterToolExecution,
@@ -875,7 +873,7 @@ fn post_execution_result_phases_cover_rejection_and_invalid_input() {
         let root = hello_tool_root("post-reject");
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = Registry::new();
+        let mut hooks = HookRegistry::new();
         hooks
             .register(Box::new(PhaseOutcomeHook {
                 phase,
@@ -904,7 +902,7 @@ fn post_execution_result_phases_cover_rejection_and_invalid_input() {
         let root = hello_tool_root("post-input");
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = Registry::new();
+        let mut hooks = HookRegistry::new();
         hooks
             .register(Box::new(PhaseOutcomeHook {
                 phase,
@@ -1045,7 +1043,7 @@ fn create_and_remove_workflows_map_committed_results() {
 fn local_tool_after_execution_transform_is_applied() {
     let root = hello_tool_root("execution-transform");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = Registry::new();
+    let mut hooks = HookRegistry::new();
     hooks
         .register(Box::new(PhaseOutcomeHook {
             phase: Phase::AfterToolExecution,
@@ -1106,7 +1104,7 @@ fn local_tool_covers_workspace_reject_and_all_post_execution_outcomes() {
     ] {
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = Registry::new();
+        let mut hooks = HookRegistry::new();
         hooks
             .register(Box::new(PhaseOutcomeHook {
                 phase,
@@ -1149,7 +1147,7 @@ fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
     ] {
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = Registry::new();
+        let mut hooks = HookRegistry::new();
         hooks
             .register(Box::new(DispatchErrorHook { phase }))
             .expect("hook");
@@ -1172,7 +1170,7 @@ fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
     ] {
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = Registry::new();
+        let mut hooks = HookRegistry::new();
         hooks
             .register(Box::new(PhaseOutcomeHook {
                 phase,
@@ -1209,7 +1207,7 @@ fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
     }
 
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = Registry::new();
+    let mut hooks = HookRegistry::new();
     hooks
         .register(Box::new(PhaseOutcomeHook {
             phase: Phase::AfterToolResultPublished,
@@ -1246,7 +1244,7 @@ fn local_tool_covers_invocation_and_pre_effect_hook_errors_and_rejections() {
         let outcome = HookOutcome::Reject(ErrorDto::validation("hook_rejected", "rejected"));
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = Registry::new();
+        let mut hooks = HookRegistry::new();
         hooks
             .register(Box::new(PhaseOutcomeHook {
                 phase,
@@ -1262,7 +1260,7 @@ fn local_tool_covers_invocation_and_pre_effect_hook_errors_and_rejections() {
 
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = Registry::new();
+        let mut hooks = HookRegistry::new();
         hooks
             .register(Box::new(DispatchErrorHook { phase }))
             .expect("hook");
@@ -1326,7 +1324,7 @@ fn local_tool_records_partial_terminal_status_on_interruption() {
 fn local_tool_covers_workspace_resolved_error_and_rejection() {
     let outcome = HookOutcome::Reject(ErrorDto::validation("resolved_blocked", "blocked"));
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = Registry::new();
+    let mut hooks = HookRegistry::new();
     hooks
         .register(Box::new(PhaseOutcomeHook {
             phase: Phase::AfterWorkspaceResolution,
@@ -1340,7 +1338,7 @@ fn local_tool_covers_workspace_resolved_error_and_rejection() {
     assert_eq!(error.code(), "resolved_blocked");
 
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = Registry::new();
+    let mut hooks = HookRegistry::new();
     hooks
         .register(Box::new(DispatchErrorHook {
             phase: Phase::AfterWorkspaceResolution,
@@ -1450,7 +1448,7 @@ impl HookObservationPort for RecordingObserver {
 fn fail_open_hook_failures_reach_the_observation_boundary_with_redacted_metadata() {
     let root = hello_tool_root("fail-open");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = Registry::new();
+    let mut hooks = HookRegistry::new();
     hooks
         .register(Box::new(FailOpenFailingHook {
             hook_id: "fail-open-alpha",
@@ -1597,7 +1595,7 @@ fn publication_failure_propagates_after_the_committed_tool_call_row() {
 fn after_publish_hook_rejection_surfaces_after_the_completed_commit() {
     let root = hello_tool_root("publish-reject");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = Registry::new();
+    let mut hooks = HookRegistry::new();
     hooks
         .register(Box::new(PhaseOutcomeHook {
             phase: Phase::AfterToolResultPublished,
@@ -1653,7 +1651,7 @@ fn after_publish_transform_outcomes_are_invalidated_without_extra_failures() {
         let root = hello_tool_root("publish-transform");
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = Registry::new();
+        let mut hooks = HookRegistry::new();
         hooks
             .register(Box::new(PhaseOutcomeHook {
                 phase: Phase::AfterToolResultPublished,
@@ -1681,7 +1679,7 @@ fn after_publish_transform_outcomes_are_invalidated_without_extra_failures() {
 fn after_publish_hook_error_fails_closed_on_the_completed_commit() {
     let root = hello_tool_root("publish-dispatch-error");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = Registry::new();
+    let mut hooks = HookRegistry::new();
     hooks
         .register(Box::new(DispatchErrorHook {
             phase: Phase::AfterToolResultPublished,
@@ -1705,7 +1703,7 @@ fn after_publish_hook_error_fails_closed_on_the_completed_commit() {
 fn fail_open_failures_in_the_published_phase_reach_the_observer() {
     let root = hello_tool_root("published-observation");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = Registry::new();
+    let mut hooks = HookRegistry::new();
     hooks
         .register(Box::new(FailOpenPublishedHook))
         .expect("hook registers");
@@ -1766,7 +1764,7 @@ fn selected_commit_failures_propagate_from_each_commit_point() {
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
         *repository.commit_failures.borrow_mut() = vec![failing_call];
-        let mut hooks = Registry::new();
+        let mut hooks = HookRegistry::new();
         if let MatrixHook::Reject(phase) = hook {
             hooks
                 .register(Box::new(PhaseOutcomeHook {
@@ -2315,7 +2313,7 @@ fn hook_phases_dispatch_in_order_around_identity_validation_and_the_workspace_bo
     let root = hello_tool_root("phase-order");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let order = Arc::new(Mutex::new(Vec::new()));
-    let mut hooks = Registry::new();
+    let mut hooks = HookRegistry::new();
     hooks
         .register(Box::new(OrderRecordingHook {
             order: Arc::clone(&order),
@@ -2352,7 +2350,7 @@ fn hook_phases_dispatch_in_order_around_identity_validation_and_the_workspace_bo
 fn the_invocation_phase_dispatches_before_identity_validation() {
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let order = Arc::new(Mutex::new(Vec::new()));
-    let mut hooks = Registry::new();
+    let mut hooks = HookRegistry::new();
     hooks
         .register(Box::new(OrderRecordingHook {
             order: Arc::clone(&order),
@@ -2720,7 +2718,7 @@ fn terminal_commit_failure_propagates_from_the_tool_error_path() {
 fn pre_execution_rejection_commit_failure_propagates() {
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     *repository.commit_failures.borrow_mut() = vec![2];
-    let mut hooks = Registry::new();
+    let mut hooks = HookRegistry::new();
     hooks
         .register(Box::new(PhaseOutcomeHook {
             phase: Phase::BeforeToolExecution,

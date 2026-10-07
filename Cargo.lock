@@ -769,14 +769,12 @@ dependencies = [
  "intention-application",
  "intention-config",
  "intention-domain",
- "intention-hooks",
  "intention-proto",
  "intention-providers",
  "intention-runtime",
  "intention-storage",
  "intention-storage-sqlite",
  "intention-tools",
- "intention-workspace",
  "tempfile",
 ]
 
@@ -786,12 +784,10 @@ version = "0.0.0"
 dependencies = [
  "intention-config",
  "intention-domain",
- "intention-hooks",
  "intention-proto",
  "intention-runtime",
  "intention-storage",
  "intention-tools",
- "intention-workspace",
 ]
 
 [[package]]
@@ -847,14 +843,6 @@ dependencies = [
 [[package]]
 name = "intention-headroom"
 version = "0.0.0"
-
-[[package]]
-name = "intention-hooks"
-version = "0.0.0"
-dependencies = [
- "intention-proto",
- "intention-tools",
-]
 
 [[package]]
 name = "intention-plans"
@@ -945,7 +933,6 @@ version = "0.0.0"
 dependencies = [
  "glob",
  "intention-proto",
- "intention-workspace",
  "rustix",
  "serde",
  "serde_json",
@@ -978,13 +965,6 @@ dependencies = [
 [[package]]
 name = "intention-vfr"
 version = "0.0.0"
-
-[[package]]
-name = "intention-workspace"
-version = "0.0.0"
-dependencies = [
- "intention-proto",
-]
 
 [[package]]
 name = "interprocess"

@@ -25,8 +25,8 @@ fn fixture_dir(label: &str) -> TempDir {
         .expect("temporary workspace")
 }
 
-fn workspace(root: &TempDir) -> intention_workspace::WorkspaceRoot {
-    intention_workspace::WorkspaceRoot::resolve(
+fn workspace(root: &TempDir) -> intention_tools::WorkspaceRoot {
+    intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root.path().to_string_lossy().into_owned()).expect("root dto"),
     )
     .expect("workspace")

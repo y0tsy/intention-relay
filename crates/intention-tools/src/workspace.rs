@@ -1,6 +1,6 @@
 //! WorkspaceRoot addressing anchor.
 //!
-//! This crate owns the workspace hook boundary: the application applies
+//! This module owns the workspace hook boundary: the application applies
 //! [`WorkspaceRoot`] between the `BeforeWorkspaceResolution` and
 //! `AfterWorkspaceResolution` hook phases. The root is an addressing anchor: a
 //! relative path addresses the root joined with that path, child processes
@@ -8,8 +8,8 @@
 //! security boundary — absolute paths and `..` are not contained, and symbolic
 //! links are ordinary filesystem material (architecture 05). Hook phase contexts may
 //! identify the workspace only through safe identity — the daemon-owned
-//! `intention_proto::WorkspaceId` — never through this crate's root path. This
-//! crate owns no persistence and no publication.
+//! `intention_proto::WorkspaceId` — never through this module's root path. This
+//! module owns no persistence and no publication.
 
 use std::path::{Path, PathBuf};
 

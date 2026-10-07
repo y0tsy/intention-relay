@@ -16,7 +16,7 @@ fn service(dir: &TempDir) -> ToolService {
     let dto = WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned())
         .unwrap_or_else(|_| unreachable!("valid fixture root"));
     ToolService::new(
-        intention_workspace::WorkspaceRoot::resolve(&dto)
+        intention_tools::WorkspaceRoot::resolve(&dto)
             .unwrap_or_else(|_| unreachable!("resolvable fixture root")),
     )
 }

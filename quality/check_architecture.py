@@ -346,7 +346,7 @@ def check_phase_policy(
             "intention-transport", "intention-client", "intention", "intention-daemon",
             "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
             "intention-providers",
-            "intention-tools", "intention-workspace", "intention-hooks",
+            "intention-tools",
         },
     }[phase]
     if active_set != expected_active:

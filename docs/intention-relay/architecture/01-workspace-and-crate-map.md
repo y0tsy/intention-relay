@@ -56,9 +56,7 @@ The M1-M5 activation notes are historical records: the coverage policy is now th
 | `intention-storage-sqlite` | Bundled SQLite single current schema (created directly on open), semantic repository implementation, projections, the message transcript, and tool-result rows. | Storage, config, domain, types. |
 | `intention-config` | TOML parsing, validation, resolved configuration and revision DTOs. | Types, domain as needed. |
 | `intention-providers` | Provider-neutral model DTOs and driver trait plus both SDK translation adapters. | Config, proto, and shared value types. |
-| `intention-tools` | Registry, core tool contracts, tool DTOs, execution interfaces. | Domain, types. |
-| `intention-workspace` | WorkspaceRoot policy, paths, process CWD preparation. | Tools, hooks, domain, types. |
-| `intention-hooks` | Typed hook phases, ordering, contexts, dispatcher. | Tools, domain, types. |
+| `intention-tools` | Registry and core tool contracts with JSON Schema descriptors, the typed hook phases and dispatcher, and the WorkspaceRoot addressing anchor. | Proto. |
 | `intention-vfr` | VFR hook, mapping, expansion/raw-read tools. | Hooks, tools, domain, types. |
 | `intention-headroom` | Headroom hook, CCR contracts, retrieve tool. | Hooks, tools, storage contracts, domain, types. |
 | `intention-plans` | Plan artifacts, hidden frontmatter, Plan/Build policy hooks. | Hooks, tools, storage contracts, domain, types. |

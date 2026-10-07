@@ -91,7 +91,7 @@ The final user-facing tool names and DTO fields may differ, but they must retain
 
 | Order | Stage | Owner | Result |
 | ---: | --- | --- | --- |
-| 1 | Path/CWD policy | `intention-workspace` | Safe resolved invocation. |
+| 1 | Path/CWD policy | `intention-tools` | Safe resolved invocation. |
 | 2 | Primitive execution | Base tool | Physical result. |
 | 3 | Virtual source transform | `intention-vfr` | Normalized VFR or original result. |
 | 4 | Persist normalized result | Application/storage | Durable audit/query value. |

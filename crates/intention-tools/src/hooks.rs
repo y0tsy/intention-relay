@@ -1,7 +1,7 @@
 //! Typed, deterministic hook registration and dispatch contracts.
 //!
 //! The two workspace phases are the mandatory workspace boundary: the
-//! `intention-workspace` owner resolves and validates the authorized root
+//! [`crate::WorkspaceRoot`] anchor resolves and validates the authorized root
 //! between [`Phase::BeforeWorkspaceResolution`] and
 //! [`Phase::AfterWorkspaceResolution`]. Phase contexts may identify a
 //! workspace only through safe identity — the [`ToolCallId`] plus typed
@@ -11,8 +11,8 @@
 //! persistence- and publication-free: they observe typed contexts and return
 //! typed outcomes that the caller alone applies.
 
+use crate::{ToolInput, ToolResult};
 use intention_proto::{DtoResult, ErrorDto, ToolCallId};
-use intention_tools::{ToolInput, ToolResult};
 
 /// The eight points in the tool lifecycle.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -217,10 +217,10 @@ pub trait Hook: Send + Sync {
 
 /// Deterministically ordered hook registry.
 #[derive(Default)]
-pub struct Registry {
+pub struct HookRegistry {
     hooks: Vec<Box<dyn Hook>>,
 }
-impl Registry {
+impl HookRegistry {
     /// Creates an empty hook registry.
     #[must_use]
     pub const fn new() -> Self {
@@ -359,7 +359,7 @@ impl Registry {
 )]
 mod tests {
     use super::*;
-    use intention_tools::{BoundedText, ExecuteInput};
+    use crate::{BoundedText, ExecuteInput};
     struct H {
         id: &'static str,
         priority: u32,
@@ -387,7 +387,7 @@ mod tests {
                 program: BoundedText::new("x").unwrap(),
                 args: vec![],
             }),
-            result: ToolResult::Execute(intention_tools::TextResult {
+            result: ToolResult::Execute(crate::TextResult {
                 text: BoundedText::new("x").unwrap(),
                 truncated: false,
             }),
@@ -396,11 +396,11 @@ mod tests {
     #[test]
     fn duplicate_hook_ids_are_rejected_and_transforms_apply() {
         static P: [Phase; 1] = [Phase::AfterToolExecution];
-        let mut r = Registry::default();
+        let mut r = HookRegistry::default();
         r.register(Box::new(H {
             id: "b",
             priority: 2,
-            outcome: Outcome::TransformResult(ToolResult::Execute(intention_tools::TextResult {
+            outcome: Outcome::TransformResult(ToolResult::Execute(crate::TextResult {
                 text: BoundedText::new("b").unwrap(),
                 truncated: false,
             })),
@@ -410,7 +410,7 @@ mod tests {
         r.register(Box::new(H {
             id: "a",
             priority: 1,
-            outcome: Outcome::TransformResult(ToolResult::Execute(intention_tools::TextResult {
+            outcome: Outcome::TransformResult(ToolResult::Execute(crate::TextResult {
                 text: BoundedText::new("a").unwrap(),
                 truncated: false,
             })),
@@ -439,7 +439,7 @@ mod tests {
             Phase::AfterToolExecution,
             Phase::BeforeToolExecution,
         ];
-        let mut registry = Registry::new();
+        let mut registry = HookRegistry::new();
         let error_code = registry
             .register(Box::new(H {
                 id: "duplicate-phase",
@@ -453,7 +453,7 @@ mod tests {
     }
     #[test]
     fn empty_pipeline_continues_and_rejection_stops() {
-        let mut r = Registry::default();
+        let mut r = HookRegistry::default();
         assert_eq!(r.dispatch(&ctx()).unwrap(), Outcome::Continue);
         static P: [Phase; 1] = [Phase::AfterToolExecution];
         r.register(Box::new(H {
@@ -506,13 +506,13 @@ mod tests {
             }
         }
         let seen = Arc::new(Mutex::new(Vec::new()));
-        let mut registry = Registry::default();
+        let mut registry = HookRegistry::default();
         registry
             .register(Box::new(Recorder {
                 id: "first",
                 priority: 1,
                 seen: seen.clone(),
-                result: Some(ToolResult::Execute(intention_tools::TextResult {
+                result: Some(ToolResult::Execute(crate::TextResult {
                     text: BoundedText::new("changed").unwrap(),
                     truncated: false,
                 })),
@@ -567,7 +567,7 @@ mod tests {
             program: BoundedText::new("changed").unwrap(),
             args: vec![],
         });
-        let mut registry = Registry::new();
+        let mut registry = HookRegistry::new();
         registry
             .register(Box::new(H {
                 id: "input",
@@ -601,7 +601,7 @@ mod tests {
         }
         let published = PhaseContext::Published {
             call: ToolCallId::new(),
-            result: ToolResult::Execute(intention_tools::TextResult {
+            result: ToolResult::Execute(crate::TextResult {
                 text: BoundedText::new("ok").unwrap(),
                 truncated: false,
             }),
@@ -612,7 +612,7 @@ mod tests {
     #[test]
     fn invalid_input_transform_and_hook_errors_are_reported() {
         static P: [Phase; 1] = [Phase::AfterToolExecution];
-        let mut registry = Registry::new();
+        let mut registry = HookRegistry::new();
         registry
             .register(Box::new(H {
                 id: "bad",
@@ -640,7 +640,7 @@ mod tests {
                 Err(ErrorDto::validation("failed", "failed"))
             }
         }
-        let mut errors = Registry::new();
+        let mut errors = HookRegistry::new();
         errors.register(Box::new(F)).unwrap();
         assert!(errors.dispatch(&ctx()).is_err());
     }
@@ -652,11 +652,11 @@ mod tests {
             Phase::BeforeToolResultPersist,
             Phase::BeforeToolResultModelContext,
         ];
-        let result = ToolResult::Execute(intention_tools::TextResult {
+        let result = ToolResult::Execute(crate::TextResult {
             text: BoundedText::new("changed").unwrap(),
             truncated: false,
         });
-        let mut registry = Registry::new();
+        let mut registry = HookRegistry::new();
         registry
             .register(Box::new(H {
                 id: "result",
@@ -712,7 +712,7 @@ mod tests {
     #[test]
     fn unchanged_and_changed_input_outcomes_are_distinguished() {
         static P: [Phase; 1] = [Phase::BeforeToolExecution];
-        let mut same = Registry::new();
+        let mut same = HookRegistry::new();
         same.register(Box::new(H {
             id: "same",
             priority: 0,
@@ -732,7 +732,7 @@ mod tests {
             program: BoundedText::new("different").unwrap(),
             args: vec![],
         });
-        let mut different = Registry::new();
+        let mut different = HookRegistry::new();
         different
             .register(Box::new(H {
                 id: "different",

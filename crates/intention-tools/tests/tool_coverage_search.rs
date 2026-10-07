@@ -12,7 +12,7 @@ use tempfile::TempDir;
 fn service() -> (TempDir, ToolService) {
     let dir = tempfile::tempdir().unwrap();
     let dto = WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap();
-    let root = intention_workspace::WorkspaceRoot::resolve(&dto).unwrap();
+    let root = intention_tools::WorkspaceRoot::resolve(&dto).unwrap();
     (dir, ToolService::new(root))
 }
 

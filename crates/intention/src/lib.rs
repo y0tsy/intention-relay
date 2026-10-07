@@ -22,9 +22,6 @@ use intention_config::{
     ResolvedConfigDto, StartupProviderMaterial,
 };
 use intention_domain::run_status_is_terminal;
-use intention_hooks::{
-    Hook, Outcome as HookOutcome, Phase, PhaseContext, Registry as HookRegistry,
-};
 use intention_proto::RunStatusDto;
 #[cfg(test)]
 use intention_proto::SendUserTurnOutcomeDto;
@@ -56,8 +53,10 @@ use intention_storage::{
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 #[cfg(test)]
 use intention_tools::ToolResult;
-use intention_tools::{CancellationSignal, ToolInput};
-use intention_workspace::WorkspaceRoot;
+use intention_tools::{
+    CancellationSignal, Hook, HookRegistry, Outcome as HookOutcome, Phase, PhaseContext, ToolInput,
+    WorkspaceRoot,
+};
 
 const SCHEMA_VERSION: SchemaVersionDto = intention_proto::CURRENT_DTO_SCHEMA_VERSION;
 const PROTOCOL_VERSION: intention_proto::ProtocolVersionDto =

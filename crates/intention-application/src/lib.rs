@@ -7,9 +7,6 @@
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{ToolResultMetadataEntryDto, ToolResultStatusDto};
-use intention_hooks::{
-    HookObservability, Outcome as HookOutcome, PhaseContext, Registry as HookRegistry,
-};
 use intention_proto::ToolCallId;
 use intention_proto::{
     CURRENT_DTO_SCHEMA_VERSION, CreateSessionAcceptedDto, InterruptRunAcceptedDto,
@@ -29,8 +26,9 @@ use intention_storage::{
     RemoveTurnInputDto, StorageRepositoryDto, ToolResultEvidenceDto, WriteToolResultInputDto,
 };
 use intention_tools::{
-    CancellationSignal, InterruptCause, ToolDispatchOutcome, ToolInput, ToolProjectedContent,
-    ToolResult, ToolService,
+    CancellationSignal, HookObservability, HookRegistry, InterruptCause, Outcome as HookOutcome,
+    Phase, PhaseContext, ToolDispatchOutcome, ToolInput, ToolProjectedContent, ToolResult,
+    ToolService, WorkspaceRoot,
 };
 
 /// Explicit durable values selected for a create-session workflow.
@@ -184,17 +182,11 @@ pub trait WorkspaceBoundaryPort {
     ///
     /// Returns a typed workspace-resolution error when the workspace cannot be
     /// authorized or prepared for the invocation.
-    fn resolve(
-        &self,
-        workspace: &intention_workspace::WorkspaceRoot,
-    ) -> DtoResult<intention_workspace::WorkspaceRoot>;
+    fn resolve(&self, workspace: &WorkspaceRoot) -> DtoResult<WorkspaceRoot>;
 }
 
 impl WorkspaceBoundaryPort for () {
-    fn resolve(
-        &self,
-        workspace: &intention_workspace::WorkspaceRoot,
-    ) -> DtoResult<intention_workspace::WorkspaceRoot> {
+    fn resolve(&self, workspace: &WorkspaceRoot) -> DtoResult<WorkspaceRoot> {
         Ok(workspace.clone())
     }
 }
@@ -216,7 +208,7 @@ fn dispatch_hooks<O: HookObservationPort>(
 /// Complete DTO-only input for one local tool invocation.
 #[derive(Debug)]
 pub struct InvokeLocalToolInputDto {
-    workspace: intention_workspace::WorkspaceRoot,
+    workspace: WorkspaceRoot,
     session_id: SessionId,
     run_id: RunId,
     call_id: ToolCallId,
@@ -236,7 +228,7 @@ impl InvokeLocalToolInputDto {
     /// the exact requested arguments.
     #[must_use]
     pub fn new(
-        workspace: intention_workspace::WorkspaceRoot,
+        workspace: WorkspaceRoot,
         session_id: SessionId,
         run_id: RunId,
         call_id: ToolCallId,
@@ -688,8 +680,8 @@ where
             // dispatch immediately before the one transaction that writes the
             // evidence row together with the transcript message answering it.
             for phase in [
-                intention_hooks::Phase::BeforeToolResultPersist,
-                intention_hooks::Phase::BeforeToolResultModelContext,
+                Phase::BeforeToolResultPersist,
+                Phase::BeforeToolResultModelContext,
             ] {
                 let context = result_phase_context(phase, call_id, &value);
                 match dispatch_hooks(&self.hooks, &context, observer) {
@@ -1352,7 +1344,7 @@ fn schedule_from_context(
 /// Builds the model-visible tool definitions advertised with every scheduled run.
 ///
 /// Active registry descriptors surface in registry order; reserved slots
-/// without a model parameter schema stay private to the daemon.
+/// without a model-facing input schema stay private to the daemon.
 ///
 /// # Errors
 ///
@@ -1362,10 +1354,10 @@ fn advertised_tool_definitions() -> DtoResult<Vec<ModelToolDefinitionDto>> {
     intention_tools::model_visible_descriptors()
         .iter()
         .map(|descriptor| {
-            let parameters_json = descriptor.model_parameters_schema().ok_or_else(|| {
+            let parameters_json = descriptor.input_schema().ok_or_else(|| {
                 ErrorDto::validation(
                     "model_tool_schema_unavailable",
-                    "a model-visible tool must advertise a parameter schema",
+                    "a model-visible tool must advertise an input schema",
                 )
             })?;
             ModelToolDefinitionDto::new(
@@ -1377,21 +1369,17 @@ fn advertised_tool_definitions() -> DtoResult<Vec<ModelToolDefinitionDto>> {
         .collect()
 }
 
-fn result_phase_context(
-    phase: intention_hooks::Phase,
-    call: ToolCallId,
-    result: &ToolResult,
-) -> PhaseContext {
+fn result_phase_context(phase: Phase, call: ToolCallId, result: &ToolResult) -> PhaseContext {
     match phase {
-        intention_hooks::Phase::BeforeToolResultPersist => PhaseContext::Persist {
+        Phase::BeforeToolResultPersist => PhaseContext::Persist {
             call,
             result: result.clone(),
         },
-        intention_hooks::Phase::BeforeToolResultModelContext => PhaseContext::ModelContext {
+        Phase::BeforeToolResultModelContext => PhaseContext::ModelContext {
             call,
             result: result.clone(),
         },
-        intention_hooks::Phase::AfterToolResultPublished => PhaseContext::Published {
+        Phase::AfterToolResultPublished => PhaseContext::Published {
             call,
             result: result.clone(),
         },
@@ -1410,9 +1398,8 @@ mod tests {
         partial_tool_result_content, result_phase_context, tool_result_content,
         tool_result_metadata,
     };
-    use intention_hooks::{Phase, PhaseContext};
     use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
-    use intention_tools::{BoundedText, TextResult, ToolResult};
+    use intention_tools::{BoundedText, Phase, PhaseContext, TextResult, ToolResult};
 
     fn bounded(value: &str) -> BoundedText {
         BoundedText::new(value).unwrap_or_else(|_| unreachable!("fixture tool text is bounded"))

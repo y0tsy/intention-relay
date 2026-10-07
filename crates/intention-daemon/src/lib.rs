@@ -27,10 +27,7 @@ use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
     ToolResultOutcomeDto,
 };
-use intention_tools::{
-    EditInput, ExecuteInput, GlobInput, GrepInput, GrepResult, PathsResult, ReadInput, ToolId,
-    ToolInput, ToolProjectedContent, ToolResult, WriteInput,
-};
+use intention_tools::{GrepResult, PathsResult, ToolInput, ToolProjectedContent, ToolResult};
 #[cfg(test)]
 use intention_transport::LocalListener;
 use intention_transport::{
@@ -624,7 +621,7 @@ impl<P: intention_application::ToolResultPublicationPort + Clone + Send + Sync +
             let tool_id = call.name().to_owned();
             let call_id = call.call_id();
             let arguments = call.arguments_json().to_owned();
-            let input = parse_tool_input(&tool_id, &arguments)?;
+            let input = ToolInput::from_arguments_json(&tool_id, &arguments)?;
             let result = tokio::task::spawn_blocking(move || {
                 let workspace = facade.resolve_workspace_root_for_daemon(session_id)?;
                 facade.invoke_local_tool_for_daemon_with_publication(
@@ -651,51 +648,6 @@ impl<P: intention_application::ToolResultPublicationPort + Clone + Send + Sync +
             }
         })
     }
-}
-
-/// Decodes provider-normalized tool arguments into the typed daemon tool input.
-///
-/// The provider tool name is resolved through the typed `ToolId`, so the names
-/// the daemon decodes are the exact names the tool registry advertises; adding
-/// a tool id without a decodable typed input is a compile error here.
-///
-/// # Errors
-///
-/// Returns a validation error for an unknown tool id or arguments that are not
-/// valid typed input for that tool.
-fn parse_tool_input(tool_id: &str, arguments_json: &str) -> DtoResult<ToolInput> {
-    let Some(tool_id) = ToolId::from_wire_name(tool_id) else {
-        return Err(unknown_tool());
-    };
-    let input = match tool_id {
-        ToolId::Read => serde_json::from_str::<ReadInput>(arguments_json).map(ToolInput::Read),
-        ToolId::Write => serde_json::from_str::<WriteInput>(arguments_json).map(ToolInput::Write),
-        ToolId::Edit => serde_json::from_str::<EditInput>(arguments_json).map(ToolInput::Edit),
-        ToolId::Execute => {
-            serde_json::from_str::<ExecuteInput>(arguments_json).map(ToolInput::Execute)
-        }
-        ToolId::Glob => serde_json::from_str::<GlobInput>(arguments_json).map(ToolInput::Glob),
-        ToolId::Grep => serde_json::from_str::<GrepInput>(arguments_json).map(ToolInput::Grep),
-        // Registered slots without a typed daemon input are not decodable.
-        ToolId::FetchUrl
-        | ToolId::AskUser
-        | ToolId::Todo
-        | ToolId::Retrieve
-        | ToolId::PlanSubmit
-        | ToolId::SubAgent
-        | ToolId::Expand
-        | ToolId::Mcp => return Err(unknown_tool()),
-    };
-    input.map_err(|_| {
-        ErrorDto::validation(
-            "invalid_tool_input_json",
-            "tool arguments are not valid typed input",
-        )
-    })
-}
-
-fn unknown_tool() -> ErrorDto {
-    ErrorDto::validation("unknown_tool", "tool is not supported by the daemon")
 }
 
 /// Normalizes one typed tool result into bounded durable outcome content.
@@ -1845,7 +1797,7 @@ mod tests {
             let name = descriptor.id().as_str();
             // Empty arguments may be rejected as invalid typed input, but an
             // advertised name must never be rejected as an unknown tool.
-            if let Err(error) = parse_tool_input(name, "{}") {
+            if let Err(error) = ToolInput::from_arguments_json(name, "{}") {
                 assert_ne!(
                     error.code(),
                     "unknown_tool",
@@ -1862,7 +1814,7 @@ mod tests {
             if advertised_names.contains(&name) {
                 continue;
             }
-            let error = parse_tool_input(name, "{}")
+            let error = ToolInput::from_arguments_json(name, "{}")
                 .expect_err("registered but unadvertised tools are not decodable");
             assert_eq!(
                 error.code(),

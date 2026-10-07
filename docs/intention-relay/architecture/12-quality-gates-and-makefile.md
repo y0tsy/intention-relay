@@ -72,7 +72,7 @@ aggregate report is informational and never a threshold authority.
 | Tier | Minimum line coverage | Crates |
 | --- | ---: | --- |
 | `core` | 75% | `intention-storage-sqlite`, `intention-runtime`, `intention-transport`, `intention-storage`, `intention-application`, `intention-domain` |
-| `standard` | 60% | `intention-providers`, `intention-tools`, `intention-workspace`, `intention-config`, `intention-daemon`, `intention-hooks` |
+| `standard` | 60% | `intention-providers`, `intention-tools`, `intention-config`, `intention-daemon` |
 | `edge` | 20% | `intention-tauri`, `intention-tui`, `intention`, `intention-client` |
 | `exempt` | 0% (not collected) | `intention-proto` |
 

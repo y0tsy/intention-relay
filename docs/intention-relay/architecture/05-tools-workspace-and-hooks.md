@@ -153,7 +153,7 @@ typed classification can never disagree and no arbitrary sentinel exit code is i
 
 ## Hook system
 
-`intention-hooks` owns typed registration, order, hook context, and dispatcher behavior.
+`intention-tools` owns typed registration, order, hook context, and dispatcher behavior.
 
 ### Hook phases
 
@@ -189,7 +189,7 @@ primitive work. VFR, Headroom, and Plan owners are not active M5 implementations
 
 | Hook owner | Responsibility |
 | --- | --- |
-| `intention-workspace` | Resolve paths from the root anchor, set process CWD, apply the default search scope. |
+| `intention-tools` | Resolve paths from the root anchor, set process CWD, apply the default search scope. |
 | `intention-plans` | Enforce Plan-mode artifact directory mutations and hide frontmatter. |
 | `intention-vfr` | Transform eligible read output into a virtual representation. |
 | `intention-headroom` | Transform eligible tool output before model-context insertion. |
@@ -249,25 +249,24 @@ are owned by [Tool registry and model-tool loop](15-tool-registry-and-model-tool
 second registry or bypass path. Plan `execute` remains available under advisory focus guidance and is not a sandbox;
 ordinary Plan `write` and `edit` remain denied.
 
-## Slice 1.5 tool contract (not activated)
+## Slice 1.5 tool contract
 
-Slice 1.5 makes JSON Schema text the tool contract and keeps the rest of the pipeline intact. This section freezes the
-target; the text above stays current policy until the slice activates.
+Slice 1.5 makes JSON Schema text the tool contract, and the merged `intention-tools` crate owns the registry, the hook
+lifecycle, and the workspace anchor that enforce it.
 
-- Descriptor by schema, not by DTO type name. `input_dto_type` and `output_dto_type` disappear from
-  `ToolDescriptorDto`. Every descriptor declares its model-visible parameter schema and its result schema as
-  code-owned JSON Schema text, and that text is the tool contract the model sees and the registry enforces.
-- Runtime validation at the boundary. The registry validates invocation inputs before any effect and tool results
-  before persistence against those schemas. A mismatch produces a typed policy or validation outcome and never reaches
-  the base tool or the durable result.
+- Descriptor by schema, not by DTO type name. Every active descriptor declares its model-visible argument schema in
+  `input_schema` and its result schema in `output_schema` as code-owned JSON Schema text; the old DTO-type-name fields
+  and the separate `model_parameters_schema` are gone, and the schema text is the contract the model sees.
+- Runtime validation at the registry boundary. `ToolInput::from_arguments_json` resolves the model-visible tool name
+  through the registry and decodes the raw argument object into the typed payload before any effect, with
+  `unknown_tool` for unregistered or reserved names and `invalid_tool_input_json` for malformed arguments. Results are
+  built only through the typed payload constructors, so a shape mismatch never reaches the durable result.
 - JSON only here. Tool inputs and outputs are JSON objects. Invocations, results, durable tool evidence, hook contexts,
-  and every other contract above stay typed DTOs, and `serde_json::Value` stays prohibited outside the tool payload
-  fields.
+  and every other contract above stay typed DTOs, and `serde_json::Value` stays prohibited in production code.
 - Eight hook phases, fully wired. The phase list, its deterministic ordering, its continue/transform/reject outcomes,
-  and the policy separation table are unchanged, but every phase gains a real dispatch site in the production path, a
-  typed context builder, and an order/short-circuit test. The dispatch sites are the application entry before input
-  validation (`BeforeToolInvocation`), the workspace owner around `resolve_path` (`BeforeWorkspaceResolution`,
-  `AfterWorkspaceResolution`), the cancellation-aware dispatch (`BeforeToolExecution`, `AfterToolExecution`), the one
-  storage transaction (`BeforeToolResultPersist`), the tool-result message build (`BeforeToolResultModelContext`), and
-  publication (`AfterToolResultPublished`). The workspace, plan, VFR, and Headroom hook owners keep their
-  responsibilities.
+  and the policy separation table are unchanged, and every phase has a dispatch site in the production path with an
+  order test: the engine entry before identity validation (`BeforeToolInvocation`), the workspace owner around the
+  boundary resolve (`BeforeWorkspaceResolution`, `AfterWorkspaceResolution`), the cancellation-aware dispatch
+  (`BeforeToolExecution`, `AfterToolExecution`), the one storage transaction (`BeforeToolResultPersist`), the
+  tool-result message build (`BeforeToolResultModelContext`), and publication (`AfterToolResultPublished`). The plan,
+  VFR, and Headroom hook owners keep their responsibilities.

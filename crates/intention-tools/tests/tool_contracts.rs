@@ -57,7 +57,7 @@ fn execute_uses_workspace_cwd_and_returns_typed_result() {
     let root_dir = fixture_dir("execute");
     let root = root_dir.path().to_owned();
     let dto = WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root dto");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(&dto).expect("workspace");
+    let workspace = intention_tools::WorkspaceRoot::resolve(&dto).expect("workspace");
     let service = ToolService::new(workspace);
     let program = if cfg!(windows) { "cmd" } else { "pwd" };
     let args = if cfg!(windows) {
@@ -96,7 +96,7 @@ fn write_expected_content_accepts_match_and_rejects_mismatch() {
     let path = root_dir.path().join("file.txt");
     std::fs::write(&path, "before").expect("seed");
     let service = ToolService::new(
-        intention_workspace::WorkspaceRoot::resolve(
+        intention_tools::WorkspaceRoot::resolve(
             &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).expect("root"),
         )
         .expect("workspace"),
@@ -135,7 +135,7 @@ fn edit_expected_content_accepts_match_and_rejects_mismatch() {
     let path = root_dir.path().join("file.txt");
     std::fs::write(&path, "before needle").expect("seed");
     let service = ToolService::new(
-        intention_workspace::WorkspaceRoot::resolve(
+        intention_tools::WorkspaceRoot::resolve(
             &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).expect("root"),
         )
         .expect("workspace"),
@@ -181,7 +181,7 @@ fn tool_service_covers_nonzero_execute_as_normalized_result() {
     let root_dir = fixture_dir("execute-");
     let root = root_dir.path();
     std::fs::write(root.join("file.txt"), "content").expect("seed");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
     )
     .expect("workspace root");
@@ -250,7 +250,7 @@ fn tool_service_covers_nonzero_execute_as_normalized_result() {
 fn execute_cancellation_is_classified_as_a_stopped_interruption() {
     let root_dir = fixture_dir("timeout-");
     let root = root_dir.path();
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
     )
     .expect("workspace root");
@@ -311,7 +311,7 @@ fn execute_cancellation_is_classified_as_a_stopped_interruption() {
 fn tool_service_rejects_invalid_patterns_and_unreadable_files() {
     let root_dir = fixture_dir("invalid-");
     let root = root_dir.path();
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
     )
     .expect("workspace root");
@@ -345,7 +345,7 @@ fn grep_reports_no_matches_for_a_valid_file_scope() {
     let root_dir = fixture_dir("search-");
     let root = root_dir.path();
     std::fs::write(root.join("file.txt"), "content").expect("seed");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
     )
     .expect("workspace root");
@@ -368,7 +368,7 @@ fn grep_reports_no_matches_for_a_valid_file_scope() {
 fn search_rejects_unsafe_patterns_and_reports_utf8_columns() {
     let dir = fixture_dir("search-validation");
     std::fs::write(dir.path().join("file.txt"), "é needle\n").unwrap();
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
@@ -416,7 +416,7 @@ fn glob_matches_are_sorted_deduplicated_and_deterministic() {
     std::fs::create_dir(dir.path().join("real")).unwrap();
     std::fs::write(dir.path().join("target.txt"), "x").unwrap();
     std::fs::write(dir.path().join("real/deep.txt"), "x").unwrap();
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
@@ -466,7 +466,7 @@ fn bounded_sources_report_truncation_only_past_the_output_bound() {
     let dir = fixture_dir("bounded-source");
     std::fs::write(dir.path().join("exact.bin"), vec![b'a'; 65_536]).unwrap();
     std::fs::write(dir.path().join("over.bin"), vec![b'b'; 65_537]).unwrap();
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
@@ -494,7 +494,7 @@ fn grep_file_scope_rejects_directories_and_follows_file_links() {
     std::fs::create_dir(dir.path().join("folder")).unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(dir.path().join("target.txt"), dir.path().join("link.txt")).unwrap();
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
@@ -542,7 +542,7 @@ fn dispatch_reports_precise_errors_and_process_output_paths() {
     let root_dir = fixture_dir("dispatch-errors");
     let root = root_dir.path();
     std::fs::write(root.join("file.txt"), "needle\nother").expect("seed");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
     )
     .expect("workspace root");
@@ -614,7 +614,7 @@ fn a_stopped_tool_never_starts_its_effect_and_keeps_partial_results() {
     let root_dir = fixture_dir("stop-effects");
     let root = root_dir.path();
     std::fs::write(root.join("file.txt"), "original").expect("seed");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
     )
     .expect("workspace root");
@@ -683,7 +683,7 @@ fn a_stopped_tool_never_starts_its_effect_and_keeps_partial_results() {
 #[test]
 fn execute_returns_stdout_stderr_and_truncation_metadata() {
     let root_dir = fixture_dir("execute-output");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).expect("root"),
     )
     .expect("workspace root");
@@ -717,7 +717,7 @@ fn execute_returns_stdout_stderr_and_truncation_metadata() {
 fn public_tool_errors_redact_secret_paths_commands_and_os_text() {
     let root_dir = fixture_dir("redaction");
     let root = root_dir.path();
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
     )
     .expect("workspace");
@@ -748,7 +748,7 @@ fn tool_service_covers_read_write_and_edit_error_variants() {
     let root = root_dir.path();
     std::fs::create_dir(root.join("directory")).expect("directory");
     let service = ToolService::new(
-        intention_workspace::WorkspaceRoot::resolve(
+        intention_tools::WorkspaceRoot::resolve(
             &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
         )
         .expect("workspace root"),
@@ -801,7 +801,7 @@ fn tool_service_returns_search_matches_and_sorted_glob_paths() {
     std::fs::write(root.join("z.txt"), "first\nneedle\nneedle two").expect("seed");
     std::fs::write(root.join("a.txt"), "needle").expect("seed");
     let service = ToolService::new(
-        intention_workspace::WorkspaceRoot::resolve(
+        intention_tools::WorkspaceRoot::resolve(
             &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
         )
         .expect("workspace root"),
@@ -838,7 +838,7 @@ fn glob_empty_and_grep_read_failure_are_typed() {
     let root = root_dir.path();
     std::fs::create_dir_all(root).unwrap();
     let service = ToolService::new(
-        intention_workspace::WorkspaceRoot::resolve(
+        intention_tools::WorkspaceRoot::resolve(
             &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).unwrap(),
         )
         .unwrap(),
@@ -968,7 +968,7 @@ fn invocation_call_identity_is_validated() {
 #[test]
 fn cancelled_dispatch_is_interrupted_before_any_tool_effect() {
     let root_dir = fixture_dir("cancelled-before-dispatch");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
@@ -1019,7 +1019,7 @@ fn tool_service_read_and_grep_report_truncation_for_invalid_utf8() {
     let dir = fixture_dir("invalid-utf8");
     let bytes = vec![0xff; 70_000];
     std::fs::write(dir.path().join("bytes.bin"), bytes).unwrap();
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
@@ -1058,7 +1058,7 @@ fn tool_service_read_and_grep_report_truncation_for_invalid_utf8() {
 #[test]
 fn execute_success_reports_stderr_and_typed_success_status() {
     let dir = fixture_dir("execute-stderr");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
@@ -1109,7 +1109,7 @@ fn execute_success_reports_stderr_and_typed_success_status() {
 #[test]
 fn execute_inherits_the_invoking_environment() {
     let dir = fixture_dir("execute-env");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
@@ -1153,7 +1153,7 @@ fn execute_inherits_the_invoking_environment() {
 fn dispatch_covers_empty_read_and_successful_empty_edit() {
     let root_dir = fixture_dir("empty-read-edit");
     std::fs::write(root_dir.path().join("empty.txt"), "").expect("seed");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).expect("root"),
     )
     .expect("workspace");
@@ -1209,7 +1209,7 @@ fn execute_reports_signal_termination_as_known_terminal_result() {
         return;
     }
     let root_dir = fixture_dir("signal-exit");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
@@ -1259,7 +1259,7 @@ fn grep_truncates_long_multibyte_fragments_on_character_boundary() {
     let root_dir = fixture_dir("large-multibyte-grep");
     let line = format!("needle{}", "界".repeat(30_000));
     std::fs::write(root_dir.path().join("large.txt"), &line).unwrap();
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
@@ -1288,7 +1288,7 @@ fn grep_truncates_long_multibyte_fragments_on_character_boundary() {
 #[test]
 fn execute_formats_success_and_truncates_both_streams() {
     let root_dir = fixture_dir("execute-output");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
@@ -1338,7 +1338,7 @@ fn execute_formats_success_and_truncates_both_streams() {
 fn exact_typed_errors_cover_search_edit_and_spawn_failures() {
     let root_dir = fixture_dir("exact-errors");
     std::fs::write(root_dir.path().join("file.txt"), "content").unwrap();
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
@@ -1459,10 +1459,16 @@ fn all_descriptor_metadata_values_are_verified() {
         assert_eq!(descriptor.descriptor_revision(), TOOL_DESCRIPTOR_REVISION);
         assert!(descriptor.input_schema().is_some());
         assert!(descriptor.output_schema().is_some());
-        let schema_json = descriptor.model_parameters_schema().expect("active schema");
-        let schema: serde_json::Value = serde_json::from_str(schema_json).expect("schema json");
-        assert!(schema.is_object());
-        assert_eq!(schema["type"], "object");
+        let input_schema_json: serde_json::Value =
+            serde_json::from_str(descriptor.input_schema().expect("active input schema"))
+                .expect("input schema json");
+        assert!(input_schema_json.is_object());
+        assert_eq!(input_schema_json["type"], "object");
+        let output_schema_json: serde_json::Value =
+            serde_json::from_str(descriptor.output_schema().expect("active output schema"))
+                .expect("output schema json");
+        assert!(output_schema_json.is_object());
+        assert_eq!(output_schema_json["type"], "object");
         assert_eq!(descriptor.status(), ToolRegistrationStatus::Active);
         assert_eq!(descriptor.observability_policy(), ToolPolicy::Allowed);
         assert!(!descriptor.display_name().is_empty());
@@ -1487,7 +1493,7 @@ fn model_visible_descriptors_are_the_six_active_tools_in_registry_order() {
         assert_eq!(descriptor.id(), id);
         assert_eq!(descriptor.status(), ToolRegistrationStatus::Active);
         assert!(!descriptor.description().is_empty());
-        let schema = descriptor.model_parameters_schema().expect("model schema");
+        let schema = descriptor.input_schema().expect("model input schema");
         assert!(!schema.is_empty());
     }
 }
@@ -1531,16 +1537,56 @@ fn reserved_slots_have_no_schemas_or_revision() {
         assert_eq!(descriptor.schema_version(), 0);
         assert_eq!(descriptor.input_schema(), None);
         assert_eq!(descriptor.output_schema(), None);
-        assert_eq!(descriptor.model_parameters_schema(), None);
         assert!(descriptor.capabilities().is_empty());
     }
 }
 
+/// Asserts one descriptor schema document is a JSON object whose properties
+/// match the keys of the serialized typed payload, and that every required
+/// property is present and non-null in that payload.
+fn assert_schema_agrees_with_payload(
+    id: ToolId,
+    schema_json: &str,
+    expected_properties: &[&str],
+    expected_required: &[&str],
+    payload: &serde_json::Value,
+) {
+    let schema: serde_json::Value = serde_json::from_str(schema_json).expect("schema json");
+    assert_eq!(schema["type"], "object");
+    let properties = schema["properties"].as_object().expect("schema properties");
+    let mut schema_properties = properties.keys().map(String::as_str).collect::<Vec<_>>();
+    schema_properties.sort_unstable();
+    let object = payload.as_object().expect("serialized payload object");
+    let mut serialized_keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+    serialized_keys.sort_unstable();
+    let mut expected = expected_properties.to_vec();
+    expected.sort_unstable();
+    assert_eq!(schema_properties, expected);
+    assert_eq!(serialized_keys, expected);
+    let required = schema["required"]
+        .as_array()
+        .expect("schema required list")
+        .iter()
+        .map(|name| name.as_str().expect("required name"))
+        .collect::<Vec<_>>();
+    assert_eq!(required, expected_required.to_vec());
+    for name in required {
+        assert!(
+            object.get(name).is_some_and(|value| !value.is_null()),
+            "required property {name} is absent or null in the serialized {} payload",
+            id.as_str()
+        );
+    }
+}
+
+/// The argument side asserts each descriptor's input schema (the former model
+/// parameter schema) against the serialized typed inputs; the result side
+/// mirrors it against the serialized typed result payloads.
 #[test]
 fn model_parameter_schemas_agree_with_serialized_inputs() {
     let path = WorkspaceRelativePathDto::parse("src/main.rs").expect("path");
     let text = |value: &str| BoundedText::new(value).expect("text");
-    let fixtures = [
+    let input_fixtures = [
         (
             ToolId::Read,
             &["path"][..],
@@ -1596,47 +1642,96 @@ fn model_parameter_schemas_agree_with_serialized_inputs() {
             serde_json::to_value(GrepInput {
                 pattern: text("needle"),
                 scope: Some(GrepScope::Directory { path: path.clone() }),
-                path: Some(path),
+                path: Some(path.clone()),
             })
             .expect("grep fixture"),
         ),
     ];
+    let result_fixtures = [
+        (
+            ToolId::Read,
+            &["text", "truncated"][..],
+            &["text", "truncated"][..],
+            serde_json::to_value(TextResult {
+                text: text("read output"),
+                truncated: false,
+            })
+            .expect("read result fixture"),
+        ),
+        (
+            ToolId::Write,
+            &["bytes"][..],
+            &["bytes"][..],
+            serde_json::to_value(WriteResult { bytes: 5 }).expect("write result fixture"),
+        ),
+        (
+            ToolId::Edit,
+            &["bytes"][..],
+            &["bytes"][..],
+            serde_json::to_value(WriteResult { bytes: 7 }).expect("edit result fixture"),
+        ),
+        (
+            ToolId::Execute,
+            &["text", "truncated"][..],
+            &["text", "truncated"][..],
+            serde_json::to_value(TextResult {
+                text: text("execute output"),
+                truncated: true,
+            })
+            .expect("execute result fixture"),
+        ),
+        (
+            ToolId::Glob,
+            &["paths", "truncated"][..],
+            &["paths", "truncated"][..],
+            serde_json::to_value(PathsResult {
+                paths: vec![path.clone()],
+                truncated: false,
+            })
+            .expect("glob result fixture"),
+        ),
+        (
+            ToolId::Grep,
+            &["matches", "truncated"][..],
+            &["matches", "truncated"][..],
+            serde_json::to_value(GrepResult {
+                matches: vec![GrepMatch {
+                    path,
+                    line: 1,
+                    column: 1,
+                    fragment: text("needle"),
+                }],
+                truncated: false,
+            })
+            .expect("grep result fixture"),
+        ),
+    ];
     let visible = model_visible_descriptors();
-    assert_eq!(visible.len(), fixtures.len());
+    assert_eq!(visible.len(), input_fixtures.len());
+    assert_eq!(visible.len(), result_fixtures.len());
     for descriptor in visible {
-        let fixture = fixtures
+        let input_fixture = input_fixtures
             .iter()
             .find(|entry| entry.0 == descriptor.id())
-            .expect("fixture for every model-visible tool");
-        let schema_json = descriptor
-            .model_parameters_schema()
-            .expect("model parameter schema");
-        let schema: serde_json::Value = serde_json::from_str(schema_json).expect("schema json");
-        assert_eq!(schema["type"], "object");
-        let properties = schema["properties"].as_object().expect("schema properties");
-        let mut schema_properties = properties.keys().map(String::as_str).collect::<Vec<_>>();
-        schema_properties.sort_unstable();
-        let object = fixture.3.as_object().expect("serialized input object");
-        let mut serialized_keys = object.keys().map(String::as_str).collect::<Vec<_>>();
-        serialized_keys.sort_unstable();
-        let mut expected_properties = fixture.1.to_vec();
-        expected_properties.sort_unstable();
-        assert_eq!(schema_properties, expected_properties);
-        assert_eq!(serialized_keys, expected_properties);
-        let required = schema["required"]
-            .as_array()
-            .expect("schema required list")
+            .expect("input fixture for every model-visible tool");
+        assert_schema_agrees_with_payload(
+            descriptor.id(),
+            descriptor.input_schema().expect("input schema"),
+            input_fixture.1,
+            input_fixture.2,
+            &input_fixture.3,
+        );
+        let result_fixture = result_fixtures
             .iter()
-            .map(|name| name.as_str().expect("required name"))
-            .collect::<Vec<_>>();
-        assert_eq!(required, fixture.2.to_vec());
-        for name in required {
-            assert!(
-                object.get(name).is_some_and(|value| !value.is_null()),
-                "required property {name} is absent or null in the serialized {} input",
-                descriptor.id()
-            );
-        }
+            .find(|entry| entry.0 == descriptor.id())
+            .expect("result fixture for every model-visible tool");
+        assert_schema_agrees_with_payload(
+            descriptor.id(),
+            descriptor.output_schema().expect("result schema"),
+            result_fixture.1,
+            result_fixture.2,
+            &result_fixture.3,
+        );
     }
 }
 
@@ -1644,7 +1739,7 @@ fn model_parameter_schemas_agree_with_serialized_inputs() {
 fn dispatch_covers_each_tool_input_variant() {
     let dir = fixture_dir("dispatch-variants");
     std::fs::write(dir.path().join("a.txt"), "needle").unwrap();
-    let root = intention_workspace::WorkspaceRoot::resolve(
+    let root = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
@@ -1685,7 +1780,7 @@ fn dispatch_covers_each_tool_input_variant() {
 fn enveloped_invocation_preserves_identity_and_records_metadata() {
     use intention_tools::{ToolContext, ToolInvocation, ToolOutcome, ToolPolicy};
     let dir = fixture_dir("envelope");
-    let root = intention_workspace::WorkspaceRoot::resolve(
+    let root = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
@@ -1724,7 +1819,7 @@ fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
     let root_path = root_dir.path();
     std::fs::write(root_path.join("data.txt"), "alpha\nneedle\n").unwrap();
     let service = ToolService::new(
-        intention_workspace::WorkspaceRoot::resolve(
+        intention_tools::WorkspaceRoot::resolve(
             &WorkspaceRootDto::parse(root_path.to_string_lossy().into_owned()).unwrap(),
         )
         .unwrap(),
@@ -1933,7 +2028,7 @@ fn projections_preserve_collections_and_round_trip() {
 #[test]
 fn envelope_reports_an_interrupted_execute_as_its_stable_error_code() {
     let root_dir = fixture_dir("envelope-interrupted");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
+    let workspace = intention_tools::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
