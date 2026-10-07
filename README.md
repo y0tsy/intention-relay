@@ -88,8 +88,7 @@ exempt at 0% and outside collection.
 
 | Crate | Responsibility |
 | --- | --- |
-| [intention-storage](crates/intention-storage) | DTO-only semantic storage contracts: repository and unit-of-work over the eight current-state tables, with one transaction per state change. |
-| [intention-storage-sqlite](crates/intention-storage-sqlite) | SQLite-backed durable implementation (single-version schema, logical version 1), selected only by the composition crate. |
+| [intention-storage](crates/intention-storage) | DTO-only repository contract plus the bundled SQLite implementation behind it (single current schema, created directly on open); the SQLite backend is selected only by the composition crate. |
 | [intention-runtime](crates/intention-runtime) | Deterministic run lifecycle decisions, model-loop coordination, cancellation, over DTO-only storage. |
 | [intention-application](crates/intention-application) | Workflow orchestration: sessions, turns, scheduling, tool invocation, and publication over durable outcomes. |
 

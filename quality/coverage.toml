@@ -12,7 +12,6 @@ edge = 20.0
 exempt = 0.0
 
 [crate_tiers]
-"intention-storage-sqlite" = "core"
 "intention-runtime" = "core"
 "intention-transport" = "core"
 "intention-storage" = "core"

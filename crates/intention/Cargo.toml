@@ -20,7 +20,6 @@ intention-domain = { path = "../intention-domain", version = "=0.0.0" }
 intention-providers = { path = "../intention-providers", version = "=0.0.0" }
 intention-runtime = { path = "../intention-runtime", version = "=0.0.0" }
 intention-storage = { path = "../intention-storage", version = "=0.0.0" }
-intention-storage-sqlite = { path = "../intention-storage-sqlite", version = "=0.0.0" }
 intention-tools = { path = "../intention-tools", version = "=0.0.0" }
 intention-proto = { path = "../intention-proto", version = "=0.0.0" }
 

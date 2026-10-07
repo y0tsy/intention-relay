@@ -11,8 +11,10 @@ use intention_proto::{
     TimestampDto, WorkspaceId,
 };
 use intention_proto::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
-use intention_storage::{AcceptUserTurnInputDto, CreateSessionInputDto, StorageRepositoryDto};
-use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
+use intention_storage::{
+    AcceptUserTurnInputDto, CreateSessionInputDto, SqliteDatabaseLocationDto,
+    SqliteStorageRepository, StorageRepositoryDto,
+};
 use tempfile::TempDir;
 
 #[test]

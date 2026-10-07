@@ -48,9 +48,9 @@ use intention_runtime::{
     ModelRunExecutionService, ModelTimePort, ToolExecutionPort, fail_starting_run,
 };
 use intention_storage::{
-    RecoverUnfinishedRunsInputDto, StorageRepositoryDto, ToolResultEvidenceDto,
+    RecoverUnfinishedRunsInputDto, SqliteDatabaseLocationDto, SqliteStorageRepository,
+    StorageRepositoryDto, ToolResultEvidenceDto,
 };
-use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 #[cfg(test)]
 use intention_tools::ToolResult;
 use intention_tools::{

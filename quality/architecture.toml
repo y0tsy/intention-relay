@@ -14,7 +14,6 @@ active_production_crates = [
   "intention-application",
   "intention-runtime",
   "intention-storage",
-  "intention-storage-sqlite",
   "intention-providers",
   "intention-tools",
 ]
@@ -56,11 +55,10 @@ test_only_source_patterns = [
 "intention-storage" = ["intention-config", "intention-domain", "intention-proto"]
 "intention-transport" = ["intention-proto"]
 "intention-client" = ["intention-transport", "intention-proto"]
-"intention" = ["intention-application", "intention-config", "intention-domain", "intention-providers", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-tools", "intention-proto"]
+"intention" = ["intention-application", "intention-config", "intention-domain", "intention-providers", "intention-runtime", "intention-storage", "intention-tools", "intention-proto"]
 "intention-daemon" = ["intention", "intention-application", "intention-client", "intention-config", "intention-domain", "intention-providers", "intention-runtime", "intention-tools", "intention-transport", "intention-proto"]
 "intention-application" = ["intention-config", "intention-domain", "intention-runtime", "intention-storage", "intention-tools", "intention-proto"]
 "intention-runtime" = ["intention-config", "intention-domain", "intention-storage", "intention-proto", "intention-providers"]
-"intention-storage-sqlite" = ["intention-config", "intention-domain", "intention-storage", "intention-proto"]
 "intention-providers" = ["intention-config", "intention-proto"]
 "intention-tools" = ["intention-proto"]
 
@@ -74,8 +72,7 @@ test_only_source_patterns = [
 "intention-daemon" = ["futures-util", "serde_json", "tempfile", "tokio"]
 "intention-application" = []
 "intention-runtime" = ["futures-executor", "futures-util"]
-"intention-storage" = ["serde_json"]
-"intention-storage-sqlite" = ["rusqlite", "serde_json", "tempfile"]
+"intention-storage" = ["rusqlite", "serde_json", "tempfile"]
 "intention-providers" = ["async-openai", "futures-core", "futures-executor", "futures-util", "http", "openrouter-rs", "serde", "serde_json"]
 "intention-tools" = ["glob", "rustix", "serde", "serde_json", "tempfile"]
 
@@ -88,7 +85,6 @@ forbidden_source_patterns = [
   "intention_application::",
   "intention_runtime::",
   "intention_storage::",
-  "intention_storage_sqlite::",
   "intention_tools::",
   "intention_providers::",
   "rusqlite::",
@@ -112,16 +108,21 @@ forbidden_source_patterns = [
 [composition]
 root_package = "intention"
 concrete_implementation_crates = [
-  "intention-storage-sqlite",
   "intention-vfr",
   "intention-headroom",
   "intention-plans",
 ]
 owned_selection_patterns = [
-  "SqliteStorageRepository",
-  "OpenRouterDriver",
-  "GenericChatDriver",
+  "SelectedProvider",
 ]
+
+[composition.owned_type_names]
+# Concrete implementation types may be named only inside their defining crate and
+# the declared composition root.
+"SqliteStorageRepository" = "intention-storage"
+"SqliteDatabaseLocationDto" = "intention-storage"
+"OpenRouterDriver" = "intention-providers"
+"GenericChatDriver" = "intention-providers"
 
 [public_contracts]
 # Provider SDK namespaces are restricted to their owner crate's private
@@ -170,11 +171,7 @@ test_targets = ["m3_runtime", "m4_model_execution", "m4_runtime_failure_helpers"
 
 [[future_crates]]
 name = "intention-storage"
-test_targets = ["contracts", "opaque_json_guard"]
-
-[[future_crates]]
-name = "intention-storage-sqlite"
-test_targets = ["m4_model_context", "m4_run_safe_config", "sqlite_contracts"]
+test_targets = ["contracts", "m4_model_context", "m4_run_safe_config", "opaque_json_guard", "sqlite_contracts"]
 
 [[future_crates]]
 name = "intention-config"

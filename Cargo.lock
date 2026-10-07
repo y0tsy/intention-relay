@@ -773,7 +773,6 @@ dependencies = [
  "intention-providers",
  "intention-runtime",
  "intention-storage",
- "intention-storage-sqlite",
  "intention-tools",
  "tempfile",
 ]
@@ -893,17 +892,6 @@ dependencies = [
  "intention-config",
  "intention-domain",
  "intention-proto",
- "serde_json",
-]
-
-[[package]]
-name = "intention-storage-sqlite"
-version = "0.0.0"
-dependencies = [
- "intention-config",
- "intention-domain",
- "intention-proto",
- "intention-storage",
  "rusqlite",
  "serde_json",
  "tempfile",

@@ -18,10 +18,10 @@ use intention_proto::{
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,
     ConsumePendingUserTurnsInputDto, CreateSessionInputDto, FinishRunInputDto,
-    RecoverUnfinishedRunsInputDto, RemoveTurnInputDto, StorageRepositoryDto, ToolResultEvidenceDto,
-    TransitionRunInputDto, WriteToolResultInputDto,
+    RecoverUnfinishedRunsInputDto, RemoveTurnInputDto, SqliteDatabaseLocationDto,
+    SqliteStorageRepository, StorageRepositoryDto, ToolResultEvidenceDto, TransitionRunInputDto,
+    WriteToolResultInputDto,
 };
-use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use tempfile::TempDir;
 
 fn time(value: i64) -> TimestampDto {
@@ -42,7 +42,7 @@ fn snapshot_with_revision_and_model(
     let source = ConfigSourceDto::Explicit(
         ConfigPathDto::parse(
             std::env::temp_dir()
-                .join("intention-storage-sqlite-test.toml")
+                .join("intention-storage-test.toml")
                 .to_string_lossy()
                 .into_owned(),
         )
@@ -62,7 +62,7 @@ fn snapshot_with_revision_and_model(
 fn workspace_root(label: &str) -> WorkspaceRootDto {
     WorkspaceRootDto::parse(
         std::env::temp_dir()
-            .join("intention-storage-sqlite-contracts")
+            .join("intention-storage-contracts")
             .join(label)
             .to_string_lossy()
             .into_owned(),

@@ -15,6 +15,12 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Mutex;
 
+use crate::{
+    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,
+    ConsumePendingUserTurnsInputDto, CreateSessionInputDto, FinishRunInputDto,
+    RecoverUnfinishedRunsInputDto, RemoveTurnInputDto, StartingRunModelContextDto,
+    StorageRepositoryDto, ToolResultEvidenceDto, TransitionRunInputDto, WriteToolResultInputDto,
+};
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
     ToolResultMetadataEntryDto, ToolResultStatusDto, validate_run_status_transition,
@@ -26,12 +32,6 @@ use intention_proto::{
 use intention_proto::{
     MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, RunModeDto, RunProjectionDto,
     RunStatusDto, SessionProjectionDto, WorkspaceRootDto,
-};
-use intention_storage::{
-    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,
-    ConsumePendingUserTurnsInputDto, CreateSessionInputDto, FinishRunInputDto,
-    RecoverUnfinishedRunsInputDto, RemoveTurnInputDto, StartingRunModelContextDto,
-    StorageRepositoryDto, ToolResultEvidenceDto, TransitionRunInputDto, WriteToolResultInputDto,
 };
 use sqlite::OptionalExtension;
 
@@ -1727,12 +1727,12 @@ mod tests {
         reason = "Focused SQLite fixtures use expect for test diagnostics."
     )]
     use super::*;
+    use crate::{
+        AppendMessageInputDto, CreateSessionInputDto, StorageRepositoryDto, WriteToolResultInputDto,
+    };
     use intention_config::{ConfigPathDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto};
     use intention_proto::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
     use intention_proto::{IdempotencyKey, ProjectId, SchemaVersionDto, UsageDto, WorkspaceId};
-    use intention_storage::{
-        AppendMessageInputDto, CreateSessionInputDto, StorageRepositoryDto, WriteToolResultInputDto,
-    };
 
     fn fixture_time(value: i64) -> TimestampDto {
         TimestampDto::from_unix_seconds(value).expect("fixture timestamp is valid")
@@ -1742,7 +1742,7 @@ mod tests {
         let source = ConfigSourceDto::Explicit(
             ConfigPathDto::parse(
                 std::env::temp_dir()
-                    .join("intention-storage-sqlite-unit.toml")
+                    .join("intention-storage-unit.toml")
                     .to_string_lossy()
                     .into_owned(),
             )
@@ -1764,7 +1764,7 @@ mod tests {
 
     fn fixture_location() -> SqliteDatabaseLocationDto {
         SqliteDatabaseLocationDto::new(format!(
-            "{}/intention-storage-sqlite-fault-{}.db",
+            "{}/intention-storage-fault-{}.db",
             std::env::temp_dir().display(),
             TurnId::new()
         ))
@@ -1774,7 +1774,7 @@ mod tests {
     fn fixture_workspace_root() -> WorkspaceRootDto {
         WorkspaceRootDto::parse(
             std::env::temp_dir()
-                .join("intention-storage-sqlite-unit-workspace")
+                .join("intention-storage-unit-workspace")
                 .to_string_lossy()
                 .into_owned(),
         )
@@ -1997,7 +1997,7 @@ mod tests {
     fn location_is_absolute_and_faults_are_single_use() {
         assert!(SqliteDatabaseLocationDto::new("relative.db").is_err());
         let location = format!(
-            "{}/intention-storage-sqlite-unit-{}.db",
+            "{}/intention-storage-unit-{}.db",
             std::env::temp_dir().display(),
             TurnId::new()
         );

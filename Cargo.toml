@@ -5,7 +5,6 @@ members = [
   "crates/intention-application",
   "crates/intention-runtime",
   "crates/intention-storage",
-  "crates/intention-storage-sqlite",
   "crates/intention-config",
   "crates/intention-providers",
   "crates/intention-tools",

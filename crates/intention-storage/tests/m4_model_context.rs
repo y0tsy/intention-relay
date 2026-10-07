@@ -16,9 +16,9 @@ use intention_proto::{
 };
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto, CreateSessionInputDto,
-    FinishRunInputDto, StorageRepositoryDto, TransitionRunInputDto,
+    FinishRunInputDto, SqliteDatabaseLocationDto, SqliteStorageRepository, StorageRepositoryDto,
+    TransitionRunInputDto,
 };
-use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use tempfile::TempDir;
 
 #[test]

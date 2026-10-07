@@ -1,5 +1,8 @@
 //! DTO-only semantic storage contracts for durable sessions and transcript state.
 //!
+//! The SQLite backend lives behind this same boundary as the private `sqlite`
+//! module, surfaced only through the DTO-only repository contract below.
+//!
 //! Implementations own transactions and backend resources. This crate exposes no
 //! connection, filesystem, SQL, path, or closure-based API across its boundary.
 //!
@@ -23,6 +26,10 @@ use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
     RemoveTurnCommandDto, RunProjectionDto, RunStatusDto, SessionProjectionDto,
 };
+
+mod sqlite;
+
+pub use sqlite::{FaultPoint, SqliteDatabaseLocationDto, SqliteStorageRepository};
 
 /// The maximum durable tool result content size in bytes.
 const MAX_TOOL_RESULT_CONTENT_BYTES: usize = 512 * 1024;

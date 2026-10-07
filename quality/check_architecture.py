@@ -333,18 +333,18 @@ def check_phase_policy(
         "m3": {
             "intention-proto", "intention-domain", "intention-config",
             "intention-transport", "intention-client", "intention", "intention-daemon",
-            "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
+            "intention-application", "intention-runtime", "intention-storage",
         },
         "m4": {
             "intention-proto", "intention-domain", "intention-config",
             "intention-transport", "intention-client", "intention", "intention-daemon",
-            "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
+            "intention-application", "intention-runtime", "intention-storage",
             "intention-providers",
         },
         "m5": {
             "intention-proto", "intention-domain", "intention-config",
             "intention-transport", "intention-client", "intention", "intention-daemon",
-            "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
+            "intention-application", "intention-runtime", "intention-storage",
             "intention-providers",
             "intention-tools",
         },
@@ -563,20 +563,22 @@ def check_declared_boundaries(
             failures.append(
                 f"{package_name}: only {root_package} may select concrete implementations, got {sorted(selected)}"
             )
-        for concrete_name in concrete:
-            namespace = concrete_name.replace("-", "_") + "::"
-            failures.extend(check_source_patterns(
-                package_name,
-                package,
-                texts,
-                [namespace],
-                f"composition ownership outside {root_package}",
-            ))
     root_sources = source_files_for_package(packages[root_package])
     root_text = "\n".join(texts[path] for path in root_sources)
     for selection in owned_selection_patterns:
         if selection not in root_text:
             failures.append(f"{root_package}: composition root must own concrete selection {selection!r}")
+    owned_type_names = composition.get("owned_type_names")
+    if not isinstance(owned_type_names, dict) or not all(
+        isinstance(name, str) and isinstance(owner, str) for name, owner in owned_type_names.items()
+    ):
+        fail("composition boundary requires an owned_type_names table of type-to-crate entries")
+    package_sources = {
+        name: source_files_for_package(package) for name, package in packages.items()
+    }
+    failures.extend(
+        composition_type_ownership_failures(root_package, owned_type_names, package_sources, texts)
+    )
 
     sdk_patterns = string_list(public_contracts, "provider_sdk_resource_patterns")
     active = string_list(policy["policy"], "active_production_crates")
@@ -660,6 +662,65 @@ def ordering_authority_failures(
                 "but no production source defines it"
             )
     return failures
+
+
+def composition_type_ownership_failures(
+    root_package: str,
+    owned_type_names: dict[str, str],
+    package_sources: dict[str, list[Path]],
+    texts: dict[Path, str],
+) -> list[str]:
+    """Return ownership failures for declared concrete implementation type names.
+
+    A declared name may be mentioned only inside the crate that defines it and the
+    declared composition root, and the declaration must be real: a name that no
+    source of its defining crate mentions is a failure.
+    """
+    failures: list[str] = []
+    for type_name, defining_crate in sorted(owned_type_names.items()):
+        if defining_crate not in package_sources:
+            failures.append(f"owned type {type_name!r} names an unknown crate {defining_crate!r}")
+            continue
+        if not any(type_name in texts[path] for path in package_sources[defining_crate]):
+            failures.append(f"owned type {type_name!r} must be defined in {defining_crate}")
+        for package_name, sources in package_sources.items():
+            if package_name in {defining_crate, root_package}:
+                continue
+            for path in sources:
+                if type_name in texts[path]:
+                    failures.append(
+                        f"{package_name}: {type_name} may only be named inside {defining_crate} "
+                        f"and the composition root {root_package}"
+                    )
+    return failures
+
+
+def self_test_composition_type_ownership() -> None:
+    """Proves the type-name ownership check can fail before it is trusted."""
+    storage = Path("crates/intention-storage/src/lib.rs")
+    daemon = Path("crates/intention-daemon/src/lib.rs")
+    tui = Path("crates/intention-tui/src/lib.rs")
+    package_sources = {
+        "intention-storage": [storage],
+        "intention-daemon": [daemon],
+        "intention-tui": [tui],
+    }
+    owned = {"SqliteStorageRepository": "intention-storage"}
+    clean = {
+        storage: "pub struct SqliteStorageRepository;\n",
+        daemon: "fn open() -> SqliteStorageRepository { todo!() }\n",
+        tui: "fn draw() {}\n",
+    }
+    leaked = dict(clean)
+    leaked[tui] = "fn draw(_: SqliteStorageRepository) {}\n"
+    missing = dict(clean)
+    missing[storage] = "pub struct OtherRepository;\n"
+    if composition_type_ownership_failures("intention-daemon", owned, package_sources, clean):
+        fail("composition ownership self-test: the defining crate and the root must pass")
+    if not composition_type_ownership_failures("intention-daemon", owned, package_sources, leaked):
+        fail("composition ownership self-test: a third crate naming the type must fail")
+    if not composition_type_ownership_failures("intention-daemon", owned, package_sources, missing):
+        fail("composition ownership self-test: a declaration no crate defines must fail")
 
 
 def self_test_ordering_authorities() -> None:
@@ -767,6 +828,7 @@ def main() -> None:
     failures.extend(check_coverage_policy(root, policy))
 
     self_test_ordering_authorities()
+    self_test_composition_type_ownership()
     ordering = policy.get("ordering_authorities")
     if not isinstance(ordering, dict):
         fail("missing [ordering_authorities] table")

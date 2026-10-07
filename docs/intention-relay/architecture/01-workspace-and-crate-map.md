@@ -18,7 +18,7 @@ implementation, tools, or provider implementations.
 `ConfigRevisionDto` the canonical credential-free persisted configuration selection: the composition root supplies one
 startup revision, storage records it by `ConfigRevisionId`, and each accepted run retains its immutable revision. TOML
 is applied only at daemon startup; live reload remains deferred.
--  M3 activates `intention-application`, `intention-runtime`, `intention-storage`, and `intention-storage-sqlite`. The
+-  M3 activates `intention-application`, `intention-runtime`, and `intention-storage`. The
 active graph adds the intentional `storage -> config`, `storage-sqlite -> config`, `application -> config`, and `runtime
 -> config` edges required to persist and attach canonical configuration revisions without exposing credentials or
 filesystem paths.
@@ -53,7 +53,6 @@ The M1-M5 activation notes are historical records: the coverage policy is now th
 | `intention-application` | Commands, queries, semantic use-case workflows, and protocol-result mapping over DTO-only storage. | Domain, storage contracts, runtime contracts, configuration revisions, protocol, types. |
 | `intention-runtime` | Deterministic session/run lifecycle decisions, interruption handling, pending-turn context joins, and recovery-before-ready. | Domain, storage contracts, configuration revisions, types. |
 | `intention-storage` | DTO-only semantic repository methods, committed-change evidence, transcript and tool-result reads, and persisted configuration-revision inputs. | Config, domain, types. |
-| `intention-storage-sqlite` | Bundled SQLite single current schema (created directly on open), semantic repository implementation, projections, the message transcript, and tool-result rows. | Storage, config, domain, types. |
 | `intention-config` | TOML parsing, validation, resolved configuration and revision DTOs. | Types, domain as needed. |
 | `intention-providers` | Provider-neutral model DTOs and driver trait plus both SDK translation adapters. | Config, proto, and shared value types. |
 | `intention-tools` | Registry and core tool contracts with JSON Schema descriptors, the typed hook phases and dispatcher, and the WorkspaceRoot addressing anchor. | Proto. |
@@ -175,7 +174,7 @@ flowchart BT
 pending, remove a not-yet-seen pending turn, append pending turns to a run context, transition a run, recover
 unfinished runs, read the transcript and tool results, and accept configuration revisions. It does not expose a
 transaction closure, SQL connection, filesystem path, or backend resource.
--  `intention-storage-sqlite` owns bundled SQLite opening and direct creation of the single current storage schema,
+-  `intention-storage` owns bundled SQLite opening and direct creation of the single current storage schema,
 single-transaction state writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId
 -> WorkspaceRootDto` association; the workspace addressing policy — the root as an anchor, not a containment boundary
 ([architecture 05](05-tools-workspace-and-hooks.md)) — remains M5 policy ownership.
