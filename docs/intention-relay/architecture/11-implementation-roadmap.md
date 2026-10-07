@@ -98,15 +98,18 @@ both drivers), `intention-storage` (storage contracts and SQLite), `intention-tr
 (composition, host, and binary), and `intention-client`; the adapter and skeleton crates stay as declared. The
 composition facade disappears: the daemon host calls the engine directly. DTOs remain only at the three physical
 boundaries — the IPC wire, SQLite persistence, and provider SDKs — and internal crates pass domain types. Tool inputs
-and outputs are schema-validated JSON and are the only JSON payloads in the system. Identity newtypes reduce to nine
-(`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `EventId`, `ConfigRevisionId`,
-`IdempotencyKey`); model steps and tool groups are addressed by plain indices and mutating operations by
-`IdempotencyKey`. Durable events use one `EventPayload`; publication follows the durable commit without the scoped
-reread proof; the eight hook phases stay. The single live protocol version is renumbered to 1.0. The `intention-client`
-is rewritten as a fully asynchronous client that implements every protocol command and query, its blocking API is
-removed, and daemon end-to-end tests drive the real client instead of the low-level transport; the `intention-tui`
-proof adapter is migrated mechanically without rework. The single storage schema evolves in place with no migration or
-compatibility path.
+and outputs are schema-validated JSON and are the only JSON payloads in the system. Identity newtypes reduce to eight
+(`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`, `IdempotencyKey`);
+model steps and tool groups are addressed by plain indices and mutating operations by `IdempotencyKey`. The event log,
+snapshots, cursors, and resync are removed in favor of current-state tables (`projects`, `workspace_roots`, `sessions`,
+`runs`, `turns`, `messages`, `tool_results`, `configuration_revisions`); `messages` and `tool_results` are the
+transcript, every state change commits in one SQLite transaction, and the daemon publishes `run.frame` notifications
+built from the committed values. The eight hook phases stay and are wired into the real tool cycle. The single live
+protocol version stays 1.0, with no resync and no cursors: a re-subscribing client receives current run state and
+bounded recent messages, then continues live. The `intention-client` is rewritten as a fully asynchronous client that
+implements every protocol method, its blocking API is removed, and daemon end-to-end tests drive the real client
+instead of the low-level transport; the `intention-tui` proof adapter is migrated mechanically without rework. The
+single storage schema evolves in place with no migration or compatibility path.
 -  **Slice 2 — Control plane — not activated.** The cluster and provider session selection (architectures 25/29/22):
 controlled live reload, credential rotation, provider health checks, model discovery, pricing policy, provider profile
 UI and raw-TOML/configuration editing, arbitrary authentication headers, session defaults and per-turn/fork overrides,
@@ -138,10 +141,10 @@ instruction contract families as typed serde JSON contracts and changes no earli
 
 -  M5+ exit proves M6, M7, M8, and M9 can each begin against stable contracts without any retroactive protocol, DTO,
 schema, crate-boundary, migration, or quality-policy change.
--  M3/M4 startup-only configuration, recorded revisions, persisted run snapshots, sessions, runs, events,
-and bytes remain authoritative and unchanged; SQLite storage is the single live schema created directly on open.
+-  M3/M4 startup-only configuration, recorded revisions, sessions, runs, and bytes remain authoritative and unchanged;
+SQLite storage is the single live schema created directly on open.
 -  Slice 1.5 preserves durable meaning: the single storage schema evolves in place with no migration or compatibility
-layer, and tool, event, hook, and lifecycle semantics keep their recorded law.
+layer, and tool, hook, and lifecycle semantics keep their recorded law.
 -  The Slice 2 health, discovery, and pricing surfaces are non-authorizing: they create no RunId, tool
 permission, MCP capability, bridge grant, kernel epoch, context projection, or branch, and the activating
 specification must prove that non-authority.
@@ -321,7 +324,7 @@ activating specification per [architecture 12](12-quality-gates-and-makefile.md)
 -  the fixed fourteen-slot registry, typed descriptor and registry revisions, frozen tool selection, and
 `WorkspaceRoot` semantics (architecture 15);
 -  the model-tool loop: sequential steps, one ordered group per tool-calling step, durable `ToolCall`/`ToolResult`
-evidence, no-retry and no-resume recovery, and `RunToolHistoryPageDto` replay delivery (architecture 15);
+evidence, no-retry and no-resume recovery, and current-state tool-result delivery (architecture 15);
 -  bridge attachment and typed handshake, the ephemeral daemon-issued grant, immutable bridge-contract selection,
 durable operation correlation, the one-path ingress into registry admission and tool-loop facts (including `sub_agent`
 ingress), safe replay, cancellation propagation, recovery, and the closed `bridge_*` failures (architecture 19);

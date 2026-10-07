@@ -111,14 +111,11 @@ def policy_crates(policy: dict[str, object]) -> dict[str, dict[str, object]]:
             fail("future crate names must begin with intention")
         if name in result:
             fail(f"duplicate future crate declaration {name}")
-        unknown = set(crate) - {"name", "responsibility", "test_target", "test_targets"}
+        unknown = set(crate) - {"name", "test_targets"}
         if "coverage_tier" in unknown:
             fail(f"future crate {name} must not declare coverage_tier; tiers live in quality/coverage.toml")
         if unknown:
             fail(f"future crate {name} has unknown declaration keys: {sorted(unknown)}")
-        for field in ("responsibility", "test_target"):
-            if not isinstance(crate.get(field), str) or not crate[field]:
-                fail(f"future crate {name} requires {field}")
         targets = crate.get("test_targets")
         if not isinstance(targets, list) or not all(isinstance(target, str) and target for target in targets):
             fail(f"future crate {name} requires test_targets as a string list")
@@ -782,7 +779,6 @@ def main() -> None:
     if not isinstance(forbidden, dict):
         fail("missing [forbidden] table")
     patterns = string_list(forbidden, "source_patterns")
-    string_list(forbidden, "public_resource_patterns")
 
     # Test-only patterns are forbidden everywhere except lexically inside
     # cfg(test)/#[test] code; source patterns stay unconditionally forbidden.

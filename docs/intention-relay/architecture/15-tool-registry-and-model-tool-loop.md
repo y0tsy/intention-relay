@@ -7,10 +7,11 @@ Owner: architecture 15.
 This document owns the unified tool registry, immutable tool selection, tool admission on the ordinary run path,
 `WorkspaceRoot` semantics, the model-tool-model loop, and the tool-effect recovery boundary. It applies to future
 ordinary runs and Build Autopilot. Slice 1.5 (core simplification) lands before this design activates: model steps and
-tool groups are addressed by plain indices rather than newtypes, publication follows the durable commit result rather
-than a separate reread, and each descriptor's tool contract is code-owned input and result JSON Schema text. Ordinary
-runs and Build Autopilot admit compatible tools without per-action confirmation; Plan denies ordinary `write`/`edit`,
-while Plan `execute` is advisory-guided and non-sandboxed.
+tool groups are addressed by plain indices rather than newtypes, identity stays within the eight newtypes Slice 1.5
+keeps, publication follows the committed values rather than a separate reread, and each descriptor's tool contract is
+code-owned input and result JSON Schema text. Ordinary runs and Build Autopilot admit compatible tools without
+per-action confirmation; Plan denies ordinary `write`/`edit`, while Plan `execute` is advisory-guided and
+non-sandboxed.
 
 ## Ownership and one capability path
 
@@ -152,12 +153,14 @@ selected it contains:
 - a tool-admission-engine revision limited to common typed mechanics;
 - the hook-pipeline revision; and
 -  an ordered list of only the active descriptors actually supplied to the model, each binding `ToolId`, intended owner,
-  descriptor revision, input and result JSON Schema, required-capability binding, mode relation, model-function-schema
-  revision, safe-result-projection revision, observation-contract revision, and stream shape.
+  descriptor revision, the descriptor's code-owned input and result JSON Schema text (the tool contract the model sees
+  and the registry enforces), required-capability binding, mode relation, model-function-schema revision,
+  safe-result-projection revision, observation-contract revision, and stream shape.
 
-It excludes unexposed slots, credentials, raw schemas/JSON, executor handles, readiness, current registry state,
-provider-native IDs, quotas, and mutable policy state. Ordering is semantic and preserved by the typed record; duplicate
-semantic keys are rejected. Admission, retry, recovery, forks, audit, or a later package must not rebuild a missing
+It excludes unexposed slots, credentials, untyped JSON payloads, provider-native schema forms, executor handles,
+readiness, current registry state, provider-native IDs, quotas, and mutable policy state. Ordering is the descriptor
+order of that list: semantic, preserved by the typed record, with no positions or cursors, and duplicate semantic keys
+are rejected. Admission, retry, recovery, forks, audit, or a later package must not rebuild a missing
 selection from current registry/descriptors, configuration, model/provider names, driver availability, hooks, workspace,
 ancestry, MCP discovery, bridge/kernel state, logs, or UI state; unknown, corrupt, or unsupported selections block
 dependent work before effect while unrelated readable history remains available.

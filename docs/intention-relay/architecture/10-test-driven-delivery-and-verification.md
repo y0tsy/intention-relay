@@ -43,23 +43,6 @@ Compilation is necessary but never sufficient acceptance evidence.
 | Adapter integration tests | Prove Tauri bridge and TUI consume the same daemon contract. | Identical session snapshot and frames observed by both clients. |
 | Outcome tests | Prove end-to-end behavior against acceptance scenarios. | Restart marks run interrupted and UI receives it. |
 
-## Test-first workflow
-
-For each implementation slice:
-
-1. reference the owning architecture document, the applicable coverage
-declarations under [Quality Gates and Makefile](12-quality-gates-and-makefile.md), and acceptance criteria;
-2. add or update DTO/contract fixtures before implementation;
-3. add failing domain, architecture, and outcome tests appropriate to the slice;
-4. implement the smallest code that makes the intended tests pass;
-5. run `make quick` while iterating, then run the narrowest relevant suite;
-6. run `make verify` before accepting the slice;
-7.  record any deliberately deferred behavior, lint/coverage/dependency exception, or known risk as an explicit open
-   decision, never by omitted test coverage.
-
-A test should expose the observable intent. Avoid tests that only assert private implementation steps when a stable
-contract or result can be asserted instead.
-
 ## Architecture rules to encode
 
 The following are mandatory candidates for automated architecture tests:
@@ -87,24 +70,12 @@ and executable Cargo test-target declarations.
 
 ## Minimum test portfolio by crate
 
-Every planned crate must declare a test target before implementation. Minimum expectations:
-
-| Crate area | Minimum evidence |
-| --- | --- |
-| `types`, `domain`, `protocol` | DTO round trip, validated wire decoding, current-version fixtures with non-current-version rejection, and explicit additive-field policy proof. |
-| `config` | TOML current-shape parsing/validation (unversioned documents fail closed), credential-free resolved/snapshot fixture, invalid provider/schema/path/source fixture, and fake-secret absence. |
-| `application`, `runtime` | State-machine/use-case tests and deterministic actor integration tests. |
-| `storage`, `storage-sqlite` | Repository contract tests, current-schema creation tests, transaction fault injection. |
-| `model`, providers | Stream/error fixtures, capability and redaction tests. |
-| `tools`, workspace, hooks | Invocation policy, path boundary, deterministic hook-order tests. |
-| VFR, Headroom, plans | Transform/retrieval/frontmatter/mode-policy outcome tests. |
-| transport, client, daemon | Bootstrap, mismatch, reconnect, restart/recovery integration tests. |
-| Tauri, TUI | Shared-client contract tests and smoke flows over fixture daemon. |
-| composition root | Wiring smoke tests using explicit test configuration only. |
-
-The goal is not an arbitrary number of tests. The required quantity is the smallest portfolio that proves each stated
-invariant, contract, failure mode, and outcome. The per-crate tier floors are mandatory guardrails defined in [12
-Quality Gates and Makefile](12-quality-gates-and-makefile.md); they must never replace these semantic requirements.
+`quality/architecture.toml` declares every crate and its required test targets, and `quality/coverage.toml` declares
+the per-crate tier floors ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)). Every declared test target
+must exist before implementation and prove the contracts, invariants, failure modes, and outcomes its owner
+architecture document states. The smallest portfolio that proves every stated invariant, contract, failure mode, and
+outcome is required; no aggregate coverage number replaces it, and boundary crates prove behavior over fixture daemons
+and current-schema state rather than private implementation steps.
 
 ## Result-oriented acceptance scenarios
 
@@ -219,19 +190,22 @@ explicit opt-in ([Quality Gates and Makefile](12-quality-gates-and-makefile.md))
 
 ## Verification evidence
 
-Each completed implementation slice must report:
+Each completed slice reports the architecture document, acceptance criteria, and tests it implements; the `make quick`,
+narrow, and `make verify` checks it ran; the outcome scenarios it covers; and every lint, coverage, feature,
+dependency, or architecture exception with its recorded rationale. Deliberately deferred behavior is recorded as an
+explicit open decision, never as omitted coverage. A cited live run reports its date, commit, provider, model, and
+workflow run URL and never the credential; the opt-in live channel is additional evidence only and never a substitute
+for the mandatory hermetic gates ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
--  the architecture document, the applicable coverage declarations under [Quality Gates and
-  Makefile](12-quality-gates-and-makefile.md), and acceptance criteria it implements;
-- tests added before or alongside behavior;
-- `make quick`, narrow, integration, and `make verify` checks run;
-- outcome scenarios covered;
-- lint, coverage, feature, dependency, or architecture exceptions, if any;
-- known non-covered risk, if any;
--  a recorded live run, when one is cited, reports the date, commit, provider, model, and workflow run URL and never the
-  credential; the opt-in live channel ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)) is additional
-  evidence and never a substitute for the mandatory hermetic gates;
-- whether the behavior is proven by automated test, manual smoke test, or intentionally still deferred.
+### Slice 1.5 evidence
+
+Slice 1.5 replaces the event, snapshot, and replay contract blocks with current-state storage tests: schema tests
+create the current-state tables directly on open, and transaction tests prove one SQLite transaction per state change
+with publication from the committed values. The daemon end-to-end tests drive the real asynchronous `intention-client`
+instead of the low-level transport. Tool-call tests cover one transaction per call and the eight hook phases, each with
+a real dispatch site, context builder, and order/short-circuit test. Protocol contract fixtures cover the reduced
+current-state surface with no resync, cursor, or event DTOs. Tests of deleted surfaces are deleted without replacement,
+and the per-crate coverage tiers in `quality/coverage.toml` are unchanged.
 
 ## Non-goals
 

@@ -263,6 +263,11 @@ target; the text above stays current policy until the slice activates.
 - JSON only here. Tool inputs and outputs are JSON objects. Invocations, results, durable tool evidence, hook contexts,
   and every other contract above stay typed DTOs, and `serde_json::Value` stays prohibited outside the tool payload
   fields.
-- Eight hook phases unchanged. The phase list, its deterministic ordering, its continue/transform/reject outcomes, and
-  the policy separation table are unchanged by the slice; the workspace, plan, VFR, and Headroom hook owners keep their
+- Eight hook phases, fully wired. The phase list, its deterministic ordering, its continue/transform/reject outcomes,
+  and the policy separation table are unchanged, but every phase gains a real dispatch site in the production path, a
+  typed context builder, and an order/short-circuit test. The dispatch sites are the application entry before input
+  validation (`BeforeToolInvocation`), the workspace owner around `resolve_path` (`BeforeWorkspaceResolution`,
+  `AfterWorkspaceResolution`), the cancellation-aware dispatch (`BeforeToolExecution`, `AfterToolExecution`), the one
+  storage transaction (`BeforeToolResultPersist`), the tool-result message build (`BeforeToolResultModelContext`), and
+  publication (`AfterToolResultPublished`). The workspace, plan, VFR, and Headroom hook owners keep their
   responsibilities.

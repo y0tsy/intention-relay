@@ -55,7 +55,7 @@ of each.
 | M3 SQLite sessions, events, snapshots, queue | Closed | Durable SQLite-backed sessions, append-only events, snapshots, turn queueing, canonical credential-free config revisions, recovery-before-ready, durable one-shot replay. |
 | M4 Model contract, providers, one streaming run | Closed | Provider-neutral model contracts and validated stream facts; private OpenRouter and generic Chat Completions drivers; durable model facts; one daemon-owned streaming run with reconnect/replay and run-scoped delivery. |
 | M5 Typed tools, WorkspaceRoot, hooks | Closed | Production model-tool loop hosted by the real daemon binary: six executable tools, fail-closed `WorkspaceRoot` resolution, deterministic typed hooks, durable and redacted tool-result evidence, daemon-host end-to-end tests on Linux and Windows. |
-| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (defined in the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md); the instruction sources slice is owned by [architecture 30](docs/intention-relay/architecture/30-instruction-sources-and-system-context.md)) delivered as six slices: 1) contracts and versions, 1.5) core simplification, 2) control plane, 3) Goal domain, 4) UI foundation, 5) instruction sources and system context. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slices 1.5-5 are not implemented. |
+| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (defined in the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md); the instruction sources slice is owned by [architecture 30](docs/intention-relay/architecture/30-instruction-sources-and-system-context.md)) delivered as six slices: 1) contracts and versions, 1.5) core simplification, 2) control plane, 3) Goal domain, 4) UI foundation, 5) instruction sources and system context. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slice 1.5 freezes a current-state core: the ten production crates stay, DTOs remain only at the IPC wire, SQLite, and provider-SDK boundaries, tool inputs and outputs are schema-validated JSON, identity reduces to eight newtypes, the event log, snapshots, cursors, and resync are replaced by current-state tables written in one SQLite transaction per state change with publication from the committed values, the eight hook phases stay and are wired into the real cycle, protocol version stays 1.0, and `intention-client` becomes fully asynchronous. Slices 1.5-5 are not implemented. |
 | M6-M9 | Planned | M6 Tauri bridge and primary desktop UI; M7 Plan/Build policies, physical plans, and Build Autopilot; M8 VFR and Headroom; M9 hardening and acceptance verification. See the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md). |
 
 Everything beyond M5 is roadmap direction recorded in
@@ -287,8 +287,10 @@ What `main` does not yet provide (all of it is documented roadmap work):
   instruction-source, `AGENTS.md`, or effective instruction projection behavior
   (slice 5, owned by [architecture 30](docs/intention-relay/architecture/30-instruction-sources-and-system-context.md)).
 - No core simplification yet (slice 1.5): the ten-crate workspace, the three
-  physical DTO boundaries, the nine identity newtypes, and the fully
-  asynchronous client are frozen by documentation but not implemented.
+  physical DTO boundaries (IPC wire, SQLite, and provider SDKs), the eight
+  identity newtypes, current-state storage without an event log, snapshots, or
+  cursors, and the asynchronous `intention-client` are frozen by documentation
+  but not implemented.
 - Out of scope for v1: Web/remote transport, multi-user access, sandboxed
   execution, and automatic run resumption.
 

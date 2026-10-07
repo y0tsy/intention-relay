@@ -353,8 +353,8 @@ compatible completed response with no reasoning is a typed empty reference, neve
 transaction appends the closed `ReasoningHistoryBound` audit fact with only the manifest identity, transfer policy,
 compatibility identity, source-entry count, and aggregate size; no reasoning text. Execution verifies the manifest and
 referenced durable facts and constructs the separate typed history without rescanning a live session, ancestor, or
-sibling. `ReasoningHistoryBound` is an ordinary run-scoped domain audit event in the same session transaction as
-`RunStarted`; it is not a `ModelRunFactDto`, not a provider-stream event, and not in a live batch. The complete required
+sibling. `ReasoningHistoryBound` is an ordinary run-scoped audit record in the same session transaction as
+`RunStarted`; it is not a durable model fact, not a provider-stream event, and not in a live batch. The complete required
 history is bounded at **4 MiB** of data and must transfer as a whole or the dependent run is rejected before provider
 work. Historical M4 runs remain readable with no synthetic manifests.
 
