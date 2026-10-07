@@ -1,7 +1,6 @@
 # Preserved reference material
 
-This directory holds legacy-derived research material retained for provenance and deeper research.
+The legacy-derived research this directory held was removed with the Slice 1.5 documentation consolidation; it remains
+recoverable from git history.
 
-- [`prime-agent-research/`](prime-agent-research/README.md): external Prime Agent research on RLM, IPython, and continual-harness concepts. It is non-authoritative background material.
-
-The active rewrite reference is [`../intention-relay/`](../intention-relay/README.md).
+The active reference is [`../intention-relay/`](../intention-relay/README.md).

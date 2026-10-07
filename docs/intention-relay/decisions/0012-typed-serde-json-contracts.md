@@ -23,8 +23,7 @@ defined inside `contract_families.rs`; the retained domain, protocol, storage, a
 | [ADR 0005](0005-no-backward-compatibility-and-legacy-removal.md) | The "Canonical records" version-ledger row and the Wave 2 plan that repins identity goldens and keeps the V4 record codec | The whole codec, not only the V3 record, is removed |
 
 The historical-compatibility rule that no historical record gains synthetic meaning and that missing meaning is never
-reconstructed from current state is not superseded by this record; it remains a project rule owned by [architecture
-14](../architecture/14-run-execution-meaning-and-historical-compatibility.md) and [ADR
+reconstructed from current state is not superseded by this record; it remains a project rule owned by this record and [ADR
 0005](0005-no-backward-compatibility-and-legacy-removal.md).
 
 ## Decision
@@ -112,8 +111,7 @@ of [ADR 0011](0011-local-json-rpc-2-0-transport.md); no re-introduction of the d
 ## Affected documents
 
 [Architecture 02](../architecture/02-dto-and-contract-policy.md) owns the typed DTO and contract policy that replaces
-the canonical codec; [architecture 14](../architecture/14-run-execution-meaning-and-historical-compatibility.md) keeps
-the historical-compatibility rules that do not depend on the codec; [architecture
+the canonical codec; the historical-compatibility rules that do not depend on the codec stay in force; [architecture
 10](../architecture/10-test-driven-delivery-and-verification.md) and [architecture
 12](../architecture/12-quality-gates-and-makefile.md) own the re-verified coverage tiers and the removal of the golden
 and parity tests from the gate surface; [architecture 11](../architecture/11-implementation-roadmap.md) and the

@@ -2,15 +2,15 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 23. Decisions: ADR 0014. Research: m4plus_concept.md.
+Owner: architecture 23. Decisions: ADR 0014.
 
 This document owns future ordinary Session branching, conversation lineage, frozen fork context, regeneration, lineage
 audit, and branch presentation. It applies to future ordinary Session branching only.
 
 ## Ownership and non-authorities
 
-Architecture 04 owns current Session/Run persistence and recovery. Architecture 14 owns run-execution meaning and
-historical compatibility; its canonical framing was removed by [ADR
+Architecture 04 owns current Session/Run persistence and recovery. Run-execution meaning and historical compatibility
+left no live path: their canonical framing was removed by [ADR
 0012](../decisions/0012-typed-serde-json-contracts.md). Architectures 15, 18, 19, and 20 own tool, MCP, bridge, and
 kernel semantics. Architecture 21 owns Goal/Skill/context source, audience, and disclosure semantics. Architecture 22
 owns provider/profile/capability/reasoning semantics.

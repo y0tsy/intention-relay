@@ -6,6 +6,6 @@
 
 ## Preserved reference material
 
-- [`reference/`](reference/README.md): research material retained for provenance.
+- [`reference/`](reference/README.md): the legacy-derived research was removed with the Slice 1.5 documentation consolidation and stays recoverable from git history.
 
 The active Intention Relay documentation takes precedence where it intentionally narrows or differs from a preserved reference source.

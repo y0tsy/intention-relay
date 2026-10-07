@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 19. Decisions: ADR 0014. Research: m4plus_concept.md.
+Owner: architecture 19. Decisions: ADR 0014.
 
 This document owns future Gateway/RLM attachment, ephemeral bridge grant, ingress operation correlation, safe
 bridge-visible delivery, and bridge recovery. It applies only to future run execution. Retained RLM bridge, child, and
@@ -10,7 +10,7 @@ activity material remains research provenance and historical-only where it confl
 
 ## Ownership and one capability path
 
-Architecture 14 is the historical record of the removed execution-meaning envelope and decoders (ADR 0012); 15 owns the
+The removed execution-meaning envelope and decoders (ADR 0012) leave no live path; 15 owns the
 fixed registry, frozen tool selection, direct admission, model-tool loop, `ToolCallId`, generic effect evidence, and
 recovery; 18 owns MCP source, discovery, selection, invocation, and recovery.
 

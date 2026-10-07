@@ -4,7 +4,7 @@
 capability-taxonomy, reasoning-history, and header contracts are accepted directions awaiting an activating
 specification; none of those surfaces exists in the tree (`responses` driver remains not activated).
 
-Owner: architecture 22. Research: m4plus_concept.md.
+Owner: architecture 22.
 
 This document owns provider kinds, profiles and catalog lifecycle, provider/model-capability selections, endpoint and
 credential-transport semantics, driver-contract compatibility, provider-local availability, and normalized textual
@@ -16,8 +16,8 @@ UI/control plane, live reload, credential rotation, discovery, pricing, health c
 
 ## Ownership and non-authorities
 
-Architecture 14 owns run-execution meaning and historical compatibility (its binary codec with canonical records,
-digests, and decode classes was removed by [ADR 0012](../decisions/0012-typed-serde-json-contracts.md)); 15 owns the
+Run-execution meaning and historical compatibility left no live path: the binary codec with canonical records,
+digests, and decode classes was removed by [ADR 0012](../decisions/0012-typed-serde-json-contracts.md); 15 owns the
 registry, tool loop, model-step identities, and local tool exchange; 18 owns MCP; 19 owns bridge ingress; 20 owns kernel
 lifecycle; 21 owns source selection, audience, disclosure, and immutable model-context projection.
 
@@ -29,7 +29,7 @@ context builder, persistence authority, profile UI, or sandbox.
 
 ## Immutable provider and capability selections
 
-Architecture 14's canonical bytes, tags, field framing, digest validation, `IRCR`/`typed-tlv-v1` framing, SHA-256
+The canonical bytes, tags, field framing, digest validation, `IRCR`/`typed-tlv-v1` framing, SHA-256
 policy, and the research-only `IRCD` framing were removed by [ADR
 0012](../decisions/0012-typed-serde-json-contracts.md): wire and durable contracts are typed serde JSON, and no
 canonical digest or identity layer exists. This document owns the provider-selection and model-capability selection

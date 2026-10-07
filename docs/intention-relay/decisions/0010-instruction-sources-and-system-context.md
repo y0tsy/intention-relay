@@ -163,9 +163,8 @@ the `Mode` contribution and [architecture 06](../architecture/06-vfr-and-headroo
 [Architecture 08](../architecture/08-model-protocol-and-providers.md) owns the request system-context semantics;
 [architecture 09](../architecture/09-configuration-security-and-observability.md) configuration, classification, and
 observability; [architecture 25](../architecture/25-configuration-provider-control-plane.md) the editing and preview
-surface; and [architecture 04](../architecture/04-sessions-runs-events-and-storage.md) with [architecture
-14](../architecture/14-run-execution-meaning-and-historical-compatibility.md) the persisted provenance and compatibility
-rules.
+surface; and and [architecture 04](../architecture/04-sessions-runs-events-and-storage.md) the persisted provenance and
+compatibility rules.
 
 ## Evidence
 

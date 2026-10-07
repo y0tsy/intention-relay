@@ -43,9 +43,8 @@ compatibility is neither required nor in demand (see `AGENTS.md`).
 
 ## Implementation status
 
-Milestones M0 through M5 are closed with recorded evidence; each milestone
-below is detailed in its closure document under
-[docs/intention-relay/closeout/](docs/intention-relay/closeout/).
+Milestones M0 through M5 are closed; the table below summarizes the scope
+of each.
 
 | Milestone | Status | Scope |
 | --- | --- | --- |
@@ -265,20 +264,16 @@ is enabled for dependency updates
   repository.
 - [docs/README.md](docs/README.md): documentation index.
 - [docs/intention-relay/README.md](docs/intention-relay/README.md):
-  authoritative product reference material, closeouts, decisions,
-  reconciliation, and the legacy-derived baseline.
+    authoritative product reference material and the target architecture.
 - [docs/intention-relay/architecture/README.md](docs/intention-relay/architecture/README.md):
   target architecture with reading paths (principles, crate map, DTO policy,
   quality gates, TTD, roadmap, and the instruction channel).
 - [Implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md):
   milestone-by-milestone delivery plan and the M5+ slice order.
-- [docs/intention-relay/closeout/](docs/intention-relay/closeout/):
-  immutable closure evidence for each milestone, including CI results and
-  coverage.
+
 - [docs/intention-relay/decisions/README.md](docs/intention-relay/decisions/README.md):
   accepted architecture decision records (ADR 0001-0019).
-- [docs/reference/README.md](docs/reference/README.md): preserved legacy
-  research material, not an implementation dependency.
+
 - [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md): generated license notices
   for registry dependencies.
 

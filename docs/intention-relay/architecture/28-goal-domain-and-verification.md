@@ -6,12 +6,12 @@ run selection; verification gates and evidence; working memory, roles, and templ
 model proposals and user confirmation; the conversation-compaction working form; and Goal-domain bounds and closed safe
 failures.
 
-Owner: architecture 28. Research: `m4plus_concept.md`.
+Owner: architecture 28.
 
 ## Ownership and non-authorities
 
-Architecture 14 owns run-execution meaning and historical compatibility; its canonical codec was removed by [ADR
-0012](../decisions/0012-typed-serde-json-contracts.md). Architecture 15 owns the registry and tool loop, architecture 18
+The removed run-execution meaning layer (its canonical codec was removed by [ADR
+0012](../decisions/0012-typed-serde-json-contracts.md)) leaves no live path. Architecture 15 owns the registry and tool loop, architecture 18
 MCP lifecycle, architecture 21 context selection and projection (Goal context selection, Skills, memory/compaction
 selection), and architecture 03 activity-journal and notification projections.
 

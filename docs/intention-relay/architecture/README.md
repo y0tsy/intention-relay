@@ -68,20 +68,19 @@ flowchart TD
 ### Runtime and persistence
 
 1. [Daemon, transport, and adapters](03-daemon-transport-and-adapters.md)
-2. [Sessions, runs, events, and storage](04-sessions-runs-events-and-storage.md)
-4. [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md)
-5. [Tool registry and model-tool loop](15-tool-registry-and-model-tool-loop.md)
-8. [MCP capability lifecycle](18-mcp-capability-lifecycle.md)
-9. [Gateway/RLM bridge](19-gateway-rlm-bridge.md)
-10. [Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md)
-11. [Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md)
-12. [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md)
-13. [Non-destructive session branching and regeneration](23-non-destructive-session-branching-and-regeneration.md)
-15. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
-16. [VFR and Headroom](06-vfr-and-headroom.md)
-17. [Configuration and provider control plane](25-configuration-provider-control-plane.md)
-19. [Goal domain and verification](28-goal-domain-and-verification.md)
-20. [Provider session selection and profiles protocol](29-provider-session-and-profiles-protocol.md)
+2. [Sessions, runs, and storage](04-sessions-runs-events-and-storage.md)
+3. [Tool registry and model-tool loop](15-tool-registry-and-model-tool-loop.md)
+4. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
+5. [VFR and Headroom](06-vfr-and-headroom.md)
+6. [MCP capability lifecycle](18-mcp-capability-lifecycle.md)
+7. [Gateway/RLM bridge](19-gateway-rlm-bridge.md)
+8. [Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md)
+9. [Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md)
+10. [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md)
+11. [Non-destructive session branching and regeneration](23-non-destructive-session-branching-and-regeneration.md)
+12. [Configuration and provider control plane](25-configuration-provider-control-plane.md)
+13. [Goal domain and verification](28-goal-domain-and-verification.md)
+14. [Provider session selection and profiles protocol](29-provider-session-and-profiles-protocol.md)
 
 ### Agent operation
 
@@ -95,13 +94,7 @@ flowchart TD
 1. [Quality gates and Makefile](12-quality-gates-and-makefile.md)
 2. [Test-driven delivery and verification](10-test-driven-delivery-and-verification.md)
 3. [Implementation roadmap](11-implementation-roadmap.md)
-5. [Architecture decision records](../decisions/README.md)
-7. [M0/M1 closure evidence](../closeout/m0-m1-closure-evidence.md)
-8. [M1+ quality hardening evidence](../closeout/m1-plus-quality-hardening-evidence.md)
-9. [M2 closure evidence](../closeout/m2-closure-evidence.md)
-10. [M3 closure evidence](../closeout/m3-closure-evidence.md)
-11. [M4 closure evidence](../closeout/m4-closure-evidence.md)
-12. [M5 closure evidence](../closeout/m5-closure-evidence.md)
+4. [Architecture decision records](../decisions/README.md)
 
 ## Document map
 

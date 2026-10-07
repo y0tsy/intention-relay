@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 21. Research: m4plus_concept.md.
+Owner: architecture 21.
 
 This document owns future Goal scope and evidence, Skill selection and safe disclosure, context-source manifests,
 model-step projections, typed memory records, and immutable compaction. It applies only to future run execution.
@@ -11,7 +11,7 @@ with architectures 14--20.
 
 ## Ownership and non-authorities
 
-Architecture 14 is the historical record of the removed execution-meaning envelope and decoders (ADR 0012); 15 owns the
+The removed execution-meaning envelope and decoders (ADR 0012) leave no live path; 15 owns the
 registry, frozen direct-tool selection, tool admission, model-tool loop, `ToolCallId`, and generic effect facts; 18 owns
 MCP lifecycle; 19 owns bridge grants, ingress, operation correlation, and bridge delivery; 20 owns kernel epochs, cells,
 checkpoints, and kernel-local safe projection.

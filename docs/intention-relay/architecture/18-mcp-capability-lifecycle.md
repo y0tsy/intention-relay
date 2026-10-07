@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 18. Research: m4plus_concept.md.
+Owner: architecture 18.
 
 This document owns future MCP source proposals, discovery, normalized capabilities, run-local capability
 selections, invocation, safe projections, disposal, recovery, and compatibility. It applies only to future run
@@ -11,8 +11,8 @@ provenance, not future MCP capability state.
 
 ## Ownership and non-authorities
 
-Architecture 14 is the historical record of the removed execution-meaning envelope, canonical framing, decoders, and
-compatibility classes (ADR 0012). Architecture 15 owns the fixed `mcp` slot, composition-only activation, direct
+The removed execution-meaning envelope, canonical framing, decoders, and compatibility classes (ADR 0012) leave no
+live path. Architecture 15 owns the fixed `mcp` slot, composition-only activation, direct
 admission, `ToolCallId`, generic tool loop, and effect/publication boundary.
 
 This document owns only MCP-specific nested-selection semantics and capability lifecycle. It is not a second registry,

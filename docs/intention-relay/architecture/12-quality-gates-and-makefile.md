@@ -4,8 +4,7 @@
 Cargo configuration and committed lockfile, machine-readable policies, quality checkers, and CI workflow — is
 implemented and blocking (commit `f2bb35d040dcec93639d6715fc06429b9070e1e3`), and the policy below is the v1 quality
 policy. Future milestones extend it only when they add a new crate, feature combination, adapter, quality tool, or an
-explicitly approved stronger check. The M0/M1 verification baseline is recorded in [M0/M1 Closure
-Evidence](../closeout/m0-m1-closure-evidence.md).
+explicitly approved stronger check.
 
 ## Scope
 
@@ -343,8 +342,8 @@ shell behavior and label each command as mutating or non-mutating.
 
 **Removed 2026-10-02: the quality self-test suite.** The expected-failure fixture suite `quality/self_test.py`, its
 `quality-self-test` and `quality-self-test-in-place` targets, its `ci-selftest` CI job, and its `selftest` tool scope no
-longer exist. No gate requires them: the remaining gates are the targets listed above, and decision records or closeout
-evidence that name the self-test describe completed historical work.
+longer exist. No gate requires them: the remaining gates are the targets listed above, and decision records that name the self-test
+describe completed historical work.
 
 **Added 2026-10-05: focused coverage-checker self-tests.** `quality/test_check_coverage.py` proves the tier decisions
 with synthetic reports: each tier floor passes at its percentage and fails below it, an exempt crate is rejected from
@@ -455,9 +454,8 @@ compilation never replaces a required end-to-end outcome scenario.
 ### M4 controller charter and closure record
 
 `docs/intention-relay/m4.md` records the controller-owned M4 execution charter as read-only historical context; it does
-not override this quality policy or authorize worktrees, lane execution, or any Makefile change. M4 is closed at the
-immutable baseline documented in [M4 Closure Evidence](../closeout/m4-closure-evidence.md); changes to that scope
-require a new decision and their own acceptance evidence. The active Makefile contract remains unchanged: every
+not override this quality policy or authorize worktrees, lane execution, or any Makefile change. M4 is closed at its
+recorded baseline; changes to that scope require a new decision and their own acceptance evidence. The active Makefile contract remains unchanged: every
 implementation handoff runs `make quick` while iterating and `make verify` before acceptance. The charter's proposed
 package-scoped `make focus PACKAGES=...` target remains unimplemented and may not weaken the full-gate requirement, and
 no simultaneous full `make verify` executions may claim independent acceptance on the same host because coverage,
@@ -490,8 +488,7 @@ Autopilot, provider control-plane, and instruction-channel decisions live in the
 a production boundary, the activating change updates the existing machine-readable architecture, test-target, coverage,
 and feature policies together with its focused expected-failure architecture fixtures and outcome evidence; research or
 a reconciliation row alone is not a quality-policy declaration. M5's focused tool, workspace, hook, and typed-result
-tests are not a substitute for the unrun full gates. A closeout identifies `make verify`, CI, coverage, and supply-chain
-results separately and marks unexecuted gates pending against the stated baseline.
+tests are not a substitute for the unrun full gates.
 
 ## Required quality-gate failure tests
 
@@ -514,8 +511,7 @@ M0 proves that the quality system fails correctly for controlled fixtures:
 | Unused, stale, or manifest-only dependency | `make deps`. |
 | Recognizable fake secret in output fixture | `make test` and `make verify`. |
 
-The specific fixtures and gates, including M1 additions, are listed in the [closure evidence
-matrix](../closeout/m0-m1-closure-evidence.md#acceptance-evidence-matrix).
+
 
 ## Acceptance criteria
 

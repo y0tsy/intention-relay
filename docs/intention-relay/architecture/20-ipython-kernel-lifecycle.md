@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 20. Decisions: ADR 0009. Research: m4plus_concept.md.
+Owner: architecture 20. Decisions: ADR 0009.
 
 This document owns future run-scoped IPython kernel epochs, foreground cells, namespace checkpoints, kernel-local
 background work, safe kernel projections, and kernel recovery. It applies only to future run execution. Retained
@@ -11,7 +11,7 @@ architectures 14--19.
 
 ## Ownership and non-authorities
 
-Architecture 14 is the historical record of the removed execution-meaning machinery (ADR 0012); 15 owns registry
+The removed execution-meaning machinery (ADR 0012) leaves no live path; 15 owns registry
 selection, direct tool admission, `ToolCallId`, generic tool-loop records, the committed call start, and publication;
 18 owns MCP lifecycle; 19 owns bridge attachment, grants, operation identity, ingress, delivery, and bridge recovery.
 

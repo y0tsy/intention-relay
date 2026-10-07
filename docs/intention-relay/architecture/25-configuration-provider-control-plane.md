@@ -7,14 +7,14 @@ slice is not activated; activation requires an activating specification (activat
 0004](../decisions/0004-m5plus-complete-foundation-activation.md), [ADR
 0010](../decisions/0010-instruction-sources-and-system-context.md)).
 
-Owner: architecture 25. Decisions: ADR 0010. Research: `m4plus_concept.md`.
+Owner: architecture 25. Decisions: ADR 0010.
 
 ## Ownership and non-authorities
 
 Architecture 09 owns TOML parsing, schema validation, configuration discovery, redaction, and startup-only application.
-Architecture 22 owns future provider kinds, profiles, catalogs, selections, and driver compatibility. Architecture 14
-owns run-execution meaning and historical compatibility; its canonical codec was removed by [ADR
-0012](../decisions/0012-typed-serde-json-contracts.md). Architecture 15 owns the tool loop, and architecture 03 owns the
+Architecture 22 owns future provider kinds, profiles, catalogs, selections, and driver compatibility; the removed
+run-execution meaning layer (its canonical codec was removed by [ADR
+0012](../decisions/0012-typed-serde-json-contracts.md)) leaves no live path. Architecture 15 owns the tool loop, and architecture 03 owns the
 flat activity journal, the notification list, and adapter behavior.
 
 This document owns only the accepted future directions below: no second runtime, registry, persistence authority, or

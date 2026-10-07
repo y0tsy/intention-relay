@@ -106,22 +106,6 @@ The goal is not an arbitrary number of tests. The required quantity is the small
 invariant, contract, failure mode, and outcome. The per-crate tier floors are mandatory guardrails defined in [12
 Quality Gates and Makefile](12-quality-gates-and-makefile.md); they must never replace these semantic requirements.
 
-## Closed-milestone evidence
-
-The closed-milestone delivery records are:
-
-- M0/M1 quality foundation and contracts, including versioned JSON fixtures for `ErrorDto`,
-  `EventEnvelopeDto<DomainEventDto>`, protocol hello and subscription commands, and `ConfigSnapshotDto`:
-  [M0/M1 Closure Evidence](../closeout/m0-m1-closure-evidence.md);
-- M1+ quality hardening: [M1+ Quality Hardening Evidence](../closeout/m1-plus-quality-hardening-evidence.md);
-- M3 storage/runtime activation: [M3 Closure Evidence](../closeout/m3-closure-evidence.md);
--  M4 model/provider and run-stream activation, including the controller-owned `M4 execution charter` and the final
-  Linux/Windows CI results: [M4 Closure Evidence](../closeout/m4-closure-evidence.md);
-- M5 trusted-local execute and model-tool-loop activation: [M5 Closure Evidence](../closeout/m5-closure-evidence.md).
-
-M5's trusted-local `execute` environment, the six active tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`), and
-`WorkspaceRoot` addressing semantics are owned by [Tools, Workspace, and Hooks](05-tools-workspace-and-hooks.md).
-
 ## Result-oriented acceptance scenarios
 
 ### G. Plan-to-Build Autopilot continuity

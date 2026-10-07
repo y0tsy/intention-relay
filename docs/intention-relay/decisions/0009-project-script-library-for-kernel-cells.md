@@ -150,8 +150,7 @@ task, or checkpoint carry-over;
 
 ## Research provenance
 
-`m4plus_concept.md`; the
-[`rlm-ipython-harness-integration-analysis.md`](../../reference/prime-agent-research/rlm-ipython-harness-integration-analysis.md)
-persistent scratch state; [architecture 20](../architecture/20-ipython-kernel-lifecycle.md) checkpoint exclusion of
-executable payload; and the user-requested direction of 2026-09-25 that an agent must be able to persist its reusable
-kernel scripts in the project rather than only namespace variables.
+The retained RLM/IPython harness analysis (git history), [architecture
+20](../architecture/20-ipython-kernel-lifecycle.md)'s checkpoint exclusion of executable payload, and the user-requested
+direction of 2026-09-25 that an agent must be able to persist its reusable kernel scripts in the project rather than
+only namespace variables.

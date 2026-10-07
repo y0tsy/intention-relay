@@ -10,12 +10,12 @@ and the held-run admission path are not part of the direction ([ADR
 0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md)), and the negotiated capability plane is removed
 by [ADR 0011](../decisions/0011-local-json-rpc-2-0-transport.md).
 
-Owner: architecture 29. Decisions: ADR 0011, ADR 0014. Research: `m4plus_concept.md`.
+Owner: architecture 29. Decisions: ADR 0011, ADR 0014.
 
 ## Ownership and non-authorities
 
-Architecture 14 owns run-execution meaning and historical
-compatibility; its canonical codec was removed by [ADR 0012](../decisions/0012-typed-serde-json-contracts.md).
+The removed run-execution meaning layer (its canonical codec was removed by [ADR
+0012](../decisions/0012-typed-serde-json-contracts.md)) leaves no live path.
 Architecture 15 owns the registry and tool loop, and architecture 23 session branching.
 Architecture 22 owns provider kinds, profiles, catalogs, selections, and driver compatibility;
 architecture 25 owns the configuration/provider control plane.

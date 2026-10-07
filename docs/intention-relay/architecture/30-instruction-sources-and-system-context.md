@@ -4,10 +4,7 @@
 instruction channel of a model request: instruction sources, profile revisions, canonical assembly, the effective
 instruction projection, its bounds, failures, and observability. It follows the single live version and no-backward-compatibility policy ([ADR 0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md)); delivery belongs to the fifth activating slice of Milestone 5+.
 
-Owner: architecture 30. Decisions: ADR 0010. Research: `legacy-antibusy-prompts/`,
-`legacy-baseline/02-capability-catalog.md`, `legacy-baseline/04-agent-behavior.md`, [ADR
-0002](../decisions/0002-build-autopilot-and-plan-focus-continuity.md), [ADR
-0003](../decisions/0003-production-model-tool-loop.md).
+Owner: architecture 30. Decisions: ADR 0010, ADR 0002, ADR 0003.
 
 ## Ownership and non-authorities
 

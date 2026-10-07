@@ -10,10 +10,7 @@ feature profiles, architecture checks, and supply-chain gates live in [Quality G
 Makefile](12-quality-gates-and-makefile.md); test-first and outcome-verification rules live in [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md).
 
-The immutable M0/M1 phase-closure baseline and verification matrix are recorded in [M0/M1 Closure
-Evidence](../closeout/m0-m1-closure-evidence.md). M2 closeout evidence is tracked separately in [M2 Closure
-Evidence](../closeout/m2-closure-evidence.md); its full `make verify` result passed on the recorded M2 worktree, while
-its immutable commit baseline remains pending.
+
 
 ## Dependency graph
 

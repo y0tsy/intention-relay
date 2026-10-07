@@ -180,7 +180,6 @@ architectures [01](../architecture/01-workspace-and-crate-map.md),
 [09](../architecture/09-configuration-security-and-observability.md),
 [10](../architecture/10-test-driven-delivery-and-verification.md),
 [11](../architecture/11-implementation-roadmap.md),
-[14](../architecture/14-run-execution-meaning-and-historical-compatibility.md),
 [18](../architecture/18-mcp-capability-lifecycle.md),
 [19](../architecture/19-gateway-rlm-bridge.md),
 [21](../architecture/21-goals-skills-context-memory-and-compaction.md),
@@ -201,10 +200,8 @@ signal reset, pre-invocation partial answers, cooperative tool interruption, and
 suite passing. Gates: `make quick`, `make verify`, `docs-check`, `make architecture`, Linux/Windows CI.
 
 The retired names survive only as historical prose: the queue-and-cancellation wording of the closed M3/M4/M5
-milestone records ([M3](../closeout/m3-closure-evidence.md), [M4](../closeout/m4-closure-evidence.md),
-[M5](../closeout/m5-closure-evidence.md)); the removal ledgers of [ADR
+milestone records; the removal ledgers of [ADR
 0005](0005-no-backward-compatibility-and-legacy-removal.md); the Slice 2 descriptions in ADR 0004;
-the superseded text of ; the historical
-audit [`complexity-audit.md`](../complexity-audit.md); and the preserved research tree under
-[`../../reference/`](../../reference/README.md). Editing a historical record to hide a name it reported would destroy
+the superseded text of ; and the preserved research
+provenance recorded in git history. Editing a historical record to hide a name it reported would destroy
 the record.
