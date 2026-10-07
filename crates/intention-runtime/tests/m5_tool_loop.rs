@@ -9,11 +9,6 @@ use futures_util::{StreamExt, stream};
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
-use intention_model::{
-    AssistantReasoningDto, FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto,
-    ModelDriver, ModelEventDto, ModelEventStream, ModelExecutionDriver, ModelMessageDto,
-    ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto,
-};
 use intention_proto::{
     ConfigRevisionId, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto, SessionId,
     TimestampDto, ToolCallId, TurnId, WorkspaceId,
@@ -21,6 +16,11 @@ use intention_proto::{
 use intention_proto::{
     MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto, RunStatusDto,
     SessionProjectionDto, WorkspaceRootDto,
+};
+use intention_providers::{
+    AssistantReasoningDto, FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto,
+    ModelDriver, ModelEventDto, ModelEventStream, ModelExecutionDriver, ModelMessageDto,
+    ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto,
 };
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,

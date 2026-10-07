@@ -9,12 +9,12 @@ use std::sync::{
 };
 
 use futures_util::{StreamExt, stream};
-use intention_model::{
+use intention_proto::RunId;
+use intention_providers::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
     ProviderErrorDto,
 };
-use intention_proto::RunId;
 
 fn request() -> ModelRequestDto {
     ModelRequestDto::new(
@@ -87,7 +87,7 @@ impl ModelExecutionDriver for FixtureExecutionDriver {
                 Ok(ModelEventDto::started()),
                 Ok(ModelEventDto::text_delta("ordered").expect("text is valid")),
                 Ok(ModelEventDto::usage(
-                    intention_model::UsageDto::reported(1, 2, 3).expect("usage is valid"),
+                    intention_providers::UsageDto::reported(1, 2, 3).expect("usage is valid"),
                 )),
                 Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
             ])

@@ -6,6 +6,11 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
+use crate::model::{
+    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
+    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
+    ProviderErrorDto, ToolCallDto, UsageDto,
+};
 use async_openai::{
     Client,
     config::OpenAIConfig,
@@ -21,11 +26,6 @@ use futures_util::{
     stream,
 };
 use intention_config::{ProviderKindDto, ResolvedConfigDto, StartupProviderMaterial};
-use intention_model::{
-    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
-    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
-    ProviderErrorDto, ToolCallDto, UsageDto,
-};
 use intention_proto::{DtoResult, ErrorDto, ToolCallId};
 
 mod wire;
@@ -891,13 +891,13 @@ mod tests {
         )
         .expect("request is valid")
         .with_tools(vec![
-            intention_model::ModelToolDefinitionDto::new(
+            crate::model::ModelToolDefinitionDto::new(
                 "read_file",
                 "Reads one file",
                 r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
             )
             .expect("tool is valid"),
-            intention_model::ModelToolDefinitionDto::new(
+            crate::model::ModelToolDefinitionDto::new(
                 "search",
                 "Searches files",
                 r#"{"type":"object","required":["query"]}"#,
@@ -989,7 +989,7 @@ mod tests {
         // its text beside the tool calls.
         let attached = assistant_tool_request(&first, &second)
             .with_assistant_reasoning(vec![
-                intention_model::AssistantReasoningDto::new(
+                crate::model::AssistantReasoningDto::new(
                     vec![second.call_id()],
                     "weighing the options",
                 )
@@ -1008,7 +1008,7 @@ mod tests {
         // the key stays on the wire.
         let presence = assistant_tool_request(&first, &second)
             .with_assistant_reasoning(vec![
-                intention_model::AssistantReasoningDto::new(vec![second.call_id()], "")
+                crate::model::AssistantReasoningDto::new(vec![second.call_id()], "")
                     .expect("presence attachment is valid"),
             ])
             .expect("attachment is accepted");
@@ -1019,7 +1019,7 @@ mod tests {
         // An attachment for an unrelated call never leaks onto this message.
         let unrelated = assistant_tool_request(&first, &second)
             .with_assistant_reasoning(vec![
-                intention_model::AssistantReasoningDto::new(vec![ToolCallId::new()], "other call")
+                crate::model::AssistantReasoningDto::new(vec![ToolCallId::new()], "other call")
                     .expect("attachment is valid"),
             ])
             .expect("attachment is accepted");

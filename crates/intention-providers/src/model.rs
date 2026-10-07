@@ -1,7 +1,7 @@
 //! Provider-neutral model contracts (including tool calls and results) and validated stream facts.
 //!
-//! This crate contains no provider SDK, asynchronous runtime, or transport
-//! resources. Provider crates translate their native responses into these
+//! This module contains no provider SDK, asynchronous runtime, or transport
+//! resources. Provider adapters translate their native responses into these
 //! validated DTOs before crossing the provider boundary.
 
 use std::{

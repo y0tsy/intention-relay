@@ -770,10 +770,8 @@ dependencies = [
  "intention-config",
  "intention-domain",
  "intention-hooks",
- "intention-model",
  "intention-proto",
- "intention-provider-generic-chat",
- "intention-provider-openrouter",
+ "intention-providers",
  "intention-runtime",
  "intention-storage",
  "intention-storage-sqlite",
@@ -827,8 +825,8 @@ dependencies = [
  "intention-client",
  "intention-config",
  "intention-domain",
- "intention-model",
  "intention-proto",
+ "intention-providers",
  "intention-runtime",
  "intention-tools",
  "intention-transport",
@@ -859,18 +857,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "intention-model"
-version = "0.0.0"
-dependencies = [
- "futures-core",
- "futures-executor",
- "futures-util",
- "intention-proto",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "intention-plans"
 version = "0.0.0"
 
@@ -884,29 +870,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "intention-provider-generic-chat"
+name = "intention-providers"
 version = "0.0.0"
 dependencies = [
  "async-openai",
+ "futures-core",
+ "futures-executor",
  "futures-util",
  "http",
  "intention-config",
- "intention-model",
- "intention-proto",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "intention-provider-openrouter"
-version = "0.0.0"
-dependencies = [
- "futures-util",
- "http",
- "intention-config",
- "intention-model",
  "intention-proto",
  "openrouter-rs",
+ "serde",
  "serde_json",
 ]
 
@@ -918,8 +893,8 @@ dependencies = [
  "futures-util",
  "intention-config",
  "intention-domain",
- "intention-model",
  "intention-proto",
+ "intention-providers",
  "intention-storage",
 ]
 

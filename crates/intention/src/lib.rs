@@ -25,9 +25,6 @@ use intention_domain::run_status_is_terminal;
 use intention_hooks::{
     Hook, Outcome as HookOutcome, Phase, PhaseContext, Registry as HookRegistry,
 };
-use intention_model::{ModelCancellationSignal, ModelExecutionDriver};
-#[cfg(any(test, feature = "test-support"))]
-use intention_model::{ModelCapabilitiesDto, ModelDriver, ModelEventStream};
 use intention_proto::RunStatusDto;
 #[cfg(test)]
 use intention_proto::SendUserTurnOutcomeDto;
@@ -44,8 +41,11 @@ use intention_proto::{
 };
 #[cfg(test)]
 use intention_proto::{ProjectId, WorkspaceId};
-use intention_provider_generic_chat::GenericChatDriver;
-use intention_provider_openrouter::OpenRouterDriver;
+use intention_providers::GenericChatDriver;
+use intention_providers::OpenRouterDriver;
+use intention_providers::{ModelCancellationSignal, ModelExecutionDriver};
+#[cfg(any(test, feature = "test-support"))]
+use intention_providers::{ModelCapabilitiesDto, ModelDriver, ModelEventStream};
 use intention_runtime::{
     ModelRunCommitObserver, ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto,
     ModelRunExecutionService, ModelTimePort, ToolExecutionPort, fail_starting_run,
@@ -111,7 +111,7 @@ impl ModelDriver for TestSupportUnconfiguredDriver {
 impl ModelExecutionDriver for TestSupportUnconfiguredDriver {
     fn execute(
         &self,
-        _request: intention_model::ModelRequestDto,
+        _request: intention_providers::ModelRequestDto,
         _cancellation: ModelCancellationSignal,
     ) -> ModelEventStream {
         Box::pin(futures_util::stream::empty())

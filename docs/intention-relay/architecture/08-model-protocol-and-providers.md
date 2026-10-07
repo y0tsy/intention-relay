@@ -7,10 +7,10 @@ provider capabilities rather than forcing all models into a lowest-common-denomi
 
 ## Canonical model contract
 
-`intention-model` owns typed requests, stream events, capabilities, and the provider-driver trait. `intention-proto`
-owns provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and `ProviderErrorDto`, which `intention-model`
+`intention-providers` owns typed requests, stream events, capabilities, and the provider-driver trait. `intention-proto`
+owns provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and `ProviderErrorDto`, which `intention-providers`
 re-exports for source compatibility. `intention-domain` owns the durable projections and the transcript-row representation.
-Domain, storage, and protocol retain no dependency on `intention-model`.
+Domain, storage, and protocol retain no dependency on `intention-providers`.
 
 ```text
 ModelDriver
@@ -49,8 +49,7 @@ absent. A driver never synthesizes, substitutes, reorders, or truncates instruct
 or extend it.
 
 Provider SDK types cannot leave their provider crate. The architecture checker permits `openrouter_rs` namespace use
-only in `intention-provider-openrouter` private implementation and `async_openai` only in
-`intention-provider-generic-chat`; source-level ownership analysis rejects either SDK plus HTTP/runtime resources
+only inside `intention-providers`, in its private OpenRouter adapter, and `async_openai` only in its generic-chat adapter; source-level ownership analysis rejects either SDK plus HTTP/runtime resources
 outside those owners.
 
 ## Model evidence in the transcript
@@ -87,7 +86,7 @@ requested feature is valid.
 
 ### OpenRouter
 
-`intention-provider-openrouter` uses the pinned `openrouter-rs` 0.18.0 privately. It owns:
+`intention-providers` uses the pinned `openrouter-rs` 0.18.0 privately. It owns:
 
 - OpenRouter configuration translation;
 -  private SDK request construction and fixture normalization for text, reasoning, usage, finish, tool-call, and error
@@ -97,7 +96,7 @@ events;
 
 ### Generic Chat Completion
 
-`intention-provider-generic-chat` supports compatible Chat Completion-style endpoints using `async-openai` 0.42.0
+`intention-providers` supports compatible Chat Completion-style endpoints using `async-openai` 0.42.0
 privately with its configured-base-URL streaming support. It does not implement a custom HTTP or SSE parser: the adapter
 enables the pinned SDK's `byot` feature and drives the stream through `create_stream_byot` with crate-private typed
 request and chunk structs, so the SDK still owns HTTP, SSE, TLS, and error mapping while the adapter privately owns the
@@ -246,7 +245,7 @@ wait starts the next attempt immediately.
 
 ## Quality-gate integration
 
-`intention-model` and provider adapters are subject to their `standard` tier floor. Stream normalization, capability
+`intention-providers` is subject to its `standard` tier floor. Stream normalization, capability
 validation, retry,
 SDK-isolation, and secret-redaction fixtures are blocking `make verify` inputs under every relevant feature profile.
 Dependency and public-API checks must prevent provider SDK types and secrets from escaping their crate. See [12 Quality

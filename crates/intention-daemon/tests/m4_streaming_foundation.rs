@@ -28,10 +28,6 @@ use intention_application::ScheduleModelRunDto;
 use intention_client::RunStreamClient;
 use intention_config::ConfigSnapshotDto;
 use intention_daemon::DaemonToolExecutor;
-use intention_model::{
-    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
-    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
-};
 #[cfg(feature = "test-support")]
 use intention_proto::TurnId;
 use intention_proto::{IdempotencyKey, RunId, SessionId, TimestampDto};
@@ -44,6 +40,10 @@ use intention_proto::{
     ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto,
     ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, RunSubscriptionResponseDto,
     SubscribeRunCommandDto, decode_response, encode_request,
+};
+use intention_providers::{
+    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
+    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
 };
 #[cfg(feature = "test-support")]
 use intention_runtime::INTERRUPT_NOTICE;

@@ -16,8 +16,8 @@
 //! arrives; every uncalibrated increment is estimated at four characters per
 //! token.
 
-use intention_model::{ModelMessageDto, ModelRequestDto, ModelRoleDto, UsageDto};
 use intention_proto::DtoResult;
+use intention_providers::{ModelMessageDto, ModelRequestDto, ModelRoleDto, UsageDto};
 
 /// Characters per estimated token for every uncalibrated increment.
 const ESTIMATED_CHARACTERS_PER_TOKEN: usize = 4;
@@ -282,7 +282,7 @@ mod tests {
     #[test]
     fn compressed_tool_results_keep_their_pairing_and_floor() {
         let id = ToolCallId::new();
-        let call = intention_model::ToolCallDto::new(id, "read", "{}").expect("call is valid");
+        let call = intention_providers::ToolCallDto::new(id, "read", "{}").expect("call is valid");
         let mut messages = vec![
             user("context"),
             ModelMessageDto::assistant_tool_calls(None, vec![call]).expect("message is valid"),

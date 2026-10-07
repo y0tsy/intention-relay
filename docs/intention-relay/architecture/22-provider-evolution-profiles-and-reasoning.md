@@ -232,7 +232,7 @@ round's own accepted reasoning to the assistant tool-call message of that in-fli
 forbidden.
 
 The future normalized stream carries text, reasoning, summaries, tool calls, usage, and terminal events. The Slice 2
-provider-neutral reasoning DTO surface is owned by `intention-model`; the
+provider-neutral reasoning DTO surface is owned by `intention-providers`; the
 closed fragment category and the summary delta do not exist yet, and the live
 normalized reasoning event is the M4 `ModelEventDto::ReasoningDelta { content }`. The Slice 2 shape is:
 
@@ -403,7 +403,7 @@ vLLM/SGLang parser config, raw provider JSON, or generic request templates. Cros
 typed textual history contract; provider-native `preserve_thinking`, `thinking.keep`, remote continuation identifiers,
 and non-fitting assistant-history requirements are excluded. Arbitrary authentication headers are an accepted post-M5
 direction for M5+ Slice 2:
-a closed code-owned typed header policy (the `intention-model` `AuthenticationHeaderPolicyV1` consumed by both
+a closed code-owned typed header policy (the provider-owned `AuthenticationHeaderPolicyV1` consumed by both
 provider adapters; the protocol-only duplicate was removed by the unconsumed-surface audit (2026-09)). That policy
 belongs to the not-activated Slice 2, so the direction is documentation-only until an activating
 specification. The typed provider-native preservation-control and server-side-parser contracts were removed by the

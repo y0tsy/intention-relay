@@ -339,13 +339,13 @@ def check_phase_policy(
             "intention-proto", "intention-domain", "intention-config",
             "intention-transport", "intention-client", "intention", "intention-daemon",
             "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
-            "intention-model", "intention-provider-openrouter", "intention-provider-generic-chat",
+            "intention-providers",
         },
         "m5": {
             "intention-proto", "intention-domain", "intention-config",
             "intention-transport", "intention-client", "intention", "intention-daemon",
             "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
-            "intention-model", "intention-provider-openrouter", "intention-provider-generic-chat",
+            "intention-providers",
             "intention-tools", "intention-workspace", "intention-hooks",
         },
     }[phase]
@@ -581,8 +581,7 @@ def check_declared_boundaries(
     sdk_patterns = string_list(public_contracts, "provider_sdk_resource_patterns")
     active = string_list(policy["policy"], "active_production_crates")
     provider_owners = {
-        "intention-provider-openrouter": {"openrouter_rs::"},
-        "intention-provider-generic-chat": {"async_openai::"},
+        "intention-providers": {"openrouter_rs::", "async_openai::"},
     }
     for package_name in active:
         allowed_private_sdk = provider_owners.get(package_name, set())
@@ -606,8 +605,8 @@ def check_provider_sdk_ownership(
         fail("public contract boundary table is required")
     sdk_patterns = set(string_list(public_contracts, "provider_sdk_resource_patterns"))
     owners = {
-        "async_openai::": "intention-provider-generic-chat",
-        "openrouter_rs::": "intention-provider-openrouter",
+        "async_openai::": "intention-providers",
+        "openrouter_rs::": "intention-providers",
     }
     failures: list[str] = []
     for path, text in texts.items():

@@ -15,17 +15,17 @@ use intention::DaemonApplicationFacade;
 use intention_application::ScheduleModelRunDto;
 use intention_config::ConfigSnapshotDto;
 use intention_daemon::DaemonToolExecutor;
-use intention_model::{
-    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
-    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
-    ModelToolDefinitionDto, ToolCallDto,
-};
 use intention_proto::{IdempotencyKey, RunId, SessionId, TimestampDto, ToolCallId};
 use intention_proto::{
     MessageKindDto, MessageProjectionDto, RunStatusDto, SendUserTurnCommandDto, WorkspaceRootDto,
 };
 use intention_proto::{
     ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, SendUserTurnOutcomeDto,
+};
+use intention_providers::{
+    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
+    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
+    ModelToolDefinitionDto, ToolCallDto,
 };
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionOutcomeDto, ModelSleepFuture,

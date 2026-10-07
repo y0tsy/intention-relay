@@ -116,7 +116,7 @@ accepted provider reasoning as transient same-run attachment state with no durab
 attach it to the assistant tool-call message of the same-run continuation ([architecture
 08](08-model-protocol-and-providers.md)), and it is never durable history,
 message text, or cross-turn transfer. `intention-proto` owns the shared safe usage, finish-reason, tool-call, and
-provider-error values; `intention-model` re-exports them for source compatibility. Native SDK decoding and JSON values
+provider-error values; `intention-providers` re-exports them for its consumers. Native SDK decoding and JSON values
 may exist only inside the owning provider implementation before being normalized to those DTOs.
 
 Run-scoped delivery is a current-state stream: `SubscribeRunCommandDto` receives a correlated snapshot of the current

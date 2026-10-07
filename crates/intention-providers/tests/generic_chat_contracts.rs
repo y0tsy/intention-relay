@@ -13,31 +13,31 @@ use std::{
 };
 
 use futures_util::{Stream, task::noop_waker_ref};
-use intention_model::{
+use intention_proto::RunId;
+use intention_providers::GenericChatDriver;
+use intention_providers::{
     FinishReasonDto, ModelCancellationSignal, ModelDriver, ModelExecutionDriver, ModelMessageDto,
     ModelRequestDto, ModelRequestedCapabilitiesDto, ModelRoleDto,
 };
-use intention_proto::RunId;
-use intention_provider_openrouter::OpenRouterDriver;
 
 const FAKE_CREDENTIAL: &str = "fixture-credential-not-real-12345";
 
 fn material() -> StartupProviderMaterial {
     ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
         format!(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\""
+            "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\nendpoint = \"https://example.invalid/v1\"\ncredential = \"{FAKE_CREDENTIAL}\""
         ),
         ConfigSourceDto::Explicit(
             ConfigPathDto::parse(
                 std::env::temp_dir()
-                    .join("intention-relay-openrouter.toml")
+                    .join("intention-relay-generic.toml")
                     .to_string_lossy()
                     .into_owned(),
             )
             .expect("fixture path is absolute"),
         ),
     ))
-    .expect("OpenRouter config resolves")
+    .expect("generic config resolves")
 }
 
 fn request(capabilities: ModelRequestedCapabilitiesDto) -> ModelRequestDto {
@@ -52,69 +52,64 @@ fn request(capabilities: ModelRequestedCapabilitiesDto) -> ModelRequestDto {
 }
 
 #[test]
-fn openrouter_driver_declares_capabilities_and_preflights_before_outbound_work() {
-    let driver = OpenRouterDriver::from_startup_material(material()).expect("driver builds");
+fn generic_driver_declares_supported_subset_and_rejects_unsupported_preflight() {
+    let driver = GenericChatDriver::from_startup_material(material()).expect("driver builds");
     assert!(driver.capabilities().supports_text());
-    assert!(driver.capabilities().supports_reasoning());
     assert!(driver.capabilities().supports_tool_calls());
+    assert!(driver.capabilities().supports_reasoning());
     assert!(!driver.capabilities().supports_multimodal());
     assert!(!driver.capabilities().supports_vendor_extensions());
-    assert_eq!(
+    assert!(
         driver
             .preflight(&request(ModelRequestedCapabilitiesDto::new(
-                false, true, false, false,
+                true, false, true, false,
             )))
-            .expect_err("multimodal must fail before request translation")
-            .code(),
-        "unsupported_model_capability"
+            .is_ok()
     );
     assert_eq!(driver.prepared_request_count(), 0);
 
-    assert_eq!(
-        driver
-            .preflight(&request(ModelRequestedCapabilitiesDto::new(
-                false, false, false, true,
-            )))
-            .expect_err("vendor extensions must fail before request translation")
-            .code(),
-        "unsupported_model_capability"
-    );
-    assert_eq!(driver.prepared_request_count(), 0);
+    for unsupported in [
+        ModelRequestedCapabilitiesDto::new(false, true, false, false),
+        ModelRequestedCapabilitiesDto::new(false, false, false, true),
+    ] {
+        assert_eq!(
+            driver
+                .preflight(&request(unsupported))
+                .expect_err("unsupported generic capability rejects before preparation")
+                .code(),
+            "unsupported_model_capability"
+        );
+        assert_eq!(driver.prepared_request_count(), 0);
+    }
 }
 
 #[test]
-fn openrouter_mapping_normalizes_text_reasoning_usage_finish_error_and_tool_call() {
-    let text = OpenRouterDriver::map_fixture_text("hello").expect("text maps");
+fn generic_mapping_normalizes_text_usage_finish_error_and_tool_call() {
+    let text = GenericChatDriver::map_fixture_text("hello").expect("text maps");
     assert_eq!(
         serde_json::to_string(&text).expect("serializes"),
         r#"{"kind":"text_delta","content":"hello"}"#
     );
-    let reasoning =
-        OpenRouterDriver::map_fixture_reasoning("considering context").expect("reasoning maps");
-    assert_eq!(
-        serde_json::to_string(&reasoning).expect("serializes"),
-        r#"{"kind":"reasoning_delta","content":"considering context"}"#
-    );
-    let usage = OpenRouterDriver::map_fixture_usage(2, 3, 5).expect("usage maps");
+    let usage = GenericChatDriver::map_fixture_usage(2, 3, 5).expect("usage maps");
     assert!(
         serde_json::to_string(&usage)
             .expect("serializes")
             .contains("reported")
     );
     assert_eq!(
-        OpenRouterDriver::map_fixture_finish("tool_calls"),
+        GenericChatDriver::map_fixture_finish("tool_calls"),
         FinishReasonDto::ToolCalls
     );
     assert_eq!(
-        OpenRouterDriver::map_fixture_finish("unknown"),
+        GenericChatDriver::map_fixture_finish("other"),
         FinishReasonDto::Unknown
     );
     let tool =
-        OpenRouterDriver::map_fixture_tool_call("call-1", "inspect", "{}").expect("tool maps");
+        GenericChatDriver::map_fixture_tool_call("call-1", "inspect", "{}").expect("tool maps");
     assert_eq!(tool.name(), "inspect");
-    let error = OpenRouterDriver::map_fixture_error(503, "provider text must not leak")
+    let error = GenericChatDriver::map_fixture_error(429, "provider text must not leak")
         .expect("error maps");
-    assert_eq!(error.code(), "openrouter_provider_unavailable");
+    assert_eq!(error.code(), "generic_chat_provider_unavailable");
     assert!(
         !serde_json::to_string(&error)
             .expect("serializes")
@@ -123,14 +118,15 @@ fn openrouter_mapping_normalizes_text_reasoning_usage_finish_error_and_tool_call
 }
 
 #[test]
-fn openrouter_public_driver_does_not_expose_credential() {
-    let driver = OpenRouterDriver::from_startup_material(material()).expect("driver builds");
-    assert!(!format!("{driver:?}").contains(FAKE_CREDENTIAL));
+fn generic_public_driver_does_not_expose_credential() {
+    let driver = GenericChatDriver::from_startup_material(material()).expect("driver builds");
+    let debug = format!("{driver:?}");
+    assert!(!debug.contains(FAKE_CREDENTIAL));
 }
 
 fn collect_ready(
-    mut stream: intention_model::ModelEventStream,
-) -> Vec<Result<intention_model::ModelEventDto, intention_model::ProviderErrorDto>> {
+    mut stream: intention_providers::ModelEventStream,
+) -> Vec<Result<intention_providers::ModelEventDto, intention_providers::ProviderErrorDto>> {
     let waker = noop_waker_ref();
     let mut context = Context::from_waker(waker);
     let mut events = Vec::new();
@@ -144,8 +140,8 @@ fn collect_ready(
 }
 
 #[test]
-fn openrouter_execution_cancels_before_stream_creation_without_network_work() {
-    let driver = OpenRouterDriver::from_startup_material(material()).expect("driver builds");
+fn generic_execution_cancels_before_stream_creation_without_network_work() {
+    let driver = GenericChatDriver::from_startup_material(material()).expect("driver builds");
     let cancellation = ModelCancellationSignal::new();
     cancellation.cancel();
     let events = collect_ready(driver.execute(
@@ -156,8 +152,8 @@ fn openrouter_execution_cancels_before_stream_creation_without_network_work() {
 }
 
 #[test]
-fn openrouter_execution_rejects_preflight_before_stream_creation_without_network_work() {
-    let driver = OpenRouterDriver::from_startup_material(material()).expect("driver builds");
+fn generic_execution_rejects_preflight_before_stream_creation_without_network_work() {
+    let driver = GenericChatDriver::from_startup_material(material()).expect("driver builds");
     let events = collect_ready(driver.execute(
         request(ModelRequestedCapabilitiesDto::new(
             false, true, false, false,
@@ -166,20 +162,20 @@ fn openrouter_execution_rejects_preflight_before_stream_creation_without_network
     ));
     assert!(matches!(
         events.as_slice(),
-        [Err(error)] if error.code() == "openrouter_request_rejected"
+        [Err(error)] if error.code() == "generic_chat_request_rejected"
     ));
 }
 
 #[test]
-fn openrouter_driver_rejects_wrong_provider_kind() {
+fn generic_driver_rejects_wrong_kind_and_missing_endpoint_safely() {
     let wrong_kind = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
         format!(
-            "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\nendpoint = \"https://example.invalid/v1\"\ncredential = \"{FAKE_CREDENTIAL}\""
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\""
         ),
         ConfigSourceDto::Explicit(
             ConfigPathDto::parse(
                 std::env::temp_dir()
-                    .join("intention-relay-openrouter-wrong-kind.toml")
+                    .join("intention-relay-generic-wrong-kind.toml")
                     .to_string_lossy()
                     .into_owned(),
             )
@@ -188,9 +184,31 @@ fn openrouter_driver_rejects_wrong_provider_kind() {
     ))
     .expect("material resolves");
     assert_eq!(
-        OpenRouterDriver::from_startup_material(wrong_kind)
+        GenericChatDriver::from_startup_material(wrong_kind)
             .expect_err("wrong provider kind fails")
             .code(),
-        "invalid_openrouter_provider_config"
+        "invalid_generic_chat_provider_config"
+    );
+
+    let missing_endpoint = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
+        format!(
+            "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\""
+        ),
+        ConfigSourceDto::Explicit(
+            ConfigPathDto::parse(
+                std::env::temp_dir()
+                    .join("intention-relay-generic-no-endpoint.toml")
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+            .expect("fixture path is absolute"),
+        ),
+    ))
+    .expect("material resolves");
+    assert_eq!(
+        GenericChatDriver::from_startup_material(missing_endpoint)
+            .expect_err("missing endpoint fails")
+            .code(),
+        "missing_generic_chat_endpoint"
     );
 }

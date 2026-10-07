@@ -3,12 +3,12 @@
     reason = "Contract fixtures use expect to provide precise test failure messages."
 )]
 
-use intention_model::{
+use intention_proto::{CorrelationIdDto, RunId, ToolCallId};
+use intention_providers::{
     AssistantReasoningDto, FinishReasonDto, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
     ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
     ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto, UsageDto,
 };
-use intention_proto::{CorrelationIdDto, RunId, ToolCallId};
 
 fn message(role: ModelRoleDto, content: &str) -> ModelMessageDto {
     ModelMessageDto::new(role, content).expect("fixture message is valid")
@@ -128,7 +128,7 @@ fn public_model_contracts_round_trip_and_preserve_validated_accessors() {
             message(ModelRoleDto::Assistant, "message-assistant"),
         ],
         Some("system-context".to_owned()),
-        Some(intention_model::ModelRequestedCapabilitiesDto::new(
+        Some(intention_providers::ModelRequestedCapabilitiesDto::new(
             true, true, true, true,
         )),
     )
@@ -162,15 +162,15 @@ fn public_model_contracts_round_trip_and_preserve_validated_accessors() {
 fn capabilities_tool_usage_events_and_errors_cover_safe_wire_variants() {
     let complete = ModelCapabilitiesDto::new(true, true, true, true, true, true);
     complete
-        .ensure_supports(intention_model::ModelRequestedCapabilitiesDto::new(
+        .ensure_supports(intention_providers::ModelRequestedCapabilitiesDto::new(
             true, true, true, true,
         ))
         .expect("complete capability declaration supports request");
     for requested in [
-        intention_model::ModelRequestedCapabilitiesDto::new(true, false, false, false),
-        intention_model::ModelRequestedCapabilitiesDto::new(false, true, false, false),
-        intention_model::ModelRequestedCapabilitiesDto::new(false, false, true, false),
-        intention_model::ModelRequestedCapabilitiesDto::new(false, false, false, true),
+        intention_providers::ModelRequestedCapabilitiesDto::new(true, false, false, false),
+        intention_providers::ModelRequestedCapabilitiesDto::new(false, true, false, false),
+        intention_providers::ModelRequestedCapabilitiesDto::new(false, false, true, false),
+        intention_providers::ModelRequestedCapabilitiesDto::new(false, false, false, true),
     ] {
         assert_eq!(
             ModelCapabilitiesDto::new(true, false, false, false, false, true)
@@ -417,7 +417,7 @@ fn model_request_with_messages_preserves_fields() {
         "fixture-model",
         vec![message(ModelRoleDto::User, "first")],
         Some("system-context".to_owned()),
-        Some(intention_model::ModelRequestedCapabilitiesDto::new(
+        Some(intention_providers::ModelRequestedCapabilitiesDto::new(
             true, true, true, true,
         )),
     )
@@ -739,7 +739,7 @@ fn model_driver_default_preflight_uses_declared_capabilities() {
         "fixture-model",
         vec![message(ModelRoleDto::User, "hello")],
         None,
-        Some(intention_model::ModelRequestedCapabilitiesDto::new(
+        Some(intention_providers::ModelRequestedCapabilitiesDto::new(
             false, false, true, false,
         )),
     )

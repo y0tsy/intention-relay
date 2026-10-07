@@ -1,22 +1,22 @@
 //! OpenRouter provider normalization backed privately by `openrouter-rs`.
 //!
 //! This adapter owns OpenRouter SDK construction and request translation. It
-//! emits only `intention-model` DTOs and never exposes SDK stream resources.
+//! emits only provider-neutral model DTOs and never exposes SDK stream resources.
 
 use std::collections::VecDeque;
 
+use crate::model::ModelToolDefinitionDto;
+use crate::model::{
+    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
+    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
+    ProviderErrorDto, ToolCallDto, UsageDto,
+};
 use futures_util::{
     Stream, StreamExt,
     future::{Either, select},
     stream,
 };
 use intention_config::{ProviderKindDto, ResolvedConfigDto, StartupProviderMaterial};
-use intention_model::ModelToolDefinitionDto;
-use intention_model::{
-    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
-    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
-    ProviderErrorDto, ToolCallDto, UsageDto,
-};
 use intention_proto::{DtoResult, ErrorDto, ToolCallId};
 use openrouter_rs::{
     OpenRouterClient,
@@ -979,7 +979,7 @@ mod tests {
             .expect("request is valid");
         assert!(plain.assistant_reasoning().is_empty());
         let attachment =
-            intention_model::AssistantReasoningDto::new(vec![call.call_id()], "chain of thought")
+            crate::model::AssistantReasoningDto::new(vec![call.call_id()], "chain of thought")
                 .expect("reasoning attachment is valid");
         let attached = ModelRequestDto::new(run_id, "fixture-model", messages, None, None)
             .expect("request is valid")

@@ -22,15 +22,15 @@ is applied only at daemon startup; live reload remains deferred.
 active graph adds the intentional `storage -> config`, `storage-sqlite -> config`, `application -> config`, and `runtime
 -> config` edges required to persist and attach canonical configuration revisions without exposing credentials or
 filesystem paths.
--  M4 activates `intention-model`, `intention-provider-openrouter`, and `intention-provider-generic-chat`. The model
+-  M4 activates the provider layer, carried since the Slice 1.5 collapse by `intention-providers`. The model
 crate remains provider-neutral and depends only on `intention-proto`; provider crates depend only on model/config/types
 plus their private SDK. `intention-proto` owns the provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and
-`ProviderErrorDto` shared by model and durable domain facts; `intention-model` retains compatibility re-exports. Only
+`ProviderErrorDto` shared by model and durable domain facts; `intention-providers` re-exports them for its consumers. Only
 `intention` may select either concrete provider.
 -  M4 model and provider evidence is domain-owned and current-state: domain, storage, and protocol never depend on
-`intention-model`, and SQLite stores assistant content, reasoning text, tool calls, and tool results on the transcript
+`intention-providers`, and SQLite stores assistant content, reasoning text, tool calls, and tool results on the transcript
 and tool-result rows rather than in typed envelopes or per-run cursors. `intention-runtime` depends on the
-provider-neutral `intention-model` contract only for its injected base execution service; it neither selects a concrete
+provider-neutral `intention-providers` contract only for its injected base execution service; it neither selects a concrete
 provider nor exposes an async runtime resource.
 -  M4 activates the daemon host as a private composition consumer. `intention-daemon` may depend on the composition
 facade plus the DTO/application/runtime/model/protocol/transport/type crates needed to host selected execution and
@@ -55,9 +55,7 @@ The M1-M5 activation notes are historical records: the coverage policy is now th
 | `intention-storage` | DTO-only semantic repository methods, committed-change evidence, transcript and tool-result reads, and persisted configuration-revision inputs. | Config, domain, types. |
 | `intention-storage-sqlite` | Bundled SQLite single current schema (created directly on open), semantic repository implementation, projections, the message transcript, and tool-result rows. | Storage, config, domain, types. |
 | `intention-config` | TOML parsing, validation, resolved configuration and revision DTOs. | Types, domain as needed. |
-| `intention-model` | Provider-neutral model DTOs and driver trait. | Types, domain DTOs where required. |
-| `intention-provider-openrouter` | OpenRouter SDK translation. | Model, config, types. |
-| `intention-provider-generic-chat` | Generic Chat Completion translation. | Model, config, types. |
+| `intention-providers` | Provider-neutral model DTOs and driver trait plus both SDK translation adapters. | Config, proto, and shared value types. |
 | `intention-tools` | Registry, core tool contracts, tool DTOs, execution interfaces. | Domain, types. |
 | `intention-workspace` | WorkspaceRoot policy, paths, process CWD preparation. | Tools, hooks, domain, types. |
 | `intention-hooks` | Typed hook phases, ordering, contexts, dispatcher. | Tools, domain, types. |

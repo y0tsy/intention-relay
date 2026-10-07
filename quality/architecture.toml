@@ -15,9 +15,7 @@ active_production_crates = [
   "intention-runtime",
   "intention-storage",
   "intention-storage-sqlite",
-  "intention-model",
-  "intention-provider-openrouter",
-  "intention-provider-generic-chat",
+  "intention-providers",
   "intention-tools",
   "intention-workspace",
   "intention-hooks",
@@ -60,14 +58,12 @@ test_only_source_patterns = [
 "intention-storage" = ["intention-config", "intention-domain", "intention-proto"]
 "intention-transport" = ["intention-proto"]
 "intention-client" = ["intention-transport", "intention-proto"]
-"intention" = ["intention-application", "intention-config", "intention-domain", "intention-hooks", "intention-model", "intention-provider-generic-chat", "intention-provider-openrouter", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-tools", "intention-proto", "intention-workspace"]
-"intention-daemon" = ["intention", "intention-application", "intention-client", "intention-config", "intention-domain", "intention-model", "intention-runtime", "intention-tools", "intention-transport", "intention-proto"]
+"intention" = ["intention-application", "intention-config", "intention-domain", "intention-hooks", "intention-providers", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-tools", "intention-proto", "intention-workspace"]
+"intention-daemon" = ["intention", "intention-application", "intention-client", "intention-config", "intention-domain", "intention-providers", "intention-runtime", "intention-tools", "intention-transport", "intention-proto"]
 "intention-application" = ["intention-config", "intention-domain", "intention-hooks", "intention-runtime", "intention-storage", "intention-tools", "intention-proto", "intention-workspace"]
-"intention-runtime" = ["intention-config", "intention-domain", "intention-model", "intention-storage", "intention-proto"]
+"intention-runtime" = ["intention-config", "intention-domain", "intention-storage", "intention-proto", "intention-providers"]
 "intention-storage-sqlite" = ["intention-config", "intention-domain", "intention-storage", "intention-proto"]
-"intention-model" = ["intention-proto"]
-"intention-provider-openrouter" = ["intention-config", "intention-model", "intention-proto"]
-"intention-provider-generic-chat" = ["intention-config", "intention-model", "intention-proto"]
+"intention-providers" = ["intention-config", "intention-proto"]
 "intention-tools" = ["intention-proto", "intention-workspace"]
 "intention-workspace" = ["intention-proto"]
 "intention-hooks" = ["intention-tools", "intention-proto"]
@@ -84,9 +80,7 @@ test_only_source_patterns = [
 "intention-runtime" = ["futures-executor", "futures-util"]
 "intention-storage" = ["serde_json"]
 "intention-storage-sqlite" = ["rusqlite", "serde_json", "tempfile"]
-"intention-model" = ["futures-core", "futures-executor", "futures-util", "serde", "serde_json"]
-"intention-provider-openrouter" = ["futures-util", "http", "openrouter-rs", "serde_json"]
-"intention-provider-generic-chat" = ["async-openai", "futures-util", "http", "serde", "serde_json"]
+"intention-providers" = ["async-openai", "futures-core", "futures-executor", "futures-util", "http", "openrouter-rs", "serde", "serde_json"]
 "intention-tools" = ["glob", "rustix", "serde", "serde_json", "tempfile"]
 "intention-workspace" = []
 "intention-hooks" = []
@@ -102,7 +96,7 @@ forbidden_source_patterns = [
   "intention_storage::",
   "intention_storage_sqlite::",
   "intention_tools::",
-  "intention_provider_",
+  "intention_providers::",
   "rusqlite::",
   "tauri::",
 ]
@@ -125,8 +119,6 @@ forbidden_source_patterns = [
 root_package = "intention"
 concrete_implementation_crates = [
   "intention-storage-sqlite",
-  "intention-provider-openrouter",
-  "intention-provider-generic-chat",
   "intention-vfr",
   "intention-headroom",
   "intention-plans",
@@ -195,16 +187,8 @@ name = "intention-config"
 test_targets = ["contracts", "snapshot_fixtures", "m4_contracts"]
 
 [[future_crates]]
-name = "intention-model"
-test_targets = ["model_contracts", "m4_execution_contracts"]
-
-[[future_crates]]
-name = "intention-provider-openrouter"
-test_targets = ["openrouter_contracts"]
-
-[[future_crates]]
-name = "intention-provider-generic-chat"
-test_targets = ["generic_chat_contracts"]
+name = "intention-providers"
+test_targets = ["generic_chat_contracts", "m4_execution_contracts", "model_contracts", "openrouter_contracts"]
 
 [[future_crates]]
 name = "intention-tools"

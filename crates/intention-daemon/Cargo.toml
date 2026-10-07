@@ -16,7 +16,7 @@ test-support = ["intention/test-support"]
 intention = { path = "../intention", version = "=0.0.0" }
 intention-application = { path = "../intention-application", version = "=0.0.0" }
 intention-domain = { path = "../intention-domain", version = "=0.0.0" }
-intention-model = { path = "../intention-model", version = "=0.0.0" }
+intention-providers = { path = "../intention-providers", version = "=0.0.0" }
 intention-runtime = { path = "../intention-runtime", version = "=0.0.0" }
 intention-tools = { path = "../intention-tools", version = "=0.0.0" }
 intention-transport = { path = "../intention-transport", version = "=0.0.0" }
@@ -31,5 +31,5 @@ intention-application = { path = "../intention-application", version = "=0.0.0" 
 intention-config = { path = "../intention-config", version = "=0.0.0" }
 intention-client = { path = "../intention-client", version = "=0.0.0" }
 intention-domain = { path = "../intention-domain", version = "=0.0.0" }
-intention-model = { path = "../intention-model", version = "=0.0.0" }
+intention-providers = { path = "../intention-providers", version = "=0.0.0" }
 tempfile = "3.24.0"

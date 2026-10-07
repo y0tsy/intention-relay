@@ -12,7 +12,6 @@ use std::{
 
 use intention::{DaemonApplicationFacade, LocalToolInvocationOutcomeDto};
 use intention_domain::run_status_is_terminal;
-use intention_model::ModelCancellationSignal;
 use intention_proto::RunStatusDto;
 use intention_proto::{
     CorrelationIdDto, DtoResult, ErrorDto, RunId, SessionId, TimestampDto, ToolCallDto,
@@ -23,6 +22,7 @@ use intention_proto::{
     ProtocolResponsePayloadDto, RunStatusFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
     decode_request_line, encode_response, is_notification_line,
 };
+use intention_providers::ModelCancellationSignal;
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
     ToolResultOutcomeDto,
@@ -1206,10 +1206,6 @@ mod tests {
     use intention_config::{
         ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
     };
-    use intention_model::{
-        FinishReasonDto, ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelEventStream,
-        ModelExecutionDriver,
-    };
     use intention_proto::{
         ConfigRevisionId, IdempotencyKey, ProjectId, SchemaVersionDto, TimestampDto, WorkspaceId,
     };
@@ -1222,6 +1218,10 @@ mod tests {
         ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestPayloadDto,
         ProtocolResponsePayloadDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto,
         decode_response, encode_request,
+    };
+    use intention_providers::{
+        FinishReasonDto, ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelEventStream,
+        ModelExecutionDriver,
     };
     use intention_transport::{AsyncLocalClientConnection, AsyncLocalListener};
     use tempfile::TempDir;
@@ -1287,7 +1287,7 @@ mod tests {
     impl ModelExecutionDriver for EmptyDriver {
         fn execute(
             &self,
-            _request: intention_model::ModelRequestDto,
+            _request: intention_providers::ModelRequestDto,
             _cancellation: ModelCancellationSignal,
         ) -> ModelEventStream {
             Box::pin(futures_util::stream::empty())
@@ -1305,7 +1305,7 @@ mod tests {
     impl ModelExecutionDriver for CompletedDriver {
         fn execute(
             &self,
-            _request: intention_model::ModelRequestDto,
+            _request: intention_providers::ModelRequestDto,
             _cancellation: ModelCancellationSignal,
         ) -> ModelEventStream {
             Box::pin(futures_util::stream::iter(vec![
@@ -1327,7 +1327,7 @@ mod tests {
     impl ModelExecutionDriver for PendingDriver {
         fn execute(
             &self,
-            _request: intention_model::ModelRequestDto,
+            _request: intention_providers::ModelRequestDto,
             _cancellation: ModelCancellationSignal,
         ) -> ModelEventStream {
             Box::pin(futures_util::stream::pending())

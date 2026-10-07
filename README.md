@@ -97,9 +97,7 @@ exempt at 0% and outside collection.
 
 | Crate | Responsibility |
 | --- | --- |
-| [intention-model](crates/intention-model) | Provider-neutral model contracts (messages, tool calls/results) and validated stream facts; no SDK or runtime resources. |
-| [intention-provider-openrouter](crates/intention-provider-openrouter) | OpenRouter driver; `openrouter-rs` stays a private implementation detail. |
-| [intention-provider-generic-chat](crates/intention-provider-generic-chat) | Generic OpenAI-compatible Chat Completions driver; `async-openai` stays private. |
+| [intention-providers](crates/intention-providers) | Provider-neutral model contracts (messages, tool calls/results, validated stream facts) plus the OpenRouter and generic Chat Completions translation adapters; `openrouter-rs` and `async-openai` stay private implementation details. |
 
 ### Tools, workspace, and hooks
 
