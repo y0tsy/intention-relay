@@ -295,7 +295,7 @@ records, not a work-authorization plane. All directions affect fresh runs only.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 14, 15, 18, 21, and 24. Non-goals: Goal persistence,
+This document depends on architectures 03, 15, 18, and 21. Non-goals: Goal persistence,
 search/index/vector retrieval, prompt assembly, SQL/wire tags, migrations, retention/deletion/encryption, source-page
 sizes, resource values, provider evolution, session branching, activity-journal and UI delivery, Plan artifacts, MCP
 administration, Python/Jupyter process behavior, Cargo, Makefile/CI, production activation, attachments/images/binary/

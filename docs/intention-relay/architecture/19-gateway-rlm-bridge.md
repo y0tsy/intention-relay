@@ -6,7 +6,7 @@ Owner: architecture 19.
 
 This document owns future Gateway/RLM attachment, ephemeral bridge grant, ingress operation correlation, safe
 bridge-visible delivery, and bridge recovery. It applies only to future run execution. Retained RLM bridge, child, and
-activity material remains research provenance and historical-only where it conflicts with architectures 14--18.
+activity material remains research provenance and historical-only where it conflicts with architectures 15--18.
 
 ## Ownership and one capability path
 
@@ -228,11 +228,11 @@ trees, policy inheritance, queues, activity identities, and product limits remai
 reference exact legacy bytes, rewrite, normalize, or synthesize future state
 ([architecture 00](00-principles-and-scope.md)).
 
-This document depends on architectures 14, 15, and 18. Related
+This document depends on architectures 15 and 18. Related
 owners: 20 owns kernel process/namespace/checkpoint lifecycle; 21 owns Goal, Skill, context, memory, and compaction
 (bridge-delivered context is safe immutable projection only); 22 owns provider profile/capability semantics (bridge
 delivery uses only safe existing provider facts); 23 owns ordinary Session forks (no bridge grant or operation crosses
-one); 24 owns activity/UI projections (bridge grants, operations, and resources never become activity authority or
+one); 03 owns activity/UI projections (bridge grants, operations, and resources never become activity authority or
 public activity payload). It does not define kernel lifecycle, RLM executor or recursion topology, provider evolution,
 Skills, Goals, context, session forks, activity/UI, direct MCP administration, SQL, migrations, wire tags, crates,
 Cargo, Makefile/CI, or production implementation.

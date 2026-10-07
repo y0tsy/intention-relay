@@ -26,7 +26,7 @@ flowchart LR
   PA --> RC[Resolved config]
   RC --> RV[Config revision]
   RV --> DS[Daemon state]
-  DS --> RS[Run snapshot]
+  DS --> RS[Run records]
   RS --> RT[Run actor]
 ```
 
@@ -47,7 +47,7 @@ outcome test; it affects fresh runs only and never mutates a recorded snapshot.
 ### M3 lifecycle rules
 
 -  `ConfigSnapshotDto` is the canonical persisted, credential-free configuration selection; raw TOML and credentials do
-not enter storage, events, snapshots, or protocol DTOs.
+not enter committed records, frames, or protocol DTOs.
 - The composition root accepts one valid snapshot per daemon startup and persists it before recovery/readiness.
 - An accepted run receives an immutable copy of its selected snapshot/revision.
 -  Existing runs do not silently change provider, model, tool policy, VFR, Headroom, workspace, or timeout behavior due
@@ -70,7 +70,7 @@ snapshots always carry the effective policy explicitly. Runtime owns the fixed 2
 
 `parse_startup_material` additionally creates opaque `StartupProviderMaterial` for composition. It has no `Debug`,
 `Display`, serde implementation, or credential accessor and may only be consumed by a selected provider constructor.
-Safe resolved/snapshot DTOs, persistence, events, protocol, diagnostics, logs, and adapter projections remain
+Safe resolved/snapshot DTOs, committed records, frames, protocol, diagnostics, logs, and adapter projections remain
 credential-free.
 
 These M4 configuration and credential-isolation rules are implemented and verified at the M4 closure baseline. They
@@ -96,9 +96,9 @@ them to leak through the system.
 
 - configuration files have user-only permissions where the platform supports them, such as `0600` on Unix;
 - creation and update code warns or refuses unsafe permissions according to a documented platform policy;
--  secrets are excluded from transport DTOs, domain events, run snapshots, plan frontmatter, UI DTOs, tool results, and
-normal logs. `execute` is trusted-local and may inherit the invoking process environment; environment variables are not
-name-filtered or copied into evidence or logs;
+-  secrets are excluded from transport DTOs, the durable `runs`, `turns`, `messages`, `tool_results`, and
+`configuration_revisions` records, plan frontmatter, UI DTOs, and normal logs. `execute` is trusted-local and may
+inherit the invoking process environment; environment variables are not name-filtered or copied into evidence or logs;
 - errors, logs, and diagnostic bundles use centralized redaction;
 - configuration displays do not log values while rendering or validation fails;
 -  hermetic test fixtures use fake credentials only; the single opt-in live-provider e2e channel
@@ -145,8 +145,8 @@ apply safe projection before output:
 config -> provider
 provider error -> event/log
 process output -> tool result
-storage record -> snapshot
-snapshot/event -> transport
+committed record -> snapshot
+snapshot/frame -> transport
 transport -> Tauri/TUI presentation
 ```
 
@@ -172,8 +172,8 @@ Adapters render observations. They do not infer daemon health from presentation 
 
 ## Logging and audit
 
--  Domain events are the durable audit of application facts; structured logs are operational diagnostics, not a
-replacement for domain events.
+-  The committed current-state records (`runs`, `turns`, `messages`, `tool_results`, `configuration_revisions`) are
+the durable audit of application facts; structured logs are operational diagnostics, not a replacement for them.
 -  Logs have correlation IDs and safe context DTOs, and no sensitive prompt/configuration content is emitted merely for
 diagnostics.
 - Tool output logging is size-bounded and subject to content policy.
@@ -190,7 +190,7 @@ atomicity.
 | Run snapshot immutability | Accepted-turn integration fixtures. | Started runs retain their selected immutable config revision. |
 | Path selection | Config and platform-state location fixtures. | Config/storage locations use explicit absolute override or platform locations, never CWD. |
 | Permission safety | Filesystem permission test on Unix. | Created config is user-readable only or fails safely. |
-| Redaction | Table-driven secret injection plus raw SQLite persistence fixtures. | Recognizable fake credentials are absent from configuration-revision JSON, session/run snapshot JSON, event envelopes, errors, logs, and presentation DTOs. |
+| Redaction | Table-driven secret injection plus raw SQLite persistence fixtures. | Recognizable fake credentials are absent from configuration-revision JSON, the committed `runs`, `turns`, `messages`, and `tool_results` rows, errors, logs, and presentation DTOs. |
 | Safe observability | Daemon status contract test. | Health/usage/tool state is visible without credentials. |
 
 ## Quality-gate integration

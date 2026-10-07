@@ -146,7 +146,7 @@ activating specification.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 09, 14, 22, and 24. Non-goals: a reload
+This document depends on architectures 03, 09, and 22. Non-goals: a reload
 watcher/transport, keychain or secret store, standalone health-service or discovery topology, pricing engine, profile
 picker/editor implementation, OS notifications, remote transport, multi-user access, sandbox/container isolation, and
 production activation beyond the accepted directions. The daemon-facade serving surface for reload, rotation, health,

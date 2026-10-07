@@ -88,13 +88,13 @@ repositories, remote systems, or effects. A fork never clones or rolls back mach
 
 ## Atomic lineage and idempotency
 
-Future storage adds fork-owned records for conversation trees, child lineage, base snapshots, and fork operations; each
-state change is one SQLite transaction, and there is no separate event or ordering record.
+Future storage adds fork-owned records for conversation trees, child lineage, base snapshots, and fork operations under
+the one-transaction state-change law of [architecture 04](04-sessions-runs-events-and-storage.md).
 
 One transaction validates the source head and the accepted preview binding, then commits the child projection, lineage,
 base snapshot, optional anchor, and idempotency result; no external action occurs inside it.
 
-No synthetic source `SessionForked` event is allowed.
+No synthetic fork provenance record is allowed.
 
 Equal operation identity and command semantics return the same child without new records. Changed reuse, stale source
 state, preview mismatch, ineligible boundary, unavailable history, unsupported snapshot, or unavailable reference fails
@@ -232,10 +232,10 @@ canonical size limit ([architecture 09](09-configuration-security-and-observabil
 only by the page and title representation bounds above. Boundaries, base snapshots, lineage, and idempotency records
 remain indefinitely readable under the initial archive-only retention policy.
 
-The ordinary-session taxonomy adds `SessionForked`, `ForkAnchorMaterialized`, `SessionRenamed`, `SessionArchived`, and
-`SessionRestored` to the existing `SessionCreated` and run taxonomy. The conversation-tree lineage carries the closed
-lineage taxonomy `ConversationTreeCreated` and `ConversationBranchLinked`. Generic metadata events and a synthetic
-source-session fork event are not acceptable audit boundaries.
+Fork provenance is stored as committed records: fork, anchor materialization, rename, archive, and restore each commit
+a durable record alongside the ordinary session and run records, and the closed conversation-tree lineage commits
+`ConversationTreeCreated` and `ConversationBranchLinked` records. Generic metadata records and a synthetic
+source-session fork record are not acceptable audit boundaries.
 
 Inherited usage is source provenance and is never charged to the child a second time. Child totals count only
 child-owned runs; tree aggregates deduplicate inherited usage by original `RunId`. Presentation must distinguish own and
@@ -272,7 +272,7 @@ action, kernel task, MCP process, bridge grant, or unfinished effect. Later chil
 provider meaning. A profile override is allowed only for user-turn regeneration as a safe future-default proposal, never
 as a current run selection or continuation.
 
-This document depends on architectures 04 and 14--22 plus the DTO, transport, security, verification, and quality
+This document depends on architectures 04 and 15--22 plus the DTO, transport, security, verification, and quality
 policies. It does not define activity-journal or UI implementation, workspace cloning/rebinding, autonomous
 model/IPython forking, provider implementation, destructive deletion/GC/export, schema, migrations, crates, Cargo,
 Makefile/CI, or production activation.

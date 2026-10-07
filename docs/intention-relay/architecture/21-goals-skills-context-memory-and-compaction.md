@@ -7,7 +7,7 @@ Owner: architecture 21.
 This document owns future Goal scope and evidence, Skill selection and safe disclosure, context-source manifests,
 model-step projections, typed memory records, and immutable compaction. It applies only to future run execution.
 Retained Goal, Skill, memory, or compaction material remains research provenance and historical-only where it conflicts
-with architectures 14--20.
+with architectures 15--20.
 
 ## Ownership and non-authorities
 
@@ -239,11 +239,11 @@ selection, or body.
 Skill records are session-scoped: `SkillCreated`, `SkillImported`, `SkillRevisionCreated`, `SkillReplacementLinked`,
 `SkillRolledBack`, `SkillArchived`, `SkillRestored`, `SkillRevoked`, `SkillResolutionRecorded`, `SkillSelected`,
 `SkillDisclosed`, `SkillSupplementDisclosed`, `SkillProposalAccepted`, and `SkillProposalRejected` are typed records
-committed in exactly one session, one transaction per state change; there is no separate event or ordering record. The
-one cross-session aspect is catalog state, not a record family: records, revisions, and cards carry identity and exact
-revision, and a list binds the catalog revision and opaque token below, so catalog state has no durable order. Every
-state-changing command commits the state change in one transaction; no external action occurs inside it, and publication
-follows the commit. Current cards and catalog caches accelerate queries but never reconstruct historical use.
+committed in exactly one session under the one-transaction state-change law of [architecture
+04](04-sessions-runs-events-and-storage.md). The one cross-session aspect is catalog state, not a record family:
+records, revisions, and cards carry identity and exact revision, and a list binds the catalog revision and opaque token
+below, so catalog state has no durable order. Current cards and catalog caches accelerate queries but never reconstruct
+historical use.
 
 Skill operations are typed JSON-RPC 2.0 methods (card-only listing, exact inspect/disclosure, user invocation, lifecycle
 commands, and durable skill audit; [architecture
@@ -284,7 +284,7 @@ ContextSourceManifestV1
 ModelContextProjectionV1
   projection_contract_revision
   manifest_reference
-  model_step_id
+  model_step_index
   ordered_safe_items
   disclosure_decisions
   omission_or_degradation_evidence
@@ -359,7 +359,7 @@ may reconstruct missing future context meaning.
 
 ## Dependencies, non-goals, and evidence
 
-This document depends on architectures 14, 15, and 18--20. It does not define actual Goal persistence,
+This document depends on architectures 15 and 18--20. It does not define actual Goal persistence,
 search/index/vector retrieval, instruction assembly (owned by [architecture
 30](30-instruction-sources-and-system-context.md)), SQL/wire tags, migrations, retention/deletion/encryption,
 source-page sizes, resource values, provider evolution, architecture-23 session branching, activity-journal and UI

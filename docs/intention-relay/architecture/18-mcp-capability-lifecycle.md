@@ -263,7 +263,7 @@ Milestone 5+ as an explicit durable contract that never silently resumes old ext
 
 ## Dependencies and non-goals
 
-This document depends on architectures 14 and 15. It defines no direct MCP
+This document depends on architecture 15. It defines no direct MCP
 administration, an MCP listener/inbound daemon attachment, raw string-method transport, arbitrary maps/headers/schemas,
 plugins/installations, dynamic ToolIds, long-lived workers/supervision, provider evolution, bridge/IPython,
 Skills/Goals/context semantics, session forks, activity/UI, schema, migrations, crates, Cargo, Makefile/CI, or
@@ -274,7 +274,7 @@ retry counter, or quota.
 Architecture 19 may carry safe MCP projections through its shared ingress and delivery path but cannot discover, select,
 invoke, reattach, or recreate MCP work independently. Architecture 20
 kernel-originated MCP work still uses this document's fixed `mcp` lifecycle through the bridge and tool loop,
-checkpoints contain no live MCP state, and later runs reacquire capabilities. Architectures 21-24 own
+checkpoints contain no live MCP state, and later runs reacquire capabilities. Architectures 03 and 21-23 own
 Goal/Skill/context, provider, fork, and activity semantics: context is safe non-authorizing projection only, provider
 and MCP private credentials/resources remain separate and non-authorizing, no live MCP state crosses a fork, and
 activity projections expose only safe MCP provenance without discovering, selecting, invoking, reconnecting, or

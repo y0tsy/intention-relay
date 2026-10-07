@@ -14,7 +14,7 @@ A feature is delivered only when all three are true:
 
 1. its typed contract is specified and tested;
 2. its architecture boundaries are protected by executable checks where feasible;
-3. a user-visible or operational outcome is verified through the real command/event/persistence path.
+3. a user-visible or operational outcome is verified through the real command/persistence path.
 
 ```mermaid
 flowchart LR
@@ -106,7 +106,7 @@ The following scenarios must become executable before the corresponding capabili
 2. Connect a Tauri bridge fixture and TUI client fixture.
 3. Create/open the same session through one adapter.
 4. Send a user turn through the other.
-5. Verify both receive the same ordered snapshot/events.
+5. Verify both receive the same correlated subscription snapshot and live frames.
 
 ### B. Workspace addressing
 
@@ -131,7 +131,7 @@ The following scenarios must become executable before the corresponding capabili
 3. Edit its body through the plan path.
 4. Verify frontmatter remains valid and invisible in captured model context.
 5. Attempt a project-file write with normal write/edit.
-6. Verify typed denial and durable audit event.
+6. Verify the typed denial and the durable audit record it commits.
 
 ### E. VFR and Headroom pipeline
 
@@ -206,6 +206,24 @@ instead of the low-level transport. Tool-call tests cover one transaction per ca
 a real dispatch site, context builder, and order/short-circuit test. Protocol contract fixtures cover the reduced
 current-state surface with no resync, cursor, or event DTOs. Tests of deleted surfaces are deleted without replacement,
 and the per-crate coverage tiers in `quality/coverage.toml` are unchanged.
+
+### Future package evidence
+
+Evidence obligations for systems that are not activated are owned by their documents; this document keeps only the
+pointers:
+
+- Slice 1.5 core simplification — [Implementation Roadmap](11-implementation-roadmap.md).
+- Tool registry and model-tool loop — [architecture 15](15-tool-registry-and-model-tool-loop.md).
+- MCP capability lifecycle — [architecture 18](18-mcp-capability-lifecycle.md).
+- Gateway/RLM bridge — [architecture 19](19-gateway-rlm-bridge.md).
+- IPython kernel lifecycle — [architecture 20](20-ipython-kernel-lifecycle.md).
+- Goals, skills, context, memory, and compaction — [architecture 21](21-goals-skills-context-memory-and-compaction.md).
+- Provider evolution, profiles, and reasoning — [architecture 22](22-provider-evolution-profiles-and-reasoning.md).
+- Session branching and regeneration — [architecture 23](23-non-destructive-session-branching-and-regeneration.md).
+- Daemon, transport, and adapter boundary — [architecture 03](03-daemon-transport-and-adapters.md).
+- Configuration and provider control plane — [architecture 25](25-configuration-provider-control-plane.md) (protocol:
+  [architecture 29](29-provider-session-and-profiles-protocol.md)).
+- Post-M4 evidence obligations — activating specification per [architecture 12](12-quality-gates-and-makefile.md).
 
 ## Non-goals
 

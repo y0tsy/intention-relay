@@ -7,7 +7,7 @@ Owner: architecture 20.
 This document owns future run-scoped IPython kernel epochs, foreground cells, namespace checkpoints, kernel-local
 background work, safe kernel projections, and kernel recovery. It applies only to future run execution. Retained
 session-scoped IPython/RLM material remains research provenance and historical-only where it conflicts with
-architectures 14--19.
+architectures 15--19.
 
 ## Ownership and non-authorities
 
@@ -87,7 +87,7 @@ One epoch executes at most one foreground cell at a time. A cell binding is immu
 KernelExecutionBindingV1
   kernel_execution_id
   run_id
-  model_step_id
+  model_step_index
   kernel_selection_reference
   kernel_epoch_id
   typed_source_reference
@@ -284,7 +284,7 @@ implementation detail.
 
 ## Dependencies, non-goals, and evidence
 
-This document depends on architectures 14, 15, 18, and 19 and owns the project script library path, selection, and
+This document depends on architectures 15, 18, and 19 and owns the project script library path, selection, and
 evidence contract. It does not define Python/Jupyter dependencies, process supervision, storage/wire
 tags, migrations, retention, encryption, resource-limit values, RLM executor topology, Skills/Goals/context, provider
 evolution, session forks, activity-journal and UI delivery, direct MCP administration, Cargo, Makefile/CI, or production

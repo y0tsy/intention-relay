@@ -10,8 +10,8 @@ multi-user operation are explicit v1 exclusions ([00 Principles and Scope](00-pr
 
 The daemon is the sole owner of application use cases and runtime actors; SQLite connections and persistence
 transactions; active sessions and runs; provider drivers and model streams; the tool registry, workspace policy, hooks,
-VFR, Headroom, and plan policies; frame publication and subscription source; and the flat activity journal and
-notification list.
+VFR, Headroom, and plan policies; frame publication and subscription source; and protocol frames and subscription
+current-state reads via `intention-transport`.
 
 Tauri, TUI, and REPL own only presentation, user input adaptation, local display state, and reconnect UX.
 
@@ -251,7 +251,7 @@ Tauri is a bootstrap/native bridge, not a domain host.
 Svelte UI → Tauri invoke/event bridge → intention-client → local daemon
 ```
 
-The Rust bridge may initialize `intention-client`; dispatch protocol command/query DTOs; forward typed event DTOs; map
+The Rust bridge may initialize `intention-client`; dispatch protocol command/query DTOs; forward typed frame DTOs; map
 explicit presentation DTOs when necessary for JavaScript ergonomics; and manage window, native dialog, notification, and
 app lifecycle details.
 
@@ -262,7 +262,7 @@ introduce a parallel Tauri-only command contract.
 ## TUI and REPL
 
 TUI and REPL connect directly through `intention-client`. They are equal presentation adapters, not special daemon
-modes, and must use the same command, query, snapshot, and event DTOs as the Tauri bridge. This is an intentional
+modes, and must use the same command, query, snapshot, and frame DTOs as the Tauri bridge. This is an intentional
 architectural proof that presentation logic is isolated.
 
 ## Daemon restart semantics

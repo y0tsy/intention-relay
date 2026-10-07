@@ -10,6 +10,9 @@ feature profiles, architecture checks, and supply-chain gates live in [Quality G
 Makefile](12-quality-gates-and-makefile.md); test-first and outcome-verification rules live in [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md).
 
+The systems of documents 15 and 18-30 and of Slices 2-5 are not activated, and each activation requires an accepted
+activating specification ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
+
 
 
 ## Dependency graph
@@ -95,21 +98,22 @@ production crates and simplifies the internal interfaces every later slice build
 `intention-proto` (types and protocol), `intention-domain`, `intention-config`, `intention-engine` (application and
 runtime), `intention-tools` (tools, workspace, and hooks), `intention-providers` (provider-neutral model contract and
 both drivers), `intention-storage` (storage contracts and SQLite), `intention-transport`, `intention-daemon`
-(composition, host, and binary), and `intention-client`; the adapter and skeleton crates stay as declared. The
-composition facade disappears: the daemon host calls the engine directly. DTOs remain only at the three physical
-boundaries — the IPC wire, SQLite persistence, and provider SDKs — and internal crates pass domain types. Tool inputs
-and outputs are schema-validated JSON and are the only JSON payloads in the system. Identity newtypes reduce to eight
-(`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`, `IdempotencyKey`);
-model steps and tool groups are addressed by plain indices and mutating operations by `IdempotencyKey`. The event log,
-snapshots, cursors, and resync are removed in favor of current-state tables (`projects`, `workspace_roots`, `sessions`,
-`runs`, `turns`, `messages`, `tool_results`, `configuration_revisions`); `messages` and `tool_results` are the
-transcript, every state change commits in one SQLite transaction, and the daemon publishes `run.frame` notifications
-built from the committed values. The eight hook phases stay and are wired into the real tool cycle. The single live
-protocol version stays 1.0, with no resync and no cursors: a re-subscribing client receives current run state and
-bounded recent messages, then continues live. The `intention-client` is rewritten as a fully asynchronous client that
-implements every protocol method, its blocking API is removed, and daemon end-to-end tests drive the real client
-instead of the low-level transport; the `intention-tui` proof adapter is migrated mechanically without rework. The
-single storage schema evolves in place with no migration or compatibility path.
+(composition, host, and binary), and `intention-client`; the adapter and skeleton crates stay as declared. The target
+keeps DTOs only at the three physical boundaries — the IPC wire, SQLite persistence, and provider SDKs — with internal
+crates passing domain types, and makes schema-validated JSON tool inputs and outputs the only JSON payloads in the
+system. The current-state core has already landed on this branch: the event log, snapshots, cursors, and resync are
+replaced by the eight current-state tables (`projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`,
+`tool_results`, `configuration_revisions`); `messages` and `tool_results` are the transcript; identity is the eight
+newtypes (`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`,
+`IdempotencyKey`), with model steps and tool groups addressed by plain indices and mutating operations by
+`IdempotencyKey`; every state change commits in one SQLite transaction and the daemon publishes `run.frame`
+notifications built from the committed values; the single live protocol version is 1.0 with no cursors, and a
+re-subscribing client receives current run state and bounded recent messages, then continues live; `intention-client`
+is a fully asynchronous client that implements every protocol method with its blocking API removed, daemon end-to-end
+tests drive the real client instead of the low-level transport, and the `intention-tui` proof adapter is migrated
+mechanically without rework; and the eight hook phases are wired into the real tool cycle. What remains before the
+slice can activate is the ten-production-crate consolidation and the removal of the composition facade, so the daemon
+host calls the engine directly; the single storage schema evolves in place with no migration or compatibility path.
 -  **Slice 2 — Control plane — not activated.** The cluster and provider session selection (architectures 25/29/22):
 controlled live reload, credential rotation, provider health checks, model discovery, pricing policy, provider profile
 UI and raw-TOML/configuration editing, arbitrary authentication headers, session defaults and per-turn/fork overrides,
@@ -188,7 +192,7 @@ consumed here, while the durable `SessionProviderProfileChanged` delivery stays 
 ### Tests first
 
 - bridge contract tests using a fixture daemon;
-- TUI/bridge equivalent command/event tests;
+- TUI/bridge equivalent command, query, and frame tests;
 - desktop lifecycle smoke test where the environment supports it;
 - adapter mapping coverage and fixture-daemon outcome scenarios.
 
@@ -327,7 +331,8 @@ activating specification per [architecture 12](12-quality-gates-and-makefile.md)
 evidence, no-retry and no-resume recovery, and current-state tool-result delivery (architecture 15);
 -  bridge attachment and typed handshake, the ephemeral daemon-issued grant, immutable bridge-contract selection,
 durable operation correlation, the one-path ingress into registry admission and tool-loop facts (including `sub_agent`
-ingress), safe replay, cancellation propagation, recovery, and the closed `bridge_*` failures (architecture 19);
+ingress), re-subscription reading current state, cancellation propagation, recovery, and the closed `bridge_*`
+failures (architecture 19);
 -  worker/process supervision topology, never a second runtime, registry, persistence authority, or sandbox (architecture 03);
 -  crate ownership, feature-profile, and coverage declarations under [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations for every activated family.
@@ -336,7 +341,8 @@ Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations fo
 
 - registry slot, descriptor-revision, and registry-revision fixtures;
 - loop step/group fixtures plus the ordered-group shape matrix and effect-evidence fault injection;
-- bridge grant, operation correlation, replay, cancellation, slow-peer, and no-bypass fixtures;
+- bridge grant, operation correlation, re-subscription reading current state, cancellation, slow-peer, and no-bypass
+fixtures;
 - supervision-topology fixtures;
 - M3/M4 tool denial, ordinary workspace addressing, and retained RLM preservation fixtures.
 
@@ -346,7 +352,7 @@ Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations fo
 interrupted call;
 -  bridge ingress cannot bypass registry admission, `ToolCallId`, start/result evidence, or post-commit reread
 publication;
-- no ordinary M3/M4/M5 tool path, denial, or replay changes meaning.
+- no ordinary M3/M4/M5 tool path, denial, or re-subscription read changes meaning.
 
 ### Exit criteria
 

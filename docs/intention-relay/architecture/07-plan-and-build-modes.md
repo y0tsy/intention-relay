@@ -100,7 +100,7 @@ The model never receives this frontmatter. `intention-plans` owns it:
 - hides frontmatter on model-visible reads;
 - preserves controlled metadata when the agent edits plan body content;
 - rejects edits that would corrupt the frontmatter boundary;
-- persists a matching typed plan revision/event.
+- persists a matching committed plan revision record.
 
 The model receives only:
 
@@ -187,12 +187,12 @@ stateDiagram
   Abandoned --> [*]
 ```
 
-Plan approval is a durable event for one exact plan revision. By default, the approval operation immediately creates and
-starts a fresh Build Autopilot run in the same Session, after the Plan run is terminalized safely. The new run gets a
-new `RunId`, immutable Build/Autopilot policy snapshot, exact approved plan reference, and safe context projection. It
-does not resume the Plan stream or provider request. An optional implementation-handoff operation may instead create a
-new Session from a frozen full safe context snapshot; it is separate from run continuation and does not transfer live
-resources or authority.
+Plan approval is a committed record for one exact plan revision. By default, the approval operation immediately
+creates and starts a fresh Build Autopilot run in the same Session, after the Plan run is terminalized safely. The new
+run gets a new `RunId`, immutable Build/Autopilot policy snapshot, exact approved plan reference, and safe context
+projection. It does not resume the Plan stream or provider request. An optional implementation-handoff operation may
+instead create a new Session from a frozen full safe context snapshot; it is separate from run continuation and does
+not transfer live resources or authority.
 
 ## Required tests and outcomes
 
@@ -203,7 +203,7 @@ resources or authority.
 | Hidden metadata | Model-request capture test. | Model receives body and never YAML frontmatter. |
 | Metadata integrity | Agent-edit test with attempted frontmatter mutation. | Controlled metadata remains valid and revision increments. |
 | Plan write restriction | Tool-policy integration test. | Project write/edit is denied with typed policy error. |
-| Plan artifact edit | Tool-policy test. | Current plan body is updated and a revision event is stored. |
+| Plan artifact edit | Tool-policy test. | Current plan body is updated and the revision is committed as a durable record. |
 | Execute focus/audit | Command fixture/audit test. | Plan-mode execution is available, marked with Plan policy, advisory-guided and auditable; docs/tests do not claim shell containment. |
 | Approval flow | State-machine integration test. | Submission, approval/rejection, and feedback transitions are durable and ordered. |
 | Approval continuation | Application/runtime outcome test. | Approval pins the plan revision and starts a new Build Autopilot run in the same Session with a new `RunId`. |

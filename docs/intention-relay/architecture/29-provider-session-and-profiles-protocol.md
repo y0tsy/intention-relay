@@ -32,9 +32,9 @@ A session copies the global `ProviderProfileId` as a durable future default; cat
 profile ID, the expected session projection revision, and an operation ID; it changes only future intent and, when the
 durable default changes, publishes the typed `SessionProviderProfileChanged` event to the validating session-event
 boundary. No durable copy of that event is written: the control-plane event family
-has no durable append seam. Durable delivery remains future work, reserved to Milestone 6 in the roadmap's [reserved
-declarations carried by M6-M9](11-implementation-roadmap.md#reserved-declarations-carried-by-m6-m9) and anchored as the
-durable `SessionProviderProfileChanged` append layer. An existing-profile request is a successful `changed = false`
+has no durable append seam. Durable delivery remains future work, reserved to Milestone 6 in the roadmap's
+[Tauri bridge and primary desktop UI](11-implementation-roadmap.md#milestone-6-tauri-bridge-and-primary-desktop-ui) and
+anchored as the durable `SessionProviderProfileChanged` append layer. An existing-profile request is a successful `changed = false`
 no-op that publishes no event. `GetSessionProviderProfileQueryDto` returns the durable intent, the current safe resolved
 entry/revision or a closed unavailability reason, the session projection revision, and the global default; availability
 is a daemon-computed read projection and never mass-rewrites sessions or turns.
@@ -133,7 +133,7 @@ the layer is not activated and activation requires an activating specification.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 14, 15, 22, 23, and 25.
+This document depends on architectures 15, 22, 23, and 25.
 Non-goals: a `responses` SDK/driver, user-kind parser, catalog database, profile picker/editor
 presentation, credential entry/keychain, health test, discovery, pricing, telemetry, live reload, multimodal or
 structured output, plugin drivers, remote continuation, and production behavior. The catalog database, the single

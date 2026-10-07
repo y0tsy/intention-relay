@@ -244,7 +244,7 @@ instruction contract.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 04, 06, 07, 08, 09, 14, 21, 23, and 25.
+This document depends on architectures 04, 06, 07, 08, 09, 21, 23, and 25.
 Non-goals: Goal, Skill, context-manifest, memory, or compaction semantics; fork lineage or lineage projection rules;
 the model request contract or driver translation; configuration storage, reload, or credential handling; activity,
 notification, or adapter behavior; few-shot example selection, memory-derived prompt material, MCP-provided prompts,

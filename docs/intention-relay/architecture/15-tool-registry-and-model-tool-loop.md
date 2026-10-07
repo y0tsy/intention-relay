@@ -385,8 +385,9 @@ without bypass or duplication, and tool admission never grants target-mutation a
 requests consume the same frozen descriptor selection, admission, `ToolCallId`, and publication path; kernel execution
 is not a new ToolId, registry, or primitive bypass.
 
-Architectures 21-24 own Goal/Skill/context, provider, fork, and activity semantics; none may add a descriptor, ToolId,
-admission exception, `WorkspaceRoot` authority, `ToolCallId`, or retry path, and context projections may inform a
+Architectures 03 and 21-23 own Goal/Skill/context, provider, fork, and activity semantics; none may add a
+descriptor, ToolId, admission exception, `WorkspaceRoot` authority, `ToolCallId`, or retry path, and context projections
+may inform a
 model step only through immutable selected safe representations. A provider may normalize a tool call only when the
 immutable capability selection declares `model_tool_loop_v1`, and it cannot assign local IDs, use provider-built-in
 tools, create a registry, or bypass the frozen local exchange. Architecture 23 may preserve terminal tool provenance
