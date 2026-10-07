@@ -1,3 +1,13 @@
+//! Streaming-foundation integration fixtures for the daemon host.
+//!
+//! The fixtures here exercise current durable state only: live `Content` and
+//! `Status` frames published from committed values, the current-state snapshot a
+//! run subscription returns at registration, the transcript rows holding the run
+//! history, and the run projections a restarted daemon serves. A run
+//! subscription carries no cursor and no replay tail, and a slow subscriber is
+//! closed instead of resynchronized: a re-subscribing client re-reads current
+//! state.
+
 #![allow(
     clippy::expect_used,
     clippy::panic,
@@ -18,9 +28,7 @@ use intention_application::ScheduleModelRunDto;
 use intention_client::RunStreamClient;
 use intention_config::ConfigSnapshotDto;
 use intention_daemon::DaemonToolExecutor;
-#[cfg(feature = "test-support")]
-use intention_domain::RunStatusDto;
-use intention_domain::SendUserTurnCommandDto;
+use intention_domain::{MessageKindDto, RunStatusDto, SendUserTurnCommandDto};
 use intention_model::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
@@ -34,12 +42,16 @@ use intention_protocol::{
     ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, RunSubscriptionResponseDto,
     SubscribeRunCommandDto, decode_response, encode_request,
 };
+#[cfg(feature = "test-support")]
+use intention_runtime::INTERRUPT_NOTICE;
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
 };
 #[cfg(feature = "test-support")]
 use intention_transport::{AsyncLocalListener, LocalEndpoint};
-use intention_types::{RunId, SessionId, TimestampDto, TurnId};
+#[cfg(feature = "test-support")]
+use intention_types::TurnId;
+use intention_types::{IdempotencyKey, RunId, SessionId, TimestampDto};
 use tempfile::TempDir;
 
 struct ScriptedDriver {
@@ -186,11 +198,11 @@ impl RecordingObserver {
 }
 
 impl ModelRunCommitObserver for RecordingObserver {
-    fn observe_model_run_commit(&self, committed: ModelRunCommitDto) {
+    fn observe_model_run_commit(&self, committed: &ModelRunCommitDto) {
         self.commits
             .lock()
             .expect("observer recorder remains available")
-            .push(committed);
+            .push(committed.clone());
     }
 }
 
@@ -278,7 +290,8 @@ fn create_and_start(facade: &DaemonApplicationFacade) -> (SessionId, RunId) {
         ProtocolCommandResultDto::Accepted(_)
     ));
     let result = facade.command(ProtocolCommandDto::SendUserTurn(
-        SendUserTurnCommandDto::new(session_id, TurnId::new(), "turn").expect("turn is valid"),
+        SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "turn")
+            .expect("turn is valid"),
     ));
     let ProtocolCommandResultDto::Accepted(accepted) = result else {
         panic!("fixture turn starts")
@@ -330,7 +343,7 @@ async fn send_user_turn_through_host(endpoint: &LocalEndpoint, session_id: Sessi
         "m4-host-command-test",
         1,
         ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, TurnId::new(), "host turn")
+            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "host turn")
                 .expect("turn is valid"),
         )),
     )
@@ -372,30 +385,30 @@ async fn interrupt_run_through_host(
 }
 
 #[cfg(feature = "test-support")]
-async fn send_pending_turn_through_host(
-    endpoint: &LocalEndpoint,
-    session_id: SessionId,
-    turn_id: TurnId,
-) {
+async fn send_pending_turn_through_host(endpoint: &LocalEndpoint, session_id: SessionId) -> TurnId {
     let response = send_request_through_host(
         endpoint,
         "m4-host-pending-test",
         1,
         ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, turn_id, "pending host turn")
+            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "pending host turn")
                 .expect("pending turn is valid"),
         )),
     )
     .await;
-    assert!(matches!(
-        response,
-        ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(accepted))
-            if matches!(
-                accepted.result(),
-                ProtocolAcceptedResultDto::SendUserTurn(turn)
-                    if matches!(turn.outcome(), SendUserTurnOutcomeDto::Pending)
-            )
-    ));
+    let ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(accepted)) =
+        response
+    else {
+        panic!("host accepts the pending turn")
+    };
+    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
+        panic!("host response contains a pending turn")
+    };
+    assert!(
+        matches!(turn.outcome(), SendUserTurnOutcomeDto::Pending),
+        "the host answers the pending turn with its durable identity"
+    );
+    turn.turn_id()
 }
 
 #[tokio::test]
@@ -424,62 +437,105 @@ async fn injected_driver_executes_through_the_facade_bridge_and_observes_only_co
     let commits = observer.commits();
     assert!(
         commits.len() >= 3,
-        "facts and completion are observed after commit"
+        "the running status, committed content, and completed status are observed after commit"
     );
+    assert!(commits.iter().all(|commit| match commit {
+        ModelRunCommitDto::Content(message) =>
+            message.session_id() == session_id && message.run_id() == Some(run_id),
+        ModelRunCommitDto::Status {
+            session_id: committed_session,
+            run_id: committed_run,
+            ..
+        } => *committed_session == session_id && *committed_run == run_id,
+    }));
+    assert!(matches!(
+        commits.first(),
+        Some(ModelRunCommitDto::Status {
+            status: RunStatusDto::Running,
+            ..
+        })
+    ));
+    assert!(commits.iter().any(|commit| matches!(
+        commit,
+        ModelRunCommitDto::Content(message)
+            if message.kind() == MessageKindDto::Assistant
+                && message.text() == "complete response"
+    )));
+    assert!(matches!(
+        commits.last(),
+        Some(ModelRunCommitDto::Status {
+            status: RunStatusDto::Completed,
+            ..
+        })
+    ));
+
+    // The committed values the observer received re-read as current state.
+    let run = facade
+        .load_run_projection_for_daemon(session_id, run_id)
+        .expect("completed run projection reads");
+    assert_eq!(run.status(), RunStatusDto::Completed);
+    let messages = facade
+        .load_run_messages_for_daemon(session_id, run_id, 16)
+        .expect("committed transcript reads");
+    assert!(messages.iter().any(|message| {
+        message.kind() == MessageKindDto::Assistant && message.text() == "complete response"
+    }));
     assert!(
-        commits
+        messages
             .iter()
-            .all(|commit| { commit.session_id() == session_id && commit.run_id() == run_id })
-    );
-    assert!(
-        commits
-            .windows(2)
-            .all(|pair| pair[0].cursor() <= pair[1].cursor())
+            .any(|message| { message.kind() == MessageKindDto::User && message.text() == "turn" })
     );
 }
 
 #[cfg(feature = "test-support")]
 #[tokio::test]
-async fn real_async_host_returns_current_run_snapshot_and_accepts_repeated_replay_requests() {
+async fn real_async_host_snapshot_answers_a_subscription_and_a_resubscribe_rereads_current_state() {
     let driver = Arc::new(ScriptedDriver::completed_text());
     let (_directory, facade, _snapshot) = fixture_facade(driver);
     let (session_id, run_id) = create_and_start(&facade);
     let endpoint = LocalEndpoint::from_instance_id(format!("m4-host-{}", RunId::new()))
         .expect("fixture endpoint is valid");
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
-    let server = tokio::spawn(async move {
-        let connection = listener.accept().await.expect("fixture peer connects");
-        intention_daemon::serve_test_async_connection(connection, facade).await;
-    });
+    let server = tokio::spawn(intention_daemon::serve_test_async_listener(
+        listener, facade, 2,
+    ));
 
     let client = RunStreamClient::new(endpoint, "m4-host-test").expect("stream client is valid");
-    let mut subscription = client
+    let subscription = client
         .subscribe(SubscribeRunCommandDto::new(
             intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
-            None,
         ))
         .await
-        .expect("current replay arrives");
-    assert_eq!(
-        subscription.reducer().last_cursor(),
-        Some(intention_domain::RunEventCursorDto::new(0))
-    );
-    subscription
-        .request_replay()
+        .expect("the current run snapshot arrives");
+    let run = *subscription
+        .reducer()
+        .run()
+        .expect("the subscription snapshot is authoritative");
+    assert_eq!(run.session_id(), session_id);
+    assert_eq!(run.run_id(), run_id);
+    assert_eq!(run.status(), RunStatusDto::Starting);
+    drop(subscription);
+
+    // There is no cursor and no replay tail: a fresh subscription re-reads the
+    // same current durable state.
+    let reconnected = client
+        .subscribe(SubscribeRunCommandDto::new(
+            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+            session_id,
+            run_id,
+        ))
         .await
-        .expect("repeat replay arrives");
-    assert_eq!(
-        subscription.reducer().last_cursor(),
-        Some(intention_domain::RunEventCursorDto::new(0))
-    );
-    server.abort();
+        .expect("the re-subscription re-reads current state");
+    assert_eq!(reconnected.reducer().run(), Some(&run));
+    drop(reconnected);
+    server.await.expect("host serves both subscription peers");
 }
 
 #[cfg(feature = "test-support")]
 #[tokio::test]
-async fn accepted_host_turn_executes_once_then_streams_durable_facts_and_completed_snapshot() {
+async fn accepted_host_turn_executes_once_then_streams_committed_content_and_completed_status() {
     let driver = Arc::new(BlockingDriver::new());
     let (_directory, facade, _snapshot) = fixture_facade(driver.clone());
     let session_id = SessionId::new();
@@ -516,69 +572,44 @@ async fn accepted_host_turn_executes_once_then_streams_durable_facts_and_complet
             intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
-            None,
         ))
         .await
-        .expect("current replay arrives");
-    assert_eq!(
-        subscription
-            .reducer()
-            .snapshot()
-            .expect("initial replay is authoritative")
-            .run_projection()
-            .status(),
-        RunStatusDto::Running
-    );
+        .expect("the current run snapshot arrives");
+    assert_eq!(subscription.reducer().status(), Some(RunStatusDto::Running));
     driver.release.notify_one();
-    let mut completed = false;
-    for _ in 0..6 {
-        if completed {
-            break;
-        }
-        let _ = tokio::time::timeout(Duration::from_secs(1), subscription.receive())
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while subscription.reducer().status() != Some(RunStatusDto::Completed) {
+        let frame = tokio::time::timeout_at(deadline, subscription.receive())
             .await
-            .expect("stream delivers committed frame")
-            .expect("stream frame is valid");
-        completed = subscription
-            .reducer()
-            .snapshot()
-            .is_some_and(|snapshot| snapshot.run_projection().status() == RunStatusDto::Completed);
+            .expect("committed frames arrive before the deadline")
+            .expect("the delivered frame is valid");
+        assert!(
+            frame.is_some(),
+            "the stream stays open until the terminal status is published"
+        );
     }
-    assert!(
-        completed,
-        "same persistent connection receives completed state"
-    );
     assert_eq!(driver.executions(), 1);
-    assert!(
-        subscription
-            .reducer()
-            .last_cursor()
-            .is_some_and(|cursor| cursor.value() > 0)
-    );
+    assert!(subscription.reducer().messages().iter().any(|message| {
+        message.kind() == MessageKindDto::Assistant && message.text() == "live response"
+    }));
     drop(subscription);
 
-    let mut reconnected = client
+    let reconnected = client
         .subscribe(SubscribeRunCommandDto::new(
             intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
-            None,
         ))
         .await
-        .expect("new connection receives a current snapshot");
+        .expect("a new connection receives current state");
     assert_eq!(
-        reconnected
-            .reducer()
-            .snapshot()
-            .expect("reconnect replay is authoritative")
-            .run_projection()
-            .status(),
-        RunStatusDto::Completed
+        reconnected.reducer().status(),
+        Some(RunStatusDto::Completed)
     );
-    reconnected
-        .request_replay()
-        .await
-        .expect("same connection accepts a repeated replay");
+    assert!(reconnected.reducer().messages().iter().any(|message| {
+        message.kind() == MessageKindDto::Assistant && message.text() == "live response"
+    }));
+    drop(reconnected);
     server.await.expect("host accepts command and stream peers");
 }
 
@@ -623,10 +654,10 @@ async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
         .await
         .expect("the same run continues after the interruption notice");
     assert_eq!(driver.executions(), 2);
-    let replay = facade
-        .load_current_run_snapshot_for_daemon(session_id, run_id)
-        .expect("continuing run replay reads");
-    assert_eq!(replay.run_projection().status(), RunStatusDto::Running);
+    let run = facade
+        .load_run_projection_for_daemon(session_id, run_id)
+        .expect("continuing run projection reads");
+    assert_eq!(run.status(), RunStatusDto::Running);
     let requests = driver.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1].run_id(), run_id);
@@ -637,21 +668,15 @@ async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
             .any(|message| message.role() == ModelRoleDto::Notice),
         "the continuation carries the interruption notice"
     );
-    let events = facade
-        .durable_events_for_test_support(session_id)
-        .expect("durable events read");
+    let messages = facade
+        .load_run_messages_for_daemon(session_id, run_id, 64)
+        .expect("committed transcript rows read");
     assert!(
-        events.iter().any(|event| matches!(
-            event.payload(),
-            intention_domain::DomainEventDto::InterruptNoticeRecorded(fact)
-                if event.run_id() == Some(run_id)
-                    && matches!(
-                        fact.fact().input(),
-                        intention_domain::ModelRunFactInputDto::InterruptNoticeRecorded { content }
-                            if content == intention_runtime::INTERRUPT_NOTICE
-                    )
-        )),
-        "the interruption notice is durable"
+        messages
+            .iter()
+            .any(|message| message.kind() == MessageKindDto::Notice
+                && message.text() == INTERRUPT_NOTICE),
+        "the interruption notice is a durable transcript row"
     );
 
     // Releasing the continuation completes the original run.
@@ -667,9 +692,8 @@ async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
     );
     assert_eq!(
         facade
-            .load_current_run_snapshot_for_daemon(session_id, run_id)
-            .expect("completed run replay reads")
-            .run_projection()
+            .load_run_projection_for_daemon(session_id, run_id)
+            .expect("completed run projection reads")
             .status(),
         RunStatusDto::Completed
     );
@@ -712,12 +736,22 @@ async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
     tokio::time::timeout(Duration::from_secs(1), driver.entered.notified())
         .await
         .expect("first execution is blocked");
-    let pending_turn_id = TurnId::new();
-    send_pending_turn_through_host(&endpoint, session_id, pending_turn_id).await;
+    let pending_turn_id = send_pending_turn_through_host(&endpoint, session_id).await;
     assert_eq!(
         host.task_count(),
         1,
         "a pending message never admits a second execution"
+    );
+    let pending = facade
+        .session_snapshot(session_id, None)
+        .expect("session projection reads");
+    assert!(
+        pending
+            .projection()
+            .pending_turns()
+            .iter()
+            .any(|turn| turn.turn_id() == pending_turn_id),
+        "the pending message is durable input before it joins"
     );
     driver.release.notify_one();
     tokio::time::timeout(Duration::from_secs(2), driver.entered.notified())
@@ -737,34 +771,30 @@ async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
         }),
         "the joined message is part of the live context"
     );
-    let replay = facade
-        .load_current_run_snapshot_for_daemon(session_id, run_id)
-        .expect("continuing run replay reads");
-    assert_eq!(replay.run_projection().status(), RunStatusDto::Running);
+    let joined = facade
+        .session_snapshot(session_id, None)
+        .expect("joined session projection reads");
     assert!(
-        facade
-            .load_current_run_snapshot_for_daemon(
-                session_id,
-                RunId::parse(&pending_turn_id.to_string()).expect("turn identity shape"),
-            )
-            .is_err(),
+        joined.projection().pending_turns().is_empty(),
+        "the joined message is no longer pending"
+    );
+    assert_eq!(
+        joined.projection().active_run().map(|run| run.run_id()),
+        Some(run_id),
         "the pending message never becomes its own run"
     );
-    let events = facade
-        .durable_events_for_test_support(session_id)
-        .expect("durable events read");
+    let run = facade
+        .load_run_projection_for_daemon(session_id, run_id)
+        .expect("continuing run projection reads");
+    assert_eq!(run.status(), RunStatusDto::Running);
+    let messages = facade
+        .load_run_messages_for_daemon(session_id, run_id, 64)
+        .expect("committed transcript rows read");
     assert!(
-        events.iter().any(|event| matches!(
-            event.payload(),
-            intention_domain::DomainEventDto::UserMessageAppended(fact)
-                if event.run_id() == Some(run_id)
-                    && matches!(
-                        fact.fact().input(),
-                        intention_domain::ModelRunFactInputDto::UserMessageAppended { content, .. }
-                            if content == "pending host turn"
-                    )
-        )),
-        "the join is a durable run fact"
+        messages.iter().any(|message| {
+            message.kind() == MessageKindDto::User && message.text() == "pending host turn"
+        }),
+        "the join is a durable transcript row of the same run"
     );
 
     driver.release.notify_one();
@@ -779,9 +809,8 @@ async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
     );
     assert_eq!(
         facade
-            .load_current_run_snapshot_for_daemon(session_id, run_id)
-            .expect("completed run replay reads")
-            .run_projection()
+            .load_run_projection_for_daemon(session_id, run_id)
+            .expect("completed run projection reads")
             .status(),
         RunStatusDto::Completed,
         "one run carries the whole continuous session"
@@ -792,8 +821,7 @@ async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
 
 #[cfg(feature = "test-support")]
 #[tokio::test]
-async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resuming_or_exposing_fake_credentials()
- {
+async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_credentials() {
     const FAKE_CREDENTIAL: &str = "F-STREAM-RESTART-FAKE-CREDENTIAL-48271";
     let first_driver = Arc::new(BlockingDriver::new());
     let directory = TempDir::new().expect("temporary directory exists");
@@ -835,8 +863,7 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
     tokio::time::timeout(Duration::from_secs(1), first_driver.entered.notified())
         .await
         .expect("first host reaches an in-flight provider stream");
-    let pending_turn_id = TurnId::new();
-    send_pending_turn_through_host(&first_endpoint, session_id, pending_turn_id).await;
+    let pending_turn_id = send_pending_turn_through_host(&first_endpoint, session_id).await;
     first_server.await.expect("first host accepted its peers");
     first_host.shutdown().await;
     drop(first_facade);
@@ -854,29 +881,42 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
     )
     .expect("restart recovery opens the existing durable host state");
     let interrupted = restarted
-        .load_current_run_snapshot_for_daemon(session_id, first_run)
-        .expect("interrupted original replay reads");
+        .load_run_projection_for_daemon(session_id, first_run)
+        .expect("interrupted original projection reads");
     assert_eq!(
-        interrupted.run_projection().status(),
+        interrupted.status(),
         RunStatusDto::Interrupted,
         "recovery interrupts the in-flight run before the second host is ready"
     );
+    let recovered = restarted
+        .session_snapshot(session_id, None)
+        .expect("recovered session projection reads");
     assert!(
-        restarted
-            .load_current_run_snapshot_for_daemon(
-                session_id,
-                RunId::parse(&pending_turn_id.to_string()).expect("turn identity shape"),
-            )
-            .is_err(),
-        "a pending message is durable input, never a run of its own"
+        recovered.projection().active_run().is_none(),
+        "the interrupted run is terminal after recovery"
+    );
+    assert!(
+        recovered
+            .projection()
+            .pending_turns()
+            .iter()
+            .any(|turn| turn.turn_id() == pending_turn_id),
+        "the pending message survives restart as durable input"
+    );
+    let interrupted_messages = restarted
+        .load_run_messages_for_daemon(session_id, first_run, 64)
+        .expect("interrupted transcript rows read");
+    assert!(
+        !interrupted_messages
+            .iter()
+            .any(|message| message.text() == "pending host turn"),
+        "a pending message is durable input, never part of the interrupted run"
     );
     assert_eq!(restart_driver.executions(), 0);
 
-    let replay_json = serde_json::to_string(&interrupted).expect("replay serializes");
-    let events = restarted
-        .durable_events_for_test_support(session_id)
-        .expect("durable restart events read");
-    let events_json = serde_json::to_string(&events).expect("durable events serialize");
+    let projection_json = serde_json::to_string(&interrupted).expect("projection serializes");
+    let transcript_json =
+        serde_json::to_string(&interrupted_messages).expect("transcript rows serialize");
     let error_json = serde_json::to_string(&intention_types::ErrorDto::unavailable(
         "restart_fixture_error",
         "safe restart fixture error",
@@ -910,11 +950,10 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
                 intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                 session_id,
                 first_run,
-                None,
             )),
         ))
         .await
-        .expect("restart replay request sends");
+        .expect("restart snapshot request sends");
     let initial_line = messages
         .receive_line()
         .await
@@ -928,7 +967,6 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
                 intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                 session_id,
                 RunId::new(),
-                None,
             )),
         ))
         .await
@@ -943,46 +981,36 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
         serde_json::to_string(&initial_frame).expect("initial frame serializes");
     let transport_error_json =
         serde_json::to_string(&transport_error_frame).expect("error frame serializes");
-    assert!(matches!(
-        initial_frame,
-        ProtocolResponsePayloadDto::RunSubscription(_)
-    ));
+    let ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Snapshot(snapshot)) =
+        &initial_frame
+    else {
+        panic!("restart subscription answers with the current snapshot")
+    };
+    assert_eq!(
+        snapshot.run().status(),
+        RunStatusDto::Interrupted,
+        "the restarted daemon serves the interrupted run's current state"
+    );
     assert!(matches!(
         transport_error_frame,
         ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Error(ref error))
-            if error.code() == "run_replay_not_found"
+            if error.code() == "storage_record_not_found"
     ));
     restart_server
         .await
         .expect("restart host accepts stream peer");
     for output in [
-        &replay_json,
-        &events_json,
+        &projection_json,
+        &transcript_json,
         &error_json,
         &initial_frame_json,
         &transport_error_json,
     ] {
         assert!(
             !output.contains(FAKE_CREDENTIAL),
-            "actual durable replay/event/error fixture output never contains the credential"
+            "actual durable projection/transcript/error fixture output never contains the credential"
         );
     }
-    assert!(
-        events.iter().any(|event| matches!(
-            event.payload(),
-            intention_domain::DomainEventDto::RunStatusChanged(change)
-                if change.status() == RunStatusDto::Interrupted
-        )),
-        "the interrupted terminal transition is durable"
-    );
-    assert!(
-        events.iter().any(|event| matches!(
-            event.payload(),
-            intention_domain::DomainEventDto::UserTurnPending(pending)
-                if pending.turn_id() == pending_turn_id
-        )),
-        "the pending message survives restart as durable input"
-    );
 }
 
 #[cfg(feature = "test-support")]

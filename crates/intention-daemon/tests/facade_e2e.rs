@@ -1,11 +1,12 @@
 //! Facade-level daemon-host end-to-end tests over real IPC.
 //!
 //! These tests spawn the real `intention-daemon` binary over real local
-//! transport, drive it with the real client transport, and execute a real
+//! transport, drive it with the real asynchronous client, and execute a real
 //! `read` tool through the production model-tool loop against a fake
-//! OpenAI-compatible provider. They prove durable `ToolResultRecorded` facts,
-//! restart the daemon, and prove the same durable run replays without
-//! re-executing the tool.
+//! OpenAI-compatible provider. They prove the committed transcript rows, the
+//! run status, and live `run.frame` publication, restart the daemon, and prove
+//! the same durable run is replayed as current state without re-executing the
+//! tool.
 
 #![allow(
     clippy::expect_used,
@@ -22,22 +23,25 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use intention_client::{IntentionClient, ProcessDaemonLauncher, RunStreamClient};
+use intention_client::{
+    IntentionClient, ProcessDaemonLauncher, RunStreamClient, RunStreamSubscription,
+};
 use intention_domain::{
-    CreateSessionCommandDto, ModelRunFactDto, ModelRunFactInputDto, RunModeDto, RunSnapshotDto,
-    RunStatusDto, SendUserTurnCommandDto, ToolResultOutcomeDto, WorkspaceRootDto,
+    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunStatusDto,
+    SendUserTurnCommandDto, WorkspaceRootDto,
 };
 use intention_protocol::{
     DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto,
     ProtocolHelloDto, ProtocolMethodDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
-    RunStreamFrameDto, RunSubscriptionResponseDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto,
-    decode_response, encode_request, parse_run_frame_notification,
+    RunStreamFrameDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto, decode_response,
+    encode_request,
 };
 use intention_transport::{
-    AsyncLocalClientConnection, LocalConnection, LocalEndpoint, local_protocol_version,
-    negotiate_client,
+    LocalConnection, LocalEndpoint, local_protocol_version, negotiate_client,
 };
-use intention_types::{DtoResult, ErrorDto, ProjectId, RunId, SessionId, TurnId, WorkspaceId};
+use intention_types::{
+    DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId,
+};
 use tempfile::TempDir;
 
 /// One daemon-host fixture: isolated config/state/workspace, a fake provider,
@@ -372,7 +376,7 @@ fn handle_provider_request(
         return;
     };
     // The provider paces each scripted round so the test's subscriber can
-    // attach before the durable facts for that round are committed.
+    // attach before the committed state for that round is published.
     thread::sleep(Duration::from_millis(500));
     let request_number = requests.fetch_add(1, Ordering::AcqRel) + 1;
     let body_text = String::from_utf8_lossy(&body);
@@ -486,7 +490,7 @@ fn invalid_response() -> ErrorDto {
 /// Polls the daemon health projection until it reports `Ready`.
 ///
 /// `health()` only negotiates and queries; it never launches the daemon.
-fn wait_until_ready(endpoint: &LocalEndpoint, deadline: Instant) -> IntentionClient {
+async fn wait_until_ready(endpoint: &LocalEndpoint, deadline: Instant) -> IntentionClient {
     let client = IntentionClient::new(
         endpoint.clone(),
         "facade-e2e",
@@ -497,141 +501,97 @@ fn wait_until_ready(endpoint: &LocalEndpoint, deadline: Instant) -> IntentionCli
     )
     .expect("facade e2e client is valid");
     while Instant::now() < deadline {
-        match client.health() {
+        match client.health().await {
             Ok(health) if health.readiness() == DaemonReadinessDto::Ready => return client,
             Ok(_) => {}
             Err(_) => {}
         }
-        thread::sleep(Duration::from_millis(100));
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
     panic!("daemon becomes ready before the deadline");
 }
 
-/// Drives the real `RunStreamClient` until the run reaches a terminal snapshot.
-async fn observe_terminal_snapshot(
+/// One live run observation: the subscription, the correlated current-state
+/// snapshot it carried, and every later frame the subscriber received.
+struct LiveRunObservation {
+    subscription: RunStreamSubscription,
+    snapshot_status: Option<RunStatusDto>,
+    snapshot_messages: Vec<MessageProjectionDto>,
+    frames: Vec<RunStreamFrameDto>,
+}
+
+impl LiveRunObservation {
+    /// Returns whether the correlated snapshot already reported a terminal run.
+    fn snapshot_is_terminal(&self) -> bool {
+        self.snapshot_status.is_some_and(RunStatusDto::is_terminal)
+    }
+
+    /// Returns whether any received status frame reported a committed status.
+    fn received_status_frame(&self) -> bool {
+        self.frames
+            .iter()
+            .any(|frame| matches!(frame, RunStreamFrameDto::Status(_)))
+    }
+}
+
+/// Subscribes to one run's current state and drives the live stream until the
+/// run reports a terminal status.
+///
+/// The correlated first reply is the current-state snapshot; every later
+/// committed content or status change arrives as a live `run.frame` on the
+/// same subscription. A re-subscribing client re-reads current state and
+/// continues live, so both the snapshot and the frames are authoritative.
+async fn observe_run_until_terminal(
     client: &RunStreamClient,
     session_id: SessionId,
     run_id: RunId,
     deadline: Instant,
-) -> RunSnapshotDto {
+) -> LiveRunObservation {
     let mut subscription = client
         .subscribe(SubscribeRunCommandDto::new(
             intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
-            None,
         ))
         .await
         .expect("run subscription arrives");
+    let snapshot_status = subscription.reducer().status();
+    let snapshot_messages = subscription.reducer().messages().to_vec();
+    let mut frames = Vec::new();
     loop {
-        if let Some(snapshot) = subscription.reducer().snapshot()
-            && snapshot.run_projection().status().is_terminal()
+        if subscription
+            .reducer()
+            .status()
+            .is_some_and(RunStatusDto::is_terminal)
         {
-            return snapshot;
+            return LiveRunObservation {
+                subscription,
+                snapshot_status,
+                snapshot_messages,
+                frames,
+            };
         }
         assert!(
             Instant::now() < deadline,
-            "run reaches a terminal snapshot before the deadline"
+            "the run reaches a terminal status before the deadline"
         );
         match tokio::time::timeout(Duration::from_secs(1), subscription.receive()).await {
-            Ok(Ok(_)) => {}
+            Ok(Ok(Some(frame))) => frames.push(frame),
+            Ok(Ok(None)) => {
+                panic!("the daemon closed the run stream before the run terminalized")
+            }
             Ok(Err(error)) => panic!("run stream frame error: {}", error.code()),
             Err(_) => {}
         }
     }
 }
 
-/// Subscribes to one run stream and collects every delivered durable fact plus
-/// the terminal snapshot. The daemon only replays the snapshot and tail on
-/// subscribe; facts are delivered as live batches while the run commits them.
-async fn collect_run_facts(
-    endpoint: &LocalEndpoint,
-    session_id: SessionId,
-    run_id: RunId,
-    deadline: Instant,
-) -> (Vec<ModelRunFactDto>, RunSnapshotDto) {
-    let connection = AsyncLocalClientConnection::connect(endpoint)
-        .await
-        .expect("run stream connects");
-    let (_remote, mut requests, mut messages) = connection
-        .negotiate(fixture_hello())
-        .await
-        .expect("run stream negotiates");
-    requests
-        .send_message(&encode_request(
-            1,
-            ProtocolRequestPayloadDto::RunSubscription(SubscribeRunCommandDto::new(
-                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-                session_id,
-                run_id,
-                None,
-            )),
-        ))
-        .await
-        .expect("run subscription request sends");
-    let reply = messages
-        .receive_line()
-        .await
-        .expect("run subscription reply arrives");
-    let reply = decode_response(&reply, ProtocolMethodDto::RunSubscribe, 1)
-        .expect("run subscription reply decodes");
-    let mut facts = Vec::new();
-    match reply {
-        ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Replay(replay)) => {
-            let snapshot = replay;
-            if snapshot.run_projection().status().is_terminal() {
-                return (facts, snapshot);
-            }
-        }
-        _ => panic!("run subscription reply must be a replay"),
-    }
-    loop {
-        assert!(
-            Instant::now() < deadline,
-            "run facts arrive before the deadline"
-        );
-        let line = tokio::time::timeout(Duration::from_secs(1), messages.receive_line())
-            .await
-            .expect("run stream frame within the deadline")
-            .expect("run stream frame is valid");
-        match parse_run_frame_notification(&line).expect("run frame notification decodes") {
-            RunStreamFrameDto::LiveBatch(batch) => {
-                facts.extend(batch.facts().iter().cloned());
-            }
-            RunStreamFrameDto::Snapshot(frame) => {
-                let snapshot = frame.snapshot().clone();
-                if snapshot.run_projection().status().is_terminal() {
-                    return (facts, snapshot);
-                }
-            }
-            RunStreamFrameDto::Resync(resync) => {
-                panic!("unexpected run resync: {:?}", resync.reason());
-            }
-        }
-    }
-}
-
-/// Asserts the delivered durable facts are a non-empty contiguous cursor range
-/// ending in a terminal fact (`Finished` or `Failed`).
-///
-/// The daemon replays an empty tail on subscribe and broadcasts live batches
-/// only for facts committed after registration, so a subscriber can miss a
-/// prefix of the run's facts but never a gap inside the delivered suffix.
-fn assert_contiguous_facts(facts: &[ModelRunFactDto]) {
-    assert!(!facts.is_empty(), "durable facts are delivered");
-    assert!(
-        facts
-            .windows(2)
-            .all(|pair| pair[0].cursor().value() + 1 == pair[1].cursor().value()),
-        "durable facts are contiguous in cursor order"
-    );
-    assert!(
-        matches!(
-            facts.last().map(ModelRunFactDto::input),
-            Some(ModelRunFactInputDto::Finished { .. }) | Some(ModelRunFactInputDto::Failed { .. })
-        ),
-        "the final durable fact closes the run"
-    );
+/// Returns whether one transcript slice holds the committed assistant step
+/// whose text the fixture provider streamed.
+fn has_assistant_step(messages: &[MessageProjectionDto]) -> bool {
+    messages
+        .iter()
+        .any(|message| message.kind() == MessageKindDto::Assistant && message.text() == "done")
 }
 
 #[tokio::test]
@@ -640,7 +600,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
         Some(("hello.txt", "hello from e2e")),
         r#"{"path":"hello.txt"}"#,
     );
-    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20));
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
     let workspace_root = host.workspace.path().to_string_lossy().into_owned();
 
     let session_id = SessionId::new();
@@ -665,7 +625,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
     let result = send_command(
         &host.endpoint,
         ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, TurnId::new(), "Read hello.txt")
+            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "Read hello.txt")
                 .expect("turn is valid"),
         )),
     )
@@ -683,57 +643,87 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
     let stream_client =
         RunStreamClient::new(host.endpoint.clone(), "facade-e2e").expect("stream client is valid");
     let live_deadline = Instant::now() + Duration::from_secs(30);
-    // Subscribe for facts first: the daemon broadcasts live batches only while
-    // the run commits, and the run-stream replay tail is empty by design.
-    let (facts, snapshot) =
-        collect_run_facts(&host.endpoint, session_id, run_id, live_deadline).await;
-    let terminal_snapshot =
-        observe_terminal_snapshot(&stream_client, session_id, run_id, live_deadline).await;
+    // Subscribe immediately after acceptance: the subscription snapshot is the
+    // current run state, and every later commit arrives as a live frame.
+    let observation =
+        observe_run_until_terminal(&stream_client, session_id, run_id, live_deadline).await;
+    let reducer = observation.subscription.reducer();
     assert_eq!(
-        terminal_snapshot.run_projection().status(),
-        RunStatusDto::Completed,
-        "the real daemon completes the tool round: {:?}",
-        terminal_snapshot.projection().failure()
+        reducer.status(),
+        Some(RunStatusDto::Completed),
+        "the real daemon completes the tool round"
     );
-    assert_contiguous_facts(&facts);
-    let tool_call = facts
-        .iter()
-        .find_map(|fact| match fact.input() {
-            ModelRunFactInputDto::ToolCallRecorded { call } if call.name() == "read" => {
-                Some(call.clone())
-            }
-            _ => None,
-        })
-        .expect("the read tool call is durable");
     assert_eq!(
-        tool_call.arguments_json(),
+        reducer
+            .run()
+            .expect("the subscription carries the run scope")
+            .run_id(),
+        run_id
+    );
+    // A non-terminal snapshot can only reach the terminal status through a
+    // live status frame; the committed completion is published, never polled.
+    if !observation.snapshot_is_terminal() {
+        assert!(
+            observation.received_status_frame(),
+            "a live status frame carries the committed completion to the subscriber"
+        );
+    }
+    // The committed assistant step is published live or carried by the
+    // snapshot, so the subscriber always observes it exactly once.
+    if !has_assistant_step(&observation.snapshot_messages) {
+        assert!(
+            observation.frames.iter().any(|frame| matches!(
+                frame,
+                RunStreamFrameDto::Content(message)
+                    if message.kind() == MessageKindDto::Assistant && message.text() == "done"
+            )),
+            "the committed assistant content is published as a live content frame"
+        );
+    }
+    assert!(
+        has_assistant_step(reducer.messages()),
+        "the subscriber's current transcript holds the committed assistant step"
+    );
+
+    // The session snapshot is the current-state read of the committed
+    // transcript: the accepted turn, the tool call, its one result row, and the
+    // assistant step, in durable insertion order.
+    let session_snapshot = client
+        .session_snapshot(session_id)
+        .await
+        .expect("session snapshot reads");
+    let messages = session_snapshot.messages();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.kind())
+            .collect::<Vec<_>>(),
+        vec![
+            MessageKindDto::User,
+            MessageKindDto::ToolCall,
+            MessageKindDto::ToolResult,
+            MessageKindDto::Assistant,
+        ],
+        "the committed transcript records the turn, the read call, its result, and the assistant step"
+    );
+    assert_eq!(messages[0].text(), "Read hello.txt");
+    assert_eq!(messages[1].tool_id(), Some("read"));
+    assert_eq!(
+        messages[1].text(),
         r#"{"path":"hello.txt"}"#,
         "the durable tool call keeps the relative workspace path"
     );
-    let tool_result = facts
-        .iter()
-        .find_map(|fact| match fact.input() {
-            ModelRunFactInputDto::ToolResultRecorded { call_id, outcome }
-                if *call_id == tool_call.call_id() =>
-            {
-                Some(outcome)
-            }
-            _ => None,
-        })
-        .expect("the read tool result is durable");
-    assert!(
-        matches!(
-            tool_result,
-            ToolResultOutcomeDto::Succeeded { content } if content == "hello from e2e"
-        ),
-        "the durable tool result carries the exact file content"
-    );
-    assert_eq!(snapshot.run_projection().status(), RunStatusDto::Completed);
+    let call_id = messages[1]
+        .tool_call_id()
+        .expect("the tool call row carries its identity");
+    assert_eq!(messages[2].tool_id(), Some("read"));
+    assert_eq!(messages[2].tool_call_id(), Some(call_id));
     assert_eq!(
-        facts.last().expect("facts exist").cursor(),
-        snapshot.cursor(),
-        "the terminal fact cursor equals the authoritative snapshot cursor"
+        messages[2].text(),
+        "hello from e2e",
+        "the tool result row carries the exact file content"
     );
+    assert_eq!(messages[3].text(), "done");
     assert_eq!(
         host.provider.request_count(),
         2,
@@ -745,101 +735,68 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
         "no further provider request follows completion"
     );
 
-    // Public payloads never disclose the credential; durable run facts never
-    // disclose the absolute workspace path.
-    let session_json = serde_json::to_string(
-        &client
-            .session_snapshot(session_id)
-            .expect("session snapshot reads"),
-    )
-    .expect("session snapshot serializes");
-    let facts_json = serde_json::to_string(&facts).expect("durable facts serialize");
+    // Public payloads never disclose the credential; the durable transcript
+    // never discloses the absolute workspace path.
+    let transcript_json = serde_json::to_string(messages).expect("transcript serializes");
+    let session_json =
+        serde_json::to_string(&session_snapshot).expect("session snapshot serializes");
     assert!(
-        !facts_json.contains(&host.credential),
-        "durable facts never disclose the provider credential"
+        !transcript_json.contains(&host.credential),
+        "the durable transcript never discloses the provider credential"
     );
     assert!(
-        !facts_json.contains(&host.workspace.path().to_string_lossy().into_owned()),
-        "durable facts never disclose the absolute workspace path"
+        !transcript_json.contains(&host.workspace.path().to_string_lossy().into_owned()),
+        "the durable transcript never discloses the absolute workspace path"
     );
     assert!(
         !session_json.contains(&host.credential),
         "the session snapshot never discloses the provider credential"
     );
-    let session_sequence = client
-        .session_snapshot(session_id)
-        .expect("session snapshot reads")
-        .at_sequence();
-    let pre_restart_cursor = snapshot.cursor();
 
     // Restart the daemon against the identical environment and state, then
-    // prove the completed run replays without any provider re-execution.
+    // prove the completed run is replayed as current state without any
+    // provider re-execution.
     host.restart_daemon();
-    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20));
-    let mut subscription = stream_client
-        .subscribe(SubscribeRunCommandDto::new(
-            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-            session_id,
-            run_id,
-            None,
-        ))
-        .await
-        .expect("restart replay arrives");
-    let replay_snapshot = subscription
-        .reducer()
-        .snapshot()
-        .expect("restart replay is authoritative");
-    assert_eq!(
-        replay_snapshot.run_projection().status(),
-        RunStatusDto::Completed,
-        "the restarted daemon replays the completed run"
-    );
-    assert_eq!(
-        replay_snapshot.cursor(),
-        pre_restart_cursor,
-        "the durable run cursor replays unchanged"
-    );
-    subscription
-        .request_replay()
-        .await
-        .expect("repeat replay arrives");
-    assert_eq!(
-        subscription
-            .reducer()
-            .snapshot()
-            .expect("repeat replay is authoritative")
-            .run_projection()
-            .status(),
-        RunStatusDto::Completed,
-        "the same connection accepts a repeated replay"
-    );
-    let (replayed_facts, replayed_snapshot) = collect_run_facts(
-        &host.endpoint,
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
+    let replayed = observe_run_until_terminal(
+        &stream_client,
         session_id,
         run_id,
         Instant::now() + Duration::from_secs(15),
     )
     .await;
     assert_eq!(
-        replayed_snapshot.run_projection().status(),
-        RunStatusDto::Completed
+        replayed.snapshot_status,
+        Some(RunStatusDto::Completed),
+        "the restarted daemon replays the completed run as its current state"
+    );
+    let replayed_messages = replayed.subscription.reducer().messages();
+    assert_eq!(
+        replayed_messages.len(),
+        4,
+        "the replayed run snapshot carries the complete committed transcript"
     );
     assert_eq!(
-        replayed_snapshot.cursor(),
-        pre_restart_cursor,
-        "the replayed snapshot preserves the exact durable cursor"
+        replayed_messages[2].text(),
+        "hello from e2e",
+        "the durable tool result replays unchanged"
     );
-    assert!(
-        replayed_facts.is_empty(),
-        "the daemon run-stream replay tail is empty by design; live batches carry facts"
-    );
-    let replayed_session_sequence = client
+    let replayed_session = client
         .session_snapshot(session_id)
-        .expect("replayed session snapshot reads")
-        .at_sequence();
+        .await
+        .expect("replayed session snapshot reads");
     assert_eq!(
-        replayed_session_sequence, session_sequence,
-        "the durable session event sequence replays unchanged"
+        replayed_session
+            .messages()
+            .iter()
+            .map(|message| (message.kind(), message.text()))
+            .collect::<Vec<_>>(),
+        session_snapshot
+            .messages()
+            .iter()
+            .map(|message| (message.kind(), message.text()))
+            .collect::<Vec<_>>(),
+        "the durable transcript replays unchanged after the daemon restart"
     );
 
     // Allow any late provider traffic to land before asserting the tool was
@@ -848,7 +805,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
     assert_eq!(
         host.provider.request_count(),
         2,
-        "the restarted daemon replays durable facts without re-executing the tool"
+        "the restarted daemon replays the durable run without re-executing the tool"
     );
     assert_eq!(host.provider.excess_count(), 0);
 }
@@ -856,7 +813,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
 #[tokio::test]
 async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
     let host = E2eHost::new(None, r#"{"path":"missing.txt"}"#);
-    let _client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20));
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
 
     let session_id = SessionId::new();
     let created = send_command(
@@ -878,7 +835,7 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
     let result = send_command(
         &host.endpoint,
         ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, TurnId::new(), "Read missing.txt")
+            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "Read missing.txt")
                 .expect("turn is valid"),
         )),
     )
@@ -896,47 +853,60 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
     let stream_client =
         RunStreamClient::new(host.endpoint.clone(), "facade-e2e").expect("stream client is valid");
     let deadline = Instant::now() + Duration::from_secs(30);
-    let (facts, snapshot) = collect_run_facts(&host.endpoint, session_id, run_id, deadline).await;
-    let terminal_snapshot =
-        observe_terminal_snapshot(&stream_client, session_id, run_id, deadline).await;
+    let observation =
+        observe_run_until_terminal(&stream_client, session_id, run_id, deadline).await;
     assert_eq!(
-        terminal_snapshot.run_projection().status(),
-        RunStatusDto::Failed,
-        "the real daemon terminalizes the missing-file tool round as Failed: {:?}",
-        terminal_snapshot.projection().failure()
+        observation.subscription.reducer().status(),
+        Some(RunStatusDto::Failed),
+        "the real daemon terminalizes the missing-file tool round as Failed"
     );
-    assert_contiguous_facts(&facts);
-    assert!(
-        facts.iter().any(|fact| matches!(
-            fact.input(),
-            ModelRunFactInputDto::ToolCallRecorded { call }
-                if call.name() == "read"
-        )),
-        "the denied read tool call is durable"
-    );
-    assert!(
-        facts.iter().any(|fact| matches!(
-            fact.input(),
-            ModelRunFactInputDto::ToolResultRecorded {
-                outcome: ToolResultOutcomeDto::Failed { failure },
-                ..
-            } if failure.code() == "tool_read_failed"
-        )),
-        "the missing-file tool result is a durable typed failure"
-    );
-    assert!(
-        facts.iter().any(|fact| matches!(
-            fact.input(),
-            ModelRunFactInputDto::Failed { failure }
-                if failure.code() == "tool_read_failed"
-        )),
-        "the run terminalizes with the durable tool failure"
-    );
-    assert_eq!(snapshot.run_projection().status(), RunStatusDto::Failed);
+    if !observation.snapshot_is_terminal() {
+        assert!(
+            observation.received_status_frame(),
+            "a live status frame carries the committed failure to the subscriber"
+        );
+    }
     assert_eq!(
         host.provider.request_count(),
         1,
         "the typed tool failure never retries the provider"
     );
     assert_eq!(host.provider.excess_count(), 0);
+
+    // The failed run's transcript carries the model's call row and the typed
+    // failure result row committed for that exact invocation.
+    let session_snapshot = client
+        .session_snapshot(session_id)
+        .await
+        .expect("session snapshot reads");
+    let messages = session_snapshot.messages();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.kind())
+            .collect::<Vec<_>>(),
+        vec![
+            MessageKindDto::User,
+            MessageKindDto::ToolCall,
+            MessageKindDto::ToolResult,
+        ],
+        "the failed run records the turn, the denied call, and its typed failure result"
+    );
+    assert_eq!(messages[0].text(), "Read missing.txt");
+    assert_eq!(messages[1].tool_id(), Some("read"));
+    assert_eq!(
+        messages[1].text(),
+        r#"{"path":"missing.txt"}"#,
+        "the denied tool call keeps the relative workspace path"
+    );
+    let call_id = messages[1]
+        .tool_call_id()
+        .expect("the tool call row carries its identity");
+    assert_eq!(messages[2].tool_id(), Some("read"));
+    assert_eq!(messages[2].tool_call_id(), Some(call_id));
+    assert_eq!(
+        messages[2].text(),
+        "tool_read_failed",
+        "the missing-file tool result is durable typed-failure evidence"
+    );
 }

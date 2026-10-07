@@ -145,7 +145,7 @@ The following scenarios must become executable before the corresponding capabili
 
 1. Use an intentionally recognizable fake credential in TOML.
 2. Trigger provider config and failure paths.
-3. Enumerate events, snapshots, errors, structured logs, and adapter DTOs.
+3. Enumerate frames, snapshots, errors, structured logs, and adapter DTOs.
 4. Verify the credential is absent from all output.
 
 ### I. Daemon-host tool loop
@@ -155,11 +155,11 @@ The following scenarios must become executable before the corresponding capabili
 outgoing request advertises the six active registered tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`) and
 requests the `tool_calls` capability.
 3. Verify the daemon executes the call through the real typed registry under `WorkspaceRoot` with typed hooks.
-4.  Verify the durable `ToolCallRecorded` and `ToolResultRecorded` facts commit before publication and are streamed to
-   the client.
+4.  Verify the committed tool-call row, its answering tool-result row, and the `tool_results` row commit before
+   publication, and that the client's `run.frame` notifications carry only those committed values.
 5. Verify the provider exchange continues with assistant-tool-call and tool-role messages and completes.
-6. Restart the daemon and replay the run.
-7. Verify recorded tool calls and results replay and are never re-executed.
+6. Restart the daemon and re-read current state.
+7. Verify the recorded tool call and result re-read from current state and are never re-executed.
 
 ### J. Live provider tool loop (opt-in, manual)
 
@@ -173,13 +173,13 @@ the real daemon binary, drives it through the real local transport, and executes
 provider API over HTTPS.
 3. Verify the provider returns a real tool call; the outgoing request
 advertises the six active registered tools and requests the `tool_calls` capability (scenario I), the daemon executes
-the call through the real typed registry under `WorkspaceRoot`, the durable `ToolCallRecorded` and `ToolResultRecorded`
-facts commit before publication, and the run completes. When the configured model runs in thinking mode, the
+the call through the real typed registry under `WorkspaceRoot`, the committed tool call and its result commit before
+publication, and the run completes. When the configured model runs in thinking mode, the
 continuation request also carries the same round's accepted reasoning as `reasoning_content` on the assistant tool-call
 message; no prior-turn reasoning is transferred.
-4. Restart the daemon and replay the run; verify the recorded tool call and
-result replay and are never re-executed.
-5. Verify the credential is absent from durable facts, snapshots, daemon logs,
+4. Restart the daemon and re-read the run; verify the recorded tool call and
+result re-read from current state and are never re-executed.
+5. Verify the credential is absent from the committed transcript rows, session snapshots, daemon logs,
 and state bytes.
 6. Verify an invalid credential produces a typed failure mapping and never an
 untyped panic or a credential echo.

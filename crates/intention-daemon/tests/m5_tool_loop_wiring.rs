@@ -16,8 +16,7 @@ use intention_application::ScheduleModelRunDto;
 use intention_config::ConfigSnapshotDto;
 use intention_daemon::DaemonToolExecutor;
 use intention_domain::{
-    ModelRunFactInputDto, RunEventCursorDto, RunStatusDto, SendUserTurnCommandDto,
-    ToolResultOutcomeDto, WorkspaceRootDto,
+    MessageKindDto, MessageProjectionDto, RunStatusDto, SendUserTurnCommandDto, WorkspaceRootDto,
 };
 use intention_model::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
@@ -31,7 +30,7 @@ use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionOutcomeDto, ModelSleepFuture,
     ModelTimePort,
 };
-use intention_types::{RunId, SessionId, TimestampDto, ToolCallId, TurnId};
+use intention_types::{IdempotencyKey, RunId, SessionId, TimestampDto, ToolCallId};
 use tempfile::TempDir;
 
 /// Emits one scripted event round per provider execution and records requests.
@@ -112,12 +111,27 @@ struct RecordingObserver {
     commits: Mutex<Vec<ModelRunCommitDto>>,
 }
 
-impl ModelRunCommitObserver for RecordingObserver {
-    fn observe_model_run_commit(&self, committed: ModelRunCommitDto) {
+impl RecordingObserver {
+    /// Returns every committed status the runtime published, in order.
+    fn observed_statuses(&self) -> Vec<RunStatusDto> {
         self.commits
             .lock()
             .expect("observer recorder remains available")
-            .push(committed);
+            .iter()
+            .filter_map(|committed| match committed {
+                ModelRunCommitDto::Status { status, .. } => Some(*status),
+                ModelRunCommitDto::Content(_) => None,
+            })
+            .collect()
+    }
+}
+
+impl ModelRunCommitObserver for RecordingObserver {
+    fn observe_model_run_commit(&self, committed: &ModelRunCommitDto) {
+        self.commits
+            .lock()
+            .expect("observer recorder remains available")
+            .push(committed.clone());
     }
 }
 
@@ -222,7 +236,8 @@ fn create_session(
 
 fn started_run(facade: &DaemonApplicationFacade, session_id: SessionId) -> RunId {
     let result = facade.command(ProtocolCommandDto::SendUserTurn(
-        SendUserTurnCommandDto::new(session_id, TurnId::new(), "turn").expect("turn is valid"),
+        SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "turn")
+            .expect("turn is valid"),
     ));
     let ProtocolCommandResultDto::Accepted(accepted) = result else {
         panic!("fixture turn starts")
@@ -236,16 +251,15 @@ fn started_run(facade: &DaemonApplicationFacade, session_id: SessionId) -> RunId
     run_id
 }
 
-fn run_tail(
+/// Reads the committed transcript rows of one run through the daemon seam.
+fn run_transcript(
     facade: &DaemonApplicationFacade,
     session_id: SessionId,
     run_id: RunId,
-) -> Vec<intention_domain::ModelRunFactDto> {
+) -> Vec<MessageProjectionDto> {
     facade
-        .load_run_tail_for_daemon(session_id, run_id, RunEventCursorDto::new(0))
-        .expect("run tail reads")
-        .facts()
-        .to_vec()
+        .load_run_messages_for_daemon(session_id, run_id, 64)
+        .expect("run transcript reads")
 }
 
 #[tokio::test]
@@ -286,12 +300,11 @@ async fn daemon_tool_executor_executes_real_read_tool_through_loop() {
         .await
         .expect("the real read tool loop completes");
 
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(4)
-        }
-    );
+    let ModelRunExecutionOutcomeDto::Completed { run } = outcome else {
+        panic!("the read tool round completes the run: {outcome:?}")
+    };
+    assert_eq!(run.run_id(), run_id);
+    assert_eq!(run.status(), RunStatusDto::Completed);
     assert_eq!(
         driver.executions(),
         2,
@@ -327,40 +340,56 @@ async fn daemon_tool_executor_executes_real_read_tool_through_loop() {
         ]
     );
 
-    let facts = run_tail(&facade, session_id, run_id);
-    assert_eq!(facts.len(), 4);
-    assert!(matches!(
-        facts[0].input(),
-        ModelRunFactInputDto::ProviderAttemptStarted { attempt: 1 }
-    ));
-    assert!(matches!(
-        facts[1].input(),
-        ModelRunFactInputDto::ToolCallRecorded { call: recorded } if *recorded == call
-    ));
-    assert!(matches!(
-        facts[2].input(),
-        ModelRunFactInputDto::ToolResultRecorded {
-            call_id,
-            outcome: ToolResultOutcomeDto::Succeeded { content },
-        } if *call_id == call.call_id() && content == "hello from e2e"
-    ));
-    assert!(matches!(
-        facts[3].input(),
-        ModelRunFactInputDto::Finished { .. }
-    ));
-
-    let replay = facade
-        .load_current_run_snapshot_for_daemon(session_id, run_id)
-        .expect("completed run replay reads");
-    assert_eq!(replay.run_projection().status(), RunStatusDto::Completed);
-    let facts_json = serde_json::to_string(&facts).expect("facts serialize");
+    // The committed transcript is the current durable record of the tool round:
+    // one call row and one result row for the invocation, exactly once.
+    let messages = run_transcript(&facade, session_id, run_id);
+    assert_eq!(
+        messages
+            .iter()
+            .map(MessageProjectionDto::kind)
+            .collect::<Vec<_>>(),
+        vec![
+            MessageKindDto::User,
+            MessageKindDto::ToolCall,
+            MessageKindDto::ToolResult,
+        ],
+        "the run transcript records the accepted turn, the call, and its single result"
+    );
+    assert_eq!(messages[0].text(), "turn");
+    assert_eq!(messages[1].tool_id(), Some("read"));
+    assert_eq!(messages[1].tool_call_id(), Some(call.call_id()));
+    assert_eq!(
+        messages[1].text(),
+        r#"{"path":"hello.txt"}"#,
+        "the durable tool call keeps the canonical arguments document"
+    );
+    assert_eq!(messages[2].tool_id(), Some("read"));
+    assert_eq!(messages[2].tool_call_id(), Some(call.call_id()));
+    assert_eq!(
+        messages[2].text(),
+        "hello from e2e",
+        "the tool result row carries the exact file content"
+    );
+    assert_eq!(
+        facade
+            .load_run_projection_for_daemon(session_id, run_id)
+            .expect("completed run projection reads")
+            .status(),
+        RunStatusDto::Completed
+    );
+    assert_eq!(
+        observer.observed_statuses(),
+        vec![RunStatusDto::Running, RunStatusDto::Completed],
+        "the runtime publishes each committed status exactly once, in order"
+    );
+    let transcript_json = serde_json::to_string(&messages).expect("transcript serializes");
     assert!(
-        !facts_json.contains(&workspace_directory.path().to_string_lossy().into_owned()),
-        "durable facts never disclose the workspace absolute path"
+        !transcript_json.contains(&workspace_directory.path().to_string_lossy().into_owned()),
+        "the durable transcript never discloses the workspace absolute path"
     );
     assert!(
-        !facts_json.contains("fixture-credential"),
-        "durable facts never disclose the provider credential"
+        !transcript_json.contains("fixture-credential"),
+        "the durable transcript never discloses the provider credential"
     );
 }
 
@@ -391,33 +420,50 @@ async fn daemon_tool_executor_missing_file_returns_typed_failure() {
         .await
         .expect("the missing-file tool loop commits a typed failure");
 
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Failed {
-            cursor: RunEventCursorDto::new(4)
-        }
-    );
+    let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
+        panic!("the missing-file round fails the run: {outcome:?}")
+    };
+    assert_eq!(run.run_id(), run_id);
+    assert_eq!(run.status(), RunStatusDto::Failed);
+    assert_eq!(error.code(), "tool_read_failed");
     assert_eq!(driver.executions(), 1, "no retry follows the typed failure");
-    let facts = run_tail(&facade, session_id, run_id);
-    assert_eq!(facts.len(), 4);
-    assert!(matches!(
-        facts[1].input(),
-        ModelRunFactInputDto::ToolCallRecorded { .. }
-    ));
-    assert!(matches!(
-        facts[2].input(),
-        ModelRunFactInputDto::ToolResultRecorded {
-            call_id,
-            outcome: ToolResultOutcomeDto::Failed { failure },
-        } if *call_id == call.call_id() && failure.code() == "tool_read_failed"
-    ));
-    assert!(matches!(
-        facts[3].input(),
-        ModelRunFactInputDto::Failed { failure }
-            if failure.code() == "tool_read_failed"
-    ));
-    let replay = facade
-        .load_current_run_snapshot_for_daemon(session_id, run_id)
-        .expect("failed run replay reads");
-    assert_eq!(replay.run_projection().status(), RunStatusDto::Failed);
+
+    let messages = run_transcript(&facade, session_id, run_id);
+    assert_eq!(
+        messages
+            .iter()
+            .map(MessageProjectionDto::kind)
+            .collect::<Vec<_>>(),
+        vec![
+            MessageKindDto::User,
+            MessageKindDto::ToolCall,
+            MessageKindDto::ToolResult,
+        ],
+        "the failed run records the turn, the call, and its typed failure result"
+    );
+    assert_eq!(messages[1].tool_call_id(), Some(call.call_id()));
+    assert_eq!(
+        messages[1].text(),
+        r#"{"path":"missing.txt"}"#,
+        "the denied tool call keeps the canonical arguments document"
+    );
+    assert_eq!(messages[2].tool_id(), Some("read"));
+    assert_eq!(messages[2].tool_call_id(), Some(call.call_id()));
+    assert_eq!(
+        messages[2].text(),
+        "tool_read_failed",
+        "the durable result row answers the call with the typed failure"
+    );
+    assert_eq!(
+        facade
+            .load_run_projection_for_daemon(session_id, run_id)
+            .expect("failed run projection reads")
+            .status(),
+        RunStatusDto::Failed
+    );
+    assert_eq!(
+        observer.observed_statuses(),
+        vec![RunStatusDto::Running, RunStatusDto::Failed],
+        "the runtime publishes the failed terminal status exactly once"
+    );
 }

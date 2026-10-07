@@ -1,7 +1,7 @@
 //! Thin daemon process host for the local protocol facade.
 //!
 //! The daemon owns the local listener and typed connection hosting. It delegates
-//! health, query, command, and replay-only subscription meaning to the durable
+//! health, query, command, and current-state subscription meaning to the durable
 //! composition facade.
 
 use std::{
@@ -11,17 +11,17 @@ use std::{
 };
 
 use intention::{DaemonApplicationFacade, LocalToolInvocationOutcomeDto};
-use intention_domain::{RunEventCursorDto, RunFailureDto, RunStatusDto, ToolResultOutcomeDto};
+use intention_domain::RunStatusDto;
 use intention_model::ModelCancellationSignal;
 use intention_protocol::{
     JsonRpcResponseDto, ProtocolAcceptedDto, ProtocolCommandDto, ProtocolCommandResultDto,
     ProtocolDaemonMessageDto, ProtocolHelloDto, ProtocolRequestPayloadDto,
-    ProtocolResponsePayloadDto, RunLiveBatchDto, RunResyncDto, RunResyncReasonDto,
-    RunSnapshotFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto, decode_request_line,
-    encode_response, is_notification_line,
+    ProtocolResponsePayloadDto, RunStatusFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
+    decode_request_line, encode_response, is_notification_line,
 };
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
+    ToolResultOutcomeDto,
 };
 use intention_tools::{
     EditInput, ExecuteInput, GlobInput, GrepInput, GrepResult, PathsResult, ReadInput, ToolId,
@@ -32,16 +32,12 @@ use intention_transport::LocalListener;
 use intention_transport::{
     AsyncLocalListener, AsyncMessageSender, LocalEndpoint, local_protocol_version,
 };
-#[cfg(any(test, feature = "test-support"))]
-use intention_transport::{LocalConnection, negotiate_daemon};
 use intention_types::{
     CorrelationIdDto, DtoResult, ErrorDto, RunId, SessionId, TimestampDto, ToolCallDto,
 };
 
 const SUBSCRIBER_QUEUE_CAPACITY: usize = 64;
 const SUBSCRIBER_WRITE_DEADLINE: Duration = Duration::from_secs(10);
-const PUBLICATION_RETRY_ATTEMPTS: usize = 6;
-const PUBLICATION_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 type RunKey = (SessionId, RunId);
 
@@ -68,7 +64,6 @@ struct Subscriber {
 
 #[derive(Clone, Copy)]
 struct PublishedRun {
-    cursor: RunEventCursorDto,
     status: RunStatusDto,
 }
 
@@ -80,7 +75,6 @@ struct HostData {
     execution_completion: HashMap<RunKey, tokio::sync::watch::Sender<bool>>,
     subscribers: HashMap<RunKey, Vec<Subscriber>>,
     published: HashMap<RunKey, PublishedRun>,
-    publication_retries: std::collections::HashSet<RunKey>,
     next_subscriber_id: u64,
 }
 
@@ -94,7 +88,6 @@ impl Default for HostData {
             execution_completion: HashMap::new(),
             subscribers: HashMap::new(),
             published: HashMap::new(),
-            publication_retries: std::collections::HashSet::new(),
             next_subscriber_id: 1,
         }
     }
@@ -176,17 +169,16 @@ impl HostState {
             if let Err(error) = result {
                 let active = host
                     .facade
-                    .load_current_run_snapshot_for_daemon(key.0, key.1)
-                    .map_or(true, |replay| {
-                        !replay.run_projection().status().is_terminal()
-                    });
+                    .load_run_projection_for_daemon(key.0, key.1)
+                    .map_or(true, |run| !run.status().is_terminal());
                 if active
                     && host
                         .facade
                         .fail_active_run_for_daemon(key.0, key.1, error.code())
                         .is_ok()
                 {
-                    host.on_terminal(key.0, key.1);
+                    host.publish_current(key.0, key.1);
+                    host.on_terminal(key.0);
                 }
             }
             if let Ok(mut data) = host.data.lock() {
@@ -299,124 +291,70 @@ impl HostState {
             .fail_starting_run_for_daemon(session_id, run_id, "model_scheduling_unavailable")
             .is_ok()
         {
-            self.on_terminal(session_id, run_id);
+            self.publish_current(session_id, run_id);
+            self.on_terminal(session_id);
         }
     }
 
-    /// Runs the consolidated terminal side effects for one run that just
-    /// reached a durable terminal state: publish the terminal snapshot
-    /// (retrying transient read failures boundedly) and schedule a current
-    /// Starting successor exactly once (PR24-007/014).
-    fn on_terminal(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
-        if !self.publish_current(session_id, run_id) {
-            self.spawn_bounded_publication_retry(session_id, run_id);
-        }
+    /// Runs the terminal side effect for one run that just reached a durable
+    /// terminal state: schedule a current `Starting` successor exactly once.
+    ///
+    /// The terminal status frame is published directly from the committed
+    /// transition value, so no publication retry is required.
+    fn on_terminal(self: &Arc<Self>, session_id: SessionId) {
         if let Ok(Some(promoted)) = self.facade.current_starting_run_for_daemon(session_id) {
             self.schedule_if_starting(session_id, promoted);
         }
     }
 
-    /// Spawns one bounded publication retry worker per run.
-    ///
-    /// A terminal commit has no guaranteed successor, so a transient read
-    /// failure at the final publication cannot be left to a later commit to
-    /// fix; the worker retries the exact terminal publication a bounded
-    /// number of times. Reconnect remains the ultimate fallback (PR24-014).
-    fn spawn_bounded_publication_retry(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
-        let key = (session_id, run_id);
-        {
-            let Ok(mut data) = self.data.lock() else {
-                return;
-            };
-            if !data.publication_retries.insert(key) {
-                return;
-            }
-        }
-        let host = Arc::clone(self);
-        let task = tokio::spawn(async move {
-            for _ in 0..PUBLICATION_RETRY_ATTEMPTS {
-                if host.publish_current(session_id, run_id) {
-                    break;
-                }
-                tokio::time::sleep(PUBLICATION_RETRY_DELAY).await;
-            }
-            if let Ok(mut data) = host.data.lock() {
-                data.publication_retries.remove(&key);
-            }
-        });
-        #[cfg(any(test, feature = "test-support"))]
-        self.track_test_execution_task(task);
-        #[cfg(not(any(test, feature = "test-support")))]
-        std::mem::drop(task);
-    }
-
-    /// Publishes every durable fact and the current snapshot to live
-    /// subscribers, returning whether publication fully caught up with the
-    /// durable cursor and status (PR24-014).
+    /// Publishes the current durable run status to live subscribers when it
+    /// differs from the last published status, returning whether the read
+    /// succeeded.
     fn publish_current(&self, session_id: SessionId, run_id: RunId) -> bool {
-        let Ok(_publication_gate) = self.publication_gate.lock() else {
+        let Ok(run) = self
+            .facade
+            .load_run_projection_for_daemon(session_id, run_id)
+        else {
             return false;
         };
-        let replay = match self
-            .facade
-            .load_current_run_snapshot_for_daemon(session_id, run_id)
-        {
-            Ok(replay) => replay,
-            Err(_) => return false,
-        };
+        self.publish_status(session_id, run_id, run.status());
+        true
+    }
+
+    /// Publishes one committed run status to live subscribers.
+    ///
+    /// The frame carries the committed value; a repeated status is not
+    /// re-published.
+    fn publish_status(&self, session_id: SessionId, run_id: RunId, status: RunStatusDto) {
         let key = (session_id, run_id);
-        let snapshot = replay;
-        let current = PublishedRun {
-            cursor: snapshot.cursor(),
-            status: snapshot.run_projection().status(),
-        };
         let previous = self
             .data
             .lock()
             .ok()
             .and_then(|data| data.published.get(&key).copied());
-        let mut after = previous.map_or(RunEventCursorDto::new(0), |value| value.cursor);
-        while after < current.cursor {
-            let Ok(tail) = self
-                .facade
-                .load_run_tail_for_daemon(session_id, run_id, after)
-            else {
-                return false;
-            };
-            if tail.facts().is_empty() {
-                return false;
-            }
-            let next_after = tail.next_after_cursor();
-            let Ok(batch) = RunLiveBatchDto::new(
-                session_id,
-                run_id,
-                tail.after_cursor(),
-                tail.facts().to_vec(),
-                next_after,
-            ) else {
-                return false;
-            };
-            self.broadcast(
-                key,
-                ProtocolDaemonMessageDto::run_frame(RunStreamFrameDto::LiveBatch(batch)),
-            );
-            if next_after <= after {
-                return false;
-            }
-            after = next_after;
+        if previous.is_some_and(|value| value.status == status) {
+            return;
         }
-        if previous.is_none_or(|value| value.status != current.status) {
-            self.broadcast(
-                key,
-                ProtocolDaemonMessageDto::run_frame(RunStreamFrameDto::Snapshot(
-                    RunSnapshotFrameDto::new(snapshot),
-                )),
-            );
-        }
+        self.broadcast(
+            key,
+            ProtocolDaemonMessageDto::run_frame(RunStreamFrameDto::Status(RunStatusFrameDto::new(
+                session_id, run_id, status,
+            ))),
+        );
         if let Ok(mut data) = self.data.lock() {
-            data.published.insert(key, current);
+            data.published.insert(key, PublishedRun { status });
         }
-        true
+    }
+
+    /// Publishes one committed transcript row to live subscribers.
+    fn publish_content(&self, message: &intention_domain::MessageProjectionDto) {
+        let Some(run_id) = message.run_id() else {
+            return;
+        };
+        self.broadcast(
+            (message.session_id(), run_id),
+            ProtocolDaemonMessageDto::run_frame(RunStreamFrameDto::Content(message.clone())),
+        );
     }
 
     fn broadcast(&self, key: RunKey, message: ProtocolDaemonMessageDto) {
@@ -431,27 +369,20 @@ impl HostState {
             }
         }
         for id in slow {
-            self.send_slow_resync(key, id);
-            self.remove_subscriber(key, id);
+            // A subscriber whose queue overflowed is closed instead of
+            // resynchronized: it re-reads current state on reconnect.
+            self.close_subscriber(key, id);
         }
     }
 
-    fn send_slow_resync(&self, key: RunKey, id: u64) {
+    fn close_subscriber(&self, key: RunKey, id: u64) {
         if let Ok(data) = self.data.lock()
             && let Some(subscribers) = data.subscribers.get(&key)
             && let Some(subscriber) = subscribers.iter().find(|subscriber| subscriber.id == id)
         {
-            let _ = subscriber
-                .sender
-                .try_send(ProtocolDaemonMessageDto::run_frame(
-                    RunStreamFrameDto::Resync(RunResyncDto::new(
-                        key.0,
-                        key.1,
-                        RunResyncReasonDto::SubscriberTooSlow,
-                    )),
-                ));
             subscriber.close.send_replace(true);
         }
+        self.remove_subscriber(key, id);
     }
 
     fn remove_subscriber(&self, key: RunKey, id: u64) {
@@ -466,7 +397,6 @@ impl HostState {
         self: &Arc<Self>,
         session_id: SessionId,
         run_id: RunId,
-        after_cursor: Option<RunEventCursorDto>,
         sender: tokio::sync::mpsc::Sender<ProtocolDaemonMessageDto>,
         close: tokio::sync::watch::Sender<bool>,
         request_id: u64,
@@ -495,38 +425,13 @@ impl HostState {
                 return None;
             }
         };
-        let replay = match self
+        if let Err(error) = self
             .facade
-            .load_current_run_snapshot_for_daemon(session_id, run_id)
+            .load_run_projection_for_daemon(session_id, run_id)
         {
-            Ok(replay) => replay,
-            Err(error) if error.code() == "run_replay_not_found" => {
-                let _ = sender.try_send(run_subscription_response(
-                    request_id,
-                    RunSubscriptionResponseDto::Error(error),
-                ));
-                return None;
-            }
-            Err(_) => {
-                let _ = sender.try_send(run_subscription_response(
-                    request_id,
-                    RunSubscriptionResponseDto::Resync(RunResyncDto::new(
-                        session_id,
-                        run_id,
-                        RunResyncReasonDto::HistoryUnavailable,
-                    )),
-                ));
-                return None;
-            }
-        };
-        if after_cursor.is_some_and(|cursor| cursor > replay.cursor()) {
             let _ = sender.try_send(run_subscription_response(
                 request_id,
-                RunSubscriptionResponseDto::Resync(RunResyncDto::new(
-                    session_id,
-                    run_id,
-                    RunResyncReasonDto::InvalidCursor,
-                )),
+                RunSubscriptionResponseDto::Error(error),
             ));
             return None;
         }
@@ -541,19 +446,15 @@ impl HostState {
         // The subscriber is registered before this second durable read. The
         // serialized publisher cannot place a later live frame before this
         // response enters this subscriber's FIFO queue.
-        let response = match self
-            .facade
-            .load_current_run_snapshot_for_daemon(session_id, run_id)
-        {
-            Ok(replay) => RunSubscriptionResponseDto::Replay(replay),
-            Err(error) if error.code() == "run_replay_not_found" => {
+        let response = match self.facade.load_run_snapshot_for_daemon(session_id, run_id) {
+            Ok(snapshot) => RunSubscriptionResponseDto::Snapshot(snapshot),
+            Err(error) => {
+                // The run became unreadable between the admission read and this
+                // snapshot read, so the registration is withdrawn before the
+                // typed error is reported.
+                self.remove_subscriber(key, id);
                 RunSubscriptionResponseDto::Error(error)
             }
-            Err(_) => RunSubscriptionResponseDto::Resync(RunResyncDto::new(
-                session_id,
-                run_id,
-                RunResyncReasonDto::HistoryUnavailable,
-            )),
         };
         if sender
             .try_send(run_subscription_response(request_id, response))
@@ -562,7 +463,7 @@ impl HostState {
             // The per-connection queue is full, so the correlated reply cannot
             // be delivered. The subscriber is removed and the failure is
             // reported through the same typed error every other registration
-                        // failure uses.
+            // failure uses.
             self.remove_subscriber(key, id);
             if sender
                 .try_send(run_subscription_response(
@@ -602,17 +503,20 @@ struct HostCommitObserver {
 }
 
 impl ModelRunCommitObserver for HostCommitObserver {
-    fn observe_model_run_commit(&self, committed: ModelRunCommitDto) {
-        if committed.snapshot().run_projection().status().is_terminal() {
-            // Consolidated terminal side effects: bounded terminal
-            // publication and exact once scheduling of a current Starting
-            // successor (PR24-007/014).
-            self.host
-                .on_terminal(committed.session_id(), committed.run_id());
-            return;
+    fn observe_model_run_commit(&self, committed: &ModelRunCommitDto) {
+        match committed {
+            ModelRunCommitDto::Content(message) => self.host.publish_content(message),
+            ModelRunCommitDto::Status {
+                session_id,
+                run_id,
+                status,
+            } => {
+                self.host.publish_status(*session_id, *run_id, *status);
+                if status.is_terminal() {
+                    self.host.on_terminal(*session_id);
+                }
+            }
         }
-        self.host
-            .publish_current(committed.session_id(), committed.run_id());
     }
 }
 
@@ -654,7 +558,7 @@ impl intention_runtime::ToolExecutionPort for DaemonToolExecutor {
             let result = tokio::task::spawn_blocking(move || {
                 let workspace = facade.resolve_workspace_root_for_daemon(session_id)?;
                 facade.invoke_local_tool_for_daemon(
-                    session_id, run_id, call_id, tool_id, input, workspace,
+                    session_id, run_id, call_id, tool_id, input, workspace, arguments,
                 )
             })
             .await
@@ -673,11 +577,7 @@ impl intention_runtime::ToolExecutionPort for DaemonToolExecutor {
                 Ok(LocalToolInvocationOutcomeDto::Partial { stopped, result }) => {
                     partial_tool_result(stopped, result)
                 }
-                Err(error) => Ok(ToolResultOutcomeDto::failed(RunFailureDto::new(
-                    error.code(),
-                    error.retry(),
-                    error.correlation_id(),
-                )?)),
+                Err(error) => Ok(ToolResultOutcomeDto::failed(error)),
             }
         })
     }
@@ -730,7 +630,7 @@ fn unknown_tool() -> ErrorDto {
 
 /// Normalizes one typed tool result into bounded durable outcome content.
 fn normalize_tool_result(result: ToolResult) -> DtoResult<ToolResultOutcomeDto> {
-    ToolResultOutcomeDto::succeeded(normalize_tool_result_content(result)?)
+    ToolResultOutcomeDto::completed(normalize_tool_result_content(result)?)
 }
 
 /// Maps one interrupted invocation into bounded, model-visible partial content.
@@ -918,7 +818,6 @@ async fn serve_async_connection(
                         let subscriber_id = host.register_subscriber(
                             subscription.session_id(),
                             subscription.run_id(),
-                            subscription.after_cursor(),
                             sender.clone(),
                             close_sender.clone(),
                             request_id,
@@ -953,9 +852,9 @@ async fn serve_async_connection(
             message = receiver.recv() => {
                 let Some(message) = message else { return; };
                 if write_message_with_deadline(&mut messages, message).await.is_err() {
-                    // A queued resync frame is best effort: a timed-out OS write
-                    // cannot be recovered, but it is never allowed to stall
-                    // persistence or any other subscriber.
+                    // A queued frame is best effort: a timed-out OS write cannot
+                    // be recovered, but it is never allowed to stall persistence
+                    // or any other subscriber.
                     if let Some((key, id)) = registered {
                         host.remove_subscriber(key, id);
                     }
@@ -1071,12 +970,6 @@ mod deadline_tests {
 
 fn daemon_hello() -> DtoResult<ProtocolHelloDto> {
     ProtocolHelloDto::new(local_protocol_version(), "intention-daemon")
-}
-
-#[cfg(any(test, feature = "test-support"))]
-#[doc(hidden)]
-pub fn serve_test_connection(connection: LocalConnection, facade: DaemonApplicationFacade) {
-    serve_connection(connection, facade);
 }
 
 /// Serves one injected asynchronous connection for a bounded integration fixture.
@@ -1211,39 +1104,6 @@ impl TestHostLifecycle {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-fn serve_connection(mut connection: LocalConnection, facade: DaemonApplicationFacade) {
-    let hello = match daemon_hello() {
-        Ok(hello) => hello,
-        Err(_) => return,
-    };
-    if negotiate_daemon(&mut connection, hello).is_err() {
-        return;
-    }
-    let line = match connection.receive_line() {
-        Ok(line) => line,
-        Err(_) => return,
-    };
-    let request = match decode_request_line(&line) {
-        Ok(request) => request,
-        Err(_) => return,
-    };
-    let payload = match request.payload() {
-        ProtocolRequestPayloadDto::Command(command) => match command {
-            ProtocolCommandDto::SubscribeSession(subscription) => {
-                ProtocolResponsePayloadDto::Subscription(facade.subscribe(*subscription))
-            }
-            _ => ProtocolResponsePayloadDto::CommandResult(facade.command(command.clone())),
-        },
-        ProtocolRequestPayloadDto::Query(query) => {
-            ProtocolResponsePayloadDto::QueryResult(facade.query(*query))
-        }
-        ProtocolRequestPayloadDto::RunSubscription(_) => run_subscription_unsupported(),
-    };
-    let response = encode_response(request.id(), payload);
-    let _ = connection.send_message(&response);
-}
-
 fn unix_timestamp() -> DtoResult<TimestampDto> {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1291,7 +1151,7 @@ mod tests {
     };
     use intention_transport::{AsyncLocalClientConnection, AsyncLocalListener};
     use intention_types::{
-        ConfigRevisionId, ProjectId, SchemaVersionDto, TimestampDto, TurnId, WorkspaceId,
+        ConfigRevisionId, IdempotencyKey, ProjectId, SchemaVersionDto, TimestampDto, WorkspaceId,
     };
     use tempfile::TempDir;
 
@@ -1419,7 +1279,7 @@ mod tests {
             ProtocolCommandResultDto::Accepted(_)
         ));
         let accepted = facade.command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, TurnId::new(), "fixture turn")
+            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "fixture turn")
                 .expect("fixture turn is valid"),
         ));
         let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
@@ -1461,7 +1321,6 @@ mod tests {
                     intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                     session_id,
                     run_id,
-                    None,
                 )),
             ))
             .await
@@ -1470,15 +1329,16 @@ mod tests {
             .receive_line()
             .await
             .expect("subscription reply arrives");
-        // The correlated reply is the concrete initial replay of this run.
-        let ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Replay(replay)) =
-            decode_response(&line, ProtocolMethodDto::RunSubscribe, 1)
-                .expect("subscription reply decodes")
+        // The correlated reply is the current durable state of this run.
+        let ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Snapshot(
+            snapshot,
+        )) = decode_response(&line, ProtocolMethodDto::RunSubscribe, 1)
+            .expect("subscription reply decodes")
         else {
-            panic!("a run subscription answers with the concrete replay payload")
+            panic!("a run subscription answers with the current run snapshot")
         };
-        assert_eq!(replay.session_id(), session_id);
-        assert_eq!(replay.run_id(), run_id);
+        assert_eq!(snapshot.run().session_id(), session_id);
+        assert_eq!(snapshot.run().run_id(), run_id);
 
         // The same connection still serves an ordinary request while the
         // subscription is registered.
@@ -1573,9 +1433,8 @@ mod tests {
         );
         assert_eq!(
             host.facade
-                .load_current_run_snapshot_for_daemon(session_id, run_id)
+                .load_run_projection_for_daemon(session_id, run_id)
                 .expect("starting run replay reads")
-                .run_projection()
                 .status(),
             RunStatusDto::Starting
         );
@@ -1610,9 +1469,8 @@ mod tests {
         // Wait until the pending provider stream is the run's live operation.
         for _ in 0..20 {
             if facade
-                .load_current_run_snapshot_for_daemon(session_id, run_id)
+                .load_run_projection_for_daemon(session_id, run_id)
                 .expect("run replay reads")
-                .run_projection()
                 .status()
                 == RunStatusDto::Running
             {
@@ -1638,9 +1496,8 @@ mod tests {
         }
         assert_eq!(
             facade
-                .load_current_run_snapshot_for_daemon(session_id, run_id)
+                .load_run_projection_for_daemon(session_id, run_id)
                 .expect("interrupted run replay reads")
-                .run_projection()
                 .status(),
             RunStatusDto::Running
         );
@@ -1667,15 +1524,8 @@ mod tests {
             tokio::sync::mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
         let (unknown_close, _unknown_closed) = tokio::sync::watch::channel(false);
         assert!(
-            host.register_subscriber(
-                session_id,
-                RunId::new(),
-                None,
-                unknown_sender,
-                unknown_close,
-                1
-            )
-            .is_none()
+            host.register_subscriber(session_id, RunId::new(), unknown_sender, unknown_close, 1)
+                .is_none()
         );
         assert!(matches!(
             unknown_receiver.recv().await,
@@ -1683,33 +1533,26 @@ mod tests {
                 if matches!(
                     response.result_value(),
                     Some(ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Error(error)))
-                        if error.code() == "run_replay_not_found"
+                        if error.code() == "storage_record_not_found"
                 )
         ));
 
-        let (cursor_sender, mut cursor_receiver) =
+        let (scoped_sender, mut scoped_receiver) =
             tokio::sync::mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
-        let (cursor_close, _cursor_closed) = tokio::sync::watch::channel(false);
-        assert!(
-            host.register_subscriber(
-                session_id,
-                run_id,
-                Some(RunEventCursorDto::new(1)),
-                cursor_sender,
-                cursor_close,
-                2,
-            )
-            .is_none()
-        );
+        let (scoped_close, _scoped_closed) = tokio::sync::watch::channel(false);
+        let registered = host
+            .register_subscriber(session_id, run_id, scoped_sender, scoped_close, 2)
+            .expect("a current run admits one subscriber");
         assert!(matches!(
-            cursor_receiver.recv().await,
+            scoped_receiver.recv().await,
             Some(ProtocolDaemonMessageDto::Response(response))
                 if matches!(
                     response.result_value(),
-                    Some(ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Resync(resync)))
-                        if resync.reason() == RunResyncReasonDto::InvalidCursor
+                    Some(ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Snapshot(snapshot)))
+                        if snapshot.run().run_id() == run_id
                 )
         ));
+        host.remove_subscriber((session_id, run_id), registered);
 
         let (slow_sender, mut slow_receiver) =
             tokio::sync::mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
@@ -1735,8 +1578,8 @@ mod tests {
                 ],
             );
         }
-        let frame = ProtocolDaemonMessageDto::run_frame(RunStreamFrameDto::Resync(
-            RunResyncDto::new(session_id, run_id, RunResyncReasonDto::CursorGap),
+        let frame = ProtocolDaemonMessageDto::run_frame(RunStreamFrameDto::Status(
+            RunStatusFrameDto::new(session_id, run_id, RunStatusDto::Running),
         ));
         for _ in 0..SUBSCRIBER_QUEUE_CAPACITY {
             host.broadcast((session_id, run_id), frame.clone());
@@ -1762,22 +1605,22 @@ mod tests {
     async fn a_full_subscriber_queue_fails_closed_instead_of_waiting_silently() {
         // C-03: when the per-connection queue cannot accept the correlated
         // reply, the registration fails closed: no subscriber is left
-                // registered and the connection is told to end, so the peer never
+        // registered and the connection is told to end, so the peer never
         // waits for a reply that cannot arrive.
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
         let (session_id, run_id) = create_and_start(&facade);
         let host = host_for_test(facade);
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
         let (close, mut closed) = tokio::sync::watch::channel(false);
-        let queued = ProtocolDaemonMessageDto::run_frame(RunStreamFrameDto::Resync(
-            RunResyncDto::new(session_id, run_id, RunResyncReasonDto::CursorGap),
+        let queued = ProtocolDaemonMessageDto::run_frame(RunStreamFrameDto::Status(
+            RunStatusFrameDto::new(session_id, run_id, RunStatusDto::Running),
         ));
         sender
             .try_send(queued)
             .expect("the single-slot queue accepts one frame");
 
         assert!(
-            host.register_subscriber(session_id, run_id, None, sender, close, 7)
+            host.register_subscriber(session_id, run_id, sender, close, 7)
                 .is_none(),
             "a full queue cannot accept the correlated reply"
         );
@@ -1812,7 +1655,7 @@ mod tests {
             ],
             truncated: true,
         });
-        let ToolResultOutcomeDto::Succeeded { content } =
+        let ToolResultOutcomeDto::Completed { content, .. } =
             normalize_tool_result(glob).expect("a glob result normalizes")
         else {
             panic!("a glob result succeeds")
@@ -1823,7 +1666,7 @@ mod tests {
             matches: Vec::new(),
             truncated: true,
         });
-        let ToolResultOutcomeDto::Succeeded { content } =
+        let ToolResultOutcomeDto::Completed { content, .. } =
             normalize_tool_result(grep).expect("a grep result normalizes")
         else {
             panic!("a grep result succeeds")
@@ -1837,7 +1680,7 @@ mod tests {
             text: intention_tools::BoundedText::new("half a line").expect("fixture text"),
             truncated: false,
         });
-        let ToolResultOutcomeDto::Partial { content } =
+        let ToolResultOutcomeDto::Partial { content, .. } =
             partial_tool_result(true, Some(captured)).expect("a partial outcome normalizes")
         else {
             panic!("an interrupted call yields a partial outcome")
@@ -1847,14 +1690,14 @@ mod tests {
             "half a line\n[The tool call was stopped before a final result; the output above is partial.]"
         );
 
-        let ToolResultOutcomeDto::Partial { content } =
+        let ToolResultOutcomeDto::Partial { content, .. } =
             partial_tool_result(false, None).expect("a lost partial outcome normalizes")
         else {
             panic!("an interrupted call yields a partial outcome")
         };
         assert_eq!(content, "[The tool call did not receive a final result.]");
 
-        let ToolResultOutcomeDto::Partial { content } =
+        let ToolResultOutcomeDto::Partial { content, .. } =
             partial_tool_result(true, None).expect("a stopped partial outcome normalizes")
         else {
             panic!("an interrupted call yields a partial outcome")
