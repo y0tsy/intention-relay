@@ -10,8 +10,8 @@ use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
 use intention_storage::{AcceptUserTurnInputDto, CreateSessionInputDto, StorageRepositoryDto};
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_types::{
-    ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, ProjectId, RunId, SessionId, TimestampDto,
-    TurnId, WorkspaceId,
+    ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, IdempotencyKey, ProjectId, RunId, SessionId,
+    TimestampDto, WorkspaceId,
 };
 use tempfile::TempDir;
 
@@ -25,7 +25,7 @@ fn matching_run_loads_its_immutable_safe_configuration_selection() {
         .accept_user_turn(
             AcceptUserTurnInputDto::new(
                 session_id,
-                TurnId::new(),
+                IdempotencyKey::new(),
                 "turn",
                 run_id,
                 snapshot.clone(),
@@ -66,7 +66,7 @@ fn unknown_and_cross_session_run_config_lookups_share_safe_no_leak_error() {
         .accept_user_turn(
             AcceptUserTurnInputDto::new(
                 session_id,
-                TurnId::new(),
+                IdempotencyKey::new(),
                 "turn",
                 run_id,
                 snapshot("safe-model", None, 30, 2),
@@ -108,7 +108,7 @@ fn corrupted_run_configuration_snapshot_is_a_decode_failure_and_a_missing_row_st
         .accept_user_turn(
             AcceptUserTurnInputDto::new(
                 session_id,
-                TurnId::new(),
+                IdempotencyKey::new(),
                 "turn",
                 run_id,
                 snapshot,
@@ -121,7 +121,7 @@ fn corrupted_run_configuration_snapshot_is_a_decode_failure_and_a_missing_row_st
         .expect("database reopens for corruption");
     connection
         .execute(
-            "UPDATE configuration_revisions SET snapshot_json=?2 WHERE revision_id=?1",
+            "UPDATE configuration_revisions SET snapshot_json=?2 WHERE id=?1",
             sqlite::params![revision_id.to_string(), "{not-a-snapshot"],
         )
         .expect("persisted snapshot is corrupted");
@@ -137,7 +137,7 @@ fn corrupted_run_configuration_snapshot_is_a_decode_failure_and_a_missing_row_st
     // A missing row remains transient unavailability, not corruption.
     connection
         .execute(
-            "DELETE FROM configuration_revisions WHERE revision_id=?1",
+            "DELETE FROM configuration_revisions WHERE id=?1",
             [revision_id.to_string()],
         )
         .expect("persisted snapshot row is removed");
@@ -160,7 +160,7 @@ fn backend_failure_on_the_run_identity_lookup_is_unavailable_not_not_found() {
         .accept_user_turn(
             AcceptUserTurnInputDto::new(
                 session_id,
-                TurnId::new(),
+                IdempotencyKey::new(),
                 "turn",
                 run_id,
                 snapshot("safe-model", None, 30, 2),
@@ -198,7 +198,7 @@ fn backend_failure_on_the_snapshot_lookup_is_unavailable_not_not_found() {
         .accept_user_turn(
             AcceptUserTurnInputDto::new(
                 session_id,
-                TurnId::new(),
+                IdempotencyKey::new(),
                 "turn",
                 run_id,
                 snapshot("safe-model", None, 30, 2),

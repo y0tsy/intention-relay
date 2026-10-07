@@ -3,61 +3,105 @@
     reason = "M4 SQLite model-context fixtures use expect for precise diagnostics."
 )]
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Barrier};
-use std::thread;
-
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::{
-    CreateSessionCommandDto, ModelRunFactInputDto, RunEventCursorDto, RunModeDto, RunStatusDto,
-    ToolLifecycleEventDto, ToolLifecycleStatusDto, WorkspaceRootDto,
+    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunStatusDto,
+    WorkspaceRootDto,
 };
 use intention_storage::{
-    AcceptUserTurnInputDto, AppendModelRunFactsInputDto, AppendToolLifecycleEventInputDto,
-    CreateSessionInputDto, ModelContextRoleDto, StorageRepositoryDto, TransitionRunInputDto,
+    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto, CreateSessionInputDto,
+    FinishRunInputDto, StorageRepositoryDto, TransitionRunInputDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_types::{
-    AssistantTurnId, ConfigRevisionId, ProjectId, RunId, SessionId, TimestampDto, ToolCallId,
-    TurnId, WorkspaceId,
+    ConfigRevisionId, FinishReasonDto, IdempotencyKey, ProjectId, RunId, SchemaVersionDto,
+    SessionId, TimestampDto, ToolCallId, UsageDto, WorkspaceId,
 };
 use tempfile::TempDir;
 
 #[test]
-fn starting_run_model_context_uses_durable_start_order_and_completed_assistant_text() {
+fn starting_run_model_context_rebuilds_the_committed_transcript_in_insertion_order() {
     let (_directory, repository) = repository();
     let session_id = create_session(&repository, "model-context");
 
     let first_run = start_run(&repository, session_id, "first user", "first-model", 2);
-    start_and_finish(
+    let call_id = ToolCallId::new();
+    append(
         &repository,
         session_id,
-        first_run,
-        Some("first assistant"),
+        Some(first_run),
+        MessageKindDto::ToolCall,
+        r#"{"path":"src/lib.rs"}"#,
+        None,
+        Some(call_id),
+        Some("read"),
         3,
     );
-
-    let second_run = start_run(&repository, session_id, "second user", "second-model", 4);
-    start_and_finish(&repository, session_id, second_run, None, 5);
-
-    let partial_run = start_run(&repository, session_id, "partial user", "partial-model", 6);
-    append_assistant_content(&repository, session_id, partial_run, "partial assistant", 7);
+    append(
+        &repository,
+        session_id,
+        Some(first_run),
+        MessageKindDto::ToolResult,
+        "file contents",
+        None,
+        Some(call_id),
+        Some("read"),
+        3,
+    );
+    append(
+        &repository,
+        session_id,
+        Some(first_run),
+        MessageKindDto::Notice,
+        "[The call was stopped before a final result.]",
+        None,
+        None,
+        None,
+        3,
+    );
+    append(
+        &repository,
+        session_id,
+        Some(first_run),
+        MessageKindDto::Assistant,
+        "first assistant",
+        Some("first reasoning"),
+        None,
+        None,
+        3,
+    );
     repository
         .transition_run(TransitionRunInputDto::new(
             session_id,
-            partial_run,
-            RunStatusDto::Failed,
-            time(7),
+            first_run,
+            RunStatusDto::Running,
+            time(3),
         ))
-        .expect("partial run fails");
+        .expect("first run starts");
+    repository
+        .finish_run(
+            FinishRunInputDto::new(
+                session_id,
+                first_run,
+                RunStatusDto::Completed,
+                Some(UsageDto::reported(1, 1, 2).expect("fixture usage is consistent")),
+                Some(FinishReasonDto::Stop),
+                None,
+                None,
+                time(4),
+            )
+            .expect("first run outcome is valid"),
+        )
+        .expect("first run completes");
 
-    let starting_run = start_run(&repository, session_id, "current user", "current-model", 8);
+    let starting_run = start_run(&repository, session_id, "current user", "current-model", 5);
     let context = repository
         .load_starting_run_model_context(session_id, starting_run)
         .expect("starting run context loads");
 
+    assert_eq!(context.session_id(), session_id);
     assert_eq!(context.run_id(), starting_run);
     assert_eq!(
         context.safe_config().resolved().provider().model(),
@@ -67,207 +111,65 @@ fn starting_run_model_context_uses_durable_start_order_and_completed_assistant_t
         context
             .messages()
             .iter()
-            .map(|message| (message.role(), message.content()))
+            .map(|message| (message.kind(), message.text()))
             .collect::<Vec<_>>(),
         vec![
-            (ModelContextRoleDto::User, "first user"),
-            (ModelContextRoleDto::Assistant, "first assistant"),
-            (ModelContextRoleDto::User, "second user"),
-            (ModelContextRoleDto::User, "partial user"),
-            (ModelContextRoleDto::User, "current user"),
+            (MessageKindDto::User, "first user"),
+            (MessageKindDto::ToolCall, r#"{"path":"src/lib.rs"}"#),
+            (MessageKindDto::ToolResult, "file contents"),
+            (
+                MessageKindDto::Notice,
+                "[The call was stopped before a final result.]"
+            ),
+            (MessageKindDto::Assistant, "first assistant"),
+            (MessageKindDto::User, "current user"),
         ]
     );
-    assert_eq!(
-        context
-            .messages()
-            .last()
-            .expect("current user is present")
-            .role(),
-        ModelContextRoleDto::User
-    );
-    assert_eq!(
-        context
-            .messages()
-            .last()
-            .expect("current user is present")
-            .content(),
-        "current user"
-    );
+    let assistant = context
+        .messages()
+        .iter()
+        .find(|message| message.kind() == MessageKindDto::Assistant)
+        .expect("the completed assistant step is part of the context");
+    assert_eq!(assistant.reasoning(), Some("first reasoning"));
+    assert_eq!(assistant.run_id(), Some(first_run));
+    let last = context.messages().last().expect("current user is present");
+    assert_eq!(last.kind(), MessageKindDto::User);
+    assert_eq!(last.run_id(), Some(starting_run));
     let encoded = serde_json::to_string(context.safe_config()).expect("safe config serializes");
     assert!(!encoded.contains("recognizable-fixture-credential"));
     assert!(!encoded.contains("model-context.toml"));
 }
 
 #[test]
-fn starting_run_context_notices_tool_calls_that_never_finished() {
+fn starting_run_context_ends_at_the_target_run_user_turn() {
     let (_directory, repository) = repository();
-    let session_id = create_session(&repository, "recovery-notice");
-
-    // A recovered run carries one tool call that started and never recorded a
-    // terminal status, and one call that completed normally.
-    let recovered_run = start_run(
+    let session_id = create_session(&repository, "boundary");
+    let run_id = start_run(&repository, session_id, "first user", "current-model", 2);
+    // A message committed after the run's starting turn (for example a pending
+    // message consumed at a boundary) never extends the starting context.
+    append(
         &repository,
         session_id,
-        "recovered user",
-        "recovered-model",
-        2,
+        Some(run_id),
+        MessageKindDto::User,
+        "joined user",
+        None,
+        None,
+        None,
+        3,
     );
-    let unfinished_call = ToolCallId::new();
-    let finished_call = ToolCallId::new();
-    for (call_id, status) in [
-        (unfinished_call, ToolLifecycleStatusDto::Admitted),
-        (unfinished_call, ToolLifecycleStatusDto::Started),
-        (finished_call, ToolLifecycleStatusDto::Admitted),
-        (finished_call, ToolLifecycleStatusDto::Started),
-        (finished_call, ToolLifecycleStatusDto::Completed),
-    ] {
-        repository
-            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
-                ToolLifecycleEventDto::new(
-                    session_id,
-                    recovered_run,
-                    call_id,
-                    "read",
-                    status,
-                    "fixture lifecycle",
-                    time(2),
-                )
-                .expect("lifecycle evidence is valid"),
-            ))
-            .expect("lifecycle evidence persists");
-    }
-    repository
-        .transition_run(TransitionRunInputDto::new(
-            session_id,
-            recovered_run,
-            RunStatusDto::Interrupted,
-            time(2),
-        ))
-        .expect("the recovered run turns interrupted");
 
-    let starting_run = start_run(&repository, session_id, "current user", "current-model", 3);
     let context = repository
-        .load_starting_run_model_context(session_id, starting_run)
+        .load_starting_run_model_context(session_id, run_id)
         .expect("starting run context loads");
     assert_eq!(
         context
             .messages()
             .iter()
-            .map(|message| (message.role(), message.content()))
+            .map(MessageProjectionDto::text)
             .collect::<Vec<_>>(),
-        vec![
-            (ModelContextRoleDto::User, "recovered user"),
-            (
-                ModelContextRoleDto::Notice,
-                "[The tool call \"read\" did not receive a final result.]",
-            ),
-            (ModelContextRoleDto::User, "current user"),
-        ]
+        vec!["first user"]
     );
-}
-
-#[test]
-fn context_read_never_returns_starting_context_after_concurrent_terminalization() {
-    for iteration in 0..32 {
-        let directory = TempDir::new().expect("temporary directory exists");
-        let location = SqliteDatabaseLocationDto::new(
-            directory
-                .path()
-                .join("storage.sqlite")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("database path is absolute");
-        let reader_repository =
-            SqliteStorageRepository::open(location.clone()).expect("reader opens");
-        let writer_repository = SqliteStorageRepository::open(location).expect("writer opens");
-        let session_id = create_session(&reader_repository, "concurrent-context");
-        let run_id = start_run(
-            &reader_repository,
-            session_id,
-            "current user",
-            "current-model",
-            2,
-        );
-
-        let reader_repository = Arc::new(reader_repository);
-        let writer_repository = Arc::new(writer_repository);
-        let ready = Arc::new(Barrier::new(2));
-        // The reader records whether terminalization was already durable when
-        // its read began. Completion timestamps cannot prove that ordering: a
-        // descheduled reader thread returns a legitimate pre-commit snapshot
-        // after the writer committed, which made this fixture flaky under load.
-        let terminalized = Arc::new(AtomicBool::new(false));
-        let reader_ready = Arc::clone(&ready);
-        let reader_terminalized = Arc::clone(&terminalized);
-        let reader = {
-            let repository = Arc::clone(&reader_repository);
-            thread::spawn(move || {
-                reader_ready.wait();
-                let started_after_terminalization = reader_terminalized.load(Ordering::SeqCst);
-                let context = repository.load_starting_run_model_context(session_id, run_id);
-                (started_after_terminalization, context)
-            })
-        };
-        let writer_ready = Arc::clone(&ready);
-        let writer = {
-            let repository = Arc::clone(&writer_repository);
-            thread::spawn(move || {
-                writer_ready.wait();
-                repository
-                    .transition_run(TransitionRunInputDto::new(
-                        session_id,
-                        run_id,
-                        RunStatusDto::Interrupted,
-                        time(3),
-                    ))
-                    .expect("writer terminalizes run");
-                terminalized.store(true, Ordering::SeqCst);
-            })
-        };
-
-        let (started_after_terminalization, context) =
-            reader.join().expect("reader thread completes");
-        writer.join().expect("writer thread completes");
-        if let Err(error) = &context {
-            assert_eq!(
-                error.code(),
-                "run_model_context_unavailable",
-                "iteration {iteration}"
-            );
-        }
-        if let Ok(context) = &context {
-            // A read that began before terminalization may observe the
-            // pre-commit snapshot; it must still be one coherent starting
-            // context, never a partially terminalized one.
-            assert!(
-                !started_after_terminalization,
-                "iteration {iteration}: a read starting after terminalization returned a starting context"
-            );
-            assert_eq!(context.run_id(), run_id, "iteration {iteration}");
-            assert_eq!(
-                context.safe_config().resolved().provider().model(),
-                "current-model",
-                "iteration {iteration}"
-            );
-            assert_eq!(
-                context.messages().last().map(|message| message.content()),
-                Some("current user"),
-                "iteration {iteration}"
-            );
-        }
-        // Once terminalization is durable, a fresh read on the racing
-        // connection must never return the starting context, however the race
-        // itself was ordered.
-        let error = reader_repository
-            .load_starting_run_model_context(session_id, run_id)
-            .expect_err("a read after durable terminalization cannot return a starting context");
-        assert_eq!(
-            error.code(),
-            "run_model_context_unavailable",
-            "iteration {iteration}"
-        );
-    }
 }
 
 #[test]
@@ -356,11 +258,11 @@ fn start_run(
     event_time: i64,
 ) -> RunId {
     let run_id = RunId::new();
-    repository
+    let outcome = repository
         .accept_user_turn(
             AcceptUserTurnInputDto::new(
                 session_id,
-                TurnId::new(),
+                IdempotencyKey::new(),
                 content,
                 run_id,
                 snapshot(model),
@@ -369,85 +271,44 @@ fn start_run(
             .expect("turn input is valid"),
         )
         .expect("turn starts");
-    run_id
-}
-
-fn append_assistant_content(
-    repository: &SqliteStorageRepository,
-    session_id: SessionId,
-    run_id: RunId,
-    assistant_content: &str,
-    event_time: i64,
-) {
-    repository
-        .append_model_run_facts(
-            AppendModelRunFactsInputDto::new(
-                session_id,
-                run_id,
-                RunEventCursorDto::new(0),
-                vec![
-                    ModelRunFactInputDto::provider_attempt_started(1).expect("attempt is valid"),
-                    ModelRunFactInputDto::assistant_content_appended(
-                        AssistantTurnId::new(),
-                        assistant_content,
-                    )
-                    .expect("assistant content is valid"),
-                ],
-                Some(RunStatusDto::Running),
-                time(event_time),
-            )
-            .expect("fact input is valid"),
-        )
-        .expect("partial assistant content persists");
-}
-
-fn start_and_finish(
-    repository: &SqliteStorageRepository,
-    session_id: SessionId,
-    run_id: RunId,
-    assistant_content: Option<&str>,
-    event_time: i64,
-) {
-    let mut facts =
-        vec![ModelRunFactInputDto::provider_attempt_started(1).expect("attempt is valid")];
-    if let Some(assistant_content) = assistant_content {
-        facts.push(
-            ModelRunFactInputDto::assistant_content_appended(
-                AssistantTurnId::new(),
-                assistant_content,
-            )
-            .expect("assistant content is valid"),
-        );
+    match outcome {
+        AcceptedTurnOutcomeDto::Started { run, message } => {
+            assert_eq!(run.run_id(), run_id);
+            assert_eq!(message.text(), content);
+            run_id
+        }
+        AcceptedTurnOutcomeDto::Pending(_) => unreachable!("a fresh session starts the run"),
     }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The transcript fixture keeps one flat row builder."
+)]
+fn append(
+    repository: &SqliteStorageRepository,
+    session_id: SessionId,
+    run_id: Option<RunId>,
+    kind: MessageKindDto,
+    text: &str,
+    reasoning: Option<&str>,
+    tool_call_id: Option<ToolCallId>,
+    tool_id: Option<&str>,
+    event_time: i64,
+) {
+    let message = MessageProjectionDto::new(
+        session_id,
+        run_id,
+        kind,
+        text,
+        reasoning.map(str::to_owned),
+        tool_call_id,
+        tool_id.map(str::to_owned),
+    )
+    .expect("fixture transcript row is valid");
     repository
-        .append_model_run_facts(
-            AppendModelRunFactsInputDto::new(
-                session_id,
-                run_id,
-                RunEventCursorDto::new(0),
-                facts,
-                Some(RunStatusDto::Running),
-                time(event_time),
-            )
-            .expect("fact input is valid"),
-        )
-        .expect("assistant content persists");
-    repository
-        .transition_run(TransitionRunInputDto::new(
-            session_id,
-            run_id,
-            RunStatusDto::Completing,
-            time(event_time),
-        ))
-        .expect("run begins completion");
-    repository
-        .transition_run(TransitionRunInputDto::new(
-            session_id,
-            run_id,
-            RunStatusDto::Completed,
-            time(event_time),
-        ))
-        .expect("run completes");
+        .append_message(AppendMessageInputDto::new(message, time(event_time)))
+        .expect("fixture transcript row commits");
 }
 
 fn snapshot(model: &str) -> ConfigSnapshotDto {
@@ -467,7 +328,7 @@ fn snapshot(model: &str) -> ConfigSnapshotDto {
     ))
     .expect("safe configuration resolves");
     ConfigSnapshotDto::new(
-        intention_types::SchemaVersionDto::new(1, 0),
+        SchemaVersionDto::new(1, 0),
         ConfigRevisionId::new(),
         time(1),
         resolved,

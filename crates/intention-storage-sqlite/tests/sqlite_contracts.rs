@@ -7,18 +7,20 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, RemoveTurnCommandDto, RunModeDto, RunStatusDto,
-    ToolLifecycleEventDto, ToolLifecycleStatusDto, WorkspaceRootDto,
+    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
+    RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto, ToolResultMetadataEntryDto,
+    ToolResultStatusDto, WorkspaceRootDto,
 };
 use intention_storage::{
-    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendToolLifecycleEventInputDto,
-    CreateSessionInputDto, RecoverUnfinishedRunsInputDto, RemoveTurnInputDto, StorageRepositoryDto,
-    ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
+    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,
+    ConsumePendingUserTurnsInputDto, CreateSessionInputDto, FinishRunInputDto,
+    RecoverUnfinishedRunsInputDto, RemoveTurnInputDto, StorageRepositoryDto, ToolResultEvidenceDto,
+    TransitionRunInputDto, WriteToolResultInputDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_types::{
-    ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, ProjectId, RunId, SchemaVersionDto,
-    SessionEventSequenceDto, SessionId, TimestampDto, TurnId, WorkspaceId,
+    ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId,
+    RunId, SchemaVersionDto, SessionId, TimestampDto, ToolCallId, UsageDto, WorkspaceId,
 };
 use tempfile::TempDir;
 
@@ -56,6 +58,7 @@ fn snapshot_with_revision_and_model(
     ConfigSnapshotDto::new(SchemaVersionDto::new(1, 0), revision_id, time(1), resolved)
         .expect("fixture snapshot is valid")
 }
+
 fn workspace_root(label: &str) -> WorkspaceRootDto {
     WorkspaceRootDto::parse(
         std::env::temp_dir()
@@ -69,16 +72,26 @@ fn workspace_root(label: &str) -> WorkspaceRootDto {
 
 fn repository() -> (TempDir, SqliteStorageRepository) {
     let directory = TempDir::new().expect("temporary directory exists");
-    let location = directory
-        .path()
-        .join("storage.sqlite")
-        .to_string_lossy()
-        .into_owned();
-    let store = SqliteStorageRepository::open(
-        SqliteDatabaseLocationDto::new(location).expect("temp location is absolute"),
-    )
-    .expect("database opens");
+    let store = open(&directory);
     (directory, store)
+}
+
+fn open(directory: &TempDir) -> SqliteStorageRepository {
+    SqliteStorageRepository::open(
+        SqliteDatabaseLocationDto::new(
+            directory
+                .path()
+                .join("storage.sqlite")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .expect("temp location is absolute"),
+    )
+    .expect("database opens")
+}
+
+fn reopen(directory: &TempDir) -> SqliteStorageRepository {
+    open(directory)
 }
 
 fn create(store: &SqliteStorageRepository) -> SessionId {
@@ -89,7 +102,7 @@ fn create(store: &SqliteStorageRepository) -> SessionId {
                 ProjectId::new(),
                 session,
                 WorkspaceId::new(),
-                workspace_root("storage-contract"),
+                workspace_root(&session.to_string()),
                 RunModeDto::Build,
             ),
             time(1),
@@ -101,292 +114,347 @@ fn create(store: &SqliteStorageRepository) -> SessionId {
 fn accept(
     store: &SqliteStorageRepository,
     session: SessionId,
-    turn: TurnId,
+    key: IdempotencyKey,
     run: RunId,
     text: &str,
-) -> intention_storage::CommittedChangeDto {
+) -> AcceptedTurnOutcomeDto {
     store
         .accept_user_turn(
-            AcceptUserTurnInputDto::new(session, turn, text, run, snapshot(), time(2))
+            AcceptUserTurnInputDto::new(session, key, text, run, snapshot(), time(2))
                 .expect("turn input is valid"),
         )
         .expect("turn commits")
 }
 
-fn tool_event(session: SessionId, run: RunId, detail: &str, at: i64) -> ToolLifecycleEventDto {
-    ToolLifecycleEventDto::new(
-        session,
-        run,
-        intention_types::ToolCallId::new(),
-        "shell",
-        ToolLifecycleStatusDto::Completed,
-        detail,
-        time(at),
-    )
-    .expect("tool event is valid")
-}
-
-fn tool_event_with_status(
-    session: SessionId,
-    run: RunId,
-    status: ToolLifecycleStatusDto,
-    detail: &str,
-    at: i64,
-) -> ToolLifecycleEventDto {
-    ToolLifecycleEventDto::new(
-        session,
-        run,
-        intention_types::ToolCallId::new(),
-        "shell",
-        status,
-        detail,
-        time(at),
-    )
-    .expect("tool event is valid")
-}
-
-#[test]
-fn append_tool_lifecycle_event_accepts_scoped_event_and_round_trips_redacted_payload() {
-    let (_directory, store) = repository();
-    let session = create(&store);
-    let run = RunId::new();
-    accept(&store, session, TurnId::new(), run, "run");
-    let event = tool_event_with_status(
-        session,
-        run,
-        ToolLifecycleStatusDto::Admitted,
-        "safe detail",
-        3,
-    );
-    let appended = store
-        .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(event.clone()))
-        .expect("scoped tool event appends");
-    assert_eq!(appended.session_id(), session);
-    assert_eq!(appended.run_id(), Some(run));
-    assert_eq!(appended.sequence().value(), 4);
-    assert!(matches!(appended.payload(), DomainEventDto::ToolLifecycle(value) if value == &event));
-    let tail = store
-        .load_tail(session, SessionEventSequenceDto::new(3))
-        .expect("tool event tail loads");
-    assert_eq!(tail.last(), Some(&appended));
-    let encoded = serde_json::to_string(&tail[0]).expect("event serializes");
-    assert!(!encoded.contains("credential"));
-    assert!(!encoded.contains("/tmp/"));
-    let decoded: intention_types::EventEnvelopeDto<DomainEventDto> =
-        serde_json::from_str(&encoded).expect("event round-trips");
-    assert_eq!(decoded, tail[0]);
-}
-
-#[test]
-fn append_tool_lifecycle_event_rejects_wrong_session_or_unknown_run_without_writing() {
-    let (_directory, store) = repository();
-    let session = create(&store);
-    let other_session = {
-        let other = SessionId::new();
-        store
-            .create_session(CreateSessionInputDto::new(
-                CreateSessionCommandDto::new(
-                    ProjectId::new(),
-                    other,
-                    WorkspaceId::new(),
-                    workspace_root("other-session"),
-                    RunModeDto::Build,
-                ),
-                time(1),
-            ))
-            .expect("other session creates");
-        other
-    };
-    let run = RunId::new();
-    accept(&store, session, TurnId::new(), run, "run");
-    for event in [
-        tool_event(other_session, run, "cross-session", 3),
-        tool_event(session, RunId::new(), "unknown-run", 3),
-    ] {
-        let error = store
-            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(event))
-            .expect_err("invalid run scope is rejected");
-        assert!(matches!(
-            error.code(),
-            "run_replay_not_found" | "run_history_unavailable"
-        ));
+fn started(outcome: AcceptedTurnOutcomeDto) -> (RunProjectionDto, MessageProjectionDto) {
+    match outcome {
+        AcceptedTurnOutcomeDto::Started { run, message } => (run, message),
+        AcceptedTurnOutcomeDto::Pending(_) => unreachable!("the turn must start a run"),
     }
-    assert_eq!(
-        store
-            .load_tail(session, SessionEventSequenceDto::new(2))
-            .expect("tail loads")
-            .len(),
-        1
-    );
 }
 
-#[test]
-fn tool_lifecycle_rejects_invalid_initial_status_and_terminal_successor() {
-    let (_directory, store) = repository();
-    let session = create(&store);
-    let run = RunId::new();
-    accept(&store, session, TurnId::new(), run, "run");
-    let invalid = tool_event_with_status(session, run, ToolLifecycleStatusDto::Completed, "bad", 3);
-    assert!(
-        store
-            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(invalid))
-            .is_err()
-    );
-    let call = intention_types::ToolCallId::new();
-    for status in [
-        ToolLifecycleStatusDto::Admitted,
-        ToolLifecycleStatusDto::Started,
-        ToolLifecycleStatusDto::Completed,
-    ] {
-        let event = ToolLifecycleEventDto::new(session, run, call, "shell", status, "ok", time(3))
-            .expect("event");
-        store
-            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(event))
-            .expect("valid sequence");
+fn pending(outcome: AcceptedTurnOutcomeDto) -> PendingTurnProjectionDto {
+    match outcome {
+        AcceptedTurnOutcomeDto::Pending(turn) => turn,
+        AcceptedTurnOutcomeDto::Started { .. } => unreachable!("the turn must stay pending"),
     }
-    let late = ToolLifecycleEventDto::new(
-        session,
-        run,
-        call,
-        "shell",
-        ToolLifecycleStatusDto::Failed,
-        "late",
-        time(4),
-    )
-    .expect("event");
-    assert!(
-        store
-            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(late))
-            .is_err()
-    );
 }
 
-#[test]
-fn tool_lifecycle_guard_rejects_terminal_and_interrupted_runs_but_accepts_active_runs() {
-    for status in [
-        RunStatusDto::Completed,
-        RunStatusDto::Failed,
-        RunStatusDto::Interrupted,
-    ] {
-        let (_directory, store) = repository();
-        let session = create(&store);
-        let run = RunId::new();
-        accept(&store, session, TurnId::new(), run, "run");
-        if status == RunStatusDto::Completed {
-            store
-                .transition_run(TransitionRunInputDto::new(
-                    session,
-                    run,
-                    RunStatusDto::Running,
-                    time(3),
-                ))
-                .expect("run starts");
-            store
-                .transition_run(TransitionRunInputDto::new(
-                    session,
-                    run,
-                    RunStatusDto::Completing,
-                    time(4),
-                ))
-                .expect("run begins completion");
-        }
-        store
-            .transition_run(TransitionRunInputDto::new(session, run, status, time(5)))
-            .expect("run reaches terminal state");
-        let error = store
-            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
-                tool_event_with_status(
-                    session,
-                    run,
-                    ToolLifecycleStatusDto::Admitted,
-                    "late effect",
-                    5,
-                ),
-            ))
-            .expect_err("terminal run rejects tool effects");
-        assert_eq!(error.code(), "terminal_run_tool_lifecycle");
-    }
-
-    let (_directory, store) = repository();
-    let session = create(&store);
-    let run = RunId::new();
-    accept(&store, session, TurnId::new(), run, "active");
+fn append(
+    store: &SqliteStorageRepository,
+    message: MessageProjectionDto,
+    event_time: i64,
+) -> MessageProjectionDto {
     store
-        .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
-            tool_event_with_status(
-                session,
-                run,
-                ToolLifecycleStatusDto::Admitted,
-                "active effect",
-                3,
-            ),
-        ))
-        .expect("active run accepts tool effect");
+        .append_message(AppendMessageInputDto::new(message, time(event_time)))
+        .expect("transcript row commits")
 }
 
 #[test]
-fn create_accept_pending_idempotence_removal_snapshots_and_tail_are_durable() {
-    let (_directory, store) = repository();
-    let session = create(&store);
-    let first_turn = TurnId::new();
-    let first_run = RunId::new();
-    let first = accept(&store, session, first_turn, first_run, "first");
-    assert!(
-        matches!(first.turn_outcome(), Some(AcceptedTurnOutcomeDto::Started(run)) if run.run_id() == first_run)
+fn current_storage_schema_is_created_completely_and_remains_authoritative() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    let path = directory.path().join("storage.sqlite");
+    let store = open(&directory);
+    // The complete current schema is created directly on open: every table and
+    // explicit index exists exactly once, with no legacy or duplicate objects.
+    let connection = sqlite::Connection::open(&path).expect("database reopens");
+    let expected_tables = [
+        "projects",
+        "workspace_roots",
+        "sessions",
+        "runs",
+        "turns",
+        "messages",
+        "tool_results",
+        "configuration_revisions",
+    ];
+    let table_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("table count reads");
+    assert_eq!(
+        table_count,
+        expected_tables.len() as i64,
+        "exactly the eight current-state tables exist, no legacy tables"
     );
-    assert_eq!(first.events().len(), 2);
+    for table in expected_tables {
+        let present: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [table],
+                |row| row.get(0),
+            )
+            .expect("table lookup");
+        assert_eq!(present, 1, "table {table} must be created exactly once");
+    }
+    for removed in [
+        "domain_events",
+        "session_snapshots",
+        "run_snapshots",
+        "container_journals",
+        "model_run_facts",
+        "model_run_snapshots",
+    ] {
+        let present: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [removed],
+                |row| row.get(0),
+            )
+            .expect("removed table lookup");
+        assert_eq!(present, 0, "removed table {removed} must be absent");
+    }
+    let index_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='one_active_run_per_session'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("index lookup");
+    assert_eq!(
+        index_count, 1,
+        "the active-run index must exist exactly once"
+    );
+    for (table, column) in [
+        ("sessions", "last_sequence"),
+        ("sessions", "config_revision_id"),
+        ("sessions", "workspace_root"),
+        ("turns", "outcome"),
+        ("turns", "turn_id"),
+    ] {
+        let present: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name=?2",
+                sqlite::params![table, column],
+                |row| row.get(0),
+            )
+            .expect("column lookup");
+        assert_eq!(present, 0, "removed column {table}.{column} must be absent");
+    }
+    drop(connection);
 
-    let second_turn = TurnId::new();
-    let second_run = RunId::new();
-    let pending = accept(&store, session, second_turn, second_run, "second");
-    assert_eq!(
-        pending.turn_outcome(),
-        Some(AcceptedTurnOutcomeDto::Pending)
-    );
-    let retried = accept(&store, session, second_turn, second_run, "second");
-    assert!(retried.events().is_empty());
-    assert_eq!(retried.position(), pending.position());
-    assert_eq!(
-        retried.turn_outcome(),
-        Some(AcceptedTurnOutcomeDto::Pending)
-    );
+    // The freshly created schema is usable end to end.
+    let session = SessionId::new();
+    let workspace_id = WorkspaceId::new();
+    let project_id = ProjectId::new();
+    let root = workspace_root("schema");
+    let projection = store
+        .create_session(CreateSessionInputDto::new(
+            CreateSessionCommandDto::new(
+                project_id,
+                session,
+                workspace_id,
+                root.clone(),
+                RunModeDto::Build,
+            ),
+            time(1),
+        ))
+        .expect("session creates");
+    assert_eq!(projection.project_id(), project_id);
+    assert_eq!(projection.session_id(), session);
+    assert_eq!(projection.workspace_id(), workspace_id);
+    assert_eq!(projection.workspace_root(), &root);
+    assert_eq!(projection.mode(), RunModeDto::Build);
+    assert_eq!(projection.config_revision_id(), None);
+    assert!(projection.active_run().is_none());
+    assert!(projection.pending_turns().is_empty());
+    let run = RunId::new();
+    let (accepted_run, message) = started(accept(
+        &store,
+        session,
+        IdempotencyKey::new(),
+        run,
+        "usable",
+    ));
+    assert_eq!(accepted_run.run_id(), run);
+    assert_eq!(accepted_run.status(), RunStatusDto::Starting);
+    assert_eq!(message.text(), "usable");
     assert_eq!(
         store
-            .accept_user_turn(
-                AcceptUserTurnInputDto::new(
-                    session,
-                    second_turn,
-                    "changed",
-                    second_run,
-                    snapshot(),
-                    time(3)
-                )
-                .expect("turn input is valid"),
-            )
-            .expect_err("changed idempotent content conflicts")
+            .load_session_projection(session)
+            .expect("session projection loads")
+            .active_run()
+            .expect("accepted run is active")
+            .run_id(),
+        run
+    );
+}
+
+#[test]
+fn create_accept_pending_idempotence_and_removal_are_typed_and_durable() {
+    let (directory, store) = repository();
+    let session = create(&store);
+    let first_run = RunId::new();
+    let (_, first_message) = started(accept(
+        &store,
+        session,
+        IdempotencyKey::new(),
+        first_run,
+        "first",
+    ));
+    assert_eq!(first_message.kind(), MessageKindDto::User);
+    assert_eq!(first_message.run_id(), Some(first_run));
+
+    let second_key = IdempotencyKey::new();
+    let second_run = RunId::new();
+    let second = AcceptUserTurnInputDto::new(
+        session,
+        second_key,
+        "second",
+        second_run,
+        snapshot(),
+        time(3),
+    )
+    .expect("queued turn input is valid");
+    let queued = pending(store.accept_user_turn(second.clone()).expect("turn queues"));
+    assert_eq!(queued.content(), "second");
+    assert_eq!(queued.session_id(), session);
+    let replayed = pending(
+        store
+            .accept_user_turn(second.clone())
+            .expect("pending replay is accepted"),
+    );
+    assert_eq!(replayed.turn_id(), queued.turn_id());
+
+    for changed in [
+        AcceptUserTurnInputDto::new(
+            session,
+            second_key,
+            "changed content",
+            second_run,
+            snapshot(),
+            time(4),
+        )
+        .expect("changed content input is valid"),
+        AcceptUserTurnInputDto::new(
+            session,
+            second_key,
+            "second",
+            RunId::new(),
+            snapshot(),
+            time(4),
+        )
+        .expect("changed run input is valid"),
+        AcceptUserTurnInputDto::new(
+            session,
+            second_key,
+            "second",
+            second_run,
+            snapshot_with_revision_and_model(ConfigRevisionId::new(), "fixture-other"),
+            time(4),
+        )
+        .expect("changed revision input is valid"),
+    ] {
+        assert_eq!(
+            store
+                .accept_user_turn(changed)
+                .expect_err("different durable content under one key conflicts")
+                .code(),
+            "turn_idempotency_conflict"
+        );
+    }
+
+    // The queue, the active run, and the committed transcript survive a reopen.
+    drop(store);
+    let reopened = reopen(&directory);
+    let projection = reopened
+        .load_session_projection(session)
+        .expect("session projection loads");
+    assert_eq!(
+        projection
+            .active_run()
+            .expect("the first turn owns the active run")
+            .run_id(),
+        first_run
+    );
+    assert_eq!(projection.pending_turns().len(), 1);
+    assert_eq!(projection.pending_turns()[0].turn_id(), queued.turn_id());
+    assert_eq!(
+        reopened
+            .load_run_messages(session, first_run, 10)
+            .expect("transcript loads")
+            .iter()
+            .map(MessageProjectionDto::text)
+            .collect::<Vec<_>>(),
+        vec!["first"]
+    );
+
+    // Removal commits the removed state and returns the pending projection.
+    let removed = reopened
+        .remove_turn(RemoveTurnInputDto::new(
+            RemoveTurnCommandDto::new(session, queued.turn_id()),
+            time(5),
+        ))
+        .expect("pending turn removes");
+    assert_eq!(removed, queued);
+    assert!(
+        reopened
+            .load_session_projection(session)
+            .expect("session projection loads")
+            .pending_turns()
+            .is_empty()
+    );
+    assert_eq!(
+        reopened
+            .accept_user_turn(second)
+            .expect_err("a removed key stays bound to its durable state")
             .code(),
         "turn_idempotency_conflict"
     );
-    let snapshot_before = store
-        .load_session_snapshot(session)
-        .expect("snapshot loads");
-    assert_eq!(snapshot_before.pending_turns().len(), 1);
-    store
-        .remove_turn(RemoveTurnInputDto::new(
-            RemoveTurnCommandDto::new(session, second_turn),
-            time(4),
-        ))
-        .expect("pending turn removes");
-    let projection = store
-        .load_session_snapshot(session)
-        .expect("snapshot loads");
-    assert!(projection.pending_turns().is_empty());
-    let tail = store
-        .load_tail(session, SessionEventSequenceDto::new(0))
-        .expect("full tail loads");
     assert_eq!(
-        tail.last().expect("tail has events").sequence(),
-        projection.at_sequence()
+        reopened
+            .remove_turn(RemoveTurnInputDto::new(
+                RemoveTurnCommandDto::new(session, queued.turn_id()),
+                time(6),
+            ))
+            .expect_err("a removed turn cannot be removed twice")
+            .code(),
+        "pending_turn_not_found"
+    );
+}
+
+#[test]
+fn turn_idempotency_replay_reports_current_run_status_and_committed_message() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let input = AcceptUserTurnInputDto::new(
+        session,
+        IdempotencyKey::new(),
+        "idempotent",
+        run,
+        snapshot(),
+        time(2),
+    )
+    .expect("turn input is valid");
+    let (_, message) = started(store.accept_user_turn(input.clone()).expect("turn commits"));
+    store
+        .transition_run(TransitionRunInputDto::new(
+            session,
+            run,
+            RunStatusDto::Running,
+            time(3),
+        ))
+        .expect("run starts");
+
+    let (replayed_run, replayed_message) = started(
+        store
+            .accept_user_turn(input)
+            .expect("turn replay is accepted"),
+    );
+    assert_eq!(replayed_run.run_id(), run);
+    assert_eq!(replayed_run.status(), RunStatusDto::Running);
+    assert_eq!(replayed_message, message);
+    assert_eq!(
+        store
+            .load_run_messages(session, run, 10)
+            .expect("transcript loads")
+            .len(),
+        1,
+        "the idempotent replay commits no second transcript row"
     );
 }
 
@@ -395,54 +463,61 @@ fn pending_messages_never_start_runs_and_recovery_interrupts_unfinished_work() {
     let (_directory, store) = repository();
     let session = create(&store);
     let active_run = RunId::new();
-    accept(&store, session, TurnId::new(), active_run, "active");
-    let pending = [(TurnId::new(), RunId::new()), (TurnId::new(), RunId::new())];
-    for (turn_id, run_id) in pending {
-        let change = accept(&store, session, turn_id, run_id, "pending message");
-        assert_eq!(change.turn_outcome(), Some(AcceptedTurnOutcomeDto::Pending));
-    }
+    let _ = accept(&store, session, IdempotencyKey::new(), active_run, "active");
+    let queued_runs = [RunId::new(), RunId::new()];
+    let queued = [
+        pending(accept(
+            &store,
+            session,
+            IdempotencyKey::new(),
+            queued_runs[0],
+            "first pending",
+        )),
+        pending(accept(
+            &store,
+            session,
+            IdempotencyKey::new(),
+            queued_runs[1],
+            "second pending",
+        )),
+    ];
 
     let recovered = store
         .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(time(5)))
-        .expect("recovery interrupts the unfinished run");
+        .expect("recovery commits");
     assert_eq!(recovered.len(), 1);
-    assert_eq!(recovered[0].events().len(), 1);
+    assert_eq!(recovered[0].run_id(), active_run);
+    assert_eq!(recovered[0].status(), RunStatusDto::Interrupted);
     let projection = store
-        .load_session_snapshot(session)
-        .expect("snapshot loads");
+        .load_session_projection(session)
+        .expect("session projection loads");
     assert!(projection.active_run().is_none());
-    assert_eq!(projection.pending_turns().len(), 2);
-    assert_eq!(projection.pending_turns()[0].turn_id(), pending[0].0);
-    assert_eq!(projection.pending_turns()[1].turn_id(), pending[1].0);
-    let tail = store
-        .load_tail(session, SessionEventSequenceDto::new(0))
-        .expect("tail loads");
-    assert!(matches!(
-        tail.last().expect("recovery event exists").payload(),
-        intention_domain::DomainEventDto::RunStatusChanged(event)
-            if event.status() == RunStatusDto::Interrupted
-    ));
+    assert_eq!(projection.pending_turns(), queued.as_slice());
 
     // The next accepted message finds an idle session with pending work: the
     // oldest pending message starts the run and the new message stays pending.
-    let later_turn = TurnId::new();
-    let later = accept(&store, session, later_turn, RunId::new(), "later");
-    assert!(
-        matches!(later.turn_outcome(), Some(AcceptedTurnOutcomeDto::Started(run)) if run.run_id() == pending[0].1)
-    );
+    let (promoted, promoted_message) = started(accept(
+        &store,
+        session,
+        IdempotencyKey::new(),
+        RunId::new(),
+        "later",
+    ));
+    assert_eq!(promoted.run_id(), queued_runs[0]);
+    assert_eq!(promoted.turn_id(), queued[0].turn_id());
+    assert_eq!(promoted.status(), RunStatusDto::Starting);
+    assert_eq!(promoted_message.text(), "first pending");
     let projection = store
-        .load_session_snapshot(session)
-        .expect("post-recovery snapshot loads");
-    assert_eq!(
-        projection
-            .active_run()
-            .expect("oldest pending message starts the run")
-            .run_id(),
-        pending[0].1
-    );
-    assert_eq!(projection.pending_turns().len(), 2);
-    assert_eq!(projection.pending_turns()[0].turn_id(), pending[1].0);
-    assert_eq!(projection.pending_turns()[1].turn_id(), later_turn);
+        .load_session_projection(session)
+        .expect("session projection loads");
+    let ordered = projection
+        .pending_turns()
+        .iter()
+        .map(PendingTurnProjectionDto::turn_id)
+        .collect::<Vec<_>>();
+    assert_eq!(ordered.len(), 2);
+    assert_eq!(ordered[0], queued[1].turn_id());
+    assert_eq!(projection.pending_turns()[1].content(), "later");
 }
 
 #[test]
@@ -451,10 +526,14 @@ fn every_terminal_transition_leaves_pending_messages_pending() {
         let (_directory, store) = repository();
         let session = create(&store);
         let active_run = RunId::new();
-        accept(&store, session, TurnId::new(), active_run, "active");
-        let pending_turn = TurnId::new();
-        let pending_run = RunId::new();
-        accept(&store, session, pending_turn, pending_run, "pending");
+        let _ = accept(&store, session, IdempotencyKey::new(), active_run, "active");
+        let queued = pending(accept(
+            &store,
+            session,
+            IdempotencyKey::new(),
+            RunId::new(),
+            "pending",
+        ));
         store
             .transition_run(TransitionRunInputDto::new(
                 session,
@@ -464,11 +543,11 @@ fn every_terminal_transition_leaves_pending_messages_pending() {
             ))
             .expect("terminal transition commits");
         let projection = store
-            .load_session_snapshot(session)
-            .expect("snapshot loads");
+            .load_session_projection(session)
+            .expect("session projection loads");
         assert!(projection.active_run().is_none());
         assert_eq!(projection.pending_turns().len(), 1);
-        assert_eq!(projection.pending_turns()[0].turn_id(), pending_turn);
+        assert_eq!(projection.pending_turns()[0].turn_id(), queued.turn_id());
         assert_eq!(projection.pending_turns()[0].content(), "pending");
     }
 }
@@ -478,24 +557,25 @@ fn idle_admission_retains_the_oldest_pending_message_selection() {
     let (_directory, store) = repository();
     let session = create(&store);
     let active_run = RunId::new();
-    accept(&store, session, TurnId::new(), active_run, "active");
-    let pending_turn = TurnId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), active_run, "active");
     let pending_run = RunId::new();
     let revision_a = ConfigRevisionId::new();
     let config_a = snapshot_with_revision_and_model(revision_a, "fixture-a");
-    store
-        .accept_user_turn(
-            AcceptUserTurnInputDto::new(
-                session,
-                pending_turn,
-                "pending",
-                pending_run,
-                config_a.clone(),
-                time(3),
+    let queued = pending(
+        store
+            .accept_user_turn(
+                AcceptUserTurnInputDto::new(
+                    session,
+                    IdempotencyKey::new(),
+                    "pending",
+                    pending_run,
+                    config_a.clone(),
+                    time(3),
+                )
+                .expect("pending input is valid"),
             )
-            .expect("pending input is valid"),
-        )
-        .expect("turn becomes pending");
+            .expect("turn becomes pending"),
+    );
     let config_b = snapshot_with_revision_and_model(ConfigRevisionId::new(), "fixture-b");
     store
         .accept_configuration_revision(config_b)
@@ -508,21 +588,636 @@ fn idle_admission_retains_the_oldest_pending_message_selection() {
             time(4),
         ))
         .expect("terminal transition commits");
-    let later = accept(&store, session, TurnId::new(), RunId::new(), "later");
-    assert!(
-        matches!(later.turn_outcome(), Some(AcceptedTurnOutcomeDto::Started(run)) if run.run_id() == pending_run)
-    );
-    let active = store
-        .load_session_snapshot(session)
-        .expect("snapshot loads")
-        .active_run()
-        .expect("oldest pending message starts the run");
-    assert_eq!(active.run_id(), pending_run);
-    assert_eq!(active.turn_id(), pending_turn);
-    assert_eq!(active.config_revision_id(), revision_a);
+
+    let (run, message) = started(accept(
+        &store,
+        session,
+        IdempotencyKey::new(),
+        RunId::new(),
+        "later",
+    ));
+    assert_eq!(run.run_id(), pending_run);
+    assert_eq!(run.turn_id(), queued.turn_id());
+    assert_eq!(run.config_revision_id(), revision_a);
+    assert_eq!(message.text(), "pending");
+    assert_eq!(message.run_id(), Some(pending_run));
     store
         .accept_configuration_revision(config_a)
         .expect("pending snapshot remains canonical and unmodified");
+}
+
+#[test]
+fn pending_messages_keep_insertion_order_and_removal_allows_the_oldest_to_start() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let active_run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), active_run, "active");
+    let queued_runs = [RunId::new(), RunId::new(), RunId::new()];
+    let queued = [
+        pending(accept(
+            &store,
+            session,
+            IdempotencyKey::new(),
+            queued_runs[0],
+            "first pending",
+        )),
+        pending(accept(
+            &store,
+            session,
+            IdempotencyKey::new(),
+            queued_runs[1],
+            "second pending",
+        )),
+        pending(accept(
+            &store,
+            session,
+            IdempotencyKey::new(),
+            queued_runs[2],
+            "third pending",
+        )),
+    ];
+    let projection = store
+        .load_session_projection(session)
+        .expect("session projection loads");
+    assert_eq!(
+        projection
+            .pending_turns()
+            .iter()
+            .map(PendingTurnProjectionDto::turn_id)
+            .collect::<Vec<_>>(),
+        queued
+            .iter()
+            .map(PendingTurnProjectionDto::turn_id)
+            .collect::<Vec<_>>()
+    );
+
+    store
+        .remove_turn(RemoveTurnInputDto::new(
+            RemoveTurnCommandDto::new(session, queued[0].turn_id()),
+            time(3),
+        ))
+        .expect("oldest pending turn removes");
+    store
+        .transition_run(TransitionRunInputDto::new(
+            session,
+            active_run,
+            RunStatusDto::Failed,
+            time(4),
+        ))
+        .expect("terminal transition commits");
+    let (promoted, promoted_message) = started(accept(
+        &store,
+        session,
+        IdempotencyKey::new(),
+        RunId::new(),
+        "later",
+    ));
+    assert_eq!(promoted.run_id(), queued_runs[1]);
+    assert_eq!(promoted.turn_id(), queued[1].turn_id());
+    assert_eq!(promoted_message.text(), "second pending");
+    let projection = store
+        .load_session_projection(session)
+        .expect("session projection loads");
+    assert_eq!(projection.pending_turns().len(), 2);
+    assert_eq!(projection.pending_turns()[0].turn_id(), queued[2].turn_id());
+    assert_eq!(projection.pending_turns()[1].content(), "later");
+}
+
+#[test]
+fn consume_pending_user_turns_appends_ordered_messages_and_marks_turns_appended() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "active");
+    let first_input = AcceptUserTurnInputDto::new(
+        session,
+        IdempotencyKey::new(),
+        "first pending",
+        RunId::new(),
+        snapshot(),
+        time(3),
+    )
+    .expect("first pending input is valid");
+    let first = pending(
+        store
+            .accept_user_turn(first_input.clone())
+            .expect("first turn queues"),
+    );
+    let second = pending(accept(
+        &store,
+        session,
+        IdempotencyKey::new(),
+        RunId::new(),
+        "second pending",
+    ));
+
+    let consumed = store
+        .consume_pending_user_turns(ConsumePendingUserTurnsInputDto::new(session, run, time(4)))
+        .expect("pending turns join the run");
+    assert_eq!(consumed.len(), 2);
+    assert_eq!(consumed[0].text(), "first pending");
+    assert_eq!(consumed[0].run_id(), Some(run));
+    assert_eq!(consumed[0].kind(), MessageKindDto::User);
+    assert_eq!(consumed[1].text(), "second pending");
+    assert_eq!(consumed[1].run_id(), Some(run));
+    assert_eq!(
+        store
+            .load_run_messages(session, run, 10)
+            .expect("run transcript loads")
+            .iter()
+            .map(MessageProjectionDto::text)
+            .collect::<Vec<_>>(),
+        vec!["active", "first pending", "second pending"],
+        "joined messages keep insertion order after the starting turn"
+    );
+    assert!(
+        store
+            .load_session_projection(session)
+            .expect("session projection loads")
+            .pending_turns()
+            .is_empty()
+    );
+    // A joined turn replays as its own pending projection, and a second
+    // consume joins nothing.
+    assert_eq!(
+        pending(
+            store
+                .accept_user_turn(first_input)
+                .expect("a joined turn replays as pending")
+        )
+        .turn_id(),
+        first.turn_id()
+    );
+    assert!(
+        store
+            .consume_pending_user_turns(ConsumePendingUserTurnsInputDto::new(session, run, time(5)))
+            .expect("an empty consume commits")
+            .is_empty()
+    );
+    assert_eq!(second.session_id(), session);
+}
+
+#[test]
+fn append_message_and_transcript_reads_obey_bounds_and_order() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "start");
+    let call_id = ToolCallId::new();
+    let _ = append(
+        &store,
+        MessageProjectionDto::new(
+            session,
+            Some(run),
+            MessageKindDto::Assistant,
+            "answer",
+            Some("why".to_owned()),
+            None,
+            None,
+        )
+        .expect("assistant row is valid"),
+        3,
+    );
+    let _ = append(
+        &store,
+        MessageProjectionDto::new(
+            session,
+            Some(run),
+            MessageKindDto::ToolCall,
+            r#"{"path":"src/lib.rs"}"#,
+            None,
+            Some(call_id),
+            Some("read".to_owned()),
+        )
+        .expect("tool call row is valid"),
+        3,
+    );
+    let _ = append(
+        &store,
+        MessageProjectionDto::new(
+            session,
+            Some(run),
+            MessageKindDto::Notice,
+            "notice",
+            None,
+            None,
+            None,
+        )
+        .expect("notice row is valid"),
+        3,
+    );
+
+    let recent = store
+        .load_recent_messages(session, 2)
+        .expect("recent transcript loads");
+    assert_eq!(
+        recent
+            .iter()
+            .map(MessageProjectionDto::text)
+            .collect::<Vec<_>>(),
+        vec![r#"{"path":"src/lib.rs"}"#, "notice"],
+        "recent rows are the newest rows in insertion order"
+    );
+    let all = store
+        .load_recent_messages(session, 10)
+        .expect("full transcript loads");
+    assert_eq!(all.len(), 4);
+    assert_eq!(all[0].text(), "start");
+    assert_eq!(all[1].reasoning(), Some("why"));
+    assert_eq!(
+        store
+            .load_run_messages(session, run, 10)
+            .expect("run transcript loads")
+            .len(),
+        4
+    );
+    assert_eq!(
+        store
+            .load_recent_messages(session, 0)
+            .expect_err("a zero limit is invalid")
+            .code(),
+        "invalid_message_limit"
+    );
+    assert_eq!(
+        store
+            .load_run_messages(session, run, 0)
+            .expect_err("a zero limit is invalid")
+            .code(),
+        "invalid_message_limit"
+    );
+    assert_eq!(
+        store
+            .load_recent_messages(SessionId::new(), 1)
+            .expect_err("an unknown session is hidden")
+            .code(),
+        "storage_record_not_found"
+    );
+    assert_eq!(
+        store
+            .load_run_messages(session, RunId::new(), 1)
+            .expect_err("an unknown run is hidden")
+            .code(),
+        "storage_record_not_found"
+    );
+    let other = create(&store);
+    assert_eq!(
+        store
+            .load_run_messages(other, run, 1)
+            .expect_err("a cross-session run is hidden")
+            .code(),
+        "storage_record_not_found"
+    );
+    assert_eq!(
+        store
+            .append_message(AppendMessageInputDto::new(
+                MessageProjectionDto::new(
+                    other,
+                    Some(run),
+                    MessageKindDto::User,
+                    "foreign",
+                    None,
+                    None,
+                    None,
+                )
+                .expect("foreign row is valid"),
+                time(5),
+            ))
+            .expect_err("a transcript row cannot address another session's run")
+            .code(),
+        "storage_record_not_found"
+    );
+}
+
+#[test]
+fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
+    let (directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "run");
+    let call_id = ToolCallId::new();
+    let evidence = ToolResultEvidenceDto::new(
+        session,
+        run,
+        call_id,
+        "read",
+        ToolResultStatusDto::Completed,
+        r#"{"result":"read","value":{"text":"hello","truncated":false}}"#,
+        vec![
+            ToolResultMetadataEntryDto::new("truncated", "false")
+                .expect("fixture metadata is valid"),
+        ],
+        time(4),
+    )
+    .expect("tool result evidence is valid");
+    let message = MessageProjectionDto::new(
+        session,
+        Some(run),
+        MessageKindDto::ToolResult,
+        evidence.content(),
+        None,
+        Some(call_id),
+        Some("read".to_owned()),
+    )
+    .expect("answering row is valid");
+    let committed = store
+        .write_tool_result(
+            WriteToolResultInputDto::new(evidence.clone(), message.clone())
+                .expect("evidence and answer match"),
+        )
+        .expect("evidence and its transcript row commit atomically");
+    assert_eq!(committed, evidence);
+    assert_eq!(
+        store
+            .load_tool_result(session, run, call_id)
+            .expect("typed evidence rereads"),
+        evidence
+    );
+    assert!(
+        store
+            .load_run_messages(session, run, 10)
+            .expect("transcript loads")
+            .iter()
+            .any(|row| row.kind() == MessageKindDto::ToolResult
+                && row.tool_call_id() == Some(call_id)
+                && row.text() == evidence.content())
+    );
+    assert_eq!(
+        store
+            .write_tool_result(
+                WriteToolResultInputDto::new(evidence.clone(), message)
+                    .expect("second evidence and answer match")
+            )
+            .expect_err("a second result for one call conflicts")
+            .code(),
+        "tool_result_conflict"
+    );
+    assert_eq!(
+        store
+            .load_tool_result(session, run, ToolCallId::new())
+            .expect_err("an unknown call has no durable evidence")
+            .code(),
+        "tool_result_not_found"
+    );
+    assert_eq!(
+        store
+            .load_tool_result(SessionId::new(), run, call_id)
+            .expect_err("a cross-session identity finds no evidence")
+            .code(),
+        "tool_result_not_found"
+    );
+
+    drop(store);
+    let reopened = reopen(&directory);
+    assert_eq!(
+        reopened
+            .load_tool_result(session, run, call_id)
+            .expect("durable evidence rereads after reopen"),
+        evidence
+    );
+}
+
+#[test]
+fn finish_run_commits_terminal_outcome_and_is_idempotent() {
+    let (directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "run");
+    store
+        .transition_run(TransitionRunInputDto::new(
+            session,
+            run,
+            RunStatusDto::Running,
+            time(3),
+        ))
+        .expect("run starts");
+    let finished = store
+        .finish_run(
+            FinishRunInputDto::new(
+                session,
+                run,
+                RunStatusDto::Completed,
+                Some(UsageDto::reported(2, 3, 5).expect("fixture usage is consistent")),
+                Some(FinishReasonDto::Stop),
+                None,
+                None,
+                time(4),
+            )
+            .expect("terminal outcome is valid"),
+        )
+        .expect("run completes");
+    assert_eq!(finished.status(), RunStatusDto::Completed);
+    assert_eq!(finished.run_id(), run);
+
+    // The same terminal outcome replays idempotently and changes nothing.
+    let replayed = store
+        .finish_run(
+            FinishRunInputDto::new(
+                session,
+                run,
+                RunStatusDto::Completed,
+                None,
+                None,
+                None,
+                None,
+                time(5),
+            )
+            .expect("repeated terminal outcome is valid"),
+        )
+        .expect("repeated terminal outcome is idempotent");
+    assert_eq!(replayed, finished);
+    assert_eq!(
+        store
+            .finish_run(
+                FinishRunInputDto::new(
+                    session,
+                    run,
+                    RunStatusDto::Failed,
+                    None,
+                    None,
+                    Some("provider_failed".to_owned()),
+                    Some("safe failure".to_owned()),
+                    time(6),
+                )
+                .expect("conflicting terminal outcome is valid"),
+            )
+            .expect_err("a completed run cannot become failed")
+            .code(),
+        "invalid_run_status_transition"
+    );
+
+    // A starting run cannot complete without the declared running edge.
+    let second = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), second, "second");
+    assert_eq!(
+        store
+            .finish_run(
+                FinishRunInputDto::new(
+                    session,
+                    second,
+                    RunStatusDto::Completed,
+                    None,
+                    None,
+                    None,
+                    None,
+                    time(6),
+                )
+                .expect("undeclared outcome is structurally valid"),
+            )
+            .expect_err("a starting run cannot complete directly")
+            .code(),
+        "invalid_run_status_transition"
+    );
+
+    drop(store);
+    let reopened = reopen(&directory);
+    let failed_session = create(&reopened);
+    let failed_run = RunId::new();
+    let _ = accept(
+        &reopened,
+        failed_session,
+        IdempotencyKey::new(),
+        failed_run,
+        "failing",
+    );
+    let failed = reopened
+        .finish_run(
+            FinishRunInputDto::new(
+                failed_session,
+                failed_run,
+                RunStatusDto::Failed,
+                Some(UsageDto::NotReported),
+                None,
+                Some("provider_failed".to_owned()),
+                Some("safe failure".to_owned()),
+                time(7),
+            )
+            .expect("failed outcome is valid"),
+        )
+        .expect("failed run commits");
+    assert_eq!(failed.status(), RunStatusDto::Failed);
+
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for inspection");
+    let (usage, reason, finished_at, status): (
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        String,
+    ) = connection
+        .query_row(
+            "SELECT usage_json, finish_reason, finished_at, status FROM runs WHERE id=?1",
+            [run.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("completed run evidence reads");
+    assert!(usage.expect("reported usage persists").contains("reported"));
+    assert_eq!(reason.as_deref(), Some("stop"));
+    assert_eq!(status, "completed");
+    assert!(finished_at.is_some());
+    let (code, message): (Option<String>, Option<String>) = connection
+        .query_row(
+            "SELECT error_code, error_message FROM runs WHERE id=?1",
+            [failed_run.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("failed run evidence reads");
+    assert_eq!(code.as_deref(), Some("provider_failed"));
+    assert_eq!(message.as_deref(), Some("safe failure"));
+}
+
+#[test]
+fn recovery_marks_every_unfinished_run_in_its_own_transaction() {
+    let (_directory, store) = repository();
+    let first_session = create(&store);
+    let second_session = create(&store);
+    let first_run = RunId::new();
+    let _ = accept(
+        &store,
+        first_session,
+        IdempotencyKey::new(),
+        first_run,
+        "first",
+    );
+    let queued = pending(accept(
+        &store,
+        first_session,
+        IdempotencyKey::new(),
+        RunId::new(),
+        "pending",
+    ));
+    let completed_run = RunId::new();
+    let _ = accept(
+        &store,
+        second_session,
+        IdempotencyKey::new(),
+        completed_run,
+        "completed",
+    );
+    store
+        .transition_run(TransitionRunInputDto::new(
+            second_session,
+            completed_run,
+            RunStatusDto::Running,
+            time(3),
+        ))
+        .expect("run starts");
+    store
+        .finish_run(
+            FinishRunInputDto::new(
+                second_session,
+                completed_run,
+                RunStatusDto::Completed,
+                Some(UsageDto::NotReported),
+                Some(FinishReasonDto::Stop),
+                None,
+                None,
+                time(4),
+            )
+            .expect("terminal outcome is valid"),
+        )
+        .expect("run completes");
+    let unfinished_run = RunId::new();
+    let _ = accept(
+        &store,
+        second_session,
+        IdempotencyKey::new(),
+        unfinished_run,
+        "unfinished",
+    );
+
+    let recovered = store
+        .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(time(5)))
+        .expect("recovery commits");
+    let mut recovered_ids = recovered.iter().map(|run| run.run_id()).collect::<Vec<_>>();
+    recovered_ids.sort_unstable();
+    let mut expected = vec![first_run, unfinished_run];
+    expected.sort_unstable();
+    assert_eq!(recovered_ids, expected);
+    assert!(
+        recovered
+            .iter()
+            .all(|run| run.status() == RunStatusDto::Interrupted)
+    );
+    assert_eq!(
+        store
+            .load_run_projection(second_session, completed_run)
+            .expect("completed run loads")
+            .status(),
+        RunStatusDto::Completed,
+        "recovery leaves terminal runs untouched"
+    );
+    let projection = store
+        .load_session_projection(first_session)
+        .expect("session projection loads");
+    assert!(projection.active_run().is_none());
+    assert_eq!(projection.pending_turns(), std::slice::from_ref(&queued));
+    assert!(
+        store
+            .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(time(6)))
+            .expect("a second recovery commits")
+            .is_empty(),
+        "recovery is idempotent once every run is terminal"
+    );
 }
 
 #[test]
@@ -541,6 +1236,8 @@ fn canonical_config_revision_rejects_conflicting_snapshot_without_sensitive_deta
         .accept_configuration_revision(conflicting)
         .expect_err("revision cannot bind a different snapshot");
     assert_eq!(error.code(), "config_revision_conflict");
+    assert_eq!(error.category(), ErrorCategoryDto::Conflict);
+    assert_eq!(error.retry(), ErrorRetryDto::Never);
     assert!(!error.to_string().contains("fixture-secret"));
     assert!(!error.to_string().contains("/tmp/"));
 }
@@ -555,7 +1252,7 @@ fn turn_acceptance_rejects_config_revision_collision() {
         .accept_user_turn(
             AcceptUserTurnInputDto::new(
                 session,
-                TurnId::new(),
+                IdempotencyKey::new(),
                 "first",
                 RunId::new(),
                 original,
@@ -568,7 +1265,7 @@ fn turn_acceptance_rejects_config_revision_collision() {
         .accept_user_turn(
             AcceptUserTurnInputDto::new(
                 session,
-                TurnId::new(),
+                IdempotencyKey::new(),
                 "second",
                 RunId::new(),
                 snapshot_with_revision_and_model(revision, "fixture-b"),
@@ -583,11 +1280,12 @@ fn turn_acceptance_rejects_config_revision_collision() {
 }
 
 #[test]
-fn workspace_identity_cannot_bind_conflicting_roots_and_unknown_tails_fail_typed() {
+fn workspace_identity_cannot_bind_conflicting_roots_and_unknown_projections_fail_typed() {
     let (_directory, store) = repository();
     let workspace_id = WorkspaceId::new();
     let root = workspace_root("canonical");
-    for session in [SessionId::new(), SessionId::new()] {
+    let first_session = SessionId::new();
+    for session in [first_session, SessionId::new()] {
         store
             .create_session(CreateSessionInputDto::new(
                 CreateSessionCommandDto::new(
@@ -601,23 +1299,47 @@ fn workspace_identity_cannot_bind_conflicting_roots_and_unknown_tails_fail_typed
             ))
             .expect("same workspace identity and root remain canonical");
     }
-    let conflict = store
-        .create_session(CreateSessionInputDto::new(
-            CreateSessionCommandDto::new(
-                ProjectId::new(),
-                SessionId::new(),
-                workspace_id,
-                workspace_root("conflict"),
-                RunModeDto::Build,
-            ),
-            time(2),
-        ))
-        .expect_err("workspace identity cannot bind a different root");
-    assert_eq!(conflict.code(), "workspace_root_conflict");
+    let command = CreateSessionCommandDto::new(
+        ProjectId::new(),
+        first_session,
+        workspace_id,
+        root,
+        RunModeDto::Build,
+    );
     assert_eq!(
         store
-            .load_tail(SessionId::new(), SessionEventSequenceDto::new(0))
-            .expect_err("unknown tail is typed not-found")
+            .create_session(CreateSessionInputDto::new(command, time(1)))
+            .expect_err("a durable session identity is created once")
+            .code(),
+        "session_already_exists"
+    );
+    assert_eq!(
+        store
+            .create_session(CreateSessionInputDto::new(
+                CreateSessionCommandDto::new(
+                    ProjectId::new(),
+                    SessionId::new(),
+                    workspace_id,
+                    workspace_root("conflict"),
+                    RunModeDto::Build,
+                ),
+                time(2),
+            ))
+            .expect_err("workspace identity cannot bind a different root")
+            .code(),
+        "workspace_root_conflict"
+    );
+    assert_eq!(
+        store
+            .load_session_projection(SessionId::new())
+            .expect_err("an unknown session projection is typed not-found")
+            .code(),
+        "storage_record_not_found"
+    );
+    assert_eq!(
+        store
+            .load_run_projection(SessionId::new(), RunId::new())
+            .expect_err("an unknown run projection is typed not-found")
             .code(),
         "storage_record_not_found"
     );
@@ -657,62 +1379,77 @@ fn second_workspace_identity_over_one_root_is_a_typed_conflict() {
 }
 
 #[test]
-fn reused_turn_identity_across_sessions_is_a_typed_conflict() {
+fn reused_run_identity_across_sessions_is_a_typed_conflict() {
     let (_directory, store) = repository();
     let first = create(&store);
-    let turn = TurnId::new();
     let run = RunId::new();
-    accept(&store, first, turn, run, "first");
-    let second = SessionId::new();
-    store
-        .create_session(CreateSessionInputDto::new(
-            CreateSessionCommandDto::new(
-                ProjectId::new(),
-                second,
-                WorkspaceId::new(),
-                workspace_root("storage-contract-second"),
-                RunModeDto::Build,
-            ),
-            time(1),
-        ))
-        .expect("the second session creates");
+    let _ = accept(&store, first, IdempotencyKey::new(), run, "first");
+    let second = create(&store);
     let started_conflict = store
         .accept_user_turn(
-            AcceptUserTurnInputDto::new(second, turn, "second", run, snapshot(), time(2))
-                .expect("turn input is valid"),
+            AcceptUserTurnInputDto::new(
+                second,
+                IdempotencyKey::new(),
+                "second",
+                run,
+                snapshot(),
+                time(2),
+            )
+            .expect("turn input is valid"),
         )
-        .expect_err("the turn identity is already durable in another session");
+        .expect_err("the run identity is already durable in another session");
     assert_eq!(started_conflict.code(), "turn_identity_conflict");
     assert_eq!(started_conflict.category(), ErrorCategoryDto::Conflict);
+    assert_eq!(started_conflict.retry(), ErrorRetryDto::Never);
     // With an active run in the second session the reused identity would take
     // the queued path; it is rejected before that insert as well.
-    accept(&store, second, TurnId::new(), RunId::new(), "own turn");
+    let _ = accept(
+        &store,
+        second,
+        IdempotencyKey::new(),
+        RunId::new(),
+        "own turn",
+    );
     let queued_conflict = store
         .accept_user_turn(
-            AcceptUserTurnInputDto::new(second, turn, "queued second", run, snapshot(), time(3))
-                .expect("turn input is valid"),
+            AcceptUserTurnInputDto::new(
+                second,
+                IdempotencyKey::new(),
+                "queued second",
+                run,
+                snapshot(),
+                time(3),
+            )
+            .expect("turn input is valid"),
         )
-        .expect_err("the turn identity stays rejected for a queued turn");
+        .expect_err("the run identity stays rejected for a queued turn");
     assert_eq!(queued_conflict.code(), "turn_identity_conflict");
-    assert_eq!(queued_conflict.retry(), ErrorRetryDto::Never);
-}
-
-#[test]
-fn future_tail_positions_fail_before_sqlite_integer_conversion() {
-    let (_directory, store) = repository();
-    let session = create(&store);
-    for position in [
-        SessionEventSequenceDto::new(2),
-        SessionEventSequenceDto::new(u64::MAX),
-    ] {
-        assert_eq!(
-            store
-                .load_tail(session, position)
-                .expect_err("future cursor is rejected before a history query")
-                .code(),
-            "invalid_event_tail_position"
-        );
-    }
+    // A pending turn's own proposed run identity is equally reserved.
+    let reserved_run = RunId::new();
+    let _ = pending(accept(
+        &store,
+        second,
+        IdempotencyKey::new(),
+        reserved_run,
+        "pending",
+    ));
+    assert_eq!(
+        store
+            .accept_user_turn(
+                AcceptUserTurnInputDto::new(
+                    second,
+                    IdempotencyKey::new(),
+                    "duplicate identity",
+                    reserved_run,
+                    snapshot(),
+                    time(4),
+                )
+                .expect("turn input is valid"),
+            )
+            .expect_err("a reserved proposed run identity cannot be reused")
+            .code(),
+        "turn_identity_conflict"
+    );
 }
 
 #[test]
@@ -720,7 +1457,7 @@ fn undeclared_terminal_successors_are_rejected() {
     let (_directory, store) = repository();
     let session = create(&store);
     let run = RunId::new();
-    accept(&store, session, TurnId::new(), run, "active");
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "active");
     assert_eq!(
         store
             .transition_run(TransitionRunInputDto::new(
@@ -729,623 +1466,43 @@ fn undeclared_terminal_successors_are_rejected() {
                 RunStatusDto::Completed,
                 time(3),
             ))
-            .expect_err("a starting run skips the completing state")
+            .expect_err("a starting run skips the running state")
             .code(),
         "invalid_run_status_transition"
     );
-}
-
-#[test]
-fn an_inactive_session_admits_the_oldest_pending_message() {
-    let (directory, store) = repository();
-    let session = create(&store);
-    let active_run = RunId::new();
-    accept(&store, session, TurnId::new(), active_run, "active");
-    let pending_turn = TurnId::new();
-    let pending_run = RunId::new();
-    accept(
-        &store,
-        session,
-        pending_turn,
-        pending_run,
-        "pending message",
-    );
-    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
-        .expect("fixture database reopens");
-    connection
-        .execute(
-            "UPDATE runs SET status='interrupted' WHERE run_id=?1",
-            [active_run.to_string()],
-        )
-        .expect("fixture simulates an idle session with pending work");
-    drop(connection);
-    let later_turn = TurnId::new();
-    let change = accept(&store, session, later_turn, RunId::new(), "later");
-    assert!(
-        matches!(change.turn_outcome(), Some(AcceptedTurnOutcomeDto::Started(run)) if run.run_id() == pending_run && run.turn_id() == pending_turn)
-    );
-    let projection = store
-        .load_session_snapshot(session)
-        .expect("snapshot loads");
-    assert_eq!(
-        projection
-            .active_run()
-            .expect("oldest pending message starts the run")
-            .run_id(),
-        pending_run
-    );
-    assert_eq!(projection.pending_turns().len(), 1);
-    assert_eq!(projection.pending_turns()[0].turn_id(), later_turn);
-}
-
-#[test]
-fn pending_messages_keep_insertion_order_and_removal_allows_the_oldest_to_start() {
-    let (_directory, store) = repository();
-    let session = create(&store);
-    let active_run = RunId::new();
-    accept(&store, session, TurnId::new(), active_run, "active");
-    let pending = [
-        (TurnId::new(), RunId::new()),
-        (TurnId::new(), RunId::new()),
-        (TurnId::new(), RunId::new()),
-    ];
-    for (turn, run) in pending {
-        let change = accept(&store, session, turn, run, "pending message");
-        assert_eq!(change.turn_outcome(), Some(AcceptedTurnOutcomeDto::Pending));
-    }
-    let projection = store
-        .load_session_snapshot(session)
-        .expect("snapshot loads");
-    let ordered = projection
-        .pending_turns()
-        .iter()
-        .map(intention_domain::PendingTurnProjectionDto::turn_id)
-        .collect::<Vec<_>>();
-    assert_eq!(ordered, vec![pending[0].0, pending[1].0, pending[2].0]);
-
-    store
-        .remove_turn(RemoveTurnInputDto::new(
-            RemoveTurnCommandDto::new(session, pending[0].0),
-            time(3),
-        ))
-        .expect("oldest pending turn removes");
     store
         .transition_run(TransitionRunInputDto::new(
             session,
-            active_run,
-            RunStatusDto::Failed,
-            time(4),
+            run,
+            RunStatusDto::Running,
+            time(3),
         ))
-        .expect("terminal transition commits");
-    let later_turn = TurnId::new();
-    let later = accept(&store, session, later_turn, RunId::new(), "later");
-    assert!(
-        matches!(later.turn_outcome(), Some(AcceptedTurnOutcomeDto::Started(run)) if run.run_id() == pending[1].1)
-    );
-    let projection = store
-        .load_session_snapshot(session)
-        .expect("snapshot loads");
-    assert_eq!(
-        projection
-            .active_run()
-            .expect("oldest remaining pending turn starts the run")
-            .run_id(),
-        pending[1].1
-    );
-    let ordered = projection
-        .pending_turns()
-        .iter()
-        .map(intention_domain::PendingTurnProjectionDto::turn_id)
-        .collect::<Vec<_>>();
-    assert_eq!(ordered, vec![pending[2].0, later_turn]);
-}
-
-#[test]
-fn current_storage_schema_is_created_completely_and_remains_authoritative() {
-    let directory = TempDir::new().expect("temporary directory exists");
-    let path = directory.path().join("storage.sqlite");
-    let store = SqliteStorageRepository::open(
-        SqliteDatabaseLocationDto::new(path.to_string_lossy().into_owned()).expect("absolute path"),
-    )
-    .expect("database opens");
-    // The complete current schema is created directly on open: every table and
-    // explicit index exists exactly once, with no legacy or duplicate objects.
-    let connection = sqlite::Connection::open(path).expect("database reopens");
-    let expected_tables = [
-        // M3/M4 base tables.
-        "projects",
-        "workspace_roots",
-        "sessions",
-        "turns",
-        "runs",
-        "configuration_revisions",
-        "domain_events",
-        "session_snapshots",
-        "run_snapshots",
-        "container_journals",
-        "model_run_facts",
-        "model_run_snapshots",
-        "tool_results",
-    ];
-    let table_count: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("table count reads");
-    assert_eq!(
-        table_count,
-        expected_tables.len() as i64,
-        "exactly the current tables exist, no legacy tables"
-    );
-    for table in expected_tables {
-        let present: i64 = connection
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
-                [table],
-                |row| row.get(0),
-            )
-            .expect("table lookup");
-        assert_eq!(present, 1, "table {table} must be created exactly once");
-    }
-    let expected_indexes = ["one_active_run_per_session"];
-    for index in expected_indexes {
-        let present: i64 = connection
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1",
-                [index],
-                |row| row.get(0),
-            )
-            .expect("index lookup");
-        assert_eq!(present, 1, "index {index} must be created exactly once");
-    }
-    // The queue is gone in place: neither its table nor its ticket columns
-    // exist under the single live schema.
-    for (table, column) in [("turns", "queue_ticket"), ("sessions", "next_queue_ticket")] {
-        let present: i64 = connection
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name=?2",
-                sqlite::params![table, column],
-                |row| row.get(0),
-            )
-            .expect("column lookup");
-        assert_eq!(present, 0, "removed column {table}.{column} must be absent");
-    }
-    // The freshly created schema is usable end to end.
-    let session = create(&store);
-    let run = RunId::new();
-    accept(&store, session, TurnId::new(), run, "usable");
-    assert_eq!(
-        store
-            .load_session_snapshot(session)
-            .expect("session snapshot loads")
-            .active_run()
-            .expect("accepted run is active")
-            .run_id(),
-        run
-    );
-}
-
-#[test]
-fn completed_result_evidence_is_durable_across_reopen_with_redacted_payload() {
-    let (directory, store) = repository();
-    let session = create(&store);
-    let run = RunId::new();
-    accept(&store, session, TurnId::new(), run, "run");
-    // Commit the exact terminal lifecycle evidence the application pipeline
-    // writes for one successful invocation: admitted, started, completed.
-    let call = intention_types::ToolCallId::new();
-    for (index, (status, detail)) in [
-        (
-            ToolLifecycleStatusDto::Admitted,
-            "local tool invocation admitted",
-        ),
-        (
-            ToolLifecycleStatusDto::Started,
-            "local tool invocation started",
-        ),
-        (
-            ToolLifecycleStatusDto::Completed,
-            "local tool invocation completed",
-        ),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let appended = store
-            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
-                ToolLifecycleEventDto::new(session, run, call, "read", status, detail, time(3))
-                    .expect("pipeline lifecycle event is valid"),
-            ))
-            .expect("pipeline lifecycle commit succeeds");
-        assert_eq!(appended.sequence().value(), 4 + index as u64);
-    }
-
-    // A restart drops the handle and reopens the exact durable location.
-    drop(store);
-    let reopened = SqliteStorageRepository::open(
-        SqliteDatabaseLocationDto::new(
-            directory
-                .path()
-                .join("storage.sqlite")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("reopened location is absolute"),
-    )
-    .expect("durable database reopens after restart");
-
-    let tail = reopened
-        .load_tail(session, SessionEventSequenceDto::new(0))
-        .expect("durable tail reloads after reopen");
-    let lifecycle = tail
-        .iter()
-        .filter_map(|event| match event.payload() {
-            DomainEventDto::ToolLifecycle(item) => Some(item),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(lifecycle.len(), 3);
-    assert_eq!(lifecycle[0].status(), &ToolLifecycleStatusDto::Admitted);
-    assert_eq!(lifecycle[0].detail(), "local tool invocation admitted");
-    assert_eq!(lifecycle[1].status(), &ToolLifecycleStatusDto::Started);
-    assert_eq!(lifecycle[1].detail(), "local tool invocation started");
-    assert_eq!(lifecycle[2].status(), &ToolLifecycleStatusDto::Completed);
-    assert_eq!(lifecycle[2].detail(), "local tool invocation completed");
-    assert!(lifecycle.iter().all(|item| {
-        item.session_id() == session && item.run_id() == run && item.call_id() == call
-    }));
-
-    // The terminal commit refreshed the session snapshot in its transaction.
-    let projection = reopened
-        .load_session_snapshot(session)
-        .expect("recovered session snapshot loads");
-    assert_eq!(
-        projection.at_sequence(),
-        tail.last().expect("tail has events").sequence()
-    );
-
-    // The reopened terminal evidence round-trips without secret or root-path
-    // material in its durable payload.
-    let terminal = tail.last().expect("terminal envelope is durable");
-    let encoded = serde_json::to_string(terminal).expect("terminal evidence serializes");
-    let decoded: intention_types::EventEnvelopeDto<DomainEventDto> =
-        serde_json::from_str(&encoded).expect("terminal evidence round-trips");
-    assert_eq!(&decoded, terminal);
-    assert!(!encoded.contains("credential"));
-    assert!(!encoded.contains("fixture-secret"));
-    let fixture_root = std::env::temp_dir()
-        .join("intention-storage-sqlite-contracts")
-        .join("storage-contract");
-    assert!(!encoded.contains(fixture_root.to_string_lossy().as_ref()));
-
-    // The durable terminal guard survives the restart: a completed call can
-    // never be re-driven to another terminal state after recovery.
-    let late = ToolLifecycleEventDto::new(
-        session,
-        run,
-        call,
-        "read",
-        ToolLifecycleStatusDto::Failed,
-        "late failure after completion",
-        time(4),
-    )
-    .expect("late event is valid");
-    assert_eq!(
-        reopened
-            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(late))
-            .expect_err("terminal guard survives the restart")
-            .code(),
-        "invalid_tool_lifecycle_transition"
-    );
-
-    // Recovery leaves the store writable at the correct next sequence for a
-    // fresh invocation.
-    let next_call = intention_types::ToolCallId::new();
-    let next = reopened
-        .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
-            ToolLifecycleEventDto::new(
+        .expect("run starts");
+    store
+        .finish_run(
+            FinishRunInputDto::new(
                 session,
                 run,
-                next_call,
-                "read",
-                ToolLifecycleStatusDto::Admitted,
-                "local tool invocation admitted",
-                time(5),
+                RunStatusDto::Completed,
+                Some(UsageDto::NotReported),
+                Some(FinishReasonDto::Stop),
+                None,
+                None,
+                time(4),
             )
-            .expect("next invocation event is valid"),
-        ))
-        .expect("a fresh invocation admits after recovery");
-    assert_eq!(next.sequence().value(), 7);
-}
-
-#[test]
-fn tool_result_evidence_commits_with_its_lifecycle_event_and_rereads_durably() {
-    let (directory, store) = repository();
-    let session = create(&store);
-    let run = RunId::new();
-    accept(&store, session, TurnId::new(), run, "run");
-    let call = intention_types::ToolCallId::new();
-    let admitted = ToolLifecycleEventDto::new(
-        session,
-        run,
-        call,
-        "read",
-        ToolLifecycleStatusDto::Admitted,
-        "admitted",
-        time(3),
-    )
-    .expect("tool event is valid");
-    store
-        .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(admitted))
-        .expect("admitted event commits without evidence");
-    let started = ToolLifecycleEventDto::new(
-        session,
-        run,
-        call,
-        "read",
-        ToolLifecycleStatusDto::Started,
-        "started",
-        time(3),
-    )
-    .expect("tool event is valid");
-    store
-        .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(started))
-        .expect("started event commits without evidence");
-    let evidence = ToolResultEvidenceDto::new(
-        session,
-        run,
-        call,
-        ToolResultKindDto::Read,
-        r#"{"result":"read","value":{"text":"hello","truncated":false}}"#,
-        time(4),
-    )
-    .expect("tool result evidence is valid");
-    let completed = ToolLifecycleEventDto::new(
-        session,
-        run,
-        call,
-        "read",
-        ToolLifecycleStatusDto::Completed,
-        "completed",
-        time(4),
-    )
-    .expect("tool event is valid");
-    let committed = store
-        .append_tool_lifecycle_event(
-            AppendToolLifecycleEventInputDto::new(completed)
-                .with_result(evidence.clone())
-                .expect("terminal evidence attaches"),
+            .expect("terminal outcome is valid"),
         )
-        .expect("terminal event and evidence commit atomically");
-    assert_eq!(committed.sequence().value(), 6);
-    assert!(
-        matches!(committed.payload(), DomainEventDto::ToolLifecycle(value) if value.status() == &ToolLifecycleStatusDto::Completed)
-    );
+        .expect("run completes");
     assert_eq!(
         store
-            .load_tool_result(session, run, call)
-            .expect("typed evidence rereads"),
-        evidence
-    );
-    let projection = store
-        .load_session_snapshot(session)
-        .expect("snapshot stays coherent with the commit");
-    assert_eq!(projection.at_sequence().value(), 6);
-    drop(store);
-    let reopened = SqliteStorageRepository::open(
-        SqliteDatabaseLocationDto::new(
-            directory
-                .path()
-                .join("storage.sqlite")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("temp location is absolute"),
-    )
-    .expect("database reopens");
-    assert_eq!(
-        reopened
-            .load_tool_result(session, run, call)
-            .expect("durable evidence rereads after reopen"),
-        evidence
-    );
-}
-
-#[test]
-fn terminal_tool_lifecycle_rejects_mismatched_typed_result_evidence() {
-    let (_directory, store) = repository();
-    let session = create(&store);
-    let run = RunId::new();
-    accept(&store, session, TurnId::new(), run, "run");
-    let call = intention_types::ToolCallId::new();
-    for status in [
-        ToolLifecycleStatusDto::Admitted,
-        ToolLifecycleStatusDto::Started,
-    ] {
-        store
-            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
-                ToolLifecycleEventDto::new(session, run, call, "read", status, "phase", time(3))
-                    .expect("lifecycle event is valid"),
+            .transition_run(TransitionRunInputDto::new(
+                session,
+                run,
+                RunStatusDto::Running,
+                time(5),
             ))
-            .expect("non-terminal lifecycle event commits");
-    }
-    let terminal = ToolLifecycleEventDto::new(
-        session,
-        run,
-        call,
-        "read",
-        ToolLifecycleStatusDto::Completed,
-        "completed",
-        time(4),
-    )
-    .expect("terminal event is valid");
-    let evidence = ToolResultEvidenceDto::new(
-        session,
-        run,
-        intention_types::ToolCallId::new(),
-        ToolResultKindDto::Read,
-        r#"{"result":"read"}"#,
-        time(4),
-    )
-    .expect("mismatched evidence is structurally valid");
-    assert_eq!(
-        AppendToolLifecycleEventInputDto::new(terminal)
-            .with_result(evidence)
-            .expect_err("mismatched evidence is rejected at attachment")
+            .expect_err("a terminal status accepts no successor")
             .code(),
-        "invalid_tool_result"
-    );
-    assert_eq!(
-        store
-            .load_tail(session, SessionEventSequenceDto::new(0))
-            .expect("tail loads")
-            .len(),
-        5
-    );
-}
-
-#[test]
-fn tool_result_reread_is_typed_not_found_without_durably_committed_evidence() {
-    let (_directory, store) = repository();
-    let session = create(&store);
-    let run = RunId::new();
-    accept(&store, session, TurnId::new(), run, "run");
-    let call = intention_types::ToolCallId::new();
-    for status in [
-        ToolLifecycleStatusDto::Admitted,
-        ToolLifecycleStatusDto::Started,
-    ] {
-        let event =
-            ToolLifecycleEventDto::new(session, run, call, "read", status, "phase", time(3))
-                .expect("tool event is valid");
-        store
-            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(event))
-            .expect("non-terminal event commits without evidence");
-    }
-    assert_eq!(
-        store
-            .load_tool_result(session, run, call)
-            .expect_err("no evidence was durably committed")
-            .code(),
-        "tool_result_not_found"
-    );
-    assert_eq!(
-        store
-            .load_tool_result(SessionId::new(), run, call)
-            .expect_err("cross-session identity finds no evidence")
-            .code(),
-        "tool_result_not_found"
-    );
-}
-
-/// Reopens the durable fixture database at the exact repository location.
-fn reopen(directory: &TempDir) -> SqliteStorageRepository {
-    SqliteStorageRepository::open(
-        SqliteDatabaseLocationDto::new(
-            directory
-                .path()
-                .join("storage.sqlite")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("reopened location is absolute"),
-    )
-    .expect("database reopens")
-}
-
-#[test]
-fn idempotent_turn_replies_use_current_durable_state() {
-    let (directory, store) = repository();
-    let session_id = create(&store);
-    let run_one = RunId::new();
-    let turn_one = TurnId::new();
-    let input = AcceptUserTurnInputDto::new(
-        session_id,
-        turn_one,
-        "first run",
-        run_one,
-        snapshot_with_revision_and_model(ConfigRevisionId::new(), "fixture-model"),
-        time(2),
-    )
-    .expect("turn input is valid");
-    store.accept_user_turn(input.clone()).expect("turn commits");
-    // A pending second turn is retried before and after removal.
-    let run_two = RunId::new();
-    let turn_two = TurnId::new();
-    let pending = AcceptUserTurnInputDto::new(
-        session_id,
-        turn_two,
-        "pending second message",
-        run_two,
-        snapshot_with_revision_and_model(ConfigRevisionId::new(), "fixture-model"),
-        time(3),
-    )
-    .expect("turn input is valid");
-    store
-        .accept_user_turn(pending.clone())
-        .expect("turn becomes pending");
-    // Retry while the pending message is still unseen reports Pending.
-    assert!(
-        matches!(
-            store
-                .accept_user_turn(pending.clone())
-                .expect("pending retry is accepted")
-                .turn_outcome(),
-            Some(AcceptedTurnOutcomeDto::Pending)
-        ),
-        "an existing pending message reports its pending outcome"
-    );
-    // Removing the unseen pending message drops its durable row; a later retry
-    // of the same identity is a fresh acceptance of the same message.
-    store
-        .remove_turn(RemoveTurnInputDto::new(
-            RemoveTurnCommandDto::new(session_id, turn_two),
-            time(4),
-        ))
-        .expect("pending turn removes");
-    assert!(
-        matches!(
-            store
-                .accept_user_turn(pending)
-                .expect("a removed pending message can be accepted again")
-                .turn_outcome(),
-            Some(AcceptedTurnOutcomeDto::Pending)
-        ),
-        "the re-accepted message is pending again"
-    );
-    // Retry of a started turn reports the run's actual durable status, not a
-    // hardcoded Starting projection.
-    store
-        .transition_run(TransitionRunInputDto::new(
-            session_id,
-            run_one,
-            RunStatusDto::Running,
-            time(5),
-        ))
-        .expect("run transitions to running");
-    let retried = store
-        .accept_user_turn(input)
-        .expect("started turn retry is accepted");
-    assert!(
-        matches!(
-            retried.turn_outcome(),
-            Some(AcceptedTurnOutcomeDto::Started(run))
-                if run.status() == RunStatusDto::Running && run.run_id() == run_one
-        ),
-        "the idempotent reply reflects the current running status"
-    );
-    // The retried outcome projection is durable and coherent after reopen.
-    drop(store);
-    let reopened = reopen(&directory);
-    let snapshot = reopened
-        .load_session_snapshot(session_id)
-        .expect("session snapshot loads");
-    assert!(
-        snapshot
-            .active_run()
-            .is_some_and(|run| run.run_id() == run_one),
-        "the reopened projection still owns the running run"
+        "invalid_run_status_transition"
     );
 }

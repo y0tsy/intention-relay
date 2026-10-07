@@ -1,23 +1,35 @@
 #![allow(
     clippy::expect_used,
-    reason = "M3 contract fixtures use expect for precise test diagnostics."
+    reason = "Storage contract fixtures use expect for precise test diagnostics."
 )]
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
-    CreateSessionCommandDto, RunModeDto, RunStatusDto, ToolLifecycleEventDto,
-    ToolLifecycleStatusDto, WorkspaceRootDto,
+    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
+    RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto, ToolResultMetadataEntryDto,
+    ToolResultStatusDto, WorkspaceRootDto,
 };
 use intention_storage::{
-    AcceptUserTurnInputDto, AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto,
-    AppendToolLifecycleEventInputDto, CommittedChangeDto, CreateSessionInputDto,
-    ModelContextMessageDto, ModelContextRoleDto, RecoverUnfinishedRunsInputDto, RemoveTurnInputDto,
-    StartingRunModelContextDto, StorageRepositoryDto, ToolResultEvidenceDto, ToolResultKindDto,
-    TransitionRunInputDto,
+    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,
+    ConsumePendingUserTurnsInputDto, CreateSessionInputDto, FinishRunInputDto,
+    RecoverUnfinishedRunsInputDto, RemoveTurnInputDto, StartingRunModelContextDto,
+    ToolResultEvidenceDto, TransitionRunInputDto, WriteToolResultInputDto,
 };
 use intention_types::{
-    ConfigRevisionId, ProjectId, RunId, SessionId, TimestampDto, TurnId, WorkspaceId,
+    ConfigRevisionId, ErrorCategoryDto, FinishReasonDto, IdempotencyKey, ProjectId, RunId,
+    SessionId, TimestampDto, ToolCallId, TurnId, UsageDto, WorkspaceId,
 };
+
+fn time(value: i64) -> TimestampDto {
+    TimestampDto::from_unix_seconds(value).expect("fixture time is valid")
+}
+
+fn snapshot() -> ConfigSnapshotDto {
+    serde_json::from_str(include_str!(
+        "../../intention-config/tests/fixtures/config-snapshot-v1.json"
+    ))
+    .expect("safe config snapshot decodes")
+}
 
 fn workspace_root() -> WorkspaceRootDto {
     WorkspaceRootDto::parse(
@@ -29,583 +41,468 @@ fn workspace_root() -> WorkspaceRootDto {
     .expect("native fixture workspace is valid")
 }
 
-#[test]
-fn storage_input_and_commit_evidence_reject_invalid_boundaries() {
-    let time = TimestampDto::from_unix_seconds(1).expect("fixture time is valid");
-    let session_id = SessionId::new();
-    let snapshot: ConfigSnapshotDto = serde_json::from_str(include_str!(
-        "../../intention-config/tests/fixtures/config-snapshot-v1.json"
-    ))
-    .expect("safe config snapshot decodes");
-    assert!(
-        AcceptUserTurnInputDto::new(session_id, TurnId::new(), " ", RunId::new(), snapshot, time,)
-            .is_err()
-    );
-
-    let projection = intention_domain::SessionProjectionDto::new(
-        ProjectId::new(),
+fn user_message(session_id: SessionId, run_id: RunId, text: &str) -> MessageProjectionDto {
+    MessageProjectionDto::new(
         session_id,
-        WorkspaceId::new(),
-        workspace_root(),
-        RunModeDto::Build,
+        Some(run_id),
+        MessageKindDto::User,
+        text,
         None,
         None,
-        Vec::new(),
-        intention_types::SessionEventSequenceDto::new(0),
+        None,
     )
-    .expect("projection is coherent");
-    assert!(
-        intention_storage::CommittedChangeDto::new(
-            projection,
-            intention_types::SessionEventSequenceDto::new(0),
-            vec![intention_types::EventEnvelopeDto::new(
-                intention_types::EventMetadataDto::new(
-                    intention_types::SchemaVersionDto::new(1, 0),
-                    intention_types::EventId::new(),
-                    session_id,
-                    None,
-                    None,
-                    intention_types::SessionEventSequenceDto::new(1),
-                    time,
-                ),
-                intention_domain::DomainEventDto::RunStatusChanged(
-                    intention_domain::RunStatusChangedEventDto::new(
-                        session_id,
-                        RunId::new(),
-                        RunStatusDto::Running,
-                        time,
-                    ),
-                ),
-            )],
-            None,
-        )
-        .is_err()
-    );
+    .expect("fixture user row is valid")
+}
+
+fn evidence(session_id: SessionId, run_id: RunId, call_id: ToolCallId) -> ToolResultEvidenceDto {
+    ToolResultEvidenceDto::new(
+        session_id,
+        run_id,
+        call_id,
+        "read",
+        ToolResultStatusDto::Completed,
+        r#"{"result":"read"}"#,
+        vec![ToolResultMetadataEntryDto::new("truncated", "false").expect("metadata is valid")],
+        time(3),
+    )
+    .expect("fixture evidence is valid")
 }
 
 #[test]
-fn repository_contracts_supply_ids_timestamps_and_config_revisions_for_all_mutating_paths() {
-    let time = TimestampDto::from_unix_seconds(1).expect("fixture time is valid");
+fn create_and_turn_inputs_expose_their_typed_fields() {
+    let created_at = time(1);
     let session_id = SessionId::new();
-    let create = CreateSessionInputDto::new(
-        CreateSessionCommandDto::new(
-            ProjectId::new(),
-            session_id,
-            WorkspaceId::new(),
-            workspace_root(),
-            RunModeDto::Build,
-        ),
-        time,
+    let workspace_id = WorkspaceId::new();
+    let project_id = ProjectId::new();
+    let command = CreateSessionCommandDto::new(
+        project_id,
+        session_id,
+        workspace_id,
+        workspace_root(),
+        RunModeDto::Build,
     );
-    assert_eq!(create.occurred_at(), time);
-    let snapshot: ConfigSnapshotDto = serde_json::from_str(include_str!(
-        "../../intention-config/tests/fixtures/config-snapshot-v1.json"
-    ))
-    .expect("safe config snapshot decodes");
+    assert_eq!(command.project_id(), project_id);
+    assert_eq!(command.session_id(), session_id);
+    assert_eq!(command.workspace_id(), workspace_id);
+    assert_eq!(command.workspace_root(), &workspace_root());
+    assert_eq!(command.mode(), RunModeDto::Build);
+    let create = CreateSessionInputDto::new(command, created_at);
+    assert_eq!(create.command().session_id(), session_id);
+    assert_eq!(create.occurred_at(), created_at);
+
+    let snapshot = snapshot();
+    let key = IdempotencyKey::new();
+    let run_id = RunId::new();
     let turn = AcceptUserTurnInputDto::new(
         session_id,
-        TurnId::new(),
+        key,
         "hello",
-        RunId::new(),
-        snapshot,
-        time,
+        run_id,
+        snapshot.clone(),
+        created_at,
     )
     .expect("turn input is valid");
-    assert_eq!(turn.occurred_at(), time);
+    assert_eq!(turn.session_id(), session_id);
+    assert_eq!(turn.idempotency_key(), key);
+    assert_eq!(turn.content(), "hello");
+    assert_eq!(turn.proposed_run_id(), run_id);
+    assert_eq!(turn.config_snapshot(), &snapshot);
+    assert_eq!(turn.config_revision_id(), snapshot.revision_id());
+    assert_eq!(turn.occurred_at(), created_at);
     assert_eq!(
         turn.config_revision_id(),
         ConfigRevisionId::parse("44444444-4444-4444-8444-444444444444")
             .expect("fixture id is valid")
     );
-    let transition =
-        TransitionRunInputDto::new(session_id, RunId::new(), RunStatusDto::Completed, time);
-    assert_eq!(transition.occurred_at(), time);
     assert_eq!(
-        RecoverUnfinishedRunsInputDto::new(time).recovered_at(),
-        time
-    );
-    let event = ToolLifecycleEventDto::new(
-        session_id,
-        RunId::new(),
-        intention_types::ToolCallId::new(),
-        "read",
-        ToolLifecycleStatusDto::Rejected,
-        "policy",
-        time,
-    )
-    .expect("tool event is valid");
-    let run_id = event.run_id();
-    assert_eq!(
-        AppendToolLifecycleEventInputDto::new(event)
-            .event()
-            .run_id(),
-        run_id
+        AcceptUserTurnInputDto::new(session_id, key, " ", run_id, snapshot, created_at,)
+            .expect_err("blank turn content rejects")
+            .code(),
+        "invalid_turn_content"
     );
 }
 
 #[test]
-fn storage_dtos_expose_all_fields_and_default_repository_failures_safely() {
-    let time = TimestampDto::from_unix_seconds(1).expect("fixture time is valid");
+fn turn_and_run_inputs_are_typed_and_ordered() {
+    let at = time(2);
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let snapshot: ConfigSnapshotDto = serde_json::from_str(include_str!(
-        "../../intention-config/tests/fixtures/config-snapshot-v1.json"
-    ))
-    .expect("safe config snapshot decodes");
-    let remove = RemoveTurnInputDto::new(
-        intention_domain::RemoveTurnCommandDto::new(session_id, TurnId::new()),
-        time,
-    );
-    assert_eq!(remove.occurred_at(), time);
+    let remove = RemoveTurnInputDto::new(RemoveTurnCommandDto::new(session_id, TurnId::new()), at);
     assert_eq!(remove.command().session_id(), session_id);
+    assert_eq!(remove.command().turn_id().to_string().len(), 36);
+    assert_eq!(remove.occurred_at(), at);
 
-    let facts = vec![
-        intention_domain::ModelRunFactInputDto::AssistantContentAppended {
-            assistant_turn_id: intention_types::AssistantTurnId::new(),
-            content: "hello".into(),
-        },
-    ];
-    let append = AppendModelRunFactsInputDto::new(
-        session_id,
-        run_id,
-        intention_domain::RunEventCursorDto::new(0),
-        facts,
-        Some(RunStatusDto::Running),
-        time,
-    )
-    .expect("fact append is valid");
-    assert_eq!(append.session_id(), session_id);
-    assert_eq!(append.run_id(), run_id);
-    assert_eq!(append.expected_cursor().value(), 0);
-    assert_eq!(append.facts().len(), 1);
-    assert_eq!(append.status(), Some(RunStatusDto::Running));
-    assert_eq!(append.occurred_at(), time);
-    let append_snapshot = intention_domain::RunSnapshotDto::new(
-        session_id,
-        run_id,
-        intention_types::SessionEventSequenceDto::new(1),
-        intention_domain::ModelRunProjectionDto::new(
-            intention_domain::RunProjectionDto::new(
-                session_id,
-                run_id,
-                TurnId::new(),
-                RunStatusDto::Running,
-                ConfigRevisionId::parse("44444444-4444-4444-8444-444444444444")
-                    .expect("revision is valid"),
-            ),
-            intention_domain::RunEventCursorDto::new(1),
-            None,
-            "",
-            None,
-            None,
-            None,
-        )
-        .expect("model projection is valid"),
-    )
-    .expect("snapshot is valid");
-    let fact = intention_domain::ModelRunFactDto::new(
-        intention_domain::RunEventCursorDto::new(1),
-        intention_domain::ModelRunFactInputDto::provider_attempt_started(1).expect("fact is valid"),
-    )
-    .expect("fact is valid");
-    let outcome = AppendModelRunFactsOutcomeDto::new(
-        intention_domain::RunEventCursorDto::new(1),
-        append_snapshot,
-        vec![fact],
-    )
-    .expect("outcome is valid");
-    assert_eq!(outcome.cursor().value(), 1);
-    assert_eq!(outcome.snapshot().run_id(), run_id);
-    assert_eq!(outcome.facts().len(), 1);
-    assert!(
-        AppendModelRunFactsInputDto::new(
-            session_id,
-            run_id,
-            intention_domain::RunEventCursorDto::new(0),
-            vec![],
-            None,
-            time
-        )
-        .is_err()
-    );
+    let consume = ConsumePendingUserTurnsInputDto::new(session_id, run_id, at);
+    assert_eq!(consume.session_id(), session_id);
+    assert_eq!(consume.run_id(), run_id);
+    assert_eq!(consume.occurred_at(), at);
 
-    let message =
-        ModelContextMessageDto::new(ModelContextRoleDto::User, "hello").expect("message is valid");
-    assert_eq!(message.role(), ModelContextRoleDto::User);
-    assert_eq!(message.content(), "hello");
-    assert!(ModelContextMessageDto::new(ModelContextRoleDto::Assistant, " ").is_err());
-    let context = StartingRunModelContextDto::new(session_id, run_id, snapshot, vec![message])
-        .expect("context is valid");
-    assert_eq!(context.session_id(), session_id);
-    assert_eq!(context.run_id(), run_id);
-    assert_eq!(context.messages().len(), 1);
-    assert!(
-        StartingRunModelContextDto::new(session_id, run_id, context.safe_config().clone(), vec![],)
-            .is_err()
-    );
-
-    struct Empty;
-    impl StorageRepositoryDto for Empty {
-        fn create_session(
-            &self,
-            _: CreateSessionInputDto,
-        ) -> intention_types::DtoResult<CommittedChangeDto> {
-            unreachable!()
-        }
-        fn accept_user_turn(
-            &self,
-            _: AcceptUserTurnInputDto,
-        ) -> intention_types::DtoResult<CommittedChangeDto> {
-            unreachable!()
-        }
-        fn remove_turn(
-            &self,
-            _: RemoveTurnInputDto,
-        ) -> intention_types::DtoResult<CommittedChangeDto> {
-            unreachable!()
-        }
-        fn transition_run(
-            &self,
-            _: TransitionRunInputDto,
-        ) -> intention_types::DtoResult<CommittedChangeDto> {
-            unreachable!()
-        }
-        fn recover_unfinished_runs(
-            &self,
-            _: RecoverUnfinishedRunsInputDto,
-        ) -> intention_types::DtoResult<Vec<CommittedChangeDto>> {
-            unreachable!()
-        }
-        fn load_session_snapshot(
-            &self,
-            _: SessionId,
-        ) -> intention_types::DtoResult<intention_domain::SessionProjectionDto> {
-            unreachable!()
-        }
-        fn load_tail(
-            &self,
-            _: SessionId,
-            _: intention_types::SessionEventSequenceDto,
-        ) -> intention_types::DtoResult<
-            Vec<intention_types::EventEnvelopeDto<intention_domain::DomainEventDto>>,
-        > {
-            unreachable!()
-        }
-        fn accept_configuration_revision(
-            &self,
-            _: ConfigSnapshotDto,
-        ) -> intention_types::DtoResult<()> {
-            unreachable!()
-        }
-    }
-    let repository = Empty;
-    let event = ToolLifecycleEventDto::new(
-        session_id,
-        run_id,
-        intention_types::ToolCallId::new(),
-        "read",
-        ToolLifecycleStatusDto::Rejected,
-        "policy",
-        time,
-    )
-    .expect("tool event is valid");
-    assert_eq!(
-        repository
-            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(event))
-            .expect_err("repository operation must be unavailable")
-            .code(),
-        "tool_lifecycle_unavailable"
-    );
-    assert_eq!(
-        repository
-            .load_tool_result(session_id, run_id, intention_types::ToolCallId::new())
-            .expect_err("repository operation must be unavailable")
-            .code(),
-        "tool_result_unavailable"
-    );
-    assert_eq!(
-        repository
-            .append_model_run_facts(append)
-            .expect_err("repository operation must be unavailable")
-            .code(),
-        "run_history_unavailable"
-    );
-    assert_eq!(
-        repository
-            .load_run_config_snapshot(session_id, run_id)
-            .expect_err("repository operation must be unavailable")
-            .code(),
-        "run_configuration_unavailable"
-    );
-    assert_eq!(
-        repository
-            .load_starting_run_model_context(session_id, run_id)
-            .expect_err("repository operation must be unavailable")
-            .code(),
-        "run_model_context_unavailable"
-    );
-    assert_eq!(
-        repository
-            .load_current_run_snapshot(session_id, run_id)
-            .expect_err("repository operation must be unavailable")
-            .code(),
-        "run_history_unavailable"
-    );
-    assert_eq!(
-        repository
-            .load_run_tail(
-                session_id,
-                run_id,
-                intention_domain::RunEventCursorDto::new(0)
-            )
-            .expect_err("repository operation must be unavailable")
-            .code(),
-        "run_history_unavailable"
-    );
-    assert_eq!(
-        repository
-            .append_pending_user_turns(intention_storage::AppendPendingUserTurnsInputDto::new(
-                session_id,
-                run_id,
-                intention_domain::RunEventCursorDto::new(0),
-                time,
-            ))
-            .expect_err("repository operation must be unavailable")
-            .code(),
-        "pending_user_turns_unavailable"
-    );
-}
-
-#[test]
-fn storage_constructors_cover_successful_accessors_and_validation_paths() {
-    let time = TimestampDto::from_unix_seconds(2).expect("fixture time is valid");
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let snapshot: ConfigSnapshotDto = serde_json::from_str(include_str!(
-        "../../intention-config/tests/fixtures/config-snapshot-v1.json"
-    ))
-    .expect("safe config snapshot decodes");
-    let create = CreateSessionInputDto::new(
-        CreateSessionCommandDto::new(
-            ProjectId::new(),
-            session_id,
-            WorkspaceId::new(),
-            workspace_root(),
-            RunModeDto::Build,
-        ),
-        time,
-    );
-    assert_eq!(create.command().session_id(), session_id);
-    assert_eq!(create.occurred_at(), time);
-
-    let turn = AcceptUserTurnInputDto::new(
-        session_id,
-        TurnId::new(),
-        "content",
-        run_id,
-        snapshot.clone(),
-        time,
-    )
-    .expect("turn is valid");
-    assert_eq!(turn.session_id(), session_id);
-    assert_eq!(turn.turn_id().to_string().len(), 36);
-    assert_eq!(turn.content(), "content");
-    assert_eq!(turn.proposed_run_id(), run_id);
-    assert_eq!(turn.config_snapshot(), &snapshot);
-
-    let transition = TransitionRunInputDto::new(session_id, run_id, RunStatusDto::Running, time);
+    let transition = TransitionRunInputDto::new(session_id, run_id, RunStatusDto::Running, at);
     assert_eq!(transition.session_id(), session_id);
     assert_eq!(transition.run_id(), run_id);
     assert_eq!(transition.status(), RunStatusDto::Running);
-    let remove = RemoveTurnInputDto::new(
-        intention_domain::RemoveTurnCommandDto::new(session_id, TurnId::new()),
-        time,
-    );
-    assert_eq!(remove.command().turn_id().to_string().len(), 36);
+    assert_eq!(transition.occurred_at(), at);
 
-    let facts = vec![
-        intention_domain::ModelRunFactInputDto::provider_attempt_started(1).expect("fact is valid"),
-    ];
-    assert!(
-        AppendModelRunFactsInputDto::new(
-            session_id,
-            run_id,
-            intention_domain::RunEventCursorDto::new(0),
-            facts,
-            None,
-            time,
-        )
-        .is_ok()
-    );
-    assert_eq!(
-        AppendModelRunFactsInputDto::new(
-            session_id,
-            run_id,
-            intention_domain::RunEventCursorDto::new(0),
-            Vec::new(),
-            None,
-            time,
-        )
-        .expect_err("empty fact batch rejects")
-        .code(),
-        "invalid_run_event_cursor"
-    );
-    for terminal in [
-        intention_domain::ModelRunFactInputDto::finished(intention_types::FinishReasonDto::Stop),
-        intention_domain::ModelRunFactInputDto::failed(
-            intention_domain::RunFailureDto::new(
-                "provider_failed",
-                intention_types::ErrorRetryDto::Never,
-                None,
-            )
-            .expect("safe failure is valid"),
-        ),
-    ] {
-        assert_eq!(
-            AppendModelRunFactsInputDto::new(
-                session_id,
-                run_id,
-                intention_domain::RunEventCursorDto::new(0),
-                vec![
-                    terminal,
-                    intention_domain::ModelRunFactInputDto::provider_attempt_started(1)
-                        .expect("fact is valid"),
-                ],
-                None,
-                time,
-            )
-            .expect_err("facts after a terminal model fact reject")
-            .code(),
-            "invalid_run_event_cursor"
-        );
-    }
-    let message = ModelContextMessageDto::new(ModelContextRoleDto::Assistant, "done")
-        .expect("message is valid");
-    assert_eq!(message.content(), "done");
-    assert_eq!(
-        RecoverUnfinishedRunsInputDto::new(time).recovered_at(),
-        time
-    );
+    assert_eq!(RecoverUnfinishedRunsInputDto::new(at).recovered_at(), at);
 }
 
 #[test]
-fn tool_result_evidence_respects_typed_identity_and_terminal_boundaries() {
-    let time = TimestampDto::from_unix_seconds(3).expect("fixture time is valid");
+fn finish_run_input_requires_a_terminal_safe_outcome() {
+    let at = time(3);
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let call_id = intention_types::ToolCallId::new();
-    for kind in [
-        ToolResultKindDto::Read,
-        ToolResultKindDto::Glob,
-        ToolResultKindDto::Grep,
-        ToolResultKindDto::Write,
-        ToolResultKindDto::Edit,
-        ToolResultKindDto::Execute,
+    for status in [
+        RunStatusDto::Starting,
+        RunStatusDto::Running,
+        RunStatusDto::WaitingInput,
     ] {
         assert_eq!(
-            ToolResultKindDto::parse(kind.name()).expect("known kind parses"),
-            kind
+            FinishRunInputDto::new(session_id, run_id, status, None, None, None, None, at)
+                .expect_err("a non-terminal outcome rejects")
+                .code(),
+            "invalid_run_outcome"
         );
     }
-    assert!(ToolResultKindDto::parse("unknown").is_err());
-    assert!(
-        ToolResultEvidenceDto::new(
+    assert_eq!(
+        FinishRunInputDto::new(
             session_id,
             run_id,
-            call_id,
-            ToolResultKindDto::Read,
-            " ",
-            time
+            RunStatusDto::Failed,
+            None,
+            None,
+            Some("provider_failed".to_owned()),
+            None,
+            at,
         )
-        .is_err()
+        .expect_err("an incomplete error pair rejects")
+        .code(),
+        "invalid_run_outcome"
     );
-    assert!(
-        ToolResultEvidenceDto::new(
+    assert_eq!(
+        FinishRunInputDto::new(
             session_id,
             run_id,
-            call_id,
-            ToolResultKindDto::Read,
-            "nul\0byte",
-            time
+            RunStatusDto::Failed,
+            None,
+            None,
+            Some("provider_failed".to_owned()),
+            Some("unsafe\0message".to_owned()),
+            at,
         )
-        .is_err()
+        .expect_err("unsafe error text rejects")
+        .code(),
+        "invalid_run_outcome"
     );
-    assert!(
-        ToolResultEvidenceDto::new(
-            session_id,
-            run_id,
-            call_id,
-            ToolResultKindDto::Read,
-            "x".repeat(512 * 1024 + 1),
-            time
-        )
-        .is_err()
-    );
-    let evidence = ToolResultEvidenceDto::new(
+    let usage = UsageDto::reported(2, 3, 5).expect("fixture usage is consistent");
+    let finish = FinishRunInputDto::new(
         session_id,
         run_id,
-        call_id,
-        ToolResultKindDto::Read,
-        r#"{"result":"read","value":{"text":"hello","truncated":false}}"#,
-        time,
+        RunStatusDto::Completed,
+        Some(usage),
+        Some(FinishReasonDto::Stop),
+        None,
+        None,
+        at,
     )
-    .expect("evidence is valid");
-    assert_eq!(evidence.session_id(), session_id);
-    assert_eq!(evidence.run_id(), run_id);
-    assert_eq!(evidence.call_id(), call_id);
-    assert_eq!(evidence.kind(), ToolResultKindDto::Read);
-    assert_eq!(
-        evidence.content(),
-        r#"{"result":"read","value":{"text":"hello","truncated":false}}"#
-    );
-    assert_eq!(evidence.occurred_at(), time);
+    .expect("terminal outcome is valid");
+    assert_eq!(finish.session_id(), session_id);
+    assert_eq!(finish.run_id(), run_id);
+    assert_eq!(finish.status(), RunStatusDto::Completed);
+    assert_eq!(finish.usage(), Some(&usage));
+    assert_eq!(finish.finish_reason(), Some(FinishReasonDto::Stop));
+    assert_eq!(finish.error_code(), None);
+    assert_eq!(finish.error_message(), None);
+    assert_eq!(finish.occurred_at(), at);
+}
 
-    let started = ToolLifecycleEventDto::new(
+#[test]
+fn append_and_tool_result_inputs_keep_closed_shapes() {
+    let at = time(4);
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let call_id = ToolCallId::new();
+    let message = user_message(session_id, run_id, "appended");
+    let append = AppendMessageInputDto::new(message.clone(), at);
+    assert_eq!(append.message(), &message);
+    assert_eq!(append.occurred_at(), at);
+
+    let result = evidence(session_id, run_id, call_id);
+    let answering = MessageProjectionDto::new(
         session_id,
-        run_id,
-        call_id,
-        "read",
-        ToolLifecycleStatusDto::Started,
-        "started",
-        time,
+        Some(run_id),
+        MessageKindDto::ToolResult,
+        result.content(),
+        None,
+        Some(call_id),
+        Some("read".to_owned()),
     )
-    .expect("started event is valid");
-    let input = AppendToolLifecycleEventInputDto::new(started);
-    assert!(input.result().is_none());
+    .expect("answering row is valid");
+    let write = WriteToolResultInputDto::new(result.clone(), answering.clone())
+        .expect("matching evidence and answer commit together");
+    assert_eq!(write.evidence(), &result);
+    assert_eq!(write.message(), &answering);
+
+    for mismatched in [
+        MessageProjectionDto::new(
+            session_id,
+            Some(run_id),
+            MessageKindDto::Assistant,
+            "not a result",
+            None,
+            None,
+            None,
+        )
+        .expect("assistant row is valid"),
+        MessageProjectionDto::new(
+            SessionId::new(),
+            Some(run_id),
+            MessageKindDto::ToolResult,
+            result.content(),
+            None,
+            Some(call_id),
+            Some("read".to_owned()),
+        )
+        .expect("cross-session row is structurally valid"),
+        MessageProjectionDto::new(
+            session_id,
+            Some(RunId::new()),
+            MessageKindDto::ToolResult,
+            result.content(),
+            None,
+            Some(call_id),
+            Some("read".to_owned()),
+        )
+        .expect("cross-run row is structurally valid"),
+        MessageProjectionDto::new(
+            session_id,
+            Some(run_id),
+            MessageKindDto::ToolResult,
+            result.content(),
+            None,
+            Some(ToolCallId::new()),
+            Some("read".to_owned()),
+        )
+        .expect("cross-call row is structurally valid"),
+        MessageProjectionDto::new(
+            session_id,
+            Some(run_id),
+            MessageKindDto::ToolResult,
+            result.content(),
+            None,
+            Some(call_id),
+            Some("glob".to_owned()),
+        )
+        .expect("cross-tool row is structurally valid"),
+    ] {
+        assert_eq!(
+            WriteToolResultInputDto::new(result.clone(), mismatched)
+                .expect_err("a tool result commits only with its own answering row")
+                .code(),
+            "invalid_tool_result"
+        );
+    }
+}
+
+#[test]
+fn tool_result_evidence_is_bounded_and_typed() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let call_id = ToolCallId::new();
     assert_eq!(
-        input
-            .with_result(evidence.clone())
-            .expect_err("non-terminal lifecycle status cannot carry evidence")
-            .code(),
+        ToolResultEvidenceDto::new(
+            session_id,
+            run_id,
+            call_id,
+            " ",
+            ToolResultStatusDto::Completed,
+            "content",
+            Vec::new(),
+            time(3),
+        )
+        .expect_err("a blank tool identity rejects")
+        .code(),
         "invalid_tool_result"
     );
-    let mismatched = ToolLifecycleEventDto::new(
-        session_id,
-        RunId::new(),
-        call_id,
-        "read",
-        ToolLifecycleStatusDto::Completed,
-        "completed",
-        time,
-    )
-    .expect("completed event is valid");
-    assert!(
-        AppendToolLifecycleEventInputDto::new(mismatched)
-            .with_result(evidence.clone())
-            .is_err()
+    assert_eq!(
+        ToolResultEvidenceDto::new(
+            session_id,
+            run_id,
+            call_id,
+            "read",
+            ToolResultStatusDto::Partial,
+            " ",
+            Vec::new(),
+            time(3),
+        )
+        .expect_err("blank content rejects")
+        .code(),
+        "invalid_tool_result"
     );
-    let completed = ToolLifecycleEventDto::new(
+    assert_eq!(
+        ToolResultEvidenceDto::new(
+            session_id,
+            run_id,
+            call_id,
+            "read",
+            ToolResultStatusDto::Failed,
+            "nul\0byte",
+            Vec::new(),
+            time(3),
+        )
+        .expect_err("unsafe content rejects")
+        .code(),
+        "invalid_tool_result"
+    );
+    assert_eq!(
+        ToolResultEvidenceDto::new(
+            session_id,
+            run_id,
+            call_id,
+            "read",
+            ToolResultStatusDto::Failed,
+            "x".repeat(512 * 1024 + 1),
+            Vec::new(),
+            time(3),
+        )
+        .expect_err("oversized content rejects")
+        .code(),
+        "invalid_tool_result"
+    );
+    assert_eq!(
+        ToolResultEvidenceDto::new(
+            session_id,
+            run_id,
+            call_id,
+            "read",
+            ToolResultStatusDto::Cancelled,
+            "content",
+            vec![
+                ToolResultMetadataEntryDto::new("truncated", "false").expect("metadata is valid"),
+                ToolResultMetadataEntryDto::new("truncated", "true").expect("metadata is valid"),
+            ],
+            time(3),
+        )
+        .expect_err("duplicate metadata keys reject")
+        .code(),
+        "invalid_tool_result_metadata"
+    );
+    let result = evidence(session_id, run_id, call_id);
+    assert_eq!(result.session_id(), session_id);
+    assert_eq!(result.run_id(), run_id);
+    assert_eq!(result.call_id(), call_id);
+    assert_eq!(result.tool_id(), "read");
+    assert_eq!(result.status(), ToolResultStatusDto::Completed);
+    assert_eq!(result.content(), r#"{"result":"read"}"#);
+    assert_eq!(result.metadata().len(), 1);
+    assert_eq!(result.metadata()[0].key(), "truncated");
+    assert_eq!(result.metadata()[0].value(), "false");
+    assert_eq!(result.occurred_at(), time(3));
+}
+
+#[test]
+fn accepted_turn_outcome_and_model_context_expose_committed_values() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let turn_id = TurnId::new();
+    let run = RunProjectionDto::new(
         session_id,
         run_id,
-        call_id,
-        "read",
-        ToolLifecycleStatusDto::Completed,
-        "completed",
-        time,
-    )
-    .expect("completed event is valid");
-    let input = AppendToolLifecycleEventInputDto::new(completed)
-        .with_result(evidence.clone())
-        .expect("terminal lifecycle status carries evidence");
-    assert_eq!(input.result(), Some(&evidence));
+        turn_id,
+        RunStatusDto::Starting,
+        ConfigRevisionId::new(),
+    );
+    let message = user_message(session_id, run_id, "started");
+    let started = AcceptedTurnOutcomeDto::Started {
+        run,
+        message: message.clone(),
+    };
+    assert_eq!(started.started_run(), Some(run));
+    assert_eq!(started.started_message(), Some(&message));
+    assert_eq!(started.pending_turn(), None);
+
+    let pending_turn = PendingTurnProjectionDto::new(session_id, turn_id, "queued")
+        .expect("pending turn is valid");
+    let queued = AcceptedTurnOutcomeDto::Pending(pending_turn.clone());
+    assert_eq!(queued.started_run(), None);
+    assert_eq!(queued.started_message(), None);
+    assert_eq!(queued.pending_turn(), Some(&pending_turn));
+
+    let context = StartingRunModelContextDto::new(session_id, run_id, snapshot(), vec![message])
+        .expect("starting context is valid");
+    assert_eq!(context.session_id(), session_id);
+    assert_eq!(context.run_id(), run_id);
+    assert_eq!(
+        context.messages().last().map(MessageProjectionDto::text),
+        Some("started")
+    );
+    assert_eq!(
+        context.safe_config().revision_id(),
+        snapshot().revision_id()
+    );
+    assert_eq!(
+        StartingRunModelContextDto::new(session_id, run_id, snapshot(), Vec::new())
+            .expect_err("an empty context rejects")
+            .code(),
+        "invalid_model_context"
+    );
+    assert_eq!(
+        StartingRunModelContextDto::new(
+            session_id,
+            run_id,
+            snapshot(),
+            vec![user_message(SessionId::new(), run_id, "foreign")],
+        )
+        .expect_err("a cross-session message rejects")
+        .code(),
+        "invalid_model_context"
+    );
+    assert_eq!(
+        StartingRunModelContextDto::new(
+            session_id,
+            run_id,
+            snapshot(),
+            vec![
+                MessageProjectionDto::new(
+                    session_id,
+                    Some(run_id),
+                    MessageKindDto::Notice,
+                    "notice",
+                    None,
+                    None,
+                    None,
+                )
+                .expect("notice row is valid"),
+            ],
+        )
+        .expect_err("a context that does not end with the starting user turn rejects")
+        .code(),
+        "invalid_model_context"
+    );
+    assert_eq!(
+        StartingRunModelContextDto::new(
+            session_id,
+            run_id,
+            snapshot(),
+            vec![
+                MessageProjectionDto::new(
+                    session_id,
+                    None,
+                    MessageKindDto::User,
+                    "session-level",
+                    None,
+                    None,
+                    None,
+                )
+                .expect("session row is valid"),
+            ],
+        )
+        .expect_err("the final message must belong to the starting run")
+        .code(),
+        "invalid_model_context"
+    );
+    assert_eq!(
+        ErrorCategoryDto::Validation.as_str(),
+        "validation",
+        "the fixture also pins the typed error category vocabulary"
+    );
 }
