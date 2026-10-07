@@ -12,10 +12,9 @@ edge = 20.0
 exempt = 0.0
 
 [crate_tiers]
-"intention-runtime" = "core"
 "intention-transport" = "core"
 "intention-storage" = "core"
-"intention-application" = "core"
+"intention-engine" = "core"
 "intention-domain" = "core"
 "intention-tools" = "standard"
 "intention-config" = "standard"

@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
+use intention_engine::fail_starting_run;
 use intention_proto::{
     ConfigRevisionId, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto, SessionId,
     TimestampDto, TurnId, WorkspaceId,
@@ -15,7 +16,6 @@ use intention_proto::{
 use intention_proto::{
     RunModeDto, RunProjectionDto, RunStatusDto, SessionProjectionDto, WorkspaceRootDto,
 };
-use intention_runtime::fail_starting_run;
 use intention_storage::{CreateSessionInputDto, FinishRunInputDto, StorageRepositoryDto};
 
 fn time(value: i64) -> TimestampDto {

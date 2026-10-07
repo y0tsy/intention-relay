@@ -7,16 +7,16 @@ use std::cell::RefCell;
 use std::fs;
 use std::sync::{Arc, Mutex};
 
-use intention_application::{
-    ApplicationService, CreateSessionWorkflowInputDto, HookObservationPort,
-    InvokeLocalToolInputDto, LocalToolInvocationOutcomeDto, ModelRunDispatchPort,
-    ScheduleModelRunDto, SendUserTurnWorkflowInputDto, ToolResultPublicationPort,
-    WorkspaceBoundaryPort,
-};
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::ToolResultStatusDto;
+use intention_engine::{
+    ApplicationService, HookObservationPort, LocalToolInvocationOutcomeDto,
+    ModelCancellationSignal, ModelRunDispatchPort, ModelRunExecutionInputDto,
+    ToolInvocationRequestDto, ToolResultPublicationPort, WorkspaceBoundaryPort,
+};
+use intention_engine::{ModelMessageDto, ModelRoleDto};
 use intention_proto::{
     CURRENT_DTO_SCHEMA_VERSION, ProtocolAcceptedResultDto, SendUserTurnOutcomeDto,
 };
@@ -29,7 +29,6 @@ use intention_proto::{
     MessageProjectionDto, PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto,
     RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto, WorkspaceRootDto,
 };
-use intention_runtime::{ModelMessageDto, ModelRequestDto, ModelRoleDto};
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,
     ConsumePendingUserTurnsInputDto, CreateSessionInputDto, FinishRunInputDto,
@@ -65,8 +64,8 @@ struct DispatchErrorHook {
     phase: Phase,
 }
 
-fn invoke_read_input(path: &str) -> InvokeLocalToolInputDto {
-    InvokeLocalToolInputDto::new(
+fn invoke_read_input(path: &str) -> ToolInvocationRequestDto {
+    ToolInvocationRequestDto::new(
         WorkspaceRoot::resolve(
             &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy()).expect("workspace"),
         )
@@ -82,8 +81,8 @@ fn invoke_read_input(path: &str) -> InvokeLocalToolInputDto {
     )
 }
 
-fn invoke_read_input_in_workspace(root: &WorkspaceRoot, path: &str) -> InvokeLocalToolInputDto {
-    InvokeLocalToolInputDto::new(
+fn invoke_read_input_in_workspace(root: &WorkspaceRoot, path: &str) -> ToolInvocationRequestDto {
+    ToolInvocationRequestDto::new(
         root.clone(),
         SessionId::new(),
         RunId::new(),
@@ -486,7 +485,7 @@ fn local_tool_success_records_admission_and_completion() {
     let call = ToolCallId::new();
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let result = ApplicationService::new(&repository)
-        .invoke_local_tool(InvokeLocalToolInputDto::new(
+        .invoke_local_tool(ToolInvocationRequestDto::new(
             hello_workspace(&root),
             session,
             run,
@@ -569,7 +568,7 @@ fn committed_rows_preserve_exact_correlation_identity_across_terminal_outcome() 
     let run_id = RunId::new();
     let call_id = ToolCallId::new();
     let error = ApplicationService::new(&repository)
-        .invoke_local_tool(InvokeLocalToolInputDto::new(
+        .invoke_local_tool(ToolInvocationRequestDto::new(
             WorkspaceRoot::resolve(
                 &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy())
                     .expect("workspace"),
@@ -610,7 +609,7 @@ fn committed_rows_preserve_exact_correlation_identity_across_terminal_outcome() 
 fn local_tool_rejects_unknown_or_mismatched_id_before_effects() {
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let error = ApplicationService::new(&repository)
-        .invoke_local_tool(InvokeLocalToolInputDto::new(
+        .invoke_local_tool(ToolInvocationRequestDto::new(
             WorkspaceRoot::resolve(
                 &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy())
                     .expect("workspace dto"),
@@ -659,65 +658,56 @@ fn local_tool_hook_rejection_is_durable_and_skips_execution() {
 }
 
 #[test]
-fn public_dto_constructors_and_schedule_validation_cover_mismatch_paths() {
+fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection() {
     let command = SendUserTurnCommandDto::new(SessionId::new(), IdempotencyKey::new(), "hello")
         .expect("command is valid");
-    let input = SendUserTurnWorkflowInputDto::new(RunId::new(), snapshot(), fixture_time());
-    assert_eq!(input.occurred_at(), fixture_time());
-    assert_eq!(input.config_snapshot().resolved(), snapshot().resolved());
-    let request = ModelRequestDto::new(
-        RunId::new(),
-        "fixture",
-        vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
-        None,
-        None,
-    )
-    .expect("request is valid");
-    let error = ScheduleModelRunDto::new(command.session_id(), RunId::new(), request, snapshot())
+    let proposed_run_id = RunId::new();
+    let config = snapshot();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable(
+        "turn_admission_unavailable",
+        "the durable session refused the turn",
+    )));
+    let error = ApplicationService::new(&repository)
+        .send_user_turn_and_schedule(
+            command,
+            proposed_run_id,
+            config.clone(),
+            fixture_time(),
+            &RecordingDispatchPort::default(),
+        )
+        .expect_err("admission failure is propagated");
+    assert_eq!(error.code(), "turn_admission_unavailable");
+    let inputs = repository.accepted_inputs.borrow();
+    assert_eq!(inputs[0].proposed_run_id(), proposed_run_id);
+    assert_eq!(inputs[0].config_snapshot().resolved(), config.resolved());
+    assert_eq!(inputs[0].occurred_at(), fixture_time());
+    drop(inputs);
+
+    // A durable context for another run cannot become the requested schedule.
+    let session_id = SessionId::new();
+    let requested_run = RunId::new();
+    *repository.starting_context.borrow_mut() =
+        Some(starting_context(session_id, RunId::new(), &config));
+    let error = ApplicationService::new(&repository)
+        .schedule_starting_run(session_id, requested_run, ModelCancellationSignal::new())
         .expect_err("mismatched schedule is rejected");
     assert_eq!(error.code(), "invalid_model_run_schedule");
 
+    // A context that names the requested run reconstructs the durable
+    // selection and its message list into the execution input.
     let matching_run = RunId::new();
-    let matching_request = ModelRequestDto::new(
-        matching_run,
-        "fixture",
-        vec![ModelMessageDto::new(ModelRoleDto::Assistant, "answer").expect("message")],
-        None,
-        None,
-    )
-    .expect("request is valid");
-    let scheduled = ScheduleModelRunDto::new(
-        command.session_id(),
-        matching_run,
-        matching_request,
-        snapshot(),
-    )
-    .expect("matching schedule is accepted");
+    *repository.starting_context.borrow_mut() =
+        Some(starting_context(session_id, matching_run, &config));
+    let scheduled = ApplicationService::new(&repository)
+        .schedule_starting_run(session_id, matching_run, ModelCancellationSignal::new())
+        .expect("matching schedule is accepted");
+    assert_eq!(scheduled.session_id(), session_id);
     assert_eq!(scheduled.run_id(), matching_run);
-    assert_eq!(scheduled.request().messages().len(), 1);
+    assert_eq!(scheduled.request().messages().len(), 3);
     assert_eq!(
         scheduled.safe_config().resolved().provider().model(),
         "fixture"
     );
-
-    // A matching run identity whose model disagrees with the durable
-    // selection is rejected through the other validation operand.
-    let wrong_model_request = ModelRequestDto::new(
-        matching_run,
-        "other",
-        vec![ModelMessageDto::new(ModelRoleDto::Assistant, "answer").expect("message")],
-        None,
-        None,
-    )
-    .expect("request is valid");
-    let error = ScheduleModelRunDto::new(
-        command.session_id(),
-        matching_run,
-        wrong_model_request,
-        snapshot(),
-    )
-    .expect_err("model mismatch is rejected");
-    assert_eq!(error.code(), "invalid_model_run_schedule");
 }
 
 #[test]
@@ -1020,7 +1010,7 @@ fn create_and_remove_workflows_map_committed_results() {
     );
 
     let created = application
-        .create_session(CreateSessionWorkflowInputDto::new(create, fixture_time()))
+        .create_session(create, fixture_time())
         .expect("create maps");
     assert!(matches!(
         created,
@@ -1113,7 +1103,7 @@ fn local_tool_covers_workspace_reject_and_all_post_execution_outcomes() {
             }))
             .expect("hook");
         let error = ApplicationService::with_hooks(&repository, hooks)
-            .invoke_local_tool(InvokeLocalToolInputDto::new(
+            .invoke_local_tool(ToolInvocationRequestDto::new(
                 workspace.clone(),
                 SessionId::new(),
                 RunId::new(),
@@ -1152,7 +1142,7 @@ fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
             .register(Box::new(DispatchErrorHook { phase }))
             .expect("hook");
         let error = ApplicationService::with_hooks(&repository, hooks)
-            .invoke_local_tool(InvokeLocalToolInputDto::new(
+            .invoke_local_tool(ToolInvocationRequestDto::new(
                 workspace.clone(),
                 SessionId::new(),
                 RunId::new(),
@@ -1182,7 +1172,7 @@ fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
             }))
             .expect("hook");
         let result = ApplicationService::with_hooks(&repository, hooks)
-            .invoke_local_tool(InvokeLocalToolInputDto::new(
+            .invoke_local_tool(ToolInvocationRequestDto::new(
                 workspace.clone(),
                 SessionId::new(),
                 RunId::new(),
@@ -1216,7 +1206,7 @@ fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
         }))
         .expect("hook");
     let result = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool(InvokeLocalToolInputDto::new(
+        .invoke_local_tool(ToolInvocationRequestDto::new(
             workspace,
             SessionId::new(),
             RunId::new(),
@@ -1291,7 +1281,7 @@ fn local_tool_records_partial_terminal_status_on_interruption() {
     });
     let outcome = ApplicationService::new(&repository)
         .invoke_local_tool(
-            InvokeLocalToolInputDto::new(
+            ToolInvocationRequestDto::new(
                 WorkspaceRoot::resolve(
                     &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy()).expect("root"),
                 )
@@ -1358,7 +1348,7 @@ fn cancelled_tool_lifecycle_is_terminal_and_not_completed_or_replayed() {
     let call_id = ToolCallId::new();
     let outcome = ApplicationService::new(&repository)
         .invoke_local_tool(
-            InvokeLocalToolInputDto::new(
+            ToolInvocationRequestDto::new(
                 WorkspaceRoot::resolve(
                     &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy())
                         .expect("workspace dto"),
@@ -1886,7 +1876,7 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
     let publisher = TerminalOrderingProbe::new(&repository);
     let result = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
-            InvokeLocalToolInputDto::new(
+            ToolInvocationRequestDto::new(
                 hello_workspace(&root),
                 session_id,
                 run_id,
@@ -1927,7 +1917,7 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
     let publisher = TerminalOrderingProbe::new(&repository);
     let error = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
-            InvokeLocalToolInputDto::new(
+            ToolInvocationRequestDto::new(
                 hello_workspace(&root),
                 session_id,
                 run_id,
@@ -1958,7 +1948,7 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
     let publisher = TerminalOrderingProbe::new(&repository);
     let outcome = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
-            InvokeLocalToolInputDto::new(
+            ToolInvocationRequestDto::new(
                 hello_workspace(&root),
                 session_id,
                 run_id,
@@ -2006,7 +1996,7 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
     });
     let outcome = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
-            InvokeLocalToolInputDto::new(
+            ToolInvocationRequestDto::new(
                 hello_workspace(&root),
                 session_id,
                 run_id,
@@ -2051,7 +2041,7 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
     let publisher = TerminalOrderingProbe::new(&repository);
     ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
-            InvokeLocalToolInputDto::new(
+            ToolInvocationRequestDto::new(
                 hello_workspace(&root),
                 session_id,
                 run_id,
@@ -2081,7 +2071,7 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
     let publisher = TerminalOrderingProbe::new(&repository);
     let error = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
-            InvokeLocalToolInputDto::new(
+            ToolInvocationRequestDto::new(
                 hello_workspace(&root),
                 session_id,
                 run_id,
@@ -2110,7 +2100,7 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
     let publisher = TerminalOrderingProbe::new(&repository);
     let outcome = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
-            InvokeLocalToolInputDto::new(
+            ToolInvocationRequestDto::new(
                 hello_workspace(&root),
                 session_id,
                 run_id,
@@ -2156,7 +2146,7 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
     });
     let outcome = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
-            InvokeLocalToolInputDto::new(
+            ToolInvocationRequestDto::new(
                 hello_workspace(&root),
                 session_id,
                 run_id,
@@ -2206,7 +2196,7 @@ fn tool_call_row_commits_the_canonical_arguments_document() {
     // A caller without the model's arguments still commits a well-formed row.
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     ApplicationService::new(&repository)
-        .invoke_local_tool(InvokeLocalToolInputDto::new(
+        .invoke_local_tool(ToolInvocationRequestDto::new(
             hello_workspace(&root),
             SessionId::new(),
             RunId::new(),
@@ -2222,12 +2212,12 @@ fn tool_call_row_commits_the_canonical_arguments_document() {
 
 #[derive(Default)]
 struct RecordingDispatchPort {
-    inputs: RefCell<Vec<ScheduleModelRunDto>>,
+    inputs: RefCell<Vec<ModelRunExecutionInputDto>>,
     failure: RefCell<Option<ErrorDto>>,
 }
 
 impl ModelRunDispatchPort for RecordingDispatchPort {
-    fn dispatch_model_run(&self, input: ScheduleModelRunDto) -> DtoResult<()> {
+    fn dispatch_model_run(&self, input: ModelRunExecutionInputDto) -> DtoResult<()> {
         self.inputs.borrow_mut().push(input);
         self.failure.borrow_mut().take().map_or(Ok(()), Err)
     }
@@ -2357,7 +2347,7 @@ fn the_invocation_phase_dispatches_before_identity_validation() {
         }))
         .expect("hook registers");
     let error = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool(InvokeLocalToolInputDto::new(
+        .invoke_local_tool(ToolInvocationRequestDto::new(
             WorkspaceRoot::resolve(
                 &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy())
                     .expect("workspace dto"),
@@ -2468,7 +2458,9 @@ fn send_user_turn_and_schedule_propagates_admission_failures() {
     let error = ApplicationService::new(&repository)
         .send_user_turn_and_schedule(
             send_command(session_id),
-            SendUserTurnWorkflowInputDto::new(RunId::new(), snapshot(), fixture_time()),
+            RunId::new(),
+            snapshot(),
+            fixture_time(),
             &dispatch,
         )
         .expect_err("admission failure is propagated");
@@ -2494,7 +2486,9 @@ fn send_user_turn_and_schedule_returns_queued_acceptance_without_dispatching() {
     let accepted = ApplicationService::new(&repository)
         .send_user_turn_and_schedule(
             send_command(session_id),
-            SendUserTurnWorkflowInputDto::new(RunId::new(), snapshot(), fixture_time()),
+            RunId::new(),
+            snapshot(),
+            fixture_time(),
             &dispatch,
         )
         .expect("queued acceptance is returned unchanged");
@@ -2526,7 +2520,9 @@ fn send_user_turn_and_schedule_dispatches_the_committed_starting_run() {
     let accepted = ApplicationService::new(&repository)
         .send_user_turn_and_schedule(
             send_command(session_id),
-            SendUserTurnWorkflowInputDto::new(run_id, config.clone(), fixture_time()),
+            run_id,
+            config.clone(),
+            fixture_time(),
             &dispatch,
         )
         .expect("started acceptance is returned unchanged");
@@ -2581,7 +2577,9 @@ fn send_user_turn_and_schedule_preserves_acceptance_when_context_is_unusable() {
         let accepted = ApplicationService::new(&repository)
             .send_user_turn_and_schedule(
                 send_command(session_id),
-                SendUserTurnWorkflowInputDto::new(run_id, config, fixture_time()),
+                run_id,
+                config,
+                fixture_time(),
                 &dispatch,
             )
             .expect("post-commit context failure preserves the acceptance");
@@ -2622,7 +2620,9 @@ fn send_user_turn_and_schedule_preserves_acceptance_when_dispatch_fails() {
     let accepted = ApplicationService::new(&repository)
         .send_user_turn_and_schedule(
             send_command(session_id),
-            SendUserTurnWorkflowInputDto::new(run_id, config, fixture_time()),
+            run_id,
+            config,
+            fixture_time(),
             &dispatch,
         )
         .expect("post-commit dispatch failure preserves the acceptance");
@@ -2648,7 +2648,7 @@ fn schedule_starting_run_maps_durable_context_into_the_dispatch_dto() {
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     *repository.starting_context.borrow_mut() = Some(starting_context(session_id, run_id, &config));
     let scheduled = ApplicationService::new(&repository)
-        .schedule_starting_run(session_id, run_id)
+        .schedule_starting_run(session_id, run_id, ModelCancellationSignal::new())
         .expect("durable starting context schedules");
     assert_eq!(scheduled.session_id(), session_id);
     assert_eq!(scheduled.run_id(), run_id);
@@ -2664,7 +2664,11 @@ fn schedule_starting_run_maps_durable_context_into_the_dispatch_dto() {
 fn schedule_starting_run_propagates_context_load_errors() {
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let error = ApplicationService::new(&repository)
-        .schedule_starting_run(SessionId::new(), RunId::new())
+        .schedule_starting_run(
+            SessionId::new(),
+            RunId::new(),
+            ModelCancellationSignal::new(),
+        )
         .expect_err("missing durable context is propagated");
     assert_eq!(error.code(), "run_model_context_unavailable");
 }
@@ -2680,7 +2684,7 @@ fn create_session_propagates_repository_errors() {
         RunModeDto::Build,
     );
     let error = ApplicationService::new(&repository)
-        .create_session(CreateSessionWorkflowInputDto::new(command, fixture_time()))
+        .create_session(command, fixture_time())
         .expect_err("repository failure is propagated");
     assert_eq!(error.code(), "fixture_missing_result");
 }

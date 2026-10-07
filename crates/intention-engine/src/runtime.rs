@@ -24,9 +24,7 @@ use intention_storage::{
     StorageRepositoryDto, TransitionRunInputDto,
 };
 
-mod context_window;
-
-use context_window::ContextWindowState;
+use crate::context_window::ContextWindowState;
 
 /// The durable context notice recorded when an interrupted call produced no
 /// final result of its own.
@@ -228,6 +226,20 @@ pub struct ModelRunExecutionInputDto {
     request: ModelRequestDto,
     safe_config: ConfigSnapshotDto,
     cancellation: ModelCancellationSignal,
+}
+
+/// The cancellation handle carries interior shared state with no safe debug
+/// rendering, so the input renders its durable selection only.
+impl std::fmt::Debug for ModelRunExecutionInputDto {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ModelRunExecutionInputDto")
+            .field("session_id", &self.session_id)
+            .field("run_id", &self.run_id)
+            .field("request", &self.request)
+            .field("safe_config", &self.safe_config)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ModelRunExecutionInputDto {

@@ -10,11 +10,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use intention_application::{
-    ApplicationService, CreateSessionWorkflowInputDto, InvokeLocalToolInputDto,
-    ModelRunDispatchPort, ScheduleModelRunDto, SendUserTurnWorkflowInputDto,
-    ToolResultPublicationPort, WorkspaceBoundaryPort,
-};
 #[cfg(test)]
 use intention_config::ConfigPathDto;
 use intention_config::{
@@ -22,6 +17,14 @@ use intention_config::{
     ResolvedConfigDto, StartupProviderMaterial,
 };
 use intention_domain::run_status_is_terminal;
+use intention_engine::{
+    ApplicationService, ModelRunDispatchPort, ToolInvocationRequestDto, ToolResultPublicationPort,
+    WorkspaceBoundaryPort,
+};
+use intention_engine::{
+    ModelRunCommitObserver, ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto,
+    ModelRunExecutionService, ModelTimePort, ToolExecutionPort, fail_starting_run,
+};
 use intention_proto::RunStatusDto;
 #[cfg(test)]
 use intention_proto::SendUserTurnOutcomeDto;
@@ -43,10 +46,6 @@ use intention_providers::OpenRouterDriver;
 use intention_providers::{ModelCancellationSignal, ModelExecutionDriver};
 #[cfg(any(test, feature = "test-support"))]
 use intention_providers::{ModelCapabilitiesDto, ModelDriver, ModelEventStream};
-use intention_runtime::{
-    ModelRunCommitObserver, ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto,
-    ModelRunExecutionService, ModelTimePort, ToolExecutionPort, fail_starting_run,
-};
 use intention_storage::{
     RecoverUnfinishedRunsInputDto, SqliteDatabaseLocationDto, SqliteStorageRepository,
     StorageRepositoryDto, ToolResultEvidenceDto,
@@ -70,9 +69,9 @@ const SESSION_SNAPSHOT_MESSAGES: u32 = 256;
 /// The terminal outcome of one facade local tool invocation.
 ///
 /// Re-exported for the daemon host, which maps the outcome onto the
-/// model-visible tool-result fact without depending on the application crate
+/// model-visible tool-result fact without depending on the engine crate
 /// directly.
-pub use intention_application::LocalToolInvocationOutcomeDto;
+pub use intention_engine::LocalToolInvocationOutcomeDto;
 
 /// Public M3 daemon application facade over a private durable composition.
 #[derive(Clone)]
@@ -165,12 +164,12 @@ impl SelectedProvider {
 #[derive(Default)]
 struct PrivateModelRunDispatch {
     #[cfg(test)]
-    admitted: Mutex<Vec<ScheduleModelRunDto>>,
+    admitted: Mutex<Vec<ModelRunExecutionInputDto>>,
 }
 
 impl PrivateModelRunDispatch {
     #[cfg(test)]
-    fn admitted(&self) -> DtoResult<Vec<ScheduleModelRunDto>> {
+    fn admitted(&self) -> DtoResult<Vec<ModelRunExecutionInputDto>> {
         self.admitted
             .lock()
             .map(|admitted| admitted.clone())
@@ -184,7 +183,7 @@ impl PrivateModelRunDispatch {
 }
 
 impl ModelRunDispatchPort for PrivateModelRunDispatch {
-    fn dispatch_model_run(&self, input: ScheduleModelRunDto) -> DtoResult<()> {
+    fn dispatch_model_run(&self, input: ModelRunExecutionInputDto) -> DtoResult<()> {
         // Lane E admits a post-commit scheduling payload only. Provider execution,
         // including an outbound request, remains owned by the future daemon host.
         #[cfg(not(test))]
@@ -333,25 +332,22 @@ impl DaemonApplicationFacade {
         publisher: &P,
     ) -> DtoResult<LocalToolInvocationOutcomeDto> {
         let cancellation = self.bind_local_tool_cancellation(session_id, run_id)?;
-        let result = intention_application::ApplicationService::with_hooks(
-            &self.inner.repository,
-            production_hooks()?,
-        )
-        .with_workspace_boundary(SafeWorkspaceBoundary)
-        .invoke_local_tool_with_publication(
-            InvokeLocalToolInputDto::new(
-                workspace,
-                session_id,
-                run_id,
-                call_id,
-                tool_id,
-                input,
-                now()?,
-            )
-            .with_arguments_json(arguments_json)
-            .with_cancellation(cancellation),
-            publisher,
-        );
+        let result = ApplicationService::with_hooks(&self.inner.repository, production_hooks()?)
+            .with_workspace_boundary(SafeWorkspaceBoundary)
+            .invoke_local_tool_with_publication(
+                ToolInvocationRequestDto::new(
+                    workspace,
+                    session_id,
+                    run_id,
+                    call_id,
+                    tool_id,
+                    input,
+                    now()?,
+                )
+                .with_arguments_json(arguments_json)
+                .with_cancellation(cancellation),
+                publisher,
+            );
         self.release_local_tool_cancellation(session_id, run_id);
         result
     }
@@ -503,16 +499,15 @@ impl DaemonApplicationFacade {
     /// Executes one scheduled run through the privately selected provider
     /// driver with the mandatory tool executor.
     ///
-    /// This bridge is provider-neutral and safe: it accepts only scheduling DTOs,
-    /// cancellation, a time port, committed-observation evidence, and the tool
-    /// executor. It does not expose provider SDKs, credentials, Tokio, or
+    /// This bridge is provider-neutral and safe: it accepts only a model-run
+    /// execution input, a time port, committed-observation evidence, and the
+    /// tool executor. It does not expose provider SDKs, credentials, Tokio, or
     /// storage resources. Provider-emitted tool calls execute through the
     /// caller-supplied durable tool path.
     #[doc(hidden)]
     pub async fn execute_scheduled_model_run_for_daemon_with_tool_executor<Time>(
         &self,
-        schedule: ScheduleModelRunDto,
-        cancellation: ModelCancellationSignal,
+        input: ModelRunExecutionInputDto,
         time: &Time,
         observer: &dyn ModelRunCommitObserver,
         tool_executor: &dyn ToolExecutionPort,
@@ -527,13 +522,7 @@ impl DaemonApplicationFacade {
             observer,
             tool_executor,
         )
-        .execute(ModelRunExecutionInputDto::new(
-            schedule.session_id(),
-            schedule.run_id(),
-            schedule.request().clone(),
-            schedule.safe_config().clone(),
-            cancellation,
-        ))
+        .execute(input)
         .await
     }
 
@@ -707,8 +696,13 @@ impl DaemonApplicationFacade {
         &self,
         session_id: SessionId,
         run_id: RunId,
-    ) -> DtoResult<ScheduleModelRunDto> {
-        ApplicationService::new(&self.inner.repository).schedule_starting_run(session_id, run_id)
+        cancellation: ModelCancellationSignal,
+    ) -> DtoResult<ModelRunExecutionInputDto> {
+        ApplicationService::new(&self.inner.repository).schedule_starting_run(
+            session_id,
+            run_id,
+            cancellation,
+        )
     }
 
     /// Returns the currently active durable run when it is eligible for host admission.
@@ -855,17 +849,15 @@ impl DaemonApplicationFacade {
         let result = match command {
             ProtocolCommandDto::CreateSession(command) => {
                 ApplicationService::new(&self.inner.repository)
-                    .create_session(CreateSessionWorkflowInputDto::new(command, timestamp))?
+                    .create_session(command, timestamp)?
             }
             ProtocolCommandDto::SendUserTurn(command) => {
                 let proposed_run_id = RunId::new();
                 ApplicationService::new(&self.inner.repository).send_user_turn_and_schedule(
                     command,
-                    SendUserTurnWorkflowInputDto::new(
-                        proposed_run_id,
-                        self.inner.config_snapshot.clone(),
-                        timestamp,
-                    ),
+                    proposed_run_id,
+                    self.inner.config_snapshot.clone(),
+                    timestamp,
                     &self.inner.dispatch,
                 )?
             }
@@ -1239,7 +1231,11 @@ mod tests {
         )
         .expect("durable facade opens");
         let error = facade
-            .schedule_starting_run_for_daemon(SessionId::new(), RunId::new())
+            .schedule_starting_run_for_daemon(
+                SessionId::new(),
+                RunId::new(),
+                ModelCancellationSignal::new(),
+            )
             .expect_err("unknown run cannot be scheduled");
         assert_eq!(error.code(), "run_model_context_unavailable");
         assert!(!error.to_string().contains("schedule-error.sqlite"));
@@ -1309,21 +1305,29 @@ mod tests {
             "idempotent turn",
         )
         .expect("fixture user turn is valid");
-        // The facade proposes one run identity per command, so replaying that
-        // exact workflow input is the durable retry unit.
+        // The facade proposes one run identity per command, so replaying the
+        // exact accepted parameters is the durable retry unit.
         let proposed_run_id = RunId::new();
-        let workflow = SendUserTurnWorkflowInputDto::new(
-            proposed_run_id,
-            facade.inner.config_snapshot.clone(),
-            TimestampDto::from_unix_seconds(2).expect("fixture timestamp is valid"),
-        );
+        let occurred_at = TimestampDto::from_unix_seconds(2).expect("fixture timestamp is valid");
         let service = ApplicationService::new(&facade.inner.repository);
 
         let initial = service
-            .send_user_turn_and_schedule(command.clone(), workflow.clone(), &facade.inner.dispatch)
+            .send_user_turn_and_schedule(
+                command.clone(),
+                proposed_run_id,
+                facade.inner.config_snapshot.clone(),
+                occurred_at,
+                &facade.inner.dispatch,
+            )
             .expect("the first user turn is accepted");
         let replay = service
-            .send_user_turn_and_schedule(command, workflow, &facade.inner.dispatch)
+            .send_user_turn_and_schedule(
+                command,
+                proposed_run_id,
+                facade.inner.config_snapshot.clone(),
+                occurred_at,
+                &facade.inner.dispatch,
+            )
             .expect("the durable retry replays the committed acceptance");
 
         assert_eq!(replay, initial);
@@ -1435,7 +1439,7 @@ mod tests {
             Some(run_id)
         );
         let schedule = facade
-            .schedule_starting_run_for_daemon(session_id, run_id)
+            .schedule_starting_run_for_daemon(session_id, run_id, ModelCancellationSignal::new())
             .expect("durable model context schedules");
         assert_eq!(
             (schedule.session_id(), schedule.run_id()),

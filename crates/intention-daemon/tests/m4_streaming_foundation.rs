@@ -23,11 +23,16 @@ use std::{
 use futures_util::StreamExt;
 use futures_util::stream;
 use intention::DaemonApplicationFacade;
-use intention_application::ScheduleModelRunDto;
 #[cfg(feature = "test-support")]
 use intention_client::RunStreamClient;
 use intention_config::ConfigSnapshotDto;
 use intention_daemon::DaemonToolExecutor;
+#[cfg(feature = "test-support")]
+use intention_engine::INTERRUPT_NOTICE;
+use intention_engine::ModelRunExecutionInputDto;
+use intention_engine::{
+    ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
+};
 #[cfg(feature = "test-support")]
 use intention_proto::TurnId;
 use intention_proto::{IdempotencyKey, RunId, SessionId, TimestampDto};
@@ -44,11 +49,6 @@ use intention_proto::{
 use intention_providers::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
-};
-#[cfg(feature = "test-support")]
-use intention_runtime::INTERRUPT_NOTICE;
-use intention_runtime::{
-    ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
 };
 #[cfg(feature = "test-support")]
 use intention_transport::{AsyncLocalListener, LocalEndpoint};
@@ -256,8 +256,8 @@ fn schedule(
     session_id: SessionId,
     run_id: RunId,
     snapshot: ConfigSnapshotDto,
-) -> ScheduleModelRunDto {
-    ScheduleModelRunDto::new(
+) -> ModelRunExecutionInputDto {
+    ModelRunExecutionInputDto::new(
         session_id,
         run_id,
         ModelRequestDto::new(
@@ -269,8 +269,8 @@ fn schedule(
         )
         .expect("request is valid"),
         snapshot,
+        ModelCancellationSignal::new(),
     )
-    .expect("schedule is valid")
 }
 
 fn create_and_start(facade: &DaemonApplicationFacade) -> (SessionId, RunId) {
@@ -421,7 +421,6 @@ async fn injected_driver_executes_through_the_facade_bridge_and_observes_only_co
     let outcome = facade
         .execute_scheduled_model_run_for_daemon_with_tool_executor(
             schedule(session_id, run_id, snapshot),
-            ModelCancellationSignal::new(),
             &TokioTime,
             &observer,
             &DaemonToolExecutor::new(facade.clone()),
@@ -431,7 +430,7 @@ async fn injected_driver_executes_through_the_facade_bridge_and_observes_only_co
 
     assert!(matches!(
         outcome,
-        intention_runtime::ModelRunExecutionOutcomeDto::Completed { .. }
+        intention_engine::ModelRunExecutionOutcomeDto::Completed { .. }
     ));
     assert_eq!(driver.executions(), 1);
     let commits = observer.commits();

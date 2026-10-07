@@ -12,6 +12,10 @@ use std::{
 
 use intention::{DaemonApplicationFacade, LocalToolInvocationOutcomeDto};
 use intention_domain::run_status_is_terminal;
+use intention_engine::{
+    ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
+    ToolResultOutcomeDto,
+};
 use intention_proto::RunStatusDto;
 use intention_proto::{
     CorrelationIdDto, DtoResult, ErrorDto, RunId, SessionId, TimestampDto, ToolCallDto,
@@ -23,10 +27,6 @@ use intention_proto::{
     decode_request_line, encode_response, is_notification_line,
 };
 use intention_providers::ModelCancellationSignal;
-use intention_runtime::{
-    ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
-    ToolResultOutcomeDto,
-};
 use intention_tools::{GrepResult, PathsResult, ToolInput, ToolProjectedContent, ToolResult};
 #[cfg(test)]
 use intention_transport::LocalListener;
@@ -123,10 +123,14 @@ impl HostState {
         if data.tasks.contains_key(&key) {
             return;
         }
-        let schedule = match self
-            .facade
-            .schedule_starting_run_for_daemon(session_id, run_id)
-        {
+        // The admitted run's cancellation signal is created here and embedded
+        // in the execution input, so an interrupt and the executor share it.
+        let cancellation = ModelCancellationSignal::new();
+        let schedule = match self.facade.schedule_starting_run_for_daemon(
+            session_id,
+            run_id,
+            cancellation.clone(),
+        ) {
             Ok(schedule) => schedule,
             Err(_) => {
                 drop(data);
@@ -134,11 +138,10 @@ impl HostState {
                 return;
             }
         };
-        let cancellation = ModelCancellationSignal::new();
         let std::collections::hash_map::Entry::Vacant(entry) = data.tasks.entry(key) else {
             return;
         };
-        entry.insert(cancellation.clone());
+        entry.insert(cancellation);
         #[cfg(any(test, feature = "test-support"))]
         {
             let (completion, _) = tokio::sync::watch::channel(false);
@@ -161,7 +164,6 @@ impl HostState {
                 .facade
                 .execute_scheduled_model_run_for_daemon_with_tool_executor(
                     schedule.clone(),
-                    cancellation.clone(),
                     &TokioTime,
                     &observer,
                     &executor,
@@ -538,7 +540,7 @@ struct HostTranscriptPublisher {
     host: Arc<HostState>,
 }
 
-impl intention_application::ToolResultPublicationPort for HostTranscriptPublisher {
+impl intention_engine::ToolResultPublicationPort for HostTranscriptPublisher {
     fn publish_committed_message(
         &self,
         message: &intention_proto::MessageProjectionDto,
@@ -593,7 +595,7 @@ impl DaemonToolExecutor<()> {
     }
 }
 
-impl<P: intention_application::ToolResultPublicationPort + Clone + Send + Sync + 'static>
+impl<P: intention_engine::ToolResultPublicationPort + Clone + Send + Sync + 'static>
     DaemonToolExecutor<P>
 {
     /// Binds one durable facade and the host publication boundary, so every
@@ -604,8 +606,8 @@ impl<P: intention_application::ToolResultPublicationPort + Clone + Send + Sync +
     }
 }
 
-impl<P: intention_application::ToolResultPublicationPort + Clone + Send + Sync + 'static>
-    intention_runtime::ToolExecutionPort for DaemonToolExecutor<P>
+impl<P: intention_engine::ToolResultPublicationPort + Clone + Send + Sync + 'static>
+    intention_engine::ToolExecutionPort for DaemonToolExecutor<P>
 {
     fn execute_tool(
         &self,

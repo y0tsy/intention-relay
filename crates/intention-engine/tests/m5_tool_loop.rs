@@ -9,6 +9,11 @@ use futures_util::{StreamExt, stream};
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
+use intention_engine::{
+    ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,
+    ModelRunExecutionOutcomeDto, ModelRunExecutionService, ModelSleepFuture, ModelTimePort,
+    ToolExecutionPort, ToolResultOutcomeDto,
+};
 use intention_proto::{
     ConfigRevisionId, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto, SessionId,
     TimestampDto, ToolCallId, TurnId, WorkspaceId,
@@ -21,11 +26,6 @@ use intention_providers::{
     AssistantReasoningDto, FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto,
     ModelDriver, ModelEventDto, ModelEventStream, ModelExecutionDriver, ModelMessageDto,
     ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto,
-};
-use intention_runtime::{
-    ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,
-    ModelRunExecutionOutcomeDto, ModelRunExecutionService, ModelSleepFuture, ModelTimePort,
-    ToolExecutionPort, ToolResultOutcomeDto,
 };
 use intention_storage::{
     AppendMessageInputDto, ConsumePendingUserTurnsInputDto, CreateSessionInputDto,
@@ -1520,14 +1520,14 @@ fn interruption_during_tool_execution_records_the_notice_and_continues() {
             .iter()
             .map(|message| (message.kind(), message.text()))
             .collect::<Vec<_>>(),
-        vec![(MessageKindDto::Notice, intention_runtime::INTERRUPT_NOTICE)],
+        vec![(MessageKindDto::Notice, intention_engine::INTERRUPT_NOTICE)],
         "the interruption commits its durable notice"
     );
     drop(messages);
     let requests = driver.requests.borrow();
     assert!(requests[1].messages().iter().any(|message| {
         message.role() == ModelRoleDto::Notice
-            && message.content() == intention_runtime::INTERRUPT_NOTICE
+            && message.content() == intention_engine::INTERRUPT_NOTICE
     }));
 }
 
@@ -1630,7 +1630,7 @@ fn interruption_during_a_provider_round_records_a_notice_and_continues() {
             .collect::<Vec<_>>(),
         vec![
             (MessageKindDto::Assistant, "partial"),
-            (MessageKindDto::Notice, intention_runtime::INTERRUPT_NOTICE),
+            (MessageKindDto::Notice, intention_engine::INTERRUPT_NOTICE),
         ]
     );
     drop(messages);
@@ -1694,7 +1694,7 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
     let answered = requests[1].messages().iter().any(|message| {
         message.role() == ModelRoleDto::Tool
             && message.tool_call_id() == Some(call.call_id())
-            && message.content() == intention_runtime::TOOL_INTERRUPT_NOTICE
+            && message.content() == intention_engine::TOOL_INTERRUPT_NOTICE
     });
     assert!(
         answered,
@@ -1822,7 +1822,7 @@ fn interruption_while_the_round_is_waiting_records_a_notice_and_continues() {
             .iter()
             .map(|message| (message.kind(), message.text()))
             .collect::<Vec<_>>(),
-        vec![(MessageKindDto::Notice, intention_runtime::INTERRUPT_NOTICE)]
+        vec![(MessageKindDto::Notice, intention_engine::INTERRUPT_NOTICE)]
     );
 }
 
@@ -2080,7 +2080,7 @@ fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
             .iter()
             .map(|message| (message.kind(), message.text()))
             .collect::<Vec<_>>(),
-        vec![(MessageKindDto::Notice, intention_runtime::INTERRUPT_NOTICE)]
+        vec![(MessageKindDto::Notice, intention_engine::INTERRUPT_NOTICE)]
     );
 }
 
@@ -2150,7 +2150,7 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
             .iter()
             .map(|message| (message.kind(), message.text()))
             .collect::<Vec<_>>(),
-        vec![(MessageKindDto::Notice, intention_runtime::INTERRUPT_NOTICE)]
+        vec![(MessageKindDto::Notice, intention_engine::INTERRUPT_NOTICE)]
     );
 }
 
@@ -2218,7 +2218,7 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
             .iter()
             .map(|message| (message.kind(), message.text()))
             .collect::<Vec<_>>(),
-        vec![(MessageKindDto::Notice, intention_runtime::INTERRUPT_NOTICE)]
+        vec![(MessageKindDto::Notice, intention_engine::INTERRUPT_NOTICE)]
     );
 }
 

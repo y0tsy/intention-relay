@@ -9,6 +9,11 @@ use futures_util::{StreamExt, stream};
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
+use intention_engine::{
+    ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,
+    ModelRunExecutionOutcomeDto, ModelRunExecutionService, ModelSleepFuture, ModelTimePort,
+    ToolExecutionPort, ToolResultOutcomeDto,
+};
 use intention_proto::{
     ConfigRevisionId, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto, SessionId,
     TimestampDto, TurnId, WorkspaceId,
@@ -21,11 +26,6 @@ use intention_providers::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
     ProviderErrorDto, ToolCallDto, UsageDto,
-};
-use intention_runtime::{
-    ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,
-    ModelRunExecutionOutcomeDto, ModelRunExecutionService, ModelSleepFuture, ModelTimePort,
-    ToolExecutionPort, ToolResultOutcomeDto,
 };
 use intention_storage::{
     AppendMessageInputDto, ConsumePendingUserTurnsInputDto, CreateSessionInputDto,
@@ -791,7 +791,7 @@ fn interruption_records_a_notice_and_continues_the_same_run() {
             .collect::<Vec<_>>(),
         vec![
             (MessageKindDto::Assistant, "partial answer"),
-            (MessageKindDto::Notice, intention_runtime::INTERRUPT_NOTICE),
+            (MessageKindDto::Notice, intention_engine::INTERRUPT_NOTICE),
             (MessageKindDto::Assistant, "final answer"),
         ],
         "the stopped step commits its text and the durable notice"
@@ -804,7 +804,7 @@ fn interruption_records_a_notice_and_continues_the_same_run() {
     assert_eq!(requests.len(), 2);
     assert!(requests[1].messages().iter().any(|message| {
         message.role() == ModelRoleDto::Notice
-            && message.content() == intention_runtime::INTERRUPT_NOTICE
+            && message.content() == intention_engine::INTERRUPT_NOTICE
     }));
     drop(requests);
     let finishes = repository.finishes.borrow();
@@ -861,7 +861,7 @@ fn an_interrupt_before_the_first_round_still_records_a_notice_and_continues() {
             .iter()
             .map(|message| (message.kind(), message.text()))
             .collect::<Vec<_>>(),
-        vec![(MessageKindDto::Notice, intention_runtime::INTERRUPT_NOTICE)],
+        vec![(MessageKindDto::Notice, intention_engine::INTERRUPT_NOTICE)],
         "an interrupted step without text commits only its notice"
     );
     drop(messages);
@@ -1347,13 +1347,13 @@ fn an_interrupt_during_a_retry_wait_records_a_notice_and_starts_the_next_attempt
             .iter()
             .map(|message| (message.kind(), message.text()))
             .collect::<Vec<_>>(),
-        vec![(MessageKindDto::Notice, intention_runtime::INTERRUPT_NOTICE)]
+        vec![(MessageKindDto::Notice, intention_engine::INTERRUPT_NOTICE)]
     );
     drop(messages);
     let requests = driver.requests.borrow();
     assert!(requests[1].messages().iter().any(|message| {
         message.role() == ModelRoleDto::Notice
-            && message.content() == intention_runtime::INTERRUPT_NOTICE
+            && message.content() == intention_engine::INTERRUPT_NOTICE
     }));
     drop(requests);
     let finishes = repository.finishes.borrow();

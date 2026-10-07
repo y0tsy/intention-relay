@@ -11,8 +11,7 @@ active_production_crates = [
   "intention-client",
   "intention",
   "intention-daemon",
-  "intention-application",
-  "intention-runtime",
+  "intention-engine",
   "intention-storage",
   "intention-providers",
   "intention-tools",
@@ -55,10 +54,9 @@ test_only_source_patterns = [
 "intention-storage" = ["intention-config", "intention-domain", "intention-proto"]
 "intention-transport" = ["intention-proto"]
 "intention-client" = ["intention-transport", "intention-proto"]
-"intention" = ["intention-application", "intention-config", "intention-domain", "intention-providers", "intention-runtime", "intention-storage", "intention-tools", "intention-proto"]
-"intention-daemon" = ["intention", "intention-application", "intention-client", "intention-config", "intention-domain", "intention-providers", "intention-runtime", "intention-tools", "intention-transport", "intention-proto"]
-"intention-application" = ["intention-config", "intention-domain", "intention-runtime", "intention-storage", "intention-tools", "intention-proto"]
-"intention-runtime" = ["intention-config", "intention-domain", "intention-storage", "intention-proto", "intention-providers"]
+"intention" = ["intention-config", "intention-domain", "intention-engine", "intention-providers", "intention-storage", "intention-tools", "intention-proto"]
+"intention-daemon" = ["intention", "intention-client", "intention-config", "intention-domain", "intention-engine", "intention-providers", "intention-tools", "intention-transport", "intention-proto"]
+"intention-engine" = ["intention-config", "intention-domain", "intention-providers", "intention-proto", "intention-storage", "intention-tools"]
 "intention-providers" = ["intention-config", "intention-proto"]
 "intention-tools" = ["intention-proto"]
 
@@ -70,8 +68,7 @@ test_only_source_patterns = [
 "intention-client" = ["fs4", "tempfile", "tokio"]
 "intention" = ["futures-util", "tempfile"]
 "intention-daemon" = ["futures-util", "serde_json", "tempfile", "tokio"]
-"intention-application" = []
-"intention-runtime" = ["futures-executor", "futures-util"]
+"intention-engine" = ["futures-executor", "futures-util"]
 "intention-storage" = ["rusqlite", "serde_json", "tempfile"]
 "intention-providers" = ["async-openai", "futures-core", "futures-executor", "futures-util", "http", "openrouter-rs", "serde", "serde_json"]
 "intention-tools" = ["glob", "rustix", "serde", "serde_json", "tempfile"]
@@ -82,8 +79,7 @@ allowed_workspace_dependencies = ["intention-client", "intention-transport", "in
 allowed_test_workspace_dependencies = ["intention-daemon", "intention-test-support"]
 allowed_external_dependencies = ["serde_json", "tokio"]
 forbidden_source_patterns = [
-  "intention_application::",
-  "intention_runtime::",
+  "intention_engine::",
   "intention_storage::",
   "intention_tools::",
   "intention_providers::",
@@ -162,12 +158,8 @@ test_targets = ["contracts", "m3_contracts", "m5_tool_results"]
 
 # Active M3 application lifecycle targets are checked against Cargo metadata.
 [[future_crates]]
-name = "intention-application"
-test_targets = ["m3_application"]
-
-[[future_crates]]
-name = "intention-runtime"
-test_targets = ["m3_runtime", "m4_model_execution", "m4_runtime_failure_helpers", "m5_tool_loop"]
+name = "intention-engine"
+test_targets = ["m3_engine", "m3_runtime", "m4_model_execution", "m4_runtime_failure_helpers", "m5_tool_loop"]
 
 [[future_crates]]
 name = "intention-storage"

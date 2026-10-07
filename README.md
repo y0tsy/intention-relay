@@ -89,8 +89,7 @@ exempt at 0% and outside collection.
 | Crate | Responsibility |
 | --- | --- |
 | [intention-storage](crates/intention-storage) | DTO-only repository contract plus the bundled SQLite implementation behind it (single current schema, created directly on open); the SQLite backend is selected only by the composition crate. |
-| [intention-runtime](crates/intention-runtime) | Deterministic run lifecycle decisions, model-loop coordination, cancellation, over DTO-only storage. |
-| [intention-application](crates/intention-application) | Workflow orchestration: sessions, turns, scheduling, tool invocation, and publication over durable outcomes. |
+| [intention-engine](crates/intention-engine) | Commands, queries, and semantic use-case workflows plus deterministic run execution, interruption handling, context-window accounting, and recovery-before-ready, over DTO-only storage. |
 
 ### Model drivers
 

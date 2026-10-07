@@ -333,18 +333,18 @@ def check_phase_policy(
         "m3": {
             "intention-proto", "intention-domain", "intention-config",
             "intention-transport", "intention-client", "intention", "intention-daemon",
-            "intention-application", "intention-runtime", "intention-storage",
+            "intention-engine", "intention-storage",
         },
         "m4": {
             "intention-proto", "intention-domain", "intention-config",
             "intention-transport", "intention-client", "intention", "intention-daemon",
-            "intention-application", "intention-runtime", "intention-storage",
+            "intention-engine", "intention-storage",
             "intention-providers",
         },
         "m5": {
             "intention-proto", "intention-domain", "intention-config",
             "intention-transport", "intention-client", "intention", "intention-daemon",
-            "intention-application", "intention-runtime", "intention-storage",
+            "intention-engine", "intention-storage",
             "intention-providers",
             "intention-tools",
         },

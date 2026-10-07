@@ -2,8 +2,7 @@
 members = [
   "crates/intention-proto",
   "crates/intention-domain",
-  "crates/intention-application",
-  "crates/intention-runtime",
+  "crates/intention-engine",
   "crates/intention-storage",
   "crates/intention-config",
   "crates/intention-providers",

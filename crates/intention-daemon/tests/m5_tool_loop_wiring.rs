@@ -12,9 +12,13 @@ use std::{
 
 use futures_util::stream;
 use intention::DaemonApplicationFacade;
-use intention_application::ScheduleModelRunDto;
 use intention_config::ConfigSnapshotDto;
 use intention_daemon::DaemonToolExecutor;
+use intention_engine::ModelRunExecutionInputDto;
+use intention_engine::{
+    ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionOutcomeDto, ModelSleepFuture,
+    ModelTimePort,
+};
 use intention_proto::{IdempotencyKey, RunId, SessionId, TimestampDto, ToolCallId};
 use intention_proto::{
     MessageKindDto, MessageProjectionDto, RunStatusDto, SendUserTurnCommandDto, WorkspaceRootDto,
@@ -26,10 +30,6 @@ use intention_providers::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
     ModelToolDefinitionDto, ToolCallDto,
-};
-use intention_runtime::{
-    ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionOutcomeDto, ModelSleepFuture,
-    ModelTimePort,
 };
 use tempfile::TempDir;
 
@@ -196,8 +196,8 @@ fn schedule(
     session_id: SessionId,
     run_id: RunId,
     snapshot: ConfigSnapshotDto,
-) -> ScheduleModelRunDto {
-    ScheduleModelRunDto::new(
+) -> ModelRunExecutionInputDto {
+    ModelRunExecutionInputDto::new(
         session_id,
         run_id,
         ModelRequestDto::new(
@@ -211,8 +211,8 @@ fn schedule(
         .with_tools(advertised_tool_definitions())
         .expect("tool advertisement is valid"),
         snapshot,
+        ModelCancellationSignal::new(),
     )
-    .expect("schedule is valid")
 }
 
 fn create_session(
@@ -292,7 +292,6 @@ async fn daemon_tool_executor_executes_real_read_tool_through_loop() {
     let outcome = facade
         .execute_scheduled_model_run_for_daemon_with_tool_executor(
             schedule(session_id, run_id, snapshot),
-            ModelCancellationSignal::new(),
             &TokioTime,
             &observer,
             &executor,
@@ -412,7 +411,6 @@ async fn daemon_tool_executor_missing_file_returns_typed_failure() {
     let outcome = facade
         .execute_scheduled_model_run_for_daemon_with_tool_executor(
             schedule(session_id, run_id, snapshot),
-            ModelCancellationSignal::new(),
             &TokioTime,
             &observer,
             &executor,

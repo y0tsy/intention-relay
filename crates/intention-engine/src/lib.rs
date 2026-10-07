@@ -5,6 +5,11 @@
 //! Every tool call commits its `tool_call` row before dispatch and exactly one
 //! terminal result row with its answering `tool_result` message afterwards.
 
+mod context_window;
+mod runtime;
+
+pub use crate::runtime::*;
+
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{ToolResultMetadataEntryDto, ToolResultStatusDto};
 use intention_proto::ToolCallId;
@@ -18,9 +23,6 @@ use intention_proto::{
     MessageProjectionDto, RemoveTurnCommandDto, SendUserTurnCommandDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
-use intention_runtime::{
-    ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, fail_starting_run,
-};
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto, CreateSessionInputDto,
     RemoveTurnInputDto, StorageRepositoryDto, ToolResultEvidenceDto, WriteToolResultInputDto,
@@ -30,78 +32,6 @@ use intention_tools::{
     Phase, PhaseContext, ToolDispatchOutcome, ToolInput, ToolProjectedContent, ToolResult,
     ToolService, WorkspaceRoot,
 };
-
-/// Explicit durable values selected for a create-session workflow.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CreateSessionWorkflowInputDto {
-    command: CreateSessionCommandDto,
-    occurred_at: TimestampDto,
-}
-
-impl CreateSessionWorkflowInputDto {
-    /// Creates a DTO-only session creation workflow input.
-    #[must_use]
-    pub const fn new(command: CreateSessionCommandDto, occurred_at: TimestampDto) -> Self {
-        Self {
-            command,
-            occurred_at,
-        }
-    }
-
-    /// Returns the requested durable session command.
-    #[must_use]
-    pub const fn command(&self) -> &CreateSessionCommandDto {
-        &self.command
-    }
-
-    /// Returns the event timestamp selected by the caller.
-    #[must_use]
-    pub const fn occurred_at(&self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
-/// Explicit durable values selected for one accepted user turn.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SendUserTurnWorkflowInputDto {
-    proposed_run_id: RunId,
-    config_snapshot: ConfigSnapshotDto,
-    occurred_at: TimestampDto,
-}
-
-impl SendUserTurnWorkflowInputDto {
-    /// Creates a DTO-only user-turn workflow input.
-    #[must_use]
-    pub const fn new(
-        proposed_run_id: RunId,
-        config_snapshot: ConfigSnapshotDto,
-        occurred_at: TimestampDto,
-    ) -> Self {
-        Self {
-            proposed_run_id,
-            config_snapshot,
-            occurred_at,
-        }
-    }
-
-    /// Returns the supplied first-or-future run identity.
-    #[must_use]
-    pub const fn proposed_run_id(&self) -> RunId {
-        self.proposed_run_id
-    }
-
-    /// Returns the immutable snapshot retained for a started or queued run.
-    #[must_use]
-    pub const fn config_snapshot(&self) -> &ConfigSnapshotDto {
-        &self.config_snapshot
-    }
-
-    /// Returns the selected durable event timestamp.
-    #[must_use]
-    pub const fn occurred_at(&self) -> TimestampDto {
-        self.occurred_at
-    }
-}
 
 /// Synchronous DTO-only boundary that admits accepted work to daemon-owned scheduling.
 ///
@@ -113,7 +43,7 @@ pub trait ModelRunDispatchPort {
     /// # Errors
     ///
     /// Returns a typed local scheduling error when the daemon cannot accept the work.
-    fn dispatch_model_run(&self, input: ScheduleModelRunDto) -> DtoResult<()>;
+    fn dispatch_model_run(&self, input: ModelRunExecutionInputDto) -> DtoResult<()>;
 }
 
 /// Terminal application outcome of one explicit local tool invocation.
@@ -139,7 +69,7 @@ pub trait LocalToolInvocationPort {
     /// Returns the typed storage or tool execution error.
     fn invoke_local_tool(
         &self,
-        input: InvokeLocalToolInputDto,
+        input: ToolInvocationRequestDto,
     ) -> DtoResult<LocalToolInvocationOutcomeDto>;
 }
 
@@ -205,9 +135,9 @@ fn dispatch_hooks<O: HookObservationPort>(
     Ok(dispatched.outcome)
 }
 
-/// Complete DTO-only input for one local tool invocation.
+/// Complete engine command for one local tool invocation.
 #[derive(Debug)]
-pub struct InvokeLocalToolInputDto {
+pub struct ToolInvocationRequestDto {
     workspace: WorkspaceRoot,
     session_id: SessionId,
     run_id: RunId,
@@ -219,7 +149,7 @@ pub struct InvokeLocalToolInputDto {
     arguments_json: String,
 }
 
-impl InvokeLocalToolInputDto {
+impl ToolInvocationRequestDto {
     /// Creates a local tool invocation input.
     ///
     /// The canonical arguments document defaults to an empty JSON object; a
@@ -264,69 +194,6 @@ impl InvokeLocalToolInputDto {
     }
 }
 
-/// Complete DTO-only scheduling payload constructed from durable starting-run context.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ScheduleModelRunDto {
-    session_id: SessionId,
-    run_id: RunId,
-    request: ModelRequestDto,
-    safe_config: ConfigSnapshotDto,
-}
-
-impl ScheduleModelRunDto {
-    /// Creates a coherent model-run scheduling payload.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the request identity or model does not
-    /// agree with the durable selected configuration.
-    pub fn new(
-        session_id: SessionId,
-        run_id: RunId,
-        request: ModelRequestDto,
-        safe_config: ConfigSnapshotDto,
-    ) -> DtoResult<Self> {
-        if request.run_id() != run_id
-            || request.model() != safe_config.resolved().provider().model()
-        {
-            return Err(ErrorDto::validation(
-                "invalid_model_run_schedule",
-                "model scheduling request must match the durable starting run selection",
-            ));
-        }
-        Ok(Self {
-            session_id,
-            run_id,
-            request,
-            safe_config,
-        })
-    }
-
-    /// Returns the owning durable session.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-
-    /// Returns the exact durable starting run.
-    #[must_use]
-    pub const fn run_id(&self) -> RunId {
-        self.run_id
-    }
-
-    /// Returns the provider-neutral request built from durable context.
-    #[must_use]
-    pub const fn request(&self) -> &ModelRequestDto {
-        &self.request
-    }
-
-    /// Returns the immutable credential-free run configuration selection.
-    #[must_use]
-    pub const fn safe_config(&self) -> &ConfigSnapshotDto {
-        &self.safe_config
-    }
-}
-
 /// DTO-only application facade over one semantic storage repository.
 pub struct ApplicationService<'a, Repository> {
     repository: &'a Repository,
@@ -345,7 +212,7 @@ where
     /// Returns the typed validation, storage, or tool execution error.
     pub fn invoke_local_tool(
         &self,
-        input: InvokeLocalToolInputDto,
+        input: ToolInvocationRequestDto,
     ) -> DtoResult<LocalToolInvocationOutcomeDto> {
         self.invoke_local_tool_with_publication(input, &())
     }
@@ -358,7 +225,7 @@ where
     /// post-publish hook error.
     pub fn invoke_local_tool_with_publication<P: ToolResultPublicationPort>(
         &self,
-        input: InvokeLocalToolInputDto,
+        input: ToolInvocationRequestDto,
         publisher: &P,
     ) -> DtoResult<LocalToolInvocationOutcomeDto> {
         self.invoke_local_tool_through_ports(input, publisher, &())
@@ -375,7 +242,7 @@ where
     /// Returns the typed validation, storage, or tool execution error.
     pub fn invoke_local_tool_with_observation<O: HookObservationPort>(
         &self,
-        input: InvokeLocalToolInputDto,
+        input: ToolInvocationRequestDto,
         observer: &O,
     ) -> DtoResult<LocalToolInvocationOutcomeDto> {
         self.invoke_local_tool_through_ports(input, &(), observer)
@@ -383,11 +250,11 @@ where
 
     fn invoke_local_tool_through_ports<P: ToolResultPublicationPort, O: HookObservationPort>(
         &self,
-        input: InvokeLocalToolInputDto,
+        input: ToolInvocationRequestDto,
         publisher: &P,
         observer: &O,
     ) -> DtoResult<LocalToolInvocationOutcomeDto> {
-        let InvokeLocalToolInputDto {
+        let ToolInvocationRequestDto {
             workspace,
             session_id,
             run_id,
@@ -707,7 +574,7 @@ where
         let (status, content, metadata) = match &result {
             Ok(value) => (
                 ToolResultStatusDto::Completed,
-                tool_result_content(value)?,
+                render_tool_result_content(value)?,
                 tool_result_metadata(value)?,
             ),
             Err(error) => (
@@ -942,12 +809,12 @@ where
     /// Returns the typed repository error when durable session creation fails.
     pub fn create_session(
         &self,
-        input: CreateSessionWorkflowInputDto,
+        command: CreateSessionCommandDto,
+        occurred_at: TimestampDto,
     ) -> DtoResult<ProtocolAcceptedResultDto> {
-        let projection = self.repository.create_session(CreateSessionInputDto::new(
-            input.command.clone(),
-            input.occurred_at,
-        ))?;
+        let projection = self
+            .repository
+            .create_session(CreateSessionInputDto::new(command, occurred_at))?;
         Ok(ProtocolAcceptedResultDto::CreateSession(
             CreateSessionAcceptedDto::new(
                 projection.project_id(),
@@ -974,22 +841,23 @@ where
     pub fn send_user_turn_and_schedule<Dispatch>(
         &self,
         command: SendUserTurnCommandDto,
-        input: SendUserTurnWorkflowInputDto,
+        proposed_run_id: RunId,
+        config_snapshot: ConfigSnapshotDto,
+        occurred_at: TimestampDto,
         dispatch: &Dispatch,
     ) -> DtoResult<ProtocolAcceptedResultDto>
     where
         Dispatch: ModelRunDispatchPort,
     {
-        let occurred_at = input.occurred_at();
         let outcome = self
             .repository
             .accept_user_turn(AcceptUserTurnInputDto::new(
                 command.session_id(),
                 command.idempotency_key(),
                 command.content(),
-                input.proposed_run_id,
-                input.config_snapshot,
-                input.occurred_at,
+                proposed_run_id,
+                config_snapshot,
+                occurred_at,
             )?)?;
         let accepted = accepted_user_turn(&command, &outcome)?;
         let ProtocolAcceptedResultDto::SendUserTurn(accepted_turn) = accepted else {
@@ -1004,7 +872,7 @@ where
             .load_starting_run_model_context(session_id, run_id)
         {
             Ok(context) if context.session_id() == session_id && context.run_id() == run_id => {
-                match schedule_from_context(context) {
+                match schedule_from_context(context, run_id, ModelCancellationSignal::new()) {
                     Ok(schedule) => schedule,
                     Err(_) => {
                         preserve_accepted_after_scheduling_failure(
@@ -1092,7 +960,9 @@ where
     /// Reconstructs the exact durable context for one current `Starting` run.
     ///
     /// This is the daemon-host admission read. It deliberately does not dispatch
-    /// work itself, so composition remains the owner of provider execution.
+    /// work itself, so composition remains the owner of provider execution, and
+    /// the supplied cancellation signal becomes part of the returned execution
+    /// input so the host that registers it owns the run's interruption.
     ///
     /// # Errors
     ///
@@ -1102,10 +972,13 @@ where
         &self,
         session_id: SessionId,
         run_id: RunId,
-    ) -> DtoResult<ScheduleModelRunDto> {
+        cancellation: ModelCancellationSignal,
+    ) -> DtoResult<ModelRunExecutionInputDto> {
         schedule_from_context(
             self.repository
                 .load_starting_run_model_context(session_id, run_id)?,
+            run_id,
+            cancellation,
         )
     }
 
@@ -1185,7 +1058,7 @@ fn terminal_status_for_error(error: &ErrorDto) -> ToolResultStatusDto {
 ///
 /// Returns a validation error when the rendered content is blank, because a
 /// tool result row must always answer its call with readable content.
-fn tool_result_content(result: &ToolResult) -> DtoResult<String> {
+fn render_tool_result_content(result: &ToolResult) -> DtoResult<String> {
     let content = match result.projection().content {
         ToolProjectedContent::Text { text, truncated } => {
             if truncated {
@@ -1281,7 +1154,7 @@ fn partial_tool_result_content(stopped: bool, result: Option<&ToolResult>) -> Dt
         (false, false) => "[The tool call did not receive a final result.]",
     };
     match result {
-        Some(result) => Ok(format!("{}\n{notice}", tool_result_content(result)?)),
+        Some(result) => Ok(format!("{}\n{notice}", render_tool_result_content(result)?)),
         None => Ok(notice.to_owned()),
     }
 }
@@ -1303,7 +1176,9 @@ fn preserve_accepted_after_scheduling_failure<Repository>(
 
 fn schedule_from_context(
     context: intention_storage::StartingRunModelContextDto,
-) -> DtoResult<ScheduleModelRunDto> {
+    run_id: RunId,
+    cancellation: ModelCancellationSignal,
+) -> DtoResult<ModelRunExecutionInputDto> {
     let messages = context
         .messages()
         .iter()
@@ -1333,12 +1208,23 @@ fn schedule_from_context(
         None,
     )?
     .with_tools(advertised_tool_definitions()?)?;
-    ScheduleModelRunDto::new(
+    // The constructed request must agree with the requested run identity and
+    // the durable starting-run selection before it becomes executable work.
+    if request.run_id() != run_id
+        || request.model() != context.safe_config().resolved().provider().model()
+    {
+        return Err(ErrorDto::validation(
+            "invalid_model_run_schedule",
+            "model scheduling request must match the durable starting run selection",
+        ));
+    }
+    Ok(ModelRunExecutionInputDto::new(
         context.session_id(),
         context.run_id(),
         request,
         context.safe_config().clone(),
-    )
+        cancellation,
+    ))
 }
 
 /// Builds the model-visible tool definitions advertised with every scheduled run.
@@ -1395,7 +1281,7 @@ mod tests {
     )]
 
     use super::{
-        partial_tool_result_content, result_phase_context, tool_result_content,
+        partial_tool_result_content, render_tool_result_content, result_phase_context,
         tool_result_metadata,
     };
     use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
@@ -1441,7 +1327,7 @@ mod tests {
             truncated: false,
         });
         assert_eq!(
-            tool_result_content(&read).expect("read content renders"),
+            render_tool_result_content(&read).expect("read content renders"),
             "hello"
         );
         let truncated = ToolResult::Execute(TextResult {
@@ -1449,7 +1335,7 @@ mod tests {
             truncated: true,
         });
         assert_eq!(
-            tool_result_content(&truncated).expect("execute content renders"),
+            render_tool_result_content(&truncated).expect("execute content renders"),
             "done\n[truncated]"
         );
         let glob = ToolResult::Glob(intention_tools::PathsResult {
@@ -1457,7 +1343,7 @@ mod tests {
             truncated: true,
         });
         assert_eq!(
-            tool_result_content(&glob).expect("glob content renders"),
+            render_tool_result_content(&glob).expect("glob content renders"),
             "src/a.rs\nsrc/b.rs\n[truncated]"
         );
         let grep = ToolResult::Grep(intention_tools::GrepResult {
@@ -1470,17 +1356,17 @@ mod tests {
             truncated: false,
         });
         assert_eq!(
-            tool_result_content(&grep).expect("grep content renders"),
+            render_tool_result_content(&grep).expect("grep content renders"),
             "src/a.rs:3:5: needle"
         );
         let write = ToolResult::Write(intention_tools::WriteResult { bytes: 17 });
         assert_eq!(
-            tool_result_content(&write).expect("write content renders"),
+            render_tool_result_content(&write).expect("write content renders"),
             "17 bytes"
         );
         let edit = ToolResult::Edit(intention_tools::WriteResult { bytes: 2 });
         assert_eq!(
-            tool_result_content(&edit).expect("edit content renders"),
+            render_tool_result_content(&edit).expect("edit content renders"),
             "2 bytes"
         );
     }
@@ -1491,7 +1377,7 @@ mod tests {
             text: bounded(""),
             truncated: false,
         });
-        let error = tool_result_content(&read).expect_err("blank content is rejected");
+        let error = render_tool_result_content(&read).expect_err("blank content is rejected");
         assert_eq!(error.code(), "invalid_tool_result_content");
     }
 

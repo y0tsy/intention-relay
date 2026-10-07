@@ -766,27 +766,14 @@ name = "intention"
 version = "0.0.0"
 dependencies = [
  "futures-util",
- "intention-application",
  "intention-config",
  "intention-domain",
+ "intention-engine",
  "intention-proto",
  "intention-providers",
- "intention-runtime",
  "intention-storage",
  "intention-tools",
  "tempfile",
-]
-
-[[package]]
-name = "intention-application"
-version = "0.0.0"
-dependencies = [
- "intention-config",
- "intention-domain",
- "intention-proto",
- "intention-runtime",
- "intention-storage",
- "intention-tools",
 ]
 
 [[package]]
@@ -816,13 +803,12 @@ version = "0.0.0"
 dependencies = [
  "futures-util",
  "intention",
- "intention-application",
  "intention-client",
  "intention-config",
  "intention-domain",
+ "intention-engine",
  "intention-proto",
  "intention-providers",
- "intention-runtime",
  "intention-tools",
  "intention-transport",
  "serde_json",
@@ -837,6 +823,20 @@ dependencies = [
  "intention-proto",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "intention-engine"
+version = "0.0.0"
+dependencies = [
+ "futures-executor",
+ "futures-util",
+ "intention-config",
+ "intention-domain",
+ "intention-proto",
+ "intention-providers",
+ "intention-storage",
+ "intention-tools",
 ]
 
 [[package]]
@@ -870,19 +870,6 @@ dependencies = [
  "openrouter-rs",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "intention-runtime"
-version = "0.0.0"
-dependencies = [
- "futures-executor",
- "futures-util",
- "intention-config",
- "intention-domain",
- "intention-proto",
- "intention-providers",
- "intention-storage",
 ]
 
 [[package]]

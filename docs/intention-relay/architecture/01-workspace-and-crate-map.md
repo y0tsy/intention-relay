@@ -18,7 +18,7 @@ implementation, tools, or provider implementations.
 `ConfigRevisionDto` the canonical credential-free persisted configuration selection: the composition root supplies one
 startup revision, storage records it by `ConfigRevisionId`, and each accepted run retains its immutable revision. TOML
 is applied only at daemon startup; live reload remains deferred.
--  M3 activates `intention-application`, `intention-runtime`, and `intention-storage`. The
+-  M3 activates the engine and storage layers, merged since Slice 1.5 into `intention-engine` and `intention-storage`. The
 active graph adds the intentional `storage -> config`, `storage-sqlite -> config`, `application -> config`, and `runtime
 -> config` edges required to persist and attach canonical configuration revisions without exposing credentials or
 filesystem paths.
@@ -29,7 +29,7 @@ plus their private SDK. `intention-proto` owns the provider-neutral `UsageDto`, 
 `intention` may select either concrete provider.
 -  M4 model and provider evidence is domain-owned and current-state: domain, storage, and protocol never depend on
 `intention-providers`, and SQLite stores assistant content, reasoning text, tool calls, and tool results on the transcript
-and tool-result rows rather than in typed envelopes or per-run cursors. `intention-runtime` depends on the
+and tool-result rows rather than in typed envelopes or per-run cursors. `intention-engine` depends on the
 provider-neutral `intention-providers` contract only for its injected base execution service; it neither selects a concrete
 provider nor exposes an async runtime resource.
 -  M4 activates the daemon host as a private composition consumer. `intention-daemon` may depend on the composition
@@ -50,8 +50,7 @@ The M1-M5 activation notes are historical records: the coverage policy is now th
 | --- | --- | --- |
 | `intention-proto` | ID newtypes, schema versions, common errors, time, envelopes. | Minimal shared dependencies only. |
 | `intention-domain` | Domain DTOs, value validation, invariants. | `intention-proto`. |
-| `intention-application` | Commands, queries, semantic use-case workflows, and protocol-result mapping over DTO-only storage. | Domain, storage contracts, runtime contracts, configuration revisions, protocol, types. |
-| `intention-runtime` | Deterministic session/run lifecycle decisions, interruption handling, pending-turn context joins, and recovery-before-ready. | Domain, storage contracts, configuration revisions, types. |
+| `intention-engine` | Commands, queries, semantic use-case workflows, and protocol-result mapping plus deterministic run execution, interruption handling, context-window accounting, and recovery-before-ready, over DTO-only storage. | Domain, storage, tools, providers, configuration revisions, proto. |
 | `intention-storage` | DTO-only semantic repository methods, committed-change evidence, transcript and tool-result reads, and persisted configuration-revision inputs. | Config, domain, types. |
 | `intention-config` | TOML parsing, validation, resolved configuration and revision DTOs. | Types, domain as needed. |
 | `intention-providers` | Provider-neutral model DTOs and driver trait plus both SDK translation adapters. | Config, proto, and shared value types. |
@@ -178,7 +177,7 @@ transaction closure, SQL connection, filesystem path, or backend resource.
 single-transaction state writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId
 -> WorkspaceRootDto` association; the workspace addressing policy — the root as an anchor, not a containment boundary
 ([architecture 05](05-tools-workspace-and-hooks.md)) — remains M5 policy ownership.
--  `intention-runtime` decides valid run state edges and owns interruption handling: a stopped provider stream or tool
+-  `intention-engine` decides valid run state edges and owns interruption handling: a stopped provider stream or tool
 call records a notice, resets its signal, and the run continues with its next model step. The repository owns run
 creation, pending-turn context joins, and recovery. It has no provider, tool, timer, or stream dependency in
 M3.
