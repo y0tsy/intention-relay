@@ -173,7 +173,7 @@ AfterToolResultPublished
 - hooks return a typed continue/transform/reject outcome;
 - a rejection creates a policy/result DTO, never an unstructured panic;
 - hook failures are classified as fail-closed or fail-open per phase and policy, not by incidental error handling;
-- hooks cannot directly commit storage or publish a competing event;
+- hooks cannot directly commit storage or publish independently;
 - hook execution itself is observable with safe metadata.
 
 ### M5 ownership and execution order

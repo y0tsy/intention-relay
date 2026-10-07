@@ -10,10 +10,10 @@ Owner: architecture 28. Research: `m4plus_concept.md`.
 
 ## Ownership and non-authorities
 
-Architecture 14 owns run-execution meaning and historical
-compatibility; its canonical codec was removed by [ADR 0012](../decisions/0012-typed-serde-json-contracts.md).
-Architecture 15 owns the registry and tool loop, architecture 18 MCP lifecycle, architecture 21 context selection and
-projection (Goal context selection, Skills, memory/compaction selection), and architecture 03 activity-journal and notification projections.
+Architecture 14 owns run-execution meaning and historical compatibility; its canonical codec was removed by [ADR
+0012](../decisions/0012-typed-serde-json-contracts.md). Architecture 15 owns the registry and tool loop, architecture 18
+MCP lifecycle, architecture 21 context selection and projection (Goal context selection, Skills, memory/compaction
+selection), and architecture 03 activity-journal and notification projections.
 
 This document owns the Goal aggregate domain and its verification semantics. A Goal, revision, link, gate, memory
 record, role, template, proposal, or summary creates no `RunId` except through the ordinary admission path, lifecycle
@@ -127,10 +127,10 @@ memory/Skill/role/summary, credential, provider value, current machine state, ra
 or handle. Factory Skills use the exact `SkillSelectionV1` under the frozen snapshot.
 
 The admission transaction validates the Goal and session link, the complete target snapshot, all references and bounds,
-provider selection, registry revision, and applicable policy, then atomically writes the run, selection, audit evidence,
-projections, and snapshots, or none; no external action occurs inside that transaction. An active run retains its frozen
+provider selection, registry revision, and applicable policy, then commits the run, selection, and audit evidence in one
+transaction; no external action occurs inside it. An active run retains its frozen
 selection, and edits create newer revisions for future admission only. Unknown, corrupt, unavailable, incompatible, or
-over-limit selected records block dependent operations before external work; replay, retry, child
+over-limit selected records block dependent operations before external work; retry, child
 admission, fork, and recovery never substitute current state. `McpMethodCatalogSelectionV1` is `Disabled` when `mcp` is
 absent from the frozen model-tool selection; each `mcp` call records the exact one method reference and typed input
 identity before external action.
@@ -290,21 +290,18 @@ memory/Skill/role/template content, model proposal text, provider resource, or i
 
 ## Compatibility and historical preservation
 
-M3/M4 bytes, sessions, runs, events, snapshots, replay, recovery, and `ToolCallRecorded ->
-tool_execution_unavailable` remain authoritative and unchanged, and no historical record gains synthetic Goal, gate,
-memory, proposal, or compaction state. Goals are acceptance/evidence records, not a work-authorization plane. All
-directions affect fresh runs only.
+No historical record gains synthetic Goal, gate, memory, proposal, or compaction state. Goals are acceptance/evidence
+records, not a work-authorization plane. All directions affect fresh runs only.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 14, 15, 18, 21, and 24 plus decision 0001.
-Non-goals: Goal persistence, search/index/vector retrieval, prompt assembly, SQL/wire tags,
-migrations, retention/deletion/encryption, source-page sizes, resource values, provider evolution, session branching,
-activity-journal and UI delivery, Plan artifacts, MCP administration, Python/Jupyter process behavior, Cargo, Makefile/CI, production
-activation, attachments/images/binary/ rich-MIME input, dynamic extensions and installation,
-dynamic tool registration, physical deletion, and long-lived-worker administration (leases, attach/detach, force-kill,
-supervisor recovery). Work/continuation/requeue after client disconnection is an accepted post-M5 future direction under
-: an explicit durable contract that never silently
-resumes old external work.
+This document depends on architectures 14, 15, 18, 21, and 24 plus decision 0001. Non-goals: Goal persistence,
+search/index/vector retrieval, prompt assembly, SQL/wire tags, migrations, retention/deletion/encryption, source-page
+sizes, resource values, provider evolution, session branching, activity-journal and UI delivery, Plan artifacts, MCP
+administration, Python/Jupyter process behavior, Cargo, Makefile/CI, production activation, attachments/images/binary/
+rich-MIME input, dynamic extensions and installation, dynamic tool registration, physical deletion, and
+long-lived-worker administration (leases, attach/detach, force-kill, supervisor recovery). Work/continuation/requeue
+after client disconnection is an accepted post-M5 future direction under an explicit durable contract that never
+silently resumes old external work.
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).

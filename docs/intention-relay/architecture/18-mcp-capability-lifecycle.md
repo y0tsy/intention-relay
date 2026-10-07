@@ -6,9 +6,8 @@ Owner: architecture 18. Research: m4plus_concept.md.
 
 This document owns future MCP source proposals, discovery, normalized capabilities, run-local capability
 selections, invocation, safe projections, disposal, recovery, and compatibility. It applies only to future run
-execution through the fixed `mcp` `ToolId`. M3/M4 bytes, IDs, UUIDs, provider behavior, replay, recovery,
-snapshots, and M4 `ToolCallRecorded -> tool_execution_unavailable` retain their recorded ordinary semantics, and
-retained bounded user connection/catalog research remains historical provenance, not future MCP capability state.
+execution through the fixed `mcp` `ToolId`. Retained bounded user connection/catalog research remains historical
+provenance, not future MCP capability state.
 
 ## Ownership and non-authorities
 
@@ -28,7 +27,7 @@ Dynamic acquisition means immutable **run-local capabilities beneath the one fix
 another ToolId, registry entry, plugin, direct primitive path, daemon, or authority. Future work supersedes
 retained requirements for user-created catalogs, complete-at-admission method sets, no discovery, and
 quota gates, and it preserves the one gateway, typed boundary, private resources, idempotency,
-redaction, commit/reread publication, cancellation/disposal, and no-resume law.
+redaction, publication after commit, cancellation/disposal, and no-resume law.
 
 Typed serde JSON (ADR 0012) supplies the record shape; the removed `IRCR` / `typed-tlv-v1` / SHA-256 canonical policy is
 not revived. This document owns the field semantics of these conceptual records. The concept2 names
@@ -93,7 +92,8 @@ revision and never retargets an old one.
 
 Admission freezes an initial MCP acquisition contract, not methods which do not yet exist. Each model step freezes the
 accumulated selection revision it consumed, and each invocation freezes that exact selection, capability revision, typed
-input, idempotency identity, and daemon-assigned `ToolCallId` before external work. A later discovery cannot change an
+input, and daemon-assigned `ToolCallId` under the turn idempotency key ([architecture
+04](04-sessions-runs-events-and-storage.md)) before external work. A later discovery cannot change an
 already-sent model step or invocation.
 
 ## Capability acquisition
@@ -122,28 +122,27 @@ sequenceDiagram
   M->>X: Discover
   X-->>M: Complete response or loss
   M->>S: Commit selection or outcome
-  S-->>L: Reread then publish
+  S-->>L: Publish committed values
 ```
 
 Acquisition validates an active run, exact frozen active descriptor, source proposal, mode, gateway/protocol
-compatibility, private material availability, idempotency, and intrinsic bounds. It atomically records pre-effect
-binding, records `Started` immediately before discovery dispatch, and performs discovery outside transactions.
+compatibility, private material availability, and intrinsic bounds. It atomically records pre-effect binding, records
+`Started` immediately before discovery dispatch, and performs discovery outside transactions.
 
 The complete discovery response is normalized only into closed typed input/result schema families; malformed, ambiguous,
 raw-map-only, recursive beyond intrinsic bounds, unsupported, or unrepresentable schemas fail before capability
 registration or invocation. On success, one transaction commits safe discovery evidence, every capability revision, one
-accumulated selection revision, terminal result, projections/events/snapshots/sequences, and idempotency; partial
-capability visibility is forbidden. Commit is followed by scoped durable reread and publication only to a later model
-step. Equal acquisition identity and equal typed request return the committed discovery/selection without another
-external action, changed reuse fails before discovery, and concurrent selection commits compare the expected predecessor
-revision: a loser rereads and may not infer a merge or overwrite a different selection. An accepted empty discovery is a
-known result.
+accumulated selection revision, and the terminal result; no external action occurs inside it, and partial capability
+visibility is forbidden. Publication to a later model step follows the commit. Equal acquisition identity and equal
+typed request return the committed discovery/selection without another external action, changed reuse fails before
+discovery, and concurrent selection commits compare the expected predecessor revision: a loser rereads and may not infer
+a merge or overwrite a different selection. An accepted empty discovery is a known result.
 
 ## Invocation, results, and safe projection
 
 Invocation validates exact model-step selection, selected capability, typed input, descriptor/gateway/protocol/schema
-revisions, private material availability, live exact compatibility, and cancellation state. It atomically binds
-`McpInvocationSelectionV1`, idempotency, and `ToolCallId`, then records `Started` immediately before irreversible
+revisions, private material availability, live exact compatibility, and cancellation state. It commits the binding of
+`McpInvocationSelectionV1` and `ToolCallId` in one transaction, then records `Started` immediately before irreversible
 dispatch; no external work occurs in either transaction. An invocation cannot substitute current discovery, schema,
 endpoint, credential generation, registry, configuration, or another same-named method, and remote idempotency support
 is evidence only: it cannot authorize automatic retry, status lookup, replay, or a claim of safe repetition.
@@ -192,9 +191,9 @@ Local stdio resources are run-owned and lazy: they are disposed on completion, c
 never shared with another run, and never reattached after restart. HTTP connections and local process epochs are private
 operational evidence, not durable execution authority.
 
-Recovery completes before readiness/admission. It validates historical MCP records, classifies unfinished attempts,
-disposes private resources, establishes fresh readiness epochs without dispatch, and never reconnects, polls,
-reattaches, respawns, retries, resumes, rediscovers, or repeats old discovery/invocation work. A fresh run imports no
+MCP recovery validates historical MCP records, classifies unfinished attempts, disposes private resources, establishes
+fresh readiness epochs without dispatch, and never reconnects, polls, reattaches, respawns, retries, resumes,
+rediscovers, or repeats old discovery/invocation work. A fresh run imports no
 live process, connection, credential handle, or accumulated selection; it acquires again, and earlier discovery remains
 audit evidence only.
 
@@ -206,13 +205,11 @@ controls cannot invoke, widen, or inspect private resources, and an interrupted 
 child-local.
 
 Future MCP projections use typed JSON-RPC 2.0 methods (ADR 0011) layered with the `model_tool_loop_v1` descriptor/model
-capability: authoritative initial replay/resync/error, bounded ordered discovery/capability/selection/invocation
-history, then live notifications through one post-commit gate. Replay is read-only and causes no discovery, invocation,
-process start, retry, or publication, and no caller receives a partial ordinary snapshot. M3/M4 and retained
-bounded-MCP/RLM records gain no synthetic source, discovery, capability, selection, process, or authority state; M4
-`ToolCallRecorded` remains denial evidence, and no historical record, current server, endpoint, credential, schema,
-registry, configuration, ancestry, Goal, Skill, UI, logs, or remote continuation state may reconstruct missing MCP
-meaning.
+capability: live notifications through one post-commit gate; reconnect re-reads current state, and there is no event
+tail, cursor, or resynchronization. No caller receives a partial ordinary snapshot. M3/M4 and retained bounded-MCP/RLM
+records gain no synthetic source, discovery, capability, selection, process, or authority state; historical M4 tool
+calls remain denial evidence, and no historical record, current server, endpoint, credential, schema, registry,
+configuration, ancestry, Goal, Skill, UI, logs, or remote continuation state may reconstruct missing MCP meaning.
 
 ## MCP detail: bounded gateway, bounds, and safe failures
 
@@ -226,14 +223,14 @@ remote method, and a method whose schema does not fit a supported closed family 
 A connection has `Project` or `Session` scope; the user alone creates, edits, archives, restores, and selects a
 connection and methods, and a model may only prepare a draft under the selected proposal rules. Credentials, OAuth
 material, SDK objects, sockets, child-process handles, and endpoint resources remain private daemon material and never
-enter a DTO, snapshot, fact, log, diagnostic, card, model context, or safe result. The selected transports are
+enter a DTO, log, diagnostic, card, model context, or safe result. The selected transports are
 user-created outgoing `HTTP`/`HTTPS` connections and user-created local standard-input/output services. The daemon
 starts a local service only upon the first selected MCP call in one run; that private process serves only that run and
 is terminated when the run completes, cancels, fails, or is interrupted, and it is never attached by a later daemon,
 shared with another run, treated as a durable worker, or managed as a long-lived process.
 
-Every MCP call passes the same registry selection, daemon-bound authority, typed admission, idempotency, durable
-outcome, cancellation, redaction, and post-reread publication rules as another registered tool. Connection, method,
+Every MCP call passes the same registry selection, daemon-bound authority, typed admission, durable outcome,
+cancellation, redaction, and post-commit publication rules as another registered tool. Connection, method,
 schema, and gateway revisions are frozen in the call and run selection. A remote schema mismatch fails closed before an
 external effect; an already started ambiguous call is never
 repeated and commits a bounded `Partial` result with its notice when appropriate. A service may emit bounded safe
@@ -272,14 +269,10 @@ representation/protocol bounds and actual finite resource capacity remain separa
 retry counter, or quota.
 
 Architecture 19 may carry safe MCP projections through its shared ingress and delivery path but cannot discover, select,
-invoke, reattach, or recreate MCP work independently, and bridge replay remains zero-effect. Architecture 20
+invoke, reattach, or recreate MCP work independently. Architecture 20
 kernel-originated MCP work still uses this document's fixed `mcp` lifecycle through the bridge and tool loop,
 checkpoints contain no live MCP state, and later runs reacquire capabilities. Architectures 21-24 own
 Goal/Skill/context, provider, fork, and activity semantics: context is safe non-authorizing projection only, provider
 and MCP private credentials/resources remain separate and non-authorizing, no live MCP state crosses a fork, and
 activity projections expose only safe MCP provenance without discovering, selecting, invoking, reconnecting, or
 recreating MCP work.
-
-## Required evidence before implementation
-
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).

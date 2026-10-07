@@ -62,95 +62,8 @@ feature-profile policy in the same change, only pinned dependencies and tools ar
 development and `make verify` before acceptance, and any policy exception is recorded in a reviewed, versioned policy
 file with rationale and equivalent test evidence.
 
-The tier numbers in the closed M0-M5 milestone records below are historical acceptance evidence, not current policy:
-the deleted base-threshold record replaced them with a single base threshold, and [ADR
-0016](../decisions/0016-per-crate-coverage-tiers.md) replaced that with the per-crate tiers declared in
-`quality/coverage.toml`.
-
-## Milestone 0: Reproducible quality foundation
-
-Closed. Delivered the pinned Rust toolchain and external-tool manifest (nextest, llvm-cov, deny, audit, udeps, machete,
-outdated), the root Makefile with explicit mutating versus non-mutating targets and `make ci` as the only CI
-verification command (initially aliasing the full `make verify` gate), strict workspace lints with a documented
-local-exception mechanism, the versioned coverage-tier policy and checker, the non-production `quality-harness`
-workspace member, the machine-readable required-v1-crate-set, responsibility, test-target, and feature-profile policies,
-the initial architecture-test harness, and supply-chain policy files. The quality pipeline never installs tools, updates
-lockfiles, or repairs source implicitly, and no production crate can merge without a declared tier, test target, and
-architecture ownership entry. Evidence: [M0/M1 Closure Evidence](../closeout/m0-m1-closure-evidence.md).
-
-## Milestone 1: Contracts, configuration, and workspace skeleton
-
-Closed. Delivered the workspace manifests and crate skeletons following [Workspace and Crate
-Map](01-workspace-and-crate-map.md), with `intention-types`, `intention-domain`, `intention-protocol`, and
-`intention-config` as the only active Tier A production crates and every later crate an implementation-free skeleton
-until its owning milestone. The TOML schema is version 1 (the single current shape; unversioned documents fail closed;
-future schemas are rejected with an `ErrorDto`), configuration discovers a platform-standard location with a validated
-explicit absolute-path override and never falls back to process CWD, and the credential-free `ConfigSnapshotDto`
-foundation fixes `ConfigRevisionId` and capture time. Configuration revision persistence, daemon application/reload, and
-attaching a snapshot to a live run remain owned by M3/M4. M1 accepts only the `openrouter` and
-`generic-chat-completion-api` provider kinds; `openai` remains unavailable until a separately declared OpenAI Responses
-driver crate, contract, and boundary policy exist. Evidence: [M0/M1 Closure
-Evidence](../closeout/m0-m1-closure-evidence.md).
-
-## Milestone 1+: Quality policy hardening
-
-Closed quality-enforcement milestone between the M1 contract foundation and M2 functional delivery; it activated no
-additional production crate. Added workspace-wide dependency-graph construction with deterministic cycle-path rejection
-in `make architecture`, machine-readable Cargo `test_targets` enforcement for every planned crate, source-level provider
-SDK namespace ownership for `async_openai::` and `openrouter_rs::`, the exact-file coverage-exclusion policy with
-owner/report-path/denominator enforcement, and isolated expected-failure fixtures for every new rule. Evidence: [M1+
-Quality Hardening Evidence](../closeout/m1-plus-quality-hardening-evidence.md).
-
-## Milestone 2: Local protocol, client, and daemon bootstrap
-
-Closed. Delivered `intention-transport`, `intention-client`, `intention-daemon`, composition wiring, and the
-`intention-tui` proof adapter over cross-platform local IPC (Unix domain sockets and Windows named pipes) with per-user
-endpoint locations, the Unix `0700` endpoint-parent and `0600` listener-socket policy, a cross-platform `fs4` advisory
-startup lock, version-validated `Ready` health, and snapshot-tail/resync subscription wiring with optional run scope.
-The M2 wire was replaced by JSON-RPC 2.0 over NDJSON with exact protocol version 1.0 and the `MAX_MESSAGE_BYTES`
-liveness cap ([ADR 0011](../decisions/0011-local-json-rpc-2-0-transport.md)), which is the current protocol; the socket,
-permissions, and bounded serving remain. Idle shutdown, explicit daemon stop, upgrade coordination, durable
-sessions/events/snapshots, and model/provider execution were deferred (M3 owns durable storage/recovery; M4 owns
-model/provider runs); detailed transport and adapter constraints live in [Daemon, Transport, and
-Adapters](03-daemon-transport-and-adapters.md). Evidence: [M2 Closure Evidence](../closeout/m2-closure-evidence.md).
-
-## Milestone 3: SQLite sessions, events, snapshots, and queue
-
-Closed. Delivered repository DTO contracts and the bundled-SQLite implementation creating the single current storage
-schema directly on open (no migration chain or version gate; [ADR
-0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md)), activated `intention-application`,
-`intention-runtime`, `intention-storage`, and `intention-storage-sqlite`, and established session/project/workspace-root
-state with stable `WorkspaceId` association. Canonical credential-free `ConfigSnapshotDto` revision persistence is
-idempotent for a same-ID equal snapshot and fails with a typed conflict for a same-ID different snapshot; accepted and
-promoted runs keep immutable snapshot/revision attachment. Append-only events, current projections, and per-commit
-session/run snapshots are atomic; the one-active-run invariant, durable queued input with never-reused queue tickets,
-atomic terminal promotion, the `Starting -> Cancelling -> Cancelled` lifecycle, and recovery-before-ready without
-automatic external-work resumption are in place. M3 applies TOML once per daemon startup (no live reload) and serves
-durable one-shot snapshot replay or typed resync only; a `run_id: Some` request always returns typed
-`HistoryUnavailable` resync rather than unfiltered session state. Persistent live run streaming, post-commit fan-out,
-slow-peer policy, and safely represented run-scoped replay arrive with M4 through separate contracts. Evidence: [M3
-Closure Evidence](../closeout/m3-closure-evidence.md).
-
-## Milestone 4: Model contract, providers, and one streaming run, complete
-
-Closed at immutable implementation baseline `d2a85370a66d63fc759e4987a74d435ecd5d5115`. Delivered provider-neutral model
-DTOs and stream ordering, safe per-run execution policy in snapshots, opaque startup-only provider material, private
-SDK-backed request/mapping boundaries, the OpenRouter SDK driver (`openrouter-rs` 0.16.0), the Generic Chat Completions
-driver (`async-openai` 0.42.0), provider capability validation with usage/events and timeout/retry policy, and one
-streaming user turn ending in a durable run state. The generic subset is text, usage, finish, and function-style tool
-calls; reasoning, multimodal, and vendor extensions reject preflight, and no custom HTTP/SSE parsing exists. Evidence:
-[M4 Closure Evidence](../closeout/m4-closure-evidence.md).
-
-## Milestone 5: Typed tools, WorkspaceRoot, and hooks
-
-Closed at the immutable merged baseline `bf40567` (PR #14). Delivered the typed core tool registry with six active tools
-(`read`, `write`, `edit`, `execute`, `glob`, `grep`); `WorkspaceRoot` as an addressing anchor with root-relative joins,
-`execute` CWD, and default search scope ([ADR 0013](../decisions/0013-workspace-root-addressing-anchor.md)); the typed
-hook dispatcher with deterministic ordering and short-circuiting; tool lifecycle persistence and events; and the
-daemon-owned invocation path consumed by the model-tool loop ([ADR
-0003](../decisions/0003-production-model-tool-loop.md)). Composition owns registry/workspace/hook assembly, application
-owns durable lifecycle and result persistence/publication, restart replay never re-executes tools, and the other fixed
-registry slots remain reserved. Evidence: [M5 Closure Evidence](../closeout/m5-closure-evidence.md).
+The coverage policy is the per-crate tiers declared in `quality/coverage.toml` ([ADR
+0016](../decisions/0016-per-crate-coverage-tiers.md)).
 
 ## Milestone 5+: Post-M5 retrospective alignment
 
@@ -224,30 +137,6 @@ existing `system_context` channel, materialized into fork, plan, and handoff rec
 provenance; closed safe failures, channel closure, and safe observability. Its activating specification declares the
 instruction contract families as typed serde JSON contracts and changes no earlier slice.
 
-### Slice evidence
-
-Each slice declares its contracts, versions, fixtures, and outcome evidence per [architecture
-12](12-quality-gates-and-makefile.md).
-
--  Slice 1: JSON-RPC 2.0 conformance fixtures (envelope shape, 1:1 method coverage of the command and query variants,
-notifications, and error codes), exact protocol-version equality with a typed `-32001` mismatch error, typed serde JSON
-DTO round trips, and current-schema creation fixtures.
--  Slice 1.5: the activating specification declares the ten-crate workspace, per-crate test targets, coverage tiers, and
-feature profiles, and proves the boundary rules: no DTO inside the process outside the three physical boundaries, no
-JSON outside tool payloads, nine identity newtypes, one `EventPayload`, publication without a reread proof, the
-renumbered protocol version, the asynchronous client covering every command and query, and end-to-end tests driving the
-real client instead of the low-level transport.
--  Slice 2: not activated; its activating specification declares the reload transaction fault-injection, rotation
-no-frozen-meaning and fail-closed, health/discovery/pricing non-authority, catalog acceptance/recovery, control-plane
-safe-projection, and current-schema creation fixtures with their policy declarations.
--  Slices 3-5: each activating specification declares its fixtures and outcome evidence; slice 5 additionally proves
-deterministic assembly, ordering, and separator stability, profile-revision immutability for every edit operation with
-typed validation failures, absence/unreadability/non-text/oversize behavior of `AGENTS.md`, projection freeze with reuse
-across steps and verbatim fork and handoff inheritance, channel closure against Skill, memory, tool, repository, and
-provider material, credential-free surfaces, and preview non-admission.
--  Shared across slices: M3/M4 byte, meaning, replay, and recovery preservation plus fake-secret regression across logs,
-errors, snapshots, events, and adapter DTOs.
-
 ### Exit criteria
 
 -  M5+ exit proves M6, M7, M8, and M9 can each begin against stable contracts without any retroactive protocol, DTO,
@@ -270,42 +159,6 @@ untrusted material entering the instruction channel and no authority created (AD
 -  Milestones 11 and 12 are this milestone's successors for the remaining post-M4 packages; their activating
 specifications, contracts, and evidence stay owned by those milestones. M7 and M8 consume only the declared `Mode` and
 `Vfr` contributions while M12 keeps the Skill and context-disclosure boundary.
-
-### Retrospective completions outside the slice sequence
-
--  The ordinary request-side tool advertisement ([ADR 0006](../decisions/0006-request-side-tool-advertisement.md)) is
-complete: request construction advertises the six active registered tools in registry order as validated typed
-definitions, forces the `tool_calls` capability, and both current adapters translate them without `tool_choice`;
-hermetic evidence is anchored at EVD-062. This retrospective completion does not advance slices 3-5.
--  The ordinary same-run provider reasoning round-trip ([ADR 0008](../decisions/0008-same-run-reasoning-round-trip.md))
-is complete: the generic Chat Completions adapter consumes typed `reasoning_content` deltas as normalized `Primary`
-reasoning events and serializes the current round's accepted reasoning on the same-run assistant tool-call continuation
-as transient request state with no durable representation; the OpenRouter adapter ignores the attachment by design.
-Hermetic evidence is anchored at EVD-064, and the recorded live run remains the controller's manual live-evidence
-obligation. This retrospective completion does not advance slices 3-5.
--  The opt-in live-provider e2e channel ([ADR 0007](../decisions/0007-opt-in-live-provider-e2e.md)) is additive and
-manual-only: the ignored `crates/intention-daemon/tests/real_api_e2e.rs` target and the `make e2e-real-api` entry point
-execute a real provider tool loop only under explicit opt-in, never in `make quick`, `make verify`, or CI. A recorded
-live run (date, commit, provider kind, model, and its run identifier; never the key) is the manual live-evidence
-obligation, and the channel does not alter any protocol, DTO, wire, storage, or blocking gate; the same recorded run
-also covers the same-run reasoning round-trip (ADR 0008).
-
-## Reserved declarations carried by M6-M9
-
-The unconsumed-surface audit (2026-09) keeps exactly one audited surface for this block and records the deleted groups
-so no M6-M9 slice claims them:
-
--  **Durable session-event delivery (`SessionProviderProfileChanged`) — claimed by Milestone 6.** The control-plane
-event family is a boundary-validated session-event publication with no durable copy and belongs to the not-activated
-Slice 2, so no session-default change exists to produce it. The durable append/delivery layer remains reserved to the
-first M6-M9 milestone that consumes session state and reconnect delivery. Anchors: `m4plus_concept.md` (session
-selection, runs, queues, and usage), [architecture 29](29-provider-session-and-profiles-protocol.md) (session selection,
-runs, queues, and usage). Until Milestone 6 lands the layer and Slice 2 is activated, no control-plane event is produced
-or validated.
--  **Deleted groups — no M6-M9 slice claims them.** The protocol reasoning/header/parser duplicates, the eight
-producer-less control-plane event DTOs, the six unconsumed model types, and the `provider_profile_tombstoned` wire code
-were deleted by the unconsumed-surface audit (2026-09). The `configuration_audit` table belongs to the not-activated
-Slice 2 control-plane schema, so no durable catalog audit evidence exists until Slice 2 is activated.
 
 ## Milestone 6: Tauri bridge and primary desktop UI
 
@@ -463,8 +316,8 @@ activating specification per [architecture 12](12-quality-gates-and-makefile.md)
 -  the fixed fourteen-slot registry, typed descriptor and registry revisions, frozen tool selection, and
 `WorkspaceRoot` semantics (architecture 15, decision 0001);
 -  the model-tool loop: sequential steps, one ordered group per tool-calling step, durable `ToolCall`/`ToolResult`
-evidence, no-retry and no-resume recovery, and `RunToolHistoryPageDto` replay delivery (architectures 15,  as amended by [ADR
-0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md));
+evidence, no-retry and no-resume recovery, and `RunToolHistoryPageDto` replay delivery (architectures 15,  as amended by
+[ADR 0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md));
 -  bridge attachment and typed handshake, the ephemeral daemon-issued grant, immutable bridge-contract selection,
 durable operation correlation, the one-path ingress into registry admission and tool-loop facts (including `sub_agent`
 ingress), safe replay, cancellation propagation, recovery, and the closed `bridge_*` failures (architecture 19);
@@ -566,84 +419,3 @@ The v1 implementation phase is ready to claim architectural completion only when
 -  `make verify` passes all strict formatting, lint, feature, test, documentation, architecture, coverage, and
 supply-chain checks;
 - no legacy Antibusy implementation detail is relied upon without an explicit new decision.
-
-## Post-M4 package status and activation order
-
-Post-M4 package status uses separate terms: architecture documents are `Documentation-approved`, implementation remains
-not authorized, and evidence is `Planned` unless an exact artifact and observed result is cited. The immutable
-`m4plus_concept.md` is research provenance and is not used as an implementation acceptance target; its research content
-is not edited. The ordinary M5-M9 delivery sequence remains the historical
-delivery record, and its Plan/Build policy wording is superseded by [ADR
-0002](../decisions/0002-build-autopilot-and-plan-focus-continuity.md)/[ADR
-0002](../decisions/0002-build-autopilot-and-plan-focus-continuity.md) for the accepted Autopilot transition: Plan is a focus
-mode with available advisory-guided `execute`, Build Autopilot is unrestricted by per-action confirmation, and plan
-approval starts a fresh Build run in the same Session by default. The boundary record's exit conditions include one
-owner per Foundation rule, no unresolved Foundation conflict, closed M4 and ordinary historical behavior preserved, and
-a later implementation specification required before code begins.
-
-The remaining post-M4 packages are delivered by Milestones 11 and 12: Milestone 11 the tool-registry and bridge
-packages (architectures 15/19), and Milestone 12 the MCP, kernel, and context packages (architectures 18/20/21) plus
-the remaining architecture 22 provider work. Each milestone requires an accepted activating specification and atomic
-updates to crate ownership, DTO/wire/storage versions, quality policy, feature profiles, and evidence. This roadmap
-owns sequencing and milestone acceptance only.
-
-Current ordering status: the durable ordering authorities were collapsed to two — the session event sequence
-(`SessionEventSequenceDto`) for every record committed in one session, and the container journal sequence (storage
-mechanism `container_journals`; the only container kind today is `run`, whose position type is `RunEventCursorDto`) —
-plus one observation position, the reserved observation cursor, which is a reader's resume position and never an
-authority. The collapsed set is closed: no record family introduces a further ordering sequence, and owner-local
-operational tuples are operational metadata, not ordering authorities.
-
-| Package | Owner document | Status | Depends on |
-| --- | --- | --- | --- |
-| Execution meaning and historical compatibility | [architecture 14](14-run-execution-meaning-and-historical-compatibility.md) | Superseded historical record; no implementation authorized. | Foundation |
-| Core simplification | [architectures 01](01-workspace-and-crate-map.md)/[02](02-dto-and-contract-policy.md)/[03](03-daemon-transport-and-adapters.md) | Documentation-approved; not activated; activating slice 1.5. | Foundation |
-| Tool registry and model-tool loop | [architecture 15](15-tool-registry-and-model-tool-loop.md) | Documentation-approved; not activated; Milestone 11, with the reserved tool-descriptor/tool-registry/model-tool-loop contracts activated by slice 3. | Foundation |
-| MCP capability lifecycle | [architecture 18](18-mcp-capability-lifecycle.md) | Documentation-approved; not activated; Milestone 12. | fixed tool registry/tool loop |
-| Gateway/RLM bridge | [architecture 19](19-gateway-rlm-bridge.md) | Documentation-approved; not activated; Milestone 11, with the bridge-invocation contracts activated by slice 3. | fixed tool registry/tool loop; MCP lifecycle |
-| Run-scoped IPython kernel lifecycle | [architecture 20](20-ipython-kernel-lifecycle.md) | Documentation-approved; not activated; Milestone 12. | fixed tool loop; MCP lifecycle; Gateway/RLM bridge |
-| Goals, Skills, context, memory, and compaction | [architecture 21](21-goals-skills-context-memory-and-compaction.md) | Documentation-approved; not activated; Milestone 12. | Foundation |
-| Provider evolution, profiles, and reasoning | [architecture 22](22-provider-evolution-profiles-and-reasoning.md) | Documentation-approved; not activated; the remaining provider work (`responses` driver, `SafeHeader` live wire injection, user-kind parser) is delivered by Milestone 12. | Foundation |
-| Non-destructive session branching and regeneration | [architecture 23](23-non-destructive-session-branching-and-regeneration.md) | Documentation-approved; not activated; activating slice 4 (`session_fork_v1`). | ordinary Session/storage compatibility; context; provider evolution |
-| Goal domain and verification | [architecture 28](28-goal-domain-and-verification.md) | Documentation-approved; not activated; activating slice 3. | fixed tool loop; MCP; context; provider evolution; activity-journal and notification delivery |
-| Provider session selection and profiles protocol | [architecture 29](29-provider-session-and-profiles-protocol.md) | Documentation-approved; not activated; activating slice 2. | provider evolution; session branching; configuration/provider control plane |
-| Base-tool contracts and tool-loop bounds | [architecture 15](15-tool-registry-and-model-tool-loop.md) | Documentation-approved; slice 3 activates the reserved contracts; tool-loop implementation is Milestone 11. | architecture 15; M5+ activation |
-| Session-branching detail | [architecture 23](23-non-destructive-session-branching-and-regeneration.md) | Documentation-approved; not activated; activating slice 4. | extends architecture 23 |
-| Kernel, bridge, and MCP detail | [architectures 18](18-mcp-capability-lifecycle.md)/[19](19-gateway-rlm-bridge.md)/[20](20-ipython-kernel-lifecycle.md) | Documentation-approved; slice 3 activates the bridge-invocation and MCP-method-catalog contracts; bridge implementation is Milestone 11, MCP and kernel implementation Milestone 12. | extends architectures 18/19/20 |
-| Provider reasoning and catalog detail | [architecture 22](22-provider-evolution-profiles-and-reasoning.md) | Documentation-approved; not activated; the typed `ReasoningUsageDto` was removed by the unconsumed-surface audit (2026-09). | extends architecture 22 |
-| Accepted deferred directions | [architectures 22](22-provider-evolution-profiles-and-reasoning.md)/[19](19-gateway-rlm-bridge.md) | Documentation-approved; not activated; the directions are non-authorizing. | extends architectures 22 and 19 |
-| Accepted execution directions | [architectures 25](25-configuration-provider-control-plane.md)/[22](22-provider-evolution-profiles-and-reasoning.md)/[23](23-non-destructive-session-branching-and-regeneration.md)/[28](28-goal-domain-and-verification.md)/[18](18-mcp-capability-lifecycle.md)/[29](29-provider-session-and-profiles-protocol.md) | Documentation-approved; the control-plane items activate in slice 2; the work/requeue items activate in slice 3, and export plus cross-workspace clone/rebind and RLM packaging in slice 4. | extends architectures 25, 22, 23, 28, 18, and 29 |
-| Accepted retained-deferral directions | [architectures 20](20-ipython-kernel-lifecycle.md)/[04](04-sessions-runs-events-and-storage.md)/[03](03-daemon-transport-and-adapters.md) | Documentation-approved; rich MIME/raw kernel output projection is Milestone 12, worker/process supervision topology is Milestone 11, and the physical deletion/GC retention policy is slice 4. | extends architectures 20, 04, and 03 |
-| Instruction sources and system context | [architecture 30](30-instruction-sources-and-system-context.md) | Documentation-approved; not activated; last slice ([ADR 0010](../decisions/0010-instruction-sources-and-system-context.md)). | extends architectures 30, 00, 02, 04, 06, 07, 08, 09, 14, 21, 23, and 25 |
-
-### Activation-order notes
-
--  The slice order is fixed: 1 contracts and versions, 1.5 core simplification, 2 control plane, 3 Goal domain, 4 UI
-foundation, 5 instruction sources. Later slices consume only contracts activated by earlier slices, and instruction
-sources is the last slice.
--  Slice 1.5 precedes the control plane: the crate, boundary, event, identity, and client simplifications land before
-any Slice 2 contract is activated, and no later slice reintroduces an intermediate DTO, a per-family event type, or a
-blocking client API.
--  Slice 3 additionally activates the tool-descriptor/tool-registry/model-tool-loop contracts as amended by [ADR
-0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md), and the bridge-invocation and
-MCP-method-catalog selections.
--  Milestones 11 and 12 consume this foundation and add no slice of its own: Milestone 11 → architectures 15/19;
-Milestone 12 → 18/20/21 plus the remaining architecture 22 provider work.
--  M7 consumes the `Mode` contribution, M8 the `Vfr` contribution, and M12 keeps the Skill and context-disclosure
-boundary ([ADR 0010](../decisions/0010-instruction-sources-and-system-context.md)).
--  delivery mapping: rich MIME/raw kernel
-output projection → Milestone 12; physical deletion/GC retention policy → slice 4; worker/process supervision topology →
-Milestone 11; activity numeric-limit classification → slice 4.
-
-### Post-M4 package dependency order
-
-```mermaid
-flowchart TD
-  F[M4+ Foundation] --> T[Tool loop]
-  F --> K[Skills Goals context]
-  F --> V[Provider evolution]
-  F --> B[Session branching]
-  T --> G[Gateway bridge]
-  T --> P[MCP lifecycle]
-  G --> I[IPython]
-```

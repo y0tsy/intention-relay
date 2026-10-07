@@ -1,7 +1,5 @@
 # DTO and Contract Policy
 
-**Current policy.**
-
 This document makes the DTO-first principle executable. It applies to all crate, process, persistence, provider, tool,
 hook, and presentation boundaries.
 
@@ -18,14 +16,12 @@ A DTO is a stable contract, not merely any serializable struct.
 | --- | --- | --- |
 | Command DTO | Requested state-changing work. | `SendUserTurnCommandDto`, `InterruptRunCommandDto`. |
 | Query DTO | Requested read model or snapshot. | `GetSessionSnapshotQueryDto`. |
-| Event DTO | Immutable fact that occurred. | `RunStartedEventDto`, `PlanUpdatedEventDto`. |
-| Persistence DTO | Storage-safe representation of a record/snapshot/event. | `PersistedRunDto`, `RunSnapshotDto`. |
+| Persistence DTO | Storage-safe representation of a record or projection. | `PersistedRunDto`. |
 | Provider DTO | Provider-neutral model request/stream/error contract, including advertised tool definitions and the transient same-run reasoning attachment. | `ModelRequestDto`, `ModelToolDefinitionDto`, `AssistantReasoningDto`, `ModelEventDto`. |
-| Durable model fact DTO | Typed append-only provider/model evidence, safe run projection, and scoped replay. | `ModelRunFactDto`, `RunSnapshotDto`. |
 | Runtime execution DTO | Immutable selected execution input, safe terminal outcome, and provider-neutral time port over injected provider/storage contracts. | `ModelRunExecutionInputDto`, `ModelRunExecutionOutcomeDto`, `ModelTimePort`. |
 | Tool DTO | Typed tool invocation, bounded result, metadata, policy decision, and durable result projection. | `ToolInvocationDto`, `ToolResultDto`, `ToolResultProjection`, `ToolResultEvidenceDto`. |
 | Hook DTO | Controlled state passed between tool hook phases. | `ToolHookContextDto`. |
-| Config DTO | Parsed, validated, resolved, and snapshotted TOML configuration. | `ResolvedConfigDto`, `ConfigSnapshotDto`. |
+| Config DTO | Parsed, validated, resolved, and revisioned TOML configuration. | `ResolvedConfigDto`, `ConfigRevisionDto`. |
 | Presentation DTO | Explicit adapter projection, if transport DTO is not appropriate for display. | `SessionViewDto`. |
 
 ## Type rules
@@ -38,12 +34,9 @@ identity across Session, Run, activity, lineage, graph, operation, or diagnostic
 
 Deterministic UUIDv5 is permitted only where the owner freezes its namespace and name derivation. Daemon-assigned/random
 UUIDs and deterministic UUIDv5 values are not interchangeable. Historical UUID bytes and meanings remain unchanged and
-cannot be normalized into future records. UUIDs, operation identities, sequences, and diagnostic correlation IDs are
-distinct classes and must not be converted or used as authority substitutes. Durable ordering has exactly two
-authorities — the session event sequence (`SessionEventSequenceDto`) for every record committed in one session, and the
-container journal sequence (storage mechanism `container_journals`) for records that belong to one container and are
-not a record of one session — plus one observation position, the reserved observation cursor, which is a reader's
-resume position and never an authority; the set is closed, and no record family may introduce a further ordering
+cannot be normalized into future records. UUIDs, operation identities, and diagnostic correlation IDs are distinct
+classes and must not be converted or used as authority substitutes. There is no durable ordering authority beyond
+SQLite row insertion order — `messages.id` for the transcript — and no record family may introduce an ordering
 sequence.
 
 ### IDs
@@ -55,37 +48,21 @@ primitive.
 SessionId
 RunId
 TurnId
-AssistantTurnId
 ProjectId
 WorkspaceId
-PlanId
-PlanRevisionId
 ToolCallId
-EventId
 ConfigRevisionId
+IdempotencyKey
 ```
 
 IDs must have a defined generation owner, parse/validation behavior, serialization representation, and error DTO. The
-future tool loop addresses model steps and tool groups by plain indices within their containing records rather than by
+tool loop addresses model steps and tool groups by plain indices within their containing records rather than by
 newtypes; provider-native tool-call identifiers remain private implementation state.
 
 ### Envelopes
 
-Persisted events carry `EventEnvelopeDto` with ordering and schema information; transport envelopes are JSON-RPC
-messages (architecture 03).
-
-```rust
-EventEnvelopeDto {
-    schema_version: SchemaVersionDto,
-    event_id: EventId,
-    session_id: SessionId,
-    run_id: Option<RunId>,
-    turn_id: Option<TurnId>,
-    sequence: SessionEventSequenceDto,
-    occurred_at: TimestampDto,
-    payload: DomainEventDto,
-}
-```
+Transport envelopes are JSON-RPC messages (architecture 03). Persisted state is stored as plain typed rows; there is no
+durable event envelope, event identity, or event sequence.
 
 A DTO field may be optional only when its absence has an explicit domain meaning. Optional must not conceal an
 unimplemented relationship.
@@ -126,13 +103,13 @@ The following must not cross a boundary as public inputs or outputs:
 channels, mutex guards, or closures;
 - provider SDK request/response/stream types;
 - Tauri commands, window handles, Svelte stores, terminal widgets, or presentation state;
-- bare strings for domain IDs, modes, risks, statuses, tool names, or event variants;
+- bare strings for domain IDs, modes, risks, statuses, tool names, or tool kinds;
 - implementation error types that reveal secrets or topology.
 
 Provider SDK request/response/stream types and raw `serde_json::Value` cannot cross a provider boundary. M4
 model/provider contracts use validated text context, requested/declared capability DTOs, ordered stream facts, usage,
-finish reasons, safe provider errors, and typed JSON-object tool-call text. A request advertises tool definitions as
-validated JSON-object parameter text (`ModelToolDefinitionDto`), never as raw `serde_json::Value`; the advertised set is
+finish reasons, safe provider errors, and typed JSON-object tool-call text. A request advertises tool definitions as a
+validated JSON Schema descriptor (`ModelToolDefinitionDto`), never as raw `serde_json::Value`; the advertised set is
 transient request state with no durable representation (ADR 0006). A request may additionally carry the current round's
 accepted provider reasoning as transient same-run attachment state with no durable representation: the runtime may
 attach it to the assistant tool-call message of the same-run continuation (ADR 0008), and it is never durable history,
@@ -140,16 +117,10 @@ message text, or cross-turn transfer. `intention-types` owns the shared safe usa
 provider-error values; `intention-model` re-exports them for source compatibility. Native SDK decoding and JSON values
 may exist only inside the owning provider implementation before being normalized to those DTOs.
 
-M4 durable model facts are domain-owned typed envelopes, never raw JSON. A run-scoped snapshot carries its compatible M3
-`RunProjectionDto`, its position in the run container journal (`RunEventCursorDto`), bounded assistant-turn content,
-optional normalized usage/finish/failure state, and never accumulated reasoning. `RunEventTailPageDto` carries only
-contiguous typed facts strictly after a position in the run container journal. M4's dedicated wire family keeps this
-scope separate from M3 session replay:
-`SubscribeRunCommandDto` receives a correlated `RunSubscriptionResponseDto` containing `RunSnapshotDto`, `RunResyncDto`,
-or a safe `ErrorDto`; subsequent `RunLiveBatchDto`, `RunSnapshotFrameDto`, and `RunResyncDto` are uncorrelated
-`RunStreamFrameDto` values. Live batches are non-empty, run-scoped, positive-cursor contiguous ranges, while snapshot
-frames are daemon-authoritative status checkpoints. `RunResyncReasonDto` is closed and rejects unknown variants;
-`run_replay_not_found` remains a safe error rather than a resync.
+Run-scoped delivery is a current-state stream: `SubscribeRunCommandDto` receives a correlated snapshot of the current
+run state, and subsequent uncorrelated `RunStreamFrameDto` values carry `kind` `content` or `status` with no positions
+or cursors. A re-subscribing client re-reads current state and continues live; there is no event tail, resync, or
+catch-up position.
 
 ## Validation ownership
 
@@ -174,7 +145,7 @@ incompatible protocol version as the typed `-32001` error with `ErrorDto { categ
 Validation cannot be delegated only to UI. Tauri and TUI may provide ergonomic pre-validation, but daemon validation is
 authoritative.
 
-## Command-to-event lifecycle
+## Command lifecycle
 
 ```mermaid
 sequenceDiagram
@@ -187,19 +158,19 @@ sequenceDiagram
   A->>C: Command DTO
   C->>D: JSON-RPC request
   D->>U: Application DTO
-  U->>S: State and event DTO
-  S-->>U: Commit outcome DTO
+  U->>S: State-change DTO
+  S-->>U: Committed values
   U-->>D: Command result DTO
-  D-->>C: Live event DTO
-  C-->>A: Typed event
+  D-->>C: Result and live frame DTOs
+  C-->>A: Typed result and frames
 ```
 
-A live event is emitted only after the storage commit succeeds. The command result and event must include enough typed
-identity for an adapter to reconcile state.
+A live frame is published only after the storage commit succeeds. The command result and frames must include enough
+typed identity for an adapter to reconcile state.
 
 ## Versioning and compatibility
 
-- Every transport and persisted event schema has an explicit version.
+- Every transport schema and persisted row schema has an explicit version.
 - Changes are additive by default. Current payloads may omit additive fields
 such as `ErrorDto.detail` and `ErrorDto.correlation_id`; omitted fields decode as `None`.
 - Public DTOs tolerate unknown additive JSON fields unless a closed
@@ -210,19 +181,19 @@ protocol version (1.0) and rejects any other version with the typed `-32001` ver
 (ADR 0011); the public DTO schema compares by exact equality (no same-major tolerance).
 - SQLite storage is the single live schema (logical version 1) created
 directly on open; there is no migration chain, no version gate, and no opening of older schemas, and persisted rows keep
-their recorded bytes and meaning.
+their recorded meaning.
 - Provider DTOs are versioned independently from provider SDK models.
 
 ## Contract tests required before implementation
 
--  versioned JSON fixtures for every public DTO family, including valid current fixtures, supported legacy fixtures, and
-malformed/compatibility cases;
+-  versioned JSON fixtures for every public DTO family, including valid current fixtures and malformed/compatibility
+cases;
 - invalid-shape and invalid-ID tests at every input boundary;
 - explicit wire-validation tests for non-blank, path, timestamp, and schema invariants;
-- schema compatibility fixtures for transport and persisted events;
+- schema compatibility fixtures for transport and persisted records;
 - compile-time tests proving forbidden implementation types do not appear in public signatures where tooling permits;
 - consumer-driven contract tests for `intention-client` against daemon transport;
-- redaction tests for all error/event DTOs carrying configuration or provider context.
+- redaction tests for all error and stream DTOs carrying configuration or provider context.
 
 ## Quality-gate integration
 
@@ -234,7 +205,7 @@ See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 ## Outcome criteria
 
 A feature is not ready unless a Tauri bridge and TUI/REPL can invoke its same public command/query DTOs and interpret
-the same resulting event/snapshot DTOs without adapter-specific business rules.
+the same resulting snapshot and frame DTOs without adapter-specific business rules.
 
 See [03 Daemon, Transport, and Adapters](03-daemon-transport-and-adapters.md) for the process boundary, [10 Test-Driven
 Delivery and Verification](10-test-driven-delivery-and-verification.md) for mandatory test layers, and [12 Quality Gates
@@ -246,99 +217,16 @@ Slice 1.5 collapses the DTO surface to the three places where a process, a file,
 shape. This section freezes that model; the rules above stay current policy until the slice activates.
 
 - Three physical boundaries. DTOs exist at the IPC wire (protocol commands, queries, notifications, and their typed
-  payloads), at SQLite persistence (rows, projections, snapshots, and event records), and at provider SDK calls
-  (requests, stream facts, and errors normalized into the provider-neutral contract). Every DTO category above belongs
-  to exactly one of the three.
+  payloads), at SQLite persistence (rows and projections), and at provider SDK calls (requests, stream facts, and errors
+  normalized into the provider-neutral contract). Every DTO category above belongs to exactly one of the three.
 - Domain types inside the process. Crates call each other with domain types. A DTO is not introduced between internal
   crates, and a type acquires wire attributes only when it crosses one of the three boundaries.
 - JSON only for tool payloads. Tool inputs and outputs are JSON objects validated at runtime against the tool's
   declared JSON Schema, and they are the only schemaless JSON values in the system. `serde_json::Value` stays
-  prohibited everywhere else, including error details, events, hooks, configuration, and storage.
-- Nine identifiers. `SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `EventId`,
-  `ConfigRevisionId`, and `IdempotencyKey` are the complete identity newtype set. `AssistantTurnId`, `PlanId`,
-  `PlanRevisionId`, `ModelStepId`, and `ToolGroupId` are removed: model steps and tool groups are addressed by plain
-  indices within their containing records, and mutating operations carry an `IdempotencyKey` instead of an operational
-  ID.
-- One durable event payload. `EventPayload` is the single payload type carried by `EventEnvelopeDto`, which keeps the
-  event identity, the ordering sequence, the schema version, and the session/run/turn scope. Event families become
-  variants or typed fields of that payload instead of separate envelope shapes.
-- Publication follows the commit. A live event is emitted once the durable commit succeeds, carrying the values the
+  prohibited everywhere else, including error details, hooks, configuration, and storage.
+- Eight identifiers. `SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`, and
+  `IdempotencyKey` are the complete identity newtype set. `EventId`, `AssistantTurnId`, `PlanId`, `PlanRevisionId`,
+  `ModelStepId`, and `ToolGroupId` are removed: model steps and tool groups are addressed by plain indices within their
+  containing records, and mutating operations carry an `IdempotencyKey` instead of an operational ID.
+- Publication follows the commit. A live frame is emitted once the durable commit succeeds, carrying the values the
   commit recorded; the scoped durable reread proof is removed.
-
-## Post-M4 execution and compatibility boundary
-
-Future M4+ packages use closed, typed serde JSON families rather than widening historical records by implication. If a
-future record kind is needed, it is a typed serde JSON contract declared by its own activating specification;
-kind/version/payload mismatch blocks dependent external work, and live availability never silently mutates a persisted
-meaning. The superseded execution-meaning envelope, canonical tag registry, and digest/identity codec — including
-`RunExecutionMeaningEnvelopeDto` — are deleted (ADR 0012): no canonical encoding or decoder retention schedule remains.
-
-### Future DTO families
-
-The Plan/Build Autopilot transition adds versioned typed families for plan approval, same-Session Build continuation,
-and optional implementation handoff. Approval binds an exact plan revision; same-Session continuation preserves
-`SessionId` but creates a fresh `RunId`; handoff creates an independent Session from a bounded safe snapshot. These DTOs
-must not carry credentials, raw transcripts, provider continuation state, live handles, processes, grants, or unfinished
-effects.
-
-The future tool-loop families include `ToolRegistryEntryDto`, `ToolDescriptorRevisionId`, `ToolRegistryRevisionId`,
-model-step and tool-group facts, safe workspace-path observations, output fragments, terminal results, and
-`ModelToolExchangeDto`. Model steps and tool groups carry no newtype identity and are addressed by plain indices within
-their containing records. They cannot widen
-historical M4 tool facts, expose provider-native IDs, raw paths, secrets, or SDK resources, or recreate stored selection
-from a current registry. [Tool registry and model-tool loop](15-tool-registry-and-model-tool-loop.md) owns
-their semantics.
-
-The future instruction-source families include `InstructionSourceV1`, `InstructionProfileRevisionV1`, and
-`InstructionProjectionV1` ([architecture 30](30-instruction-sources-and-system-context.md), [ADR
-0010](../decisions/0010-instruction-sources-and-system-context.md)). They carry bounded credential-free instruction text
-with its declared kind, scope, order, and audience; they carry no tool, policy, admission, provider, or other authority,
-and no untrusted material may enter them. Architecture 30 owns their semantics, and the Slice 5 activating specification
-assigns their typed serde JSON contract versions.
-
-### Historical compatibility classes
-
-- **Execution compatibility:** a supported record may execute only under its
-recorded kind, version, immutable selection, and explicitly supported driver contract.
-- **Replay compatibility:** readable history may remain replayable even when it
-is not executable.
-- **Audit compatibility:** an unknown/corrupt future audit record may isolate
-that audit result without inventing replacement state.
-
-Historical M3/M4 and ordinary records must not receive synthetic Skill, MCP, activity, policy, or profile fields. The
-single live storage schema may evolve in place to add tables, bridges, or projections but may not rewrite old payload
-bytes, IDs, cursors, snapshots, or event envelopes. Unknown or corrupt future meaning blocks dependent work before an
-effect and must not fall back to current TOML, registry, model name, provider, or live resource state. [Run execution
-meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md) owns the remaining
-historical compatibility rules.
-
-Future MCP families include typed capability source, discovery, server observation, normalized capability revision,
-accumulated run-local selection, model-step selection binding, invocation selection, safe capability/result projection,
-and attempt/recovery values. They are closed, credential-free, and cannot expose raw endpoint, command, header, token,
-frame, server error, SDK, socket, or process resource. Architecture 18 owns their semantics.
-
-## Post-M4 kernel DTO boundary
-
-Future kernel DTOs include typed kernel selection, epoch, execution binding, safe output chunk, checkpoint metadata,
-restoration outcome, and host-request references. They are closed, credential-free families: Python/Jupyter objects, raw
-frames, checkpoint payloads, grants, credentials, endpoints, handles, process resources, raw tracebacks, and
-caller-selected application identities never cross a public boundary. Architecture 20 owns their semantics.
-
-## Post-M4 provider evolution DTO boundary
-
-Future provider DTOs are closed, credential-free kind/descriptor/profile/catalog/ selection/capability/driver-contract
-and normalized-reasoning families. They cannot expose raw TOML, credentials, arbitrary maps, provider-native IDs or
-payloads, SDK/client resources, remote continuation state, or private endpoint input. Architecture 22 owns their
-semantics.
-
-## Post-M4 session branching DTO boundary
-
-Future fork DTOs are closed, versioned, credential-free command/query/result, lineage, boundary, snapshot, preview, and
-safe branch-summary families. They never carry a client-selected child ID, raw snapshot/event, credential, path,
-resource, provider payload, or authority. Architecture 23 owns their semantics.
-
-## Post-M4 activity and adapter DTO boundary
-
-Future activity-journal, notification, snapshot, page, completion, live, and resync DTO families are closed, versioned,
-credential-free safe projections. They expose no raw prompt, provider/tool/MCP data, path, credential, grant, resource,
-or implementation value. Architecture 03 owns their semantics.

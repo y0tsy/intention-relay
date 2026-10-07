@@ -10,7 +10,7 @@ multi-user operation are explicit v1 exclusions ([00 Principles and Scope](00-pr
 
 The daemon is the sole owner of application use cases and runtime actors; SQLite connections and persistence
 transactions; active sessions and runs; provider drivers and model streams; the tool registry, workspace policy, hooks,
-VFR, Headroom, and plan policies; event publication and subscription source; and the flat activity journal and
+VFR, Headroom, and plan policies; frame publication and subscription source; and the flat activity journal and
 notification list.
 
 Tauri, TUI, and REPL own only presentation, user input adaptation, local display state, and reconnect UX.
@@ -47,15 +47,15 @@ a response echoes the `id` and carries exactly one of `result` or `error`; a not
 | `turn.send` | `SendUserTurnCommandDto` | command result DTO |
 | `turn.remove` | `RemoveTurnCommandDto` | command result DTO |
 | `run.interrupt` | `InterruptRunCommandDto` | command result DTO |
-| `session.subscribe` | `SubscribeSessionCommandDto` | snapshot or resync result |
-| `run.subscribe` | `SubscribeRunCommandDto` | initial replay or resync result |
+| `session.subscribe` | `SubscribeSessionCommandDto` | current session snapshot |
+| `run.subscribe` | `SubscribeRunCommandDto` | current run state snapshot |
 | `daemon.health` | none | daemon health/readiness projection |
 | `session.snapshot` | `GetSessionSnapshotQueryDto` | durable session snapshot |
 
 The method table is one-to-one with the `ProtocolCommandDto` and `ProtocolQueryDto` variants, plus the dedicated
 `run.subscribe` request that replaced the former run-stream connection role. `run.frame`, carrying `RunStreamFrameDto`,
-is the only notification; `session.subscribe` and `session.snapshot` return durable snapshot results, and there is no
-session push channel.
+is the only notification; `session.subscribe` and `session.snapshot` return current-state snapshot results, and there is
+no session push channel.
 
 Errors follow JSON-RPC 2.0: `-32700` parse error, `-32600` invalid request, `-32601` method not found, `-32602` invalid
 params, and the application-defined `-32001` incompatible protocol version. The structured `ErrorDto` travels in
@@ -98,19 +98,18 @@ safety outcomes, retained M3 synchronous behavior, and Windows named-pipe multi-
 
 ### Persistent subscriptions and the run stream
 
-A subscription is an ordinary JSON-RPC method call. `run.subscribe` returns the initial authoritative `RunSnapshotDto` (or
-a typed resync or error) as its correlated response result, and later committed state arrives as `run.frame`
-notifications carrying the existing run replay/live/snapshot/resync payloads. Unknown or cross-session runs are safe
-errors; future cursors are `InvalidCursor`; unavailable history is `HistoryUnavailable`. A run stream never uses a
+A subscription is an ordinary JSON-RPC method call. `run.subscribe` returns the current run state as its correlated
+response result, and later committed state arrives as `run.frame` notifications carrying `RunStreamFrameDto` with
+`kind` `content` or `status` and no positions. A re-subscribing client re-reads current state and continues live; there
+is no cursor, event tail, or resynchronization. Unknown or cross-session runs are safe errors. A run stream never uses a
 filtered `SessionSnapshotDto`.
 
 `intention-daemon` owns one private Tokio runtime and serves the JSON-RPC surface from one `AsyncLocalListener`. Each
 subscriber has a private bounded outgoing queue (`SUBSCRIBER_QUEUE_CAPACITY`, 64), its own writer path, and a bounded
 write deadline (`SUBSCRIBER_WRITE_DEADLINE`, 10 seconds); these are implementation safeguards owned by the host, not
 product ceilings. An overflowing, closed, or timed-out subscriber is removed without awaiting it from execution,
-persistence, or healthy subscriber delivery, and the host attempts a typed `SubscriberTooSlow` resync where queue
-capacity permits before it closes that peer. Queue-capacity isolation and the paused-clock deadline are daemon-host
-unit evidence; the persistent-host outcome fixture proves a real healthy local peer's replay/live/replay lifecycle
+persistence, or healthy subscriber delivery. Queue-capacity isolation and the paused-clock deadline are daemon-host unit
+evidence; the persistent-host outcome fixture proves a real healthy local peer's subscribe/live/reconnect-read lifecycle
 rather than OS-buffer timing. The transport message bound and local Unix-socket/Windows-pipe permissions are unchanged.
 
 Test-only restart fixtures explicitly abort and join all first-host connection and execution tasks before dropping every
@@ -187,31 +186,23 @@ a decode-time schema-version rejection at a public DTO boundary is a `validation
 ownership").
 
 After the handshake, the client sends typed commands and queries as JSON-RPC requests, and `run.frame` notifications
-arrive on the same connection after a `run.subscribe`. A subscription request carries the last observed session event
-sequence and optional run scope when available. The client reducer accepts ordered events, ignores duplicate or stale
-delivery, and requires snapshot recovery for a forward sequence gap.
+arrive on the same connection after a `run.subscribe`. A subscription request carries its session and optional run
+scope. The client applies live frames after the snapshot it received and re-reads current state after a reconnect.
 
-### M3 durable replay-only subscriptions
+### Current-state session subscriptions
 
-M3 serves sessions from durable SQLite projections and append-only event envelopes. A session subscription is still a
-one-shot JSON-RPC request: for an unscoped request it returns the **current durable projection snapshot**, or a typed
-resync when the session cannot be supplied. It is
-**replay-only**, not a retained connection and not a live event feed, and historical projection reconstruction is not
-represented in M3. The post-commit publication seam is removed (ADR 0005 Wave 7): committed evidence is published only
-through the daemon host's commit-observation path, never through a no-op session seam. M3 durability, unscoped
-snapshot replay, ordering, and resync remain unchanged; persistent delivery is implemented only for the separate M4
-run-scoped DTOs, never for filtered M3 session state.
+A session subscription is a one-shot JSON-RPC request: it returns the **current durable projection snapshot** for the
+session. It is not a retained connection and not a live event feed. Committed values are published only through the
+daemon host's commit-observation path. Persistent delivery exists only for the separate run-scoped DTOs, never for
+filtered session state.
 
-M3 session snapshot DTOs represent session-contiguous sequence and cannot safely express filtered run state. Therefore
-every subscription with `run_id: Some` returns typed `HistoryUnavailable` resync **before any session or cursor
-validation**, whether the run matches, does not exist, belongs to another session, or has an invalid cursor. It must
-never fall back to an unfiltered session snapshot. Correctly scoped replay is delivered separately by the M4
-run-stream subscription contract; this M3 safe resync remains distinct and is not a live stream.
+A session projection cannot express filtered run state. A request that asks for a specific run uses the run-scoped
+subscription contract instead; a session request never falls back to mixing run and session state.
 
 ## Subscription and reconnect
 
-A subscription is associated with a session and optional run scope. The client records the latest applied event
-sequence.
+A subscription is associated with a session and optional run scope. The client holds at most one active subscription
+per scope.
 
 ```mermaid
 sequenceDiagram
@@ -219,39 +210,37 @@ sequenceDiagram
   participant CL as Client
   participant DM as Daemon
 
-  AD->>CL: Subscribe from sequence N
-  CL->>DM: New subscription request
-  DM-->>CL: Snapshot, or resync
-  CL-->>AD: Reconcile view
+  AD->>CL: Subscribe
+  CL->>DM: Subscription request
+  DM-->>CL: Current-state snapshot
+  DM-->>CL: Later committed frames
   Note over AD,DM: Request connection is closed
   AD->>CL: Recover after disconnect
-  CL->>DM: New subscription from last sequence M
-  DM-->>CL: Current snapshot or typed resync
+  CL->>DM: New subscription request
+  DM-->>CL: Current-state snapshot
   CL-->>AD: Consistent state or cleared projection
 ```
 
 ### Reconciliation rules
 
-- Adapters render in session event sequence order per session.
-- A gap requires recovery through a fresh snapshot, not guessed UI state.
-- Duplicate delivery is tolerated through `event_id` and session-event-sequence-aware reducers.
-- A stale live event may not mutate a projection if its session event sequence position is already applied.
-- The session event sequence is the session ordering authority; adapters do not synthesize a server sequence.
+- Adapters render committed state; a reconnect re-reads current state instead of replaying a tail.
+- Duplicate or stale frames do not mutate a projection that already reflects newer committed state.
+- Adapters never synthesize server state or ordering.
 
 ## M3 durable authority
 
 The M3 composition facade is daemon-owned durable state: it opens the platform state database, records a safe
-configuration snapshot, completes recovery before reporting ready, and serves the typed command/query contract from
+configuration revision, completes recovery before reporting ready, and serves the typed command/query contract from
 SQLite. The facade uses the platform application-state location (`XDG_STATE_HOME` or `~/.local/state` on Linux,
 Application Support on macOS, and `LOCALAPPDATA` on Windows); it returns a typed unavailable error when no absolute
 platform location is available and never falls back to process CWD.
 
 `intention-test-support` owns durable fixture construction and bounded listener orchestration. It constructs
-credential-free snapshots, platform-native temporary workspace roots, `TempDir`-backed databases, and known sessions,
-then calls only the hidden facade injection seam and the daemon's hidden one-connection dispatch seam. TUI and daemon
-binary tests do not own a parallel fixture protocol or a fixture startup CLI mode. M3 does not implement idle shutdown,
-an explicit daemon-stop command, or model or provider execution; M4 persistent delivery is provided through the separate
-run-scoped subscription contract.
+credential-free configuration revisions, platform-native temporary workspace roots, `TempDir`-backed databases, and
+known sessions, then calls only the hidden facade injection seam and the daemon's hidden one-connection dispatch seam.
+TUI and daemon binary tests do not own a parallel fixture protocol or a fixture startup CLI mode. M3 does not implement
+idle shutdown, an explicit daemon-stop command, or model or provider execution; M4 persistent delivery is provided
+through the separate run-scoped subscription contract.
 
 ## Tauri bridge
 
@@ -281,11 +270,11 @@ On daemon startup, before it reports `DaemonReadinessDto::Ready`:
 
 1. resolve and open the platform state database, creating the complete current storage schema directly on open;
 2. record the credential-free startup `ConfigSnapshotDto` revision;
-3.  snapshot the pre-existing unfinished runs and transition each one to `interrupted` through the repository's
-   mandatory terminal-transition transaction, with durable state-change event and snapshots;
+3.  transition each pre-existing unfinished run to `interrupted` through the repository's mandatory
+   terminal-transition transaction;
 4.  do not automatically retry or resume model calls, tool calls, shell processes, or other external work; pending
    turns stay durable input and start no work during recovery; and
-5. make the recovered state available through later one-shot snapshot replay.
+5. make the recovered state available through later one-shot current-state reads.
 
 This policy is honest about unknown external side effects. A user may initiate a new retry or manually reconciled
 follow-up run.
@@ -299,7 +288,7 @@ follow-up run.
 | Permission boundary | Socket/pipe permission integration test. | A different OS user cannot connect. |
 | Protocol mismatch | Client/server compatibility test. | Connection fails with the typed `-32001` incompatibility error before close. |
 | Protocol conformance | JSON-RPC conformance and rewritten transport integration tests. | The four standard error codes, `hello` exact-version equality, notification framing, and the one-to-one method table behave as specified. |
-| Reconnect | Durable replay-only subscription integration test, including run-scoped requests. | An unscoped new one-shot request receives a current durable snapshot, or typed resync; every `run_id: Some` request receives `HistoryUnavailable` before cursor/session validation without unfiltered session state, and no request claims live delivery. |
+| Reconnect | Subscription integration test, including run-scoped requests. | A new request receives the current durable snapshot, a reconnect re-reads current state, and no request claims replayed history. |
 | Restart | Persisted active-run recovery test. | Recovery completes before ready; every pre-existing unfinished run becomes `interrupted`, pending turns stay durable input, and no provider/tool call resumes. |
 | State location | Platform-state path fixture. | The database resolves under AppData/platform state and fails safely without an absolute platform directory, never using CWD. |
 | Adapter isolation | Dependency/contract test. | Tauri and TUI have no direct runtime/storage implementation dependency. |
@@ -327,44 +316,14 @@ section freezes the target; the text above stays current policy until the slice 
   facade's duplicate DTO surface. Composition still happens in exactly one place, and the hidden test seams move with
   the merged crates and stay non-production.
 - Publication without a reread. The durable commit returns the values it recorded, and the daemon host publishes live
-  events from that result. The scoped durable reread proof is removed; the live-after-commit ordering rule is unchanged.
+  frames from that result. The scoped durable reread proof is removed; the live-after-commit ordering rule is unchanged.
+- No cursors and no resync. `SubscribeSessionCommandDto` and `SubscribeRunCommandDto` lose their cursor fields,
+  session and run subscriptions return current-state snapshots, and a re-subscribing client re-reads current state. The
+  `RunResyncDto`, `RunSnapshotFrameDto`, `RunEventTailPageDto`, and cursor DTOs are removed; the wire keeps its eight
+  methods.
 - Protocol version 1.0. The single live protocol version is 1.0 ([ADR
   0011](../decisions/0011-local-json-rpc-2-0-transport.md) amendment); the wire, the method table, and exact-equality
   negotiation are unchanged by the renumbering.
 - Fully asynchronous client. `intention-client` exposes one asynchronous API covering every protocol command and query
   plus the `run.frame` notification stream, and its blocking API is removed. Daemon end-to-end tests drive the real
   client instead of the low-level transport, and the TUI proof adapter migrates mechanically without rework.
-
-## Post-M4 session branching transport boundary
-
-`session_fork_v1` is a future additive typed JSON-RPC DTO family. It cannot widen M3 session replay or M4 run streams:
-bounded tree reads remain separate, read-only projections and no tree-wide event stream is introduced. Adapters render
-daemon-owned results and cannot infer lineage, authority, or rollback.
-
-## Post-M4 activity and notification transport boundary
-
-This document owns the flat activity journal and the flat notification list as additive typed JSON-RPC surfaces on the
-existing local endpoint. They are separate from M3 session replay and M4 run streams, use daemon-owned cursors and
-resync, and never create a second listener or adapter-owned authority. There is no activity tree, delegation pair,
-message exchange, notification level, deduplication rule, or acknowledgement aggregate.
-
-**Flat activity journal.** One append-only flat stream per root run records child-run lifecycle: a daemon-assigned
-record identity, the root-run and child-run references, the selected sub-agent mode, the child session handle when one
-was issued, a flat safe status, bounded safe text, and the occurrence time. It has no activity-tree identity, no
-delegation pair, no closed record-kind vocabulary, and no sequence of its own: the stream is ordered by the root run's
-container journal (`RunEventCursorDto`) and projects durable evidence those facts already carry. It never carries a
-child answer body, prompt, provider or tool output, path, credential, grant, or implementation detail.
-
-**Flat notification list.** One daemon-owned list holds safe summaries for the local OS user: record identity,
-occurrence time, the root-run and child-run references, a flat safe status, and bounded safe text. An entry appears when
-a child run is admitted in either mode and when a child or root run reaches a terminal state. The list has no levels, no
-deduplication rule, no acknowledgement aggregate, and no negotiated family: a request carries only the last observation
-cursor, which is a resume position and never a read, seen, dismissed, or accepted claim, and returns bounded pages
-ordered by that cursor. A summary never includes the child answer body, which stays readable only through the durable
-child result. Notification publication, replay, and reconnect never start work.
-
-## Post-M5 supervision topology direction
-
-Worker and process supervision topology is an accepted post-M5 future direction, to be executed in Milestone 5+ as a
-production supervision topology for long-lived workers and processes. It never becomes a second runtime, registry, scheduler,
-persistence authority, or sandbox.

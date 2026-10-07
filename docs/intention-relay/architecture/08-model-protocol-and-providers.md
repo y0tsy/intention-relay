@@ -54,27 +54,16 @@ only in `intention-provider-openrouter` private implementation and `async_openai
 `intention-provider-generic-chat`; source-level ownership analysis rejects either SDK plus HTTP/runtime resources
 outside those owners.
 
-## Durable model facts
+## Model evidence in the transcript
 
-The model stream remains provider-neutral; durable model evidence is a separate domain/storage concern owned by [DTO and
-Contract Policy](02-dto-and-contract-policy.md) and [Sessions, Runs, Events, and
-Storage](04-sessions-runs-events-and-storage.md).
+The model stream remains provider-neutral; durable provider evidence is a transcript concern owned by [DTO and Contract
+Policy](02-dto-and-contract-policy.md) and [Sessions, Runs, and Storage](04-sessions-runs-events-and-storage.md).
 
-Each atomic M4 batch takes a dedicated, monotonically increasing position in the run container journal
-(`RunEventCursorDto`) and appends typed domain events for attempt start/failure, retry, assistant content, tail-only
-reasoning, usage, tool call, finish, or safe failure.
-Attempts are positive; a retry's next attempt is exactly the failed attempt plus one; assistant batches are non-blank
-and at most 4 KiB; individual canonical facts are limited to 512 KiB; and a terminal run accepts no new facts. The safe
-run snapshot includes compatible M3 projection identity/status/revision, accumulated assistant content for the active
-assistant turn, usage, finish reason, and safe failure; it never accumulates reasoning content.
-
-Storage appends a non-empty fact batch only when its expected cursor matches, optionally changing status in the same
-transaction with domain-event envelope, index, run cursor/projection, session snapshot, and M4 run snapshot.
-
-Stable errors are `run_fact_too_large` (validation/never), `run_event_cursor_conflict` (conflict/immediate),
-`run_replay_not_found` (not-found/never), `invalid_run_event_cursor` (validation/never), and `run_history_unavailable`
-(unavailable/manual). Internal replay reads are run-scoped and bounded; M3 public protocol subscription behavior remains
-unchanged.
+Text and reasoning accumulate in memory and commit once per completed model step as one `messages` row; usage, finish
+reason, and failure commit on the `runs` row; tool calls and results commit as message and `tool_results` rows. Attempts
+are positive; a retry's next attempt is exactly the failed attempt plus one; an assistant message is non-blank and
+bounded by the transcript bounds; and a terminal run accepts no new content. There is no per-fact position, cursor, or
+snapshot.
 
 ```mermaid
 sequenceDiagram
@@ -88,7 +77,7 @@ sequenceDiagram
   P->>X: Provider-native request
   X-->>P: Native stream
   P-->>M: ModelEvent DTO stream
-  M-->>R: Typed events
+  M-->>R: Typed stream facts
 ```
 
 The provider adapter translates native formats into typed DTOs. It must not erase a capability merely because another
@@ -249,47 +238,13 @@ wait starts the next attempt immediately.
 ## Quality-gate integration
 
 `intention-model` and provider adapters are subject to their `standard` tier floor ([ADR
-0016](../decisions/0016-per-crate-coverage-tiers.md)). Stream normalization, capability validation, retry, SDK-isolation,
-and secret-redaction fixtures are blocking `make verify` inputs under every relevant feature profile. Dependency and
-public-API checks must prevent provider SDK types and secrets from escaping their crate. See [12 Quality Gates and
-Makefile](12-quality-gates-and-makefile.md).
+0016](../decisions/0016-per-crate-coverage-tiers.md)). Stream normalization, capability validation, retry,
+SDK-isolation, and secret-redaction fixtures are blocking `make verify` inputs under every relevant feature profile.
+Dependency and public-API checks must prevent provider SDK types and secrets from escaping their crate. See [12 Quality
+Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Non-goals
 
 - A provider-agnostic interface that discards reasoning, tool, or native capabilities.
 - Direct SDK use from application, runtime, transport, or adapters.
 - Full provider catalog in v1.
-
-## Post-M4 immutable execution-meaning boundary
-
-M4 provider selection, retry behavior, supported provider kinds, and stream contracts remain unchanged. The former
-execution-meaning envelope, canonical codec, and digest/identity layer are a superseded historical record ([Run
-execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md)); no canonical
-execution-meaning record exists (ADR 0012), and no future meaning record may reinterpret an M4 selection.
-
-A future provider/model/capability selection is a typed JSON field owned by its domain document. Provider drivers remain
-subordinate adapters: they do not select lifecycle, authority, tools, or current-state fallback. Model names never
-select a provider kind or driver, and model names never infer provider kind, driver, endpoint, or capability.
-
-Future `responses`, parse-time `openai` aliasing, profiles, catalog lifecycle, reasoning, and driver compatibility are
-owned by [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md). It preserves M4
-exactly: no new M4 driver is introduced, future `responses` is distinct from Generic Chat, `openai` is only a future
-parse-time alias, and model names never route provider behavior.
-
-## Post-M4 tool-loop consequence
-
-M4 tool-call evidence and denial remain unchanged. The ordinary request-side advertisement of the active registered
-tools is active under ADR 0006 and creates no frozen selection; `model_tool_loop_v1` and `ModelToolExchangeDto` history
-remain reserved for Slice 3. The same-run reasoning round-trip is active under ADR 0008: it
-attaches only the current round's accepted reasoning as transient request state, creates no durable reasoning history,
-and does not change the reserved `model_tool_loop_v1` contract. A future driver may support `model_tool_loop_v1` only
-when it can translate a frozen local typed tool selection and complete `ModelToolExchangeDto` history into a fresh
-provider request. It never invokes a local primitive or reuses opaque remote continuation state. Registry and tool-loop
-semantics are owned by [Tool registry and model-tool loop](15-tool-registry-and-model-tool-loop.md); provider
-evolution remains separate.
-
-## Post-M4 session branching consequence
-
-Architecture 23 owns frozen fork model context and immutable transfer references. Provider drivers cannot reconstruct
-fork history from current state, infer a provider selection, or continue a source request. Architecture 22 owns future
-provider and reasoning semantics; M4 provider behavior remains unchanged.

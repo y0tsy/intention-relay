@@ -88,32 +88,6 @@ value outside that range fails closed with the typed `invalid_provider_context_w
 08](08-model-protocol-and-providers.md) owns the window mechanics that consume it ([ADR
 0018](../decisions/0018-dynamic-context-window-and-prompt-caching.md)).
 
-### M5+ typed-edit rendering and reload status (not activated)
-
-Configuration editing is an accepted future direction ([architecture
-25](25-configuration-provider-control-plane.md)) with no live implementation, and controlled reload is only the
-accepted future direction described
-in the M3 lifecycle rules above. The M5+ Slice 2 direction renders typed-edit candidate documents inside
-`intention-config` (the accepted decision: render from the safe snapshot AST inside the crate) and adds a
-`ConfigurationProjectionDto.reload_status` vocabulary. Its activating specification must implement the recorded
-rules:
-
--  a typed-edit candidate is rendered from the safe snapshot AST inside the configuration crate, and the composition
-maps protocol typed-edit operations into that crate's credential-free edit-operation type without doing TOML rendering
-itself;
--  values carrying TOML-significant characters are escaped by the serializer instead of producing an unparseable
-document;
-- configuration fields the edit does not name survive the edit unchanged;
--  a value the configuration shape cannot represent fails with a typed `configuration_edit_invalid` error instead of a
-generic `invalid_config_toml` parse failure;
--  the rendered document stays credential-free by construction; only the private channel may re-insert
-`provider.credential` as a TOML value before the candidate flows through the unchanged server-side reload contract
-(`prepare`, `parse_candidate`, `reject_catalog_affecting_edits`), and a document-shape failure in the restore helper is
-a typed validation error (`invalid_config_toml` or `invalid_config_schema`), never a credential-free document that a
-caller could mistake for a configured one;
--  the reload status projection is a closed enum validated by serde at decode, where an unknown status is rejected with
-`configuration_projection_invalid` and a consumer can match the status exhaustively.
-
 ## Open-text provider credentials
 
 Provider credentials may be stored in TOML in open text by explicit product decision. This is not equivalent to allowing
@@ -202,10 +176,10 @@ atomicity.
 ## Quality-gate integration
 
 `intention-config` remains subject to its `standard` tier floor ([ADR
-0016](../decisions/0016-per-crate-coverage-tiers.md)). TOML parsing, M1 snapshot serialization, permissions, redaction,
-and safe observability tests are blocking `make verify` inputs; M3 adds canonical snapshot-persistence, restart-only
-application, and per-run snapshot integration coverage. A recognizable fake secret is a mandatory regression fixture
-across logs, errors, snapshots, events, and adapter DTOs. See [12 Quality Gates and
+0016](../decisions/0016-per-crate-coverage-tiers.md)). TOML parsing, M1 revision serialization, permissions, redaction,
+and safe observability tests are blocking `make verify` inputs; M3 adds canonical revision persistence, restart-only
+application, and per-run configuration-selection coverage. A recognizable fake secret is a mandatory regression
+fixture across logs, errors, persisted state, and adapter DTOs. See [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md).
 
 ## Open decisions
@@ -213,71 +187,5 @@ Makefile](12-quality-gates-and-makefile.md).
 - exact TOML layout and include/import policy, if any;
 - user experience for config edits and daemon-restart-required changes;
 - credential rotation flow;
-- event/log retention and diagnostic export policy;
+- transcript/log retention and diagnostic export policy;
 - platform-specific config permission behavior outside Unix.
-
-## Post-M4 selection and observability boundary
-
-This document preserves M3/M4 startup-only TOML application. The configuration/provider control-plane cluster
-(controlled live reload, credential rotation, profile editing, discovery, pricing, and health behavior) is an accepted
-future direction and the
-[Implementation Roadmap](11-implementation-roadmap.md), and adds no implemented behavior. Future execution meanings and
-attempt evidence must remain credential-free and exclude SDK objects, process handles, kernel state, bridge grants, raw
-provider/MCP payloads, and private endpoint material.
-
-Future observability may expose typed capacity outcomes and safe attempt references, but it cannot convert logs,
-notifications, activity, or provider responses into authority. Redaction rules apply to every new persistence, protocol,
-diagnostic, and identity surface.
-
-## Execution-meaning historical record
-
-Architecture 14 ([Run execution meaning and historical
-compatibility](14-run-execution-meaning-and-historical-compatibility.md)) is the historical record of the removed
-execution-meaning envelope, canonical codec, and decoders (ADR 0012); the removed machinery has no implementation path,
-and its live owners now use typed serde JSON equivalents. This document retains M3/M4 startup-only configuration and the
-redaction boundaries above, and no future meaning record may reinterpret an M4 selection.
-
-## Post-M4 tool-loop observability consequence
-
-Future registry/descriptor revisions and safe tool state may be observable, but canonical or public projections may not
-expose credentials, raw typed inputs, unsafe absolute/canonical/symlink paths, process resources, provider-native call
-identifiers, SDK values, or raw output. See [Tool registry and model-tool
-loop](15-tool-registry-and-model-tool-loop.md).
-
-## Post-M4 kernel observability consequence
-
-Future kernel selections, checkpoint metadata, and safe output projections remain credential-free. Checkpoint payloads,
-Python values, Jupyter frames, raw tracebacks, grants, endpoints, paths, handles, process details, and implementation
-errors never enter storage, protocol, logs, diagnostics, adapters, or model context. Kernel availability is typed
-operational evidence, not authority.
-
-## Post-M4 provider-evolution configuration consequence
-
-Architecture 22 owns future startup-only credential-free provider profile/catalog selection. Raw TOML, credentials,
-private endpoint input, candidate material, and private clients remain outside persistence and public diagnostics.
-Catalog/default state cannot reconstruct immutable provider meaning or imply live reload, credential rotation,
-discovery, health testing, or a configuration control plane.
-
-## Post-M4 session branching observability consequence
-
-Future fork snapshots and lineage projections are credential-free safe records. They exclude raw provider/tool/kernel
-data, workspace contents, implementation resources, and secrets. Lineage audit remains separate from Session/Run events
-and cannot be used to infer rollback or external-effect proof.
-
-## Post-M4 activity and notification observability consequence
-
-Architecture 03 owns the flat activity journal and notification list. They remain credential-free and exclude raw
-prompt/provider/tool/MCP/path/grant/resource data. Notifications are durable presentation evidence, not authority,
-read-state by cursor, or operational diagnostics.
-
-## Post-M5 instruction-source configuration and observability consequence
-
-[Architecture 30](30-instruction-sources-and-system-context.md) owns the instruction channel ([ADR
-0010](../decisions/0010-instruction-sources-and-system-context.md)). Its profile revision identity and workspace
-instruction reference cross the configuration surface; instruction text stays on the editing surface where the user
-reads and edits it ([architecture 25](25-configuration-provider-control-plane.md)).
-
-Fragment configuration follows the TOML-only typed-edit rules above: an edit is a validated candidate edit that fails
-closed and affects fresh runs only, and no credential, private endpoint material, SDK object, or raw provider payload
-may be stored in, echoed from, or derived from an instruction source. Logs, activity, notification, and audit surfaces
-carry revision identities only; fake-secret regression covers every one of them.

@@ -31,7 +31,7 @@ A session copies the global `ProviderProfileId` as a durable future default; cat
 `SetSessionProviderProfileCommandDto` is user-initiated, idempotent, and optimistic: it takes the session, an enabled
 profile ID, the expected session projection revision, and an operation ID; it changes only future intent and, when the
 durable default changes, publishes the typed `SessionProviderProfileChanged` event to the validating session-event
-boundary. No durable copy of that event and no durable session-event snapshot is written: the control-plane event family
+boundary. No durable copy of that event is written: the control-plane event family
 has no durable append seam. Durable delivery remains future work, reserved to Milestone 6 in the roadmap's [reserved
 declarations carried by M6-M9](11-implementation-roadmap.md#reserved-declarations-carried-by-m6-m9) and anchored as the
 durable `SessionProviderProfileChanged` append layer. An existing-profile request is a successful `changed = false`
@@ -83,7 +83,7 @@ atomic reload contract and is not part of this surface. The daemon advertises an
 capability today.
 
 A catalog list is bounded, paginated by an opaque token, sorted by stable `ProfileId`, carries the active
-`CatalogRevisionId`, and returns `has_more`; a catalog change invalidates the token with a typed conflict/resync. An
+`CatalogRevisionId`, and returns `has_more`; a catalog change invalidates the token with a typed conflict. An
 entry includes profile/catalog revisions, display name, enabled state, kind ID, kind descriptor revision, exact model,
 normalized endpoint where applicable, effective policy, capability subset, credential transport mode and safe header
 name where applicable, `credential_configured`, deterministic driver-declared capabilities, and local readiness. The
@@ -106,13 +106,14 @@ credential-rotation limitation). An omitted profile or unreferenced kind becomes
 candidate (not auto-tombstoned); a profile pointing to an omitted kind is invalid. Degraded mode is admin/read only.
 
 `AcceptProviderCatalogRemovalCommandDto` (idempotent) takes a candidate handle, expected active/candidate revisions, and
-an operation ID; it atomically accepts removals, creates tombstones, records ordered audit, and activates the registry.
+an operation ID; it commits the state change in one transaction and then activates the registry; no external action
+occurs inside it.
 `RejectProviderCatalogCandidateCommandDto` drops the private candidate and pending status, records
 `ProviderCatalogCandidateRejected`, and leaves degraded read-only with `removal_candidate_rejected`. At most one
 candidate exists, with a lifetime of **30 minutes** from `ProviderCatalogRemovalPending`; expiry produces
 `ProviderCatalogCandidateExpired` and degraded read-only with `removal_candidate_expired`.
 
-Startup opens storage first, interrupts unfinished runs before any read response, then prepares and activates the
+Startup opens storage first, applies the architecture 04 recovery-before-ready rule, then prepares and activates the
 catalog. A degraded daemon serves health, safe catalog status/validation, and session/run/tree reads; all provider state
 changes, admission, and default changes are rejected with `execution_not_ready`, the only exceptions being accept/reject
 of the one pending candidate. A crash after acceptance produces `ProviderCatalogActivationRecoveryRequired` before
@@ -125,11 +126,9 @@ ordinary recovery path is the only one.
 
 ## Compatibility and historical preservation
 
-M3/M4 bytes, sessions, runs, events, snapshots, replay, recovery, and `ToolCallRecorded ->
-tool_execution_unavailable` remain authoritative and unchanged, and no historical selection gains a synthetic
-profile/catalog/session-default state. A per-turn or fork override affects only its run; existing persisted runs retain
-their recorded immutable selection. All directions affect fresh runs only; the layer is not activated and activation
-requires an activating specification.
+No historical selection gains a synthetic profile/catalog/session-default state. A per-turn or fork override affects
+only its run; existing persisted runs retain their recorded immutable selection. All directions affect fresh runs only;
+the layer is not activated and activation requires an activating specification.
 
 ## Dependencies and non-goals
 

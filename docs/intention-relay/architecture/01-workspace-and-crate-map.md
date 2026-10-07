@@ -14,20 +14,22 @@ Contract Policy](02-dto-and-contract-policy.md).
 implementation, tools, or provider implementations.
 - Concrete drivers are selected only by the composition root.
 - Feature flags may choose implementations, but may not make the public contract type-unstable.
--  M1 establishes the `ConfigRevisionId` and credential-free `ConfigSnapshotDto` contract foundation. M3 makes
-`ConfigSnapshotDto` the canonical credential-free persisted configuration selection: the composition root supplies one
-startup snapshot, storage records it by revision, and each accepted run retains its immutable revision. TOML
+-  M1 establishes the `ConfigRevisionId` and credential-free `ConfigRevisionDto` contract foundation. M3 makes
+`ConfigRevisionDto` the canonical credential-free persisted configuration selection: the composition root supplies one
+startup revision, storage records it by `ConfigRevisionId`, and each accepted run retains its immutable revision. TOML
 is applied only at daemon startup; live reload remains deferred.
 -  M3 activates `intention-application`, `intention-runtime`, `intention-storage`, and `intention-storage-sqlite`. The
 active graph adds the intentional `storage -> config`, `storage-sqlite -> config`, `application -> config`, and `runtime
--> config` edges required to persist and attach canonical snapshots without exposing credentials or filesystem paths.
+-> config` edges required to persist and attach canonical configuration revisions without exposing credentials or
+filesystem paths.
 -  M4 activates `intention-model`, `intention-provider-openrouter`, and `intention-provider-generic-chat`. The model
 crate remains provider-neutral and depends only on `intention-types`; provider crates depend only on model/config/types
 plus their private SDK. `intention-types` owns the provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and
 `ProviderErrorDto` shared by model and durable domain facts; `intention-model` retains compatibility re-exports. Only
 `intention` may select either concrete provider.
--  M4 durable model facts remain domain-owned: domain, storage, and protocol never depend on `intention-model`; SQLite
-stores typed domain-event envelopes and indexes them by dedicated per-run cursor. `intention-runtime` depends on the
+-  M4 model and provider evidence is domain-owned and current-state: domain, storage, and protocol never depend on
+`intention-model`, and SQLite stores assistant content, reasoning text, tool calls, and tool results on the transcript
+and tool-result rows rather than in typed envelopes or per-run cursors. `intention-runtime` depends on the
 provider-neutral `intention-model` contract only for its injected base execution service; it neither selects a concrete
 provider nor exposes an async runtime resource.
 -  M4 activates the daemon host as a private composition consumer. `intention-daemon` may depend on the composition
@@ -47,12 +49,12 @@ The M1-M5 activation notes are historical records: the coverage policy is now th
 | Crate | Owns | May depend on |
 | --- | --- | --- |
 | `intention-types` | ID newtypes, schema versions, common errors, time, envelopes. | Minimal shared dependencies only. |
-| `intention-domain` | Domain DTOs, value validation, domain events, invariants. | `intention-types`. |
-| `intention-application` | Commands, queries, semantic use-case workflows, and protocol-result mapping over DTO-only storage. | Domain, storage contracts, runtime contracts, config snapshots, protocol, types. |
-| `intention-runtime` | Deterministic session/run lifecycle decisions, interruption handling, pending-turn context joins, and recovery-before-ready. | Domain, storage contracts, config snapshots, types. |
-| `intention-storage` | DTO-only semantic repository methods, atomic committed-change evidence, snapshots, event-log contracts, and persisted config-snapshot inputs. | Config, domain, types. |
-| `intention-storage-sqlite` | Bundled SQLite single current schema (created directly on open), semantic repository implementation, projections, per-state snapshots, and append-only event persistence. | Storage, config, domain, types. |
-| `intention-config` | TOML parsing, validation, migrations, resolved config/snapshot DTOs. | Types, domain as needed. |
+| `intention-domain` | Domain DTOs, value validation, invariants. | `intention-types`. |
+| `intention-application` | Commands, queries, semantic use-case workflows, and protocol-result mapping over DTO-only storage. | Domain, storage contracts, runtime contracts, configuration revisions, protocol, types. |
+| `intention-runtime` | Deterministic session/run lifecycle decisions, interruption handling, pending-turn context joins, and recovery-before-ready. | Domain, storage contracts, configuration revisions, types. |
+| `intention-storage` | DTO-only semantic repository methods, committed-change evidence, transcript and tool-result reads, and persisted configuration-revision inputs. | Config, domain, types. |
+| `intention-storage-sqlite` | Bundled SQLite single current schema (created directly on open), semantic repository implementation, projections, the message transcript, and tool-result rows. | Storage, config, domain, types. |
+| `intention-config` | TOML parsing, validation, resolved configuration and revision DTOs. | Types, domain as needed. |
 | `intention-model` | Provider-neutral model DTOs and driver trait. | Types, domain DTOs where required. |
 | `intention-provider-openrouter` | OpenRouter SDK translation. | Model, config, types. |
 | `intention-provider-generic-chat` | Generic Chat Completion translation. | Model, config, types. |
@@ -62,7 +64,7 @@ The M1-M5 activation notes are historical records: the coverage policy is now th
 | `intention-vfr` | VFR hook, mapping, expansion/raw-read tools. | Hooks, tools, domain, types. |
 | `intention-headroom` | Headroom hook, CCR contracts, retrieve tool. | Hooks, tools, storage contracts, domain, types. |
 | `intention-plans` | Plan artifacts, hidden frontmatter, Plan/Build policy hooks. | Hooks, tools, storage contracts, domain, types. |
-| `intention-protocol` | Versioned public transport commands, queries, events. | Domain, types. |
+| `intention-protocol` | Versioned public transport commands, queries, and notifications. | Domain, types. |
 | `intention-transport` | Socket/pipe framing, server/client protocol, subscriptions. | Protocol, types. |
 | `intention-client` | Bootstrap, connection, dispatch, subscription, reconnect. | Protocol, transport, types. |
 | `intention-daemon` | Daemon host binary: process lifecycle, private model-task registry, and typed connection/stream hosting. | Composition facade; application/runtime/model/domain/protocol/transport/type DTO contracts; private Tokio/future support. Never concrete provider or storage implementations. |
@@ -176,11 +178,10 @@ flowchart BT
 
 -  `intention-storage` defines semantic, DTO-only operations such as create session, accept a user turn as started or
 pending, remove a not-yet-seen pending turn, append pending turns to a run context, transition a run, recover
-unfinished runs, snapshot and durable event-tail reads, and
-configuration-snapshot acceptance. It does not expose a transaction closure, SQL connection, filesystem path, or backend
-resource.
+unfinished runs, read the transcript and tool results, and accept configuration revisions. It does not expose a
+transaction closure, SQL connection, filesystem path, or backend resource.
 -  `intention-storage-sqlite` owns bundled SQLite opening and direct creation of the single current storage schema,
-transactional projection/event/snapshot writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId
+single-transaction state writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId
 -> WorkspaceRootDto` association; the workspace addressing policy — the root as an anchor, not a containment boundary
 (ADR 0013) — remains M5 policy ownership.
 -  `intention-runtime` decides valid run state edges and owns interruption handling: a stopped provider stream or tool
@@ -190,7 +191,7 @@ M3.
 -  `intention-test-support` is a non-production workspace crate. It owns credential-free fixture configuration, native
 temporary roots under `std::env::temp_dir()`, `TempDir`-backed durable databases, deterministic sessions, and bounded
 fixture listener orchestration. `intention` exposes only hidden `test-support` facade seams for an injected
-database/snapshot and durable-event inspection; `intention-daemon` exposes only a hidden one-connection dispatch seam.
+database and current-state inspection; `intention-daemon` exposes only a hidden one-connection dispatch seam.
 Release production APIs and the daemon binary expose no fixture mode.
 
 ## Composition rules
@@ -248,51 +249,3 @@ Makefile/CI contract in [12 Quality Gates and Makefile](12-quality-gates-and-mak
 
 This map does not freeze individual module names, file names, Cargo feature syntax, or exact trait method signatures;
 those are implementation choices that must preserve these ownership and dependency rules.
-
-## Post-M4 prospective ownership boundary
-
-This section records future layer ownership only; it creates no crate, table, or dependency edge.
-`quality/architecture.toml` remains the sole machine-readable future-crate placeholder registry, and coverage and
-feature policy remain activation-time projections.
-
-| Concern | Future layer owner | Required boundary |
-| --- | --- | --- |
-| Admission workflows and recovery decisions | Application/runtime | DTO-only storage and capability contracts. |
-| Atomic lifecycle/attempt persistence and recovery facts | Storage | No transaction/resource leaks. |
-| Public commands, queries, events, and future versioned typed replay | Protocol | No runtime, SDK, storage, or adapter resources. |
-| Registry and one capability invocation path | Tools/gateway | Composition-only concrete assembly. |
-| MCP source, capability, selection, and invocation values | Domain/types | Typed, credential-free values and invariants. |
-| MCP discovery/invocation orchestration and recovery | Application/runtime | One registry path and DTO-only storage. |
-| Kernel IDs, selections, checkpoint metadata, and safe projections | Domain/types | Typed, credential-free values and no Python/Jupyter resources. |
-| Kernel epoch/cell/checkpoint lifecycle and recovery | Application/runtime | Bridge/tool-loop consumption only; no lifecycle or registry authority. |
-| Private Python/Jupyter sidecar translation | Private daemon adapter | No public resource types, no second listener, and no direct primitive path. |
-| Process/task ownership, identity assignment, publication | Daemon | No product-decision authority. |
-| Concrete provider/tool/storage selection | Composition | The only concrete assembler. |
-| Presentation and typed user input | Adapters | No local business authority or bypass. |
-
-Architectures 18 and 20 own future MCP and kernel semantics. Kernel work must split typed contracts, lifecycle
-orchestration, and private Python/Jupyter translation without exposing implementation resources; Skill, provider-profile,
-and fork boundaries remain separate delivery decisions. Any split must preserve this acyclic direction, DTO-first
-contracts, a declared test target, the declared coverage tier ([ADR
-0016](../decisions/0016-per-crate-coverage-tiers.md)), and isolated architecture fixtures before production activation.
-Exact crate allocation remains activation-time work.
-
-See [decision 0001](../decisions/0001-rust-owned-capability-plane-and-fixed-tool-registry.md) and the ownership map.
-
-## Post-M4 provider evolution ownership
-
-Architecture 22 owns future typed provider/profile/catalog/revision/capability values, private provider translation,
-driver compatibility, and composition-only private driver assembly. A later activation must split typed contracts,
-orchestration, storage, and private SDK or decoder translation without exposing credentials, native payloads, SDK/client
-resources, or another capability authority.
-
-## Post-M4 session branching ownership
-
-Architecture 23 owns future typed conversation-tree, parent, boundary, fork operation, snapshot, lineage-audit, and safe
-branch-projection values. Domain owns validation; storage owns atomic lineage persistence; protocol owns a later typed
-DTO family; application/runtime owns fork orchestration; adapters own presentation only.
-
-## Post-M4 activity and adapter ownership
-
-Architecture 03 owns the future typed flat activity-journal and notification-list contracts and the safe presentation projections built from them.
-Domain/storage/protocol/application/runtime roles remain DTO-first; adapters consume only `intention-client`.

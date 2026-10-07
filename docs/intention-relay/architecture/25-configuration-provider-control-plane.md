@@ -14,8 +14,8 @@ Owner: architecture 25. Decisions: ADR 0010. Research: `m4plus_concept.md`.
 Architecture 09 owns TOML parsing, schema validation, configuration discovery, redaction, and startup-only application.
 Architecture 22 owns future provider kinds, profiles, catalogs, selections, and driver compatibility. Architecture 14
 owns run-execution meaning and historical compatibility; its canonical codec was removed by [ADR
-0012](../decisions/0012-typed-serde-json-contracts.md). Architecture 15 owns the tool loop, and architecture 03 owns the flat
-activity journal, the notification list, and adapter behavior.
+0012](../decisions/0012-typed-serde-json-contracts.md). Architecture 15 owns the tool loop, and architecture 03 owns the
+flat activity journal, the notification list, and adapter behavior.
 
 This document owns only the accepted future directions below: no second runtime, registry, persistence authority, or
 sandbox, and no `RunId`, lifecycle transition, tool permission, child, MCP capability, bridge grant, kernel epoch,
@@ -24,19 +24,20 @@ price, or control-plane action. All directions apply to future fresh runs only.
 
 ## Controlled configuration live reload
 
-M3/M4 apply TOML only at daemon startup; existing runs retain their recorded immutable snapshot/revision. Controlled
-live reload is the accepted direction that applies a validated TOML change to a running daemon:
+M3/M4 apply TOML only at daemon startup; existing runs retain their recorded immutable configuration revision.
+Controlled live reload is the accepted direction that applies a validated TOML change to a running daemon:
 
 - reload is an explicit command, contract, transaction, and outcome test: the
-daemon re-parses and validates a candidate snapshot against the current single configuration shape, atomically commits a
-new accepted revision, and applies it to fresh runs only; configuration has no migration path, unversioned or legacy
-documents fail closed under [ADR 0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md), and there is
-no watcher, polling, auto-restart, or automatic re-application;
+daemon re-parses and validates a candidate configuration revision against the current single configuration shape,
+commits the new accepted revision in one transaction, and applies it to fresh runs only; configuration has no migration
+path, unversioned or legacy documents fail closed under [ADR
+0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md), and there is no watcher, polling,
+auto-restart, or automatic re-application;
 - a candidate that cannot be applied atomically fails closed and leaves the
-daemon on its recorded snapshot; a candidate that changes catalog-affecting configuration is rejected with
+daemon on its recorded configuration revision; a candidate that changes catalog-affecting configuration is rejected with
 `catalog_change_requires_restart`, and the next daemon restart re-derives the active catalog from the startup document
 through the catalog prepare and accept path;
-- existing persisted runs, admitted runs, and recorded snapshots are never
+- existing persisted runs, admitted runs, and recorded configuration revisions are never
 mutated, re-selected, or rewritten by a reload;
 - the reload command is the only activation path for a running daemon; with no
 activation in the tree, daemon restart is again the only configuration activation path.
@@ -62,9 +63,9 @@ rotation command re-reads the file through that boundary, replaces the compositi
 frozen-meaning checks pass, and rebuilds the provider driver's private client. The rebuild keeps the driver options the
 composition's provider-option seam applies at construction: rotation preflights the active profile's declared options
 through the seam and replaces only the private SDK client, so it never silently drops or ignores declared driver
-options. Facades opened without a file-backed source (test-support hosts) fail closed with
-`credential_rotation_source_unavailable`. No credential handling beyond the M3/M4 startup boundary may exist in
-the tree, and no credential, file content, or source path may appear in a DTO, error, log, snapshot, projection, or
+options. Facades opened without a file-backed source (test-support hosts) fail closed with the same typed error. No
+credential handling beyond the M3/M4 startup boundary may exist in
+the tree, and no credential, file content, or source path may appear in a DTO, error, log, projection, or
 durable surface.
 
 ## Provider health checks
@@ -112,14 +113,15 @@ affect fresh runs only.
 
 ## Raw-TOML editing and configuration editing
 
-Raw-TOML editing and a validated configuration-editing surface are accepted directions awaiting a new activating specification:
+Raw-TOML editing and a validated configuration-editing surface are accepted directions awaiting a new activating
+specification:
 
 - a safe, validated raw-TOML editing surface over the shared typed client
-produces a new candidate snapshot through the same atomic reload contract; it is never adapter authority and never
-in-place mutation of an admitted run or recorded snapshot;
+produces a new candidate revision through the same reload transaction; it is never adapter authority and never
+in-place mutation of an admitted run or recorded configuration revision;
 - editing is accepted server-side only: the daemon validates the candidate,
 credentials are never echoed through any edit response or projection, and a validated edit that fails closed leaves the
-daemon on its recorded snapshot;
+daemon on its recorded configuration revision;
 - typed configuration edits reconstruct a credential-free candidate document
 server-side and restore the composition's retained private credential into it inside the private loading boundary, so
 the candidate validates and commits without the credential ever crossing a wire, DTO, error, log, or durable surface;
@@ -138,11 +140,9 @@ it.
 
 ## Compatibility and historical preservation
 
-M3/M4 startup-only application, `ConfigSnapshotDto` revisions, persisted run snapshots, provider kinds, retries, model
-facts, cursors, replay, recovery, and `ToolCallRecorded -> tool_execution_unavailable` retain their recorded ordinary
-semantics and stay unchanged; no direction rewrites historical bytes, assigns new meaning to a closed variant, or
-reconstructs missing meaning from current state. All directions affect fresh runs only; the slice is not activated and
-activation requires an activating specification.
+No direction rewrites historical records, assigns new meaning to a closed variant, or reconstructs missing meaning
+from current state. All directions affect fresh runs only; the slice is not activated and activation requires an
+activating specification.
 
 ## Dependencies and non-goals
 

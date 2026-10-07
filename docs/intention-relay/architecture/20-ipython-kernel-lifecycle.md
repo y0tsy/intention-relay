@@ -5,16 +5,15 @@
 Owner: architecture 20. Decisions: ADR 0009. Research: m4plus_concept.md.
 
 This document owns future run-scoped IPython kernel epochs, foreground cells, namespace checkpoints, kernel-local
-background work, safe kernel projections, and kernel recovery. It applies only to future run execution. M3/M4 bytes,
-IDs, UUIDs, cursors, events, snapshots, provider behavior, replay, recovery, and
-M4 `ToolCallRecorded -> tool_execution_unavailable` retain their recorded ordinary semantics. Retained session-scoped
-IPython/RLM material remains research provenance and historical-only where it conflicts with architectures 14--19.
+background work, safe kernel projections, and kernel recovery. It applies only to future run execution. Retained
+session-scoped IPython/RLM material remains research provenance and historical-only where it conflicts with
+architectures 14--19.
 
 ## Ownership and non-authorities
 
 Architecture 14 is the historical record of the removed execution-meaning machinery (ADR 0012); 15 owns registry
-selection, direct tool admission, `ToolCallId`, generic tool-loop facts, `ToolCallStarted`, and publication; 18 owns MCP
-lifecycle; 19 owns bridge attachment, grants, operation identity, ingress, delivery, and bridge recovery.
+selection, direct tool admission, `ToolCallId`, generic tool-loop records, the committed call start, and publication;
+18 owns MCP lifecycle; 19 owns bridge attachment, grants, operation identity, ingress, delivery, and bridge recovery.
 
 This document owns only private sidecar creation/disposal, kernel epochs, foreground cells, namespace/checkpoint
 lifecycle, safe output normalization, kernel-local background restrictions, kernel readiness/capacity, and
@@ -56,8 +55,8 @@ One additive bounded reference joins the selection: `script_library_reference` p
 0009](../decisions/0009-project-script-library-for-kernel-cells.md)). It is credential-free and content-free, carries no
 absolute or symlink-target path, and its absence means an empty import surface.
 
-A `KernelEpochId` is created lazily only after recovery completes, a supported active run is reread, the exact
-kernel/bridge/tool selections validate, required live capacity exists, and no cancellation gate applies.
+A `KernelEpochId` is created lazily only after a supported active run is reread, the exact kernel/bridge/tool selections
+validate, required live capacity exists, and no cancellation gate applies.
 A fresh run never reuses a live kernel or namespace. Process creation occurs outside semantic transactions.
 
 ```mermaid
@@ -97,16 +96,16 @@ KernelExecutionBindingV1
 
 It excludes raw source from public/durable projections. No Python execution occurs in the binding transaction. A
 kernel-specific cell start records private attempt evidence for direct Python/process effects; it does not replace
-architecture 15's `ToolCallStarted` for any routed host operation.
+architecture 15's committed call start for any routed host operation.
 
 Safe output is a closed text-only family, such as `Stdout`, `Stderr`, `DisplayText`, and safe `Error`; output normalizes
 Jupyter `stream`, `execute_result`, `display_data`, and `error` into ordered typed `KernelOutputChunkDto` values with
-closed kind `Stdout`, `Stderr`, `DisplayText`, or `Error`, becoming the same post-commit `ToolOutputDeltaRecorded`
-content stream and one terminal typed result. Raw Jupyter frames, rich MIME, binary data, arbitrary display metadata,
+closed kind `Stdout`, `Stderr`, `DisplayText`, or `Error`, becoming the same post-commit content stream and one terminal
+typed result. Raw Jupyter frames, rich MIME, binary data, arbitrary display metadata,
 raw tracebacks, Python objects, resources, and implementation errors remain private. Output uses architecture 15's
-existing run/tool-loop facts, cursor, terminal result, post-commit reread, and publication gate. Partial output is
+existing run/tool-loop stream, terminal result, and publication gate. Partial output is
 observational only; only a complete safe terminal projection may enter a later model step. Unrepresentable output
-produces the closed `kernel_output_unrepresentable` before public publication, without truncation or partial commit, and
+produces `kernel_output_unrepresentable` before public publication, without truncation or partial commit, and
 the terminal result is never reconstructed from a formatted footer. Rich MIME/raw kernel output projection is an
 accepted post-M5 future direction,
 to be executed in Milestone 5+ as a bounded, credential-free surface that never substitutes for this closed text-only
@@ -114,7 +113,7 @@ safe projection and never crosses public or durable boundaries unredacted; it is
 
 Kernel host requests consume architecture 19. Every request carries a current grant and new `BridgeOperationId`;
 architecture 19 binds the operation and architecture 15 assigns `ToolCallId`, admits, starts, records, and publishes the
-tool action. The kernel cannot create a listener, registry, direct primitive path, sequence, or result channel. Equal
+tool action. The kernel cannot create a listener, registry, direct primitive path, or result channel. Equal
 operation reuse returns durable evidence; changed reuse fails before effect. Grant expiry, cell closure, cancellation,
 kernel disposal, and restart prevent new host requests.
 
@@ -205,11 +204,11 @@ modified namespace alive. The run stays `Running`, the stopped cell commits its 
 notice, and the model receives the next step; the daemon does not
 wait for the cell to acknowledge an interrupt. Late cell output, host responses, fragments, and results after
 interruption, terminalization, epoch replacement, grant expiry, or restart are non-authoritative and cannot append
-facts.
+durable records.
 
-Recovery completes before kernel readiness, attachment, or admission. It invalidates grants, refuses old-sidecar
-adoption, classifies unfinished kernel attempts from durable evidence, disposes discoverable private
-resources without a rollback claim, and verifies stored checkpoints without executing them. It never resumes, retries,
+Kernel recovery invalidates grants, refuses old-sidecar adoption, classifies unfinished kernel attempts from durable
+evidence, disposes discoverable private resources without a rollback claim, and verifies stored checkpoints without
+executing them. It never resumes, retries,
 reattaches, reruns, polls, or redisplays old kernel/cell/task/bridge/tool/child/MCP work; later work requires a new
 RunId, epoch, grant, cell identity, and operation identities.
 
@@ -220,8 +219,8 @@ unfinished effect; a child may receive only a separately selected verified check
 independent, and child-local. Kernel-originated MCP work still uses the fixed `mcp` slot through
 architectures 19, 15, and 18; checkpoints never contain live MCP state and later runs reacquire capabilities.
 
-Future kernel delivery uses typed JSON-RPC 2.0 methods (ADR 0011): correlated results or typed resync/error followed by
-history-before-live notifications under existing durable sequence owners. It is read-only: replay/reconnect cannot
+Future kernel delivery uses typed JSON-RPC 2.0 methods (ADR 0011): correlated results followed by live notifications.
+Reconnect re-reads current state; there is no event tail, cursor, or resynchronization. Delivery is read-only: it cannot
 create a kernel, restore a namespace, execute a cell, issue a grant, repeat a host request, start a child, or invoke
 MCP. Partial delivery is never permitted. M3/M4 and retained IPython/RLM records gain no kernel selection, epoch,
 checkpoint, grant, operation, child, MCP, activity, or policy state; M4 tool calls remain denial evidence, and no
@@ -279,11 +278,11 @@ implementation detail.
 
 ## Dependencies, non-goals, and evidence
 
-This document depends on architectures 14, 15, 18, and 19, decisions 0001 and 0009 for the project script library
-path, selection, and evidence contract. It does not define Python/Jupyter dependencies, process supervision,
-storage/wire tags, migrations, retention, encryption, resource-limit values, RLM executor topology,
-Skills/Goals/context, provider evolution, session forks, activity-journal and UI delivery, direct MCP administration, Cargo, Makefile/CI, or
-production activation.
+This document depends on architectures 14, 15, 18, and 19, decisions 0001 and 0009 for the project script library path,
+selection, and evidence contract. It does not define Python/Jupyter dependencies, process supervision, storage/wire
+tags, migrations, retention, encryption, resource-limit values, RLM executor topology, Skills/Goals/context, provider
+evolution, session forks, activity-journal and UI delivery, direct MCP administration, Cargo, Makefile/CI, or production
+activation.
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
 

@@ -2,9 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.** Architecture 30 owns the
 instruction channel of a model request: instruction sources, profile revisions, canonical assembly, the effective
-instruction projection, its bounds, failures, and observability. It preserves M3/M4 bytes and meanings and the current
-single-version model contract ([ADR 0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md)); delivery
-belongs to the fifth activating slice of Milestone 5+.
+instruction projection, its bounds, failures, and observability. It follows the single live version and no-backward-compatibility policy ([ADR 0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md)); delivery belongs to the fifth activating slice of Milestone 5+.
 
 Owner: architecture 30. Decisions: ADR 0010. Research: `legacy-antibusy-prompts/`,
 `legacy-baseline/02-capability-catalog.md`, `legacy-baseline/04-agent-behavior.md`, [ADR
@@ -25,8 +23,8 @@ control-plane commands that edit and preview instructions.
 Instruction text is not authority: it cannot create, widen, or remove a tool permission, provider selection, admission
 decision, child, MCP capability, bridge grant, kernel epoch, or reconciliation outcome, and it
 cannot prove that an external effect did or did not happen.
-The channel applies to newly admitted runs only; historical M3/M4 requests, runs, events, snapshots, replay, recovery,
-and retained records keep their recorded meaning and gain no instruction state.
+The channel applies to newly admitted runs only; historical M3/M4 requests and runs keep their recorded meaning and gain
+no instruction state.
 
 ## Instruction source model
 
@@ -130,13 +128,12 @@ flowchart TD
 ```
 
 The projection is frozen before the first model step of the run. Every later model step of the same run reuses it; a
-fork inherits the materialized projection verbatim; a plan handoff materializes it into its frozen snapshot; replay,
+fork inherits the materialized projection verbatim; a plan handoff materializes it into its frozen snapshot;
 regeneration, reconnect, and audit never rebuild it. No path may re-derive instructions from current configuration,
 current `AGENTS.md` content, current session state, or a live ancestor. The projection is the contents of the
 `effective_instruction_projection` and `materialized_effective_instruction_projection` fields of the fork base and
 preview records ([architecture 23](23-non-destructive-session-branching-and-regeneration.md)), and its revision identity
-is recorded as safe usage provenance. It introduces no further ordering sequence, no lifecycle transition, and no
-authority.
+is recorded as safe usage provenance. It introduces no lifecycle transition and no authority.
 
 ## Workspace project instructions
 
@@ -245,7 +242,7 @@ Classification and redaction rules of [architecture 09](09-configuration-securit
 M3/M4 requests keep the optional system context absent, and M3/M4 runs carry no instruction state. Historical records
 never gain a reconstructed instruction projection, and a missing or unreadable materialized projection leaves the
 dependent fork or handoff blocked while unrelated history remains readable. The mechanism adds no second model protocol,
-no second storage schema, no further ordering sequence, and no migration; it is part of the single live first-scope
+no second storage schema, and no migration; it is part of the single live first-scope
 instruction contract.
 
 ## Dependencies and non-goals

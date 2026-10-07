@@ -5,10 +5,9 @@
 Owner: architecture 21. Research: m4plus_concept.md.
 
 This document owns future Goal scope and evidence, Skill selection and safe disclosure, context-source manifests,
-model-step projections, typed memory records, and immutable compaction. It applies only to future run execution. M3/M4
-bytes, IDs, UUIDs, cursors, events, snapshots, provider behavior, replay, recovery, and M4 `ToolCallRecorded ->
-tool_execution_unavailable` retain their recorded ordinary semantics. Retained Goal, Skill, memory, or compaction
-material remains research provenance and historical-only where it conflicts with architectures 14--20.
+model-step projections, typed memory records, and immutable compaction. It applies only to future run execution.
+Retained Goal, Skill, memory, or compaction material remains research provenance and historical-only where it conflicts
+with architectures 14--20.
 
 ## Ownership and non-authorities
 
@@ -231,24 +230,23 @@ SkillSelectionV1
 Selection is immutable before the next affected model step or external action. `GoalRunSelectionV1` records exact Skill
 selections; ordinary runs use a separately versioned optional selection carrying the same non-authorizing frozen Skill
 context. A child run receives only exact selected Skill/role/reference values explicitly selected for it. Forks retain
-the exact selected card/revision/disclosure references in their immutable base snapshot. Retry, replay, and recovery
-validate stored selection and never rediscover a current Skill. A new revision, disable, archive, revoke, replacement,
+the exact selected card/revision/disclosure references in their immutable base snapshot. Retry and recovery validate
+stored selection and never rediscover a current Skill. A new revision, disable, archive, revoke, replacement,
 or restore affects future discovery/admission only; it never rewrites an admitted run, child, fork, historical
 selection, or body.
 
-Skill facts are session records: `SkillCreated`, `SkillImported`, `SkillRevisionCreated`, `SkillReplacementLinked`,
+Skill records are session-scoped: `SkillCreated`, `SkillImported`, `SkillRevisionCreated`, `SkillReplacementLinked`,
 `SkillRolledBack`, `SkillArchived`, `SkillRestored`, `SkillRevoked`, `SkillResolutionRecorded`, `SkillSelected`,
-`SkillDisclosed`, `SkillSupplementDisclosed`, `SkillProposalAccepted`, and `SkillProposalRejected` are typed facts
-committed in exactly one session and ordered by that session's event sequence; no separate Skill sequence exists. The
-one cross-session aspect is catalog state, not a fact family: records, revisions, and cards carry identity and exact
-revision, and a list binds the catalog revision and opaque token below, so catalog state has no durable order and needs
-no container journal. Every state-changing command atomically commits its projection, event(s), idempotency binding, and
-affected snapshot(s), then publishes only after durable reread. Current cards and catalog snapshots accelerate queries
-but never reconstruct historical use.
+`SkillDisclosed`, `SkillSupplementDisclosed`, `SkillProposalAccepted`, and `SkillProposalRejected` are typed records
+committed in exactly one session, one transaction per state change; there is no separate event or ordering record. The
+one cross-session aspect is catalog state, not a record family: records, revisions, and cards carry identity and exact
+revision, and a list binds the catalog revision and opaque token below, so catalog state has no durable order. Every
+state-changing command commits the state change in one transaction; no external action occurs inside it, and publication
+follows the commit. Current cards and catalog caches accelerate queries but never reconstruct historical use.
 
 Skill operations are typed JSON-RPC 2.0 methods (card-only listing, exact inspect/disclosure, user invocation, lifecycle
 commands, and durable skill audit; ADR 0011). A list captures one catalog revision, uses stable ordering and an opaque
-token, and returns `has_more`; a malformed, cross-scope, or stale token fails with typed conflict/resynchronization.
+token, and returns `has_more`; a malformed, cross-scope, or stale token fails with a typed conflict.
 Skill records are typed serde JSON (ADR 0012) with no canonical tags or digest framing. Unknown, corrupt, incompatible,
 stale, missing, archived, revoked, or over-limit content blocks only the dependent disclosure/model step before external
 work while unrelated history remains readable; no current card, body, origin, or live path is substituted.
@@ -335,10 +333,9 @@ steps as applicable but cannot rewrite an already committed projection or summar
 disclosure, or compaction output after cancellation, terminalization, replacement, or restart is non-authoritative and
 cannot append facts.
 
-Recovery completes before new context-driven admission or step construction. It may validate persisted supported
-references, but never rediscloses, recompacts, fetches current catalog/file/index content, resumes/retries work, or
-reconstructs projections from mutable state. Unsupported, corrupt, or missing selected context blocks only dependent
-future work before effect; unrelated readable history stays isolated.
+Context recovery may validate persisted supported references, but never rediscloses, recompacts, fetches current
+catalog/file/index content, resumes/retries work, or reconstructs projections from mutable state. Unsupported, corrupt,
+or missing selected context blocks only dependent future work before effect; unrelated readable history stays isolated.
 
 ## Child, MCP, bridge, kernel, protocol, and compatibility boundaries
 
@@ -348,9 +345,10 @@ connection, process, or unfinished effect. Child context is independent and non-
 
 MCP, bridge, and kernel context is safe projection only. Context cannot discover or invoke MCP, issue a bridge
 grant/operation, create a kernel epoch, restore a checkpoint, or cause a host request. Future delivery uses typed
-JSON-RPC 2.0 methods (ADR 0011): correlated, history-before-live, read-only safe projection or typed resync/error.
-Replay, reconnect, or audit cannot create a Goal, disclose memory, recompact, execute a model step, invoke a tool, start
-a child, issue authority, or perform external work. Partial delivery is never permitted.
+JSON-RPC 2.0 methods (ADR 0011): correlated, read-only current-state projections. Reconnect re-reads current state;
+there is no event tail, cursor, or resynchronization. Reconnection or audit cannot create a Goal, disclose memory,
+recompact, execute a model step, invoke a tool, start a child, issue authority, or perform external work. Partial
+delivery is never permitted.
 
 M3/M4 and retained records gain no Goal, Skill, source-manifest, projection, memory, disclosure, summary, applicability
 link, child, MCP, activity, or policy state. Historical M4 tool calls remain denial evidence. No current mutable state
@@ -358,16 +356,17 @@ may reconstruct missing future context meaning.
 
 ## Dependencies, non-goals, and evidence
 
-This document depends on architectures 14, 15, and 18--20 and decision 0001. It does
-not define actual Goal persistence, search/index/vector retrieval, instruction assembly (owned by [architecture
+This document depends on architectures 14, 15, and 18--20 and decision 0001. It does not define actual Goal persistence,
+search/index/vector retrieval, instruction assembly (owned by [architecture
 30](30-instruction-sources-and-system-context.md)), SQL/wire tags, migrations, retention/deletion/encryption,
-source-page sizes, resource values, provider evolution, architecture-23 session branching, activity-journal and UI delivery, physical Plan
-artifacts, direct MCP administration, Python/Jupyter process behavior, Cargo, Makefile/CI, or production activation.
+source-page sizes, resource values, provider evolution, architecture-23 session branching, activity-journal and UI
+delivery, physical Plan artifacts, direct MCP administration, Python/Jupyter process behavior, Cargo, Makefile/CI, or
+production activation.
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
 
 Architecture 22 owns provider kind/profile/capability/reasoning normalization. Provider may declare compatible reasoning
 input requirements, but only this document selects sources, audiences, disclosures, and model-step context projections;
-provider cannot scan or inject historical context. Architecture 03 owns the flat activity journal and notification list. Context records may be
-referenced only through safe selected provenance and never becomes activity authority or a hidden presentation
-disclosure channel.
+provider cannot scan or inject historical context. Architecture 03 owns the flat activity journal and notification list.
+Context records may be referenced only through safe selected provenance and never becomes activity authority or a hidden
+presentation disclosure channel.
