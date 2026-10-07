@@ -6,18 +6,10 @@
 use std::fmt::{Display, Formatter};
 
 use intention_types::{
-    ConfigRevisionId, DtoResult, ErrorDto, PlanId, ProjectId, RunId, SessionEventSequenceDto,
-    SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
+    ConfigRevisionId, DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, ToolCallId,
+    TurnId, WorkspaceId,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
-
-mod model_facts;
-
-pub use model_facts::{
-    ModelRunFactDto, ModelRunFactEventDto, ModelRunFactInputDto, ModelRunFactKindDto,
-    ModelRunProjectionDto, RunEventCursorDto, RunEventTailPageDto, RunFailureDto, RunSnapshotDto,
-    ToolResultOutcomeDto,
-};
 
 /// The agent policy active for a run.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -33,16 +25,12 @@ pub enum RunModeDto {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatusDto {
-    /// The input was accepted but no run actor has started it.
-    Queued,
     /// The run is initializing its immutable context.
     Starting,
     /// The run is actively receiving model or tool work.
     Running,
     /// The run requires a user answer or permission result.
     WaitingInput,
-    /// The run is committing its terminal result.
-    Completing,
     /// The run completed successfully.
     Completed,
     /// The run encountered an unrecoverable safe failure.
@@ -67,21 +55,17 @@ impl RunStatusDto {
 pub fn validate_run_status_transition(from: RunStatusDto, to: RunStatusDto) -> DtoResult<()> {
     let allowed = matches!(
         (from, to),
-        (RunStatusDto::Queued, RunStatusDto::Starting)
-            | (RunStatusDto::Queued, RunStatusDto::Interrupted)
-            | (RunStatusDto::Starting, RunStatusDto::Running)
+        (RunStatusDto::Starting, RunStatusDto::Running)
+            | (RunStatusDto::Starting, RunStatusDto::WaitingInput)
             | (RunStatusDto::Starting, RunStatusDto::Failed)
             | (RunStatusDto::Starting, RunStatusDto::Interrupted)
             | (RunStatusDto::Running, RunStatusDto::WaitingInput)
-            | (RunStatusDto::Running, RunStatusDto::Completing)
+            | (RunStatusDto::Running, RunStatusDto::Completed)
             | (RunStatusDto::Running, RunStatusDto::Failed)
             | (RunStatusDto::Running, RunStatusDto::Interrupted)
             | (RunStatusDto::WaitingInput, RunStatusDto::Running)
             | (RunStatusDto::WaitingInput, RunStatusDto::Failed)
             | (RunStatusDto::WaitingInput, RunStatusDto::Interrupted)
-            | (RunStatusDto::Completing, RunStatusDto::Completed)
-            | (RunStatusDto::Completing, RunStatusDto::Failed)
-            | (RunStatusDto::Completing, RunStatusDto::Interrupted)
     );
     if allowed {
         Ok(())
@@ -133,8 +117,8 @@ impl WorkspaceRootDto {
     /// Parses an absolute, non-empty native workspace path without resolving it.
     ///
     /// Resolution and root validation belong to `intention-workspace`, where
-/// the root is an addressing anchor rather than a containment boundary
-/// (architecture 05).
+    /// the root is an addressing anchor rather than a containment boundary
+    /// (architecture 05).
     ///
     /// # Errors
     ///
@@ -397,7 +381,6 @@ pub struct SessionProjectionDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     active_run: Option<RunProjectionDto>,
     pending_turns: Vec<PendingTurnProjectionDto>,
-    at_sequence: SessionEventSequenceDto,
 }
 
 impl<'de> Deserialize<'de> for SessionProjectionDto {
@@ -417,7 +400,6 @@ impl<'de> Deserialize<'de> for SessionProjectionDto {
             #[serde(default)]
             active_run: Option<RunProjectionDto>,
             pending_turns: Vec<PendingTurnProjectionDto>,
-            at_sequence: SessionEventSequenceDto,
         }
 
         let raw = RawSessionProjectionDto::deserialize(deserializer)?;
@@ -430,7 +412,6 @@ impl<'de> Deserialize<'de> for SessionProjectionDto {
             raw.config_revision_id,
             raw.active_run,
             raw.pending_turns,
-            raw.at_sequence,
         )
         .map_err(de::Error::custom)
     }
@@ -445,7 +426,7 @@ impl SessionProjectionDto {
     /// different session, or pending turn identities are not unique.
     #[expect(
         clippy::too_many_arguments,
-        reason = "This public M3 wire constructor preserves the established nine-field session projection contract."
+        reason = "This public wire constructor preserves the established eight-field session projection contract."
     )]
     pub fn new(
         project_id: ProjectId,
@@ -456,7 +437,6 @@ impl SessionProjectionDto {
         config_revision_id: Option<ConfigRevisionId>,
         active_run: Option<RunProjectionDto>,
         pending_turns: Vec<PendingTurnProjectionDto>,
-        at_sequence: SessionEventSequenceDto,
     ) -> DtoResult<Self> {
         if active_run.is_some_and(|run| run.session_id() != session_id)
             || pending_turns
@@ -485,7 +465,6 @@ impl SessionProjectionDto {
             config_revision_id,
             active_run,
             pending_turns,
-            at_sequence,
         })
     }
 
@@ -529,18 +508,13 @@ impl SessionProjectionDto {
     pub fn pending_turns(&self) -> &[PendingTurnProjectionDto] {
         &self.pending_turns
     }
-    /// Returns the event position included by the projection.
-    #[must_use]
-    pub const fn at_sequence(&self) -> SessionEventSequenceDto {
-        self.at_sequence
-    }
 }
 
 /// A command requesting that the daemon accept a new user turn.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SendUserTurnCommandDto {
     session_id: SessionId,
-    turn_id: TurnId,
+    idempotency_key: IdempotencyKey,
     content: String,
 }
 
@@ -552,12 +526,12 @@ impl<'de> Deserialize<'de> for SendUserTurnCommandDto {
         #[derive(Deserialize)]
         struct RawSendUserTurnCommandDto {
             session_id: SessionId,
-            turn_id: TurnId,
+            idempotency_key: IdempotencyKey,
             content: String,
         }
 
         let raw = RawSendUserTurnCommandDto::deserialize(deserializer)?;
-        Self::new(raw.session_id, raw.turn_id, raw.content).map_err(de::Error::custom)
+        Self::new(raw.session_id, raw.idempotency_key, raw.content).map_err(de::Error::custom)
     }
 }
 
@@ -569,7 +543,7 @@ impl SendUserTurnCommandDto {
     /// Returns a validation error when the requested content is empty.
     pub fn new(
         session_id: SessionId,
-        turn_id: TurnId,
+        idempotency_key: IdempotencyKey,
         content: impl Into<String>,
     ) -> DtoResult<Self> {
         let content = content.into();
@@ -581,7 +555,7 @@ impl SendUserTurnCommandDto {
         } else {
             Ok(Self {
                 session_id,
-                turn_id,
+                idempotency_key,
                 content,
             })
         }
@@ -593,10 +567,10 @@ impl SendUserTurnCommandDto {
         self.session_id
     }
 
-    /// Returns the stable requested turn identity.
+    /// Returns the caller-supplied repeatable-operation identity.
     #[must_use]
-    pub const fn turn_id(&self) -> TurnId {
-        self.turn_id
+    pub const fn idempotency_key(&self) -> IdempotencyKey {
+        self.idempotency_key
     }
 
     /// Returns the requested user-authored content.
@@ -653,150 +627,6 @@ impl GetSessionSnapshotQueryDto {
     }
 }
 
-/// A command requesting allocation of a new physical plan.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CreatePlanCommandDto {
-    session_id: SessionId,
-    plan_id: PlanId,
-}
-
-impl CreatePlanCommandDto {
-    /// Creates a typed plan allocation request.
-    #[must_use]
-    pub const fn new(session_id: SessionId, plan_id: PlanId) -> Self {
-        Self {
-            session_id,
-            plan_id,
-        }
-    }
-
-    /// Returns the target session identity.
-    #[must_use]
-    pub const fn session_id(self) -> SessionId {
-        self.session_id
-    }
-
-    /// Returns the stable requested plan identity.
-    #[must_use]
-    pub const fn plan_id(self) -> PlanId {
-        self.plan_id
-    }
-}
-
-/// An immutable fact carried by a domain event envelope.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
-pub enum DomainEventDto {
-    /// A new session became durable with its declared workspace and policy mode.
-    SessionCreated(SessionCreatedEventDto),
-    /// A user turn was accepted by the durable session authority.
-    UserTurnAccepted(UserTurnAcceptedEventDto),
-    /// An accepted user turn was retained as a pending message behind an active run.
-    UserTurnPending(UserTurnPendingEventDto),
-    /// A pending user turn was removed before it joined a run context.
-    TurnRemoved(TurnRemovedEventDto),
-    /// A durable run began from an accepted user turn.
-    RunStarted(RunStartedEventDto),
-    /// A run state changed through a later application/runtime workflow.
-    RunStatusChanged(RunStatusChangedEventDto),
-    /// A provider attempt started; its typed payload carries the durable run cursor.
-    ProviderAttemptStarted(ModelRunFactEventDto),
-    /// A provider attempt failed safely; its typed payload carries the durable run cursor.
-    ProviderAttemptFailed(ModelRunFactEventDto),
-    /// A retry was scheduled; its typed payload carries the durable run cursor.
-    RetryScheduled(ModelRunFactEventDto),
-    /// Assistant content was appended; its typed payload carries the durable run cursor.
-    AssistantContentAppended(ModelRunFactEventDto),
-    /// A tail-only reasoning delta was recorded with a durable run cursor.
-    ReasoningDeltaRecorded(ModelRunFactEventDto),
-    /// Usage was recorded with a durable run cursor.
-    UsageRecorded(ModelRunFactEventDto),
-    /// Tool-call evidence was recorded with a durable run cursor.
-    ToolCallRecorded(ModelRunFactEventDto),
-    /// A model-loop tool result was recorded with a durable run cursor.
-    ModelToolResultRecorded(ModelRunFactEventDto),
-    /// A pending user message joined the run context; its payload carries the durable run cursor.
-    UserMessageAppended(ModelRunFactEventDto),
-    /// An interruption notice joined the run context; its payload carries the durable run cursor.
-    InterruptNoticeRecorded(ModelRunFactEventDto),
-    /// A provider finish reason was recorded with a durable run cursor.
-    Finished(ModelRunFactEventDto),
-    /// A safe terminal failure was recorded with a durable run cursor.
-    Failed(ModelRunFactEventDto),
-    /// A configuration revision was accepted by a later persistence workflow.
-    ConfigurationRevisionAccepted(ConfigurationRevisionAcceptedEventDto),
-    /// A plan status changed through a later plan policy workflow.
-    PlanStatusChanged(PlanStatusChangedEventDto),
-    /// A typed local tool lifecycle fact was recorded.
-    ToolLifecycle(ToolLifecycleEventDto),
-    /// A normalized, safe local tool result was recorded for durable persistence.
-    ToolResultRecorded(ToolResultRecordedEventDto),
-}
-
-/// The durable lifecycle state of one ordinary local tool call.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolLifecycleStatusDto {
-    Admitted,
-    Rejected,
-    Started,
-    Completed,
-    Failed,
-    Cancelled,
-    /// The tool stopped before a final outcome; its captured output is partial.
-    Partial,
-}
-
-/// Validates one local tool lifecycle transition.
-///
-/// # Errors
-///
-/// Returns a conflict error when the requested transition is not permitted.
-pub fn validate_tool_lifecycle_transition(
-    from: Option<&ToolLifecycleStatusDto>,
-    to: &ToolLifecycleStatusDto,
-) -> DtoResult<()> {
-    let allowed = matches!(
-        (from, to),
-        (None, ToolLifecycleStatusDto::Admitted)
-            | (
-                Some(ToolLifecycleStatusDto::Admitted),
-                ToolLifecycleStatusDto::Cancelled
-            )
-            | (
-                Some(ToolLifecycleStatusDto::Admitted),
-                ToolLifecycleStatusDto::Started
-            )
-            | (
-                Some(ToolLifecycleStatusDto::Admitted),
-                ToolLifecycleStatusDto::Rejected
-            )
-            | (
-                Some(ToolLifecycleStatusDto::Started),
-                ToolLifecycleStatusDto::Completed
-            )
-            | (
-                Some(ToolLifecycleStatusDto::Started),
-                ToolLifecycleStatusDto::Failed
-            )
-            | (
-                Some(ToolLifecycleStatusDto::Started),
-                ToolLifecycleStatusDto::Partial
-            )
-    );
-    if allowed {
-        Ok(())
-    } else {
-        Err(ErrorDto::new(
-            "invalid_tool_lifecycle_transition",
-            intention_types::ErrorCategoryDto::Conflict,
-            "tool lifecycle transition is not permitted",
-            intention_types::ErrorRetryDto::Never,
-            None,
-        )?)
-    }
-}
-
 /// Validates a plan lifecycle transition.
 ///
 /// # Errors
@@ -839,85 +669,11 @@ pub fn validate_plan_status_transition(
     }
 }
 
-/// Safe, session-ordered evidence for one local tool call.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ToolLifecycleEventDto {
-    session_id: SessionId,
-    run_id: RunId,
-    call_id: ToolCallId,
-    tool_id: String,
-    status: ToolLifecycleStatusDto,
-    detail: String,
-    occurred_at: TimestampDto,
-}
-
-impl ToolLifecycleEventDto {
-    /// Creates safe tool lifecycle evidence.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the tool identifier or safe detail is invalid.
-    pub fn new(
-        session_id: SessionId,
-        run_id: RunId,
-        call_id: ToolCallId,
-        tool_id: impl Into<String>,
-        status: ToolLifecycleStatusDto,
-        detail: impl Into<String>,
-        occurred_at: TimestampDto,
-    ) -> DtoResult<Self> {
-        let tool_id = tool_id.into();
-        let detail = detail.into();
-        if tool_id.trim().is_empty() || detail.contains('\0') {
-            return Err(ErrorDto::validation(
-                "invalid_tool_lifecycle",
-                "tool lifecycle evidence is invalid",
-            ));
-        }
-        Ok(Self {
-            session_id,
-            run_id,
-            call_id,
-            tool_id,
-            status,
-            detail,
-            occurred_at,
-        })
-    }
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-    #[must_use]
-    pub const fn run_id(&self) -> RunId {
-        self.run_id
-    }
-    #[must_use]
-    pub const fn call_id(&self) -> ToolCallId {
-        self.call_id
-    }
-    #[must_use]
-    pub fn tool_id(&self) -> &str {
-        &self.tool_id
-    }
-    #[must_use]
-    pub const fn status(&self) -> &ToolLifecycleStatusDto {
-        &self.status
-    }
-    #[must_use]
-    pub fn detail(&self) -> &str {
-        &self.detail
-    }
-    #[must_use]
-    pub const fn occurred_at(&self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
 /// The terminal outcome recorded for one local tool result.
 ///
-/// The taxonomy is deliberately closed to terminal outcomes: admission,
-/// rejection, and start evidence belong to [`ToolLifecycleStatusDto`] facts.
+/// The taxonomy is deliberately closed to terminal outcomes: a call records
+/// exactly one result row, and admission, rejection, and start evidence are
+/// not persisted.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolResultStatusDto {
@@ -929,19 +685,6 @@ pub enum ToolResultStatusDto {
     Cancelled,
     /// The tool stopped before a final outcome; its captured output is partial.
     Partial,
-}
-
-impl ToolResultStatusDto {
-    /// Returns the matching terminal local tool lifecycle status.
-    #[must_use]
-    pub const fn lifecycle_status(self) -> ToolLifecycleStatusDto {
-        match self {
-            Self::Completed => ToolLifecycleStatusDto::Completed,
-            Self::Failed => ToolLifecycleStatusDto::Failed,
-            Self::Cancelled => ToolLifecycleStatusDto::Cancelled,
-            Self::Partial => ToolLifecycleStatusDto::Partial,
-        }
-    }
 }
 
 /// One credential-free structured metadata entry of a tool result.
@@ -999,530 +742,179 @@ impl ToolResultMetadataEntryDto {
     }
 }
 
-/// The durable record of one normalized safe local tool result.
-///
-/// The payload is typed by construction and carries no credential, configuration
-/// path, or raw operating-system error: it persists only the normalized safe
-/// result supplied by the tool boundary.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ToolResultRecordedEventDto {
-    session_id: SessionId,
-    run_id: RunId,
-    call_id: ToolCallId,
-    tool_id: String,
-    status: ToolResultStatusDto,
-    normalized_content: String,
-    structured_metadata: Vec<ToolResultMetadataEntryDto>,
-    occurred_at: TimestampDto,
+/// The closed transcript message kind.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageKindDto {
+    /// User-authored content admitted as a run message.
+    User,
+    /// Assistant content committed once per completed model step.
+    Assistant,
+    /// One model-requested tool call with its canonical arguments document.
+    ToolCall,
+    /// The normalized safe result answering one tool call.
+    ToolResult,
+    /// Daemon-authored notice content bound to the run.
+    Notice,
 }
 
-impl<'de> Deserialize<'de> for ToolResultRecordedEventDto {
+/// One committed transcript row, in durable insertion order.
+///
+/// The transcript is the canonical record of user, assistant, tool-call,
+/// tool-result, and notice content; a row carries no event position, no
+/// projection identity, and no provider resource.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MessageProjectionDto {
+    session_id: SessionId,
+    run_id: Option<RunId>,
+    kind: MessageKindDto,
+    text: String,
+    reasoning: Option<String>,
+    tool_call_id: Option<ToolCallId>,
+    tool_id: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for MessageProjectionDto {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        struct RawToolResultRecordedEventDto {
+        struct RawMessageProjectionDto {
             session_id: SessionId,
-            run_id: RunId,
-            call_id: ToolCallId,
-            tool_id: String,
-            status: ToolResultStatusDto,
-            normalized_content: String,
             #[serde(default)]
-            structured_metadata: Vec<ToolResultMetadataEntryDto>,
-            occurred_at: TimestampDto,
+            run_id: Option<RunId>,
+            kind: MessageKindDto,
+            text: String,
+            #[serde(default)]
+            reasoning: Option<String>,
+            #[serde(default)]
+            tool_call_id: Option<ToolCallId>,
+            #[serde(default)]
+            tool_id: Option<String>,
         }
 
-        let raw = RawToolResultRecordedEventDto::deserialize(deserializer)?;
+        let raw = RawMessageProjectionDto::deserialize(deserializer)?;
         Self::new(
             raw.session_id,
             raw.run_id,
-            raw.call_id,
+            raw.kind,
+            raw.text,
+            raw.reasoning,
+            raw.tool_call_id,
             raw.tool_id,
-            raw.status,
-            raw.normalized_content,
-            raw.structured_metadata,
-            raw.occurred_at,
         )
         .map_err(de::Error::custom)
     }
 }
 
-impl ToolResultRecordedEventDto {
-    /// Creates a durable record of one safe local tool result.
+impl MessageProjectionDto {
+    /// Creates one coherent committed transcript row.
+    ///
+    /// A user, assistant, or notice row carries non-blank content and no tool
+    /// identity; a tool-call row carries its call identity, its wire tool name,
+    /// and the canonical arguments document; a tool-result row carries its call
+    /// identity, its wire tool name, and non-blank content. Only assistant rows
+    /// may carry reasoning text.
     ///
     /// # Errors
     ///
-    /// Returns a validation error when the tool identity is blank, the normalized
-    /// content contains a NUL character, or metadata keys are duplicated.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "The closed M5 tool-result payload keeps one flat validating constructor."
-    )]
+    /// Returns a validation error when the row violates those rules or any
+    /// carried value contains a NUL byte.
     pub fn new(
         session_id: SessionId,
-        run_id: RunId,
-        call_id: ToolCallId,
-        tool_id: impl Into<String>,
-        status: ToolResultStatusDto,
-        normalized_content: impl Into<String>,
-        structured_metadata: Vec<ToolResultMetadataEntryDto>,
-        occurred_at: TimestampDto,
+        run_id: Option<RunId>,
+        kind: MessageKindDto,
+        text: impl Into<String>,
+        reasoning: Option<String>,
+        tool_call_id: Option<ToolCallId>,
+        tool_id: Option<String>,
     ) -> DtoResult<Self> {
-        let tool_id = tool_id.into();
-        let normalized_content = normalized_content.into();
-        if tool_id.trim().is_empty() || normalized_content.contains('\0') {
-            return Err(ErrorDto::validation(
-                "invalid_tool_result_record",
-                "tool result record needs a tool identity and safe content",
-            ));
-        }
-        let mut seen_keys = std::collections::HashSet::with_capacity(structured_metadata.len());
-        if structured_metadata
-            .iter()
-            .any(|entry| !seen_keys.insert(entry.key()))
+        let text = text.into();
+        if text.contains('\0')
+            || reasoning
+                .as_deref()
+                .is_some_and(|value| value.contains('\0'))
         {
             return Err(ErrorDto::validation(
-                "invalid_tool_result_metadata",
-                "tool result metadata keys must be unique",
+                "invalid_message",
+                "transcript content must be free of NUL bytes",
+            ));
+        }
+        let tool_identity =
+            tool_call_id.is_some() && tool_id.as_ref().is_some_and(|id| !id.trim().is_empty());
+        let shape_valid = match kind {
+            MessageKindDto::User | MessageKindDto::Notice => {
+                !text.trim().is_empty()
+                    && reasoning.is_none()
+                    && tool_call_id.is_none()
+                    && tool_id.is_none()
+            }
+            MessageKindDto::Assistant => {
+                !text.trim().is_empty() && tool_call_id.is_none() && tool_id.is_none()
+            }
+            MessageKindDto::ToolCall => tool_identity && reasoning.is_none(),
+            MessageKindDto::ToolResult => {
+                tool_identity && reasoning.is_none() && !text.trim().is_empty()
+            }
+        };
+        if !shape_valid {
+            return Err(ErrorDto::validation(
+                "invalid_message",
+                "transcript rows must satisfy their closed kind shape",
             ));
         }
         Ok(Self {
             session_id,
             run_id,
-            call_id,
+            kind,
+            text,
+            reasoning,
+            tool_call_id,
             tool_id,
-            status,
-            normalized_content,
-            structured_metadata,
-            occurred_at,
         })
     }
 
-    /// Returns the owning session identity.
+    /// Returns the owning durable session identity.
     #[must_use]
     pub const fn session_id(&self) -> SessionId {
         self.session_id
     }
 
-    /// Returns the owning run identity.
+    /// Returns the owning run identity, when the row is bound to one run.
     #[must_use]
-    pub const fn run_id(&self) -> RunId {
+    pub const fn run_id(&self) -> Option<RunId> {
         self.run_id
     }
 
-    /// Returns the durable tool-call identity of the recorded result.
+    /// Returns the closed transcript kind.
     #[must_use]
-    pub const fn call_id(&self) -> ToolCallId {
-        self.call_id
+    pub const fn kind(&self) -> MessageKindDto {
+        self.kind
     }
 
-    /// Returns the stable registered tool identity.
+    /// Returns the committed content or canonical arguments document.
     #[must_use]
-    pub fn tool_id(&self) -> &str {
-        &self.tool_id
+    pub fn text(&self) -> &str {
+        &self.text
     }
 
-    /// Returns the terminal outcome recorded for the tool result.
+    /// Returns the whole reasoning text of one assistant step, when recorded.
     #[must_use]
-    pub const fn status(&self) -> ToolResultStatusDto {
-        self.status
+    pub fn reasoning(&self) -> Option<&str> {
+        self.reasoning.as_deref()
     }
 
-    /// Returns the normalized safe result content.
+    /// Returns the tool-call identity carried by a tool row.
     #[must_use]
-    pub fn normalized_content(&self) -> &str {
-        &self.normalized_content
+    pub const fn tool_call_id(&self) -> Option<ToolCallId> {
+        self.tool_call_id
     }
 
-    /// Returns the structured metadata entries.
+    /// Returns the wire tool name carried by a tool row.
     #[must_use]
-    pub fn structured_metadata(&self) -> &[ToolResultMetadataEntryDto] {
-        &self.structured_metadata
-    }
-
-    /// Returns the occurrence time.
-    #[must_use]
-    pub const fn occurred_at(&self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
-/// The fact that one user turn was durably accepted.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct UserTurnAcceptedEventDto {
-    session_id: SessionId,
-    turn_id: TurnId,
-    content: String,
-    occurred_at: TimestampDto,
-}
-
-impl<'de> Deserialize<'de> for UserTurnAcceptedEventDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawUserTurnAcceptedEventDto {
-            session_id: SessionId,
-            turn_id: TurnId,
-            content: String,
-            occurred_at: TimestampDto,
-        }
-        let raw = RawUserTurnAcceptedEventDto::deserialize(deserializer)?;
-        Self::new(raw.session_id, raw.turn_id, raw.content, raw.occurred_at)
-            .map_err(de::Error::custom)
-    }
-}
-
-impl UserTurnAcceptedEventDto {
-    /// Creates a user-turn acceptance fact with non-empty content.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the user-authored content is blank.
-    pub fn new(
-        session_id: SessionId,
-        turn_id: TurnId,
-        content: impl Into<String>,
-        occurred_at: TimestampDto,
-    ) -> DtoResult<Self> {
-        let content = content.into();
-        if content.trim().is_empty() {
-            Err(ErrorDto::validation(
-                "invalid_turn_content",
-                "user turn content must not be empty",
-            ))
-        } else {
-            Ok(Self {
-                session_id,
-                turn_id,
-                content,
-                occurred_at,
-            })
-        }
-    }
-    /// Returns the owning session identity.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-    /// Returns the accepted turn identity.
-    #[must_use]
-    pub const fn turn_id(&self) -> TurnId {
-        self.turn_id
-    }
-    /// Returns the user-authored content.
-    #[must_use]
-    pub fn content(&self) -> &str {
-        &self.content
-    }
-    /// Returns the occurrence time.
-    #[must_use]
-    pub const fn occurred_at(&self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
-/// The fact that an accepted turn became a pending message behind an active run.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct UserTurnPendingEventDto {
-    session_id: SessionId,
-    turn_id: TurnId,
-    occurred_at: TimestampDto,
-}
-impl UserTurnPendingEventDto {
-    /// Creates a pending-turn fact.
-    #[must_use]
-    pub const fn new(session_id: SessionId, turn_id: TurnId, occurred_at: TimestampDto) -> Self {
-        Self {
-            session_id,
-            turn_id,
-            occurred_at,
-        }
-    }
-    /// Returns the owning session identity.
-    #[must_use]
-    pub const fn session_id(self) -> SessionId {
-        self.session_id
-    }
-    /// Returns the pending turn identity.
-    #[must_use]
-    pub const fn turn_id(self) -> TurnId {
-        self.turn_id
-    }
-    /// Returns the occurrence time.
-    #[must_use]
-    pub const fn occurred_at(self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
-/// The fact that a pending turn was removed before it joined a run context.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct TurnRemovedEventDto {
-    session_id: SessionId,
-    turn_id: TurnId,
-    occurred_at: TimestampDto,
-}
-impl TurnRemovedEventDto {
-    /// Creates a pending-turn removal fact.
-    #[must_use]
-    pub const fn new(session_id: SessionId, turn_id: TurnId, occurred_at: TimestampDto) -> Self {
-        Self {
-            session_id,
-            turn_id,
-            occurred_at,
-        }
-    }
-    /// Returns the owning session identity.
-    #[must_use]
-    pub const fn session_id(self) -> SessionId {
-        self.session_id
-    }
-    /// Returns the removed pending turn identity.
-    #[must_use]
-    pub const fn turn_id(self) -> TurnId {
-        self.turn_id
-    }
-    /// Returns the occurrence time.
-    #[must_use]
-    pub const fn occurred_at(self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
-/// The fact that an accepted user turn started one durable M3 run.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RunStartedEventDto {
-    session_id: SessionId,
-    run_id: RunId,
-    turn_id: TurnId,
-    config_revision_id: ConfigRevisionId,
-    occurred_at: TimestampDto,
-}
-impl RunStartedEventDto {
-    /// Creates a run-start fact with its immutable configuration revision.
-    #[must_use]
-    pub const fn new(
-        session_id: SessionId,
-        run_id: RunId,
-        turn_id: TurnId,
-        config_revision_id: ConfigRevisionId,
-        occurred_at: TimestampDto,
-    ) -> Self {
-        Self {
-            session_id,
-            run_id,
-            turn_id,
-            config_revision_id,
-            occurred_at,
-        }
-    }
-    /// Returns the owning session identity.
-    #[must_use]
-    pub const fn session_id(self) -> SessionId {
-        self.session_id
-    }
-    /// Returns the started run identity.
-    #[must_use]
-    pub const fn run_id(self) -> RunId {
-        self.run_id
-    }
-    /// Returns the causal turn identity.
-    #[must_use]
-    pub const fn turn_id(self) -> TurnId {
-        self.turn_id
-    }
-    /// Returns the selected mandatory configuration revision.
-    #[must_use]
-    pub const fn config_revision_id(self) -> ConfigRevisionId {
-        self.config_revision_id
-    }
-    /// Returns the occurrence time.
-    #[must_use]
-    pub const fn occurred_at(self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
-/// The fact that a session was created with a mandatory stable workspace identity.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct SessionCreatedEventDto {
-    project_id: ProjectId,
-    session_id: SessionId,
-    workspace_id: WorkspaceId,
-    workspace_root: WorkspaceRootDto,
-    mode: RunModeDto,
-    occurred_at: TimestampDto,
-}
-
-impl<'de> Deserialize<'de> for SessionCreatedEventDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawSessionCreatedEventDto {
-            project_id: ProjectId,
-            session_id: SessionId,
-            workspace_id: WorkspaceId,
-            workspace_root: WorkspaceRootDto,
-            mode: RunModeDto,
-            occurred_at: TimestampDto,
-        }
-        let raw = RawSessionCreatedEventDto::deserialize(deserializer)?;
-        Ok(Self {
-            project_id: raw.project_id,
-            session_id: raw.session_id,
-            workspace_id: raw.workspace_id,
-            workspace_root: raw.workspace_root,
-            mode: raw.mode,
-            occurred_at: raw.occurred_at,
-        })
-    }
-}
-
-impl SessionCreatedEventDto {
-    /// Creates an M3 session-creation event payload with a stable workspace identity.
-    #[must_use]
-    pub const fn new(
-        project_id: ProjectId,
-        session_id: SessionId,
-        workspace_id: WorkspaceId,
-        workspace_root: WorkspaceRootDto,
-        mode: RunModeDto,
-        occurred_at: TimestampDto,
-    ) -> Self {
-        Self {
-            project_id,
-            session_id,
-            workspace_id,
-            workspace_root,
-            mode,
-            occurred_at,
-        }
-    }
-
-    /// Returns the owning project identity.
-    #[must_use]
-    pub const fn project_id(&self) -> ProjectId {
-        self.project_id
-    }
-
-    /// Returns the created session identity.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-
-    /// Returns the mandatory workspace identity.
-    #[must_use]
-    pub const fn workspace_id(&self) -> WorkspaceId {
-        self.workspace_id
-    }
-
-    /// Returns the declared workspace boundary.
-    #[must_use]
-    pub const fn workspace_root(&self) -> &WorkspaceRootDto {
-        &self.workspace_root
-    }
-
-    /// Returns the initial run policy mode.
-    #[must_use]
-    pub const fn mode(&self) -> RunModeDto {
-        self.mode
-    }
-
-    /// Returns the event occurrence time.
-    #[must_use]
-    pub const fn occurred_at(&self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
-/// A future durable run lifecycle transition payload.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RunStatusChangedEventDto {
-    session_id: SessionId,
-    run_id: RunId,
-    status: RunStatusDto,
-    occurred_at: TimestampDto,
-}
-
-impl RunStatusChangedEventDto {
-    /// Creates a typed run-status transition fact.
-    #[must_use]
-    pub const fn new(
-        session_id: SessionId,
-        run_id: RunId,
-        status: RunStatusDto,
-        occurred_at: TimestampDto,
-    ) -> Self {
-        Self {
-            session_id,
-            run_id,
-            status,
-            occurred_at,
-        }
-    }
-
-    /// Returns the committed successor status.
-    #[must_use]
-    pub const fn status(&self) -> RunStatusDto {
-        self.status
-    }
-}
-
-/// A future durable configuration-revision acceptance payload.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ConfigurationRevisionAcceptedEventDto {
-    session_id: SessionId,
-    revision: ConfigRevisionId,
-    occurred_at: TimestampDto,
-}
-
-impl ConfigurationRevisionAcceptedEventDto {
-    /// Creates a typed configuration-revision fact.
-    #[must_use]
-    pub const fn new(
-        session_id: SessionId,
-        revision: ConfigRevisionId,
-        occurred_at: TimestampDto,
-    ) -> Self {
-        Self {
-            session_id,
-            revision,
-            occurred_at,
-        }
-    }
-}
-
-/// A future durable plan-status transition payload.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct PlanStatusChangedEventDto {
-    session_id: SessionId,
-    plan_id: PlanId,
-    status: PlanStatusDto,
-    occurred_at: TimestampDto,
-}
-
-impl PlanStatusChangedEventDto {
-    /// Creates a typed plan-status transition fact.
-    #[must_use]
-    pub const fn new(
-        session_id: SessionId,
-        plan_id: PlanId,
-        status: PlanStatusDto,
-        occurred_at: TimestampDto,
-    ) -> Self {
-        Self {
-            session_id,
-            plan_id,
-            status,
-            occurred_at,
-        }
+    pub fn tool_id(&self) -> Option<&str> {
+        self.tool_id.as_deref()
     }
 }
 
@@ -1534,11 +926,6 @@ mod tests {
     )]
 
     use super::*;
-    use intention_types::{EventId, SchemaVersionDto, SessionEventSequenceDto, WorkspaceId};
-
-    fn fixture_time() -> TimestampDto {
-        TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid")
-    }
 
     fn fixture_workspace_root() -> WorkspaceRootDto {
         WorkspaceRootDto::parse(
@@ -1551,7 +938,7 @@ mod tests {
     }
 
     #[test]
-    fn all_domain_statuses_and_commands_round_trip() {
+    fn run_and_plan_statuses_round_trip_through_wire_values() {
         for mode in [RunModeDto::Plan, RunModeDto::Build] {
             let encoded = serde_json::to_string(&mode).expect("mode serialization succeeds");
             let decoded: RunModeDto =
@@ -1559,11 +946,9 @@ mod tests {
             assert_eq!(decoded, mode);
         }
         for status in [
-            RunStatusDto::Queued,
             RunStatusDto::Starting,
             RunStatusDto::Running,
             RunStatusDto::WaitingInput,
-            RunStatusDto::Completing,
             RunStatusDto::Completed,
             RunStatusDto::Failed,
             RunStatusDto::Interrupted,
@@ -1573,15 +958,7 @@ mod tests {
                 serde_json::from_str(&encoded).expect("status parsing succeeds");
             assert_eq!(decoded, status);
         }
-        for status in [
-            PlanStatusDto::Drafting,
-            PlanStatusDto::Revising,
-            PlanStatusDto::Submitted,
-            PlanStatusDto::Approved,
-            PlanStatusDto::Rejected,
-            PlanStatusDto::Superseded,
-            PlanStatusDto::Abandoned,
-        ] {
+        for status in [PlanStatusDto::Drafting, PlanStatusDto::Approved] {
             let encoded = serde_json::to_string(&status).expect("status serialization succeeds");
             let decoded: PlanStatusDto =
                 serde_json::from_str(&encoded).expect("status parsing succeeds");
@@ -1590,143 +967,196 @@ mod tests {
 
         let session_id = SessionId::new();
         let run_id = RunId::new();
-        let plan_id = PlanId::new();
         let interrupt = InterruptRunCommandDto::new(session_id, run_id);
         assert_eq!(interrupt.session_id(), session_id);
         assert_eq!(interrupt.run_id(), run_id);
         let query = GetSessionSnapshotQueryDto::new(session_id);
         assert_eq!(query.session_id(), session_id);
-        let plan = CreatePlanCommandDto::new(session_id, plan_id);
-        assert_eq!(plan.session_id(), session_id);
-        assert_eq!(plan.plan_id(), plan_id);
     }
 
     #[test]
-    fn session_and_future_event_payloads_expose_valid_domain_shapes() {
-        let project_id = ProjectId::new();
+    fn session_projection_rejects_a_pending_turn_from_another_session() {
         let session_id = SessionId::new();
-        let workspace = fixture_workspace_root();
-        assert_eq!(workspace.as_str(), workspace.to_string());
-        let created = SessionCreatedEventDto::new(
-            project_id,
+        let projection = SessionProjectionDto::new(
+            ProjectId::new(),
             session_id,
             WorkspaceId::new(),
-            workspace.clone(),
+            fixture_workspace_root(),
             RunModeDto::Build,
-            fixture_time(),
+            None,
+            None,
+            vec![
+                PendingTurnProjectionDto::new(SessionId::new(), TurnId::new(), "hello")
+                    .expect("pending turn is non-empty"),
+            ],
         );
-        assert_eq!(created.project_id(), project_id);
-        assert_eq!(created.session_id(), session_id);
-        assert_eq!(created.workspace_root(), &workspace);
-        assert_eq!(created.mode(), RunModeDto::Build);
-        assert_eq!(created.occurred_at(), fixture_time());
+        assert!(projection.is_err());
 
-        let events = [
-            DomainEventDto::SessionCreated(created),
-            DomainEventDto::RunStatusChanged(RunStatusChangedEventDto::new(
+        let projection = SessionProjectionDto::new(
+            ProjectId::new(),
+            session_id,
+            WorkspaceId::new(),
+            fixture_workspace_root(),
+            RunModeDto::Build,
+            None,
+            Some(RunProjectionDto::new(
                 session_id,
                 RunId::new(),
+                TurnId::new(),
                 RunStatusDto::Running,
-                fixture_time(),
+                ConfigRevisionId::new(),
             )),
-            DomainEventDto::ConfigurationRevisionAccepted(
-                ConfigurationRevisionAcceptedEventDto::new(
-                    session_id,
-                    ConfigRevisionId::new(),
-                    fixture_time(),
-                ),
-            ),
-            DomainEventDto::PlanStatusChanged(PlanStatusChangedEventDto::new(
-                session_id,
-                PlanId::new(),
-                PlanStatusDto::Approved,
-                fixture_time(),
-            )),
-        ];
-        for event in events {
-            let envelope = intention_types::EventEnvelopeDto::new(
-                intention_types::EventMetadataDto::new(
-                    SchemaVersionDto::new(1, 0),
-                    EventId::new(),
-                    session_id,
-                    None,
-                    None,
-                    SessionEventSequenceDto::new(1),
-                    fixture_time(),
-                ),
-                event,
-            );
-            let encoded = serde_json::to_string(&envelope).expect("event serialization succeeds");
-            let _: intention_types::EventEnvelopeDto<DomainEventDto> =
-                serde_json::from_str(&encoded).expect("event parsing succeeds");
-        }
+            Vec::new(),
+        )
+        .expect("coherent session projection is valid");
+        assert_eq!(projection.session_id(), session_id);
+        assert_eq!(
+            projection.active_run().map(RunProjectionDto::status),
+            Some(RunStatusDto::Running)
+        );
     }
 
     #[test]
-    fn tool_lifecycle_transitions_reject_duplicates_invalid_initial_and_terminal_edges() {
+    fn run_status_transitions_accept_only_declared_edges() {
         let statuses = [
-            ToolLifecycleStatusDto::Admitted,
-            ToolLifecycleStatusDto::Rejected,
-            ToolLifecycleStatusDto::Started,
-            ToolLifecycleStatusDto::Completed,
-            ToolLifecycleStatusDto::Failed,
-            ToolLifecycleStatusDto::Cancelled,
-            ToolLifecycleStatusDto::Partial,
+            RunStatusDto::Starting,
+            RunStatusDto::Running,
+            RunStatusDto::WaitingInput,
+            RunStatusDto::Completed,
+            RunStatusDto::Failed,
+            RunStatusDto::Interrupted,
         ];
-
-        for status in &statuses {
-            assert!(validate_tool_lifecycle_transition(Some(status), status).is_err());
-        }
-        for status in &statuses {
-            let expected_initial = matches!(status, ToolLifecycleStatusDto::Admitted);
-            assert_eq!(
-                validate_tool_lifecycle_transition(None, status).is_ok(),
-                expected_initial
-            );
-        }
-        for from in &statuses {
-            for to in &statuses {
+        for from in statuses {
+            for to in statuses {
                 let allowed = matches!(
                     (from, to),
-                    (
-                        ToolLifecycleStatusDto::Admitted,
-                        ToolLifecycleStatusDto::Started
-                            | ToolLifecycleStatusDto::Rejected
-                            | ToolLifecycleStatusDto::Cancelled
-                    ) | (
-                        ToolLifecycleStatusDto::Started,
-                        ToolLifecycleStatusDto::Completed
-                            | ToolLifecycleStatusDto::Failed
-                            | ToolLifecycleStatusDto::Partial
-                    )
+                    (RunStatusDto::Starting, RunStatusDto::Running)
+                        | (RunStatusDto::Starting, RunStatusDto::WaitingInput)
+                        | (RunStatusDto::Starting, RunStatusDto::Failed)
+                        | (RunStatusDto::Starting, RunStatusDto::Interrupted)
+                        | (RunStatusDto::Running, RunStatusDto::WaitingInput)
+                        | (RunStatusDto::Running, RunStatusDto::Completed)
+                        | (RunStatusDto::Running, RunStatusDto::Failed)
+                        | (RunStatusDto::Running, RunStatusDto::Interrupted)
+                        | (RunStatusDto::WaitingInput, RunStatusDto::Running)
+                        | (RunStatusDto::WaitingInput, RunStatusDto::Failed)
+                        | (RunStatusDto::WaitingInput, RunStatusDto::Interrupted)
                 );
                 assert_eq!(
-                    validate_tool_lifecycle_transition(Some(from), to).is_ok(),
+                    validate_run_status_transition(from, to).is_ok(),
                     allowed,
-                    "unexpected tool transition: {from:?} -> {to:?}"
+                    "unexpected run transition: {from:?} -> {to:?}"
                 );
             }
         }
     }
 
     #[test]
-    fn tool_result_statuses_map_only_to_terminal_lifecycle_statuses() {
-        for (status, lifecycle) in [
-            (
-                ToolResultStatusDto::Completed,
-                ToolLifecycleStatusDto::Completed,
-            ),
-            (ToolResultStatusDto::Failed, ToolLifecycleStatusDto::Failed),
-            (
-                ToolResultStatusDto::Cancelled,
-                ToolLifecycleStatusDto::Cancelled,
-            ),
-            (
-                ToolResultStatusDto::Partial,
-                ToolLifecycleStatusDto::Partial,
-            ),
-        ] {
-            assert_eq!(status.lifecycle_status(), lifecycle);
-        }
+    fn transcript_rows_validate_their_closed_shapes() {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let call_id = ToolCallId::new();
+        assert!(
+            MessageProjectionDto::new(
+                session_id,
+                Some(run_id),
+                MessageKindDto::User,
+                "hello",
+                None,
+                None,
+                None,
+            )
+            .is_ok()
+        );
+        assert!(
+            MessageProjectionDto::new(
+                session_id,
+                Some(run_id),
+                MessageKindDto::Assistant,
+                "answer",
+                Some("reasoning".to_owned()),
+                None,
+                None,
+            )
+            .is_ok()
+        );
+        assert!(
+            MessageProjectionDto::new(
+                session_id,
+                Some(run_id),
+                MessageKindDto::ToolCall,
+                "{\"path\":\"src/lib.rs\"}",
+                None,
+                Some(call_id),
+                Some("read".to_owned()),
+            )
+            .is_ok()
+        );
+        assert!(
+            MessageProjectionDto::new(
+                session_id,
+                Some(run_id),
+                MessageKindDto::ToolResult,
+                "contents",
+                Some("reasoning".to_owned()),
+                Some(call_id),
+                Some("read".to_owned()),
+            )
+            .is_err()
+        );
+        assert!(
+            MessageProjectionDto::new(
+                session_id,
+                Some(run_id),
+                MessageKindDto::ToolResult,
+                " ",
+                None,
+                Some(call_id),
+                Some("read".to_owned()),
+            )
+            .is_err()
+        );
+        assert!(
+            MessageProjectionDto::new(
+                session_id,
+                Some(run_id),
+                MessageKindDto::Notice,
+                "notice",
+                None,
+                Some(call_id),
+                Some("read".to_owned()),
+            )
+            .is_err()
+        );
+        assert!(
+            MessageProjectionDto::new(
+                session_id,
+                Some(run_id),
+                MessageKindDto::ToolCall,
+                "{}",
+                None,
+                None,
+                Some("read".to_owned()),
+            )
+            .is_err()
+        );
+        let decoded: MessageProjectionDto = serde_json::from_str(
+            &serde_json::to_string(
+                &MessageProjectionDto::new(
+                    session_id,
+                    None,
+                    MessageKindDto::Notice,
+                    "a notice",
+                    None,
+                    None,
+                    None,
+                )
+                .expect("notice row is valid"),
+            )
+            .expect("notice row serializes"),
+        )
+        .expect("notice row deserializes");
+        assert_eq!(decoded.kind(), MessageKindDto::Notice);
+        assert_eq!(decoded.run_id(), None);
     }
 }

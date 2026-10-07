@@ -1,253 +1,113 @@
 #![allow(
     clippy::expect_used,
-    clippy::unwrap_used,
     reason = "M5 tool-result contract fixtures use expect for precise diagnostics."
 )]
 
 //! Typed, credential-free durable tool-result contract evidence.
 
-use intention_domain::{
-    DomainEventDto, ToolLifecycleEventDto, ToolLifecycleStatusDto, ToolResultMetadataEntryDto,
-    ToolResultRecordedEventDto, ToolResultStatusDto,
-};
-use intention_types::{
-    EventEnvelopeDto, EventId, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId,
-    TimestampDto, ToolCallId,
-};
+use intention_domain::{ToolResultMetadataEntryDto, ToolResultStatusDto};
 
-fn time() -> TimestampDto {
-    TimestampDto::from_unix_seconds(1_700_000_000).expect("fixture time is valid")
-}
-
-fn entry(key: &str, value: &str) -> ToolResultMetadataEntryDto {
-    ToolResultMetadataEntryDto::new(key, value).expect("bounded metadata entry is valid")
-}
-
-fn record() -> ToolResultRecordedEventDto {
-    ToolResultRecordedEventDto::new(
-        SessionId::new(),
-        RunId::new(),
-        ToolCallId::new(),
-        "read",
+#[test]
+fn tool_result_status_set_is_closed_to_terminal_outcomes() {
+    for status in [
         ToolResultStatusDto::Completed,
-        "bounded safe result",
-        vec![entry("bytes", "17"), entry("truncated", "false")],
-        time(),
-    )
-    .expect("bounded fixture record is valid")
+        ToolResultStatusDto::Failed,
+        ToolResultStatusDto::Cancelled,
+        ToolResultStatusDto::Partial,
+    ] {
+        let wire = serde_json::to_string(&status).expect("status serializes");
+        let decoded: ToolResultStatusDto = serde_json::from_str(&wire).expect("status decodes");
+        assert_eq!(decoded, status);
+    }
+    assert_eq!(
+        serde_json::to_value(ToolResultStatusDto::Completed).expect("status serializes to JSON"),
+        serde_json::json!("completed")
+    );
+    assert_eq!(
+        serde_json::to_value(ToolResultStatusDto::Failed).expect("status serializes to JSON"),
+        serde_json::json!("failed")
+    );
+    assert_eq!(
+        serde_json::to_value(ToolResultStatusDto::Cancelled).expect("status serializes to JSON"),
+        serde_json::json!("cancelled")
+    );
+    assert_eq!(
+        serde_json::to_value(ToolResultStatusDto::Partial).expect("status serializes to JSON"),
+        serde_json::json!("partial")
+    );
+    for undeclared in ["started", "admitted", "rejected"] {
+        assert!(serde_json::from_str::<ToolResultStatusDto>(&format!("\"{undeclared}\"")).is_err());
+    }
 }
 
 #[test]
-fn tool_result_record_round_trips_with_typed_identity() {
-    let event = record();
-
-    let decoded: ToolResultRecordedEventDto =
-        serde_json::from_str(&serde_json::to_string(&event).expect("record serializes"))
-            .expect("record decodes");
-    assert_eq!(decoded, event);
-}
-
-#[test]
-fn tool_result_record_validates_identity_safety_and_metadata_uniqueness() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let call_id = ToolCallId::new();
-
-    assert!(
-        ToolResultRecordedEventDto::new(
-            session_id,
-            run_id,
-            call_id,
-            " ",
-            ToolResultStatusDto::Completed,
-            "content",
-            Vec::new(),
-            time(),
-        )
-        .is_err()
-    );
-    // An empty normalized result is legitimate; content is not size-bounded.
-    assert!(
-        ToolResultRecordedEventDto::new(
-            session_id,
-            run_id,
-            call_id,
-            "read",
-            ToolResultStatusDto::Failed,
-            "",
-            Vec::new(),
-            time(),
-        )
-        .is_ok()
-    );
-    // Content beyond the former 4 KiB cap is accepted.
-    assert!(
-        ToolResultRecordedEventDto::new(
-            session_id,
-            run_id,
-            call_id,
-            "read",
-            ToolResultStatusDto::Completed,
-            "x".repeat(4 * 1024 + 1),
-            Vec::new(),
-            time(),
-        )
-        .is_ok()
-    );
-    assert!(
-        ToolResultRecordedEventDto::new(
-            session_id,
-            run_id,
-            call_id,
-            "read",
-            ToolResultStatusDto::Completed,
-            "bad\0content",
-            Vec::new(),
-            time(),
-        )
-        .is_err()
-    );
-
-    let oversized_metadata = || -> Vec<ToolResultMetadataEntryDto> {
-        (0..17)
-            .map(|index| entry(&format!("key{index}"), "v"))
-            .collect()
-    };
-    // Metadata beyond the former 16-entry cap is accepted.
-    let record = ToolResultRecordedEventDto::new(
-        session_id,
-        run_id,
-        call_id,
-        "read",
-        ToolResultStatusDto::Completed,
-        "content",
-        oversized_metadata(),
-        time(),
-    )
-    .expect("record with 17 metadata entries is accepted");
-    assert_eq!(record.structured_metadata().len(), 17);
-    assert!(
-        ToolResultRecordedEventDto::new(
-            session_id,
-            run_id,
-            call_id,
-            "read",
-            ToolResultStatusDto::Completed,
-            "content",
-            vec![entry("key", "first"), entry("key", "second")],
-            time(),
-        )
-        .is_err()
-    );
+fn tool_result_metadata_entries_validate_keys_and_preserve_values() {
+    let entry =
+        ToolResultMetadataEntryDto::new("bytes", "17").expect("bounded metadata entry is valid");
+    assert_eq!(entry.key(), "bytes");
+    assert_eq!(entry.value(), "17");
+    let decoded: ToolResultMetadataEntryDto =
+        serde_json::from_str(&serde_json::to_string(&entry).expect("entry serializes"))
+            .expect("entry decodes");
+    assert_eq!(decoded, entry);
 
     assert!(ToolResultMetadataEntryDto::new(" ", "v").is_err());
+    assert!(ToolResultMetadataEntryDto::new("bad\0key", "v").is_err());
     assert!(ToolResultMetadataEntryDto::new("k", "bad\0value").is_err());
+
+    let empty_value =
+        ToolResultMetadataEntryDto::new("k", "").expect("an empty metadata value is allowed");
+    assert_eq!(empty_value.value(), "");
     // Keys and values beyond the former 128-byte and 1 KiB caps are accepted
     // and preserved exactly.
-    let key_129 = ToolResultMetadataEntryDto::new("x".repeat(129), "v").expect("129-byte key");
-    assert_eq!(key_129.key().len(), 129);
-    let value_1025 =
+    let long_key =
+        ToolResultMetadataEntryDto::new("x".repeat(129), "v").expect("129-byte key is accepted");
+    assert_eq!(long_key.key().len(), 129);
+    let long_value =
         ToolResultMetadataEntryDto::new("k", "x".repeat(1025)).expect("1 KiB + 1 value");
-    assert_eq!(value_1025.value().len(), 1025);
+    assert_eq!(long_value.value().len(), 1025);
 }
 
 #[test]
-fn tool_result_wire_shape_is_closed_safe_and_additive_tolerant() {
-    let event = record();
-    let encoded: serde_json::Value =
-        serde_json::to_value(&event).expect("record serializes to JSON");
+fn tool_result_metadata_wire_shape_is_closed_and_additive_tolerant() {
+    let entry = ToolResultMetadataEntryDto::new("bytes", "17").expect("metadata entry is valid");
+    let encoded = serde_json::to_value(&entry).expect("entry serializes to JSON");
 
-    // The durable shape is closed: exactly the documented typed fields persist,
-    // so no credential, config path, raw error, or extra payload can appear.
-    let expected = serde_json::json!({
-        "session_id": event.session_id(),
-        "run_id": event.run_id(),
-        "call_id": event.call_id(),
-        "tool_id": "read",
-        "status": "completed",
-        "normalized_content": "bounded safe result",
-        "structured_metadata": [
-            {"key": "bytes", "value": "17"},
-            {"key": "truncated", "value": "false"}
-        ],
-        "occurred_at": 1_700_000_000,
-    });
-    assert_eq!(encoded, expected);
-
-    let valid = |value: serde_json::Value| {
-        serde_json::from_value::<ToolResultRecordedEventDto>(value).is_ok()
-    };
-    let mut additive = expected.clone();
-    additive["future_additive_field"] = serde_json::json!(true);
-    assert!(valid(additive.clone()));
-    // The metadata list is optional on the wire and defaults to empty.
-    let mut without_metadata = expected.clone();
-    without_metadata
-        .as_object_mut()
-        .expect("object")
-        .remove("structured_metadata");
-    assert!(valid(without_metadata));
-
-    // Validated wire decoding: persisted safety constraints cannot be bypassed.
-    // Content beyond the former 4 KiB cap round-trips in full.
-    let mut oversize = expected.clone();
-    oversize["normalized_content"] = serde_json::json!("x".repeat(4 * 1024 + 1));
-    let decoded_oversize =
-        serde_json::from_value::<ToolResultRecordedEventDto>(oversize).expect("oversize decodes");
+    // The metadata entry persists exactly the documented typed fields.
+    assert_eq!(encoded, serde_json::json!({"key": "bytes", "value": "17"}));
     assert_eq!(
-        decoded_oversize.normalized_content(),
-        "x".repeat(4 * 1024 + 1)
+        encoded.as_object().expect("entry is a JSON object").len(),
+        2
     );
-    let mut nul = expected.clone();
-    nul["normalized_content"] = serde_json::json!("bad\0content");
-    assert!(!valid(nul));
-    let mut unknown_status = expected.clone();
-    unknown_status["status"] = serde_json::json!("started");
-    assert!(!valid(unknown_status));
-    let mut negative_time = expected;
-    negative_time["occurred_at"] = serde_json::json!(-1);
-    assert!(!valid(negative_time));
-    let mut missing_identity = additive;
-    missing_identity
-        .as_object_mut()
-        .expect("object")
-        .remove("call_id");
-    assert!(!valid(missing_identity));
-}
 
-#[test]
-fn additive_tool_result_taxonomy_preserves_prior_event_variants() {
-    let session_id = SessionId::new();
-    let prior = DomainEventDto::ToolLifecycle(
-        ToolLifecycleEventDto::new(
-            session_id,
-            RunId::new(),
-            ToolCallId::new(),
-            "read",
-            ToolLifecycleStatusDto::Started,
-            "bounded detail",
-            time(),
+    let mut additive = encoded;
+    additive["future_additive_field"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<ToolResultMetadataEntryDto>(additive).is_ok());
+
+    assert!(
+        serde_json::from_value::<ToolResultMetadataEntryDto>(serde_json::json!({"value": "17"}))
+            .is_err()
+    );
+    assert!(
+        serde_json::from_value::<ToolResultMetadataEntryDto>(serde_json::json!({"key": "bytes"}))
+            .is_err()
+    );
+    assert!(
+        serde_json::from_value::<ToolResultMetadataEntryDto>(
+            serde_json::json!({"key": " ", "value": "17"})
         )
-        .expect("lifecycle event is valid"),
+        .is_err()
     );
-    let added = DomainEventDto::ToolResultRecorded(record());
-
-    for payload in [prior, added] {
-        let envelope = EventEnvelopeDto::new(
-            intention_types::EventMetadataDto::new(
-                SchemaVersionDto::new(1, 0),
-                EventId::new(),
-                session_id,
-                None,
-                None,
-                SessionEventSequenceDto::new(1),
-                time(),
-            ),
-            payload,
-        );
-        let encoded = serde_json::to_string(&envelope).expect("envelope serializes");
-        let decoded: EventEnvelopeDto<DomainEventDto> =
-            serde_json::from_str(&encoded).expect("envelope decodes");
-        assert_eq!(decoded.payload(), envelope.payload());
-    }
+    assert!(
+        serde_json::from_value::<ToolResultMetadataEntryDto>(
+            serde_json::json!({"key": "bytes", "value": "bad\0value"})
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<ToolResultMetadataEntryDto>(
+            serde_json::json!({"key": 7, "value": "17"})
+        )
+        .is_err()
+    );
 }
