@@ -87,7 +87,7 @@ requested feature is valid.
 
 ### OpenRouter
 
-`intention-provider-openrouter` uses the pinned `openrouter-rs` 0.17.0 privately. It owns:
+`intention-provider-openrouter` uses the pinned `openrouter-rs` 0.18.0 privately. It owns:
 
 - OpenRouter configuration translation;
 -  private SDK request construction and fixture normalization for text, reasoning, usage, finish, tool-call, and error

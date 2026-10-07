@@ -4902,7 +4902,7 @@ SOFTWARE.
 
 #### Used by
 
-- [openrouter-rs 0.17.0](https://github.com/realmorrisliu/openrouter-rs)
+- [openrouter-rs 0.18.0](https://github.com/realmorrisliu/openrouter-rs)
 - [zmij 1.0.23](https://github.com/dtolnay/zmij)
 
 ```text
