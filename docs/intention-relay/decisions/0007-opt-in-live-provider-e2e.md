@@ -80,7 +80,7 @@ schema, canonical record, tag, or production error-code change.
 
 Public DTO schema 1.1, TOML configuration schema 1, and the single live SQLite schema are unchanged; the local protocol
 version clause is superseded by [ADR 0011](0011-local-json-rpc-2-0-transport.md) (JSON-RPC 2.0 over NDJSON at protocol
-version 2.0, no capability plane), and the record otherwise stands. M3/M4/M5 recorded history, replay, durable facts,
+version 1.0, no capability plane), and the record otherwise stands. M3/M4/M5 recorded history, replay, durable facts,
 snapshots, and evidence are unchanged, and a live run creates only ordinary current-version run state in its disposable
 test database. M5+ exit invariants are preserved: no M6-M9 boundary behavior and no second runtime, registry, scheduler,
 persistence authority, or sandbox; the M5+ Slice 3 reservations (`tool-descriptor-revision` `0x0301`,

@@ -6,7 +6,10 @@ Owner: architecture 15. Decisions: ADR 0001, ADR 0014. Research: m4plus_concept.
 
 This document owns the unified tool registry, immutable tool selection, tool admission on the ordinary run path,
 `WorkspaceRoot` semantics, the model-tool-model loop, and the tool-effect recovery boundary. It applies to future
-ordinary runs and Build Autopilot. M3/M4 behavior is unchanged. Ordinary runs and Build Autopilot admit compatible
+ordinary runs and Build Autopilot. M3/M4 behavior is unchanged. Slice 1.5 (core simplification) lands before this
+design activates: model steps and tool groups are addressed by plain indices rather than newtypes, publication follows
+the durable commit result rather than a separate reread, and each descriptor's tool contract is code-owned input and
+result JSON Schema text. Ordinary runs and Build Autopilot admit compatible
 tools without per-action confirmation; Plan denies ordinary `write`/`edit`, while Plan `execute` is advisory-guided and
 non-sandboxed.
 
@@ -67,9 +70,10 @@ malformed request gets the known pre-effect outcome `ExecutionUnavailable`. Rese
 nor requires every owner to ship together. Only the intended owner may activate through composition, creating new
 descriptor and registry revisions; active status alone establishes neither model visibility nor live readiness.
 
-An active descriptor carries credential-free fields for `ToolId`, intended owner, typed input/result schema references,
-required model capabilities, `ToolEffectProfile`, workspace binding, mode relation, model-function schema revision,
-safe-result-projection revision, observation-contract revision, stream shape, and `model_schema_availability` (whether a
+An active descriptor carries credential-free fields for `ToolId`, intended owner, code-owned input and result JSON
+Schema, required model capabilities, `ToolEffectProfile`, workspace binding, mode relation, model-function schema
+revision, safe-result-projection revision, observation-contract revision, stream shape, and
+`model_schema_availability` (whether a
 code-owned function schema can reach a compatible model subset). `display_name` is presentation metadata, not identity.
 Public boundaries reject raw JSON/maps, unvalidated paths, provider/Python values, implementation handles, resources,
 and implementation errors.
@@ -148,7 +152,7 @@ selected it contains:
 - a tool-admission-engine revision limited to common typed mechanics;
 - the hook-pipeline revision; and
 -  an ordered list of only the active descriptors actually supplied to the model, each binding `ToolId`, intended owner,
-  descriptor revision, input/result schema references, required-capability binding, mode relation, model-function-schema
+  descriptor revision, input and result JSON Schema, required-capability binding, mode relation, model-function-schema
   revision, safe-result-projection revision, observation-contract revision, and stream shape.
 
 It excludes unexposed slots, credentials, raw schemas/JSON, executor handles, readiness, current registry state,
@@ -213,8 +217,9 @@ publication gate under architecture 20's cell rules.
 
 ## Model-to-tool-to-model lifecycle
 
-The loop belongs to one daemon-owned active run. The daemon assigns `ModelStepId`, `ToolGroupId`, and canonical
-`ToolCallId`; providers, adapters, and tools assign none of them, and provider-native call IDs remain private. Runs have
+The loop belongs to one daemon-owned active run. The daemon assigns the canonical `ToolCallId` and the plain model-step
+and tool-group indices; providers, adapters, and tools assign none of them, and provider-native call IDs remain
+private. Runs have
 sequential model steps; this first scope adds no numeric step limit. A tool-calling completed step owns one non-empty
 ordered group; a `ToolCallId` is unique and never reused, and group validity is shape-only with no numeric call bound.
 A step with calls but no `ToolCalls` closing reason, a `ToolCalls` reason without calls, a duplicate or malformed group,

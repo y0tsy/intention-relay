@@ -270,6 +270,20 @@ corrupts history, never destroys descendants or audit dependencies, and is never
 archive-only retention remains the
 first-scope default.
 
+## Slice 1.5 event and publication model (not activated)
+
+Slice 1.5 replaces the family-specific event types with one payload and drops the reread from the publication path. This
+section freezes the target; the invariants above stay current policy until the slice activates.
+
+- One payload type. `EventPayload` is the single payload carried by `EventEnvelopeDto`. The closed fact vocabulary above
+  becomes variants or typed fields of that payload instead of separate top-level event types, and the envelope keeps
+  the event identity, the ordering sequence, the schema version, and the session/run/turn scope.
+- Durable schema in place. The single storage schema carries the payload change directly, with no migration, no second
+  event shape, and no compatibility column; stored envelopes keep the commit-bytes-meaning relationship.
+- Publication from the commit. The durable commit returns the values it recorded, and invariant 6 is satisfied by that
+  result instead of an independent scoped reread, which is removed together with its fixture. The commit-before-publish
+  ordering and the rule that a publisher failure never rolls back committed state are unchanged.
+
 ## Post-M4 tool-loop storage consequence
 
 Future model-tool-loop work atomically records a completed tool-calling model step, its ordered tool group, normalized

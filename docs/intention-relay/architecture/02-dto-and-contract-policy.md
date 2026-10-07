@@ -65,9 +65,9 @@ EventId
 ConfigRevisionId
 ```
 
-IDs must have a defined generation owner, parse/validation behavior, serialization representation, and error DTO. Future
-tool-loop IDs include daemon-assigned `ModelStepId` and `ToolGroupId`; provider-native tool-call identifiers remain
-private implementation state.
+IDs must have a defined generation owner, parse/validation behavior, serialization representation, and error DTO. The
+future tool loop addresses model steps and tool groups by plain indices within their containing records rather than by
+newtypes; provider-native tool-call identifiers remain private implementation state.
 
 ### Envelopes
 
@@ -206,7 +206,7 @@ such as `ErrorDto.detail` and `ErrorDto.correlation_id`; omitted fields decode a
 configuration schema explicitly documents `deny_unknown_fields`. Required fields, invalid types, invalid IDs, unknown
 closed variants, and any schema/protocol version other than the current one always fail safely.
 - The daemon/client JSON-RPC 2.0 handshake accepts only the exact current
-protocol version (2.0) and rejects any other version with the typed `-32001` version error before closing the connection
+protocol version (1.0) and rejects any other version with the typed `-32001` version error before closing the connection
 (ADR 0011); the public DTO schema compares by exact equality (no same-major tolerance).
 - SQLite storage is the single live schema (logical version 1) created
 directly on open; there is no migration chain, no version gate, and no opening of older schemas, and persisted rows keep
@@ -240,6 +240,31 @@ See [03 Daemon, Transport, and Adapters](03-daemon-transport-and-adapters.md) fo
 Delivery and Verification](10-test-driven-delivery-and-verification.md) for mandatory test layers, and [12 Quality Gates
 and Makefile](12-quality-gates-and-makefile.md) for the blocking orchestration contract.
 
+## Slice 1.5 boundary model (not activated)
+
+Slice 1.5 collapses the DTO surface to the three places where a process, a file, or a foreign SDK forces a serialized
+shape. This section freezes that model; the rules above stay current policy until the slice activates.
+
+- Three physical boundaries. DTOs exist at the IPC wire (protocol commands, queries, notifications, and their typed
+  payloads), at SQLite persistence (rows, projections, snapshots, and event records), and at provider SDK calls
+  (requests, stream facts, and errors normalized into the provider-neutral contract). Every DTO category above belongs
+  to exactly one of the three.
+- Domain types inside the process. Crates call each other with domain types. A DTO is not introduced between internal
+  crates, and a type acquires wire attributes only when it crosses one of the three boundaries.
+- JSON only for tool payloads. Tool inputs and outputs are JSON objects validated at runtime against the tool's
+  declared JSON Schema, and they are the only schemaless JSON values in the system. `serde_json::Value` stays
+  prohibited everywhere else, including error details, events, hooks, configuration, and storage.
+- Nine identifiers. `SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `EventId`,
+  `ConfigRevisionId`, and `IdempotencyKey` are the complete identity newtype set. `AssistantTurnId`, `PlanId`,
+  `PlanRevisionId`, `ModelStepId`, and `ToolGroupId` are removed: model steps and tool groups are addressed by plain
+  indices within their containing records, and mutating operations carry an `IdempotencyKey` instead of an operational
+  ID.
+- One durable event payload. `EventPayload` is the single payload type carried by `EventEnvelopeDto`, which keeps the
+  event identity, the ordering sequence, the schema version, and the session/run/turn scope. Event families become
+  variants or typed fields of that payload instead of separate envelope shapes.
+- Publication follows the commit. A live event is emitted once the durable commit succeeds, carrying the values the
+  commit recorded; the scoped durable reread proof is removed.
+
 ## Post-M4 execution and compatibility boundary
 
 Future M4+ packages use closed, typed serde JSON families rather than widening historical records by implication. If a
@@ -257,8 +282,9 @@ must not carry credentials, raw transcripts, provider continuation state, live h
 effects.
 
 The future tool-loop families include `ToolRegistryEntryDto`, `ToolDescriptorRevisionId`, `ToolRegistryRevisionId`,
-`ModelStepId`, `ToolGroupId`, model-step/group facts, safe workspace-path observations, output fragments, terminal
-results, and `ModelToolExchangeDto`. They cannot widen
+model-step and tool-group facts, safe workspace-path observations, output fragments, terminal results, and
+`ModelToolExchangeDto`. Model steps and tool groups carry no newtype identity and are addressed by plain indices within
+their containing records. They cannot widen
 historical M4 tool facts, expose provider-native IDs, raw paths, secrets, or SDK resources, or recreate stored selection
 from a current registry. [Tool registry and model-tool loop](15-tool-registry-and-model-tool-loop.md) owns
 their semantics.

@@ -123,7 +123,7 @@ signal-handling claim. Admission and interruption semantics are owned by [archit
 `intention-client` is the only supported client-side integration path for local adapters. It owns:
 
 - daemon discovery and bootstrap coordination;
-- protocol version handshake (exact 2.0 equality);
+- protocol version handshake (exact 1.0 equality);
 - typed command dispatch and query execution;
 - typed subscriptions;
 - reconnect behavior;
@@ -167,7 +167,7 @@ sequenceDiagram
 2. A cross-platform `fs4` advisory startup lock prevents duplicate daemon launches.
 3. The lock holder rechecks availability before creating a daemon.
 4. It launches the daemon process only when the recheck still finds no daemon.
-5.  Readiness requires a successful JSON-RPC `hello` handshake with the exact current protocol version (2.0), a
+5.  Readiness requires a successful JSON-RPC `hello` handshake with the exact current protocol version (1.0), a
    correlated `daemon.health` request, and `DaemonReadinessDto::Ready`, not merely process existence.
 6. Startup errors are typed and safe to render.
 7. Closing one adapter never terminates a healthy shared daemon.
@@ -177,7 +177,7 @@ sequenceDiagram
 ## Protocol lifecycle
 
 At connection time the client sends `hello` carrying exactly the protocol version and the local adapter name, never an
-application account. The daemon accepts only the exact current protocol version, 2.0, and answers `hello` before serving
+application account. The daemon accepts only the exact current protocol version, 1.0, and answers `hello` before serving
 any other method; there are no capability DTOs, feature flags, family gates, or connection modes (ADR 0011).
 
 An incompatible protocol version fails closed with the typed JSON-RPC error `-32001`, carrying `ErrorDto { category:
@@ -316,6 +316,24 @@ their mapping contracts and fixture-daemon outcome scenarios; the floor never re
 - durable endpoint cleanup and stale-listener recovery policy beyond listener ownership safeguards;
 - daemon upgrades with connected adapters;
 - explicit daemon stop command and future idle shutdown policy.
+
+## Slice 1.5 daemon, transport, and client model (not activated)
+
+Slice 1.5 merges the composition facade into the daemon crate and lifts the client to the full protocol surface. This
+section freezes the target; the text above stays current policy until the slice activates.
+
+- One host, no facade library. The `intention` composition root and the `intention-daemon` host become one binary crate.
+  The daemon host calls the engine directly, the hop daemon host → facade → application disappears, and with it the
+  facade's duplicate DTO surface. Composition still happens in exactly one place, and the hidden test seams move with
+  the merged crates and stay non-production.
+- Publication without a reread. The durable commit returns the values it recorded, and the daemon host publishes live
+  events from that result. The scoped durable reread proof is removed; the live-after-commit ordering rule is unchanged.
+- Protocol version 1.0. The single live protocol version is 1.0 ([ADR
+  0011](../decisions/0011-local-json-rpc-2-0-transport.md) amendment); the wire, the method table, and exact-equality
+  negotiation are unchanged by the renumbering.
+- Fully asynchronous client. `intention-client` exposes one asynchronous API covering every protocol command and query
+  plus the `run.frame` notification stream, and its blocking API is removed. Daemon end-to-end tests drive the real
+  client instead of the low-level transport, and the TUI proof adapter migrates mechanically without rework.
 
 ## Post-M4 session branching transport boundary
 

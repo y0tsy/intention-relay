@@ -3,9 +3,13 @@
 ## Status
 
 Accepted 2026-09-30. It replaces the bespoke length-prefixed local protocol with JSON-RPC 2.0 over the existing local
-socket, raises the protocol version to 2.0 with exact-match negotiation, and removes the negotiated capability plane and
+socket, raises the protocol version with exact-match negotiation, and removes the negotiated capability plane and
 the connection-role split. It activates no remote transport, no authentication layer, no second protocol version, and no
 capability substitute.
+
+Amended 2026-10-07: the single live protocol version is renumbered to 1.0. The wire, the JSON-RPC 2.0 framing, the
+method table, and exact-equality negotiation are unchanged by the renumbering; the code constant follows at Slice 1.5
+activation.
 
 ## Scope and supersession
 
@@ -19,8 +23,8 @@ schema version; the TOML configuration and SQLite storage schemas; and every non
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |
 | [ADR 0004](0004-m5plus-complete-foundation-activation.md) | The Slice 1 negotiated capability families (`provider_profiles_v1`, `session_fork_v1`, `normalized_reasoning_stream_v1`, `agent_activity_v1`, `user_notifications_v1`, `daemon_tool_gateway_v1`, `model_tool_loop_v1`) | No capability plane exists; one protocol version and typed methods only |
-| [ADR 0005](0005-no-backward-compatibility-and-legacy-removal.md) | The local-protocol row of the version ledger, the "Protocol same-major compatibility" superseded commitment, and the Wave 3 instruction to keep the 1.1 negotiation gates | Protocol 2.0 exact equality; the single-version policy is unchanged |
-| [ADR 0006](0006-request-side-tool-advertisement.md), [ADR 0007](0007-opt-in-live-provider-e2e.md), [ADR 0008](0008-same-run-reasoning-round-trip.md) | Their compatibility lines "Local protocol 1.1 ... unchanged" | Protocol 2.0 exact equality; the feature records otherwise stand |
+| [ADR 0005](0005-no-backward-compatibility-and-legacy-removal.md) | The local-protocol row of the version ledger, the "Protocol same-major compatibility" superseded commitment, and the Wave 3 instruction to keep the 1.1 negotiation gates | Protocol 1.0 exact equality; the single-version policy is unchanged |
+| [ADR 0006](0006-request-side-tool-advertisement.md), [ADR 0007](0007-opt-in-live-provider-e2e.md), [ADR 0008](0008-same-run-reasoning-round-trip.md) | Their compatibility lines "Local protocol 1.1 ... unchanged" | Protocol 1.0 exact equality; the feature records otherwise stand |
 
 The protocol-version clauses of ADRs 0006, 0007, and 0008 are read through this record. The capability and
 connection-role surfaces this record removes were the negotiated-plane pieces of the not-activated M5+ Slice 2 control
@@ -49,7 +53,7 @@ hang. It is not a contract limit on message content ([ADR 0014](0014-limits-by-p
 
 5. The handshake carries exactly the protocol version and the adapter name.
 There is no capability list in the handshake, no capability intersection between peers, and no per-feature negotiation.
-6. The protocol version is 2.0 and negotiation is exact equality. A
+6. The protocol version is 1.0 and negotiation is exact equality. A
 mismatched peer receives a typed JSON-RPC error `-32001` with the typed `ErrorDto` in `error.data` before the connection
 closes. This fixes the recorded diagnostics defect where an incompatible version closed without a typed reason.
 7. The public DTO schema version, the TOML configuration schema, and the
@@ -99,7 +103,7 @@ Batch arrays are not part of this transport.
 
 1. One wire. JSON-RPC 2.0 over NDJSON is the only local protocol; no envelope
 DTO, length prefix, alternative framing, or parallel path remains.
-2. Exact version. Protocol 2.0 is the single live version, negotiated by
+2. Exact version. Protocol 1.0 is the single live version, negotiated by
 exact equality; there is no minor tolerance and no dual-protocol support.
 3. No capability plane. No capability list, capability intersection, feature
 gate, or capability-required error code exists, and none is replaced by an equivalent.
@@ -116,9 +120,10 @@ remote client, or authentication layer is introduced.
 
 ## Compatibility
 
-The protocol version rises from 1.1 to 2.0 because the wire changed. Old daemons and clients fail closed with the typed
-`-32001` mismatch error rather than misparsing a new message; no compatibility branch, fallback decoder, or protocol-1.1
-path is kept, per the single-version policy of [ADR 0005](0005-no-backward-compatibility-and-legacy-removal.md).
+The single live protocol version is 1.0, renumbered from the interim 2.0 label; the JSON-RPC wire itself is unchanged.
+Old daemons and clients fail closed with the typed `-32001` mismatch error rather than misparsing a new message; no
+compatibility branch, fallback decoder, or protocol-1.1 path is kept, per the single-version policy of [ADR
+0005](0005-no-backward-compatibility-and-legacy-removal.md).
 M3/M4/M5 durable runs, sessions, events, snapshots, cursors, and storage bytes are untouched by the wire change, and
 replay is served through the same typed payloads as before. The live-provider end-to-end channel of [ADR
 0007](0007-opt-in-live-provider-e2e.md) is re-pointed at the new wire and remains the manual, non-blocking live anchor.

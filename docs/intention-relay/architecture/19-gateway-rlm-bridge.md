@@ -52,11 +52,11 @@ BridgeAttachmentGrantV1
   daemon_epoch
   issued_protocol_revision
   run_id
-  model_step_id
+  model_step_position
 ```
 
-A grant binds its holder to one daemon-held `SessionId`, `RunId`, originating `TurnId`, and `ModelStepId`
-(daemon-assigned, never caller-selected). It is non-secret ephemeral transport evidence for one daemon epoch and live
+A grant binds its holder to one daemon-held `SessionId`, `RunId`, originating `TurnId`, and the daemon-assigned
+model-step position (never caller-selected). It is non-secret ephemeral transport evidence for one daemon epoch and live
 daemon process, not a credential, durable fact, semantic selection, lifecycle permission, policy decision, or
 caller-selected identity. It expires on model-step closure, run terminalization or interruption, cancellation
 reaching the bridge gate, channel detachment, or daemon exit, and never enters the future typed run record, events,
@@ -80,7 +80,7 @@ references:
 BridgeOperationV1
   bridge_operation_id
   run_id
-  model_step_id
+  model_step_position
   tool_id
   descriptor_revision
   typed_input_reference

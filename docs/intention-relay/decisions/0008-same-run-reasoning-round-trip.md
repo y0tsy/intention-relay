@@ -97,7 +97,7 @@ meaning, or tool-loop contract is introduced, and the M5+ Slice 3 reservations r
 
 Public DTO schema 1.1, TOML configuration schema 1, and the single live SQLite schema are unchanged; the local protocol
 version clause of this bullet is superseded by [ADR 0011](0011-local-json-rpc-2-0-transport.md) (JSON-RPC 2.0 over
-NDJSON at protocol version 2.0, no capability plane), and the record otherwise stands. Reasoning attachment is
+NDJSON at protocol version 1.0, no capability plane), and the record otherwise stands. Reasoning attachment is
 provider-neutral request state, not a public wire family; no migration, version change, or durable representation is
 added. M3/M4/M5 recorded history, replay, durable facts, snapshots, and evidence remain unchanged; historical runs gain
 no reasoning category, echo, or synthetic reasoning state. The OpenRouter adapter's behavior, request shape, and

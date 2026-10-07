@@ -133,7 +133,7 @@ deleted and recreated by the normal development flow, as the single live schema 
 (`UserTurnQueued`, `QueuedTurnRemoved`) and the removed protocol members are deleted, not preserved: no compatibility
 fixture, decoder, alias, or golden keeps them readable. M4 model facts, run container-journal bytes, snapshots, and
 replay keep their recorded meaning within version 1; the `RunStatusChanged` vocabulary no longer carries
-`Cancelling`/`Cancelled`. The protocol version stays 2.0 and the method surface stays one-to-one with the current
+`Cancelling`/`Cancelled`. The protocol version stays 1.0 and the method surface stays one-to-one with the current
 commands.
 
 ## Security and failure behavior

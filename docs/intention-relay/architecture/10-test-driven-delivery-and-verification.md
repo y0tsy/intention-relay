@@ -293,6 +293,19 @@ compatibility](14-run-execution-meaning-and-historical-compatibility.md) and car
 Each later package declares its own evidence portfolio through the activating-specification contract in [architecture
 12](12-quality-gates-and-makefile.md).
 
+### Core-simplification (Slice 1.5) evidence
+
+Before implementation, Slice 1.5 requires workspace-map and test-target evidence for the ten production crates; boundary
+negatives proving no DTO between internal crates and no JSON outside tool payloads; schema-validation negatives for tool
+inputs and results; identity fixtures proving the nine newtypes and the removal of the operational IDs; event fixtures
+proving one `EventPayload`; publication fixtures proving the commit result is the published value with no reread;
+protocol fixtures proving version 1.0 with the unchanged method table and exact-equality handshake; and client evidence
+proving every command and query over one asynchronous API with the daemon end-to-end tests driving the real client.
+M3/M4 durable preservation stays mandatory. For slices from 1.5 onward, the post-commit reread obligation above is
+discharged by the commit result instead of a separate durable read. These are future obligations, not claims that a
+runtime or test target exists; the design is owned by the [Implementation
+Roadmap](11-implementation-roadmap.md) slice 1.5 and its activating specification.
+
 ### Tool-registry and tool-loop evidence
 
 Before implementation, future tool-loop work requires fixed-slot and owner fixtures, Reserved/non-bypass fixtures, typed

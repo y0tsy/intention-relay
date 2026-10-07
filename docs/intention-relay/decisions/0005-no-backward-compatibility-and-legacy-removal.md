@@ -35,7 +35,7 @@ version other than the current one are not maintained.
 | SQLite schema 3 to 4 additive migration, `user_version` tracking, and future-schema rejection (architecture 04; roadmap slice rows) | One live schema (logical version 1) created directly on open; no migration chain, no `user_version` gate, no opening of older schemas |
 | M3/M4 byte-preservation evidence (schema-3 reopen fixtures, migration rollback fixtures, `TEST_SCHEMA_3_SQL`, standalone `M3_SCHEMA_SQL` fixture block) | Removed with the migration machinery; current-schema round-trip tests remain |
 | Legacy M4 selection bridge (tag `legacy-m4-selection-binding` 0x020C; `LegacyM4SelectionBindingDto`; `legacy_m4_selection_bindings` table; `LegacyBindingRepositoryDto`; `load_config_revision_records`; application `LegacyM4Bridge`; composition `SnapshotBindingSource` mirror derivation) | Removed entirely; tag 0x020C returns to unallocated and is removed from the ledger and `PUBLIC_WIRE_CONTRACT_FAMILIES`; no synthetic bindings are ever materialized |
-| Protocol same-major compatibility (1.0 to 1.1) via `ensure_compatible_with` on protocol and DTO schema versions | Exact current-version equality on negotiation; no minor tolerance (protocol 2.0 after [ADR 0011](0011-local-json-rpc-2-0-transport.md)) |
+| Protocol same-major compatibility (1.0 to 1.1) via `ensure_compatible_with` on protocol and DTO schema versions | Exact current-version equality on negotiation; no minor tolerance (protocol 1.0 after [ADR 0011](0011-local-json-rpc-2-0-transport.md)) |
 | 1.0 wire fixtures and legacy-shape deserializers (`ProtocolAcceptedDto`/`SessionSnapshotDto` additive-field tolerance, `protocol_fixtures` target, error-v1 legacy fixture, `hello-compatible-minor-v1.json` naming) | Current-version fixtures only; additive fields become required on the wire |
 | TOML configuration v0 migration (`migrate_v0`, `RawV0Config`, `RawV0ModelConfig`, `model.api_key` credential fallback, `collect_v0_issues`) | Unversioned documents fail closed (`invalid_config_schema`); only the current `[provider]` shape parses |
 | Historical reasoning wire defaults (uncategorized `ReasoningDelta` decoding as `Primary`) in domain and model crates | `category` is required on the wire; no defaulting |
@@ -90,7 +90,7 @@ example a TOML without an optional `[provider.execution]` table).
 
 | Contract | Version/status after this record |
 | --- | --- |
-| Local protocol | 2.0 over JSON-RPC 2.0 with NDJSON framing, exact equality on the handshake ([ADR 0011](0011-local-json-rpc-2-0-transport.md)); the recorded point, exact equality with no minor tolerance, stands |
+| Local protocol | 1.0 over JSON-RPC 2.0 with NDJSON framing, exact equality on the handshake ([ADR 0011](0011-local-json-rpc-2-0-transport.md)); the recorded point, exact equality with no minor tolerance, stands |
 | Public DTO schema | 1.1, additive fields are required fields |
 | TOML configuration schema | 1, single shape |
 | SQLite storage schema | Logical version 1, single live schema: the current physical DDL (previously labeled "schema 4") is retained as the one schema and created directly on open; no migrations, no version gate |
@@ -121,8 +121,9 @@ matrix ran after each wave.
 Later state (2026-09-30): the legacy M4 bridge removal stands, and the tag ledger it edited is itself removed by
 [ADR 0012](0012-typed-serde-json-contracts.md); the whole execution-meaning codec and its goldens are removed by [ADR
 0012](0012-typed-serde-json-contracts.md), not only the V3 record; the capability gates named in Wave 3 are removed by
-[ADR 0011](0011-local-json-rpc-2-0-transport.md), the protocol version is 2.0, and the "keep the 1.1 negotiation gates"
-instruction is void; the single live SQLite schema stays, while the control-plane tables and
+[ADR 0011](0011-local-json-rpc-2-0-transport.md), the protocol version it introduced is renumbered to 1.0 by the Slice
+1.5 design, and the "keep the 1.1 negotiation gates" instruction is void; the single live SQLite schema stays, while
+the control-plane tables and
 `control_plane::SCHEMA_M5_SQL` belong to the not-activated M5+ Slice 2 control plane; the single-TOML-shape removal
 stands, and the control-plane candidate machinery in its keep list belongs to that same not-activated slice; the
 provider and reasoning single-path removals stand, while the Slice 2 reasoning/catalog families belong to the
@@ -183,8 +184,8 @@ recorded above.
 slice-sequence authority. ADR 0005 changes implementation and documentation obligations without renumbering or
 reauthorizing slices 1/2 and without reopening closed milestones; closeout evidence stays immutable provenance, and only
 active indexes/links and command/evidence rows that reference removed test targets may change.
-- **Physical version interpretation:** the concrete protocol version is 2.0
-after [ADR 0011](0011-local-json-rpc-2-0-transport.md), which raised the constant with the JSON-RPC wire change; the
+- **Physical version interpretation:** the concrete protocol version is 1.0,
+renumbered from the interim 2.0 label at Slice 1.5 without a wire change; the
 recorded point, "exact equality" removes minor tolerance, not the version constant itself, stands. The SQLite physical
 DDL previously labeled "schema 4" is retained as the one current schema (logical version 1); no version marker or
 migration machinery accompanies it.

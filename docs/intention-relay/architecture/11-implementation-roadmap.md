@@ -107,7 +107,7 @@ Closed. Delivered `intention-transport`, `intention-client`, `intention-daemon`,
 `intention-tui` proof adapter over cross-platform local IPC (Unix domain sockets and Windows named pipes) with per-user
 endpoint locations, the Unix `0700` endpoint-parent and `0600` listener-socket policy, a cross-platform `fs4` advisory
 startup lock, version-validated `Ready` health, and snapshot-tail/resync subscription wiring with optional run scope.
-The M2 wire was replaced by JSON-RPC 2.0 over NDJSON with exact protocol version 2.0 and the `MAX_MESSAGE_BYTES`
+The M2 wire was replaced by JSON-RPC 2.0 over NDJSON with exact protocol version 1.0 and the `MAX_MESSAGE_BYTES`
 liveness cap ([ADR 0011](../decisions/0011-local-json-rpc-2-0-transport.md)), which is the current protocol; the socket,
 permissions, and bounded serving remain. Idle shutdown, explicit daemon stop, upgrade coordination, durable
 sessions/events/snapshots, and model/provider execution were deferred (M3 owns durable storage/recovery; M4 owns
@@ -163,23 +163,40 @@ The activation decision is [ADR 0004](../decisions/0004-m5plus-complete-foundati
 
 ### Slices
 
-The five slices are approved together as one package and delivered in this order; no slice ships half-ready, and later
+The six slices are approved together as one package and delivered in this order; no slice ships half-ready, and later
 slices consume only contracts activated by earlier slices. Every direction stays bound to its slice,
 and every retrospective change to M0-M5 code required by those directions activates inside its slice with its own
 contract, transaction, and outcome test. Each direction's activating specification is accepted at the start of the
 milestone that implements it.
 
-1.  **Contracts and versions — activated.** The typed serde JSON contract and version foundation: the JSON-RPC 2.0 local
-protocol with exact protocol version 2.0, its method/notification table, and the removed capability plane ([ADR
-0011](../decisions/0011-local-json-rpc-2-0-transport.md)); explicit DTO schema versions with exact-equality comparison;
-SQLite as one live storage schema created directly on open ([ADR
+-  **Slice 1 — Contracts and versions — activated.** The typed serde JSON contract and version foundation: the JSON-RPC
+2.0 local wire at exact protocol version 1.0, its method/notification table, and the removed capability plane
+([ADR 0011](../decisions/0011-local-json-rpc-2-0-transport.md)); explicit DTO schema versions with exact-equality
+comparison; SQLite as one live storage schema created directly on open ([ADR
 0005](../decisions/0005-no-backward-compatibility-and-legacy-removal.md)); and crate ownership, feature-profile, and
 coverage declarations under [ADR 0016](../decisions/0016-per-crate-coverage-tiers.md) for every activated family. The
 former contract ledger, `run-execution-meaning-v4` field tables, capability families, `typed-tlv-v1`/SHA-256 tags, and
 digests were deleted by [ADR 0012](../decisions/0012-typed-serde-json-contracts.md): no ledger, tag registry, canonical
 digest, or identity record remains, and every future contract family is typed serde JSON with RFC 8785 canonicalization
 only when a first real consumer appears.
-2. **Control plane — not activated.** The cluster and provider session selection (architectures 25/29/22):
+-  **Slice 1.5 — Core simplification — not activated.** It adds no product behavior: it collapses the workspace to ten
+production crates and simplifies the internal interfaces every later slice builds on. The crate set is
+`intention-proto` (types and protocol), `intention-domain`, `intention-config`, `intention-engine` (application and
+runtime), `intention-tools` (tools, workspace, and hooks), `intention-providers` (provider-neutral model contract and
+both drivers), `intention-storage` (storage contracts and SQLite), `intention-transport`, `intention-daemon`
+(composition, host, and binary), and `intention-client`; the adapter and skeleton crates stay as declared. The
+composition facade disappears: the daemon host calls the engine directly. DTOs remain only at the three physical
+boundaries — the IPC wire, SQLite persistence, and provider SDKs — and internal crates pass domain types. Tool inputs
+and outputs are schema-validated JSON and are the only JSON payloads in the system. Identity newtypes reduce to nine
+(`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `EventId`, `ConfigRevisionId`,
+`IdempotencyKey`); model steps and tool groups are addressed by plain indices and mutating operations by
+`IdempotencyKey`. Durable events use one `EventPayload`; publication follows the durable commit without the scoped
+reread proof; the eight hook phases stay. The single live protocol version is renumbered to 1.0. The `intention-client`
+is rewritten as a fully asynchronous client that implements every protocol command and query, its blocking API is
+removed, and daemon end-to-end tests drive the real client instead of the low-level transport; the `intention-tui`
+proof adapter is migrated mechanically without rework. The single storage schema evolves in place with no migration or
+compatibility path.
+-  **Slice 2 — Control plane — not activated.** The cluster and provider session selection (architectures 25/29/22):
 controlled live reload, credential rotation, provider health checks, model discovery, pricing policy, provider profile
 UI and raw-TOML/configuration editing, arbitrary authentication headers, session defaults and per-turn/fork overrides,
 the provider profiles protocol, pending-removal and degraded recovery, and the provider reasoning/catalog surface. The
@@ -187,16 +204,16 @@ unconsumed-surface audit (2026-09) removed the unconsumed
 typed preservation-control, server-side-parser, Responses reasoning-mode, reasoning-usage, and model-capability-envelope
 contracts, the protocol-only reasoning/header/parser duplicates, the eight producer-less control-plane event DTOs, and
 the `provider_profile_tombstoned` wire code.
-3. **Goal domain — not activated.** The Goal domain (architecture 28). The slice also activates the
+-  **Slice 3 — Goal domain — not activated.** The Goal domain (architecture 28). The slice also activates the
 tool-descriptor, tool-registry, and model-tool-loop contracts as amended by [ADR
 0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md) (architecture 15), the bridge-invocation and
 MCP-method-catalog selections (architectures 19/18), and work/requeue after client disconnection.
-4.  **UI foundation — not activated.** Session branching, reasoning/catalog delivery, and adapter boundaries
+-  **Slice 4 — UI foundation — not activated.** Session branching, reasoning/catalog delivery, and adapter boundaries
 (architectures 23/22 plus architecture 03's flat activity journal and notification list): `session_fork_v1`;
 normalized reasoning delivery; and the exact typed client/protocol surface M6 consumes. It also carries cross-workspace
 clone/rebind (architecture 23) and the physical deletion/GC retention policy for historical work under architecture 04's
 retention rules.
-5.  **Instruction sources and system context — fifth and last slice; not activated.** The instruction channel of
+-  **Slice 5 — Instruction sources and system context — last slice; not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md), adopted by [ADR
 0010](../decisions/0010-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
 deployment instruction profile adapted from the legacy Antibusy static prompt set, user-editable fragments at user,
@@ -215,6 +232,11 @@ Each slice declares its contracts, versions, fixtures, and outcome evidence per 
 -  Slice 1: JSON-RPC 2.0 conformance fixtures (envelope shape, 1:1 method coverage of the command and query variants,
 notifications, and error codes), exact protocol-version equality with a typed `-32001` mismatch error, typed serde JSON
 DTO round trips, and current-schema creation fixtures.
+-  Slice 1.5: the activating specification declares the ten-crate workspace, per-crate test targets, coverage tiers, and
+feature profiles, and proves the boundary rules: no DTO inside the process outside the three physical boundaries, no
+JSON outside tool payloads, nine identity newtypes, one `EventPayload`, publication without a reread proof, the
+renumbered protocol version, the asynchronous client covering every command and query, and end-to-end tests driving the
+real client instead of the low-level transport.
 -  Slice 2: not activated; its activating specification declares the reload transaction fault-injection, rotation
 no-frozen-meaning and fail-closed, health/discovery/pricing non-authority, catalog acceptance/recovery, control-plane
 safe-projection, and current-schema creation fixtures with their policy declarations.
@@ -232,6 +254,8 @@ errors, snapshots, events, and adapter DTOs.
 schema, crate-boundary, migration, or quality-policy change.
 -  M3/M4 startup-only configuration, recorded revisions, persisted run snapshots, sessions, runs, events,
 and bytes remain authoritative and unchanged; SQLite storage is the single live schema created directly on open.
+-  Slice 1.5 preserves durable meaning: the single storage schema evolves in place with no migration or compatibility
+layer, and tool, event, hook, and lifecycle semantics keep their recorded law.
 -  The Slice 2 health, discovery, and pricing surfaces are non-authorizing: they create no RunId, tool
 permission, MCP capability, bridge grant, kernel epoch, context projection, or branch, and the activating
 specification must prove that non-authority.
@@ -573,6 +597,7 @@ operational tuples are operational metadata, not ordering authorities.
 | Package | Owner document | Status | Depends on |
 | --- | --- | --- | --- |
 | Execution meaning and historical compatibility | [architecture 14](14-run-execution-meaning-and-historical-compatibility.md) | Superseded historical record; no implementation authorized. | Foundation |
+| Core simplification | [architectures 01](01-workspace-and-crate-map.md)/[02](02-dto-and-contract-policy.md)/[03](03-daemon-transport-and-adapters.md) | Documentation-approved; not activated; activating slice 1.5. | Foundation |
 | Tool registry and model-tool loop | [architecture 15](15-tool-registry-and-model-tool-loop.md) | Documentation-approved; not activated; Milestone 11, with the reserved tool-descriptor/tool-registry/model-tool-loop contracts activated by slice 3. | Foundation |
 | MCP capability lifecycle | [architecture 18](18-mcp-capability-lifecycle.md) | Documentation-approved; not activated; Milestone 12. | fixed tool registry/tool loop |
 | Gateway/RLM bridge | [architecture 19](19-gateway-rlm-bridge.md) | Documentation-approved; not activated; Milestone 11, with the bridge-invocation contracts activated by slice 3. | fixed tool registry/tool loop; MCP lifecycle |
@@ -589,13 +614,16 @@ operational tuples are operational metadata, not ordering authorities.
 | Accepted deferred directions | [architectures 22](22-provider-evolution-profiles-and-reasoning.md)/[19](19-gateway-rlm-bridge.md) | Documentation-approved; not activated; the directions are non-authorizing. | extends architectures 22 and 19 |
 | Accepted execution directions | [architectures 25](25-configuration-provider-control-plane.md)/[22](22-provider-evolution-profiles-and-reasoning.md)/[23](23-non-destructive-session-branching-and-regeneration.md)/[28](28-goal-domain-and-verification.md)/[18](18-mcp-capability-lifecycle.md)/[29](29-provider-session-and-profiles-protocol.md) | Documentation-approved; the control-plane items activate in slice 2; the work/requeue items activate in slice 3, and export plus cross-workspace clone/rebind and RLM packaging in slice 4. | extends architectures 25, 22, 23, 28, 18, and 29 |
 | Accepted retained-deferral directions | [architectures 20](20-ipython-kernel-lifecycle.md)/[04](04-sessions-runs-events-and-storage.md)/[03](03-daemon-transport-and-adapters.md) | Documentation-approved; rich MIME/raw kernel output projection is Milestone 12, worker/process supervision topology is Milestone 11, and the physical deletion/GC retention policy is slice 4. | extends architectures 20, 04, and 03 |
-| Instruction sources and system context | [architecture 30](30-instruction-sources-and-system-context.md) | Documentation-approved; not activated; fifth and last slice ([ADR 0010](../decisions/0010-instruction-sources-and-system-context.md)). | extends architectures 30, 00, 02, 04, 06, 07, 08, 09, 14, 21, 23, and 25 |
+| Instruction sources and system context | [architecture 30](30-instruction-sources-and-system-context.md) | Documentation-approved; not activated; last slice ([ADR 0010](../decisions/0010-instruction-sources-and-system-context.md)). | extends architectures 30, 00, 02, 04, 06, 07, 08, 09, 14, 21, 23, and 25 |
 
 ### Activation-order notes
 
--  The slice order is fixed: 1 contracts and versions, 2 control plane, 3 Goal domain, 4 UI
+-  The slice order is fixed: 1 contracts and versions, 1.5 core simplification, 2 control plane, 3 Goal domain, 4 UI
 foundation, 5 instruction sources. Later slices consume only contracts activated by earlier slices, and instruction
-sources is the fifth and last slice.
+sources is the last slice.
+-  Slice 1.5 precedes the control plane: the crate, boundary, event, identity, and client simplifications land before
+any Slice 2 contract is activated, and no later slice reintroduces an intermediate DTO, a per-family event type, or a
+blocking client API.
 -  Slice 3 additionally activates the tool-descriptor/tool-registry/model-tool-loop contracts as amended by [ADR
 0014](../decisions/0014-limits-by-precedent-and-no-content-scanning.md), and the bridge-invocation and
 MCP-method-catalog selections.

@@ -70,7 +70,7 @@ not implicitly to the project workspace.
 
 ### Plan allocation
 
-- `CreatePlanCommandDto` creates a `PlanId` and atomically allocates the next plan number for its `SessionId`.
+- `CreatePlanCommandDto` creates the plan artifact and atomically allocates the next plan number for its `SessionId`.
 - The number is never reused, including after plan deletion/archival if those features are later introduced.
 -  Allocation and initial physical artifact creation must be transactionally reconciled. A file-system failure must not
   leave a falsely usable persisted plan record.
@@ -84,7 +84,6 @@ Every `plan.md` begins with controlled YAML frontmatter:
 ---
 schema_version: 1
 session_id: "..."
-plan_id: "..."
 plan_number: 0
 created_at: "..."
 updated_at: "..."

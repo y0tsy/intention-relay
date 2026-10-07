@@ -43,7 +43,7 @@ side effects.
 active capabilities.
 5. Build Autopilot authority originates only from an explicit user Plan
 approval or Build start transition.
-6. Plan approval records the exact `PlanId`, `PlanRevisionId`, and digest.
+6. Plan approval records the exact session-scoped plan number, its revision, and the digest.
 7. Same-Session continuation preserves `SessionId` but creates a new `RunId`.
 8. The old Plan run, provider request, tool call, process, kernel, MCP, and
 bridge state are never resumed or reattached.

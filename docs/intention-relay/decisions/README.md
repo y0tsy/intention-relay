@@ -12,14 +12,14 @@ linked architecture sections.
 | [0001](0001-rust-owned-capability-plane-and-fixed-tool-registry.md) | Accepted | One Rust-owned capability path, fixed tool registry, and the unified registry invariants |
 | [0002](0002-build-autopilot-and-plan-focus-continuity.md) | Accepted | Build Autopilot and Plan focus continuity, including its activation scope |
 | [0003](0003-production-model-tool-loop.md) | Accepted | Production model-tool loop |
-| [0004](0004-m5plus-complete-foundation-activation.md) | Accepted | M5+ complete foundation activation: hard prerequisite for M6-M9, five-slice activation sequence |
+| [0004](0004-m5plus-complete-foundation-activation.md) | Accepted | M5+ complete foundation activation: hard prerequisite for M6-M9, six-slice activation sequence (1, 1.5, 2, 3, 4, 5) |
 | [0005](0005-no-backward-compatibility-and-legacy-removal.md) | Accepted | No backward compatibility and legacy removal (single-version policy) |
 | [0006](0006-request-side-tool-advertisement.md) | Accepted | Request-side tool advertisement (ordinary production tool loop) |
 | [0007](0007-opt-in-live-provider-e2e.md) | Accepted | Opt-in live-provider end-to-end channel (manual, non-blocking) |
 | [0008](0008-same-run-reasoning-round-trip.md) | Accepted | Same-run provider reasoning round-trip (ordinary production tool loop) |
 | [0009](0009-project-script-library-for-kernel-cells.md) | Accepted | Project script library for kernel cells (`.ir/scripts` persistence of agent-authored kernel modules) |
 | [0010](0010-instruction-sources-and-system-context.md) | Accepted | Instruction sources and system context (deployment instruction profile, workspace `AGENTS.md`, user-editable fragments, `Mode`/`Vfr` contributions, immutable effective projection) |
-| [0011](0011-local-json-rpc-2-0-transport.md) | Accepted | Local JSON-RPC 2.0 transport (NDJSON framing, protocol 2.0 exact-match handshake, no capability plane, no connection roles) |
+| [0011](0011-local-json-rpc-2-0-transport.md) | Accepted | Local JSON-RPC 2.0 transport (NDJSON framing, protocol 1.0 exact-match handshake, no capability plane, no connection roles) |
 | [0012](0012-typed-serde-json-contracts.md) | Accepted | Typed serde JSON contracts (binary canonical codec, tag registry, digests, and contract families removed; RFC 8785 policy deferred to the first real consumer) |
 | [0013](0013-workspace-root-addressing-anchor.md) | Accepted | WorkspaceRoot as an addressing anchor (join, child-process cwd, default glob/grep scope; not a security boundary) |
 | [0014](0014-limits-by-precedent-and-no-content-scanning.md) | Accepted | Limits by precedent, no runtime content scanning, and every numeric cap removed from the future child, bridge, activity, fork, kernel, and progress surfaces |

@@ -124,7 +124,7 @@ ordinary JSON-RPC methods over the single local connection; the former `session_
 capability gate were removed by [ADR 0011](../decisions/0011-local-json-rpc-2-0-transport.md). Tree reads are bounded
 immediate-child projections with stable continuation order, and lineage facts order by the conversation-tree container
 journal. They are not tree-wide event streams. Existing M3 session replay and M4 run streams remain unchanged; a peer
-that does not speak protocol 2.0 receives the typed version-mismatch error before any method is served.
+that does not speak protocol 1.0 receives the typed version-mismatch error before any method is served.
 
 ## Detailed protocol DTOs, field tables, and bounds
 

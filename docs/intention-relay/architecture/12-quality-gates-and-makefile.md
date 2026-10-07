@@ -463,6 +463,24 @@ package-scoped `make focus PACKAGES=...` target remains unimplemented and may no
 no simultaneous full `make verify` executions may claim independent acceptance on the same host because coverage,
 dependency, documentation, and Cargo resource contention would make their results impractical to interpret.
 
+### M5+ Slice 1.5 evidence requirements (not activated)
+
+The not-activated Slice 1.5 core simplification changes crate boundaries without adding a gate. Its activating
+specification declares the ten-crate workspace in `quality/architecture.toml` together with per-crate test targets,
+coverage tiers in `quality/coverage.toml`, and feature profiles in `quality/features.toml`, and it proves:
+
+- the three physical DTO boundaries (IPC wire, SQLite, provider SDK) and no DTO between internal crates;
+- no JSON outside tool payloads, with tool inputs and outputs validated against their declared JSON Schema;
+- the nine identity newtypes and one `EventPayload`;
+- publication from the durable commit result without the scoped durable reread;
+- the renumbered protocol version 1.0 with the unchanged wire, method table, and exact-equality handshake;
+- the asynchronous `intention-client` covering every protocol command and query, with the daemon end-to-end tests
+  driving the real client; and
+- preserved M3/M4 durable meaning with the single storage schema evolving in place.
+
+Activation adds no CI job, Makefile target, required status check, or coverage exclusion. Locally it is accepted by
+`make quick`, and the full acceptance gate remains `make verify` and Linux/Windows CI.
+
 ### M5+ Slice 2 test targets and evidence requirements (not activated)
 
 The not-activated M5+ Slice 2 control plane declares its integration test targets and goldens at activation: the

@@ -9,7 +9,7 @@ implemented through the closed M0-M5 milestones, the M5+ retrospective stack
 (the no-backward-compatibility removal program, request-side tool
 advertisement, the opt-in live-provider channel, the same-run reasoning round
 trip, and the project script library for kernel cells) is merged, and the
-post-M5 foundation (Milestone 5+) is in progress with one of its five slices
+post-M5 foundation (Milestone 5+) is in progress with one of its six slices
 delivered. No user-facing UI or released product exists yet.
 
 Everything here is development-machine software: there are no deployed users,
@@ -56,7 +56,7 @@ below is detailed in its closure document under
 | M3 SQLite sessions, events, snapshots, queue | Closed | Durable SQLite-backed sessions, append-only events, snapshots, turn queueing, canonical credential-free config revisions, recovery-before-ready, durable one-shot replay. |
 | M4 Model contract, providers, one streaming run | Closed | Provider-neutral model contracts and validated stream facts; private OpenRouter and generic Chat Completions drivers; durable model facts; one daemon-owned streaming run with reconnect/replay and run-scoped delivery. |
 | M5 Typed tools, WorkspaceRoot, hooks | Closed | Production model-tool loop hosted by the real daemon binary: six executable tools, fail-closed `WorkspaceRoot` resolution, deterministic typed hooks, durable and redacted tool-result evidence, daemon-host end-to-end tests on Linux and Windows. |
-| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (ADR 0004, amended by ADR 0010) delivered as five slices: 1) contracts and versions, 2) control plane, 3) Goal domain, 4) UI foundation, 5) instruction sources and system context. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slices 2-5 are not implemented. |
+| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (ADR 0004, amended by ADR 0010) delivered as six slices: 1) contracts and versions, 1.5) core simplification, 2) control plane, 3) Goal domain, 4) UI foundation, 5) instruction sources and system context. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slices 1.5-5 are not implemented. |
 | M6-M9 | Planned | M6 Tauri bridge and primary desktop UI; M7 Plan/Build policies, physical plans, and Build Autopilot; M8 VFR and Headroom; M9 hardening and acceptance verification. See the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md). |
 
 Everything beyond M5 is roadmap direction recorded in
@@ -294,6 +294,9 @@ What `main` does not yet provide (all of it is documented roadmap work):
   branching, and no UI foundation or fork override commands (slices 3-4); no
   instruction-source, `AGENTS.md`, or effective instruction projection behavior
   (slice 5, ADR 0010).
+- No core simplification yet (slice 1.5): the ten-crate workspace, the three
+  physical DTO boundaries, the nine identity newtypes, and the fully
+  asynchronous client are frozen by documentation but not implemented.
 - Out of scope for v1: Web/remote transport, multi-user access, sandboxed
   execution, and automatic run resumption.
 

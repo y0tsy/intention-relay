@@ -107,6 +107,71 @@ flowchart BT
 
 <!-- Arrows show permitted lower-level dependencies toward a consumer. Composition is the sole wiring location. -->
 
+## Slice 1.5 target crate map (not activated)
+
+Slice 1.5 collapses the workspace to ten production crates. This section freezes the target map; the table above stays
+current policy until the slice activates, and the exact permitted-edge table plus per-crate test targets and coverage
+tiers are declared by its activating specification (roadmap, slice 1.5).
+
+| Target crate | Absorbs | Owns |
+| --- | --- | --- |
+| `intention-proto` | `intention-types`, `intention-protocol` | Identity newtypes, shared value types, schema versions, the versioned public protocol DTOs, and their typed serde payloads. |
+| `intention-domain` | `intention-domain` | Domain records, value validation, domain events, and invariants. |
+| `intention-config` | `intention-config` | TOML parsing, validation, resolved configuration, and credential-free snapshots. |
+| `intention-engine` | `intention-application`, `intention-runtime` | Commands, queries, semantic use-case workflows, deterministic lifecycle decisions, interruption handling, and recovery. |
+| `intention-tools` | `intention-tools`, `intention-workspace`, `intention-hooks` | Tool registry and contracts, WorkspaceRoot policy, and the typed hook phases, contexts, and dispatcher. |
+| `intention-providers` | `intention-model`, `intention-provider-openrouter`, `intention-provider-generic-chat` | The provider-neutral model contract and both concrete SDK translation adapters. |
+| `intention-storage` | `intention-storage`, `intention-storage-sqlite` | Repository contracts and the bundled SQLite single-schema implementation. |
+| `intention-transport` | `intention-transport` | Socket/pipe framing, the JSON-RPC server and client protocol, and subscriptions. |
+| `intention-daemon` | `intention`, `intention-daemon` | Composition root, dependency wiring, process lifecycle, and typed connection and stream hosting in one binary crate. |
+| `intention-client` | `intention-client` | Bootstrap, connection, dispatch, subscriptions, and reconnect, fully asynchronous and covering every protocol command and query. |
+
+Retained outside the ten: the adapter crates `intention-tui` and `intention-tauri`, the future skeleton crates
+`intention-vfr`, `intention-headroom`, and `intention-plans`, the non-production `intention-test-support` crate, and the
+`quality/harness` tooling.
+
+Rules the target map fixes:
+
+- One composition location. The composition facade library disappears; `intention-daemon` is the only crate that selects
+  concrete implementations and the only place that wires them, and the daemon host calls the engine directly.
+- Boundaries own serialization. Only types crossing the three physical boundaries carry wire attributes: the IPC wire
+  (`intention-proto` payloads served by `intention-transport`), SQLite rows (`intention-storage`), and provider SDK
+  calls (`intention-providers`). Every other cross-crate call passes domain types.
+- Tools exchange JSON only with the model. Tool inputs and outputs are schema-validated JSON; nothing else in the system
+  carries an untyped JSON payload.
+- Acyclic direction. Protocol and domain types are the lowest layer; configuration, storage, tools, and providers
+  build on them; the engine builds on all of those; the daemon composes them; and no lower crate depends on
+  `intention-engine`, `intention-daemon`, or `intention-client`.
+
+```mermaid
+flowchart BT
+  PR[intention-proto] --> DO[intention-domain]
+  PR --> CF[intention-config]
+  DO --> CF
+  PR --> ST[intention-storage]
+  DO --> ST
+  CF --> ST
+  PR --> TL[intention-tools]
+  DO --> TL
+  PR --> PV[intention-providers]
+  DO --> PV
+  CF --> PV
+  PR --> EN[intention-engine]
+  DO --> EN
+  CF --> EN
+  ST --> EN
+  TL --> EN
+  PV --> EN
+  EN --> DH[intention-daemon]
+  ST --> DH
+  TR --> DH
+  PR --> TR[intention-transport]
+  TR --> CL[intention-client]
+  PR --> CL
+  CL --> AD[adapter crates]
+  DH --> BIN[daemon binary]
+```
+
 ## M3 ownership decisions
 
 -  `intention-storage` defines semantic, DTO-only operations such as create session, accept a user turn as started or

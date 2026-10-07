@@ -245,3 +245,21 @@ cannot add discretionary confirmation or risk authorization. The fixed registry,
 are owned by [Tool registry and model-tool loop](15-tool-registry-and-model-tool-loop.md). This does not create a
 second registry or bypass path. Plan `execute` remains available under advisory focus guidance and is not a sandbox;
 ordinary Plan `write` and `edit` remain denied.
+
+## Slice 1.5 tool contract (not activated)
+
+Slice 1.5 makes JSON Schema text the tool contract and keeps the rest of the pipeline intact. This section freezes the
+target; the text above stays current policy until the slice activates.
+
+- Descriptor by schema, not by DTO type name. `input_dto_type` and `output_dto_type` disappear from
+  `ToolDescriptorDto`. Every descriptor declares its model-visible parameter schema and its result schema as
+  code-owned JSON Schema text, and that text is the tool contract the model sees and the registry enforces.
+- Runtime validation at the boundary. The registry validates invocation inputs before any effect and tool results
+  before persistence against those schemas. A mismatch produces a typed policy or validation outcome and never reaches
+  the base tool or the durable result.
+- JSON only here. Tool inputs and outputs are JSON objects. Invocations, results, durable tool evidence, hook contexts,
+  and every other contract above stay typed DTOs, and `serde_json::Value` stays prohibited outside the tool payload
+  fields.
+- Eight hook phases unchanged. The phase list, its deterministic ordering, its continue/transform/reject outcomes, and
+  the policy separation table are unchanged by the slice; the workspace, plan, VFR, and Headroom hook owners keep their
+  responsibilities.
