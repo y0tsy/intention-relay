@@ -27,20 +27,23 @@ impl TuiProofClient {
     ///
     /// Returns a typed client/transport/protocol error without terminal-specific
     /// domain behavior.
-    pub fn connect(&self) -> DtoResult<DaemonHealthDto> {
-        self.client.connect_or_bootstrap()
+    pub async fn connect(&self) -> DtoResult<DaemonHealthDto> {
+        self.client.connect_or_bootstrap().await
     }
 
     /// Subscribes to one session using the shared client protocol mapping.
+    ///
+    /// The request returns the current session snapshot; there is no cursor and
+    /// no resume state.
     ///
     /// # Errors
     ///
     /// Returns a typed client/transport/protocol error. The returned DTO is the
     /// same one available to all other presentation adapters.
-    pub fn subscribe(
+    pub async fn subscribe(
         &self,
         subscription: SubscribeSessionCommandDto,
     ) -> DtoResult<SessionSubscriptionResponseDto> {
-        self.client.subscribe(subscription)
+        self.client.subscribe(subscription).await
     }
 }

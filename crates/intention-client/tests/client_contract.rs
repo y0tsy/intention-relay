@@ -1,15 +1,17 @@
 #![allow(
+    clippy::await_holding_lock,
     clippy::expect_used,
     clippy::panic,
-    reason = "Client contract fixtures use direct assertions and controlled fixture launchers."
+    reason = "Client contract fixtures use direct assertions and controlled fixture launchers; the standard fixture mutex serializes independent fixture servers, and every async test owns its own single-threaded runtime, so holding that guard across awaits cannot deadlock."
 )]
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
+use std::time::Duration;
 
 use intention_client::{DaemonLauncher, IntentionClient, ProcessDaemonLauncher};
-use intention_domain::{RunModeDto, SessionProjectionDto};
+use intention_domain::{MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto};
 use intention_protocol::{
     DaemonHealthDto, DaemonReadinessDto, JsonRpcErrorDto, JsonRpcRequestDto, JsonRpcResponseDto,
     PROTOCOL_HELLO_METHOD, ProtocolHelloDto, ProtocolQueryResultDto, ProtocolResponsePayloadDto,
@@ -17,18 +19,14 @@ use intention_protocol::{
     SubscribeSessionCommandDto, decode_request_line, encode_hello_response, encode_response,
 };
 use intention_transport::{LocalEndpoint, LocalListener, local_protocol_version, negotiate_daemon};
-use intention_types::{
-    DtoResult, ErrorDto, ProjectId, SchemaVersionDto, SessionEventSequenceDto, SessionId,
-    WorkspaceId,
-};
+use intention_types::{DtoResult, ErrorDto, ProjectId, SchemaVersionDto, SessionId, WorkspaceId};
 use tempfile::TempDir;
 
 const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
+/// Bound that turns a hanging client call into a visible test failure.
+const TEST_REPLY_BOUND: Duration = Duration::from_secs(5);
 
-fn fixture_projection(
-    session_id: SessionId,
-    at_sequence: SessionEventSequenceDto,
-) -> SessionProjectionDto {
+fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
     SessionProjectionDto::new(
         ProjectId::new(),
         session_id,
@@ -44,9 +42,21 @@ fn fixture_projection(
         None,
         None,
         Vec::new(),
-        at_sequence,
     )
     .expect("fixture projection is valid")
+}
+
+fn fixture_message(session_id: SessionId) -> MessageProjectionDto {
+    MessageProjectionDto::new(
+        session_id,
+        None,
+        MessageKindDto::Notice,
+        "fixture notice",
+        None,
+        None,
+        None,
+    )
+    .expect("fixture transcript row is valid")
 }
 
 #[derive(Clone)]
@@ -220,13 +230,8 @@ const fn ready_health() -> DaemonHealthDto {
     )
 }
 
-const fn subscription(session_id: SessionId, after: u64) -> SubscribeSessionCommandDto {
-    SubscribeSessionCommandDto::new(
-        SCHEMA_VERSION,
-        session_id,
-        Some(SessionEventSequenceDto::new(after)),
-        intention_domain::RunModeDto::Build,
-    )
+const fn subscription(session_id: SessionId) -> SubscribeSessionCommandDto {
+    SubscribeSessionCommandDto::new(SCHEMA_VERSION, session_id, RunModeDto::Build)
 }
 
 #[test]
@@ -258,8 +263,8 @@ fn process_launcher_and_client_metadata_reject_invalid_configuration() {
     assert_eq!(error.code(), "invalid_adapter_name");
 }
 
-#[test]
-fn first_ready_connection_skips_launch_and_bootstrap_launches_after_unavailable() {
+#[tokio::test]
+async fn first_ready_connection_skips_launch_and_bootstrap_launches_after_unavailable() {
     let _guard = fixture_guard();
     let directory = TempDir::new().expect("temporary directory is available");
     let launches = Arc::new(AtomicUsize::new(0));
@@ -274,6 +279,7 @@ fn first_ready_connection_skips_launch_and_bootstrap_launches_after_unavailable(
         Arc::clone(&launches),
     )
     .connect_or_bootstrap()
+    .await
     .expect("already-ready daemon must be used without launch");
     assert_eq!(health.readiness(), DaemonReadinessDto::Ready);
     assert_eq!(launches.load(Ordering::SeqCst), 0);
@@ -286,13 +292,14 @@ fn first_ready_connection_skips_launch_and_bootstrap_launches_after_unavailable(
         Arc::clone(&bootstrap_launches),
     )
     .connect_or_bootstrap()
+    .await
     .expect("unavailable initial endpoint must bootstrap through launcher");
     assert_eq!(health.readiness(), DaemonReadinessDto::Ready);
     assert_eq!(bootstrap_launches.load(Ordering::SeqCst), 1);
 }
 
-#[test]
-fn bootstrap_propagates_typed_launch_error() {
+#[tokio::test]
+async fn bootstrap_propagates_typed_launch_error() {
     let _guard = fixture_guard();
     let directory = TempDir::new().expect("temporary directory is available");
     let error = IntentionClient::new(
@@ -302,12 +309,13 @@ fn bootstrap_propagates_typed_launch_error() {
     )
     .expect("fixture client is valid")
     .connect_or_bootstrap()
+    .await
     .expect_err("launch rejection must be visible to the caller");
     assert_eq!(error.code(), "fixture_launch_rejected");
 }
 
-#[test]
-fn health_rejection_invalid_response_correlation_and_protocol_mismatch_are_typed() {
+#[tokio::test]
+async fn health_rejection_invalid_response_correlation_and_protocol_mismatch_are_typed() {
     let _guard = fixture_guard();
     let directory = TempDir::new().expect("temporary directory is available");
     let scenarios = [
@@ -338,22 +346,45 @@ fn health_rejection_invalid_response_correlation_and_protocol_mismatch_are_typed
         let server = start_fixture_server(endpoint.clone(), response.clone());
         let error = client(endpoint, response, Arc::new(AtomicUsize::new(0)))
             .health()
+            .await
             .expect_err("fixture must return the selected health failure");
         assert_eq!(error.code(), expected_code);
         server.join().expect("failure fixture server completes");
     }
 }
 
-#[test]
-fn snapshot_and_subscription_validate_success_rejection_and_response_shape() {
+#[tokio::test]
+async fn closed_response_channel_is_a_typed_error_instead_of_a_hang() {
+    let _guard = fixture_guard();
+    let directory = TempDir::new().expect("temporary directory is available");
+    let endpoint = endpoint(&directory);
+    let server = start_fixture_server(endpoint.clone(), FixtureResponse::Disconnect);
+    let error = tokio::time::timeout(
+        TEST_REPLY_BOUND,
+        client(
+            endpoint,
+            FixtureResponse::Disconnect,
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .session_snapshot(SessionId::new()),
+    )
+    .await
+    .expect("a closed response channel must not hang the request")
+    .expect_err("a closed response channel is a typed error");
+    assert_eq!(error.code(), "local_daemon_connection_unavailable");
+    server.join().expect("closed fixture server completes");
+}
+
+#[tokio::test]
+async fn snapshot_and_subscription_validate_success_rejection_and_response_shape() {
     let _guard = fixture_guard();
     let directory = TempDir::new().expect("temporary directory is available");
     let session_id = SessionId::new();
     let snapshot = SessionSnapshotDto::with_projection(
         SCHEMA_VERSION,
         session_id,
-        SessionEventSequenceDto::new(4),
-        fixture_projection(session_id, SessionEventSequenceDto::new(4)),
+        fixture_projection(session_id),
+        vec![fixture_message(session_id)],
     )
     .expect("fixture snapshot is valid");
     let valid_snapshot_endpoint = endpoint(&directory);
@@ -361,16 +392,17 @@ fn snapshot_and_subscription_validate_success_rejection_and_response_shape() {
         valid_snapshot_endpoint.clone(),
         FixtureResponse::Snapshot(snapshot.clone()),
     );
-    assert_eq!(
-        client(
-            valid_snapshot_endpoint,
-            FixtureResponse::Snapshot(snapshot.clone()),
-            Arc::new(AtomicUsize::new(0)),
-        )
-        .session_snapshot(session_id)
-        .expect("typed snapshot response is returned"),
-        snapshot
-    );
+    let received = client(
+        valid_snapshot_endpoint,
+        FixtureResponse::Snapshot(snapshot.clone()),
+        Arc::new(AtomicUsize::new(0)),
+    )
+    .session_snapshot(session_id)
+    .await
+    .expect("typed snapshot response is returned");
+    assert_eq!(received, snapshot);
+    assert_eq!(received.session_id(), session_id);
+    assert_eq!(received.messages(), snapshot.messages());
     server.join().expect("snapshot fixture server completes");
 
     let rejected_endpoint = endpoint(&directory);
@@ -386,6 +418,7 @@ fn snapshot_and_subscription_validate_success_rejection_and_response_shape() {
             Arc::new(AtomicUsize::new(0)),
         )
         .session_snapshot(session_id)
+        .await
         .expect_err("rejected snapshot must be propagated")
         .code(),
         "session_rejected"
@@ -401,6 +434,7 @@ fn snapshot_and_subscription_validate_success_rejection_and_response_shape() {
             Arc::new(AtomicUsize::new(0)),
         )
         .session_snapshot(session_id)
+        .await
         .expect_err("wrong snapshot payload must fail")
         .code(),
         "invalid_local_protocol_response"
@@ -420,7 +454,8 @@ fn snapshot_and_subscription_validate_success_rejection_and_response_shape() {
         FixtureResponse::Subscription(response),
         Arc::new(AtomicUsize::new(0)),
     )
-    .subscribe(subscription(session_id, 4))
+    .subscribe(subscription(session_id))
+    .await
     .expect("typed subscription response is returned");
     assert_eq!(received, SessionSubscriptionResponseDto::snapshot(snapshot));
     server
@@ -438,7 +473,8 @@ fn snapshot_and_subscription_validate_success_rejection_and_response_shape() {
             FixtureResponse::Invalid,
             Arc::new(AtomicUsize::new(0)),
         )
-        .subscribe(subscription(session_id, 4))
+        .subscribe(subscription(session_id))
+        .await
         .expect_err("wrong subscription payload must fail")
         .code(),
         "invalid_local_protocol_response"
@@ -448,8 +484,8 @@ fn snapshot_and_subscription_validate_success_rejection_and_response_shape() {
         .expect("invalid subscription fixture server completes");
 }
 
-#[test]
-fn non_ready_health_is_not_returned_as_a_successful_connection() {
+#[tokio::test]
+async fn non_ready_health_is_not_returned_as_a_successful_connection() {
     let _guard = fixture_guard();
     let directory = TempDir::new().expect("temporary directory is available");
     for readiness in [
@@ -472,6 +508,7 @@ fn non_ready_health_is_not_returned_as_a_successful_connection() {
             Arc::new(AtomicUsize::new(0)),
         )
         .health()
+        .await
         .expect_err("only ready health can establish a client connection");
         let expected = if readiness == DaemonReadinessDto::Starting {
             "local_daemon_starting"

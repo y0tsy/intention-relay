@@ -1,35 +1,36 @@
 //! Shared bootstrap, dispatch, subscription, and reconnect client for local adapters.
 //!
 //! Adapters use this crate instead of direct daemon, runtime, storage, or
-//! transport implementation access. It retains only reconnect projection state;
-//! daemon authority remains remote.
+//! transport implementation access. It retains only the current run projection
+//! and transcript rows the daemon reports; daemon authority remains remote.
 
-use std::collections::{BTreeSet, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::process::Command;
-use std::thread;
 use std::time::{Duration, Instant};
 
-use intention_domain::{ModelRunFactInputDto, RunEventCursorDto, RunSnapshotDto};
+use intention_domain::{
+    GetSessionSnapshotQueryDto, MessageProjectionDto, RunProjectionDto, RunStatusDto,
+};
 use intention_protocol::{
-    DaemonHealthDto, DaemonReadinessDto, ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto,
-    ProtocolQueryResultDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, RunLiveBatchDto,
-    RunResyncDto, RunResyncReasonDto, RunStreamFrameDto, RunSubscriptionResponseDto,
+    DaemonHealthDto, DaemonReadinessDto, ProtocolCommandDto, ProtocolHelloDto, ProtocolMethodDto,
+    ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestPayloadDto,
+    ProtocolResponsePayloadDto, RunStatusFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
     SessionSnapshotDto, SessionSubscriptionResponseDto, SubscribeRunCommandDto,
     SubscribeSessionCommandDto, decode_response, encode_request, parse_run_frame_notification,
 };
 use intention_transport::{
-    AsyncLocalClientConnection, AsyncMessageReceiver, AsyncRequestSender, LocalConnection,
-    LocalEndpoint, local_protocol_version, negotiate_client,
+    AsyncLocalClientConnection, AsyncMessageReceiver, AsyncRequestSender, LocalEndpoint,
+    local_protocol_version,
 };
-use intention_types::{DtoResult, ErrorCategoryDto, ErrorDto, SchemaVersionDto, SessionId};
+use intention_types::{DtoResult, ErrorCategoryDto, ErrorDto, RunId, SessionId};
 
-const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
 const STARTUP_RETRY: Duration = Duration::from_millis(25);
-/// Bounded wait for one correlated run-stream reply or notification.
+/// Bounded wait for one correlated command or query reply.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Bounded wait for the correlated first reply to a run-stream subscription.
 const STREAM_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Launches a daemon process after bootstrap has acquired the startup lock.
@@ -86,8 +87,10 @@ impl DaemonLauncher for ProcessDaemonLauncher {
     }
 }
 
+/// An established connection with its typed protocol directions.
 struct NegotiatedConnection {
-    connection: LocalConnection,
+    requests: AsyncRequestSender,
+    messages: AsyncMessageReceiver,
 }
 
 /// The connected shared-client facade exposed to presentation adapters.
@@ -127,23 +130,23 @@ impl IntentionClient {
     ///
     /// Returns a safe typed error if bootstrap, launch, negotiation, or readiness
     /// cannot complete before the bounded deadline.
-    pub fn connect_or_bootstrap(&self) -> DtoResult<DaemonHealthDto> {
-        match self.connect_ready() {
+    pub async fn connect_or_bootstrap(&self) -> DtoResult<DaemonHealthDto> {
+        match self.connect_ready().await {
             Ok(health) => return Ok(health),
-            Err(error) if is_daemon_starting(&error) => return self.wait_for_ready(),
+            Err(error) if is_daemon_starting(&error) => return self.wait_for_ready().await,
             Err(error) if !is_daemon_unavailable(&error) => return Err(error),
             Err(_) => {}
         }
 
         let _lock = StartupLock::acquire(&self.endpoint)?;
-        match self.connect_ready() {
+        match self.connect_ready().await {
             Ok(health) => return Ok(health),
-            Err(error) if is_daemon_starting(&error) => return self.wait_for_ready(),
+            Err(error) if is_daemon_starting(&error) => return self.wait_for_ready().await,
             Err(error) if !is_daemon_unavailable(&error) => return Err(error),
             Err(_) => {}
         }
         self.launcher.launch(&self.endpoint)?;
-        self.wait_for_ready()
+        self.wait_for_ready().await
     }
 
     /// Queries the daemon-owned health projection after a fresh negotiated connection.
@@ -151,21 +154,21 @@ impl IntentionClient {
     /// # Errors
     ///
     /// Returns a safe typed transport, protocol, or non-ready daemon error.
-    pub fn health(&self) -> DtoResult<DaemonHealthDto> {
-        self.connect_ready()
+    pub async fn health(&self) -> DtoResult<DaemonHealthDto> {
+        self.connect_ready().await
     }
 
-    /// Queries the current M2 session snapshot fixture.
+    /// Queries the current session snapshot.
     ///
     /// # Errors
     ///
     /// Returns a typed unavailable, rejected, or invalid-response error.
-    pub fn session_snapshot(&self, session_id: SessionId) -> DtoResult<SessionSnapshotDto> {
-        let response = self.request(ProtocolRequestPayloadDto::Query(
-            ProtocolQueryDto::GetSessionSnapshot(
-                intention_domain::GetSessionSnapshotQueryDto::new(session_id),
-            ),
-        ))?;
+    pub async fn session_snapshot(&self, session_id: SessionId) -> DtoResult<SessionSnapshotDto> {
+        let response = self
+            .request(ProtocolRequestPayloadDto::Query(
+                ProtocolQueryDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id)),
+            ))
+            .await?;
         match response {
             ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::SessionSnapshot(
                 snapshot,
@@ -177,31 +180,38 @@ impl IntentionClient {
         }
     }
 
-    /// Obtains a consistent snapshot or typed resync response.
+    /// Obtains the current session snapshot or a typed scoped response.
+    ///
+    /// A session subscription is a one-shot current-state request: there is no
+    /// cursor and no resume state. Re-subscribing re-reads current state.
     ///
     /// # Errors
     ///
-    /// Returns a typed unavailable or invalid-response error. A server-directed
-    /// resync is returned as data so adapters can discard local projection state.
-    pub fn subscribe(
+    /// Returns a typed unavailable or invalid-response error. A scoped rejection
+    /// is returned as data so adapters can render the daemon's decision.
+    pub async fn subscribe(
         &self,
         subscription: SubscribeSessionCommandDto,
     ) -> DtoResult<SessionSubscriptionResponseDto> {
-        let response = self.request(ProtocolRequestPayloadDto::Command(
-            intention_protocol::ProtocolCommandDto::SubscribeSession(subscription),
-        ))?;
+        let response = self
+            .request(ProtocolRequestPayloadDto::Command(
+                ProtocolCommandDto::SubscribeSession(subscription),
+            ))
+            .await?;
         match response {
             ProtocolResponsePayloadDto::Subscription(response) => Ok(response),
             _ => Err(invalid_response()),
         }
     }
 
-    fn connect_ready(&self) -> DtoResult<DaemonHealthDto> {
-        let mut connection = self.connect()?;
-        let health = self.request_on(
-            &mut connection,
-            ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
-        )?;
+    async fn connect_ready(&self) -> DtoResult<DaemonHealthDto> {
+        let mut connection = self.connect().await?;
+        let health = self
+            .request_on(
+                &mut connection,
+                ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
+            )
+            .await?;
         match health {
             ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(
                 health,
@@ -233,39 +243,46 @@ impl IntentionClient {
         }
     }
 
-    fn request(&self, payload: ProtocolRequestPayloadDto) -> DtoResult<ProtocolResponsePayloadDto> {
-        let mut connection = self.connect()?;
-        self.request_on(&mut connection, payload)
+    async fn request(
+        &self,
+        payload: ProtocolRequestPayloadDto,
+    ) -> DtoResult<ProtocolResponsePayloadDto> {
+        let mut connection = self.connect().await?;
+        self.request_on(&mut connection, payload).await
     }
 
-    fn connect(&self) -> DtoResult<NegotiatedConnection> {
-        let mut connection = LocalConnection::connect(&self.endpoint)?;
-        negotiate_client(&mut connection, self.hello.clone())?;
-        Ok(NegotiatedConnection { connection })
+    async fn connect(&self) -> DtoResult<NegotiatedConnection> {
+        let connection = AsyncLocalClientConnection::connect(&self.endpoint).await?;
+        let (_, requests, messages) = connection.negotiate(self.hello.clone()).await?;
+        Ok(NegotiatedConnection { requests, messages })
     }
 
-    fn request_on(
+    async fn request_on(
         &self,
         connection: &mut NegotiatedConnection,
         payload: ProtocolRequestPayloadDto,
     ) -> DtoResult<ProtocolResponsePayloadDto> {
         let method = ProtocolMethodDto::for_payload(&payload);
         let request = encode_request(1, payload);
-        connection.connection.send_message(&request)?;
-        let line = connection.connection.receive_line()?;
-        decode_response(&line, method, 1)
+        tokio::time::timeout(REQUEST_TIMEOUT, async {
+            connection.requests.send_message(&request).await?;
+            let line = connection.messages.receive_line().await?;
+            decode_response(&line, method, 1)
+        })
+        .await
+        .map_err(|_| request_timeout())?
     }
 
-    fn wait_for_ready(&self) -> DtoResult<DaemonHealthDto> {
+    async fn wait_for_ready(&self) -> DtoResult<DaemonHealthDto> {
         let deadline = Instant::now() + STARTUP_TIMEOUT;
         loop {
-            match self.connect_ready() {
+            match self.connect_ready().await {
                 Ok(health) => return Ok(health),
                 Err(error)
                     if (is_daemon_unavailable(&error) || is_daemon_starting(&error))
                         && Instant::now() < deadline =>
                 {
-                    thread::sleep(STARTUP_RETRY);
+                    tokio::time::sleep(STARTUP_RETRY).await;
                 }
                 Err(error) => return Err(error),
             }
@@ -297,6 +314,10 @@ impl RunStreamClient {
 
     /// Connects, subscribes, and applies the authoritative first reply.
     ///
+    /// The request carries only the session and run identity; its correlated
+    /// reply is the current run state, and later committed state arrives as
+    /// live `run.frame` notifications on the same connection.
+    ///
     /// # Errors
     ///
     /// Returns a typed protocol, transport, or scoped-response error, or an
@@ -325,8 +346,6 @@ impl RunStreamClient {
         Ok(RunStreamSubscription {
             requests,
             messages,
-            next_request_id: 2,
-            pending_frames: VecDeque::new(),
             reducer,
         })
     }
@@ -334,107 +353,39 @@ impl RunStreamClient {
 
 /// An established run-stream subscription with opaque transport resources.
 pub struct RunStreamSubscription {
+    /// The request direction is retained so the connection keeps both halves
+    /// open while committed frames arrive on the response direction.
+    #[expect(
+        dead_code,
+        reason = "the request sender is held only to keep the daemon connection open for live frames"
+    )]
     requests: AsyncRequestSender,
     messages: AsyncMessageReceiver,
-    next_request_id: u64,
-    pending_frames: VecDeque<RunStreamFrameDto>,
     reducer: RunSubscriptionReducer,
 }
 
 impl RunStreamSubscription {
-    /// Receives and applies one daemon run-frame notification.
+    /// Receives, applies, and returns the next committed run-stream frame.
     ///
-    /// Frames buffered while an earlier replay reply was pending are applied
-    /// first. A returned resync is locally generated for a detected cursor gap.
-    /// A daemon-originated matching resync clears the reducer and returns
-    /// `None`.
+    /// Returns `Ok(None)` once the daemon closes the stream; the caller then
+    /// re-reads current state by re-subscribing. Content and status frames are
+    /// applied to the reducer before they are returned.
     ///
     /// # Errors
     ///
-    /// Returns a typed framing, protocol, or scope-validation error. Live
-    /// frames may be arbitrarily sparse, so this wait is intentionally
-    /// unbounded; only the correlated reply waits carry a deadline.
-    pub async fn receive(&mut self) -> DtoResult<Option<RunResyncDto>> {
-        if let Some(frame) = self.pending_frames.pop_front() {
-            return self.reducer.apply_frame(frame);
-        }
-        let line = self.messages.receive_line().await?;
+    /// Returns a typed framing, protocol, or scope-validation error without
+    /// mutating reducer state. Live frames may be arbitrarily sparse, so this
+    /// wait is intentionally unbounded; only the correlated reply waits carry a
+    /// deadline.
+    pub async fn receive(&mut self) -> DtoResult<Option<RunStreamFrameDto>> {
+        let line = match self.messages.receive_line().await {
+            Ok(line) => line,
+            Err(error) if error.code() == "local_daemon_connection_unavailable" => return Ok(None),
+            Err(error) => return Err(error),
+        };
         let frame = parse_run_frame_notification(&line)?;
-        self.reducer.apply_frame(frame)
-    }
-
-    /// Sends a new subscription request from the last valid cursor and applies
-    /// its immediate replay, resync, or error response.
-    ///
-    /// Frames the daemon queued ahead of the correlated reply are buffered and
-    /// applied in arrival order after the reply, so the reply is never mistaken
-    /// for a frame.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed transport, protocol, or scoped-response error, or an
-    /// unavailable timeout error when the correlated reply does not arrive
-    /// before the bounded deadline. The current reducer state is retained if
-    /// the reply is invalid or rejected.
-    pub async fn request_replay(&mut self) -> DtoResult<()> {
-        let subscription = SubscribeRunCommandDto::new(
-            SCHEMA_VERSION,
-            self.reducer.session_id(),
-            self.reducer.run_id(),
-            self.reducer.last_cursor(),
-        );
-        let request_id = self.next_request_id;
-        self.next_request_id = self.next_request_id.saturating_add(1);
-        let request = encode_request(
-            request_id,
-            ProtocolRequestPayloadDto::RunSubscription(subscription),
-        );
-        self.requests.send_message(&request).await?;
-        let response = self.await_replay_response(request_id).await?;
-        match response {
-            ProtocolResponsePayloadDto::RunSubscription(response) => {
-                self.reducer.apply_initial(response)?;
-            }
-            _ => return Err(invalid_response()),
-        }
-        self.apply_buffered_frames()
-    }
-
-    /// Reads until the correlated replay reply, buffering interleaved frames.
-    ///
-    /// Only a `run.frame` notification is buffered; any other line, including a
-    /// response with another correlation id, is rejected by `decode_response`.
-    async fn await_replay_response(
-        &mut self,
-        request_id: u64,
-    ) -> DtoResult<ProtocolResponsePayloadDto> {
-        tokio::time::timeout(STREAM_REPLY_TIMEOUT, async {
-            loop {
-                let line = self.messages.receive_line().await?;
-                match parse_run_frame_notification(&line) {
-                    Ok(frame) => self.pending_frames.push_back(frame),
-                    Err(_) => {
-                        return decode_response(&line, ProtocolMethodDto::RunSubscribe, request_id);
-                    }
-                }
-            }
-        })
-        .await
-        .map_err(|_| stream_reply_timeout())?
-    }
-
-    /// Applies buffered frames in order, stopping at the first local resync.
-    ///
-    /// A frame that requires a resync is left buffered so the next `receive`
-    /// reports that resync; the reducer keeps its state for both paths.
-    fn apply_buffered_frames(&mut self) -> DtoResult<()> {
-        while let Some(frame) = self.pending_frames.pop_front() {
-            if self.reducer.apply_frame(frame.clone())?.is_some() {
-                self.pending_frames.push_front(frame);
-                return Ok(());
-            }
-        }
-        Ok(())
+        self.reducer.apply_frame(frame.clone())?;
+        Ok(Some(frame))
     }
 
     /// Returns the state reducer for this fixed run scope.
@@ -442,193 +393,126 @@ impl RunStreamSubscription {
     pub const fn reducer(&self) -> &RunSubscriptionReducer {
         &self.reducer
     }
-
-    /// Returns mutable reducer state for adapter-directed recovery.
-    #[must_use]
-    pub const fn reducer_mut(&mut self) -> &mut RunSubscriptionReducer {
-        &mut self.reducer
-    }
 }
 
-/// A run-scoped reducer preserving daemon-authoritative snapshots and cursor order.
+/// A run-scoped reducer holding the current run projection and transcript rows.
+///
+/// There are no cursors and no positions: the reducer starts from the
+/// correlated subscription snapshot and applies committed content and status
+/// frames in arrival order.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunSubscriptionReducer {
-    session_id: intention_types::SessionId,
-    run_id: intention_types::RunId,
-    snapshot: Option<RunSnapshotDto>,
-    last_cursor: Option<RunEventCursorDto>,
-    reasoning_content: String,
-    historical_reasoning_cursors: BTreeSet<RunEventCursorDto>,
-    history_unavailable: bool,
+    session_id: SessionId,
+    run_id: RunId,
+    run: Option<RunProjectionDto>,
+    messages: Vec<MessageProjectionDto>,
 }
 
 impl RunSubscriptionReducer {
     /// Creates empty local state fixed to one session and run.
     #[must_use]
-    pub const fn new(
-        session_id: intention_types::SessionId,
-        run_id: intention_types::RunId,
-    ) -> Self {
+    pub const fn new(session_id: SessionId, run_id: RunId) -> Self {
         Self {
             session_id,
             run_id,
-            snapshot: None,
-            last_cursor: None,
-            reasoning_content: String::new(),
-            historical_reasoning_cursors: BTreeSet::new(),
-            history_unavailable: false,
+            run: None,
+            messages: Vec::new(),
         }
     }
 
     /// Applies the correlated first reply for this subscription.
     ///
+    /// A snapshot replaces every projection value held before it.
+    ///
     /// # Errors
     ///
-    /// Returns a typed scoped-response error without mutation for a replay that
-    /// belongs to another session or run.
+    /// Returns a typed scoped-response error without mutation when the snapshot
+    /// belongs to another session or run, and otherwise returns the carried
+    /// subscription error unchanged.
     pub fn apply_initial(&mut self, response: RunSubscriptionResponseDto) -> DtoResult<()> {
         match response {
-            RunSubscriptionResponseDto::Replay(snapshot) => {
-                self.ensure_scope(snapshot.session_id(), snapshot.run_id())?;
-                let cursor = snapshot.cursor();
+            RunSubscriptionResponseDto::Snapshot(snapshot) => {
+                self.ensure_scope(snapshot.run().session_id(), Some(snapshot.run().run_id()))?;
                 let mut next = Self::new(self.session_id, self.run_id);
-                next.snapshot = Some(snapshot);
-                next.last_cursor = Some(cursor);
+                next.run = Some(*snapshot.run());
+                next.messages = snapshot.messages().to_vec();
                 *self = next;
                 Ok(())
             }
-            RunSubscriptionResponseDto::Resync(resync) => self.apply_resync(resync),
             RunSubscriptionResponseDto::Error(error) => Err(error),
         }
     }
 
-    /// Applies one uncorrelated run-stream frame.
+    /// Applies one uncorrelated current-state frame.
     ///
     /// # Errors
     ///
-    /// Returns a typed scoped-response error without mutation for wrong scope or
-    /// frames sent after an initial unavailable-history response.
-    pub fn apply_frame(&mut self, frame: RunStreamFrameDto) -> DtoResult<Option<RunResyncDto>> {
-        if self.history_unavailable {
-            return Err(invalid_response());
-        }
+    /// Returns a typed scoped-response error without mutation for a frame that
+    /// belongs to another session or run scope, and an invalid-response error
+    /// for a status frame received before the subscription snapshot.
+    pub fn apply_frame(&mut self, frame: RunStreamFrameDto) -> DtoResult<()> {
         match frame {
-            RunStreamFrameDto::LiveBatch(batch) => self.apply_live_batch(batch),
-            RunStreamFrameDto::Snapshot(frame) => {
-                self.ensure_scope(frame.session_id(), frame.run_id())?;
-                self.snapshot = Some(frame.snapshot().clone());
-                self.last_cursor = Some(frame.snapshot().cursor());
-                self.historical_reasoning_cursors.clear();
-                Ok(None)
-            }
-            RunStreamFrameDto::Resync(resync) => {
-                self.apply_resync(resync)?;
-                Ok(None)
-            }
+            RunStreamFrameDto::Content(message) => self.apply_content(message),
+            RunStreamFrameDto::Status(status) => self.apply_status(status),
         }
     }
 
-    /// Applies a live batch, returning a local cursor-gap resync without mutation.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed scope-validation error without mutation for another run.
-    pub fn apply_live_batch(&mut self, batch: RunLiveBatchDto) -> DtoResult<Option<RunResyncDto>> {
-        self.ensure_scope(batch.session_id(), batch.run_id())?;
-        let last = self.last_cursor.map_or(0, RunEventCursorDto::value);
-        if let Some(first_new) = batch
-            .facts()
-            .iter()
-            .find(|fact| fact.cursor().value() > last)
-            && first_new.cursor().value() != last.saturating_add(1)
-        {
-            return Ok(Some(RunResyncDto::new(
-                self.session_id,
-                self.run_id,
-                RunResyncReasonDto::CursorGap,
-            )));
-        }
-        let snapshot_cursor = self
-            .snapshot
-            .as_ref()
-            .map_or(RunEventCursorDto::new(0), RunSnapshotDto::cursor);
-        let mut next_cursor = self.last_cursor;
-        let mut appended_reasoning = String::new();
-        let mut historical_cursors = self.historical_reasoning_cursors.clone();
-        for fact in batch.facts() {
-            if fact.cursor().value() <= snapshot_cursor.value() {
-                if let ModelRunFactInputDto::ReasoningDeltaRecorded { content, .. } = fact.input()
-                    && historical_cursors.insert(fact.cursor())
-                {
-                    appended_reasoning.push_str(content);
-                }
-                continue;
-            }
-            if fact.cursor().value() <= last {
-                continue;
-            }
-            next_cursor = Some(fact.cursor());
-        }
-        self.reasoning_content.push_str(&appended_reasoning);
-        self.historical_reasoning_cursors = historical_cursors;
-        self.last_cursor = next_cursor;
-        Ok(None)
-    }
-
-    fn apply_resync(&mut self, resync: RunResyncDto) -> DtoResult<()> {
-        self.ensure_scope(resync.session_id(), resync.run_id())?;
-        self.snapshot = None;
-        self.last_cursor = None;
-        self.reasoning_content.clear();
-        self.historical_reasoning_cursors.clear();
-        self.history_unavailable = resync.reason() == RunResyncReasonDto::HistoryUnavailable;
+    fn apply_content(&mut self, message: MessageProjectionDto) -> DtoResult<()> {
+        self.ensure_scope(message.session_id(), message.run_id())?;
+        self.messages.push(message);
         Ok(())
     }
 
-    fn ensure_scope(
-        &self,
-        session_id: intention_types::SessionId,
-        run_id: intention_types::RunId,
-    ) -> DtoResult<()> {
-        if session_id == self.session_id && run_id == self.run_id {
+    fn apply_status(&mut self, frame: RunStatusFrameDto) -> DtoResult<()> {
+        self.ensure_scope(frame.session_id(), Some(frame.run_id()))?;
+        let Some(run) = self.run else {
+            return Err(invalid_response());
+        };
+        self.run = Some(RunProjectionDto::new(
+            run.session_id(),
+            run.run_id(),
+            run.turn_id(),
+            frame.status(),
+            run.config_revision_id(),
+        ));
+        Ok(())
+    }
+
+    fn ensure_scope(&self, session_id: SessionId, run_id: Option<RunId>) -> DtoResult<()> {
+        if session_id == self.session_id && run_id.is_none_or(|run_id| run_id == self.run_id) {
             Ok(())
         } else {
-            Err(ErrorDto::validation(
-                "invalid_run_subscription",
-                "run subscription data belongs to another run scope",
-            ))
+            Err(scope_error())
         }
     }
 
     /// Returns the fixed session identity.
     #[must_use]
-    pub const fn session_id(&self) -> intention_types::SessionId {
+    pub const fn session_id(&self) -> SessionId {
         self.session_id
     }
     /// Returns the fixed run identity.
     #[must_use]
-    pub const fn run_id(&self) -> intention_types::RunId {
+    pub const fn run_id(&self) -> RunId {
         self.run_id
     }
-    /// Returns the authoritative daemon snapshot, if one has been accepted.
+    /// Returns the current run projection, once a snapshot has been accepted.
     #[must_use]
-    pub fn snapshot(&self) -> Option<RunSnapshotDto> {
-        self.snapshot.clone()
+    pub const fn run(&self) -> Option<&RunProjectionDto> {
+        self.run.as_ref()
     }
-    /// Returns the last accepted durable run cursor.
+    /// Returns the current run lifecycle status, once a snapshot has been accepted.
     #[must_use]
-    pub const fn last_cursor(&self) -> Option<RunEventCursorDto> {
-        self.last_cursor
+    pub const fn status(&self) -> Option<RunStatusDto> {
+        match self.run {
+            Some(run) => Some(run.status()),
+            None => None,
+        }
     }
-    /// Returns tail-only historical reasoning accepted after an authoritative snapshot.
+    /// Returns the committed transcript rows accepted so far.
     #[must_use]
-    pub fn reasoning_content(&self) -> &str {
-        &self.reasoning_content
-    }
-    /// Reports whether the initial reply failed closed for unavailable history.
-    #[must_use]
-    pub const fn history_unavailable(&self) -> bool {
-        self.history_unavailable
+    pub fn messages(&self) -> &[MessageProjectionDto] {
+        &self.messages
     }
 }
 
@@ -737,6 +621,20 @@ fn invalid_response() -> ErrorDto {
     ErrorDto::validation(
         "invalid_local_protocol_response",
         "the local daemon returned an unexpected protocol response",
+    )
+}
+
+fn scope_error() -> ErrorDto {
+    ErrorDto::validation(
+        "invalid_run_subscription",
+        "run subscription data belongs to another run scope",
+    )
+}
+
+fn request_timeout() -> ErrorDto {
+    ErrorDto::unavailable(
+        "local_daemon_reply_timeout",
+        "the local daemon did not answer the request in time",
     )
 }
 
