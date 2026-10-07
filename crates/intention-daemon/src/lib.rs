@@ -358,6 +358,12 @@ impl HostState {
     }
 
     fn broadcast(&self, key: RunKey, message: ProtocolDaemonMessageDto) {
+        // Publication shares the registration gate, so a live frame can never
+        // enter a subscriber's queue before that subscription's correlated
+        // snapshot reply, which registration queues while holding this gate.
+        let Ok(_publication_gate) = self.publication_gate.lock() else {
+            return;
+        };
         let mut slow = Vec::new();
         if let Ok(data) = self.data.lock()
             && let Some(subscribers) = data.subscribers.get(&key)
@@ -443,9 +449,10 @@ impl HostState {
             close: close.clone(),
         });
         drop(data);
-        // The subscriber is registered before this second durable read. The
-        // serialized publisher cannot place a later live frame before this
-        // response enters this subscriber's FIFO queue.
+        // The subscriber is registered before this second durable read, and
+        // publication shares the registration gate: no later live frame can
+        // place itself in this subscriber's FIFO queue before this response
+        // enters it.
         let response = match self.facade.load_run_snapshot_for_daemon(session_id, run_id) {
             Ok(snapshot) => RunSubscriptionResponseDto::Snapshot(snapshot),
             Err(error) => {
@@ -1137,7 +1144,8 @@ mod tests {
         ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
     };
     use intention_domain::{
-        CreateSessionCommandDto, RunModeDto, SendUserTurnCommandDto, WorkspaceRootDto,
+        CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto,
+        SendUserTurnCommandDto, WorkspaceRootDto,
     };
     use intention_model::{
         FinishReasonDto, ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelEventStream,
@@ -1643,6 +1651,65 @@ mod tests {
             receiver.recv().await,
             Some(ProtocolDaemonMessageDto::Notification(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn a_correlated_subscription_reply_precedes_every_live_frame() {
+        // The subscription reply is the correlated current-state snapshot, so
+        // it is the first message a new subscriber receives even while the run
+        // is publishing committed frames concurrently. Publication and
+        // registration therefore share the same publication gate.
+        let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
+        let (session_id, run_id) = create_and_start(&facade);
+        let host = host_for_test(facade);
+        let message = MessageProjectionDto::new(
+            session_id,
+            Some(run_id),
+            MessageKindDto::Assistant,
+            "live row",
+            None,
+            None,
+            None,
+        )
+        .expect("fixture transcript row is valid");
+
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let publisher_host = Arc::clone(&host);
+        let publisher_stop = Arc::clone(&stop);
+        let publisher = std::thread::spawn(move || {
+            while !publisher_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                publisher_host.publish_content(&message);
+            }
+        });
+
+        for request_id in 1..=32 {
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
+            let (close, _closed) = tokio::sync::watch::channel(false);
+            let id = host
+                .register_subscriber(session_id, run_id, sender, close, request_id)
+                .expect("a current run admits one subscriber");
+            let first = receiver
+                .recv()
+                .await
+                .expect("the correlated reply reaches the subscriber");
+            assert!(
+                matches!(
+                    first,
+                    ProtocolDaemonMessageDto::Response(response)
+                        if response.id() == Some(request_id)
+                            && matches!(
+                                response.result_value(),
+                                Some(ProtocolResponsePayloadDto::RunSubscription(
+                                    RunSubscriptionResponseDto::Snapshot(_)
+                                ))
+                            )
+                ),
+                "the correlated snapshot reply must precede every live frame"
+            );
+            host.remove_subscriber((session_id, run_id), id);
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        publisher.join().expect("the publisher thread joins");
     }
 
     #[test]
