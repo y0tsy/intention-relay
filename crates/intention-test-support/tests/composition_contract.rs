@@ -27,14 +27,14 @@ fn snapshot() -> ConfigSnapshotDto {
     .expect("safe fixture snapshot decodes")
 }
 
-fn facade() -> (TempDir, intention::DaemonApplicationFacade) {
+fn facade() -> (TempDir, intention_daemon::DaemonApplicationFacade) {
     let directory = TempDir::new().expect("temporary directory exists");
     let facade = open_facade(directory.path().join("relay.sqlite"), snapshot())
         .expect("durable facade opens");
     (directory, facade)
 }
 
-fn create(facade: &intention::DaemonApplicationFacade, session_id: SessionId) {
+fn create(facade: &intention_daemon::DaemonApplicationFacade, session_id: SessionId) {
     let result = facade.command(ProtocolCommandDto::CreateSession(
         CreateSessionCommandDto::new(
             ProjectId::new(),
@@ -48,7 +48,7 @@ fn create(facade: &intention::DaemonApplicationFacade, session_id: SessionId) {
 }
 
 fn send_turn(
-    facade: &intention::DaemonApplicationFacade,
+    facade: &intention_daemon::DaemonApplicationFacade,
     session_id: SessionId,
     content: &str,
 ) -> SendUserTurnOutcomeDto {

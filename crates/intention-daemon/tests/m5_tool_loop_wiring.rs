@@ -11,8 +11,8 @@ use std::{
 };
 
 use futures_util::stream;
-use intention::DaemonApplicationFacade;
 use intention_config::ConfigSnapshotDto;
+use intention_daemon::DaemonApplicationFacade;
 use intention_daemon::DaemonToolExecutor;
 use intention_engine::ModelRunExecutionInputDto;
 use intention_engine::{

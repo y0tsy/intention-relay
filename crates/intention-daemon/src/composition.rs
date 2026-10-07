@@ -1,6 +1,6 @@
 //! Durable M3 composition root for the daemon application facade.
 //!
-//! Only this crate selects SQLite. The public facade exposes protocol DTOs;
+//! Only this module selects SQLite. The public facade exposes protocol DTOs;
 //! database resources, locations, configuration text, and committed-event
 //! publication stay private.
 
@@ -66,12 +66,9 @@ const DATABASE_FILENAME: &str = "intention-relay.sqlite";
 /// The retained bounded size of a current-state snapshot's recent transcript.
 const SESSION_SNAPSHOT_MESSAGES: u32 = 256;
 
-/// The terminal outcome of one facade local tool invocation.
-///
-/// Re-exported for the daemon host, which maps the outcome onto the
-/// model-visible tool-result fact without depending on the engine crate
-/// directly.
-pub use intention_engine::LocalToolInvocationOutcomeDto;
+// The terminal outcome of one facade local tool invocation: the daemon host
+// maps it onto the model-visible tool-result fact without naming a provider SDK.
+use intention_engine::LocalToolInvocationOutcomeDto;
 
 /// Public M3 daemon application facade over a private durable composition.
 #[derive(Clone)]

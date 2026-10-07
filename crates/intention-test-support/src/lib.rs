@@ -4,11 +4,10 @@ use std::path::Path;
 
 use tempfile::TempDir;
 
-use intention::DaemonApplicationFacade;
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
-use intention_daemon::TestHostLifecycle;
+use intention_daemon::{DaemonApplicationFacade, TestHostLifecycle};
 use intention_proto::{
     ConfigRevisionId, DtoResult, ProjectId, SchemaVersionDto, SessionId, TimestampDto, WorkspaceId,
 };

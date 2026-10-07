@@ -5,21 +5,29 @@
     reason = "Client contract fixtures use direct assertions and controlled fixture launchers; the standard fixture mutex serializes independent fixture servers, and every async test owns its own single-threaded runtime, so holding that guard across awaits cannot deadlock."
 )]
 
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
 use intention_client::{DaemonLauncher, IntentionClient, ProcessDaemonLauncher};
 use intention_proto::{
-    DaemonHealthDto, DaemonReadinessDto, JsonRpcErrorDto, JsonRpcRequestDto, JsonRpcResponseDto,
-    PROTOCOL_HELLO_METHOD, ProtocolHelloDto, ProtocolQueryResultDto, ProtocolResponsePayloadDto,
-    ProtocolVersionDto, SessionSnapshotDto, SessionSubscriptionResponseDto,
-    SubscribeSessionCommandDto, decode_request_line, encode_hello_response, encode_response,
+    ConfigRevisionId, CorrelationIdDto, CreateSessionAcceptedDto, CreateSessionCommandDto,
+    DaemonHealthDto, DaemonReadinessDto, IdempotencyKey, JsonRpcErrorDto, JsonRpcRequestDto,
+    JsonRpcResponseDto, PROTOCOL_HELLO_METHOD, ProtocolAcceptedDto, ProtocolAcceptedResultDto,
+    ProtocolCommandDto, ProtocolCommandResultDto, ProtocolHelloDto, ProtocolQueryResultDto,
+    ProtocolResponsePayloadDto, ProtocolVersionDto, SendUserTurnAcceptedDto,
+    SendUserTurnOutcomeDto, SessionSnapshotDto, SessionSubscriptionResponseDto,
+    SubscribeSessionCommandDto, TurnId, decode_request_line, encode_hello_response,
+    encode_response,
 };
-use intention_proto::{DtoResult, ErrorDto, ProjectId, SchemaVersionDto, SessionId, WorkspaceId};
+use intention_proto::{
+    DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto, SessionId, WorkspaceId,
+};
 use intention_proto::{MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto};
-use intention_transport::{LocalEndpoint, LocalListener, local_protocol_version, negotiate_daemon};
+use intention_transport::{
+    LocalConnection, LocalEndpoint, LocalListener, local_protocol_version, negotiate_daemon,
+};
 use tempfile::TempDir;
 
 const SCHEMA_VERSION: SchemaVersionDto = intention_proto::CURRENT_DTO_SCHEMA_VERSION;
@@ -65,6 +73,7 @@ enum FixtureResponse {
     Rejected(ErrorDto),
     Snapshot(SessionSnapshotDto),
     Subscription(SessionSubscriptionResponseDto),
+    Command(ProtocolCommandResultDto),
     Invalid,
     CorrelationMismatch,
     /// The fixture daemon answers the hello with the typed version-mismatch error.
@@ -202,6 +211,9 @@ fn serve_fixture_connection(
         FixtureResponse::Subscription(subscription) => {
             ProtocolResponsePayloadDto::Subscription(subscription.clone())
         }
+        FixtureResponse::Command(result) => {
+            ProtocolResponsePayloadDto::CommandResult(result.clone())
+        }
         FixtureResponse::Invalid
         | FixtureResponse::CorrelationMismatch
         | FixtureResponse::Disconnect => ProtocolResponsePayloadDto::CommandResult(
@@ -230,8 +242,60 @@ const fn ready_health() -> DaemonHealthDto {
     )
 }
 
+const fn starting_health() -> DaemonHealthDto {
+    DaemonHealthDto::new(
+        SCHEMA_VERSION,
+        local_protocol_version(),
+        DaemonReadinessDto::Starting,
+    )
+}
+
 const fn subscription(session_id: SessionId) -> SubscribeSessionCommandDto {
     SubscribeSessionCommandDto::new(SCHEMA_VERSION, session_id, RunModeDto::Build)
+}
+
+fn fixture_create_command(session_id: SessionId) -> CreateSessionCommandDto {
+    CreateSessionCommandDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        intention_proto::WorkspaceRootDto::parse(
+            std::env::temp_dir()
+                .join("intention-client-fixture-workspace")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .expect("fixture workspace root is valid"),
+        RunModeDto::Build,
+    )
+}
+
+/// Wraps one acceptance payload as the daemon's correlated command result.
+fn accepted_command(result: ProtocolAcceptedResultDto) -> ProtocolCommandResultDto {
+    ProtocolCommandResultDto::Accepted(ProtocolAcceptedDto::with_result(
+        CorrelationIdDto::new(),
+        result,
+    ))
+}
+
+/// Serves `Starting` health on every connection until `stop` is set.
+///
+/// The readiness wait reconnects for the whole bounded budget, so a
+/// single-connection script cannot produce the final typed starting error.
+fn start_starting_health_server(
+    endpoint: LocalEndpoint,
+    stop: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
+    let listener = LocalListener::bind(endpoint).expect("fixture listener binds");
+    thread::spawn(move || {
+        loop {
+            let connection = listener.accept().expect("fixture client connects");
+            if stop.load(Ordering::SeqCst) {
+                return;
+            }
+            serve_fixture_connection(connection, FixtureResponse::Health(starting_health()));
+        }
+    })
 }
 
 #[test]
@@ -518,4 +582,199 @@ async fn non_ready_health_is_not_returned_as_a_successful_connection() {
         assert_eq!(error.code(), expected);
         server.join().expect("non-ready fixture server completes");
     }
+}
+
+#[tokio::test]
+async fn command_and_conveniences_round_trip_typed_acceptances() {
+    let _guard = fixture_guard();
+    let directory = TempDir::new().expect("temporary directory is available");
+    let session_id = SessionId::new();
+    let created = CreateSessionAcceptedDto::new(ProjectId::new(), WorkspaceId::new(), session_id);
+
+    let command_endpoint = endpoint(&directory);
+    let accepted = accepted_command(ProtocolAcceptedResultDto::CreateSession(created));
+    let server = start_fixture_server(
+        command_endpoint.clone(),
+        FixtureResponse::Command(accepted.clone()),
+    );
+    let received = client(
+        command_endpoint,
+        FixtureResponse::Command(accepted.clone()),
+        Arc::new(AtomicUsize::new(0)),
+    )
+    .command(ProtocolCommandDto::CreateSession(fixture_create_command(
+        session_id,
+    )))
+    .await
+    .expect("an accepted command result is returned as decoded data");
+    assert_eq!(received, accepted);
+    server.join().expect("command fixture server completes");
+
+    let create_endpoint = endpoint(&directory);
+    let accepted = accepted_command(ProtocolAcceptedResultDto::CreateSession(created));
+    let server = start_fixture_server(
+        create_endpoint.clone(),
+        FixtureResponse::Command(accepted.clone()),
+    );
+    let received = client(
+        create_endpoint,
+        FixtureResponse::Command(accepted),
+        Arc::new(AtomicUsize::new(0)),
+    )
+    .create_session(fixture_create_command(session_id))
+    .await
+    .expect("session creation returns the daemon acceptance evidence");
+    assert_eq!(received, created);
+    assert_eq!(received.session_id(), session_id);
+    server
+        .join()
+        .expect("create-session fixture server completes");
+
+    let outcome = SendUserTurnOutcomeDto::Started {
+        run_id: RunId::new(),
+        config_revision_id: ConfigRevisionId::new(),
+    };
+    let accepted = accepted_command(ProtocolAcceptedResultDto::SendUserTurn(
+        SendUserTurnAcceptedDto::new(session_id, TurnId::new(), outcome),
+    ));
+    let turn_endpoint = endpoint(&directory);
+    let server = start_fixture_server(
+        turn_endpoint.clone(),
+        FixtureResponse::Command(accepted.clone()),
+    );
+    let received = client(
+        turn_endpoint,
+        FixtureResponse::Command(accepted),
+        Arc::new(AtomicUsize::new(0)),
+    )
+    .send_user_turn(
+        session_id,
+        IdempotencyKey::new(),
+        "fixture user turn".to_owned(),
+    )
+    .await
+    .expect("the user turn outcome is returned as decoded data");
+    assert_eq!(received, outcome);
+    server
+        .join()
+        .expect("send-user-turn fixture server completes");
+}
+
+#[tokio::test]
+async fn command_rejection_and_unexpected_acceptance_payloads_are_typed() {
+    let _guard = fixture_guard();
+    let directory = TempDir::new().expect("temporary directory is available");
+    let session_id = SessionId::new();
+
+    let rejection = ErrorDto::validation("fixture_command_rejected", "fixture command rejected");
+    let rejected_endpoint = endpoint(&directory);
+    let rejected = ProtocolCommandResultDto::Rejected(rejection.clone());
+    let server = start_fixture_server(
+        rejected_endpoint.clone(),
+        FixtureResponse::Command(rejected.clone()),
+    );
+    assert_eq!(
+        client(
+            rejected_endpoint,
+            FixtureResponse::Command(rejected),
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .create_session(fixture_create_command(session_id))
+        .await
+        .expect_err("a rejected command must surface the daemon error")
+        .code(),
+        "fixture_command_rejected"
+    );
+    server.join().expect("rejection fixture server completes");
+
+    let wrong_turn = accepted_command(ProtocolAcceptedResultDto::SendUserTurn(
+        SendUserTurnAcceptedDto::new(session_id, TurnId::new(), SendUserTurnOutcomeDto::Pending),
+    ));
+    let create_shape_endpoint = endpoint(&directory);
+    let server = start_fixture_server(
+        create_shape_endpoint.clone(),
+        FixtureResponse::Command(wrong_turn.clone()),
+    );
+    assert_eq!(
+        client(
+            create_shape_endpoint,
+            FixtureResponse::Command(wrong_turn),
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .create_session(fixture_create_command(session_id))
+        .await
+        .expect_err("user-turn evidence must not satisfy session creation")
+        .code(),
+        "local_command_shape_mismatch"
+    );
+    server
+        .join()
+        .expect("create-session shape fixture server completes");
+
+    let wrong_create = accepted_command(ProtocolAcceptedResultDto::CreateSession(
+        CreateSessionAcceptedDto::new(ProjectId::new(), WorkspaceId::new(), session_id),
+    ));
+    let turn_shape_endpoint = endpoint(&directory);
+    let server = start_fixture_server(
+        turn_shape_endpoint.clone(),
+        FixtureResponse::Command(wrong_create.clone()),
+    );
+    assert_eq!(
+        client(
+            turn_shape_endpoint,
+            FixtureResponse::Command(wrong_create),
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .send_user_turn(
+            session_id,
+            IdempotencyKey::new(),
+            "fixture user turn".to_owned()
+        )
+        .await
+        .expect_err("session-creation evidence must not satisfy a user turn")
+        .code(),
+        "local_command_shape_mismatch"
+    );
+    server
+        .join()
+        .expect("send-user-turn shape fixture server completes");
+}
+
+#[tokio::test]
+async fn await_ready_returns_ready_health_and_reports_starting() {
+    let _guard = fixture_guard();
+    let directory = TempDir::new().expect("temporary directory is available");
+
+    let ready_endpoint = endpoint(&directory);
+    let server = start_fixture_server(
+        ready_endpoint.clone(),
+        FixtureResponse::Health(ready_health()),
+    );
+    let health = client(
+        ready_endpoint,
+        FixtureResponse::Health(ready_health()),
+        Arc::new(AtomicUsize::new(0)),
+    )
+    .await_ready()
+    .await
+    .expect("ready daemon health is returned by the readiness wait");
+    assert_eq!(health.readiness(), DaemonReadinessDto::Ready);
+    server.join().expect("ready fixture server completes");
+
+    let starting_endpoint = endpoint(&directory);
+    let stop = Arc::new(AtomicBool::new(false));
+    let server = start_starting_health_server(starting_endpoint.clone(), Arc::clone(&stop));
+    let error = client(
+        starting_endpoint.clone(),
+        FixtureResponse::Health(ready_health()),
+        Arc::new(AtomicUsize::new(0)),
+    )
+    .await_ready()
+    .await
+    .expect_err("a starting daemon must not be reported ready");
+    assert_eq!(error.code(), "local_daemon_starting");
+    stop.store(true, Ordering::SeqCst);
+    let _final_connection = LocalConnection::connect(&starting_endpoint)
+        .expect("fixture listener accepts the final connection");
+    server.join().expect("starting fixture server stops");
 }

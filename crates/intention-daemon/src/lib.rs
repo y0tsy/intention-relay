@@ -4,17 +4,20 @@
 //! health, query, command, and current-state subscription meaning to the durable
 //! composition facade.
 
+mod composition;
+
+pub use composition::DaemonApplicationFacade;
+
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use intention::{DaemonApplicationFacade, LocalToolInvocationOutcomeDto};
 use intention_domain::run_status_is_terminal;
 use intention_engine::{
-    ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
-    ToolResultOutcomeDto,
+    LocalToolInvocationOutcomeDto, ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture,
+    ModelTimePort, ToolResultOutcomeDto,
 };
 use intention_proto::RunStatusDto;
 use intention_proto::{

@@ -11,13 +11,15 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use intention_proto::{
-    DaemonHealthDto, DaemonReadinessDto, ProtocolCommandDto, ProtocolHelloDto, ProtocolMethodDto,
-    ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestPayloadDto,
+    CreateSessionAcceptedDto, CreateSessionCommandDto, DaemonHealthDto, DaemonReadinessDto,
+    ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolHelloDto,
+    ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestPayloadDto,
     ProtocolResponsePayloadDto, RunStatusFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
-    SessionSnapshotDto, SessionSubscriptionResponseDto, SubscribeRunCommandDto,
-    SubscribeSessionCommandDto, decode_response, encode_request, parse_run_frame_notification,
+    SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionSnapshotDto,
+    SessionSubscriptionResponseDto, SubscribeRunCommandDto, SubscribeSessionCommandDto,
+    decode_response, encode_request, parse_run_frame_notification,
 };
-use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, RunId, SessionId};
+use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, IdempotencyKey, RunId, SessionId};
 use intention_proto::{
     GetSessionSnapshotQueryDto, MessageProjectionDto, RunProjectionDto, RunStatusDto,
 };
@@ -158,6 +160,22 @@ impl IntentionClient {
         self.connect_ready().await
     }
 
+    /// Waits for the daemon to report ready health within the bootstrap budget.
+    ///
+    /// The wait retries an unavailable or starting daemon with the same bounded
+    /// budget and backoff used by [`IntentionClient::connect_or_bootstrap`]; it
+    /// never launches a process.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed error that ended the wait: `local_daemon_starting` or
+    /// a daemon-unavailable error when the budget expires first,
+    /// `local_daemon_not_ready` for a draining or unavailable daemon, or the
+    /// typed transport, protocol, or rejection error the daemon returned.
+    pub async fn await_ready(&self) -> DtoResult<DaemonHealthDto> {
+        self.wait_for_ready().await
+    }
+
     /// Queries the current session snapshot.
     ///
     /// # Errors
@@ -177,6 +195,83 @@ impl IntentionClient {
                 Err(error)
             }
             _ => Err(invalid_response()),
+        }
+    }
+
+    /// Dispatches one typed command and returns the daemon's command result.
+    ///
+    /// The request reuses the shared correlated-id, payload-method, and bounded
+    /// reply path used by [`IntentionClient::session_snapshot`], so transport,
+    /// timeout, correlation, and response-shape behavior stays identical.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed transport, timeout, or invalid-response error. A daemon
+    /// rejection is returned as data inside the command result.
+    pub async fn command(
+        &self,
+        command: ProtocolCommandDto,
+    ) -> DtoResult<ProtocolCommandResultDto> {
+        let response = self
+            .request(ProtocolRequestPayloadDto::Command(command))
+            .await?;
+        match response {
+            ProtocolResponsePayloadDto::CommandResult(result) => Ok(result),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Creates a durable session and returns the daemon's acceptance evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection, a typed transport or timeout error,
+    /// or `local_command_shape_mismatch` when the daemon accepts the command with
+    /// evidence for a different operation.
+    pub async fn create_session(
+        &self,
+        command: CreateSessionCommandDto,
+    ) -> DtoResult<CreateSessionAcceptedDto> {
+        match self
+            .command(ProtocolCommandDto::CreateSession(command))
+            .await?
+        {
+            ProtocolCommandResultDto::Accepted(accepted) => match accepted.result() {
+                ProtocolAcceptedResultDto::CreateSession(created) => Ok(*created),
+                _ => Err(command_shape_mismatch()),
+            },
+            ProtocolCommandResultDto::Rejected(error) => Err(error),
+        }
+    }
+
+    /// Sends one user turn and returns the daemon's durable turn outcome.
+    ///
+    /// The daemon proposes the run identity: a turn that starts a run reports
+    /// `Started` with that run, and a turn that joins the active run context
+    /// reports `Pending`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error for blank content, the daemon's typed
+    /// rejection, a typed transport or timeout error, or
+    /// `local_command_shape_mismatch` when the daemon accepts the command with
+    /// evidence for a different operation.
+    pub async fn send_user_turn(
+        &self,
+        session_id: SessionId,
+        idempotency_key: IdempotencyKey,
+        content: String,
+    ) -> DtoResult<SendUserTurnOutcomeDto> {
+        let command = SendUserTurnCommandDto::new(session_id, idempotency_key, content)?;
+        match self
+            .command(ProtocolCommandDto::SendUserTurn(command))
+            .await?
+        {
+            ProtocolCommandResultDto::Accepted(accepted) => match accepted.result() {
+                ProtocolAcceptedResultDto::SendUserTurn(turn) => Ok(turn.outcome()),
+                _ => Err(command_shape_mismatch()),
+            },
+            ProtocolCommandResultDto::Rejected(error) => Err(error),
         }
     }
 
@@ -628,6 +723,13 @@ fn scope_error() -> ErrorDto {
     ErrorDto::validation(
         "invalid_run_subscription",
         "run subscription data belongs to another run scope",
+    )
+}
+
+fn command_shape_mismatch() -> ErrorDto {
+    ErrorDto::validation(
+        "local_command_shape_mismatch",
+        "the local daemon returned an unexpected command acceptance payload",
     )
 }
 

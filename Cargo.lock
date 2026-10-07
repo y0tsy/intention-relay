@@ -762,21 +762,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "intention"
-version = "0.0.0"
-dependencies = [
- "futures-util",
- "intention-config",
- "intention-domain",
- "intention-engine",
- "intention-proto",
- "intention-providers",
- "intention-storage",
- "intention-tools",
- "tempfile",
-]
-
-[[package]]
 name = "intention-client"
 version = "0.0.0"
 dependencies = [
@@ -802,13 +787,13 @@ name = "intention-daemon"
 version = "0.0.0"
 dependencies = [
  "futures-util",
- "intention",
  "intention-client",
  "intention-config",
  "intention-domain",
  "intention-engine",
  "intention-proto",
  "intention-providers",
+ "intention-storage",
  "intention-tools",
  "intention-transport",
  "serde_json",
@@ -892,7 +877,6 @@ version = "0.0.0"
 name = "intention-test-support"
 version = "0.0.0"
 dependencies = [
- "intention",
  "intention-config",
  "intention-daemon",
  "intention-proto",

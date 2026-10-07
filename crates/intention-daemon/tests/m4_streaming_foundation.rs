@@ -22,10 +22,10 @@ use std::{
 #[cfg(feature = "test-support")]
 use futures_util::StreamExt;
 use futures_util::stream;
-use intention::DaemonApplicationFacade;
 #[cfg(feature = "test-support")]
 use intention_client::RunStreamClient;
 use intention_config::ConfigSnapshotDto;
+use intention_daemon::DaemonApplicationFacade;
 use intention_daemon::DaemonToolExecutor;
 #[cfg(feature = "test-support")]
 use intention_engine::INTERRUPT_NOTICE;

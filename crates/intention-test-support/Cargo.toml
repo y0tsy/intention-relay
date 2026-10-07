@@ -10,7 +10,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-intention = { path = "../intention", version = "=0.0.0", features = ["test-support"] }
 intention-config = { path = "../intention-config", version = "=0.0.0" }
 intention-daemon = { path = "../intention-daemon", version = "=0.0.0", features = ["test-support"] }
 intention-transport = { path = "../intention-transport", version = "=0.0.0" }
