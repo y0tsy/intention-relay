@@ -7,12 +7,12 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
-use intention_storage::{AcceptUserTurnInputDto, CreateSessionInputDto, StorageRepositoryDto};
-use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
-use intention_types::{
+use intention_proto::{
     ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, IdempotencyKey, ProjectId, RunId, SessionId,
     TimestampDto, WorkspaceId,
 };
+use intention_storage::{AcceptUserTurnInputDto, CreateSessionInputDto, StorageRepositoryDto};
+use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use tempfile::TempDir;
 
 #[test]
@@ -284,7 +284,7 @@ fn snapshot(
     ))
     .expect("safe configuration resolves");
     ConfigSnapshotDto::new(
-        intention_types::SchemaVersionDto::new(1, 0),
+        intention_proto::SchemaVersionDto::new(1, 0),
         ConfigRevisionId::new(),
         time(1),
         resolved,

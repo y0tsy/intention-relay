@@ -9,7 +9,7 @@
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
-use intention_types::{ConfigRevisionId, DtoResult, ErrorDto, SchemaVersionDto, TimestampDto};
+use intention_proto::{ConfigRevisionId, DtoResult, ErrorDto, SchemaVersionDto, TimestampDto};
 use serde::{Deserialize, Serialize};
 
 const CURRENT_SCHEMA_MAJOR: u16 = 1;
@@ -864,9 +864,9 @@ pub fn ensure_user_only_permissions(path: &ConfigPathDto) -> DtoResult<()> {
     } else {
         Err(ErrorDto::new(
             "unsafe_config_permissions",
-            intention_types::ErrorCategoryDto::Policy,
+            intention_proto::ErrorCategoryDto::Policy,
             "configuration file must be readable only by its owner",
-            intention_types::ErrorRetryDto::Manual,
+            intention_proto::ErrorRetryDto::Manual,
             None,
         )?)
     }

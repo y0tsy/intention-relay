@@ -5,7 +5,7 @@
 
 use std::fmt::{Display, Formatter};
 
-use intention_types::{
+use intention_proto::{
     ConfigRevisionId, DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, ToolCallId,
     TurnId, WorkspaceId,
 };
@@ -65,9 +65,9 @@ pub fn validate_run_status_transition(from: RunStatusDto, to: RunStatusDto) -> D
     } else {
         Err(ErrorDto::new(
             "invalid_run_status_transition",
-            intention_types::ErrorCategoryDto::Conflict,
+            intention_proto::ErrorCategoryDto::Conflict,
             "run status transition is not permitted",
-            intention_types::ErrorRetryDto::Never,
+            intention_proto::ErrorRetryDto::Never,
             None,
         )?)
     }
@@ -654,9 +654,9 @@ pub fn validate_plan_status_transition(
     } else {
         Err(ErrorDto::new(
             "invalid_plan_status_transition",
-            intention_types::ErrorCategoryDto::Conflict,
+            intention_proto::ErrorCategoryDto::Conflict,
             "plan status transition is not permitted",
-            intention_types::ErrorRetryDto::Never,
+            intention_proto::ErrorRetryDto::Never,
             None,
         )?)
     }

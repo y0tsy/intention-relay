@@ -9,6 +9,10 @@ use intention_domain::{
     GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
     RunModeDto, RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto,
 };
+use intention_proto::{
+    ConfigRevisionId, CorrelationIdDto, ErrorDto, IdempotencyKey, ProjectId, RunId,
+    SchemaVersionDto, SessionId, TurnId, WorkspaceId,
+};
 use intention_protocol::{
     CURRENT_DTO_SCHEMA_VERSION, CURRENT_PROTOCOL_VERSION, DaemonHealthDto, DaemonReadinessDto,
     InterruptRunAcceptedDto, JsonRpcErrorDto, JsonRpcRequestDto, JsonRpcResponseDto,
@@ -20,10 +24,6 @@ use intention_protocol::{
     SubscribeRunCommandDto, SubscribeSessionCommandDto, decode_hello_request, decode_request_line,
     decode_response, encode_hello_request, encode_request, encode_response, is_notification_line,
     parse_run_frame_notification,
-};
-use intention_types::{
-    ConfigRevisionId, CorrelationIdDto, ErrorDto, IdempotencyKey, ProjectId, RunId,
-    SchemaVersionDto, SessionId, TurnId, WorkspaceId,
 };
 
 fn fixture_workspace_root() -> intention_domain::WorkspaceRootDto {

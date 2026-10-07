@@ -9,13 +9,13 @@ use intention_domain::{
     CreateSessionCommandDto, GetSessionSnapshotQueryDto, RemoveTurnCommandDto, RunModeDto,
     SendUserTurnCommandDto,
 };
+use intention_proto::{IdempotencyKey, ProjectId, RunId, SchemaVersionDto, SessionId, WorkspaceId};
 use intention_protocol::{
     ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto,
     ProtocolQueryResultDto, SendUserTurnOutcomeDto, SessionSubscriptionResponseDto,
     SubscribeSessionCommandDto,
 };
 use intention_test_support::{fixture_workspace_root, open_facade, session_messages};
-use intention_types::{IdempotencyKey, ProjectId, RunId, SchemaVersionDto, SessionId, WorkspaceId};
 use tempfile::TempDir;
 
 const SCHEMA: SchemaVersionDto = SchemaVersionDto::new(1, 0);

@@ -8,7 +8,7 @@ use intention_domain::{
     MessageProjectionDto, RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
     SendUserTurnCommandDto, SessionProjectionDto,
 };
-use intention_types::{
+use intention_proto::{
     ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto,
     SessionId, TurnId, WorkspaceId,
 };

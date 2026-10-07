@@ -15,8 +15,8 @@ use std::{
 };
 
 use futures_core::Stream;
-use intention_types::{DtoResult, ErrorDto, ErrorRetryDto, RunId, ToolCallId};
-pub use intention_types::{FinishReasonDto, ProviderErrorDto, ToolCallDto, UsageDto};
+use intention_proto::{DtoResult, ErrorDto, ErrorRetryDto, RunId, ToolCallId};
+pub use intention_proto::{FinishReasonDto, ProviderErrorDto, ToolCallDto, UsageDto};
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 /// The sender role of a model-context message, including tool calls and results.
@@ -457,7 +457,7 @@ impl ModelCapabilitiesDto {
         if unsupported {
             Err(ErrorDto::new(
                 "unsupported_model_capability",
-                intention_types::ErrorCategoryDto::Policy,
+                intention_proto::ErrorCategoryDto::Policy,
                 "the selected provider does not support the requested model capability",
                 ErrorRetryDto::Never,
                 None,

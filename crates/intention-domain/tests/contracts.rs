@@ -10,7 +10,7 @@ use intention_domain::{
     CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto,
     RemoveTurnCommandDto, RunModeDto, RunStatusDto, SendUserTurnCommandDto, WorkspaceRootDto,
 };
-use intention_types::{IdempotencyKey, ProjectId, RunId, SessionId, TurnId, WorkspaceId};
+use intention_proto::{IdempotencyKey, ProjectId, RunId, SessionId, TurnId, WorkspaceId};
 
 fn workspace_root() -> WorkspaceRootDto {
     WorkspaceRootDto::parse(

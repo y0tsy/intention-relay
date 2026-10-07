@@ -19,7 +19,7 @@ use intention_domain::{
     RemoveTurnCommandDto, RunProjectionDto, RunStatusDto, SessionProjectionDto,
     ToolResultMetadataEntryDto, ToolResultStatusDto,
 };
-use intention_types::{
+use intention_proto::{
     ConfigRevisionId, DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, RunId, SessionId,
     TimestampDto, ToolCallId, UsageDto,
 };

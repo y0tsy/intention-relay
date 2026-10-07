@@ -1,5 +1,5 @@
 [package]
-name = "intention-types"
+name = "intention-proto"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

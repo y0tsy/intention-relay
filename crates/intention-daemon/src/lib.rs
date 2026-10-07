@@ -13,6 +13,9 @@ use std::{
 use intention::{DaemonApplicationFacade, LocalToolInvocationOutcomeDto};
 use intention_domain::RunStatusDto;
 use intention_model::ModelCancellationSignal;
+use intention_proto::{
+    CorrelationIdDto, DtoResult, ErrorDto, RunId, SessionId, TimestampDto, ToolCallDto,
+};
 use intention_protocol::{
     JsonRpcResponseDto, ProtocolAcceptedDto, ProtocolCommandDto, ProtocolCommandResultDto,
     ProtocolDaemonMessageDto, ProtocolHelloDto, ProtocolRequestPayloadDto,
@@ -31,9 +34,6 @@ use intention_tools::{
 use intention_transport::LocalListener;
 use intention_transport::{
     AsyncLocalListener, AsyncMessageSender, LocalEndpoint, local_protocol_version,
-};
-use intention_types::{
-    CorrelationIdDto, DtoResult, ErrorDto, RunId, SessionId, TimestampDto, ToolCallDto,
 };
 
 const SUBSCRIBER_QUEUE_CAPACITY: usize = 64;
@@ -1213,6 +1213,9 @@ mod tests {
         FinishReasonDto, ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelEventStream,
         ModelExecutionDriver,
     };
+    use intention_proto::{
+        ConfigRevisionId, IdempotencyKey, ProjectId, SchemaVersionDto, TimestampDto, WorkspaceId,
+    };
     use intention_protocol::{
         ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolHelloDto,
         ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestPayloadDto,
@@ -1220,9 +1223,6 @@ mod tests {
         decode_response, encode_request,
     };
     use intention_transport::{AsyncLocalClientConnection, AsyncLocalListener};
-    use intention_types::{
-        ConfigRevisionId, IdempotencyKey, ProjectId, SchemaVersionDto, TimestampDto, WorkspaceId,
-    };
     use tempfile::TempDir;
 
     fn endpoint() -> LocalEndpoint {
@@ -1780,7 +1780,7 @@ mod tests {
         // truncation flag, so an honest byte-window cut survives persistence.
         let glob = ToolResult::Glob(PathsResult {
             paths: vec![
-                intention_types::WorkspaceRelativePathDto::parse("a.txt").expect("fixture path"),
+                intention_proto::WorkspaceRelativePathDto::parse("a.txt").expect("fixture path"),
             ],
             truncated: true,
         });

@@ -17,7 +17,7 @@
 //! token.
 
 use intention_model::{ModelMessageDto, ModelRequestDto, ModelRoleDto, UsageDto};
-use intention_types::DtoResult;
+use intention_proto::DtoResult;
 
 /// Characters per estimated token for every uncalibrated increment.
 const ESTIMATED_CHARACTERS_PER_TOKEN: usize = 4;
@@ -223,7 +223,7 @@ const fn compress_context(_messages: &mut [ModelMessageDto]) {
 )]
 mod tests {
     use super::*;
-    use intention_types::ToolCallId;
+    use intention_proto::ToolCallId;
 
     fn user(content: &str) -> ModelMessageDto {
         ModelMessageDto::new(ModelRoleDto::User, content).expect("user message is valid")

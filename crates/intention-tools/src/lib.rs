@@ -1,6 +1,6 @@
 //! Typed, bounded contracts for workspace tools.
 
-use intention_types::{DtoResult, RunId, SessionId, ToolCallId, WorkspaceRelativePathDto};
+use intention_proto::{DtoResult, RunId, SessionId, ToolCallId, WorkspaceRelativePathDto};
 use intention_workspace::WorkspaceRoot;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -1367,7 +1367,7 @@ impl BoundedText {
     pub fn new(value: impl Into<String>) -> DtoResult<Self> {
         let value = value.into();
         if value.contains('\0') {
-            Err(intention_types::ErrorDto::validation(
+            Err(intention_proto::ErrorDto::validation(
                 "invalid_tool_text",
                 "tool text contains NUL",
             ))
@@ -1442,7 +1442,7 @@ impl ToolInvocation {
         if self.schema_version == TOOL_SCHEMA_VERSION {
             Ok(())
         } else {
-            Err(intention_types::ErrorDto::validation(
+            Err(intention_proto::ErrorDto::validation(
                 "tool_schema_mismatch",
                 "tool invocation schema version does not match the active schema",
             ))
@@ -1460,7 +1460,7 @@ impl ToolInvocation {
         if self.context.call_id == expected {
             Ok(())
         } else {
-            Err(intention_types::ErrorDto::validation(
+            Err(intention_proto::ErrorDto::validation(
                 "tool_call_id_mismatch",
                 "tool call identity does not match invocation context",
             ))
@@ -1852,7 +1852,7 @@ impl ToolService {
         let executed = match executed? {
             ExecutedOutcome::Completed(executed) => executed,
             ExecutedOutcome::Interrupted { cause, .. } => {
-                return Err(intention_types::ErrorDto::validation(
+                return Err(intention_proto::ErrorDto::validation(
                     interruption_code(cause),
                     "workspace command execution was interrupted",
                 ));
@@ -1885,11 +1885,11 @@ fn read_tool(
         return Ok(stopped_outcome(None));
     }
     let mut file = std::fs::File::open(root.resolve_path(&input.path)).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
+        intention_proto::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
     })?;
     let mut bytes = Vec::new();
     let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
+        intention_proto::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
     })?;
     let (text, truncated) = bounded_lossy(&bytes);
     let result = ToolResult::Read(TextResult {
@@ -1925,7 +1925,7 @@ fn execute_tool(
         command.process_group(0);
     }
     let child = command.spawn().map_err(|_| {
-        intention_types::ErrorDto::validation(
+        intention_proto::ErrorDto::validation(
             "tool_execute_spawn_failed",
             "unable to spawn workspace command",
         )
@@ -1934,7 +1934,7 @@ fn execute_tool(
     let output = match bounded_output(child, cancellation) {
         Ok(output) => output,
         Err(ExecuteFailure::ReadFailed) => {
-            return Err(intention_types::ErrorDto::validation(
+            return Err(intention_proto::ErrorDto::validation(
                 "tool_execute_read_failed",
                 "workspace command execution failed",
             ));
@@ -1984,26 +1984,26 @@ fn write_tool(
         // reported as changed instead of being slurped (PR24-022).
         let current = match read_limited(&path, MAX_EDIT_TARGET_BYTES) {
             LimitedReadOutcome::Content(bytes) => String::from_utf8(bytes).map_err(|_| {
-                intention_types::ErrorDto::validation(
+                intention_proto::ErrorDto::validation(
                     "tool_write_conflict",
                     "workspace file changed before write",
                 )
             })?,
             LimitedReadOutcome::TooLarge => {
-                return Err(intention_types::ErrorDto::validation(
+                return Err(intention_proto::ErrorDto::validation(
                     "tool_write_conflict",
                     "workspace file changed before write",
                 ));
             }
             LimitedReadOutcome::Unreadable => {
-                return Err(intention_types::ErrorDto::validation(
+                return Err(intention_proto::ErrorDto::validation(
                     "tool_write_conflict",
                     "workspace file changed before write",
                 ));
             }
         };
         if current != expected.as_str() {
-            return Err(intention_types::ErrorDto::validation(
+            return Err(intention_proto::ErrorDto::validation(
                 "tool_write_conflict",
                 "workspace file changed before write",
             ));
@@ -2014,7 +2014,7 @@ fn write_tool(
         }
     }
     std::fs::write(path, input.content.as_str()).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
+        intention_proto::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
     })?;
     Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
         ToolResult::Write(WriteResult { bytes }),
@@ -2035,26 +2035,26 @@ fn edit_tool(
     // (PR24-022).
     let text = match read_limited(&path, MAX_EDIT_TARGET_BYTES) {
         LimitedReadOutcome::Content(bytes) => String::from_utf8(bytes).map_err(|_| {
-            intention_types::ErrorDto::validation(
+            intention_proto::ErrorDto::validation(
                 "tool_read_failed",
                 "unable to read workspace file",
             )
         })?,
         LimitedReadOutcome::TooLarge => {
-            return Err(intention_types::ErrorDto::validation(
+            return Err(intention_proto::ErrorDto::validation(
                 "tool_edit_target_too_large",
                 "edit target exceeds the workspace file size bound",
             ));
         }
         LimitedReadOutcome::Unreadable => {
-            return Err(intention_types::ErrorDto::validation(
+            return Err(intention_proto::ErrorDto::validation(
                 "tool_read_failed",
                 "unable to read workspace file",
             ));
         }
     };
     if !text.contains(input.old.as_str()) {
-        return Err(intention_types::ErrorDto::validation(
+        return Err(intention_proto::ErrorDto::validation(
             "edit_target_missing",
             "edit target was not found",
         ));
@@ -2062,7 +2062,7 @@ fn edit_tool(
     if let Some(expected) = input.expected_content.as_ref()
         && text != expected.as_str()
     {
-        return Err(intention_types::ErrorDto::validation(
+        return Err(intention_proto::ErrorDto::validation(
             "tool_edit_conflict",
             "workspace file changed before edit",
         ));
@@ -2073,7 +2073,7 @@ fn edit_tool(
     }
     let replacement = text.replacen(input.old.as_str(), input.new.as_str(), 1);
     std::fs::write(path, &replacement).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
+        intention_proto::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
     })?;
     Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
         ToolResult::Edit(WriteResult {
@@ -2096,12 +2096,12 @@ fn glob_tool(
         .join(input.pattern.as_str())
         .to_str()
         .ok_or_else(|| {
-            intention_types::ErrorDto::validation("invalid_tool_pattern", "tool pattern is invalid")
+            intention_proto::ErrorDto::validation("invalid_tool_pattern", "tool pattern is invalid")
         })?
         .to_owned();
     let mut paths = Vec::new();
     for entry in glob::glob(&pattern).map_err(|_| {
-        intention_types::ErrorDto::validation("invalid_tool_pattern", "tool pattern is invalid")
+        intention_proto::ErrorDto::validation("invalid_tool_pattern", "tool pattern is invalid")
     })? {
         // The traversal is the tool's I/O step: a stop ends it and the entries
         // collected so far are returned as an honestly truncated partial list.
@@ -2176,7 +2176,7 @@ fn grep_tool(
         .as_ref()
         .map(|path| root.resolve_path(path))
         .ok_or_else(|| {
-            intention_types::ErrorDto::validation(
+            intention_proto::ErrorDto::validation(
                 "invalid_tool_path",
                 "grep requires a workspace path",
             )
@@ -2185,20 +2185,20 @@ fn grep_tool(
     // symbolic link like any other filesystem path, and only the type
     // decision happens here.
     let metadata = std::fs::metadata(&path).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
+        intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
     })?;
     if !metadata.is_file() {
-        return Err(intention_types::ErrorDto::validation(
+        return Err(intention_proto::ErrorDto::validation(
             "tool_search_failed",
             "workspace search failed",
         ));
     }
     let mut file = std::fs::File::open(path).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
+        intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
     })?;
     let mut bytes = Vec::new();
     let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
+        intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
     })?;
     let text = String::from_utf8_lossy(&bytes);
     let lossy_truncated = std::str::from_utf8(&bytes).is_err();
@@ -2206,7 +2206,7 @@ fn grep_tool(
         .path
         .as_ref()
         .ok_or_else(|| {
-            intention_types::ErrorDto::validation(
+            intention_proto::ErrorDto::validation(
                 "invalid_tool_path",
                 "grep requires a workspace path",
             )
@@ -2268,7 +2268,7 @@ fn grep_scoped(
     cancellation: &CancellationSignal,
 ) -> DtoResult<ExecutedOutcome> {
     let scope = input.scope.ok_or_else(|| {
-        intention_types::ErrorDto::validation("invalid_tool_path", "grep requires a workspace path")
+        intention_proto::ErrorDto::validation("invalid_tool_path", "grep requires a workspace path")
     })?;
     let (base, single) = match scope {
         GrepScope::File { path } => (root.resolve_path(&path), Some(path)),
@@ -2279,10 +2279,10 @@ fn grep_scoped(
     // link like any other filesystem path, and only the type decision happens
     // here.
     let metadata = std::fs::metadata(&base).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
+        intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
     })?;
     if single.is_some() && !metadata.is_file() {
-        return Err(intention_types::ErrorDto::validation(
+        return Err(intention_proto::ErrorDto::validation(
             "tool_search_failed",
             "workspace search failed",
         ));
@@ -2328,7 +2328,7 @@ fn grep_scoped(
             }
         }
     } else {
-        return Err(intention_types::ErrorDto::validation(
+        return Err(intention_proto::ErrorDto::validation(
             "tool_search_failed",
             "workspace search failed",
         ));
@@ -2347,14 +2347,14 @@ fn grep_scoped(
             }))));
         }
         let mut file = std::fs::File::open(&path).map_err(|_| {
-            intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
+            intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
         })?;
         let mut bytes = Vec::new();
         // Every file is read through the bounded reader, so an oversized file
         // cannot allocate unbounded memory during a directory search; the
         // truncation flag reports the dropped tail (PR24-022).
         let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|_| {
-            intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
+            intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
         })?;
         let text = String::from_utf8_lossy(&bytes);
         let lossy_truncated = std::str::from_utf8(&bytes).is_err();
@@ -2446,7 +2446,7 @@ fn record_grep_match(
     };
     let cost = serde_json::to_string(&matched)
         .map_err(|_| {
-            intention_types::ErrorDto::validation(
+            intention_proto::ErrorDto::validation(
                 "invalid_tool_result_content",
                 "tool result content could not be normalized",
             )
@@ -2478,7 +2478,7 @@ fn validate_search_pattern(pattern: &str) -> DtoResult<()> {
         || windows_rooted
         || pattern.split(['/', '\\']).any(|part| part == "..")
     {
-        return Err(intention_types::ErrorDto::validation(
+        return Err(intention_proto::ErrorDto::validation(
             "invalid_tool_pattern",
             "tool pattern must be relative and stay within the workspace",
         ));

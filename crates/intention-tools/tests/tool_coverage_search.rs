@@ -5,8 +5,8 @@
 )]
 
 use intention_domain::WorkspaceRootDto;
+use intention_proto::ToolCallId;
 use intention_tools::*;
-use intention_types::ToolCallId;
 use tempfile::TempDir;
 
 fn service() -> (TempDir, ToolService) {
@@ -16,8 +16,8 @@ fn service() -> (TempDir, ToolService) {
     (dir, ToolService::new(root))
 }
 
-fn path(value: &str) -> intention_types::WorkspaceRelativePathDto {
-    intention_types::WorkspaceRelativePathDto::parse(value).unwrap()
+fn path(value: &str) -> intention_proto::WorkspaceRelativePathDto {
+    intention_proto::WorkspaceRelativePathDto::parse(value).unwrap()
 }
 
 fn text(value: &str) -> BoundedText {

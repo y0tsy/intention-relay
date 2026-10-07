@@ -30,6 +30,9 @@ use intention_domain::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunStatusDto,
     SendUserTurnCommandDto, WorkspaceRootDto,
 };
+use intention_proto::{
+    DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId,
+};
 use intention_protocol::{
     DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto,
     ProtocolHelloDto, ProtocolMethodDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
@@ -38,9 +41,6 @@ use intention_protocol::{
 };
 use intention_transport::{
     LocalConnection, LocalEndpoint, local_protocol_version, negotiate_client,
-};
-use intention_types::{
-    DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId,
 };
 use tempfile::TempDir;
 

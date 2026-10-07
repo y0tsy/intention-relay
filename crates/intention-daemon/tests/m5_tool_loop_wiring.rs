@@ -23,6 +23,7 @@ use intention_model::{
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
     ModelToolDefinitionDto, ToolCallDto,
 };
+use intention_proto::{IdempotencyKey, RunId, SessionId, TimestampDto, ToolCallId};
 use intention_protocol::{
     ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, SendUserTurnOutcomeDto,
 };
@@ -30,7 +31,6 @@ use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionOutcomeDto, ModelSleepFuture,
     ModelTimePort,
 };
-use intention_types::{IdempotencyKey, RunId, SessionId, TimestampDto, ToolCallId};
 use tempfile::TempDir;
 
 /// Emits one scripted event round per provider execution and records requests.
@@ -167,8 +167,8 @@ fn intention_test_snapshot() -> ConfigSnapshotDto {
     )
     .expect("fixture configuration resolves");
     ConfigSnapshotDto::new(
-        intention_types::SchemaVersionDto::new(1, 0),
-        intention_types::ConfigRevisionId::new(),
+        intention_proto::SchemaVersionDto::new(1, 0),
+        intention_proto::ConfigRevisionId::new(),
         TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid"),
         resolved,
     )
@@ -221,9 +221,9 @@ fn create_session(
     workspace: &std::path::Path,
 ) {
     let create = ProtocolCommandDto::CreateSession(intention_domain::CreateSessionCommandDto::new(
-        intention_types::ProjectId::new(),
+        intention_proto::ProjectId::new(),
         session_id,
-        intention_types::WorkspaceId::new(),
+        intention_proto::WorkspaceId::new(),
         WorkspaceRootDto::parse(workspace.to_string_lossy().into_owned())
             .expect("fixture workspace is absolute"),
         intention_domain::RunModeDto::Build,

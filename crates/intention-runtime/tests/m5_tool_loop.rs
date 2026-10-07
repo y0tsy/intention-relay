@@ -18,6 +18,10 @@ use intention_model::{
     ModelDriver, ModelEventDto, ModelEventStream, ModelExecutionDriver, ModelMessageDto,
     ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto,
 };
+use intention_proto::{
+    ConfigRevisionId, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto, SessionId,
+    TimestampDto, ToolCallId, TurnId, WorkspaceId,
+};
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,
     ModelRunExecutionOutcomeDto, ModelRunExecutionService, ModelSleepFuture, ModelTimePort,
@@ -27,10 +31,6 @@ use intention_storage::{
     AppendMessageInputDto, ConsumePendingUserTurnsInputDto, CreateSessionInputDto,
     FinishRunInputDto, RemoveTurnInputDto, StorageRepositoryDto, TransitionRunInputDto,
     WriteToolResultInputDto,
-};
-use intention_types::{
-    ConfigRevisionId, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto, SessionId,
-    TimestampDto, ToolCallId, TurnId, WorkspaceId,
 };
 
 fn time(value: i64) -> TimestampDto {

@@ -5,6 +5,7 @@
 )]
 
 use intention_domain::WorkspaceRootDto;
+use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
 use intention_tools::{
     BoundedText, CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepMatch,
     GrepResult, GrepScope, InterruptCause, PathsResult, REDACTED_WORKSPACE_CWD, ReadInput,
@@ -12,7 +13,6 @@ use intention_tools::{
     ToolInput, ToolProcessStatus, ToolProjectedContent, ToolResult, ToolResultProjection,
     ToolService, WriteInput, WriteResult, model_visible_descriptors, registry,
 };
-use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 use tempfile::TempDir;
 
 fn fixture_dir(label: &str) -> TempDir {
@@ -219,11 +219,11 @@ fn tool_service_covers_nonzero_execute_as_normalized_result() {
         .invoke_enveloped(intention_tools::ToolInvocation {
             schema_version: TOOL_SCHEMA_VERSION,
             context: intention_tools::ToolContext {
-                session_id: intention_types::SessionId::parse(
+                session_id: intention_proto::SessionId::parse(
                     "00000000-0000-4000-8000-000000000003",
                 )
                 .unwrap(),
-                run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000004")
+                run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000004")
                     .unwrap(),
                 call_id,
             },
@@ -912,9 +912,9 @@ fn dto_metadata_and_observability_round_trip_all_variants() {
         );
     }
     let context = ToolContext {
-        session_id: intention_types::SessionId::parse("00000000-0000-4000-8000-000000000001")
+        session_id: intention_proto::SessionId::parse("00000000-0000-4000-8000-000000000001")
             .unwrap(),
-        run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000002").unwrap(),
+        run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000002").unwrap(),
         call_id: ToolCallId::new(),
     };
     let envelope = ToolResultEnvelope {
@@ -946,9 +946,9 @@ fn invocation_call_identity_is_validated() {
     let invocation = intention_tools::ToolInvocation {
         schema_version: TOOL_SCHEMA_VERSION,
         context: intention_tools::ToolContext {
-            session_id: intention_types::SessionId::parse("00000000-0000-4000-8000-000000000001")
+            session_id: intention_proto::SessionId::parse("00000000-0000-4000-8000-000000000001")
                 .unwrap(),
-            run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000002").unwrap(),
+            run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000002").unwrap(),
             call_id: id,
         },
         input: ToolInput::Glob(GlobInput {
@@ -1087,11 +1087,11 @@ fn execute_success_reports_stderr_and_typed_success_status() {
         .invoke_enveloped(intention_tools::ToolInvocation {
             schema_version: TOOL_SCHEMA_VERSION,
             context: intention_tools::ToolContext {
-                session_id: intention_types::SessionId::parse(
+                session_id: intention_proto::SessionId::parse(
                     "00000000-0000-4000-8000-000000000009",
                 )
                 .unwrap(),
-                run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000010")
+                run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000010")
                     .unwrap(),
                 call_id: ToolCallId::new(),
             },
@@ -1185,9 +1185,9 @@ fn tool_invocation_round_trips_with_optional_grep_path() {
     let invocation = intention_tools::ToolInvocation {
         schema_version: TOOL_SCHEMA_VERSION,
         context: intention_tools::ToolContext {
-            session_id: intention_types::SessionId::parse("00000000-0000-4000-8000-000000000010")
+            session_id: intention_proto::SessionId::parse("00000000-0000-4000-8000-000000000010")
                 .unwrap(),
-            run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000020").unwrap(),
+            run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000020").unwrap(),
             call_id: ToolCallId::new(),
         },
         input: ToolInput::Grep(GrepInput {
@@ -1235,11 +1235,11 @@ fn execute_reports_signal_termination_as_known_terminal_result() {
         .invoke_enveloped(intention_tools::ToolInvocation {
             schema_version: TOOL_SCHEMA_VERSION,
             context: intention_tools::ToolContext {
-                session_id: intention_types::SessionId::parse(
+                session_id: intention_proto::SessionId::parse(
                     "00000000-0000-4000-8000-000000000005",
                 )
                 .unwrap(),
-                run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000006")
+                run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000006")
                     .unwrap(),
                 call_id: ToolCallId::new(),
             },
@@ -1694,11 +1694,11 @@ fn enveloped_invocation_preserves_identity_and_records_metadata() {
         .invoke_enveloped(ToolInvocation {
             schema_version: TOOL_SCHEMA_VERSION,
             context: ToolContext {
-                session_id: intention_types::SessionId::parse(
+                session_id: intention_proto::SessionId::parse(
                     "00000000-0000-4000-8000-000000000007",
                 )
                 .unwrap(),
-                run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000008")
+                run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000008")
                     .unwrap(),
                 call_id,
             },
@@ -1796,11 +1796,11 @@ fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
             .invoke_enveloped(intention_tools::ToolInvocation {
                 schema_version: TOOL_SCHEMA_VERSION,
                 context: intention_tools::ToolContext {
-                    session_id: intention_types::SessionId::parse(
+                    session_id: intention_proto::SessionId::parse(
                         "00000000-0000-4000-8000-000000000011",
                     )
                     .unwrap(),
-                    run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000012")
+                    run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000012")
                         .unwrap(),
                     call_id: ToolCallId::new(),
                 },
@@ -1952,11 +1952,11 @@ fn envelope_reports_an_interrupted_execute_as_its_stable_error_code() {
             intention_tools::ToolInvocation {
                 schema_version: TOOL_SCHEMA_VERSION,
                 context: intention_tools::ToolContext {
-                    session_id: intention_types::SessionId::parse(
+                    session_id: intention_proto::SessionId::parse(
                         "00000000-0000-4000-8000-000000000013",
                     )
                     .unwrap(),
-                    run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000014")
+                    run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000014")
                         .unwrap(),
                     call_id: ToolCallId::new(),
                 },
@@ -1989,9 +1989,9 @@ fn projection_falls_back_to_observability_and_bare_results_stay_bounded() {
     let envelope = intention_tools::ToolResultEnvelope {
         schema_version: TOOL_SCHEMA_VERSION,
         context: ToolContext {
-            session_id: intention_types::SessionId::parse("00000000-0000-4000-8000-000000000001")
+            session_id: intention_proto::SessionId::parse("00000000-0000-4000-8000-000000000001")
                 .unwrap(),
-            run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000002").unwrap(),
+            run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000002").unwrap(),
             call_id: ToolCallId::new(),
         },
         result: ToolResult::Read(TextResult {

@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use intention_client::{RunStreamClient, RunSubscriptionReducer};
 use intention_domain::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
+use intention_proto::{ConfigRevisionId, ErrorDto, RunId, SchemaVersionDto, SessionId, TurnId};
 use intention_protocol::{
     ProtocolDaemonMessageDto, ProtocolHelloDto, ProtocolRequestPayloadDto,
     ProtocolResponsePayloadDto, RunStatusFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
@@ -17,7 +18,6 @@ use intention_protocol::{
 use intention_transport::{
     AsyncLocalListener, AsyncRequestReceiver, LocalEndpoint, local_protocol_version,
 };
-use intention_types::{ConfigRevisionId, ErrorDto, RunId, SchemaVersionDto, SessionId, TurnId};
 
 const SCHEMA: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
 /// Bound that turns a hanging subscription call into a visible test failure.

@@ -18,6 +18,10 @@ use intention_model::{
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
     ProviderErrorDto, ToolCallDto, UsageDto,
 };
+use intention_proto::{
+    ConfigRevisionId, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto, SessionId,
+    TimestampDto, TurnId, WorkspaceId,
+};
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,
     ModelRunExecutionOutcomeDto, ModelRunExecutionService, ModelSleepFuture, ModelTimePort,
@@ -26,10 +30,6 @@ use intention_runtime::{
 use intention_storage::{
     AppendMessageInputDto, ConsumePendingUserTurnsInputDto, CreateSessionInputDto,
     FinishRunInputDto, RemoveTurnInputDto, StorageRepositoryDto, TransitionRunInputDto,
-};
-use intention_types::{
-    ConfigRevisionId, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto, SessionId,
-    TimestampDto, TurnId, WorkspaceId,
 };
 
 fn time(value: i64) -> TimestampDto {
@@ -241,7 +241,7 @@ impl StorageRepositoryDto for FakeRepository {
         &self,
         _session_id: SessionId,
         _run_id: RunId,
-        _call_id: intention_types::ToolCallId,
+        _call_id: intention_proto::ToolCallId,
     ) -> DtoResult<intention_storage::ToolResultEvidenceDto> {
         Err(ErrorDto::unavailable("fixture_unused", "unused"))
     }

@@ -14,6 +14,8 @@ use intention_domain::{
 use intention_hooks::{
     HookObservability, Outcome as HookOutcome, PhaseContext, Registry as HookRegistry,
 };
+use intention_proto::ToolCallId;
+use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
 use intention_protocol::{
     CURRENT_DTO_SCHEMA_VERSION, CreateSessionAcceptedDto, InterruptRunAcceptedDto,
     ProtocolAcceptedResultDto, RemoveTurnAcceptedDto, SendUserTurnAcceptedDto,
@@ -30,8 +32,6 @@ use intention_tools::{
     CancellationSignal, InterruptCause, ToolDispatchOutcome, ToolInput, ToolProjectedContent,
     ToolResult, ToolService,
 };
-use intention_types::ToolCallId;
-use intention_types::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
 
 /// Explicit durable values selected for a create-session workflow.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1205,7 +1205,7 @@ fn tool_result_content(result: &ToolResult) -> DtoResult<String> {
         ToolProjectedContent::Paths { paths, truncated } => {
             let mut content = paths
                 .iter()
-                .map(intention_types::WorkspaceRelativePathDto::as_str)
+                .map(intention_proto::WorkspaceRelativePathDto::as_str)
                 .collect::<Vec<_>>()
                 .join("\n");
             append_truncation_marker(&mut content, truncated);
@@ -1411,8 +1411,8 @@ mod tests {
         tool_result_metadata,
     };
     use intention_hooks::{Phase, PhaseContext};
+    use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
     use intention_tools::{BoundedText, TextResult, ToolResult};
-    use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 
     fn bounded(value: &str) -> BoundedText {
         BoundedText::new(value).unwrap_or_else(|_| unreachable!("fixture tool text is bounded"))

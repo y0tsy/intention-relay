@@ -7,6 +7,7 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use intention_domain::{GetSessionSnapshotQueryDto, RunModeDto};
+use intention_proto::{RunId, SchemaVersionDto, SessionId};
 use intention_protocol::{
     ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto,
     ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, SessionSubscriptionResponseDto,
@@ -17,7 +18,6 @@ use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncRequestSender, LocalEndpoint,
     local_protocol_version,
 };
-use intention_types::{RunId, SchemaVersionDto, SessionId};
 
 fn endpoint() -> LocalEndpoint {
     let nanos = SystemTime::now()

@@ -30,7 +30,7 @@ exempt = 0.0
 "intention-tui" = "edge"
 "intention" = "edge"
 "intention-client" = "edge"
-"intention-types" = "exempt"
+"intention-proto" = "exempt"
 "intention-protocol" = "exempt"
 
 [[exclusions]]

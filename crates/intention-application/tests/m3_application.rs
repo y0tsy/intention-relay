@@ -25,6 +25,10 @@ use intention_domain::{
 use intention_hooks::{
     FailurePolicy, Hook, HookObservability, Outcome as HookOutcome, Phase, PhaseContext, Registry,
 };
+use intention_proto::{
+    ConfigRevisionId, DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SchemaVersionDto,
+    SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
+};
 use intention_protocol::{
     CURRENT_DTO_SCHEMA_VERSION, ProtocolAcceptedResultDto, SendUserTurnOutcomeDto,
 };
@@ -37,10 +41,6 @@ use intention_storage::{
 };
 use intention_tools::{
     BoundedText, CancellationSignal, ExecuteInput, ReadInput, TextResult, ToolInput, ToolResult,
-};
-use intention_types::{
-    ConfigRevisionId, DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SchemaVersionDto,
-    SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
 };
 use intention_workspace::WorkspaceRoot;
 
@@ -78,7 +78,7 @@ fn invoke_read_input(path: &str) -> InvokeLocalToolInputDto {
         ToolCallId::new(),
         "read",
         ToolInput::Read(ReadInput {
-            path: intention_types::WorkspaceRelativePathDto::parse(path).expect("path"),
+            path: intention_proto::WorkspaceRelativePathDto::parse(path).expect("path"),
         }),
         fixture_time(),
     )
@@ -92,7 +92,7 @@ fn invoke_read_input_in_workspace(root: &WorkspaceRoot, path: &str) -> InvokeLoc
         ToolCallId::new(),
         "read",
         ToolInput::Read(ReadInput {
-            path: intention_types::WorkspaceRelativePathDto::parse(path).expect("path"),
+            path: intention_proto::WorkspaceRelativePathDto::parse(path).expect("path"),
         }),
         fixture_time(),
     )
@@ -454,7 +454,7 @@ fn hello_read_result() -> ToolResult {
 
 fn managed_read_input(path: &str) -> ToolInput {
     ToolInput::Read(ReadInput {
-        path: intention_types::WorkspaceRelativePathDto::parse(path).expect("path"),
+        path: intention_proto::WorkspaceRelativePathDto::parse(path).expect("path"),
     })
 }
 

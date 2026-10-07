@@ -11,6 +11,10 @@ use intention_domain::{
     RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto, ToolResultMetadataEntryDto,
     ToolResultStatusDto, WorkspaceRootDto,
 };
+use intention_proto::{
+    ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId,
+    RunId, SchemaVersionDto, SessionId, TimestampDto, ToolCallId, UsageDto, WorkspaceId,
+};
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,
     ConsumePendingUserTurnsInputDto, CreateSessionInputDto, FinishRunInputDto,
@@ -18,10 +22,6 @@ use intention_storage::{
     TransitionRunInputDto, WriteToolResultInputDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
-use intention_types::{
-    ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId,
-    RunId, SchemaVersionDto, SessionId, TimestampDto, ToolCallId, UsageDto, WorkspaceId,
-};
 use tempfile::TempDir;
 
 fn time(value: i64) -> TimestampDto {

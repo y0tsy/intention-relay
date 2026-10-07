@@ -5,8 +5,8 @@
 )]
 
 use intention_domain::WorkspaceRootDto;
+use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
 use intention_tools::*;
-use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 use tempfile::TempDir;
 
 fn service() -> (TempDir, ToolService) {
@@ -72,8 +72,8 @@ fn exercises_plain_grep_and_envelope_fallback() {
     let envelope = ToolResultEnvelope {
         schema_version: TOOL_SCHEMA_VERSION,
         context: ToolContext {
-            session_id: intention_types::SessionId::new(),
-            run_id: intention_types::RunId::new(),
+            session_id: intention_proto::SessionId::new(),
+            run_id: intention_proto::RunId::new(),
             call_id: ToolCallId::new(),
         },
         result: ToolResult::Read(TextResult {

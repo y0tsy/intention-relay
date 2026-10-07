@@ -10,11 +10,11 @@
 //! memory-bounded.
 
 use intention_domain::WorkspaceRootDto;
+use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
 use intention_tools::{
     BoundedText, CancellationSignal, EditInput, GlobInput, GrepInput, GrepMatch, GrepScope,
     ToolDispatchOutcome, ToolInput, ToolResult, ToolService, WriteInput,
 };
-use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 use serde_json::json;
 use tempfile::TempDir;
 

@@ -6,15 +6,15 @@
 use intention_domain::{
     MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto, WorkspaceRootDto,
 };
+use intention_proto::{
+    ConfigRevisionId, CorrelationIdDto, ProjectId, RunId, SchemaVersionDto, SessionId, TurnId,
+    WorkspaceId,
+};
 use intention_protocol::{
     CURRENT_PROTOCOL_VERSION, CreateSessionAcceptedDto, InterruptRunAcceptedDto,
     ProtocolAcceptedDto, ProtocolAcceptedResultDto, ProtocolVersionDto, RemoveTurnAcceptedDto,
     SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionSnapshotDto,
     SessionSubscriptionResponseDto,
-};
-use intention_types::{
-    ConfigRevisionId, CorrelationIdDto, ProjectId, RunId, SchemaVersionDto, SessionId, TurnId,
-    WorkspaceId,
 };
 
 fn workspace_root() -> WorkspaceRootDto {

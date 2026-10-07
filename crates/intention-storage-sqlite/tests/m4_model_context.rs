@@ -10,15 +10,15 @@ use intention_domain::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunStatusDto,
     WorkspaceRootDto,
 };
+use intention_proto::{
+    ConfigRevisionId, FinishReasonDto, IdempotencyKey, ProjectId, RunId, SchemaVersionDto,
+    SessionId, TimestampDto, ToolCallId, UsageDto, WorkspaceId,
+};
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto, CreateSessionInputDto,
     FinishRunInputDto, StorageRepositoryDto, TransitionRunInputDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
-use intention_types::{
-    ConfigRevisionId, FinishReasonDto, IdempotencyKey, ProjectId, RunId, SchemaVersionDto,
-    SessionId, TimestampDto, ToolCallId, UsageDto, WorkspaceId,
-};
 use tempfile::TempDir;
 
 #[test]

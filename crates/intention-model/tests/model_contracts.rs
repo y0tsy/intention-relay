@@ -8,7 +8,7 @@ use intention_model::{
     ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
     ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto, UsageDto,
 };
-use intention_types::{CorrelationIdDto, RunId, ToolCallId};
+use intention_proto::{CorrelationIdDto, RunId, ToolCallId};
 
 fn message(role: ModelRoleDto, content: &str) -> ModelMessageDto {
     ModelMessageDto::new(role, content).expect("fixture message is valid")
@@ -255,7 +255,7 @@ fn capabilities_tool_usage_events_and_errors_cover_safe_wire_variants() {
         serde_json::from_str(&serde_json::to_string(&error).expect("error serializes"))
             .expect("error deserializes");
     assert_eq!(decoded.code(), "provider_unavailable");
-    assert_eq!(decoded.retry(), intention_types::ErrorRetryDto::Never);
+    assert_eq!(decoded.retry(), intention_proto::ErrorRetryDto::Never);
     assert_eq!(decoded.correlation_id(), Some(correlation));
     assert_eq!(decoded.to_string(), "provider_unavailable");
     assert!(serde_json::from_str::<ProviderErrorDto>(r#"{"code":"","retry":"never"}"#).is_err());

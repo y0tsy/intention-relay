@@ -9,15 +9,15 @@ use intention_domain::{
     RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto, ToolResultMetadataEntryDto,
     ToolResultStatusDto, WorkspaceRootDto,
 };
+use intention_proto::{
+    ConfigRevisionId, ErrorCategoryDto, FinishReasonDto, IdempotencyKey, ProjectId, RunId,
+    SessionId, TimestampDto, ToolCallId, TurnId, UsageDto, WorkspaceId,
+};
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,
     ConsumePendingUserTurnsInputDto, CreateSessionInputDto, FinishRunInputDto,
     RecoverUnfinishedRunsInputDto, RemoveTurnInputDto, StartingRunModelContextDto,
     ToolResultEvidenceDto, TransitionRunInputDto, WriteToolResultInputDto,
-};
-use intention_types::{
-    ConfigRevisionId, ErrorCategoryDto, FinishReasonDto, IdempotencyKey, ProjectId, RunId,
-    SessionId, TimestampDto, ToolCallId, TurnId, UsageDto, WorkspaceId,
 };
 
 fn time(value: i64) -> TimestampDto {

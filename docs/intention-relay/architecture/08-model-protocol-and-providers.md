@@ -7,7 +7,7 @@ provider capabilities rather than forcing all models into a lowest-common-denomi
 
 ## Canonical model contract
 
-`intention-model` owns typed requests, stream events, capabilities, and the provider-driver trait. `intention-types`
+`intention-model` owns typed requests, stream events, capabilities, and the provider-driver trait. `intention-proto`
 owns provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and `ProviderErrorDto`, which `intention-model`
 re-exports for source compatibility. `intention-domain` owns the durable projections and the transcript-row representation.
 Domain, storage, and protocol retain no dependency on `intention-model`.

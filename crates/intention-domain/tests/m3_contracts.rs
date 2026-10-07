@@ -10,7 +10,7 @@ use intention_domain::{
     RunProjectionDto, RunStatusDto, SessionProjectionDto, WorkspaceRootDto,
     validate_plan_status_transition, validate_run_status_transition,
 };
-use intention_types::{
+use intention_proto::{
     ConfigRevisionId, ProjectId, RunId, SessionId, ToolCallId, TurnId, WorkspaceId,
 };
 

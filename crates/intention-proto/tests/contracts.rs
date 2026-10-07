@@ -3,9 +3,9 @@
     reason = "Contract fixtures use expect to provide precise test failure messages."
 )]
 
-//! Test-first contract evidence for the planned `intention-types` public API.
+//! Test-first contract evidence for the planned `intention-proto` public API.
 
-use intention_types::{
+use intention_proto::{
     ErrorCategoryDto, ErrorDto, ErrorRetryDto, IdempotencyKey, SchemaVersionDto, SessionId,
     TimestampDto,
 };
@@ -43,7 +43,7 @@ fn the_eight_identity_newtypes_round_trip_as_canonical_uuid_strings() {
     assert_eq!(decoded, key);
     assert_eq!(
         SchemaVersionDto::new(1, 1),
-        intention_types::SchemaVersionDto::new(1, 1)
+        intention_proto::SchemaVersionDto::new(1, 1)
     );
     assert_eq!(
         TimestampDto::from_unix_seconds(1)

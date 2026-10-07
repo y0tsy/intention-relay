@@ -26,7 +26,7 @@ use intention_model::{
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
     ProviderErrorDto, ToolCallDto, UsageDto,
 };
-use intention_types::{DtoResult, ErrorDto, ToolCallId};
+use intention_proto::{DtoResult, ErrorDto, ToolCallId};
 
 mod wire;
 
@@ -727,7 +727,7 @@ fn translate_assistant_message(
 )]
 mod tests {
     use super::*;
-    use intention_types::{ErrorRetryDto, RunId};
+    use intention_proto::{ErrorRetryDto, RunId};
 
     #[test]
     fn notice_role_translates_as_a_user_message_with_its_text_unchanged() {

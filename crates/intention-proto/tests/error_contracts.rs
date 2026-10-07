@@ -5,7 +5,7 @@
 
 //! Versioned fixture compatibility and safe-error contract evidence.
 
-use intention_types::{
+use intention_proto::{
     CorrelationIdDto, ErrorCategoryDto, ErrorDetailDto, ErrorDto, ErrorRetryDto,
     WorkspaceRelativePathDto,
 };

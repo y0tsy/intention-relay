@@ -17,7 +17,7 @@ use intention_model::{
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
     ProviderErrorDto, ToolCallDto, UsageDto,
 };
-use intention_types::{DtoResult, ErrorDto, ToolCallId};
+use intention_proto::{DtoResult, ErrorDto, ToolCallId};
 use openrouter_rs::{
     OpenRouterClient,
     api::chat::{ChatCompletionRequest, ContentPart, Message},
@@ -569,7 +569,7 @@ fn translate_assistant_message(message: &ModelMessageDto) -> DtoResult<Message> 
 mod tests {
     use super::*;
     use futures_util::FutureExt;
-    use intention_types::RunId;
+    use intention_proto::RunId;
 
     fn api_error(status: http::StatusCode) -> OpenRouterError {
         OpenRouterError::Api(Box::new(openrouter_rs::error::ApiErrorContext {
@@ -597,8 +597,8 @@ mod tests {
     fn native_errors_preserve_safe_retry_guidance() {
         let retryable = map_openrouter_error(&api_error(http::StatusCode::TOO_MANY_REQUESTS));
         let permanent = map_openrouter_error(&api_error(http::StatusCode::BAD_REQUEST));
-        assert_eq!(retryable.retry(), intention_types::ErrorRetryDto::Delayed);
-        assert_eq!(permanent.retry(), intention_types::ErrorRetryDto::Never);
+        assert_eq!(retryable.retry(), intention_proto::ErrorRetryDto::Delayed);
+        assert_eq!(permanent.retry(), intention_proto::ErrorRetryDto::Never);
         assert!(
             !serde_json::to_string(&retryable)
                 .expect("error serializes")
@@ -860,7 +860,7 @@ mod tests {
         assert!(matches!(
             retryable.pending.back(),
             Some(Err(error)) if error.code() == "openrouter_provider_unavailable"
-                && error.retry() == intention_types::ErrorRetryDto::Delayed
+                && error.retry() == intention_proto::ErrorRetryDto::Delayed
         ));
 
         let mut permanent = state();
@@ -868,7 +868,7 @@ mod tests {
         assert!(matches!(
             permanent.pending.back(),
             Some(Err(error)) if error.code() == "openrouter_provider_request_rejected"
-                && error.retry() == intention_types::ErrorRetryDto::Never
+                && error.retry() == intention_proto::ErrorRetryDto::Never
         ));
 
         let cancellation = ModelCancellationSignal::new();

@@ -12,11 +12,11 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto};
 use intention_protocol::{
     JsonRpcRequestDto, JsonRpcResponseDto, ProtocolHelloDto, ProtocolVersionDto,
     decode_hello_request, decode_hello_response, encode_hello_request, encode_hello_response,
 };
-use intention_types::{DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto};
 use interprocess::ConnectWaitMode;
 use interprocess::local_socket::prelude::{LocalSocketListener, LocalSocketStream};
 use interprocess::local_socket::tokio::{
@@ -1404,7 +1404,7 @@ mod tests {
         let error = response.error_value().expect("an error object is present");
         assert_eq!(error.code(), intention_protocol::JSONRPC_VERSION_MISMATCH);
         assert_eq!(
-            error.data().map(intention_types::ErrorDto::code),
+            error.data().map(intention_proto::ErrorDto::code),
             Some("incompatible_protocol_version")
         );
         assert_eq!(
@@ -1473,7 +1473,7 @@ mod tests {
             let error = response.error_value().expect("an error object is present");
             assert_eq!(error.code(), expected_code);
             assert_eq!(
-                error.data().map(intention_types::ErrorDto::code),
+                error.data().map(intention_proto::ErrorDto::code),
                 Some(expected_data_code)
             );
             assert_eq!(

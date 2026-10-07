@@ -1,6 +1,6 @@
 [workspace]
 members = [
-  "crates/intention-types",
+  "crates/intention-proto",
   "crates/intention-domain",
   "crates/intention-application",
   "crates/intention-runtime",
@@ -27,7 +27,7 @@ members = [
   "quality/harness",
 ]
 default-members = [
-  "crates/intention-types",
+  "crates/intention-proto",
   "crates/intention-domain",
   "crates/intention-protocol",
   "crates/intention-config",

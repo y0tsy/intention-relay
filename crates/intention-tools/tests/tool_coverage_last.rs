@@ -6,10 +6,10 @@
 //! instead of leaving its fixture helpers unused under `-D warnings`.
 
 use intention_domain::WorkspaceRootDto;
+use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
 use intention_tools::{
     BoundedText, CancellationSignal, ToolDispatchOutcome, ToolInput, ToolResult, ToolService,
 };
-use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 use tempfile::TempDir;
 
 fn service(dir: &TempDir) -> ToolService {

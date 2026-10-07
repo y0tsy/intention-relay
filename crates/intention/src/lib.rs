@@ -30,6 +30,12 @@ use intention_hooks::{
 use intention_model::{ModelCancellationSignal, ModelExecutionDriver};
 #[cfg(any(test, feature = "test-support"))]
 use intention_model::{ModelCapabilitiesDto, ModelDriver, ModelEventStream};
+use intention_proto::{
+    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, RunId, SchemaVersionDto, SessionId,
+    TimestampDto,
+};
+#[cfg(test)]
+use intention_proto::{ProjectId, WorkspaceId};
 #[cfg(test)]
 use intention_protocol::SendUserTurnOutcomeDto;
 use intention_protocol::{
@@ -50,12 +56,6 @@ use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepositor
 #[cfg(test)]
 use intention_tools::ToolResult;
 use intention_tools::{CancellationSignal, ToolInput};
-use intention_types::{
-    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, RunId, SchemaVersionDto, SessionId,
-    TimestampDto,
-};
-#[cfg(test)]
-use intention_types::{ProjectId, WorkspaceId};
 use intention_workspace::WorkspaceRoot;
 
 const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
@@ -290,7 +290,7 @@ impl DaemonApplicationFacade {
         &self,
         session_id: SessionId,
         run_id: RunId,
-        call_id: intention_types::ToolCallId,
+        call_id: intention_proto::ToolCallId,
         tool_id: impl Into<String>,
         input: ToolInput,
         workspace: WorkspaceRoot,
@@ -325,7 +325,7 @@ impl DaemonApplicationFacade {
         &self,
         session_id: SessionId,
         run_id: RunId,
-        call_id: intention_types::ToolCallId,
+        call_id: intention_proto::ToolCallId,
         tool_id: impl Into<String>,
         input: ToolInput,
         workspace: WorkspaceRoot,
@@ -493,7 +493,7 @@ impl DaemonApplicationFacade {
         &self,
         session_id: SessionId,
         run_id: RunId,
-        call_id: intention_types::ToolCallId,
+        call_id: intention_proto::ToolCallId,
     ) -> DtoResult<ToolResultEvidenceDto> {
         self.inner
             .repository
@@ -1079,7 +1079,7 @@ mod tests {
     /// Builds the read input for the shared `hello.txt` workspace fixture.
     fn read_hello_input() -> ToolInput {
         ToolInput::Read(intention_tools::ReadInput {
-            path: intention_types::WorkspaceRelativePathDto::parse("hello.txt")
+            path: intention_proto::WorkspaceRelativePathDto::parse("hello.txt")
                 .expect("fixture path is valid"),
         })
     }
@@ -1115,7 +1115,7 @@ mod tests {
         facade.command(ProtocolCommandDto::SendUserTurn(
             SendUserTurnCommandDto::new(
                 session_id,
-                intention_types::IdempotencyKey::new(),
+                intention_proto::IdempotencyKey::new(),
                 content,
             )
             .expect("fixture user turn is valid"),
@@ -1138,7 +1138,7 @@ mod tests {
         facade: &DaemonApplicationFacade,
         session_id: SessionId,
         run_id: RunId,
-        call_id: intention_types::ToolCallId,
+        call_id: intention_proto::ToolCallId,
     ) -> ToolResultEvidenceDto {
         facade
             .inner
@@ -1257,7 +1257,7 @@ mod tests {
         create(&facade, session_id);
         let command = SendUserTurnCommandDto::new(
             session_id,
-            intention_types::IdempotencyKey::new(),
+            intention_proto::IdempotencyKey::new(),
             "idempotent turn",
         )
         .expect("fixture user turn is valid");
@@ -1305,7 +1305,7 @@ mod tests {
         create(&facade, session_id);
         let command = SendUserTurnCommandDto::new(
             session_id,
-            intention_types::IdempotencyKey::new(),
+            intention_proto::IdempotencyKey::new(),
             "idempotent turn",
         )
         .expect("fixture user turn is valid");
@@ -1771,7 +1771,7 @@ mod tests {
         let accepted = facade.command(ProtocolCommandDto::SendUserTurn(
             SendUserTurnCommandDto::new(
                 session_id,
-                intention_types::IdempotencyKey::new(),
+                intention_proto::IdempotencyKey::new(),
                 "committed",
             )
             .expect("fixture user turn is valid"),
@@ -1824,7 +1824,7 @@ mod tests {
         let result = facade.command(ProtocolCommandDto::SendUserTurn(
             SendUserTurnCommandDto::new(
                 SessionId::new(),
-                intention_types::IdempotencyKey::new(),
+                intention_proto::IdempotencyKey::new(),
                 "turn",
             )
             .expect("fixture turn is valid"),
@@ -1853,7 +1853,7 @@ mod tests {
         let run_id = started_run(&facade, session_id, "execution bridge");
         let (_workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
-        let mismatched_call = intention_types::ToolCallId::new();
+        let mismatched_call = intention_proto::ToolCallId::new();
         let error = facade
             .invoke_local_tool_for_daemon(
                 session_id,
@@ -1876,9 +1876,9 @@ mod tests {
             "tool_result_not_found"
         );
 
-        let unavailable_call = intention_types::ToolCallId::new();
+        let unavailable_call = intention_proto::ToolCallId::new();
         let missing = ToolInput::Read(intention_tools::ReadInput {
-            path: intention_types::WorkspaceRelativePathDto::parse("missing.txt")
+            path: intention_proto::WorkspaceRelativePathDto::parse("missing.txt")
                 .expect("fixture path is valid"),
         });
         let error = facade
@@ -1947,7 +1947,7 @@ mod tests {
             facade.command(ProtocolCommandDto::RemoveTurn(
                 intention_domain::RemoveTurnCommandDto::new(
                     session_id,
-                    intention_types::TurnId::new(),
+                    intention_proto::TurnId::new(),
                 )
             )),
             ProtocolCommandResultDto::Rejected(_)
@@ -1984,7 +1984,7 @@ mod tests {
             worker_facade.invoke_local_tool_for_daemon(
                 worker_session,
                 worker_run,
-                intention_types::ToolCallId::new(),
+                intention_proto::ToolCallId::new(),
                 "execute",
                 ToolInput::Execute(intention_tools::ExecuteInput {
                     program: intention_tools::BoundedText::new(if cfg!(windows) {
@@ -2057,8 +2057,8 @@ mod tests {
         let (_workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
         let call_ids = [
-            intention_types::ToolCallId::new(),
-            intention_types::ToolCallId::new(),
+            intention_proto::ToolCallId::new(),
+            intention_proto::ToolCallId::new(),
         ];
         for call_id in call_ids {
             let result = facade
@@ -2107,7 +2107,7 @@ mod tests {
         let run_id = started_run(&facade, session_id, "publication reread");
         let (_workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
-        let first_call = intention_types::ToolCallId::new();
+        let first_call = intention_proto::ToolCallId::new();
         let result = facade
             .invoke_local_tool_for_daemon(
                 session_id,
@@ -2137,7 +2137,7 @@ mod tests {
             "the first call commits exactly its own tool-call and tool-result rows"
         );
 
-        let second_call = intention_types::ToolCallId::new();
+        let second_call = intention_proto::ToolCallId::new();
         facade
             .invoke_local_tool_for_daemon(
                 session_id,
@@ -2174,7 +2174,7 @@ mod tests {
         let run_id = started_run(&facade, session_id, "publication path");
         let (_workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
-        let call_id = intention_types::ToolCallId::new();
+        let call_id = intention_proto::ToolCallId::new();
         let publisher = RecordingPublisher::new();
         let completed = facade
             .invoke_local_tool_for_daemon_with_publication(

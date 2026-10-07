@@ -33,6 +33,9 @@ use intention_model::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
 };
+#[cfg(feature = "test-support")]
+use intention_proto::TurnId;
+use intention_proto::{IdempotencyKey, RunId, SessionId, TimestampDto};
 use intention_protocol::{
     ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, SendUserTurnOutcomeDto,
 };
@@ -49,9 +52,6 @@ use intention_runtime::{
 };
 #[cfg(feature = "test-support")]
 use intention_transport::{AsyncLocalListener, LocalEndpoint};
-#[cfg(feature = "test-support")]
-use intention_types::TurnId;
-use intention_types::{IdempotencyKey, RunId, SessionId, TimestampDto};
 use tempfile::TempDir;
 
 struct ScriptedDriver {
@@ -244,8 +244,8 @@ fn intention_test_snapshot_with_credential(credential: &str) -> ConfigSnapshotDt
     )
     .expect("fixture configuration resolves");
     ConfigSnapshotDto::new(
-        intention_types::SchemaVersionDto::new(1, 0),
-        intention_types::ConfigRevisionId::new(),
+        intention_proto::SchemaVersionDto::new(1, 0),
+        intention_proto::ConfigRevisionId::new(),
         TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid"),
         resolved,
     )
@@ -276,9 +276,9 @@ fn schedule(
 fn create_and_start(facade: &DaemonApplicationFacade) -> (SessionId, RunId) {
     let session_id = SessionId::new();
     let create = ProtocolCommandDto::CreateSession(intention_domain::CreateSessionCommandDto::new(
-        intention_types::ProjectId::new(),
+        intention_proto::ProjectId::new(),
         session_id,
-        intention_types::WorkspaceId::new(),
+        intention_proto::WorkspaceId::new(),
         intention_domain::WorkspaceRootDto::parse(
             std::env::temp_dir().to_string_lossy().into_owned(),
         )
@@ -542,9 +542,9 @@ async fn accepted_host_turn_executes_once_then_streams_committed_content_and_com
     assert!(matches!(
         facade.command(ProtocolCommandDto::CreateSession(
             intention_domain::CreateSessionCommandDto::new(
-                intention_types::ProjectId::new(),
+                intention_proto::ProjectId::new(),
                 session_id,
-                intention_types::WorkspaceId::new(),
+                intention_proto::WorkspaceId::new(),
                 intention_domain::WorkspaceRootDto::parse(
                     std::env::temp_dir().to_string_lossy().into_owned(),
                 )
@@ -622,9 +622,9 @@ async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
     assert!(matches!(
         facade.command(ProtocolCommandDto::CreateSession(
             intention_domain::CreateSessionCommandDto::new(
-                intention_types::ProjectId::new(),
+                intention_proto::ProjectId::new(),
                 session_id,
-                intention_types::WorkspaceId::new(),
+                intention_proto::WorkspaceId::new(),
                 intention_domain::WorkspaceRootDto::parse(
                     std::env::temp_dir().to_string_lossy().into_owned(),
                 )
@@ -711,9 +711,9 @@ async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
     assert!(matches!(
         facade.command(ProtocolCommandDto::CreateSession(
             intention_domain::CreateSessionCommandDto::new(
-                intention_types::ProjectId::new(),
+                intention_proto::ProjectId::new(),
                 session_id,
-                intention_types::WorkspaceId::new(),
+                intention_proto::WorkspaceId::new(),
                 intention_domain::WorkspaceRootDto::parse(
                     std::env::temp_dir().to_string_lossy().into_owned(),
                 )
@@ -837,9 +837,9 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
     assert!(matches!(
         first_facade.command(ProtocolCommandDto::CreateSession(
             intention_domain::CreateSessionCommandDto::new(
-                intention_types::ProjectId::new(),
+                intention_proto::ProjectId::new(),
                 session_id,
-                intention_types::WorkspaceId::new(),
+                intention_proto::WorkspaceId::new(),
                 intention_domain::WorkspaceRootDto::parse(
                     std::env::temp_dir().to_string_lossy().into_owned(),
                 )
@@ -917,7 +917,7 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
     let projection_json = serde_json::to_string(&interrupted).expect("projection serializes");
     let transcript_json =
         serde_json::to_string(&interrupted_messages).expect("transcript rows serialize");
-    let error_json = serde_json::to_string(&intention_types::ErrorDto::unavailable(
+    let error_json = serde_json::to_string(&intention_proto::ErrorDto::unavailable(
         "restart_fixture_error",
         "safe restart fixture error",
     ))

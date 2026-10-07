@@ -4,8 +4,8 @@
     reason = "Coverage fixtures use infallible setup values; failures indicate broken test setup."
 )]
 
+use intention_proto::WorkspaceRelativePathDto;
 use intention_tools::*;
-use intention_types::WorkspaceRelativePathDto;
 
 fn p(s: &str) -> WorkspaceRelativePathDto {
     WorkspaceRelativePathDto::parse(s).unwrap()

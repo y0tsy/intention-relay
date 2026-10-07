@@ -9,11 +9,11 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::{RunProjectionDto, RunStatusDto, SessionProjectionDto};
-use intention_runtime::fail_starting_run;
-use intention_storage::{FinishRunInputDto, StorageRepositoryDto};
-use intention_types::{
+use intention_proto::{
     ConfigRevisionId, DtoResult, ErrorDto, RunId, SchemaVersionDto, SessionId, TimestampDto, TurnId,
 };
+use intention_runtime::fail_starting_run;
+use intention_storage::{FinishRunInputDto, StorageRepositoryDto};
 
 fn time() -> TimestampDto {
     TimestampDto::from_unix_seconds(9).expect("fixture timestamp is valid")
@@ -132,7 +132,7 @@ impl StorageRepositoryDto for FakeRepository {
         &self,
         _session_id: SessionId,
         _run_id: RunId,
-        _call_id: intention_types::ToolCallId,
+        _call_id: intention_proto::ToolCallId,
     ) -> DtoResult<intention_storage::ToolResultEvidenceDto> {
         unused()
     }

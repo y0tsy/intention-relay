@@ -5,11 +5,11 @@
 )]
 
 use intention_domain::WorkspaceRootDto;
+use intention_proto::{RunId, SessionId, ToolCallId, WorkspaceRelativePathDto};
 use intention_tools::{
     BoundedText, GlobInput, TOOL_SCHEMA_VERSION, ToolContext, ToolExecutionMetadata, ToolInput,
     ToolInvocation, ToolPolicy, ToolProcessStatus, ToolService,
 };
-use intention_types::{RunId, SessionId, ToolCallId, WorkspaceRelativePathDto};
 
 fn service() -> (tempfile::TempDir, ToolService) {
     let dir = tempfile::tempdir().unwrap();

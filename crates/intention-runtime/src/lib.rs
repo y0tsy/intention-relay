@@ -17,13 +17,13 @@ pub use intention_model::{
     ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
     ModelToolDefinitionDto,
 };
+use intention_proto::{
+    DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, ProviderErrorDto, RunId,
+    SessionId, TimestampDto, ToolCallDto, UsageDto,
+};
 use intention_storage::{
     AppendMessageInputDto, ConsumePendingUserTurnsInputDto, FinishRunInputDto,
     StorageRepositoryDto, TransitionRunInputDto,
-};
-use intention_types::{
-    DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, ProviderErrorDto, RunId,
-    SessionId, TimestampDto, ToolCallDto, UsageDto,
 };
 
 mod context_window;

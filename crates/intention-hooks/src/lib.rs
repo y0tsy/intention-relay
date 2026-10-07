@@ -6,13 +6,13 @@
 //! [`Phase::AfterWorkspaceResolution`]. Phase contexts may identify a
 //! workspace only through safe identity — the [`ToolCallId`] plus typed
 //! relative input today, and the daemon-owned
-//! [`intention_types::WorkspaceId`] once the application wires it into these
+//! [`intention_proto::WorkspaceId`] once the application wires it into these
 //! contexts — never a canonical or absolute workspace path. Hooks remain
 //! persistence- and publication-free: they observe typed contexts and return
 //! typed outcomes that the caller alone applies.
 
+use intention_proto::{DtoResult, ErrorDto, ToolCallId};
 use intention_tools::{ToolInput, ToolResult};
-use intention_types::{DtoResult, ErrorDto, ToolCallId};
 
 /// The eight points in the tool lifecycle.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

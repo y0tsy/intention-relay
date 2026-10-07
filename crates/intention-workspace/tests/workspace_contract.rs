@@ -8,7 +8,7 @@
 )]
 
 use intention_domain::WorkspaceRootDto;
-use intention_types::WorkspaceRelativePathDto;
+use intention_proto::WorkspaceRelativePathDto;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 struct TempDir(std::path::PathBuf);

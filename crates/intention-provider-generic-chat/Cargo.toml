@@ -14,7 +14,7 @@ async-openai = { version = "=0.42.1", default-features = false, features = ["rus
 futures-util = "0.3.31"
 intention-config = { path = "../intention-config", version = "=0.0.0" }
 intention-model = { path = "../intention-model", version = "=0.0.0" }
-intention-types = { path = "../intention-types", version = "=0.0.0" }
+intention-proto = { path = "../intention-proto", version = "=0.0.0" }
 serde = { version = "1.0.228", features = ["derive"] }
 
 [dev-dependencies]

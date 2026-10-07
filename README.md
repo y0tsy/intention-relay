@@ -53,7 +53,7 @@ of each.
 | Milestone | Status | Scope |
 | --- | --- | --- |
 | M0 Quality foundation | Closed | Reproducible Makefile-orchestrated quality pipeline (format, lint, feature profiles, nextest, docs, architecture, coverage, supply-chain gates) with pinned tools and a metrics manifest. |
-| M1 Contracts, configuration, workspace skeleton | Closed | Tier-A crate boundaries (`intention-types`, `intention-domain`, `intention-protocol`, `intention-config`), DTO-first policy, TOML config with redacted projections, compile-only skeletons for every later crate. |
+| M1 Contracts, configuration, workspace skeleton | Closed | Tier-A crate boundaries (`intention-proto`, `intention-domain`, `intention-protocol`, `intention-config`), DTO-first policy, TOML config with redacted projections, compile-only skeletons for every later crate. |
 | M1+ Quality policy hardening | Closed | Machine-readable policies (`quality/*.toml`) enforce workspace dependency graphs, executable test targets, public-API surface, coverage tiers, and feature profiles. |
 | M2 Local protocol, client, daemon bootstrap | Closed | Private local IPC, hello/negotiation, correlated request/response codec, shared bootstrap client with startup lock and readiness polling, in-memory fixture composition, minimal TUI proof adapter. |
 | M3 SQLite sessions, transcript, queue | Closed | Durable SQLite-backed sessions, runs, turns, and transcript rows; turn queueing; canonical credential-free config revisions; recovery-before-ready. |
@@ -73,14 +73,14 @@ All workspace crates live under [crates/](crates/) unless noted. Coverage is
 enforced by the machine-readable policy in
 [quality/coverage.toml](quality/coverage.toml) under
 [architecture 12](docs/intention-relay/architecture/12-quality-gates-and-makefile.md): per-crate line
-tiers of 75% (`core`), 60% (`standard`), and 20% (`edge`), with `intention-types`
+tiers of 75% (`core`), 60% (`standard`), and 20% (`edge`), with `intention-proto`
 and `intention-protocol` exempt at 0% and outside collection.
 
 ### DTO foundations
 
 | Crate | Responsibility |
 | --- | --- |
-| [intention-types](crates/intention-types) | Shared, dependency-light DTOs: validated identifiers, schema versions, safe errors, time, pagination, and model/tool value DTOs. |
+| [intention-proto](crates/intention-proto) | Shared, dependency-light DTOs: validated identifiers, schema versions, safe errors, time, pagination, and model/tool value DTOs. |
 | [intention-domain](crates/intention-domain) | Domain DTOs and value validation: commands/queries, run modes and statuses, transcript and tool-result projections. |
 | [intention-protocol](crates/intention-protocol) | Versioned public local-protocol DTOs: typed JSON-RPC 2.0 request/response envelopes over NDJSON, command/query wrappers, and their typed serde payloads (owned by [architecture 03](docs/intention-relay/architecture/03-daemon-transport-and-adapters.md) and [architecture 02](docs/intention-relay/architecture/02-dto-and-contract-policy.md)). |
 | [intention-config](crates/intention-config) | Versioned TOML parsing, migration, validation, path selection, and credential-free public configuration projections. |

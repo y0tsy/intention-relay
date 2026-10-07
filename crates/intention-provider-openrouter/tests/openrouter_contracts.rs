@@ -17,8 +17,8 @@ use intention_model::{
     FinishReasonDto, ModelCancellationSignal, ModelDriver, ModelExecutionDriver, ModelMessageDto,
     ModelRequestDto, ModelRequestedCapabilitiesDto, ModelRoleDto,
 };
+use intention_proto::RunId;
 use intention_provider_openrouter::OpenRouterDriver;
-use intention_types::RunId;
 
 const FAKE_CREDENTIAL: &str = "fixture-credential-not-real-12345";
 

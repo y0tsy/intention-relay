@@ -23,8 +23,8 @@ active graph adds the intentional `storage -> config`, `storage-sqlite -> config
 -> config` edges required to persist and attach canonical configuration revisions without exposing credentials or
 filesystem paths.
 -  M4 activates `intention-model`, `intention-provider-openrouter`, and `intention-provider-generic-chat`. The model
-crate remains provider-neutral and depends only on `intention-types`; provider crates depend only on model/config/types
-plus their private SDK. `intention-types` owns the provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and
+crate remains provider-neutral and depends only on `intention-proto`; provider crates depend only on model/config/types
+plus their private SDK. `intention-proto` owns the provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and
 `ProviderErrorDto` shared by model and durable domain facts; `intention-model` retains compatibility re-exports. Only
 `intention` may select either concrete provider.
 -  M4 model and provider evidence is domain-owned and current-state: domain, storage, and protocol never depend on
@@ -48,8 +48,8 @@ The M1-M5 activation notes are historical records: the coverage policy is now th
 
 | Crate | Owns | May depend on |
 | --- | --- | --- |
-| `intention-types` | ID newtypes, schema versions, common errors, time, envelopes. | Minimal shared dependencies only. |
-| `intention-domain` | Domain DTOs, value validation, invariants. | `intention-types`. |
+| `intention-proto` | ID newtypes, schema versions, common errors, time, envelopes. | Minimal shared dependencies only. |
+| `intention-domain` | Domain DTOs, value validation, invariants. | `intention-proto`. |
 | `intention-application` | Commands, queries, semantic use-case workflows, and protocol-result mapping over DTO-only storage. | Domain, storage contracts, runtime contracts, configuration revisions, protocol, types. |
 | `intention-runtime` | Deterministic session/run lifecycle decisions, interruption handling, pending-turn context joins, and recovery-before-ready. | Domain, storage contracts, configuration revisions, types. |
 | `intention-storage` | DTO-only semantic repository methods, committed-change evidence, transcript and tool-result reads, and persisted configuration-revision inputs. | Config, domain, types. |
@@ -117,7 +117,7 @@ tiers are declared by its activating specification (roadmap, slice 1.5).
 
 | Target crate | Absorbs | Owns |
 | --- | --- | --- |
-| `intention-proto` | `intention-types`, `intention-protocol` | Identity newtypes, shared value types, schema versions, the versioned public protocol DTOs, and their typed serde payloads. |
+| `intention-proto` | `intention-proto`, `intention-protocol` | Identity newtypes, shared value types, schema versions, the versioned public protocol DTOs, and their typed serde payloads. |
 | `intention-domain` | `intention-domain` | Domain records, value validation, and invariants. |
 | `intention-config` | `intention-config` | TOML parsing, validation, resolved configuration, and credential-free snapshots. |
 | `intention-engine` | `intention-application`, `intention-runtime` | Commands, queries, semantic use-case workflows, deterministic lifecycle decisions, interruption handling, and recovery. |

@@ -4,10 +4,10 @@
 //! a daemon implementation, access domain services, or retain business state.
 
 use intention_client::IntentionClient;
+use intention_proto::DtoResult;
 use intention_protocol::{
     DaemonHealthDto, SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
 };
-use intention_types::DtoResult;
 
 /// A minimal proof adapter that reaches daemon state only through `IntentionClient`.
 pub struct TuiProofClient {

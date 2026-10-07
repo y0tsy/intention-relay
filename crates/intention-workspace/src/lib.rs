@@ -8,13 +8,13 @@
 //! security boundary — absolute paths and `..` are not contained, and symbolic
 //! links are ordinary filesystem material (architecture 05). Hook phase contexts may
 //! identify the workspace only through safe identity — the daemon-owned
-//! `intention_types::WorkspaceId` — never through this crate's root path. This
+//! `intention_proto::WorkspaceId` — never through this crate's root path. This
 //! crate owns no persistence and no publication.
 
 use std::path::{Path, PathBuf};
 
 use intention_domain::WorkspaceRootDto;
-use intention_types::{DtoResult, ErrorDto, WorkspaceRelativePathDto};
+use intention_proto::{DtoResult, ErrorDto, WorkspaceRelativePathDto};
 
 /// A workspace root used as an addressing anchor.
 #[derive(Clone, Debug, Eq, PartialEq)]

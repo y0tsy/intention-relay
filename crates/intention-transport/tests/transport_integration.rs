@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use intention_proto::ErrorDto;
 use intention_protocol::{
     JsonRpcErrorDto, JsonRpcRequestDto, JsonRpcResponseDto, ProtocolDaemonMessageDto,
     ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto,
@@ -19,7 +20,6 @@ use intention_transport::{
     AsyncLocalClientConnection, AsyncLocalListener, LocalConnection, LocalEndpoint, LocalListener,
     local_protocol_version, negotiate_client, negotiate_daemon,
 };
-use intention_types::ErrorDto;
 use tempfile::TempDir;
 
 static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(0);
@@ -62,8 +62,8 @@ fn unavailable_response(id: u64) -> JsonRpcResponseDto<ProtocolResponsePayloadDt
 /// Builds one current-state status frame from its wire shape so this crate
 /// keeps exercising framing without depending on the domain vocabulary.
 fn running_status_frame(
-    session_id: intention_types::SessionId,
-    run_id: intention_types::RunId,
+    session_id: intention_proto::SessionId,
+    run_id: intention_proto::RunId,
 ) -> RunStreamFrameDto {
     serde_json::from_value(serde_json::json!({
         "kind": "status",
@@ -76,8 +76,8 @@ fn running_status_frame(
 async fn async_connection_preserves_correlated_replies_then_uncorrelated_stream_frames() {
     let directory = TempDir::new().expect("temporary directory is available");
     let endpoint = endpoint(&directory);
-    let session_id = intention_types::SessionId::new();
-    let run_id = intention_types::RunId::new();
+    let session_id = intention_proto::SessionId::new();
+    let run_id = intention_proto::RunId::new();
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
     let server = tokio::spawn(async move {
         let connection = listener.accept().await.expect("server accepts client");

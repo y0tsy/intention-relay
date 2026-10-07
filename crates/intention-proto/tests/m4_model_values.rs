@@ -3,7 +3,7 @@
     reason = "M4 shared model-value fixtures use expect for precise diagnostics."
 )]
 
-use intention_types::{
+use intention_proto::{
     CorrelationIdDto, ErrorRetryDto, ProviderErrorDto, ToolCallDto, ToolCallId, UsageDto,
 };
 

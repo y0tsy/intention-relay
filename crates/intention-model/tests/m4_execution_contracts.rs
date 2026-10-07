@@ -14,7 +14,7 @@ use intention_model::{
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
     ProviderErrorDto,
 };
-use intention_types::RunId;
+use intention_proto::RunId;
 
 fn request() -> ModelRequestDto {
     ModelRequestDto::new(

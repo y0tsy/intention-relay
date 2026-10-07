@@ -1,5 +1,5 @@
 use crate::{CancellationSignal, EditInput, ExecutedOutcome, ReadInput, WriteInput};
-use intention_types::DtoResult;
+use intention_proto::DtoResult;
 use intention_workspace::WorkspaceRoot;
 
 pub fn read(

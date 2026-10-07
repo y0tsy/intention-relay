@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use intention_domain::{
     GetSessionSnapshotQueryDto, MessageProjectionDto, RunProjectionDto, RunStatusDto,
 };
+use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, RunId, SessionId};
 use intention_protocol::{
     DaemonHealthDto, DaemonReadinessDto, ProtocolCommandDto, ProtocolHelloDto, ProtocolMethodDto,
     ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestPayloadDto,
@@ -24,7 +25,6 @@ use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncRequestSender, LocalEndpoint,
     local_protocol_version,
 };
-use intention_types::{DtoResult, ErrorCategoryDto, ErrorDto, RunId, SessionId};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
 const STARTUP_RETRY: Duration = Duration::from_millis(25);
@@ -79,7 +79,7 @@ impl DaemonLauncher for ProcessDaemonLauncher {
                     "local_daemon_launch_failed",
                     ErrorCategoryDto::Unavailable,
                     "the local daemon could not be started",
-                    intention_types::ErrorRetryDto::Manual,
+                    intention_proto::ErrorRetryDto::Manual,
                     None,
                 )
                 .unwrap_or_else(|_| unavailable("local_daemon_launch_failed"))
@@ -221,7 +221,7 @@ impl IntentionClient {
                     "local_daemon_starting",
                     ErrorCategoryDto::Unavailable,
                     "the local daemon is starting",
-                    intention_types::ErrorRetryDto::Delayed,
+                    intention_proto::ErrorRetryDto::Delayed,
                     None,
                 )
                 .unwrap_or_else(|_| unavailable("local_daemon_starting"))),
@@ -230,7 +230,7 @@ impl IntentionClient {
                         "local_daemon_not_ready",
                         ErrorCategoryDto::Unavailable,
                         "the local daemon is not ready to serve requests",
-                        intention_types::ErrorRetryDto::Delayed,
+                        intention_proto::ErrorRetryDto::Delayed,
                         None,
                     )
                     .unwrap_or_else(|_| unavailable("local_daemon_not_ready")))

@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use intention_client::{DaemonLauncher, IntentionClient, ProcessDaemonLauncher};
 use intention_domain::{MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto};
+use intention_proto::{DtoResult, ErrorDto, ProjectId, SchemaVersionDto, SessionId, WorkspaceId};
 use intention_protocol::{
     DaemonHealthDto, DaemonReadinessDto, JsonRpcErrorDto, JsonRpcRequestDto, JsonRpcResponseDto,
     PROTOCOL_HELLO_METHOD, ProtocolHelloDto, ProtocolQueryResultDto, ProtocolResponsePayloadDto,
@@ -19,7 +20,6 @@ use intention_protocol::{
     SubscribeSessionCommandDto, decode_request_line, encode_hello_response, encode_response,
 };
 use intention_transport::{LocalEndpoint, LocalListener, local_protocol_version, negotiate_daemon};
-use intention_types::{DtoResult, ErrorDto, ProjectId, SchemaVersionDto, SessionId, WorkspaceId};
 use tempfile::TempDir;
 
 const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;

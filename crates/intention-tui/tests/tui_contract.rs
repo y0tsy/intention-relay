@@ -5,13 +5,13 @@
 
 use intention_client::{DaemonLauncher, IntentionClient};
 use intention_domain::RunModeDto;
+use intention_proto::{DtoResult, ErrorDto, SchemaVersionDto, SessionId};
 use intention_protocol::{
     DaemonReadinessDto, SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
 };
 use intention_test_support::FixtureHost;
 use intention_transport::LocalEndpoint;
 use intention_tui::TuiProofClient;
-use intention_types::{DtoResult, ErrorDto, SchemaVersionDto, SessionId};
 
 struct UnavailableLauncher;
 
@@ -81,6 +81,6 @@ async fn tui_proof_preserves_the_shared_client_error_contract() {
     assert_eq!(error.code(), "fixture_daemon_unavailable");
     assert_ne!(
         error.category(),
-        intention_types::ErrorCategoryDto::Internal
+        intention_proto::ErrorCategoryDto::Internal
     );
 }

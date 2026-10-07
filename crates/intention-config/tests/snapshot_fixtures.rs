@@ -6,7 +6,7 @@
 //! Versioned public configuration snapshot fixture evidence.
 
 use intention_config::{ConfigSnapshotDto, ProviderKindDto, ResolvedConfigDto};
-use intention_types::{ConfigRevisionId, SchemaVersionDto, TimestampDto};
+use intention_proto::{ConfigRevisionId, SchemaVersionDto, TimestampDto};
 
 const VALID_RESOLVED: &str = r#"{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000,"capacity_tokens":1000000},"source_kind":"explicit"}"#;
 

@@ -12,14 +12,14 @@ use intention_daemon::TestHostLifecycle;
 use intention_domain::{
     CreateSessionCommandDto, MessageProjectionDto, RunModeDto, WorkspaceRootDto,
 };
+use intention_proto::{
+    ConfigRevisionId, DtoResult, ProjectId, SchemaVersionDto, SessionId, TimestampDto, WorkspaceId,
+};
 use intention_protocol::{
     DaemonReadinessDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto,
     ProtocolQueryResultDto,
 };
 use intention_transport::{AsyncLocalListener, LocalEndpoint};
-use intention_types::{
-    ConfigRevisionId, DtoResult, ProjectId, SchemaVersionDto, SessionId, TimestampDto, WorkspaceId,
-};
 
 /// Opens a durable facade at an explicit test-only database path.
 ///
@@ -148,7 +148,7 @@ impl FixtureHost {
     /// Returns a typed storage or session-creation failure.
     pub fn open(session_id: SessionId) -> DtoResult<Self> {
         let directory = TempDir::new().map_err(|_| {
-            intention_types::ErrorDto::unavailable(
+            intention_proto::ErrorDto::unavailable(
                 "fixture_storage_unavailable",
                 "fixture durable storage is unavailable",
             )

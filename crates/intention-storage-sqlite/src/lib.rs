@@ -21,15 +21,15 @@ use intention_domain::{
     RunStatusDto, SessionProjectionDto, ToolResultMetadataEntryDto, ToolResultStatusDto,
     WorkspaceRootDto, validate_run_status_transition,
 };
+use intention_proto::{
+    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto,
+    ProjectId, RunId, SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
+};
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,
     ConsumePendingUserTurnsInputDto, CreateSessionInputDto, FinishRunInputDto,
     RecoverUnfinishedRunsInputDto, RemoveTurnInputDto, StartingRunModelContextDto,
     StorageRepositoryDto, ToolResultEvidenceDto, TransitionRunInputDto, WriteToolResultInputDto,
-};
-use intention_types::{
-    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto,
-    ProjectId, RunId, SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
 };
 use sqlite::OptionalExtension;
 
@@ -1727,10 +1727,10 @@ mod tests {
     use super::*;
     use intention_config::{ConfigPathDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto};
     use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
+    use intention_proto::{IdempotencyKey, ProjectId, SchemaVersionDto, UsageDto, WorkspaceId};
     use intention_storage::{
         AppendMessageInputDto, CreateSessionInputDto, StorageRepositoryDto, WriteToolResultInputDto,
     };
-    use intention_types::{IdempotencyKey, ProjectId, SchemaVersionDto, UsageDto, WorkspaceId};
 
     fn fixture_time(value: i64) -> TimestampDto {
         TimestampDto::from_unix_seconds(value).expect("fixture timestamp is valid")

@@ -325,24 +325,24 @@ def check_phase_policy(
     active_set = set(active)
     skeleton_set = set(skeletons)
     expected_active = {
-        "m1": {"intention-types", "intention-domain", "intention-protocol", "intention-config"},
+        "m1": {"intention-proto", "intention-domain", "intention-protocol", "intention-config"},
         "m2": {
-            "intention-types", "intention-domain", "intention-protocol", "intention-config",
+            "intention-proto", "intention-domain", "intention-protocol", "intention-config",
             "intention-transport", "intention-client", "intention", "intention-daemon",
         },
         "m3": {
-            "intention-types", "intention-domain", "intention-protocol", "intention-config",
+            "intention-proto", "intention-domain", "intention-protocol", "intention-config",
             "intention-transport", "intention-client", "intention", "intention-daemon",
             "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
         },
         "m4": {
-            "intention-types", "intention-domain", "intention-protocol", "intention-config",
+            "intention-proto", "intention-domain", "intention-protocol", "intention-config",
             "intention-transport", "intention-client", "intention", "intention-daemon",
             "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
             "intention-model", "intention-provider-openrouter", "intention-provider-generic-chat",
         },
         "m5": {
-            "intention-types", "intention-domain", "intention-protocol", "intention-config",
+            "intention-proto", "intention-domain", "intention-protocol", "intention-config",
             "intention-transport", "intention-client", "intention", "intention-daemon",
             "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
             "intention-model", "intention-provider-openrouter", "intention-provider-generic-chat",

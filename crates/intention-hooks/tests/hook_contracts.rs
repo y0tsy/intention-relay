@@ -8,8 +8,8 @@
 )]
 
 use intention_hooks::{FailurePolicy, Hook, Outcome, Phase, PhaseContext, Registry};
+use intention_proto::{ErrorDto, ToolCallId};
 use intention_tools::{BoundedText, ExecuteInput, ToolInput, ToolResult};
-use intention_types::{ErrorDto, ToolCallId};
 
 struct RejectingHook;
 impl Hook for RejectingHook {
@@ -22,7 +22,7 @@ impl Hook for RejectingHook {
     fn priority(&self) -> u32 {
         0
     }
-    fn run(&self, _: &PhaseContext) -> intention_types::DtoResult<Outcome> {
+    fn run(&self, _: &PhaseContext) -> intention_proto::DtoResult<Outcome> {
         Ok(Outcome::Reject(ErrorDto::validation("blocked", "blocked")))
     }
 }
@@ -38,7 +38,7 @@ impl Hook for EffectHook {
     fn priority(&self) -> u32 {
         10
     }
-    fn run(&self, _: &PhaseContext) -> intention_types::DtoResult<Outcome> {
+    fn run(&self, _: &PhaseContext) -> intention_proto::DtoResult<Outcome> {
         self.0.store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(Outcome::Continue)
     }
@@ -59,7 +59,7 @@ impl Hook for OrderingHook {
     fn priority(&self) -> u32 {
         self.1
     }
-    fn run(&self, _: &PhaseContext) -> intention_types::DtoResult<Outcome> {
+    fn run(&self, _: &PhaseContext) -> intention_proto::DtoResult<Outcome> {
         self.2.lock().unwrap().push(self.0);
         Ok(Outcome::Continue)
     }
@@ -207,7 +207,7 @@ fn registration_revision_is_safe_metadata_and_ordering_tiebreaker() {
         fn registration_revision(&self) -> u32 {
             self.1
         }
-        fn run(&self, _: &PhaseContext) -> intention_types::DtoResult<Outcome> {
+        fn run(&self, _: &PhaseContext) -> intention_proto::DtoResult<Outcome> {
             self.2.lock().unwrap().push(self.0);
             Ok(Outcome::Continue)
         }
@@ -255,7 +255,7 @@ impl Hook for OutcomeHook {
     fn failure_policy(&self, _: Phase) -> FailurePolicy {
         self.failure_policy
     }
-    fn run(&self, _: &PhaseContext) -> intention_types::DtoResult<Outcome> {
+    fn run(&self, _: &PhaseContext) -> intention_proto::DtoResult<Outcome> {
         Ok(self.outcome.clone())
     }
 }
@@ -409,7 +409,7 @@ fn fail_open_records_operational_failure_without_leaking_error_details() {
         fn failure_policy(&self, _: Phase) -> FailurePolicy {
             FailurePolicy::FailOpen
         }
-        fn run(&self, _: &PhaseContext) -> intention_types::DtoResult<Outcome> {
+        fn run(&self, _: &PhaseContext) -> intention_proto::DtoResult<Outcome> {
             Err(ErrorDto::validation(
                 "secret-internal-code",
                 "private detail",
@@ -448,7 +448,7 @@ fn fail_open_continues_to_later_hooks_and_preserves_ordered_observability() {
         fn failure_policy(&self, _: Phase) -> FailurePolicy {
             self.failure_policy
         }
-        fn run(&self, _: &PhaseContext) -> intention_types::DtoResult<Outcome> {
+        fn run(&self, _: &PhaseContext) -> intention_proto::DtoResult<Outcome> {
             self.seen.lock().unwrap().push(self.id);
             if self.id == "open" {
                 Err(ErrorDto::validation("internal", "not returned"))
@@ -501,7 +501,7 @@ fn fail_closed_operational_error_short_circuits_later_hooks() {
         fn priority(&self) -> u32 {
             0
         }
-        fn run(&self, _: &PhaseContext) -> intention_types::DtoResult<Outcome> {
+        fn run(&self, _: &PhaseContext) -> intention_proto::DtoResult<Outcome> {
             Err(ErrorDto::validation("closed", "closed"))
         }
     }
@@ -516,7 +516,7 @@ fn fail_closed_operational_error_short_circuits_later_hooks() {
         fn priority(&self) -> u32 {
             1
         }
-        fn run(&self, _: &PhaseContext) -> intention_types::DtoResult<Outcome> {
+        fn run(&self, _: &PhaseContext) -> intention_proto::DtoResult<Outcome> {
             self.0.store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(Outcome::Continue)
         }
@@ -544,7 +544,7 @@ fn workspace_boundary_contexts_carry_safe_identity_without_paths() {
     // workspace boundary phases structurally cannot carry the canonical
     // root; only the safe call identity and relative typed input travel.
     assert!(
-        intention_types::WorkspaceRelativePathDto::parse(absolute.to_string_lossy().as_ref())
+        intention_proto::WorkspaceRelativePathDto::parse(absolute.to_string_lossy().as_ref())
             .is_err()
     );
     let resolution = PhaseContext::WorkspaceResolution {
