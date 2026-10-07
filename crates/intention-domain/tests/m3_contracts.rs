@@ -201,7 +201,6 @@ fn run_status_state_machine_accepts_only_declared_edges() {
     let statuses = [
         RunStatusDto::Starting,
         RunStatusDto::Running,
-        RunStatusDto::WaitingInput,
         RunStatusDto::Completed,
         RunStatusDto::Failed,
         RunStatusDto::Interrupted,
@@ -211,16 +210,11 @@ fn run_status_state_machine_accepts_only_declared_edges() {
             let expected = matches!(
                 (from, to),
                 (RunStatusDto::Starting, RunStatusDto::Running)
-                    | (RunStatusDto::Starting, RunStatusDto::WaitingInput)
                     | (RunStatusDto::Starting, RunStatusDto::Failed)
                     | (RunStatusDto::Starting, RunStatusDto::Interrupted)
-                    | (RunStatusDto::Running, RunStatusDto::WaitingInput)
                     | (RunStatusDto::Running, RunStatusDto::Completed)
                     | (RunStatusDto::Running, RunStatusDto::Failed)
                     | (RunStatusDto::Running, RunStatusDto::Interrupted)
-                    | (RunStatusDto::WaitingInput, RunStatusDto::Running)
-                    | (RunStatusDto::WaitingInput, RunStatusDto::Failed)
-                    | (RunStatusDto::WaitingInput, RunStatusDto::Interrupted)
             );
             assert_eq!(
                 validate_run_status_transition(from, to).is_ok(),

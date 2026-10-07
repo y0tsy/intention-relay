@@ -103,7 +103,6 @@ fn run_status_terminal_classification_covers_all_statuses() {
     let all = [
         S::Starting,
         S::Running,
-        S::WaitingInput,
         S::Completed,
         S::Failed,
         S::Interrupted,
@@ -117,7 +116,7 @@ fn run_status_terminal_classification_covers_all_statuses() {
         let decoded: RunStatusDto = serde_json::from_str(&wire).expect("status decodes");
         assert_eq!(decoded, status);
     }
-    for retired in ["queued", "completing"] {
+    for retired in ["queued", "completing", "waiting_input"] {
         assert!(serde_json::from_str::<RunStatusDto>(&format!("\"{retired}\"")).is_err());
     }
 }

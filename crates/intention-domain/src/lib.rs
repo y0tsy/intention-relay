@@ -29,8 +29,6 @@ pub enum RunStatusDto {
     Starting,
     /// The run is actively receiving model or tool work.
     Running,
-    /// The run requires a user answer or permission result.
-    WaitingInput,
     /// The run completed successfully.
     Completed,
     /// The run encountered an unrecoverable safe failure.
@@ -56,16 +54,11 @@ pub fn validate_run_status_transition(from: RunStatusDto, to: RunStatusDto) -> D
     let allowed = matches!(
         (from, to),
         (RunStatusDto::Starting, RunStatusDto::Running)
-            | (RunStatusDto::Starting, RunStatusDto::WaitingInput)
             | (RunStatusDto::Starting, RunStatusDto::Failed)
             | (RunStatusDto::Starting, RunStatusDto::Interrupted)
-            | (RunStatusDto::Running, RunStatusDto::WaitingInput)
             | (RunStatusDto::Running, RunStatusDto::Completed)
             | (RunStatusDto::Running, RunStatusDto::Failed)
             | (RunStatusDto::Running, RunStatusDto::Interrupted)
-            | (RunStatusDto::WaitingInput, RunStatusDto::Running)
-            | (RunStatusDto::WaitingInput, RunStatusDto::Failed)
-            | (RunStatusDto::WaitingInput, RunStatusDto::Interrupted)
     );
     if allowed {
         Ok(())
@@ -948,7 +941,6 @@ mod tests {
         for status in [
             RunStatusDto::Starting,
             RunStatusDto::Running,
-            RunStatusDto::WaitingInput,
             RunStatusDto::Completed,
             RunStatusDto::Failed,
             RunStatusDto::Interrupted,
@@ -1021,7 +1013,6 @@ mod tests {
         let statuses = [
             RunStatusDto::Starting,
             RunStatusDto::Running,
-            RunStatusDto::WaitingInput,
             RunStatusDto::Completed,
             RunStatusDto::Failed,
             RunStatusDto::Interrupted,
@@ -1031,16 +1022,11 @@ mod tests {
                 let allowed = matches!(
                     (from, to),
                     (RunStatusDto::Starting, RunStatusDto::Running)
-                        | (RunStatusDto::Starting, RunStatusDto::WaitingInput)
                         | (RunStatusDto::Starting, RunStatusDto::Failed)
                         | (RunStatusDto::Starting, RunStatusDto::Interrupted)
-                        | (RunStatusDto::Running, RunStatusDto::WaitingInput)
                         | (RunStatusDto::Running, RunStatusDto::Completed)
                         | (RunStatusDto::Running, RunStatusDto::Failed)
                         | (RunStatusDto::Running, RunStatusDto::Interrupted)
-                        | (RunStatusDto::WaitingInput, RunStatusDto::Running)
-                        | (RunStatusDto::WaitingInput, RunStatusDto::Failed)
-                        | (RunStatusDto::WaitingInput, RunStatusDto::Interrupted)
                 );
                 assert_eq!(
                     validate_run_status_transition(from, to).is_ok(),

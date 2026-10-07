@@ -151,11 +151,7 @@ fn finish_run_input_requires_a_terminal_safe_outcome() {
     let at = time(3);
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    for status in [
-        RunStatusDto::Starting,
-        RunStatusDto::Running,
-        RunStatusDto::WaitingInput,
-    ] {
+    for status in [RunStatusDto::Starting, RunStatusDto::Running] {
         assert_eq!(
             FinishRunInputDto::new(session_id, run_id, status, None, None, None, None, at)
                 .expect_err("a non-terminal outcome rejects")

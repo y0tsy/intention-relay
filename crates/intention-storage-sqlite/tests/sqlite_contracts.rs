@@ -150,6 +150,47 @@ fn append(
         .expect("transcript row commits")
 }
 
+/// The eight current-state tables in the order their names sort.
+const CURRENT_TABLE_NAMES: [&str; 8] = [
+    "configuration_revisions",
+    "messages",
+    "projects",
+    "runs",
+    "sessions",
+    "tool_results",
+    "turns",
+    "workspace_roots",
+];
+
+fn table_names(directory: &TempDir) -> Vec<String> {
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for inspection");
+    let mut statement = connection
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' \
+             ORDER BY name",
+        )
+        .expect("table inspection query prepares");
+    statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("table inspection query executes")
+        .collect::<sqlite::Result<Vec<_>>>()
+        .expect("table names read")
+}
+
+fn column_names(directory: &TempDir, table: &str) -> Vec<String> {
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for inspection");
+    let mut statement = connection
+        .prepare("SELECT name FROM pragma_table_info(?1) ORDER BY cid")
+        .expect("column inspection query prepares");
+    statement
+        .query_map([table], |row| row.get::<_, String>(0))
+        .expect("column inspection query executes")
+        .collect::<sqlite::Result<Vec<_>>>()
+        .expect("column names read")
+}
+
 #[test]
 fn current_storage_schema_is_created_completely_and_remains_authoritative() {
     let directory = TempDir::new().expect("temporary directory exists");
@@ -280,6 +321,147 @@ fn current_storage_schema_is_created_completely_and_remains_authoritative() {
             .expect("accepted run is active")
             .run_id(),
         run
+    );
+}
+
+#[test]
+fn current_database_reopen_preserves_committed_rows() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    let store = open(&directory);
+    assert_eq!(table_names(&directory), CURRENT_TABLE_NAMES);
+    let session = create(&store);
+    let run = RunId::new();
+    let (_, message) = started(accept(&store, session, IdempotencyKey::new(), run, "kept"));
+    assert_eq!(message.text(), "kept");
+    drop(store);
+
+    let reopened = reopen(&directory);
+    assert_eq!(table_names(&directory), CURRENT_TABLE_NAMES);
+    assert_eq!(
+        reopened
+            .load_run_messages(session, run, 10)
+            .expect("transcript loads after reopen")
+            .iter()
+            .map(MessageProjectionDto::text)
+            .collect::<Vec<_>>(),
+        vec!["kept"]
+    );
+    assert_eq!(
+        reopened
+            .load_session_projection(session)
+            .expect("session projection loads after reopen")
+            .active_run()
+            .expect("the accepted run stays active")
+            .run_id(),
+        run
+    );
+}
+
+#[test]
+fn a_legacy_shaped_database_is_recreated_without_its_old_objects() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("legacy database creates");
+    connection
+        .execute_batch(
+            "CREATE TABLE sessions (
+               id TEXT PRIMARY KEY,
+               last_sequence INTEGER NOT NULL
+             );
+             CREATE TABLE domain_events (
+               id TEXT PRIMARY KEY,
+               payload TEXT NOT NULL
+             );
+             CREATE TABLE run_snapshots (
+               id TEXT PRIMARY KEY,
+               body TEXT NOT NULL
+             );
+             INSERT INTO sessions(id, last_sequence) VALUES ('legacy', 7);
+             INSERT INTO domain_events(id, payload) VALUES ('legacy-event', '{}');",
+        )
+        .expect("legacy schema seeds");
+    drop(connection);
+
+    let store = open(&directory);
+    assert_eq!(table_names(&directory), CURRENT_TABLE_NAMES);
+    assert_eq!(
+        column_names(&directory, "sessions"),
+        [
+            "id",
+            "project_id",
+            "workspace_id",
+            "mode",
+            "created_at",
+            "updated_at",
+        ]
+    );
+    // The recreated schema is the current one and is usable end to end.
+    let session = create(&store);
+    assert_eq!(
+        store
+            .load_session_projection(session)
+            .expect("recreated schema is usable")
+            .session_id(),
+        session
+    );
+}
+
+#[test]
+fn a_missing_current_table_recreates_the_database() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    let store = open(&directory);
+    let session = create(&store);
+    drop(store);
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for mutation");
+    connection
+        .execute_batch("DROP TABLE messages;")
+        .expect("a current table drops");
+    drop(connection);
+
+    let recreated = open(&directory);
+    assert_eq!(table_names(&directory), CURRENT_TABLE_NAMES);
+    assert_eq!(
+        recreated
+            .load_session_projection(session)
+            .expect_err("the incomplete database was recreated empty")
+            .code(),
+        "storage_record_not_found"
+    );
+}
+
+#[test]
+fn an_extra_column_on_a_current_table_recreates_the_database() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    let store = open(&directory);
+    let session = create(&store);
+    drop(store);
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for mutation");
+    connection
+        .execute_batch("ALTER TABLE sessions ADD COLUMN last_sequence INTEGER;")
+        .expect("a legacy column adds");
+    drop(connection);
+
+    let recreated = open(&directory);
+    assert_eq!(table_names(&directory), CURRENT_TABLE_NAMES);
+    assert_eq!(
+        column_names(&directory, "sessions"),
+        [
+            "id",
+            "project_id",
+            "workspace_id",
+            "mode",
+            "created_at",
+            "updated_at",
+        ]
+    );
+    assert_eq!(
+        recreated
+            .load_session_projection(session)
+            .expect_err("the extra column forced a recreation")
+            .code(),
+        "storage_record_not_found"
     );
 }
 

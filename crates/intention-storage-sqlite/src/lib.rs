@@ -4,10 +4,14 @@
 //! JSON codecs remain private implementation details of this crate.
 //!
 //! The complete current schema is created directly on open: there is no
-//! migration chain and no version gate. Every state-changing method commits
-//! its change in exactly one immediate transaction and returns the committed
-//! values; there is no event log, snapshot, cursor, or replay.
+//! migration chain and no version gate, and a database file that does not
+//! carry the complete current schema is recreated from scratch. Every
+//! state-changing method commits its change in exactly one immediate
+//! transaction and returns the committed values; there is no event log,
+//! snapshot, cursor, or replay.
 
+use std::fs::remove_file;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -118,6 +122,174 @@ CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_session ON runs(session_id)
   WHERE status NOT IN ('completed','failed','interrupted');
 ";
 
+/// The eight current-state tables with their declared columns, in declaration
+/// order, used to recognize a database that does not carry the current schema.
+const CURRENT_TABLE_COLUMNS: [(&str, &[&str]); 8] = [
+    ("projects", &["id", "name", "created_at"]),
+    (
+        "workspace_roots",
+        &["id", "project_id", "root", "created_at"],
+    ),
+    (
+        "sessions",
+        &[
+            "id",
+            "project_id",
+            "workspace_id",
+            "mode",
+            "created_at",
+            "updated_at",
+        ],
+    ),
+    (
+        "runs",
+        &[
+            "id",
+            "session_id",
+            "turn_id",
+            "config_revision_id",
+            "status",
+            "provider_kind",
+            "model",
+            "usage_json",
+            "finish_reason",
+            "error_code",
+            "error_message",
+            "started_at",
+            "finished_at",
+        ],
+    ),
+    (
+        "turns",
+        &[
+            "id",
+            "session_id",
+            "proposed_run_id",
+            "config_revision_id",
+            "content",
+            "state",
+            "idempotency_key",
+            "created_at",
+        ],
+    ),
+    (
+        "messages",
+        &[
+            "id",
+            "session_id",
+            "run_id",
+            "kind",
+            "text",
+            "reasoning",
+            "tool_call_id",
+            "tool_id",
+            "created_at",
+        ],
+    ),
+    (
+        "tool_results",
+        &[
+            "id",
+            "tool_call_id",
+            "session_id",
+            "run_id",
+            "tool_id",
+            "status",
+            "content",
+            "metadata_json",
+            "created_at",
+        ],
+    ),
+    (
+        "configuration_revisions",
+        &["id", "snapshot_json", "created_at"],
+    ),
+];
+
+/// The one explicit index of the current schema.
+const CURRENT_INDEX_NAMES: [&str; 1] = ["one_active_run_per_session"];
+
+/// Returns whether the open database already carries exactly the current
+/// schema: the eight current-state tables with their declared columns and the
+/// one explicit index. A database written by an earlier core fails this check.
+fn current_schema_is_present(connection: &sqlite::Connection) -> DtoResult<bool> {
+    let mut statement = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(storage_error)?;
+    let tables = rows
+        .collect::<sqlite::Result<Vec<_>>>()
+        .map_err(storage_error)?;
+    drop(statement);
+    if tables.len() != CURRENT_TABLE_COLUMNS.len()
+        || !CURRENT_TABLE_COLUMNS
+            .iter()
+            .all(|(table, _)| tables.iter().any(|name| name.as_str() == *table))
+    {
+        return Ok(false);
+    }
+    let mut statement = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'")
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(storage_error)?;
+    let indexes = rows
+        .collect::<sqlite::Result<Vec<_>>>()
+        .map_err(storage_error)?;
+    drop(statement);
+    if indexes.len() != CURRENT_INDEX_NAMES.len()
+        || !CURRENT_INDEX_NAMES
+            .iter()
+            .all(|index| indexes.iter().any(|name| name.as_str() == *index))
+    {
+        return Ok(false);
+    }
+    for (table, columns) in CURRENT_TABLE_COLUMNS {
+        let mut statement = connection
+            .prepare("SELECT name FROM pragma_table_info(?1) ORDER BY cid")
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map([table], |row| row.get::<_, String>(0))
+            .map_err(storage_error)?;
+        let present = rows
+            .collect::<sqlite::Result<Vec<_>>>()
+            .map_err(storage_error)?;
+        drop(statement);
+        if !present
+            .iter()
+            .map(String::as_str)
+            .eq(columns.iter().copied())
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Recreates the database file at a location that does not carry the complete
+/// current schema, removing the file and its WAL sidecars so the following
+/// open creates the current schema from scratch.
+fn recreate_stale_database(location: &str) -> DtoResult<()> {
+    let current = {
+        let connection = sqlite::Connection::open(location).map_err(storage_error)?;
+        current_schema_is_present(&connection)?
+    };
+    if current {
+        return Ok(());
+    }
+    for suffix in ["", "-wal", "-shm"] {
+        match remove_file(format!("{location}{suffix}")) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(_) => return Err(unavailable()),
+        }
+    }
+    Ok(())
+}
+
 /// A local absolute SQLite database location whose string is never exposed again.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SqliteDatabaseLocationDto(String);
@@ -149,14 +321,20 @@ pub struct SqliteStorageRepository {
 
 impl SqliteStorageRepository {
     /// Opens or creates a local database at an explicitly supplied absolute
-    /// location, creating the complete current storage schema directly on open.
+    /// location. A database that does not carry the complete current schema is
+    /// recreated from scratch; the current schema is then created directly on
+    /// open.
     ///
     /// # Errors
     ///
     /// Returns a safe unavailable error when the database cannot be opened or
     /// the current schema cannot be created.
     pub fn open(location: SqliteDatabaseLocationDto) -> DtoResult<Self> {
-        let connection = sqlite::Connection::open(location.0).map_err(storage_error)?;
+        let location = location.0;
+        if Path::new(&location).exists() {
+            recreate_stale_database(&location)?;
+        }
+        let connection = sqlite::Connection::open(&location).map_err(storage_error)?;
         connection
             .execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
             .map_err(storage_error)?;
@@ -1318,7 +1496,6 @@ const fn status_name(value: RunStatusDto) -> &'static str {
     match value {
         RunStatusDto::Starting => "starting",
         RunStatusDto::Running => "running",
-        RunStatusDto::WaitingInput => "waiting_input",
         RunStatusDto::Completed => "completed",
         RunStatusDto::Failed => "failed",
         RunStatusDto::Interrupted => "interrupted",
@@ -1329,7 +1506,6 @@ fn parse_status(value: &str) -> DtoResult<RunStatusDto> {
     match value {
         "starting" => Ok(RunStatusDto::Starting),
         "running" => Ok(RunStatusDto::Running),
-        "waiting_input" => Ok(RunStatusDto::WaitingInput),
         "completed" => Ok(RunStatusDto::Completed),
         "failed" => Ok(RunStatusDto::Failed),
         "interrupted" => Ok(RunStatusDto::Interrupted),
@@ -1708,7 +1884,6 @@ mod tests {
         for status in [
             RunStatusDto::Starting,
             RunStatusDto::Running,
-            RunStatusDto::WaitingInput,
             RunStatusDto::Completed,
             RunStatusDto::Failed,
             RunStatusDto::Interrupted,
@@ -1721,6 +1896,12 @@ mod tests {
         assert_eq!(
             parse_status("invalid")
                 .expect_err("unknown status rejects")
+                .code(),
+            "storage_decode_failed"
+        );
+        assert_eq!(
+            parse_status("waiting_input")
+                .expect_err("a removed status rejects")
                 .code(),
             "storage_decode_failed"
         );
