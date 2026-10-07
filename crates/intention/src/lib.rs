@@ -21,12 +21,9 @@ use intention_config::{
     ConfigPathResolver, ConfigSnapshotDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto,
     ResolvedConfigDto, StartupProviderMaterial,
 };
+use intention_domain::RunStatusDto;
 #[cfg(test)]
 use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
-use intention_domain::{
-    DomainEventDto, GetSessionSnapshotQueryDto, ModelRunFactInputDto, RunEventCursorDto,
-    RunFailureDto, RunSnapshotDto, RunStatusDto, ToolLifecycleStatusDto,
-};
 use intention_hooks::{
     Hook, Outcome as HookOutcome, Phase, PhaseContext, Registry as HookRegistry,
 };
@@ -38,8 +35,7 @@ use intention_protocol::SendUserTurnOutcomeDto;
 use intention_protocol::{
     DaemonHealthDto, DaemonReadinessDto, ProtocolAcceptedDto, ProtocolAcceptedResultDto,
     ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto, ProtocolQueryResultDto,
-    SessionResyncDto, SessionResyncReasonDto, SessionSubscriptionResponseDto,
-    SubscribeSessionCommandDto,
+    SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
 };
 use intention_provider_generic_chat::GenericChatDriver;
 use intention_provider_openrouter::OpenRouterDriver;
@@ -48,15 +44,15 @@ use intention_runtime::{
     ModelRunExecutionService, ModelTimePort, ToolExecutionPort, fail_starting_run,
 };
 use intention_storage::{
-    AppendModelRunFactsInputDto, RecoverUnfinishedRunsInputDto, StorageRepositoryDto,
+    RecoverUnfinishedRunsInputDto, StorageRepositoryDto, ToolResultEvidenceDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 #[cfg(test)]
 use intention_tools::ToolResult;
 use intention_tools::{CancellationSignal, ToolInput};
 use intention_types::{
-    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, ErrorRetryDto, EventEnvelopeDto,
-    RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto,
+    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, RunId, SchemaVersionDto, SessionId,
+    TimestampDto,
 };
 #[cfg(test)]
 use intention_types::{ProjectId, WorkspaceId};
@@ -68,6 +64,8 @@ const PROTOCOL_VERSION: intention_protocol::ProtocolVersionDto =
 /// The single live configuration snapshot schema (intention-config current schema).
 const CONFIG_SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 0);
 const DATABASE_FILENAME: &str = "intention-relay.sqlite";
+/// The retained bounded size of a current-state snapshot's recent transcript.
+const SESSION_SNAPSHOT_MESSAGES: u32 = 256;
 
 /// The terminal outcome of one facade local tool invocation.
 ///
@@ -231,10 +229,33 @@ impl Hook for SafeObserverHook {
     }
 }
 
+/// The workspace hook owner: it validates the two workspace-resolution phases
+/// around the application's exact `resolve_path` boundary.
+struct WorkspaceResolutionHook;
+impl Hook for WorkspaceResolutionHook {
+    fn id(&self) -> &'static str {
+        "workspace-resolution-owner"
+    }
+    fn phases(&self) -> &'static [Phase] {
+        static P: [Phase; 2] = [
+            Phase::BeforeWorkspaceResolution,
+            Phase::AfterWorkspaceResolution,
+        ];
+        &P
+    }
+    fn priority(&self) -> u32 {
+        0
+    }
+    fn run(&self, _: &PhaseContext) -> DtoResult<HookOutcome> {
+        Ok(HookOutcome::Continue)
+    }
+}
+
 fn production_hooks() -> DtoResult<HookRegistry> {
     let mut registry = HookRegistry::new();
     registry
         .register(Box::new(SafeObserverHook))
+        .and_then(|()| registry.register(Box::new(WorkspaceResolutionHook)))
         .map_err(|_error| {
             ErrorDto::validation(
                 "production_hook_registration_failed",
@@ -244,53 +265,41 @@ fn production_hooks() -> DtoResult<HookRegistry> {
     Ok(registry)
 }
 
-/// Verifies that a scoped durable reread contains committed `Completed` typed
-/// evidence for the exact invocation identity.
+/// Verifies that the committed tool-result row answers the exact invocation.
 ///
-/// The reread is scoped to the invoking session's exact pre-invocation durable
-/// position and must contain `Completed` typed evidence for the exact
-/// invocation identity before publication proceeds. Publication therefore
-/// follows commit plus a scoped reread, and the application dispatches
-/// `AfterToolResultPublished` only after this verification succeeds.
+/// Publication follows commit plus a durable reread of that invocation's own
+/// row, and the application dispatches `AfterToolResultPublished` only after
+/// this verification succeeds.
 struct DurableToolResultPublisher<'a> {
     repository: &'a SqliteStorageRepository,
-    after_sequence: SessionEventSequenceDto,
 }
 
 impl ToolResultPublicationPort for DurableToolResultPublisher<'_> {
     fn publish_tool_result(&self, input: &ToolResultPublicationInputDto) -> DtoResult<()> {
-        let events = self
-            .repository
-            .load_tail(input.session_id(), self.after_sequence)?;
-        committed_tool_result_evidence(&events, input)
+        let evidence = self.repository.load_tool_result(
+            input.session_id(),
+            input.run_id(),
+            input.call_id(),
+        )?;
+        committed_tool_result_evidence(&evidence, input)
     }
 }
 
-/// Verifies that a scoped durable reread contains committed `Completed` typed
-/// evidence for the exact invocation identity.
+/// Verifies that the durable evidence belongs to the exact invocation identity.
 fn committed_tool_result_evidence(
-    events: &[EventEnvelopeDto<DomainEventDto>],
+    evidence: &ToolResultEvidenceDto,
     input: &ToolResultPublicationInputDto,
 ) -> DtoResult<()> {
-    let correlated = events
-        .iter()
-        .rev()
-        .find_map(|envelope| match envelope.payload() {
-            DomainEventDto::ToolLifecycle(event)
-                if event.session_id() == input.session_id()
-                    && event.run_id() == input.run_id()
-                    && event.call_id() == input.call_id() =>
-            {
-                Some(event.status() == &ToolLifecycleStatusDto::Completed)
-            }
-            _ => None,
-        });
-    match correlated {
-        Some(true) => Ok(()),
-        Some(false) | None => Err(ErrorDto::unavailable(
+    if evidence.session_id() == input.session_id()
+        && evidence.run_id() == input.run_id()
+        && evidence.call_id() == input.call_id()
+    {
+        Ok(())
+    } else {
+        Err(ErrorDto::unavailable(
             "tool_result_evidence_unavailable",
             "committed tool result evidence is unavailable",
-        )),
+        ))
     }
 }
 
@@ -302,14 +311,17 @@ struct LocalToolCancellationEntry {
 }
 
 impl DaemonApplicationFacade {
-    /// Executes one explicit local tool call through the durable lifecycle path.
+    /// Executes one explicit local tool call through the one-transaction path.
     ///
-    /// Publication independently rereads the committed typed result evidence for
-    /// the exact invocation, and the application dispatches
-    /// `AfterToolResultPublished` only after that verification succeeds. The M4
-    /// model `ToolCallRecorded` fact remains denial-only; this API is an
-    /// internal, caller-admitted single invocation and never starts a loop.
+    /// Publication independently rereads the committed result row of the exact
+    /// invocation, and the application dispatches `AfterToolResultPublished`
+    /// only after that verification succeeds. This API is an internal,
+    /// caller-admitted single invocation and never starts a loop.
     #[doc(hidden)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The daemon bridge keeps the flat tool-invocation payload in one call."
+    )]
     pub fn invoke_local_tool_for_daemon(
         &self,
         session_id: SessionId,
@@ -318,18 +330,13 @@ impl DaemonApplicationFacade {
         tool_id: impl Into<String>,
         input: ToolInput,
         workspace: WorkspaceRoot,
+        arguments_json: impl Into<String>,
     ) -> DtoResult<LocalToolInvocationOutcomeDto> {
-        // The publication reread is scoped to this exact pre-invocation durable
-        // position, so it can only observe this invocation's committed evidence.
-        let after_sequence = self
-            .inner
-            .repository
-            .load_session_snapshot(session_id)?
-            .at_sequence();
+        // The reread is scoped to this invocation's own row, so publication can
+        // only observe this call's committed evidence.
         let cancellation = self.bind_local_tool_cancellation(session_id, run_id)?;
         let publisher = DurableToolResultPublisher {
             repository: &self.inner.repository,
-            after_sequence,
         };
         let result = intention_application::ApplicationService::with_hooks(
             &self.inner.repository,
@@ -346,6 +353,7 @@ impl DaemonApplicationFacade {
                 input,
                 now()?,
             )
+            .with_arguments_json(arguments_json)
             .with_cancellation(cancellation),
             &publisher,
         );
@@ -471,7 +479,7 @@ impl DaemonApplicationFacade {
         &self,
         session_id: SessionId,
     ) -> DtoResult<WorkspaceRoot> {
-        let projection = self.inner.repository.load_session_snapshot(session_id)?;
+        let projection = self.inner.repository.load_session_projection(session_id)?;
         WorkspaceRoot::resolve(projection.workspace_root())
     }
 
@@ -552,16 +560,16 @@ impl DaemonApplicationFacade {
     /// Terminalizes one still-active run as durably `Failed` for the daemon
     /// task registry.
     ///
-    /// An executor error must never leave a `Starting`/`Running`/`Completing`
-    /// run without an owner: this bridge appends the typed failure fact and
-    /// commits the terminal `Failed` transition. The failure code is the
-    /// executor error's stable code, so deterministic bound and semantic
-    /// failures (for example `reasoning_output_limit_exceeded`) become the
-    /// durable failed outcome (PR24-012). Runs already terminal are a no-op.
+    /// An executor error must never leave a `Starting`/`Running`/`WaitingInput`
+    /// run without an owner: this bridge commits the terminal `Failed` run row.
+    /// The failure code is the executor error's stable code, so deterministic
+    /// bound and semantic failures (for example
+    /// `reasoning_output_limit_exceeded`) become the durable failed outcome
+    /// (PR24-012). Runs already terminal are a no-op.
     ///
     /// # Errors
     ///
-    /// Returns the repository's typed error when the terminal append cannot
+    /// Returns the repository's typed error when the terminal run row cannot
     /// commit.
     #[doc(hidden)]
     pub fn fail_active_run_for_daemon(
@@ -576,23 +584,23 @@ impl DaemonApplicationFacade {
                 "daemon command is unavailable",
             )
         })?;
-        let replay = self
+        let run = self
             .inner
             .repository
-            .load_current_run_snapshot(session_id, run_id)?;
-        let status = replay.run_projection().status();
-        if status.is_terminal() {
+            .load_run_projection(session_id, run_id)?;
+        if run.status().is_terminal() {
             return Ok(());
         }
-        let failure = RunFailureDto::new(failure_code, ErrorRetryDto::Manual, None)?;
         self.inner
             .repository
-            .append_model_run_facts(AppendModelRunFactsInputDto::new(
+            .finish_run(intention_storage::FinishRunInputDto::new(
                 session_id,
                 run_id,
-                replay.cursor(),
-                vec![ModelRunFactInputDto::failed(failure)],
-                Some(RunStatusDto::Failed),
+                RunStatusDto::Failed,
+                None,
+                None,
+                Some(failure_code.to_owned()),
+                Some("the scheduled run execution failed".to_owned()),
                 now()?,
             )?)?;
         if let Ok(mut registry) = self.inner.tool_cancellations.lock() {
@@ -628,30 +636,52 @@ impl DaemonApplicationFacade {
         Ok(())
     }
 
-    /// Loads an authoritative current run snapshot for the private daemon host.
+    /// Loads the authoritative current run projection for the private daemon host.
     #[doc(hidden)]
-    pub fn load_current_run_snapshot_for_daemon(
+    pub fn load_run_projection_for_daemon(
         &self,
         session_id: SessionId,
         run_id: RunId,
-    ) -> DtoResult<RunSnapshotDto> {
-        ApplicationService::new(&self.inner.repository)
-            .load_current_run_snapshot(session_id, run_id)
+    ) -> DtoResult<intention_domain::RunProjectionDto> {
+        self.inner
+            .repository
+            .load_run_projection(session_id, run_id)
     }
 
-    /// Loads a contiguous durable run-fact range for the private daemon host.
+    /// Loads one coherent current-state run snapshot for the private daemon host.
+    ///
+    /// The snapshot carries the current run projection and the bounded recent
+    /// transcript rows of that run; a re-subscribing client receives current
+    /// state and continues from live frames.
     #[doc(hidden)]
-    pub fn load_run_tail_for_daemon(
+    pub fn load_run_snapshot_for_daemon(
         &self,
         session_id: SessionId,
         run_id: RunId,
-        after_cursor: RunEventCursorDto,
-    ) -> DtoResult<intention_domain::RunEventTailPageDto> {
-        ApplicationService::new(&self.inner.repository).load_run_tail(
+    ) -> DtoResult<intention_protocol::RunSubscriptionSnapshotDto> {
+        let run = self
+            .inner
+            .repository
+            .load_run_projection(session_id, run_id)?;
+        let messages = self.inner.repository.load_run_messages(
             session_id,
             run_id,
-            after_cursor,
-        )
+            SESSION_SNAPSHOT_MESSAGES,
+        )?;
+        intention_protocol::RunSubscriptionSnapshotDto::new(run, messages)
+    }
+
+    /// Loads the committed transcript rows of one run for the private daemon host.
+    #[doc(hidden)]
+    pub fn load_run_messages_for_daemon(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        limit: u32,
+    ) -> DtoResult<Vec<intention_domain::MessageProjectionDto>> {
+        self.inner
+            .repository
+            .load_run_messages(session_id, run_id, limit)
     }
 
     /// Builds the exact durable scheduling input for a current `Starting` run.
@@ -670,9 +700,10 @@ impl DaemonApplicationFacade {
         &self,
         session_id: SessionId,
     ) -> DtoResult<Option<RunId>> {
-        Ok(ApplicationService::new(&self.inner.repository)
-            .get_session_snapshot(GetSessionSnapshotQueryDto::new(session_id))?
-            .projection()
+        Ok(self
+            .inner
+            .repository
+            .load_session_projection(session_id)?
             .active_run()
             .filter(|run| run.status() == RunStatusDto::Starting)
             .map(|run| run.run_id()))
@@ -730,50 +761,57 @@ impl DaemonApplicationFacade {
                 ProtocolQueryResultDto::DaemonHealth(self.health())
             }
             ProtocolQueryDto::GetSessionSnapshot(query) => {
-                ApplicationService::new(&self.inner.repository)
-                    .get_session_snapshot(query)
-                    .map_or_else(
-                        ProtocolQueryResultDto::Rejected,
-                        ProtocolQueryResultDto::SessionSnapshot,
-                    )
+                self.session_snapshot(query.session_id(), None).map_or_else(
+                    ProtocolQueryResultDto::Rejected,
+                    ProtocolQueryResultDto::SessionSnapshot,
+                )
             }
         }
     }
 
-    /// Returns a durable checkpoint, or a typed resync.
-    ///
-    /// This retained M3 session-subscription seam is replay-only and does not
-    /// filter session snapshots. M4 run-scoped streaming publishes through the
-    /// dedicated daemon-host observer and separate run subscription contract.
+    /// Returns the current durable session snapshot; a re-subscribing client
+    /// re-reads current state and continues live.
     #[must_use]
     pub fn subscribe(&self, command: SubscribeSessionCommandDto) -> SessionSubscriptionResponseDto {
-        if command.run_id().is_some() {
-            return resync(
-                command.session_id(),
-                SessionResyncReasonDto::HistoryUnavailable,
-            );
+        match self.session_snapshot(command.session_id(), command.run_id()) {
+            Ok(snapshot) => SessionSubscriptionResponseDto::Snapshot(snapshot),
+            Err(error) => SessionSubscriptionResponseDto::Error(error),
         }
-        let requested_after = command
-            .after_sequence()
-            .unwrap_or(SessionEventSequenceDto::new(0));
-        let current = match ApplicationService::new(&self.inner.repository)
-            .get_session_snapshot(GetSessionSnapshotQueryDto::new(command.session_id()))
-        {
-            Ok(snapshot) => snapshot,
-            Err(_) => {
-                return resync(
-                    command.session_id(),
-                    SessionResyncReasonDto::HistoryUnavailable,
-                );
-            }
+    }
+
+    /// Loads one coherent current-state session snapshot.
+    ///
+    /// Recent transcript rows are bounded by the retained delivery bound; a
+    /// run-scoped request returns that run's rows instead of the session tail.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when the session projection or its
+    /// transcript rows cannot be read, or when a run-scoped request names a run
+    /// that is unknown or belongs to another session.
+    pub fn session_snapshot(
+        &self,
+        session_id: SessionId,
+        run_id: Option<RunId>,
+    ) -> DtoResult<intention_protocol::SessionSnapshotDto> {
+        let projection = self.inner.repository.load_session_projection(session_id)?;
+        let messages = match run_id {
+            Some(run_id) => self.inner.repository.load_run_messages(
+                session_id,
+                run_id,
+                SESSION_SNAPSHOT_MESSAGES,
+            )?,
+            None => self
+                .inner
+                .repository
+                .load_recent_messages(session_id, SESSION_SNAPSHOT_MESSAGES)?,
         };
-        if requested_after.value() > current.at_sequence().value() {
-            return resync(
-                command.session_id(),
-                SessionResyncReasonDto::InvalidPosition,
-            );
-        }
-        SessionSubscriptionResponseDto::snapshot(current)
+        intention_protocol::SessionSnapshotDto::with_projection(
+            SCHEMA_VERSION,
+            session_id,
+            projection,
+            messages,
+        )
     }
 
     /// Dispatches a durable M3 command.
@@ -787,17 +825,6 @@ impl DaemonApplicationFacade {
             )),
             Err(error) => ProtocolCommandResultDto::Rejected(error),
         }
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn durable_events_for_test_support(
-        &self,
-        session_id: SessionId,
-    ) -> DtoResult<Vec<intention_types::EventEnvelopeDto<intention_domain::DomainEventDto>>> {
-        self.inner
-            .repository
-            .load_tail(session_id, SessionEventSequenceDto::new(0))
     }
 
     fn command_result(&self, command: ProtocolCommandDto) -> DtoResult<ProtocolAcceptedResultDto> {
@@ -814,13 +841,7 @@ impl DaemonApplicationFacade {
                     .create_session(CreateSessionWorkflowInputDto::new(command, timestamp))?
             }
             ProtocolCommandDto::SendUserTurn(command) => {
-                let proposed_run_id =
-                    RunId::parse(&command.turn_id().to_string()).map_err(|_| {
-                        ErrorDto::unavailable(
-                            "daemon_command_unavailable",
-                            "daemon command is unavailable",
-                        )
-                    })?;
+                let proposed_run_id = RunId::new();
                 ApplicationService::new(&self.inner.repository).send_user_turn_and_schedule(
                     command,
                     SendUserTurnWorkflowInputDto::new(
@@ -851,22 +872,12 @@ impl DaemonApplicationFacade {
     }
 
     fn recover_before_ready(&self) -> DtoResult<()> {
-        self.inner
+        let _interrupted = self
+            .inner
             .repository
             .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(now()?))?;
         Ok(())
     }
-}
-
-const fn resync(
-    session_id: SessionId,
-    reason: SessionResyncReasonDto,
-) -> SessionSubscriptionResponseDto {
-    SessionSubscriptionResponseDto::resync_required(SessionResyncDto::new(
-        SCHEMA_VERSION,
-        session_id,
-        reason,
-    ))
 }
 
 fn load_platform_provider_configuration() -> DtoResult<(ConfigSnapshotDto, SelectedProvider)> {
@@ -972,7 +983,10 @@ mod tests {
 
     use super::*;
 
-    use intention_domain::SendUserTurnCommandDto;
+    use intention_domain::{
+        GetSessionSnapshotQueryDto, MessageKindDto, SendUserTurnCommandDto, ToolResultStatusDto,
+    };
+    use intention_storage::ConsumePendingUserTurnsInputDto;
     use tempfile::TempDir;
 
     fn test_facade() -> (TempDir, DaemonApplicationFacade) {
@@ -1081,9 +1095,38 @@ mod tests {
         content: &str,
     ) -> ProtocolCommandResultDto {
         facade.command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, intention_types::TurnId::new(), content)
-                .expect("fixture user turn is valid"),
+            SendUserTurnCommandDto::new(
+                session_id,
+                intention_types::IdempotencyKey::new(),
+                content,
+            )
+            .expect("fixture user turn is valid"),
         ))
+    }
+
+    /// Reads the committed transcript rows of one run.
+    fn run_messages(
+        facade: &DaemonApplicationFacade,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> Vec<intention_domain::MessageProjectionDto> {
+        facade
+            .load_run_messages_for_daemon(session_id, run_id, u32::MAX)
+            .expect("committed run transcript reads")
+    }
+
+    /// Reads the durable tool-result evidence of one exact invocation.
+    fn tool_evidence(
+        facade: &DaemonApplicationFacade,
+        session_id: SessionId,
+        run_id: RunId,
+        call_id: intention_types::ToolCallId,
+    ) -> ToolResultEvidenceDto {
+        facade
+            .inner
+            .repository
+            .load_tool_result(session_id, run_id, call_id)
+            .expect("committed tool evidence reads")
     }
 
     #[test]
@@ -1122,13 +1165,16 @@ mod tests {
             &facade.inner.config_snapshot,
             "dispatch retains only the safe durable selection"
         );
+        let messages = run_messages(&facade, session_id, run_id);
+        assert_eq!(messages.len(), 1, "admission does not execute a provider");
+        assert_eq!(messages[0].kind(), MessageKindDto::User);
+        assert_eq!(messages[0].text(), "started turn");
         assert_eq!(
             facade
-                .durable_events_for_test_support(session_id)
-                .expect("durable turn events load")
-                .len(),
-            3,
-            "admission does not execute a provider"
+                .load_run_projection_for_daemon(session_id, run_id)
+                .expect("the admitted run stays starting")
+                .status(),
+            RunStatusDto::Starting
         );
     }
 
@@ -1153,6 +1199,9 @@ mod tests {
             )),
             ProtocolQueryResultDto::SessionSnapshot(snapshot)
                 if snapshot.session_id() == session_id
+                    && snapshot.projection().session_id() == session_id
+                    && snapshot.projection().active_run().is_none()
+                    && snapshot.messages().is_empty()
         ));
         assert!(matches!(
             facade.query(ProtocolQueryDto::GetSessionSnapshot(
@@ -1179,7 +1228,7 @@ mod tests {
     }
 
     #[test]
-    fn facade_retry_of_same_user_turn_reuses_durable_run_and_skips_events_and_dispatch() {
+    fn facade_replay_of_the_same_user_turn_conflicts_without_duplicating_transcript_or_dispatch() {
         let directory = TempDir::new().expect("temporary directory exists");
         let facade = DaemonApplicationFacade::open_for_test(
             directory.path().join("idempotent-turn.sqlite"),
@@ -1190,34 +1239,35 @@ mod tests {
         create(&facade, session_id);
         let command = SendUserTurnCommandDto::new(
             session_id,
-            intention_types::TurnId::new(),
+            intention_types::IdempotencyKey::new(),
             "idempotent turn",
         )
         .expect("fixture user turn is valid");
 
         let initial = facade.command(ProtocolCommandDto::SendUserTurn(command.clone()));
-        let events_after_initial = facade
-            .durable_events_for_test_support(session_id)
-            .expect("durable turn events load");
-        let replay = facade.command(ProtocolCommandDto::SendUserTurn(command));
-        let events_after_replay = facade
-            .durable_events_for_test_support(session_id)
-            .expect("durable turn events load");
-
-        let (
-            ProtocolCommandResultDto::Accepted(initial),
-            ProtocolCommandResultDto::Accepted(replay),
-        ) = (&initial, &replay)
-        else {
-            unreachable!("identical user-turn commands are accepted")
+        let ProtocolCommandResultDto::Accepted(initial) = initial else {
+            unreachable!("the first user turn is accepted")
         };
-        assert_eq!(replay.result(), initial.result());
-        assert!(matches!(
-            initial.result(),
-            ProtocolAcceptedResultDto::SendUserTurn(turn)
-                if matches!(turn.outcome(), SendUserTurnOutcomeDto::Started { .. })
-        ));
-        assert_eq!(events_after_replay, events_after_initial);
+        let ProtocolAcceptedResultDto::SendUserTurn(initial_turn) = initial.result() else {
+            unreachable!("the first user turn returns user-turn evidence")
+        };
+        let SendUserTurnOutcomeDto::Started { run_id, .. } = initial_turn.outcome() else {
+            unreachable!("the first user turn starts a run")
+        };
+        let committed = run_messages(&facade, session_id, run_id);
+
+        // The facade proposes a fresh run identity for every command, so a
+        // repeated command conflicts durably instead of starting a second run.
+        let replay = facade.command(ProtocolCommandDto::SendUserTurn(command));
+        let ProtocolCommandResultDto::Rejected(error) = replay else {
+            unreachable!("a repeated command cannot start a second run")
+        };
+        assert_eq!(error.code(), "turn_idempotency_conflict");
+        assert_eq!(
+            run_messages(&facade, session_id, run_id),
+            committed,
+            "the rejected replay duplicates no transcript row"
+        );
         assert_eq!(
             facade
                 .inner
@@ -1226,12 +1276,48 @@ mod tests {
                 .expect("dispatch recorder remains available")
                 .len(),
             1,
-            "the idempotent retry does not enter the dispatch seam"
+            "the rejected replay never enters the dispatch seam"
         );
     }
 
     #[test]
-    fn pending_turn_does_not_admit_dispatch() {
+    fn idempotent_turn_admission_reuses_the_durable_run_without_duplicate_rows() {
+        let (_directory, facade) = test_facade();
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        let command = SendUserTurnCommandDto::new(
+            session_id,
+            intention_types::IdempotencyKey::new(),
+            "idempotent turn",
+        )
+        .expect("fixture user turn is valid");
+        // The facade proposes one run identity per command, so replaying that
+        // exact workflow input is the durable retry unit.
+        let proposed_run_id = RunId::new();
+        let workflow = SendUserTurnWorkflowInputDto::new(
+            proposed_run_id,
+            facade.inner.config_snapshot.clone(),
+            TimestampDto::from_unix_seconds(2).expect("fixture timestamp is valid"),
+        );
+        let service = ApplicationService::new(&facade.inner.repository);
+
+        let initial = service
+            .send_user_turn_and_schedule(command.clone(), workflow.clone(), &facade.inner.dispatch)
+            .expect("the first user turn is accepted");
+        let replay = service
+            .send_user_turn_and_schedule(command, workflow, &facade.inner.dispatch)
+            .expect("the durable retry replays the committed acceptance");
+
+        assert_eq!(replay, initial);
+        assert_eq!(
+            run_messages(&facade, session_id, proposed_run_id).len(),
+            1,
+            "the durable retry adds no second copy of the committed user message"
+        );
+    }
+
+    #[test]
+    fn pending_turn_stays_undispatched_and_promotes_into_the_run_transcript() {
         let directory = TempDir::new().expect("temporary directory exists");
         let facade = DaemonApplicationFacade::open_for_test(
             directory.path().join("queued-dispatch.sqlite"),
@@ -1242,7 +1328,15 @@ mod tests {
         create(&facade, session_id);
 
         let first = send_user_turn(&facade, session_id, "started turn");
-        assert!(matches!(first, ProtocolCommandResultDto::Accepted(_)));
+        let ProtocolCommandResultDto::Accepted(first) = first else {
+            unreachable!("the first user turn is accepted")
+        };
+        let ProtocolAcceptedResultDto::SendUserTurn(first_turn) = first.result() else {
+            unreachable!("the first user turn returns user-turn evidence")
+        };
+        let SendUserTurnOutcomeDto::Started { run_id, .. } = first_turn.outcome() else {
+            unreachable!("the first user turn starts a run")
+        };
         assert_eq!(
             facade
                 .inner
@@ -1254,14 +1348,15 @@ mod tests {
         );
 
         let pending = send_user_turn(&facade, session_id, "pending turn");
+        let ProtocolCommandResultDto::Accepted(pending) = pending else {
+            unreachable!("the pending user turn is accepted")
+        };
+        let ProtocolAcceptedResultDto::SendUserTurn(pending_turn) = pending.result() else {
+            unreachable!("the pending user turn returns user-turn evidence")
+        };
         assert!(matches!(
-            pending,
-            ProtocolCommandResultDto::Accepted(accepted)
-                if matches!(
-                    accepted.result(),
-                    ProtocolAcceptedResultDto::SendUserTurn(turn)
-                        if matches!(turn.outcome(), SendUserTurnOutcomeDto::Pending)
-                )
+            pending_turn.outcome(),
+            SendUserTurnOutcomeDto::Pending
         ));
         assert_eq!(
             facade
@@ -1273,29 +1368,47 @@ mod tests {
             1,
             "a pending message never enters the dispatch seam"
         );
+        let snapshot = facade
+            .session_snapshot(session_id, None)
+            .expect("the pending session snapshot reads");
+        assert_eq!(snapshot.projection().pending_turns().len(), 1);
+        assert_eq!(
+            snapshot.projection().pending_turns()[0].content(),
+            "pending turn"
+        );
+
+        let promoted = facade
+            .inner
+            .repository
+            .consume_pending_user_turns(ConsumePendingUserTurnsInputDto::new(
+                session_id,
+                run_id,
+                TimestampDto::from_unix_seconds(3).expect("fixture timestamp is valid"),
+            ))
+            .expect("pending turns join the active run context");
+        assert_eq!(promoted.len(), 1);
+        assert_eq!(promoted[0].text(), "pending turn");
+        let messages = run_messages(&facade, session_id, run_id);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].text(), "started turn");
+        assert_eq!(messages[1].text(), "pending turn");
+        assert!(
+            facade
+                .session_snapshot(session_id, None)
+                .expect("the promoted session snapshot reads")
+                .projection()
+                .pending_turns()
+                .is_empty(),
+            "a promoted turn is no longer pending"
+        );
     }
 
     #[test]
     fn daemon_host_bridges_read_the_exact_starting_run_and_interrupt_keeps_it_active() {
-        let directory = TempDir::new().expect("temporary directory exists");
-        let facade = DaemonApplicationFacade::open_for_test(
-            directory.path().join("daemon-host-bridge.sqlite"),
-            fixture_config_snapshot(),
-        )
-        .expect("durable facade opens");
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
-
-        let accepted = send_user_turn(&facade, session_id, "host bridge turn");
-        let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
-            unreachable!("fixture turn is accepted")
-        };
-        let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
-            unreachable!("fixture turn has started-run evidence")
-        };
-        let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
-            unreachable!("first fixture turn starts")
-        };
+        let run_id = started_run(&facade, session_id, "host bridge turn");
 
         assert_eq!(
             facade
@@ -1310,17 +1423,13 @@ mod tests {
             (schedule.session_id(), schedule.run_id()),
             (session_id, run_id)
         );
-        let replay = facade
-            .load_current_run_snapshot_for_daemon(session_id, run_id)
-            .expect("current run replay reads");
-        assert_eq!(replay.cursor(), RunEventCursorDto::new(0));
-        assert!(
-            facade
-                .load_run_tail_for_daemon(session_id, run_id, RunEventCursorDto::new(0))
-                .expect("empty run tail reads")
-                .facts()
-                .is_empty()
-        );
+        let snapshot = facade
+            .load_run_snapshot_for_daemon(session_id, run_id)
+            .expect("current run snapshot reads");
+        assert_eq!(snapshot.run().run_id(), run_id);
+        assert_eq!(snapshot.run().status(), RunStatusDto::Starting);
+        assert_eq!(snapshot.messages().len(), 1);
+        assert_eq!(snapshot.messages()[0].text(), "host bridge turn");
 
         let interrupt = facade
             .interrupt_run_for_daemon_host(session_id, run_id)
@@ -1328,9 +1437,7 @@ mod tests {
         assert!(matches!(
             interrupt,
             ProtocolAcceptedResultDto::InterruptRun(accepted)
-                if accepted.session_id() == session_id
-                    && accepted.run_id() == run_id
-                    && accepted.at_sequence() == replay.at_sequence()
+                if accepted.session_id() == session_id && accepted.run_id() == run_id
         ));
         assert_eq!(
             facade
@@ -1340,9 +1447,9 @@ mod tests {
         );
         assert_eq!(
             facade
-                .load_current_run_snapshot_for_daemon(session_id, run_id)
-                .expect("interrupted run replay reads")
-                .run_projection()
+                .load_run_snapshot_for_daemon(session_id, run_id)
+                .expect("interrupted run snapshot reads")
+                .run()
                 .status(),
             RunStatusDto::Starting,
             "an interrupt never terminalizes an active run"
@@ -1458,87 +1565,86 @@ mod tests {
         let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
-        assert!(matches!(
-            facade.subscribe(SubscribeSessionCommandDto::new(
-                SCHEMA_VERSION,
-                session_id,
-                Some(SessionEventSequenceDto::new(1)),
-                RunModeDto::Build,
-            )),
-            SessionSubscriptionResponseDto::Snapshot(snapshot)
-                if snapshot.at_sequence() == SessionEventSequenceDto::new(1)
+        let reply = facade.subscribe(SubscribeSessionCommandDto::new(
+            SCHEMA_VERSION,
+            session_id,
+            RunModeDto::Build,
         ));
+        let SessionSubscriptionResponseDto::Snapshot(snapshot) = reply else {
+            unreachable!("a known session returns its current snapshot")
+        };
+        assert_eq!(snapshot.schema_version(), SCHEMA_VERSION);
+        assert_eq!(snapshot.session_id(), session_id);
+        assert_eq!(snapshot.projection().session_id(), session_id);
+        assert!(snapshot.messages().is_empty());
         assert!(matches!(
             facade.subscribe(SubscribeSessionCommandDto::new(
                 SCHEMA_VERSION,
                 SessionId::new(),
-                None,
                 RunModeDto::Build,
             )),
-            SessionSubscriptionResponseDto::ResyncRequired(resync)
-                if resync.reason() == SessionResyncReasonDto::HistoryUnavailable
+            SessionSubscriptionResponseDto::Error(error)
+                if error.code() == "storage_record_not_found"
         ));
     }
 
     #[test]
-    fn subscription_rejects_run_scoped_and_invalid_positions() {
+    fn subscription_replies_typed_error_for_unknown_run_scope() {
         let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
-        let run_id = RunId::new();
-        let with_run = facade.subscribe(SubscribeSessionCommandDto::with_run_id(
+        assert!(
+            matches!(
+                facade.subscribe(SubscribeSessionCommandDto::with_run_id(
+                    SCHEMA_VERSION,
+                    session_id,
+                    Some(RunId::new()),
+                    RunModeDto::Build,
+                )),
+                SessionSubscriptionResponseDto::Error(error)
+                    if error.code() == "storage_record_not_found"
+            ),
+            "an unknown run scope is rejected without fabricating state"
+        );
+
+        let run_id = started_run(&facade, session_id, "scoped subscription");
+        let scoped = facade.subscribe(SubscribeSessionCommandDto::with_run_id(
             SCHEMA_VERSION,
             session_id,
             Some(run_id),
-            None,
             RunModeDto::Build,
         ));
-        assert!(
-            matches!(with_run, SessionSubscriptionResponseDto::ResyncRequired(r)
-            if r.reason() == SessionResyncReasonDto::HistoryUnavailable)
-        );
-        let ahead = facade.subscribe(SubscribeSessionCommandDto::new(
-            SCHEMA_VERSION,
-            session_id,
-            Some(SessionEventSequenceDto::new(99)),
-            RunModeDto::Build,
-        ));
-        assert!(
-            matches!(ahead, SessionSubscriptionResponseDto::ResyncRequired(r)
-            if r.reason() == SessionResyncReasonDto::InvalidPosition)
+        let SessionSubscriptionResponseDto::Snapshot(snapshot) = scoped else {
+            unreachable!("a known run scope returns its current snapshot")
+        };
+        assert_eq!(snapshot.messages().len(), 1);
+        assert_eq!(snapshot.messages()[0].run_id(), Some(run_id));
+        assert_eq!(
+            snapshot.projection().active_run().map(|run| run.run_id()),
+            Some(run_id)
         );
     }
 
     #[test]
     fn daemon_host_failure_and_interrupt_bridges_are_safe() {
-        let directory = TempDir::new().expect("temporary directory exists");
-        let facade = DaemonApplicationFacade::open_for_test(
-            directory.path().join("bridges.sqlite"),
-            fixture_config_snapshot(),
-        )
-        .expect("durable facade opens");
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
-        let accepted = send_user_turn(&facade, session_id, "bridge");
-        let ProtocolCommandResultDto::Accepted(a) = accepted else {
-            unreachable!()
-        };
-        let ProtocolAcceptedResultDto::SendUserTurn(t) = a.result() else {
-            unreachable!()
-        };
-        let SendUserTurnOutcomeDto::Started { run_id, .. } = t.outcome() else {
-            unreachable!()
-        };
+        let run_id = started_run(&facade, session_id, "bridge");
         facade
             .interrupt_run_for_daemon_host(session_id, run_id)
             .expect("the interrupt is accepted");
         facade
             .fail_active_run_for_daemon(session_id, run_id, "fixture_failure")
             .expect("the active run terminalizes as failed");
-        let replay = facade
-            .load_current_run_snapshot_for_daemon(session_id, run_id)
-            .expect("replay");
-        assert_eq!(replay.run_projection().status(), RunStatusDto::Failed);
+        assert_eq!(
+            facade
+                .load_run_snapshot_for_daemon(session_id, run_id)
+                .expect("the failed run reads")
+                .run()
+                .status(),
+            RunStatusDto::Failed
+        );
         let other = RunId::new();
         assert!(
             facade
@@ -1547,7 +1653,12 @@ mod tests {
         );
         assert!(
             facade
-                .load_run_tail_for_daemon(session_id, other, RunEventCursorDto::new(0))
+                .fail_active_run_for_daemon(session_id, other, "fixture_failure")
+                .is_err()
+        );
+        assert!(
+            facade
+                .load_run_projection_for_daemon(session_id, other)
                 .is_err()
         );
     }
@@ -1599,29 +1710,26 @@ mod tests {
             .expect("host interrupt is accepted");
         assert_eq!(
             facade
-                .load_current_run_snapshot_for_daemon(session_id, run_id)
-                .expect("interrupted replay reads")
-                .run_projection()
+                .load_run_snapshot_for_daemon(session_id, run_id)
+                .expect("interrupted run snapshot reads")
+                .run()
                 .status(),
             RunStatusDto::Starting,
             "the interrupt leaves the run active for its continuation"
         );
         assert!(
-            matches!(facade.command(ProtocolCommandDto::SubscribeSession(SubscribeSessionCommandDto::new(SCHEMA_VERSION, session_id, None, RunModeDto::Build))), ProtocolCommandResultDto::Rejected(error) if error.code() == "invalid_subscription_dispatch")
+            matches!(facade.command(ProtocolCommandDto::SubscribeSession(SubscribeSessionCommandDto::new(SCHEMA_VERSION, session_id, RunModeDto::Build))), ProtocolCommandResultDto::Rejected(error) if error.code() == "invalid_subscription_dispatch")
         );
     }
 
     #[test]
-    fn committed_evidence_is_durable_and_replays_without_duplication() {
+    fn duplicate_session_creation_is_rejected_and_committed_state_re_reads_stable() {
         let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
-        let durable_create_events = facade
-            .inner
-            .repository
-            .load_tail(session_id, SessionEventSequenceDto::new(0))
-            .expect("independent durable read sees the created event");
-        assert_eq!(durable_create_events.len(), 1);
+        let before = facade
+            .session_snapshot(session_id, None)
+            .expect("the created session snapshot reads");
 
         let duplicate = facade.command(ProtocolCommandDto::CreateSession(
             CreateSessionCommandDto::new(
@@ -1632,57 +1740,40 @@ mod tests {
                 RunModeDto::Build,
             ),
         ));
-        assert!(matches!(duplicate, ProtocolCommandResultDto::Rejected(_)));
-        assert_eq!(
-            facade
-                .inner
-                .repository
-                .load_tail(session_id, SessionEventSequenceDto::new(0))
-                .expect("rejected persistence changes nothing")
-                .len(),
-            1,
-            "failed persistence leaves no durable trace"
-        );
+        let ProtocolCommandResultDto::Rejected(error) = duplicate else {
+            unreachable!("a duplicate durable session identity is rejected")
+        };
+        assert_eq!(error.code(), "session_already_exists");
+        let after = facade
+            .session_snapshot(session_id, None)
+            .expect("the rejected creation changes nothing");
+        assert_eq!(after.projection(), before.projection());
+        assert_eq!(after.messages(), before.messages());
 
         let accepted = facade.command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, intention_types::TurnId::new(), "committed")
-                .expect("fixture user turn is valid"),
+            SendUserTurnCommandDto::new(
+                session_id,
+                intention_types::IdempotencyKey::new(),
+                "committed",
+            )
+            .expect("fixture user turn is valid"),
         ));
-        assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
-        let durable_events = facade
-            .inner
-            .repository
-            .load_tail(session_id, SessionEventSequenceDto::new(1))
-            .expect("independent durable read sees committed turn batch");
-        assert_eq!(durable_events.len(), 2);
-
-        // The committed evidence replays as an authoritative snapshot: the
-        // M3 seam returns the current durable checkpoint, and replaying at that
-        // checkpoint is a stable no-op that duplicates or loses nothing.
-        let replay = facade.subscribe(SubscribeSessionCommandDto::new(
-            SCHEMA_VERSION,
-            session_id,
-            Some(SessionEventSequenceDto::new(0)),
-            RunModeDto::Build,
-        ));
-        let SessionSubscriptionResponseDto::Snapshot(snapshot) = replay else {
-            unreachable!("durable replay returns the current checkpoint")
+        let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
+            unreachable!("the committed user turn is accepted")
         };
+        let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
+            unreachable!("the committed user turn returns user-turn evidence")
+        };
+        let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
+            unreachable!("the committed user turn starts a run")
+        };
+        let committed = run_messages(&facade, session_id, run_id);
+        assert_eq!(committed.len(), 1);
+        assert_eq!(committed[0].text(), "committed");
         assert_eq!(
-            snapshot.at_sequence(),
-            SessionEventSequenceDto::new(3),
-            "the snapshot advanced through the committed create and turn batches"
-        );
-        let current = facade.subscribe(SubscribeSessionCommandDto::new(
-            SCHEMA_VERSION,
-            session_id,
-            Some(snapshot.at_sequence()),
-            RunModeDto::Build,
-        ));
-        assert!(
-            matches!(current, SessionSubscriptionResponseDto::Snapshot(snapshot)
-                if snapshot.at_sequence() == SessionEventSequenceDto::new(3)),
-            "the current checkpoint is replayable without duplication"
+            run_messages(&facade, session_id, run_id),
+            committed,
+            "committed transcript rows re-read without duplication"
         );
     }
 
@@ -1713,8 +1804,12 @@ mod tests {
     fn command_rejects_turn_for_unknown_session() {
         let (_directory, facade) = test_facade();
         let result = facade.command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(SessionId::new(), intention_types::TurnId::new(), "turn")
-                .expect("fixture turn is valid"),
+            SendUserTurnCommandDto::new(
+                SessionId::new(),
+                intention_types::IdempotencyKey::new(),
+                "turn",
+            )
+            .expect("fixture turn is valid"),
         ));
         let ProtocolCommandResultDto::Rejected(error) = result else {
             unreachable!("an unknown session cannot accept a turn")
@@ -1723,7 +1818,7 @@ mod tests {
     }
 
     #[test]
-    fn daemon_tool_bridge_reports_error_for_unavailable_tool() {
+    fn daemon_tool_bridge_reports_failures_for_unavailable_calls() {
         let driver = Arc::new(TestSupportUnconfiguredDriver);
         let (_directory, facade) = {
             let directory = TempDir::new().expect("temporary directory exists");
@@ -1737,33 +1832,85 @@ mod tests {
         };
         let session_id = SessionId::new();
         create(&facade, session_id);
-        let accepted = send_user_turn(&facade, session_id, "execution bridge");
-        let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
-            unreachable!("turn is accepted")
-        };
-        let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
-            unreachable!("turn evidence exists")
-        };
-        let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
-            unreachable!("turn starts")
-        };
+        let run_id = started_run(&facade, session_id, "execution bridge");
+        let (_workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
-        let result = facade.invoke_local_tool_for_daemon(
-            session_id,
-            run_id,
-            intention_types::ToolCallId::new(),
-            "missing-tool",
-            ToolInput::Read(intention_tools::ReadInput {
-                path: intention_types::WorkspaceRelativePathDto::parse("missing.txt")
-                    .expect("path is valid"),
-            }),
-            WorkspaceRoot::resolve(
-                &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
-                    .expect("workspace root is valid"),
+        let mismatched_call = intention_types::ToolCallId::new();
+        let error = facade
+            .invoke_local_tool_for_daemon(
+                session_id,
+                run_id,
+                mismatched_call,
+                "missing-tool",
+                read_hello_input(),
+                workspace.clone(),
+                "{}",
             )
-            .expect("workspace root resolves"),
+            .expect_err("a tool identity that does not match its typed input is rejected");
+        assert_eq!(error.code(), "tool_id_mismatch");
+        assert_eq!(
+            facade
+                .inner
+                .repository
+                .load_tool_result(session_id, run_id, mismatched_call)
+                .expect_err("a rejected identity commits no evidence")
+                .code(),
+            "tool_result_not_found"
         );
-        assert!(result.is_err());
+
+        let unavailable_call = intention_types::ToolCallId::new();
+        let missing = ToolInput::Read(intention_tools::ReadInput {
+            path: intention_types::WorkspaceRelativePathDto::parse("missing.txt")
+                .expect("fixture path is valid"),
+        });
+        let error = facade
+            .invoke_local_tool_for_daemon(
+                session_id,
+                run_id,
+                unavailable_call,
+                "read",
+                missing,
+                workspace,
+                "{}",
+            )
+            .expect_err("a read of an unavailable file is a tool failure");
+        let evidence = tool_evidence(&facade, session_id, run_id, unavailable_call);
+        assert_eq!(evidence.status(), ToolResultStatusDto::Failed);
+        assert_eq!(evidence.content(), error.code());
+    }
+
+    #[test]
+    fn workspace_resolution_reads_the_declared_session_root() {
+        let (_directory, facade) = test_facade();
+        let (workspace_directory, _workspace) = workspace_fixture("hello.txt", "hello");
+        let declared =
+            WorkspaceRootDto::parse(workspace_directory.path().to_string_lossy().into_owned())
+                .expect("fixture workspace dto is absolute");
+        let session_id = SessionId::new();
+        let accepted = facade.command(ProtocolCommandDto::CreateSession(
+            CreateSessionCommandDto::new(
+                ProjectId::new(),
+                session_id,
+                WorkspaceId::new(),
+                declared,
+                RunModeDto::Build,
+            ),
+        ));
+        assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
+
+        let resolved = facade
+            .resolve_workspace_root_for_daemon(session_id)
+            .expect("the declared workspace root resolves");
+        assert_eq!(
+            resolved.execute_cwd(),
+            std::fs::canonicalize(workspace_directory.path())
+                .expect("fixture workspace canonicalizes")
+                .as_path()
+        );
+        let error = facade
+            .resolve_workspace_root_for_daemon(SessionId::new())
+            .expect_err("an unknown session has no workspace root");
+        assert_eq!(error.code(), "storage_record_not_found");
     }
 
     #[test]
@@ -1845,6 +1992,7 @@ mod tests {
                     },
                 }),
                 workspace,
+                "{}",
             )
         });
 
@@ -1873,9 +2021,9 @@ mod tests {
         assert!(stopped);
         assert_eq!(
             facade
-                .load_current_run_snapshot_for_daemon(session_id, run_id)
-                .expect("interrupted replay reads")
-                .run_projection()
+                .load_run_snapshot_for_daemon(session_id, run_id)
+                .expect("interrupted run snapshot reads")
+                .run()
                 .status(),
             RunStatusDto::Starting,
             "the interrupted run stays active for the continuing model loop"
@@ -1890,18 +2038,20 @@ mod tests {
         let run_id = started_run(&facade, session_id, "late interrupt");
         let (_workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
-        for _ in 0..2 {
+        let call_ids = [
+            intention_types::ToolCallId::new(),
+            intention_types::ToolCallId::new(),
+        ];
+        for call_id in call_ids {
             let result = facade
                 .invoke_local_tool_for_daemon(
                     session_id,
                     run_id,
-                    intention_types::ToolCallId::new(),
+                    call_id,
                     "read",
-                    ToolInput::Read(intention_tools::ReadInput {
-                        path: intention_types::WorkspaceRelativePathDto::parse("hello.txt")
-                            .expect("fixture path is valid"),
-                    }),
+                    read_hello_input(),
                     workspace.clone(),
+                    "{}",
                 )
                 .expect("reads complete before any interrupt");
             match result {
@@ -1917,26 +2067,18 @@ mod tests {
             .expect("host interrupt is accepted after completed effects");
         assert_eq!(
             facade
-                .load_current_run_snapshot_for_daemon(session_id, run_id)
-                .expect("interrupted replay reads")
-                .run_projection()
+                .load_run_projection_for_daemon(session_id, run_id)
+                .expect("the interrupted run stays readable")
                 .status(),
             RunStatusDto::Starting,
             "a late interrupt never rewrites completed evidence or terminalizes the run"
         );
-        let events = facade
-            .inner
-            .repository
-            .load_tail(session_id, SessionEventSequenceDto::new(0))
-            .expect("durable events read");
-        assert!(
-            events.iter().any(|event| matches!(
-                event.payload(),
-                intention_domain::DomainEventDto::ToolLifecycle(lifecycle)
-                    if lifecycle.status() == &intention_domain::ToolLifecycleStatusDto::Completed
-            )),
-            "the committed read evidence stands"
-        );
+        for call_id in call_ids {
+            let evidence = tool_evidence(&facade, session_id, run_id, call_id);
+            assert_eq!(evidence.status(), ToolResultStatusDto::Completed);
+            assert_eq!(evidence.tool_id(), "read");
+            assert_eq!(evidence.content(), "hello");
+        }
     }
 
     #[test]
@@ -1945,61 +2087,37 @@ mod tests {
         let session_id = SessionId::new();
         create(&facade, session_id);
         let run_id = started_run(&facade, session_id, "publication reread");
-        let committed_through = facade
-            .inner
-            .repository
-            .load_session_snapshot(session_id)
-            .expect("current snapshot reads")
-            .at_sequence();
         let (_workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
-        let call_id = intention_types::ToolCallId::new();
+        let first_call = intention_types::ToolCallId::new();
         let result = facade
             .invoke_local_tool_for_daemon(
                 session_id,
                 run_id,
-                call_id,
+                first_call,
                 "read",
                 read_hello_input(),
                 workspace.clone(),
+                "{}",
             )
-            .expect("read completes before any stop");
+            .expect("the first read completes");
         match result {
             LocalToolInvocationOutcomeDto::Completed(ToolResult::Read(text)) => {
                 assert_eq!(text.text.as_str(), "hello")
             }
             _ => unreachable!("read dispatch returns a completed read result"),
         }
-
-        let durable_tail = facade
-            .inner
-            .repository
-            .load_tail(session_id, committed_through)
-            .expect("independent durable read sees the committed invocation");
-        assert!(
-            durable_tail.iter().all(|envelope| matches!(
-                envelope.payload(),
-                intention_domain::DomainEventDto::ToolLifecycle(event)
-                    if event.session_id() == session_id
-                        && event.run_id() == run_id
-                        && event.call_id() == call_id
-            )),
-            "every committed event is this exact call's lifecycle evidence"
+        let first_evidence = tool_evidence(&facade, session_id, run_id, first_call);
+        assert_eq!(first_evidence.call_id(), first_call);
+        assert_eq!(first_evidence.status(), ToolResultStatusDto::Completed);
+        assert_eq!(
+            run_messages(&facade, session_id, run_id)
+                .iter()
+                .filter(|message| message.tool_call_id() == Some(first_call))
+                .count(),
+            2,
+            "the first call commits exactly its own tool-call and tool-result rows"
         );
-        match durable_tail
-            .last()
-            .expect("committed scope is non-empty")
-            .payload()
-        {
-            intention_domain::DomainEventDto::ToolLifecycle(event) => {
-                assert_eq!(
-                    event.status(),
-                    &intention_domain::ToolLifecycleStatusDto::Completed,
-                    "the committed typed result evidence completed"
-                );
-            }
-            _ => unreachable!("final committed evidence is the completed result"),
-        }
 
         let second_call = intention_types::ToolCallId::new();
         facade
@@ -2010,26 +2128,23 @@ mod tests {
                 "read",
                 read_hello_input(),
                 workspace,
+                "{}",
             )
-            .expect("second read completes");
-        let second_position = facade
-            .inner
-            .repository
-            .load_session_snapshot(session_id)
-            .expect("current snapshot reads")
-            .at_sequence();
-        let second_tail = facade
-            .inner
-            .repository
-            .load_tail(session_id, second_position)
-            .expect("independent durable read sees the second invocation");
-        assert!(
-            second_tail.iter().all(|envelope| matches!(
-                envelope.payload(),
-                intention_domain::DomainEventDto::ToolLifecycle(event)
-                    if event.call_id() == second_call
-            )),
-            "the second invocation never repeats the first call's evidence"
+            .expect("the second read completes");
+        let second_evidence = tool_evidence(&facade, session_id, run_id, second_call);
+        assert_eq!(second_evidence.call_id(), second_call);
+        assert_eq!(
+            tool_evidence(&facade, session_id, run_id, first_call),
+            first_evidence,
+            "the second invocation never rewrites the first call's evidence"
+        );
+        assert_eq!(
+            run_messages(&facade, session_id, run_id)
+                .iter()
+                .filter(|message| message.tool_call_id() == Some(second_call))
+                .count(),
+            2,
+            "the second call commits only its own rows"
         );
     }
 
@@ -2039,12 +2154,6 @@ mod tests {
         let session_id = SessionId::new();
         create(&facade, session_id);
         let run_id = started_run(&facade, session_id, "exact correlation");
-        let committed_through = facade
-            .inner
-            .repository
-            .load_session_snapshot(session_id)
-            .expect("current snapshot reads")
-            .at_sequence();
         let (_workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
         let call_id = intention_types::ToolCallId::new();
@@ -2056,12 +2165,12 @@ mod tests {
                 "read",
                 read_hello_input(),
                 workspace,
+                "{}",
             )
             .expect("read completes");
 
         let publisher = DurableToolResultPublisher {
             repository: &facade.inner.repository,
-            after_sequence: committed_through,
         };
         let uncommitted = ToolResultPublicationInputDto::new(
             session_id,
@@ -2072,7 +2181,7 @@ mod tests {
         let error = publisher
             .publish_tool_result(&uncommitted)
             .expect_err("an uncommitted call identity cannot publish");
-        assert_eq!(error.code(), "tool_result_evidence_unavailable");
+        assert_eq!(error.code(), "tool_result_not_found");
 
         let cross_run = ToolResultPublicationInputDto::new(
             session_id,
@@ -2083,25 +2192,38 @@ mod tests {
         let error = publisher
             .publish_tool_result(&cross_run)
             .expect_err("a cross-run identity cannot publish");
+        assert_eq!(error.code(), "tool_result_not_found");
+
+        let cross_session = ToolResultPublicationInputDto::new(
+            SessionId::new(),
+            run_id,
+            call_id,
+            hello_read_result(),
+        );
+        let error = publisher
+            .publish_tool_result(&cross_session)
+            .expect_err("a cross-session identity cannot publish");
+        assert_eq!(error.code(), "tool_result_not_found");
+
+        // The verification step rejects committed evidence whose durable
+        // identity does not answer the requested invocation.
+        let mismatched_evidence = ToolResultEvidenceDto::new(
+            session_id,
+            run_id,
+            intention_types::ToolCallId::new(),
+            "read",
+            ToolResultStatusDto::Completed,
+            "hello",
+            Vec::new(),
+            TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid"),
+        )
+        .expect("fixture evidence is valid");
+        let error = committed_tool_result_evidence(&mismatched_evidence, &uncommitted)
+            .expect_err("mismatched committed evidence cannot publish");
         assert_eq!(error.code(), "tool_result_evidence_unavailable");
 
-        let current_position = facade
-            .inner
-            .repository
-            .load_session_snapshot(session_id)
-            .expect("current snapshot reads")
-            .at_sequence();
-        let drained = DurableToolResultPublisher {
-            repository: &facade.inner.repository,
-            after_sequence: current_position,
-        };
         let exact =
             ToolResultPublicationInputDto::new(session_id, run_id, call_id, hello_read_result());
-        let error = drained
-            .publish_tool_result(&exact)
-            .expect_err("a reread window after the commit contains no evidence");
-        assert_eq!(error.code(), "tool_result_evidence_unavailable");
-
         publisher
             .publish_tool_result(&exact)
             .expect("the exact committed identity correlates");
