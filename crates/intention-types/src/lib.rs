@@ -1,9 +1,8 @@
 //! Shared, dependency-light DTOs for every Intention Relay boundary.
 //!
-//! This crate owns validated identifiers, the session event sequence, schema
-//! versions, safe errors, temporal values, and versioned event envelopes. It
-//! deliberately has no domain, persistence, provider, runtime, or presentation
-//! dependency.
+//! This crate owns validated identifiers, schema versions, safe errors, and
+//! temporal values. It deliberately has no domain, persistence, provider,
+//! runtime, or presentation dependency.
 
 use std::fmt::{Display, Formatter};
 
@@ -85,22 +84,16 @@ define_id!(
     "A stable identity for one agent execution lifecycle."
 );
 define_id!(TurnId, "A stable identity for one conversational turn.");
-define_id!(
-    AssistantTurnId,
-    "A stable identity for one assistant-owned conversational turn."
-);
 define_id!(ProjectId, "A stable identity for one logical user project.");
 define_id!(WorkspaceId, "A stable identity for one declared workspace.");
-define_id!(PlanId, "A stable identity for one physical plan artifact.");
-define_id!(
-    PlanRevisionId,
-    "A stable identity for one immutable plan revision."
-);
 define_id!(ToolCallId, "A stable identity for one tool invocation.");
-define_id!(EventId, "A stable identity for one immutable domain event.");
 define_id!(
     ConfigRevisionId,
     "A stable identity for one accepted configuration revision."
+);
+define_id!(
+    IdempotencyKey,
+    "A caller-supplied identity that makes one mutating operation repeatable."
 );
 
 /// The schema version carried by persisted and transport DTOs.
@@ -163,24 +156,6 @@ impl TimestampDto {
     /// Returns the represented whole Unix seconds.
     #[must_use]
     pub const fn unix_seconds(self) -> i64 {
-        self.0
-    }
-}
-
-/// A monotonically increasing per-session event position.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct SessionEventSequenceDto(u64);
-
-impl SessionEventSequenceDto {
-    /// Creates an explicit event sequence position.
-    #[must_use]
-    pub const fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    /// Returns the raw ordered position for storage or protocol codecs only.
-    #[must_use]
-    pub const fn value(self) -> u64 {
         self.0
     }
 }
@@ -526,106 +501,6 @@ impl Display for ErrorDto {
 
 impl std::error::Error for ErrorDto {}
 
-/// The versioned, ordered identity information shared by event envelopes.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct EventMetadataDto {
-    schema_version: SchemaVersionDto,
-    event_id: EventId,
-    session_id: SessionId,
-    run_id: Option<RunId>,
-    turn_id: Option<TurnId>,
-    sequence: SessionEventSequenceDto,
-    occurred_at: TimestampDto,
-}
-
-impl EventMetadataDto {
-    /// Creates event identity and ordering metadata.
-    #[must_use]
-    pub const fn new(
-        schema_version: SchemaVersionDto,
-        event_id: EventId,
-        session_id: SessionId,
-        run_id: Option<RunId>,
-        turn_id: Option<TurnId>,
-        sequence: SessionEventSequenceDto,
-        occurred_at: TimestampDto,
-    ) -> Self {
-        Self {
-            schema_version,
-            event_id,
-            session_id,
-            run_id,
-            turn_id,
-            sequence,
-            occurred_at,
-        }
-    }
-}
-
-/// A versioned, ordered immutable event with typed causal identity.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct EventEnvelopeDto<T> {
-    #[serde(flatten)]
-    metadata: EventMetadataDto,
-    payload: T,
-}
-
-impl<T> EventEnvelopeDto<T> {
-    /// Creates an event envelope from typed identity metadata and its payload.
-    #[must_use]
-    pub const fn new(metadata: EventMetadataDto, payload: T) -> Self {
-        Self { metadata, payload }
-    }
-
-    /// Returns the explicit schema version.
-    #[must_use]
-    pub const fn schema_version(&self) -> SchemaVersionDto {
-        self.metadata.schema_version
-    }
-
-    /// Returns the immutable event identity.
-    #[must_use]
-    pub const fn event_id(&self) -> EventId {
-        self.metadata.event_id
-    }
-
-    /// Returns the owning durable session identity.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.metadata.session_id
-    }
-
-    /// Returns the optional owning run identity.
-    #[must_use]
-    pub const fn run_id(&self) -> Option<RunId> {
-        self.metadata.run_id
-    }
-
-    /// Returns the optional causal turn identity.
-    #[must_use]
-    pub const fn turn_id(&self) -> Option<TurnId> {
-        self.metadata.turn_id
-    }
-
-    /// Returns the durable per-session ordering sequence.
-    #[must_use]
-    pub const fn sequence(&self) -> SessionEventSequenceDto {
-        self.metadata.sequence
-    }
-
-    /// Returns the occurrence timestamp.
-    #[must_use]
-    pub const fn occurred_at(&self) -> TimestampDto {
-        self.metadata.occurred_at
-    }
-
-    /// Returns the typed event payload.
-    #[must_use]
-    pub const fn payload(&self) -> &T {
-        &self.payload
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -636,7 +511,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_temporal_and_sequence_values_validate_their_boundaries() {
+    fn schema_and_temporal_values_validate_their_boundaries() {
         let current = SchemaVersionDto::new(1, 2);
         assert_eq!(current.major(), 1);
         assert_eq!(current.minor(), 2);
@@ -658,7 +533,6 @@ mod tests {
                 .code(),
             "invalid_timestamp"
         );
-        assert_eq!(SessionEventSequenceDto::new(8).value(), 8);
     }
 
     #[test]

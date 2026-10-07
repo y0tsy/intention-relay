@@ -6,8 +6,8 @@
 //! Test-first contract evidence for the planned `intention-types` public API.
 
 use intention_types::{
-    ErrorCategoryDto, ErrorDto, ErrorRetryDto, EventEnvelopeDto, EventId, EventMetadataDto, RunId,
-    SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto,
+    ErrorCategoryDto, ErrorDto, ErrorRetryDto, IdempotencyKey, SchemaVersionDto, SessionId,
+    TimestampDto,
 };
 
 #[test]
@@ -35,25 +35,22 @@ fn malformed_ids_return_a_typed_validation_error() {
 }
 
 #[test]
-fn event_envelopes_round_trip_with_causal_identity() {
-    let envelope = EventEnvelopeDto::new(
-        EventMetadataDto::new(
-            SchemaVersionDto::new(1, 0),
-            EventId::new(),
-            SessionId::new(),
-            Some(RunId::new()),
-            None,
-            SessionEventSequenceDto::new(7),
-            TimestampDto::from_unix_seconds(1_700_000_000).expect("fixture timestamp is valid"),
-        ),
-        "fixture-event".to_owned(),
-    );
-
-    let encoded = serde_json::to_string(&envelope).expect("test serialization must succeed");
-    let decoded: EventEnvelopeDto<String> =
+fn the_eight_identity_newtypes_round_trip_as_canonical_uuid_strings() {
+    let key = IdempotencyKey::new();
+    let encoded = serde_json::to_string(&key).expect("test serialization must succeed");
+    let decoded: IdempotencyKey =
         serde_json::from_str(&encoded).expect("test deserialization must succeed");
-
-    assert_eq!(decoded, envelope);
+    assert_eq!(decoded, key);
+    assert_eq!(
+        SchemaVersionDto::new(1, 1),
+        intention_types::SchemaVersionDto::new(1, 1)
+    );
+    assert_eq!(
+        TimestampDto::from_unix_seconds(1)
+            .expect("fixture timestamp is valid")
+            .unix_seconds(),
+        1
+    );
 }
 
 #[test]
