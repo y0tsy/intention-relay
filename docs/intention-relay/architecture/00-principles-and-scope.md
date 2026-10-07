@@ -12,7 +12,7 @@ map](01-workspace-and-crate-map.md).
 
 ### 1. Workspace, not a monolithic core
 
-Intention Relay is a Rust workspace of small, logically grouped crates. `intention` is a composition root that creates
+Intention Relay is a Rust workspace of small, logically grouped crates. `intention-daemon` is a composition root that creates
 factories and connects implementations, not a catch-all core crate.
 
 ### 2. DTO-first at every boundary

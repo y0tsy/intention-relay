@@ -307,12 +307,12 @@ their mapping contracts and fixture-daemon outcome scenarios; the floor never re
 - daemon upgrades with connected adapters;
 - explicit daemon stop command and future idle shutdown policy.
 
-## Slice 1.5 daemon, transport, and client model (not activated)
+## Slice 1.5 daemon, transport, and client model (activated)
 
-Slice 1.5 merges the composition facade into the daemon crate and lifts the client to the full protocol surface. This
-section freezes the target; the text above stays current policy until the slice activates.
+Slice 1.5 merged the composition facade into the daemon crate and lifted the client to the protocol command surface.
+This section records the landed model; the text above is the live policy.
 
-- One host, no facade library. The `intention` composition root and the `intention-daemon` host become one binary crate.
+- One host, no facade library. The composition root and the daemon host are one binary crate, `intention-daemon`.
   The daemon host calls the engine directly, the hop daemon host → facade → application disappears, and with it the
   facade's duplicate DTO surface. Composition still happens in exactly one place, and the hidden test seams move with
   the merged crates and stay non-production.

@@ -1,5 +1,5 @@
 [policy]
-phase = "m5"
+phase = "slice15"
 
 # Line-coverage floors. [crate_tiers] assigns every active production crate and
 # both presentation adapters to exactly one tier; the runner collects every
@@ -22,7 +22,6 @@ exempt = 0.0
 "intention-providers" = "standard"
 "intention-tauri" = "edge"
 "intention-tui" = "edge"
-"intention" = "edge"
 "intention-client" = "edge"
 "intention-proto" = "exempt"
 

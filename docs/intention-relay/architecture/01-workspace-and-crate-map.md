@@ -26,7 +26,7 @@ filesystem paths.
 crate remains provider-neutral and depends only on `intention-proto`; provider crates depend only on model/config/types
 plus their private SDK. `intention-proto` owns the provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and
 `ProviderErrorDto` shared by model and durable domain facts; `intention-providers` re-exports them for its consumers. Only
-`intention` may select either concrete provider.
+`intention-daemon` may select either concrete provider.
 -  M4 model and provider evidence is domain-owned and current-state: domain, storage, and protocol never depend on
 `intention-providers`, and SQLite stores assistant content, reasoning text, tool calls, and tool results on the transcript
 and tool-result rows rather than in typed envelopes or per-run cursors. `intention-engine` depends on the
@@ -37,7 +37,7 @@ facade plus the DTO/application/runtime/model/protocol/transport/type crates nee
 streaming, and on private Tokio/future support. It never depends directly on a concrete provider or storage
 implementation, selects no provider, and exposes no provider SDK, credential, Tokio, or storage resource in its public
 contract.
--  M5 activates the typed tool/workspace/hook path. The composition root (`intention`) owns assembly of the six active
+-  M5 activates the typed tool/workspace/hook path. The composition root (`intention-daemon`) owns assembly of the six active
 tools (`read`, `write`, `edit`, `execute`, `glob`, and `grep`) and the workspace/hook services; `intention-daemon` hosts
 the application path but does not select implementations. The remaining registry slots are reserved and unavailable.
 
@@ -60,8 +60,7 @@ The M1-M5 activation notes are historical records: the coverage policy is now th
 | `intention-plans` | Plan artifacts, hidden frontmatter, Plan/Build policy hooks. | Hooks, tools, storage contracts, domain, types. |
 | `intention-transport` | Socket/pipe framing, server/client protocol, subscriptions. | Protocol, types. |
 | `intention-client` | Bootstrap, connection, dispatch, subscription, reconnect. | Protocol, transport, types. |
-| `intention-daemon` | Daemon host binary: process lifecycle, private model-task registry, and typed connection/stream hosting. | Composition facade; application/runtime/model/domain/protocol/transport/type DTO contracts; private Tokio/future support. Never concrete provider or storage implementations. |
-| `intention` | Composition root library: factories, dependency wiring, and daemon application facade. | All selected concrete implementations. |
+| `intention-daemon` | Composition root library (factories, dependency wiring, and the durable `DaemonApplicationFacade`) plus daemon host and binary. | All selected concrete implementations. |
 | `intention-tauri` | Tauri bootstrap and native bridge. | Client, protocol, presentation DTO mapping. |
 | `intention-tui` | TUI and REPL presentation adapters. | Client, protocol, presentation crates. |
 
@@ -102,11 +101,11 @@ flowchart BT
 
 <!-- Arrows show permitted lower-level dependencies toward a consumer. Composition is the sole wiring location. -->
 
-## Slice 1.5 target crate map (not activated)
+## Slice 1.5 crate map (activated)
 
-Slice 1.5 collapses the workspace to ten production crates. This section freezes the target map; the table above stays
-current policy until the slice activates, and the exact permitted-edge table plus per-crate test targets and coverage
-tiers are declared by its activating specification (roadmap, slice 1.5).
+Slice 1.5 collapsed the workspace to ten production crates, shown below together with what each absorbed. The table
+above is the live crate map, and the exact permitted edges plus per-crate test targets and coverage tiers are declared
+by `quality/architecture.toml` under phase `slice15`.
 
 | Target crate | Absorbs | Owns |
 | --- | --- | --- |
@@ -118,7 +117,6 @@ tiers are declared by its activating specification (roadmap, slice 1.5).
 | `intention-providers` | `intention-model`, `intention-provider-openrouter`, `intention-provider-generic-chat` | The provider-neutral model contract and both concrete SDK translation adapters. |
 | `intention-storage` | `intention-storage`, `intention-storage-sqlite` | Repository contracts and the bundled SQLite single-schema implementation. |
 | `intention-transport` | `intention-transport` | Socket/pipe framing, the JSON-RPC server and client protocol, and subscriptions. |
-| `intention-daemon` | `intention`, `intention-daemon` | Composition root, dependency wiring, process lifecycle, and typed connection and stream hosting in one binary crate. |
 | `intention-client` | `intention-client` | Bootstrap, connection, dispatch, subscriptions, and reconnect, fully asynchronous and covering every protocol command and query. |
 
 Retained outside the ten: the adapter crates `intention-tui` and `intention-tauri`, the future skeleton crates
@@ -183,13 +181,13 @@ creation, pending-turn context joins, and recovery. It has no provider, tool, ti
 M3.
 -  `intention-test-support` is a non-production workspace crate. It owns credential-free fixture configuration, native
 temporary roots under `std::env::temp_dir()`, `TempDir`-backed durable databases, deterministic sessions, and bounded
-fixture listener orchestration. `intention` exposes only hidden `test-support` facade seams for an injected
+fixture listener orchestration. `intention-daemon` exposes only hidden `test-support` facade seams for an injected
 database and current-state inspection; `intention-daemon` exposes only a hidden one-connection dispatch seam.
 Release production APIs and the daemon binary expose no fixture mode.
 
 ## Composition rules
 
-`intention` creates and connects:
+`intention-daemon` creates and connects:
 
 - resolved TOML configuration;
 - SQLite storage implementation;
@@ -227,7 +225,7 @@ The workspace must have tests that fail when these rules are broken:
 1. no cyclic crate dependencies;
 2. the required v1 crate set exists, and every crate has a single declared responsibility;
 3. adapters do not import forbidden implementation crates or declare forbidden workspace/external dependencies;
-4. only `intention` selects concrete storage/provider/tool extension implementations;
+4. only `intention-daemon` selects concrete storage/provider/tool extension implementations;
 5. `intention-proto` has no dependency on Tauri, SQLite, provider SDKs, or UI crates;
 6. public cross-crate methods accept/return DTOs, not implementation resources or provider SDK types;
 7. every planned crate has a stated test target before implementation begins;

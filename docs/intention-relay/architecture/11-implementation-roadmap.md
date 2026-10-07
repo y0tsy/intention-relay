@@ -93,7 +93,7 @@ former contract ledger, `run-execution-meaning-v4` field tables, capability fami
 digests were deleted ([architecture 02](02-dto-and-contract-policy.md)): no ledger, tag registry, canonical
 digest, or identity record remains, and every future contract family is typed serde JSON with RFC 8785 canonicalization
 only when a first real consumer appears.
--  **Slice 1.5 — Core simplification — not activated.** It adds no product behavior: it collapses the workspace to ten
+-  **Slice 1.5 — Core simplification — activated.** It adds no product behavior: it collapsed the workspace to ten
 production crates and simplifies the internal interfaces every later slice builds on. The crate set is
 `intention-proto` (types and protocol), `intention-domain`, `intention-config`, `intention-engine` (application and
 runtime), `intention-tools` (tools, workspace, and hooks), `intention-providers` (provider-neutral model contract and
@@ -109,12 +109,12 @@ newtypes (`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallI
 `IdempotencyKey`; every state change commits in one SQLite transaction and the daemon publishes `run.frame`
 notifications built from the committed values; the single live protocol version is 1.0 with no cursors, and a
 re-subscribing client receives current run state and bounded recent messages, then continues live; `intention-client`
-is an asynchronous client with its blocking API removed whose connect/health, session snapshot, and run-subscription
-surface is live, and whose `intention-tui` proof adapter is migrated mechanically; the remaining protocol command
-methods and the daemon end-to-end tests that drive them through the real client rather than the low-level transport are
-still ahead; and the eight hook phases are wired into the real tool cycle. What remains before the slice can activate is
-those client methods, the ten-production-crate consolidation, and the removal of the composition facade, so the daemon
-host calls the engine directly; the single storage schema evolves in place with no migration or compatibility path.
+is an asynchronous client with its blocking API removed that covers connect/health, session snapshots, run
+subscriptions, and the command surface, and whose `intention-tui` proof adapter is migrated mechanically; the daemon
+end-to-end suite drives that client (`client_e2e`) instead of the low-level transport; the eight hook phases are wired
+into the real tool cycle; the ten-production-crate consolidation and the removal of the composition facade landed, so
+the daemon host calls the engine directly; and the single storage schema evolves in place with no migration or
+compatibility path.
 -  **Slice 2 — Control plane — not activated.** The cluster and provider session selection (architectures 25/29/22):
 controlled live reload, credential rotation, provider health checks, model discovery, pricing policy, provider profile
 UI and raw-TOML/configuration editing, arbitrary authentication headers, session defaults and per-turn/fork overrides,

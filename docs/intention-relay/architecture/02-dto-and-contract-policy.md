@@ -216,10 +216,10 @@ See [03 Daemon, Transport, and Adapters](03-daemon-transport-and-adapters.md) fo
 Delivery and Verification](10-test-driven-delivery-and-verification.md) for mandatory test layers, and [12 Quality Gates
 and Makefile](12-quality-gates-and-makefile.md) for the blocking orchestration contract.
 
-## Slice 1.5 boundary model (not activated)
+## Slice 1.5 boundary model (activated)
 
-Slice 1.5 collapses the DTO surface to the three places where a process, a file, or a foreign SDK forces a serialized
-shape. This section freezes that model; the rules above stay current policy until the slice activates.
+Slice 1.5 collapsed the DTO surface to the three places where a process, a file, or a foreign SDK forces a serialized
+shape. This section records the landed model; the rules above are the live policy.
 
 - Three physical boundaries. DTOs exist at the IPC wire (protocol commands, queries, notifications, and their typed
   payloads), at SQLite persistence (rows and projections), and at provider SDK calls (requests, stream facts, and errors

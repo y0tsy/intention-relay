@@ -1,6 +1,6 @@
 [policy]
-phase = "m5"
-active_milestone = "m5"
+phase = "slice15"
+active_milestone = "slice15"
 quality_harness = "quality-harness"
 non_production_test_crates = ["intention-test-support"]
 active_production_crates = [
@@ -9,7 +9,6 @@ active_production_crates = [
   "intention-config",
   "intention-transport",
   "intention-client",
-  "intention",
   "intention-daemon",
   "intention-engine",
   "intention-storage",
@@ -24,7 +23,6 @@ skeleton_crates = [
 
 [non_production_test_dependencies]
 "intention-test-support" = [
-  "intention",
   "intention-config",
   "intention-daemon",
   "intention-transport",
@@ -54,8 +52,7 @@ test_only_source_patterns = [
 "intention-storage" = ["intention-config", "intention-domain", "intention-proto"]
 "intention-transport" = ["intention-proto"]
 "intention-client" = ["intention-transport", "intention-proto"]
-"intention" = ["intention-config", "intention-domain", "intention-engine", "intention-providers", "intention-storage", "intention-tools", "intention-proto"]
-"intention-daemon" = ["intention", "intention-client", "intention-config", "intention-domain", "intention-engine", "intention-providers", "intention-tools", "intention-transport", "intention-proto"]
+"intention-daemon" = ["intention-client", "intention-config", "intention-domain", "intention-engine", "intention-proto", "intention-providers", "intention-storage", "intention-tools", "intention-transport"]
 "intention-engine" = ["intention-config", "intention-domain", "intention-providers", "intention-proto", "intention-storage", "intention-tools"]
 "intention-providers" = ["intention-config", "intention-proto"]
 "intention-tools" = ["intention-proto"]
@@ -66,7 +63,6 @@ test_only_source_patterns = [
 "intention-config" = ["serde", "serde_json", "toml"]
 "intention-transport" = ["interprocess", "serde", "serde_json", "tempfile", "tokio"]
 "intention-client" = ["fs4", "tempfile", "tokio"]
-"intention" = ["futures-util", "tempfile"]
 "intention-daemon" = ["futures-util", "serde_json", "tempfile", "tokio"]
 "intention-engine" = ["futures-executor", "futures-util"]
 "intention-storage" = ["rusqlite", "serde_json", "tempfile"]
@@ -102,7 +98,7 @@ forbidden_source_patterns = [
 ]
 
 [composition]
-root_package = "intention"
+root_package = "intention-daemon"
 concrete_implementation_crates = [
   "intention-vfr",
   "intention-headroom",
@@ -198,16 +194,12 @@ name = "intention-client"
 test_targets = ["client_contract", "run_stream_contract"]
 
 [[future_crates]]
-name = "intention"
-test_targets = []
-
-[[future_crates]]
 name = "intention-test-support"
 test_targets = ["composition_contract", "fixture_host"]
 
 [[future_crates]]
 name = "intention-daemon"
-test_targets = ["daemon_bootstrap", "m4_streaming_foundation", "m5_tool_loop_wiring", "facade_e2e", "real_api_e2e"]
+test_targets = ["client_e2e", "daemon_bootstrap", "m4_streaming_foundation", "m5_tool_loop_wiring", "real_api_e2e"]
 
 [[future_crates]]
 name = "intention-tauri"

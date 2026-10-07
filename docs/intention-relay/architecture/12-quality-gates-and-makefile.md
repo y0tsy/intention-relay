@@ -73,7 +73,7 @@ aggregate report is informational and never a threshold authority.
 | --- | ---: | --- |
 | `core` | 75% | `intention-engine`, `intention-transport`, `intention-storage`, `intention-domain` |
 | `standard` | 60% | `intention-providers`, `intention-tools`, `intention-config`, `intention-daemon` |
-| `edge` | 20% | `intention-tauri`, `intention-tui`, `intention`, `intention-client` |
+| `edge` | 20% | `intention-tauri`, `intention-tui`, `intention-client` |
 | `exempt` | 0% (not collected) | `intention-proto` |
 
 - Every required feature profile contributes to coverage where the crate supports that profile; a coverage decrease

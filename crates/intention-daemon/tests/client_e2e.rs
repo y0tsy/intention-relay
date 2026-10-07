@@ -1,4 +1,4 @@
-//! Facade-level daemon-host end-to-end tests over real IPC.
+//! Client-driven daemon-host end-to-end tests over real IPC.
 //!
 //! These tests spawn the real `intention-daemon` binary over real local
 //! transport, drive it with the real asynchronous client, and execute a real
@@ -11,7 +11,7 @@
 #![allow(
     clippy::expect_used,
     clippy::panic,
-    reason = "Facade end-to-end fixtures use assertion conveniences for precise diagnostics."
+    reason = "Client end-to-end fixtures use assertion conveniences for precise diagnostics."
 )]
 
 use std::io::{Read, Write};
@@ -29,20 +29,10 @@ use intention_client::{
 use intention_domain::run_status_is_terminal;
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunStatusDto,
-    SendUserTurnCommandDto, WorkspaceRootDto,
+    RunStreamFrameDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto, WorkspaceRootDto,
 };
-use intention_proto::{
-    DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto,
-    ProtocolHelloDto, ProtocolMethodDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
-    RunStreamFrameDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto, decode_response,
-    encode_request,
-};
-use intention_proto::{
-    DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId,
-};
-use intention_transport::{
-    LocalConnection, LocalEndpoint, local_protocol_version, negotiate_client,
-};
+use intention_proto::{IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId};
+use intention_transport::LocalEndpoint;
 use tempfile::TempDir;
 
 /// One daemon-host fixture: isolated config/state/workspace, a fake provider,
@@ -270,7 +260,7 @@ impl FakeProvider {
         let thread_excess = Arc::clone(&excess);
         let thread_stop = Arc::clone(&stop);
         let tool_body = serde_json::to_string(&serde_json::json!({
-            "id": "chatcmpl-facade-e2e-1",
+            "id": "chatcmpl-client-e2e-1",
             "object": "chat.completion.chunk",
             "created": 1,
             "model": "fixture-model",
@@ -289,7 +279,7 @@ impl FakeProvider {
         }))
         .expect("tool chunk serializes");
         let usage_body = serde_json::to_string(&serde_json::json!({
-            "id": "chatcmpl-facade-e2e-1",
+            "id": "chatcmpl-client-e2e-1",
             "object": "chat.completion.chunk",
             "created": 1,
             "model": "fixture-model",
@@ -298,7 +288,7 @@ impl FakeProvider {
         }))
         .expect("usage chunk serializes");
         let text_body = serde_json::to_string(&serde_json::json!({
-            "id": "chatcmpl-facade-e2e-2",
+            "id": "chatcmpl-client-e2e-2",
             "object": "chat.completion.chunk",
             "created": 1,
             "model": "fixture-model",
@@ -316,7 +306,7 @@ impl FakeProvider {
             "data: {text_body}\n\ndata: {usage_body}\n\ndata: [DONE]\n\n"
         ));
         let thread = thread::Builder::new()
-            .name("facade-e2e-provider".to_owned())
+            .name("client-e2e-provider".to_owned())
             .spawn(move || {
                 listener
                     .set_nonblocking(true)
@@ -458,56 +448,25 @@ fn excess_response() -> String {
     )
 }
 
-/// The exact hello the fixture clients exchange with the daemon.
-fn fixture_hello() -> ProtocolHelloDto {
-    ProtocolHelloDto::new(local_protocol_version(), "facade-e2e").expect("fixture hello is valid")
-}
-
-/// Sends one typed protocol command over a fresh negotiated connection and
-/// verifies the correlated response, replicating the client's private request
-/// path with public transport and protocol APIs only.
-fn send_command(
-    endpoint: &LocalEndpoint,
-    payload: ProtocolRequestPayloadDto,
-) -> DtoResult<ProtocolCommandResultDto> {
-    let method = ProtocolMethodDto::for_payload(&payload);
-    let mut connection = LocalConnection::connect(endpoint)?;
-    negotiate_client(&mut connection, fixture_hello())?;
-    connection.send_message(&encode_request(1, payload))?;
-    let line = connection.receive_line()?;
-    match decode_response(&line, method, 1)? {
-        ProtocolResponsePayloadDto::CommandResult(result) => Ok(result),
-        _ => Err(invalid_response()),
-    }
-}
-
-fn invalid_response() -> ErrorDto {
-    ErrorDto::validation(
-        "invalid_local_protocol_response",
-        "the local daemon returned an unexpected protocol response",
-    )
-}
-
-/// Polls the daemon health projection until it reports `Ready`.
+/// Waits for the spawned daemon to report `Ready` through the shared client.
 ///
-/// `health()` only negotiates and queries; it never launches the daemon.
+/// `await_ready()` only negotiates and queries; it never launches the daemon.
+/// Its own bounded wait is looped under the fixture deadline, so a daemon that
+/// needs longer than one client budget still becomes ready in time.
 async fn wait_until_ready(endpoint: &LocalEndpoint, deadline: Instant) -> IntentionClient {
     let client = IntentionClient::new(
         endpoint.clone(),
-        "facade-e2e",
+        "client-e2e",
         Box::new(
             ProcessDaemonLauncher::new(env!("CARGO_BIN_EXE_intention-daemon"))
                 .expect("daemon program is valid"),
         ),
     )
-    .expect("facade e2e client is valid");
+    .expect("client e2e client is valid");
     while Instant::now() < deadline {
-        match client.health().await {
-            Ok(health) if health.readiness() == DaemonReadinessDto::Ready => return client,
-            Ok(_) => {}
-            Err(_) => {}
+        if client.await_ready().await.is_ok() {
+            return client;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
     }
     panic!("daemon becomes ready before the deadline");
 }
@@ -605,44 +564,31 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
     let workspace_root = host.workspace.path().to_string_lossy().into_owned();
 
     let session_id = SessionId::new();
-    let created = send_command(
-        &host.endpoint,
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::CreateSession(
-            CreateSessionCommandDto::new(
-                ProjectId::new(),
-                session_id,
-                WorkspaceId::new(),
-                WorkspaceRootDto::parse(workspace_root).expect("workspace root is absolute"),
-                RunModeDto::Build,
-            ),
-        )),
-    )
-    .expect("session creation is accepted");
-    assert!(
-        matches!(created, ProtocolCommandResultDto::Accepted(_)),
-        "the daemon accepts session creation"
-    );
+    client
+        .create_session(CreateSessionCommandDto::new(
+            ProjectId::new(),
+            session_id,
+            WorkspaceId::new(),
+            WorkspaceRootDto::parse(workspace_root).expect("workspace root is absolute"),
+            RunModeDto::Build,
+        ))
+        .await
+        .expect("the daemon accepts session creation");
 
-    let result = send_command(
-        &host.endpoint,
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "Read hello.txt")
-                .expect("turn is valid"),
-        )),
-    )
-    .expect("user turn is accepted");
-    let ProtocolCommandResultDto::Accepted(accepted) = result else {
-        panic!("user turn starts a run, got: {result:?}")
-    };
-    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
-        panic!("user turn result starts a run, got: {accepted:?}")
-    };
-    let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
-        panic!("first turn starts a run, got: {turn:?}")
+    let outcome = client
+        .send_user_turn(
+            session_id,
+            IdempotencyKey::new(),
+            "Read hello.txt".to_owned(),
+        )
+        .await
+        .expect("user turn is accepted");
+    let SendUserTurnOutcomeDto::Started { run_id, .. } = outcome else {
+        panic!("first turn starts a run, got: {outcome:?}")
     };
 
     let stream_client =
-        RunStreamClient::new(host.endpoint.clone(), "facade-e2e").expect("stream client is valid");
+        RunStreamClient::new(host.endpoint.clone(), "client-e2e").expect("stream client is valid");
     let live_deadline = Instant::now() + Duration::from_secs(30);
     // Subscribe immediately after acceptance: the subscription snapshot is the
     // current run state, and every later commit arrives as a live frame.
@@ -847,42 +793,32 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
     let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
 
     let session_id = SessionId::new();
-    let created = send_command(
-        &host.endpoint,
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::CreateSession(
-            CreateSessionCommandDto::new(
-                ProjectId::new(),
-                session_id,
-                WorkspaceId::new(),
-                WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
-                    .expect("workspace root is absolute"),
-                RunModeDto::Build,
-            ),
-        )),
-    )
-    .expect("session creation is accepted");
-    assert!(matches!(created, ProtocolCommandResultDto::Accepted(_)));
+    client
+        .create_session(CreateSessionCommandDto::new(
+            ProjectId::new(),
+            session_id,
+            WorkspaceId::new(),
+            WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
+                .expect("workspace root is absolute"),
+            RunModeDto::Build,
+        ))
+        .await
+        .expect("the daemon accepts session creation");
 
-    let result = send_command(
-        &host.endpoint,
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "Read missing.txt")
-                .expect("turn is valid"),
-        )),
-    )
-    .expect("user turn is accepted");
-    let ProtocolCommandResultDto::Accepted(accepted) = result else {
-        panic!("user turn starts a run, got: {result:?}")
-    };
-    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
-        panic!("user turn result starts a run, got: {accepted:?}")
-    };
-    let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
-        panic!("first turn starts a run, got: {turn:?}")
+    let outcome = client
+        .send_user_turn(
+            session_id,
+            IdempotencyKey::new(),
+            "Read missing.txt".to_owned(),
+        )
+        .await
+        .expect("user turn is accepted");
+    let SendUserTurnOutcomeDto::Started { run_id, .. } = outcome else {
+        panic!("first turn starts a run, got: {outcome:?}")
     };
 
     let stream_client =
-        RunStreamClient::new(host.endpoint.clone(), "facade-e2e").expect("stream client is valid");
+        RunStreamClient::new(host.endpoint.clone(), "client-e2e").expect("stream client is valid");
     let deadline = Instant::now() + Duration::from_secs(30);
     let observation =
         observe_run_until_terminal(&stream_client, session_id, run_id, deadline).await;

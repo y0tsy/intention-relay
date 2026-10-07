@@ -63,20 +63,11 @@ use intention_config::{
 use intention_domain::run_status_is_terminal;
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto,
-    RunStatusDto, SendUserTurnCommandDto, WorkspaceRootDto,
+    RunStatusDto, WorkspaceRootDto,
 };
-use intention_proto::{
-    DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto,
-    ProtocolHelloDto, ProtocolMethodDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
-    SendUserTurnOutcomeDto, SessionSnapshotDto, SubscribeRunCommandDto, decode_response,
-    encode_request,
-};
-use intention_proto::{
-    DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId,
-};
-use intention_transport::{
-    LocalConnection, LocalEndpoint, local_protocol_version, negotiate_client,
-};
+use intention_proto::{IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId};
+use intention_proto::{SendUserTurnOutcomeDto, SessionSnapshotDto, SubscribeRunCommandDto};
+use intention_transport::LocalEndpoint;
 use tempfile::TempDir;
 
 /// The generic-chat endpoint used when the operator does not override it.
@@ -532,7 +523,7 @@ impl LiveE2eHost {
     ///
     /// The kill is a hard kill, so the daemon cannot clean up; its Unix socket
     /// file survives, and the transport reclaims the stale socket on the next
-    /// bind, exactly like the hermetic facade fixture. A clean daemon exit
+    /// bind, exactly like the hermetic client fixture. A clean daemon exit
     /// leaves the same file now that a dropped listener never unlinks its
     /// endpoint.
     fn restart_daemon(&mut self) {
@@ -598,21 +589,28 @@ impl Drop for LiveE2eHost {
     }
 }
 
-/// Polls the daemon health projection until it reports `Ready`.
-///
-/// `health()` only negotiates and queries; it never launches the daemon. A
-/// child that exits before readiness fails with its exit status instead of a
-/// readiness timeout.
-async fn wait_until_ready(host: &mut LiveE2eHost, deadline: Instant) -> IntentionClient {
-    let client = IntentionClient::new(
-        host.endpoint.clone(),
+/// Builds the shared typed client for one fixture endpoint.
+fn live_client(endpoint: &LocalEndpoint) -> IntentionClient {
+    IntentionClient::new(
+        endpoint.clone(),
         "real-api-e2e",
         Box::new(
             ProcessDaemonLauncher::new(env!("CARGO_BIN_EXE_intention-daemon"))
                 .expect("daemon program is valid"),
         ),
     )
-    .expect("live e2e client is valid");
+    .expect("live e2e client is valid")
+}
+
+/// Waits out the client's readiness wait until the daemon reports `Ready`.
+///
+/// `await_ready()` only negotiates and queries; it never launches the daemon.
+/// Its own bounded wait is looped under the fixture deadline, so a daemon that
+/// needs longer than one client budget still becomes ready in time. A child
+/// that exits before readiness fails with its exit status instead of a
+/// readiness timeout.
+async fn wait_until_ready(host: &mut LiveE2eHost, deadline: Instant) -> IntentionClient {
+    let client = live_client(&host.endpoint);
     while Instant::now() < deadline {
         let exit_status = host
             .daemon
@@ -622,11 +620,9 @@ async fn wait_until_ready(host: &mut LiveE2eHost, deadline: Instant) -> Intentio
             exit_status.is_none(),
             "the daemon exits before readiness with status {exit_status:?}"
         );
-        match client.health().await {
-            Ok(health) if health.readiness() == DaemonReadinessDto::Ready => return client,
-            Ok(_) | Err(_) => {}
+        if client.await_ready().await.is_ok() {
+            return client;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
     }
     panic!("daemon becomes ready before the deadline");
 }
@@ -643,15 +639,7 @@ async fn bounded_session_snapshot(
     session_id: SessionId,
     deadline: Instant,
 ) -> SessionSnapshotDto {
-    let client = IntentionClient::new(
-        endpoint.clone(),
-        "real-api-e2e",
-        Box::new(
-            ProcessDaemonLauncher::new(env!("CARGO_BIN_EXE_intention-daemon"))
-                .expect("daemon program is valid"),
-        ),
-    )
-    .expect("live e2e client is valid");
+    let client = live_client(endpoint);
     match tokio::time::timeout_at(
         tokio::time::Instant::from_std(deadline),
         client.session_snapshot(session_id),
@@ -664,80 +652,35 @@ async fn bounded_session_snapshot(
     }
 }
 
-/// The exact hello the fixture clients exchange with the daemon.
-fn fixture_hello() -> ProtocolHelloDto {
-    ProtocolHelloDto::new(local_protocol_version(), "real-api-e2e").expect("fixture hello is valid")
-}
-
-fn invalid_response() -> ErrorDto {
-    ErrorDto::validation(
-        "invalid_local_protocol_response",
-        "the local daemon returned an unexpected protocol response",
-    )
-}
-
-/// Sends one typed protocol command over a fresh negotiated connection and
-/// verifies the correlated response, replicating the shared client's private
-/// request path with public transport and protocol APIs only.
-fn send_command(
-    endpoint: &LocalEndpoint,
-    payload: ProtocolRequestPayloadDto,
-) -> DtoResult<ProtocolCommandResultDto> {
-    let method = ProtocolMethodDto::for_payload(&payload);
-    let mut connection = LocalConnection::connect(endpoint)?;
-    negotiate_client(&mut connection, fixture_hello())?;
-    connection.send_message(&encode_request(1, payload))?;
-    let line = connection.receive_line()?;
-    match decode_response(&line, method, 1)? {
-        ProtocolResponsePayloadDto::CommandResult(result) => Ok(result),
-        _ => Err(invalid_response()),
-    }
-}
-
 /// Creates one Build-mode session rooted at the fixture workspace.
 ///
 /// Every session of one fixture shares its project and workspace identity:
 /// the durable workspace root is unique, so a second session over the same
 /// root must reuse the workspace identity instead of minting a new one.
-fn create_session(host: &LiveE2eHost, session_id: SessionId, label: &str) {
-    let created = send_command(
-        &host.endpoint,
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::CreateSession(
-            CreateSessionCommandDto::new(
-                host.project_id,
-                session_id,
-                host.workspace_id,
-                WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
-                    .expect("workspace root is absolute"),
-                RunModeDto::Build,
-            ),
-        )),
-    )
-    .expect("session creation is accepted");
-    assert!(
-        matches!(created, ProtocolCommandResultDto::Accepted(_)),
-        "the daemon accepts session creation for {label}, got: {created:?}"
-    );
+async fn create_session(host: &LiveE2eHost, session_id: SessionId, label: &str) {
+    live_client(&host.endpoint)
+        .create_session(CreateSessionCommandDto::new(
+            host.project_id,
+            session_id,
+            host.workspace_id,
+            WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
+                .expect("workspace root is absolute"),
+            RunModeDto::Build,
+        ))
+        .await
+        .unwrap_or_else(|error| {
+            panic!("the daemon accepts session creation for {label}: {error:?}")
+        });
 }
 
 /// Sends one user turn and returns the run it started.
-fn send_user_turn(endpoint: &LocalEndpoint, session_id: SessionId, content: &str) -> RunId {
-    let result = send_command(
-        endpoint,
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), content)
-                .expect("turn is valid"),
-        )),
-    )
-    .expect("user turn is accepted");
-    let ProtocolCommandResultDto::Accepted(accepted) = result else {
-        panic!("user turn starts a run, got: {result:?}")
-    };
-    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
-        panic!("user turn result starts a run, got: {accepted:?}")
-    };
-    let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
-        panic!("the user turn starts a run, got: {turn:?}")
+async fn send_user_turn(endpoint: &LocalEndpoint, session_id: SessionId, content: &str) -> RunId {
+    let outcome = live_client(endpoint)
+        .send_user_turn(session_id, IdempotencyKey::new(), content.to_owned())
+        .await
+        .expect("user turn is accepted");
+    let SendUserTurnOutcomeDto::Started { run_id, .. } = outcome else {
+        panic!("the user turn starts a run, got: {outcome:?}")
     };
     run_id
 }
@@ -955,8 +898,8 @@ async fn drive_tool_turn_with(
     for attempt in 1..=TOOL_TURN_ATTEMPTS {
         prepare();
         let session_id = SessionId::new();
-        create_session(host, session_id, &format!("{tool} turn {attempt}"));
-        let run_id = send_user_turn(&host.endpoint, session_id, prompt);
+        create_session(host, session_id, &format!("{tool} turn {attempt}")).await;
+        let run_id = send_user_turn(&host.endpoint, session_id, prompt).await;
         let observed = match collect_terminal_run(
             &host.endpoint,
             session_id,
@@ -1373,8 +1316,8 @@ async fn real_provider_rejects_invalid_credential_without_leak() {
     let _client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE).await;
 
     let session_id = SessionId::new();
-    create_session(&host, session_id, "the invalid-credential run");
-    let run_id = send_user_turn(&host.endpoint, session_id, "Reply with a short greeting.");
+    create_session(&host, session_id, "the invalid-credential run").await;
+    let run_id = send_user_turn(&host.endpoint, session_id, "Reply with a short greeting.").await;
     let mut observed = None;
     for _ in 1..=TOOL_TURN_ATTEMPTS {
         if let RunObservation::Terminal(terminal) = collect_terminal_run(

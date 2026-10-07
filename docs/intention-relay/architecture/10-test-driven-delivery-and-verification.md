@@ -51,7 +51,7 @@ The following are mandatory candidates for automated architecture tests:
 | --- | --- |
 | Small-crate structure | Dependency graph check, deny cycles, and a manifest assertion for the required v1 crate set. |
 | Crate accountability | A manifest-backed test that every required crate has one declared responsibility and a test target. |
-| Composition ownership | Only `intention` selects concrete storage/provider/hook/tool extension implementations. |
+| Composition ownership | Only `intention-daemon` selects concrete storage/provider/hook/tool extension implementations. |
 | Adapter isolation | `intention-tauri` and `intention-tui` cannot depend directly on application runtime/storage implementations. |
 | DTO-first | Public cross-crate APIs use DTOs; forbidden implementation resources/SDK types cannot escape. |
 | Local protocol | Tauri bridge and TUI use `intention-client`, not direct application services. |

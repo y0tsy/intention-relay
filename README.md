@@ -109,8 +109,7 @@ exempt at 0% and outside collection.
 | --- | --- |
 | [intention-transport](crates/intention-transport) | Private per-user IPC: Unix sockets / Windows named pipes, NDJSON JSON-RPC 2.0 framing (1 MiB message cap), and the hello handshake with exact protocol-version equality. |
 | [intention-client](crates/intention-client) | Shared bootstrap, dispatch, subscription, and reconnect client for adapters, with advisory startup lock and daemon launch. |
-| [intention](crates/intention) | Composition root and durable `DaemonApplicationFacade`; the only crate that selects SQLite and concrete drivers. |
-| [intention-daemon](crates/intention-daemon) | Daemon host library plus the thin `intention-daemon` binary (the only binary in the workspace). |
+| [intention-daemon](crates/intention-daemon) | Composition root (`DaemonApplicationFacade`, the only selector of SQLite and concrete drivers), daemon host library, and the thin `intention-daemon` binary (the only binary in the workspace). |
 
 ### Adapter slots and reserved crates
 
@@ -122,7 +121,7 @@ exempt at 0% and outside collection.
 | [intention-test-support](crates/intention-test-support) | Non-production | Durable integration fixtures and contract scenarios used by tests. |
 | [quality/harness](quality/harness) | Non-production | Workspace member proving the quality pipeline. |
 
-Architecture rules worth knowing: only the `intention` composition crate
+Architecture rules worth knowing: only `intention-daemon`
 touches SQLite or selects concrete providers; presentation adapters may only
 use `intention-client`, `intention-proto`, and `intention-transport`
 boundaries; provider SDKs and Tokio/transport resources stay private to their
@@ -135,7 +134,7 @@ durable daemon over a private per-user endpoint. There is no interactive
 client or UI binary yet; today the daemon is driven through the shared
 `intention-client` crate, and the working end-to-end examples live in the
 daemon integration tests (for example
-[crates/intention-daemon/tests/facade_e2e.rs](crates/intention-daemon/tests/facade_e2e.rs),
+[crates/intention-daemon/tests/client_e2e.rs](crates/intention-daemon/tests/client_e2e.rs),
 which spawns the real binary, drives it over real IPC, and executes a real
 `read` tool through the production model-tool loop).
 

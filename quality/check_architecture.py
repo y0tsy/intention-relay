@@ -310,8 +310,8 @@ def check_phase_policy(
     if not isinstance(state, dict):
         fail("missing [policy] table")
     phase = state.get("phase")
-    if phase not in {"m1", "m2", "m3", "m4", "m5"} or state.get("active_milestone") != phase:
-        fail("policy phase and active_milestone must be matching supported milestones")
+    if phase != "slice15" or state.get("active_milestone") != phase:
+        fail("policy phase and active_milestone must name the live slice")
 
     declared = policy_crates(policy)
     expected_names = set(declared)
@@ -325,28 +325,11 @@ def check_phase_policy(
     active_set = set(active)
     skeleton_set = set(skeletons)
     expected_active = {
-        "m1": {"intention-proto", "intention-domain", "intention-config"},
-        "m2": {
+        "slice15": {
             "intention-proto", "intention-domain", "intention-config",
-            "intention-transport", "intention-client", "intention", "intention-daemon",
-        },
-        "m3": {
-            "intention-proto", "intention-domain", "intention-config",
-            "intention-transport", "intention-client", "intention", "intention-daemon",
-            "intention-engine", "intention-storage",
-        },
-        "m4": {
-            "intention-proto", "intention-domain", "intention-config",
-            "intention-transport", "intention-client", "intention", "intention-daemon",
-            "intention-engine", "intention-storage",
+            "intention-transport", "intention-client", "intention-daemon",
+            "intention-engine", "intention-storage", "intention-tools",
             "intention-providers",
-        },
-        "m5": {
-            "intention-proto", "intention-domain", "intention-config",
-            "intention-transport", "intention-client", "intention", "intention-daemon",
-            "intention-engine", "intention-storage",
-            "intention-providers",
-            "intention-tools",
         },
     }[phase]
     if active_set != expected_active:
@@ -426,7 +409,7 @@ def check_phase_policy(
             )
     for package_name in skeleton_set:
         declared_targets = set(declared[package_name]["test_targets"])
-        if declared_targets and phase != "m5":
+        if declared_targets:
             failures.append(
                 f"{package_name}: {phase.upper()} skeleton must not declare integration test targets, "
                 f"got {sorted(declared_targets)}"
