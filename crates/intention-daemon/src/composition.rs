@@ -53,10 +53,7 @@ use intention_storage::{
 };
 #[cfg(test)]
 use intention_tools::ToolResult;
-use intention_tools::{
-    CancellationSignal, Hook, HookRegistry, Outcome as HookOutcome, Phase, PhaseContext, ToolInput,
-    WorkspaceRoot,
-};
+use intention_tools::{CancellationSignal, ToolInput, WorkspaceRoot};
 use intention_transport::MAX_TRANSCRIPT_SNAPSHOT_BYTES;
 
 const SCHEMA_VERSION: SchemaVersionDto = intention_proto::CURRENT_DTO_SCHEMA_VERSION;
@@ -205,64 +202,10 @@ impl ModelRunDispatchPort for PrivateModelRunDispatch {
 struct SafeWorkspaceBoundary;
 impl WorkspaceBoundaryPort for SafeWorkspaceBoundary {
     fn resolve(&self, workspace: &WorkspaceRoot) -> DtoResult<WorkspaceRoot> {
-        // The session's declared anchor is re-authorized between the two
-        // workspace-resolution phases, and the invocation addresses only the
-        // root this boundary returns.
+        // The session's declared anchor is re-authorized before execution, and
+        // the invocation addresses only the root this boundary returns.
         workspace.rebind()
     }
-}
-
-struct SafeObserverHook;
-impl Hook for SafeObserverHook {
-    fn id(&self) -> &'static str {
-        "safe-production-observer"
-    }
-    fn phases(&self) -> &'static [Phase] {
-        static P: [Phase; 1] = [Phase::BeforeToolInvocation];
-        &P
-    }
-    fn priority(&self) -> u32 {
-        0
-    }
-    fn run(&self, _: &PhaseContext) -> DtoResult<HookOutcome> {
-        Ok(HookOutcome::Continue)
-    }
-}
-
-/// The workspace hook owner: it validates the two workspace-resolution phases
-/// around the application's exact `resolve_path` boundary.
-struct WorkspaceResolutionHook;
-impl Hook for WorkspaceResolutionHook {
-    fn id(&self) -> &'static str {
-        "workspace-resolution-owner"
-    }
-    fn phases(&self) -> &'static [Phase] {
-        static P: [Phase; 2] = [
-            Phase::BeforeWorkspaceResolution,
-            Phase::AfterWorkspaceResolution,
-        ];
-        &P
-    }
-    fn priority(&self) -> u32 {
-        0
-    }
-    fn run(&self, _: &PhaseContext) -> DtoResult<HookOutcome> {
-        Ok(HookOutcome::Continue)
-    }
-}
-
-fn production_hooks() -> DtoResult<HookRegistry> {
-    let mut registry = HookRegistry::new();
-    registry
-        .register(Box::new(SafeObserverHook))
-        .and_then(|()| registry.register(Box::new(WorkspaceResolutionHook)))
-        .map_err(|_error| {
-            ErrorDto::validation(
-                "production_hook_registration_failed",
-                "production hook registration failed",
-            )
-        })?;
-    Ok(registry)
 }
 
 /// Run-scoped interruption shared between daemon-host interrupts and admitted local tools.
@@ -277,8 +220,7 @@ impl DaemonApplicationFacade {
     /// and hands every committed transcript row to the publication boundary.
     ///
     /// Publication follows each row's own commit, so every published frame
-    /// carries a committed value, and the application dispatches
-    /// `AfterToolResultPublished` only after the terminal row was published.
+    /// carries a committed value.
     /// This API is an internal, caller-admitted single invocation and never
     /// starts a loop.
     #[doc(hidden)]
@@ -298,7 +240,7 @@ impl DaemonApplicationFacade {
         publisher: &P,
     ) -> DtoResult<LocalToolInvocationOutcomeDto> {
         let cancellation = self.bind_local_tool_cancellation(session_id, run_id)?;
-        let result = ApplicationService::with_hooks(&self.inner.repository, production_hooks()?)
+        let result = ApplicationService::new(&self.inner.repository)
             .with_workspace_boundary(SafeWorkspaceBoundary)
             .invoke_local_tool_with_publication(
                 ToolInvocationRequestDto::new(

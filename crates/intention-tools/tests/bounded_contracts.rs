@@ -464,15 +464,3 @@ fn scoped_grep_rejects_a_special_file_target() {
     );
     assert!(matches!(result, Err(error) if error.code() == "tool_search_failed"));
 }
-
-#[test]
-fn spawn_observation_wait_rejects_overflowing_duration() {
-    // The spawn-observation wait guard treats a duration whose deadline
-    // calculation overflows as immediately expired rather than panicking
-    // inside `Instant::checked_add`.
-    let signal = CancellationSignal::new();
-    assert!(
-        !signal.wait_until_spawn_observed(std::time::Duration::MAX),
-        "an overflowing wait duration must be treated as expired"
-    );
-}

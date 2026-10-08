@@ -1,6 +1,5 @@
-//! Consolidated coverage cases: schema version, dispatch, metadata
-//! validation, search scopes, and symlink handling, merged from the six former
-//! padded coverage targets.
+//! Consolidated coverage cases: schema version, dispatch, search scopes, and
+//! symlink handling, merged from the six former padded coverage targets.
 
 #![allow(
     clippy::expect_used,
@@ -16,12 +15,11 @@ use common::{fixture_dir, service};
 use intention_proto::ToolCallId;
 #[cfg(unix)]
 use intention_tools::ToolDispatchOutcome;
+use intention_tools::{
+    CancellationSignal, GrepInput, GrepScope, TOOL_SCHEMA_VERSION, ToolInput, ToolResult,
+};
 #[cfg(unix)]
 use intention_tools::{EditInput, ReadInput, WriteInput};
-use intention_tools::{
-    CancellationSignal, GrepInput, GrepScope, TOOL_SCHEMA_VERSION, ToolExecutionMetadata,
-    ToolInput, ToolPolicy, ToolProcessStatus, ToolResult,
-};
 
 #[test]
 fn tool_schema_version_is_current() {
@@ -112,19 +110,6 @@ fn scoped_search_reports_file_directory_workspace_and_failures() {
             .unwrap_err()
             .code(),
         "invalid_tool_path"
-    );
-}
-
-#[test]
-fn metadata_builders_record_path_and_typed_process_status() {
-    let path = relative("file.txt");
-    let metadata = ToolExecutionMetadata::for_workspace(ToolPolicy::Denied, 7)
-        .with_path(Some(path.clone()))
-        .with_process_status(Some(ToolProcessStatus::NonZero { code: 3 }));
-    assert_eq!(metadata.path, Some(path));
-    assert_eq!(
-        metadata.process_status,
-        Some(ToolProcessStatus::NonZero { code: 3 })
     );
 }
 

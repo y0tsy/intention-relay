@@ -147,22 +147,22 @@ explicit, tested runtime transition is introduced.
 ## Streaming and tool calls
 
 The model stream can emit content, reasoning, tool-call, usage, and terminal events. Runtime owns ordering,
-persistence, and conversion of a model tool call into typed durable rows and execution through the daemon-owned
-registry: it commits the assistant tool-call row, the application commits the call's `tool_results` row and its
+persistence, and conversion of a model tool call into typed durable rows and execution through the daemon-owned tool
+service: it commits the assistant tool-call row, the application commits the call's `tool_results` row and its
 answering tool-result row in one transaction, and the runtime continues the provider exchange with
 assistant-tool-call and tool-role messages until the provider finishes.
 
 Ordinary production requests advertise the active registered tools: the request carries validated typed
-`ModelToolDefinitionDto` definitions built by `intention_tools::model_visible_descriptors()` in registry order (`read`,
-`write`, `edit`, `execute`, `glob`, `grep`). A non-empty advertisement forces the requested `tool_calls` capability, so
+`ModelToolDefinitionDto` definitions built by `intention_tools::model_visible_descriptors()` in advertisement order
+(`read`, `write`, `edit`, `execute`, `glob`, `grep`). A non-empty advertisement forces the requested `tool_calls` capability, so
 a driver that does not declare tool-call support fails closed at preflight with `unsupported_model_capability`. Both
 current adapters translate the definitions into their private SDK request and omit `tool_choice`; an empty advertisement
 preserves the previous request shape. A definition validates its input: the name is an ASCII `[A-Za-z0-9_-]` token of
 at most 64 characters (`invalid_tool_definition_name`), the description is non-blank
 (`invalid_tool_definition_description`), and the schema text is non-empty JSON-object text of at most 64 KiB
-(`invalid_tool_definition_parameters`). A model-visible descriptor without a schema fails with
+(`invalid_tool_definition_parameters`). A model-visible tool without a schema fails with
 `model_tool_schema_unavailable`. Advertisement is transient request state: it creates no durable record, digest, or
-storage row, and it never reconstructs a stored selection from the current registry.
+storage row, and it never reconstructs a stored selection from the current spec match.
 
 The same-run continuation is the one place provider reasoning returns to a request: the runtime attaches the current
 round's accepted reasoning to the assistant tool-call message (`assistant_reasoning`), and no prior-turn reasoning is
@@ -174,7 +174,7 @@ at that same 512 KiB per-round bound. A round that exceeds the bound or carries 
 of aborting with a DTO validation error; the echo is never truncated or silently omitted.
 
 Provider drivers do not invoke local tools directly. The application builds the typed invocation from a provider-emitted
-tool call, and the daemon-owned registry executes it under `WorkspaceRoot` with typed hooks. Execution requires an
+tool call, and the daemon-owned tool service executes it under `WorkspaceRoot`. Execution requires an
 injected `ToolExecutionPort`; there is no no-port fallback and a tool round without an executor cannot start.
 
 ## Dynamic context window and prompt caching
@@ -240,9 +240,9 @@ wait starts the next attempt immediately.
 | SDK isolation | Compile/dependency test. | OpenRouter SDK types do not escape provider crate public API. |
 | Event normalization | Provider fixture stream tests. | Equivalent native sequences map to valid ordered `ModelEventDto` values. |
 | Capability check | Application/runtime test. | Unsupported requested feature fails before an invalid provider call. |
-| Tool advertisement | Model/registry/adapter/runtime/daemon-host tests. | The outgoing request contains the six active tool definitions in registry order, both adapters translate them without `tool_choice`, a driver without tool-call support fails preflight, and the advertisement survives the tool-result continuation request. |
+| Tool advertisement | Model/adapter/runtime/daemon-host tests. | The outgoing request contains the six active tool definitions in advertisement order, both adapters translate them without `tool_choice`, a driver without tool-call support fails preflight, and the advertisement survives the tool-result continuation request. |
 | Reasoning round trip | Model/adapter/runtime tests. | The generic adapter normalizes typed `reasoning_content` deltas as `Primary` reasoning events and serializes the same round's accepted reasoning on the assistant tool-call continuation without adding a durable representation; empty text is presence-only; multimodal and vendor extensions still fail preflight. |
-| Tool loop integration | Runtime/provider/application integration test. | Provider emits a tool-call DTO; the application builds the typed invocation, the daemon-owned registry executes it, and the runtime persists the correlated result and continues the exchange. |
+| Tool loop integration | Runtime/provider/application integration test. | Provider emits a tool-call DTO; the application builds the typed invocation, the daemon-owned tool service executes it, and the runtime persists the correlated result and continues the exchange. |
 | Provider selection | Configuration contract test. | A configured provider and model ID are preserved. |
 | Retry | Controlled provider failure test. | Retry lifecycle is typed, bounded, and durable. |
 | Secret redaction | Provider error fixture. | API key never appears in `ProviderErrorDto`, logs, or events. |

@@ -9,11 +9,9 @@ mod common;
 use common::{DispatchCompleted, fixture_dir, service};
 use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
 use intention_tools::{
-    BoundedText, CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepMatch,
-    GrepResult, GrepScope, InterruptCause, PathsResult, REDACTED_WORKSPACE_CWD, ReadInput,
-    TOOL_SCHEMA_VERSION, TextResult, ToolDispatchOutcome, ToolId, ToolInput, ToolProcessStatus,
-    ToolProjectedContent, ToolResult, ToolResultProjection, WriteInput, WriteResult,
-    model_visible_descriptors,
+    BoundedText, CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepScope,
+    InterruptCause, ReadInput, TextResult, ToolDispatchOutcome, ToolId, ToolInput,
+    ToolProcessStatus, ToolResult, WriteInput, model_visible_descriptors,
 };
 
 #[test]
@@ -162,22 +160,6 @@ fn tool_service_covers_nonzero_execute_as_normalized_result() {
     };
     assert!(result.text.as_str().contains("exit_code:2"));
 
-    // The real path renders the typed classification into the durable
-    // projection: the non-zero exit stays a normalized result whose projected
-    // text carries the stable status.
-    let call_id = ToolCallId::new();
-    let projection = service
-        .dispatch_completed(call_id, nonzero_input(), CancellationSignal::new())
-        .projection();
-    assert_eq!(projection.tool, ToolId::Execute);
-    assert!(matches!(
-        projection.content,
-        ToolProjectedContent::Text {
-            text,
-            truncated: false
-        } if text.as_str().contains("exit_code:2")
-    ));
-
     let encoded = serde_json::to_string(&ToolProcessStatus::NonZero { code: 2 }).unwrap();
     assert_eq!(encoded, r#"{"kind":"non_zero","code":2}"#);
     assert_eq!(
@@ -192,16 +174,21 @@ fn execute_cancellation_is_classified_as_a_stopped_interruption() {
     let service = service(&root_dir);
     let cancellation = CancellationSignal::new();
     let canceller = cancellation.clone();
+    let sentinel = root_dir.path().join("sentinel.txt");
     let cancellation_helper = std::thread::spawn(move || {
-        // Wait for a confirmed child spawn instead of racing a fixed sleep:
-        // the cancellation then provably lands while the child is running,
-        // so the interruption cause is an observed stop. The short fixture
+        // Wait for the child's own observable effect instead of racing a
+        // fixed sleep: once the sentinel exists the child provably runs, so
+        // the interruption cause is an observed stop. The short fixture
         // stays alive long enough on both Unix and Windows, and its trap
         // ignores termination signals.
-        assert!(
-            canceller.wait_until_spawn_observed(std::time::Duration::from_secs(10)),
-            "execute child was never observed after spawn"
-        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !sentinel.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "execute child never produced its start sentinel"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         canceller.cancel();
     });
     let outcome = service
@@ -212,14 +199,14 @@ fn execute_cancellation_is_classified_as_a_stopped_interruption() {
                     .expect("program"),
                 args: if cfg!(windows) {
                     vec![
-                        BoundedText::new("-n").unwrap(),
-                        BoundedText::new("2").unwrap(),
-                        BoundedText::new("127.0.0.1").unwrap(),
+                        BoundedText::new("/C").unwrap(),
+                        BoundedText::new("echo started> sentinel.txt & ping -n 2 127.0.0.1")
+                            .unwrap(),
                     ]
                 } else {
                     vec![
                         BoundedText::new("-c").unwrap(),
-                        BoundedText::new("trap '' TERM; sleep 2").unwrap(),
+                        BoundedText::new("trap '' TERM; printf x > sentinel.txt; sleep 2").unwrap(),
                     ]
                 },
             }),
@@ -744,18 +731,6 @@ fn glob_empty_and_grep_read_failure_are_typed() {
         )
         .unwrap_err();
     assert_eq!(error.code(), "tool_search_failed");
-}
-
-#[test]
-fn tool_policy_round_trips_all_variants() {
-    use intention_tools::ToolPolicy;
-    for value in [ToolPolicy::Allowed, ToolPolicy::Denied] {
-        let json = serde_json::to_string(&value).expect("policy json");
-        assert_eq!(
-            serde_json::from_str::<ToolPolicy>(&json).expect("policy"),
-            value
-        );
-    }
 }
 
 #[test]
@@ -1303,36 +1278,7 @@ fn dispatch_covers_each_tool_input_variant() {
 }
 
 #[test]
-fn glob_dispatch_projects_redacted_execution_metadata() {
-    let dir = fixture_dir("projection-metadata");
-
-    let outcome = service(&dir)
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Glob(GlobInput {
-                pattern: BoundedText::new("*.txt").unwrap(),
-            }),
-            CancellationSignal::new(),
-        )
-        .expect("a glob dispatch succeeds");
-    let ToolDispatchOutcome::Completed(result) = outcome else {
-        unreachable!("a bare glob completes");
-    };
-    assert!(matches!(result, ToolResult::Glob(_)));
-    let projection = result.projection();
-    assert_eq!(projection.tool, ToolId::Glob);
-    assert_eq!(
-        projection.execution.policy,
-        intention_tools::ToolPolicy::Allowed
-    );
-    // Durable metadata identifies the workspace root only through the stable
-    // redacted marker; the absolute location is never recorded.
-    assert_eq!(projection.execution.cwd, REDACTED_WORKSPACE_CWD);
-    assert_eq!(projection.execution.path, None);
-}
-
-#[test]
-fn dispatch_projections_are_redacted_and_normalized_for_every_concrete_tool() {
+fn dispatched_results_are_typed_and_redacted_for_every_concrete_tool() {
     let root_dir = fixture_dir("projection");
     let root_path = root_dir.path();
     std::fs::write(root_path.join("data.txt"), "alpha\nneedle\n").unwrap();
@@ -1396,161 +1342,44 @@ fn dispatch_projections_are_redacted_and_normalized_for_every_concrete_tool() {
     for (input, tool) in calls {
         let result =
             service.dispatch_completed(ToolCallId::new(), input, CancellationSignal::new());
-        let projection = result.projection();
-        assert_eq!(projection.schema_version, TOOL_SCHEMA_VERSION, "{tool}");
-        assert_eq!(projection.tool, tool);
-        assert_eq!(projection.execution.cwd, REDACTED_WORKSPACE_CWD, "{tool}");
-        // A bare result carries no invocation timing or logical path, so the
-        // projection records the zero default and no path.
-        assert_eq!(projection.execution.elapsed_ms, 0, "{tool} timing");
-        assert_eq!(
-            projection.execution.policy,
-            intention_tools::ToolPolicy::Allowed,
-            "{tool} policy"
-        );
-        assert_eq!(projection.execution.path, None, "{tool} metadata path");
-        assert_eq!(projection.execution.process_status, None, "{tool}");
-        // Neither the projection nor the typed result may carry the absolute
-        // workspace root.
-        let rendered = serde_json::to_string(&projection).unwrap();
+        // A dispatched result never carries the absolute workspace root.
+        let rendered = serde_json::to_string(&result).unwrap();
         assert!(
             !rendered.contains(&absolute_root),
-            "{tool} projection leaked the absolute root"
-        );
-        let result_rendered = serde_json::to_string(&result).unwrap();
-        assert!(
-            !result_rendered.contains(&absolute_root),
             "{tool} result leaked the absolute root"
         );
-        match (&projection.content, tool) {
-            (ToolProjectedContent::Text { text, truncated }, ToolId::Read) => {
-                assert!(text.as_str().starts_with("alpha"));
-                assert!(!*truncated);
+        match (&result, tool) {
+            (ToolResult::Read(value), ToolId::Read) => {
+                assert!(value.text.as_str().starts_with("alpha"));
+                assert!(!value.truncated);
             }
-            (ToolProjectedContent::Mutation { bytes }, ToolId::Write) => {
-                assert_eq!(*bytes, "beta needle".len() as u64);
+            (ToolResult::Write(value), ToolId::Write) => {
+                assert_eq!(value.bytes, "beta needle".len() as u64);
             }
-            (ToolProjectedContent::Mutation { bytes }, ToolId::Edit) => {
-                assert_eq!(*bytes, "gamma needle".len() as u64);
+            (ToolResult::Edit(value), ToolId::Edit) => {
+                assert_eq!(value.bytes, "gamma needle".len() as u64);
             }
-            (ToolProjectedContent::Paths { paths, truncated }, ToolId::Glob) => {
-                let listed = paths
+            (ToolResult::Glob(value), ToolId::Glob) => {
+                let listed = value
+                    .paths
                     .iter()
                     .map(WorkspaceRelativePathDto::as_str)
                     .collect::<Vec<_>>();
                 assert_eq!(listed, vec!["data.txt"]);
-                assert!(!*truncated);
+                assert!(!value.truncated);
             }
-            (ToolProjectedContent::Matches { matches, truncated }, ToolId::Grep) => {
-                assert_eq!(matches.len(), 1);
-                assert_eq!(matches[0].path.as_str(), "data.txt");
-                assert_eq!(matches[0].fragment.as_str(), "gamma needle");
-                assert_eq!(matches[0].line, 1);
-                assert!(!*truncated);
+            (ToolResult::Grep(value), ToolId::Grep) => {
+                assert_eq!(value.matches.len(), 1);
+                assert_eq!(value.matches[0].path.as_str(), "data.txt");
+                assert_eq!(value.matches[0].fragment.as_str(), "gamma needle");
+                assert_eq!(value.matches[0].line, 1);
+                assert!(!value.truncated);
             }
-            (ToolProjectedContent::Text { text, truncated }, ToolId::Execute) => {
-                assert!(text.as_str().contains("ok"));
-                assert!(!*truncated);
+            (ToolResult::Execute(value), ToolId::Execute) => {
+                assert!(value.text.as_str().contains("ok"));
+                assert!(!value.truncated);
             }
-            (content, id) => unreachable!("unexpected projection for {id}: {content:?}"),
+            (result, id) => unreachable!("unexpected result for {id}: {result:?}"),
         }
     }
-}
-
-#[test]
-fn projections_preserve_collections_and_round_trip() {
-    let paths = (0..=10_000)
-        .map(|index| WorkspaceRelativePathDto::parse(format!("f{index}.txt")).unwrap())
-        .collect::<Vec<_>>();
-    let projection = ToolResult::Glob(PathsResult {
-        paths,
-        truncated: false,
-    })
-    .projection();
-    let ToolProjectedContent::Paths { paths, truncated } = projection.content else {
-        unreachable!("glob projection content")
-    };
-    assert_eq!(paths.len(), 10_001);
-    assert!(!truncated);
-
-    let matches = (0..=10_000)
-        .map(|index| GrepMatch {
-            path: WorkspaceRelativePathDto::parse("f.txt").unwrap(),
-            line: index as u64 + 1,
-            column: 1,
-            fragment: BoundedText::new("needle").unwrap(),
-        })
-        .collect::<Vec<_>>();
-    let projection = ToolResult::Grep(GrepResult {
-        matches,
-        truncated: true,
-    })
-    .projection();
-    // The projection serializes losslessly for durable persistence.
-    let encoded = serde_json::to_string(&projection).unwrap();
-    assert_eq!(
-        serde_json::from_str::<ToolResultProjection>(&encoded).unwrap(),
-        projection
-    );
-    let ToolProjectedContent::Matches { matches, truncated } = projection.content else {
-        unreachable!("grep projection content")
-    };
-    assert_eq!(matches.len(), 10_001);
-    assert!(truncated);
-}
-
-#[test]
-fn cancelled_execute_surfaces_as_an_interrupted_outcome() {
-    let root_dir = fixture_dir("execute-interrupted");
-    let service = service(&root_dir);
-    let cancellation = CancellationSignal::new();
-    let canceller = cancellation.clone();
-    let helper = std::thread::spawn(move || {
-        assert!(
-            canceller.wait_until_spawn_observed(std::time::Duration::from_secs(10)),
-            "execute child was never observed after spawn"
-        );
-        canceller.cancel();
-    });
-    let outcome = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Execute(ExecuteInput {
-                program: BoundedText::new(if cfg!(windows) { "ping" } else { "sh" }).unwrap(),
-                args: if cfg!(windows) {
-                    vec![
-                        BoundedText::new("-n").unwrap(),
-                        BoundedText::new("2").unwrap(),
-                        BoundedText::new("127.0.0.1").unwrap(),
-                    ]
-                } else {
-                    vec![
-                        BoundedText::new("-c").unwrap(),
-                        BoundedText::new("sleep 2").unwrap(),
-                    ]
-                },
-            }),
-            cancellation,
-        )
-        .expect("an interrupted execution is an outcome, not an error");
-    helper.join().expect("cancellation helper completes");
-    assert!(matches!(
-        outcome,
-        ToolDispatchOutcome::Interrupted {
-            cause: InterruptCause::Stopped,
-            ..
-        }
-    ));
-}
-
-#[test]
-fn bare_result_projections_stay_bounded_and_redacted() {
-    let bare = ToolResult::Edit(WriteResult { bytes: 7 }).projection();
-    assert_eq!(bare.schema_version, TOOL_SCHEMA_VERSION);
-    assert_eq!(bare.tool, ToolId::Edit);
-    assert!(matches!(
-        bare.content,
-        ToolProjectedContent::Mutation { bytes: 7 }
-    ));
-    assert_eq!(bare.execution.cwd, REDACTED_WORKSPACE_CWD);
 }

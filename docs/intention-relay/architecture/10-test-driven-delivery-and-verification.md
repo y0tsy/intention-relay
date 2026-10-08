@@ -38,7 +38,7 @@ Compilation is necessary but never sufficient acceptance evidence.
 | Architecture tests | Prevent prohibited dependency/import/API shapes. | Adapter cannot depend on SQLite/runtime; SDK types do not escape provider crate. |
 | Storage tests | Prove current-schema creation, transaction, projection, and recovery correctness. | Single-transaction state changes. |
 | Runtime tests | Prove actor lifecycle, interruption, pending input, stream ordering. | Pending turn joins the live run context at the next boundary. |
-| Tool/policy tests | Prove workspace addressing, hook order, Plan restrictions, VFR/Headroom behavior. | Relative addressing from the root, VFR then Headroom ordering. |
+| Tool/policy tests | Prove workspace addressing, execution order, Plan restrictions, and the six tool contracts. | Relative addressing from the root, one durable row per committed result. |
 | Provider tests | Normalize native streams/errors and protect credentials. | OpenRouter fixture conversion. |
 | Adapter integration tests | Prove Tauri bridge and TUI consume the same daemon contract. | Identical session snapshot and frames observed by both clients. |
 | Outcome tests | Prove end-to-end behavior against acceptance scenarios. | Restart marks run interrupted and UI receives it. |
@@ -51,13 +51,13 @@ The following are mandatory candidates for automated architecture tests:
 | --- | --- |
 | Small-crate structure | Dependency graph check, deny cycles, and a manifest assertion for the required v1 crate set. |
 | Crate accountability | A manifest-backed test that every required crate has one declared responsibility and a test target. |
-| Composition ownership | Only `intention-daemon` selects concrete storage/provider/hook/tool extension implementations. |
+| Composition ownership | Only `intention-daemon` selects concrete storage/provider/tool implementations. |
 | Adapter isolation | `intention-tauri` and `intention-tui` cannot depend directly on application runtime/storage implementations. |
 | DTO-first | Public cross-crate APIs use DTOs; forbidden implementation resources/SDK types cannot escape. |
 | Local protocol | Tauri bridge and TUI use `intention-client`, not direct application services. |
 | Daemon authority | SQLite/runtime actor ownership appears only daemon-side. |
 | Workspace boundary | File-oriented tool invocations require `WorkspaceRootDto`. |
-| Hook boundaries | VFR/Headroom attach through declared hook APIs, not base-tool private coupling. |
+| Extension boundaries | VFR/Headroom attach as ordinary library calls with a declared contract, not base-tool private coupling. |
 | Plan integrity | Model-visible plan reads cannot expose frontmatter; ordinary Plan `write`/`edit` cannot target project paths, while Plan `execute` remains advisory-guided and audited. |
 | Autopilot continuity | Plan approval pins a revision, starts a fresh same-Session Build run, and optional handoff transfers only a safe frozen context. |
 | Secret safety | Secret-bearing config cannot appear in public DTO/log/error/snapshot types. |
@@ -152,9 +152,9 @@ The following scenarios must become executable before the corresponding capabili
 
 1. Start the real daemon binary and connect over the local protocol.
 2. Send a user turn against a fake provider that emits a tool call; verify the
-outgoing request advertises the six active registered tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`) and
+outgoing request advertises the six active tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`) and
 requests the `tool_calls` capability.
-3. Verify the daemon executes the call through the real typed registry under `WorkspaceRoot` with typed hooks.
+3. Verify the daemon executes the call through the real typed tool service under `WorkspaceRoot`.
 4.  Verify the committed tool-call row, its answering tool-result row, and the `tool_results` row commit before
    publication, and that the client's `run.frame` notifications carry only those committed values.
 5. Verify the provider exchange continues with assistant-tool-call and tool-role messages and completes.
@@ -172,8 +172,8 @@ requests the `tool_calls` capability.
 the real daemon binary, drives it through the real local transport, and executes a real model tool loop against the live
 provider API over HTTPS.
 3. Verify the provider returns a real tool call; the outgoing request
-advertises the six active registered tools and requests the `tool_calls` capability (scenario I), the daemon executes
-the call through the real typed registry under `WorkspaceRoot`, the committed tool call and its result commit before
+advertises the six active tools and requests the `tool_calls` capability (scenario I), the daemon executes
+the call through the real typed tool service under `WorkspaceRoot`, the committed tool call and its result commit before
 publication, and the run completes. When the configured model runs in thinking mode, the
 continuation request also carries the same round's accepted reasoning as `reasoning_content` on the assistant tool-call
 message; no prior-turn reasoning is transferred.
@@ -202,8 +202,8 @@ for the mandatory hermetic gates ([Quality Gates and Makefile](12-quality-gates-
 Slice 1.5 replaces the event, snapshot, and replay contract blocks with current-state storage tests: schema tests
 create the current-state tables directly on open, and transaction tests prove one SQLite transaction per state change
 with publication from the committed values. The daemon end-to-end tests drive the real asynchronous `intention-client`
-instead of the low-level transport. Tool-call tests cover one transaction per call and the eight hook phases, each with
-a real dispatch site, context builder, and order/short-circuit test. Protocol contract fixtures cover the reduced
+instead of the low-level transport. Tool-call tests cover one transaction per call, the pre-effect identity rejection,
+and the durable terminal row. Protocol contract fixtures cover the reduced
 current-state surface with no resync, cursor, or event DTOs. Tests of deleted surfaces are deleted without replacement,
 and the per-crate coverage tiers in `quality/coverage.toml` are unchanged.
 

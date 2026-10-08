@@ -27,9 +27,8 @@ use intention_storage::{
     RemoveTurnInputDto, StorageRepositoryDto, ToolResultEvidenceDto, WriteToolResultInputDto,
 };
 use intention_tools::{
-    CancellationSignal, HookObservability, HookRegistry, InterruptCause, Outcome as HookOutcome,
-    Phase, PhaseContext, ToolDispatchOutcome, ToolInput, ToolProjectedContent, ToolResult,
-    ToolService, WorkspaceRoot,
+    CancellationSignal, InterruptCause, ToolDispatchOutcome, ToolInput, ToolResult, ToolService,
+    WorkspaceRoot,
 };
 
 /// Synchronous DTO-only boundary that admits accepted work to daemon-owned scheduling.
@@ -59,27 +58,18 @@ pub enum LocalToolInvocationOutcomeDto {
     },
 }
 
-/// Application-owned observation boundary for tolerated hook failures.
-pub(crate) trait HookObservationPort {
-    fn observe_hook_failure(&self, observation: HookObservability);
-}
-
 impl ModelRunCommitObserver for () {
     fn observe_model_run_commit(&self, _: &ModelRunCommitDto) {}
 }
 
-impl HookObservationPort for () {
-    fn observe_hook_failure(&self, _: HookObservability) {}
-}
-
-/// Composition-owned boundary that binds the authorized workspace between the
-/// two workspace-resolution hook phases.
+/// Composition-owned boundary that binds the authorized workspace before the
+/// invocation executes.
 ///
-/// Canonical paths never enter hook contexts: the resolved root is returned to
-/// the application, not to a hook.
+/// Canonical paths stay inside the application: the bound root is returned to
+/// the application, never to an observation boundary.
 pub trait WorkspaceBoundaryPort {
-    /// Binds the authorized workspace after the pre-resolution phase and
-    /// returns the root the invocation addresses.
+    /// Binds the authorized workspace and returns the root the invocation
+    /// addresses.
     ///
     /// # Errors
     ///
@@ -92,20 +82,6 @@ impl WorkspaceBoundaryPort for () {
     fn resolve(&self, workspace: &WorkspaceRoot) -> DtoResult<WorkspaceRoot> {
         Ok(workspace.clone())
     }
-}
-
-/// Runs application hooks, forwarding tolerated fail-open metadata to the
-/// caller-owned observation boundary and returning only the safe outcome.
-fn dispatch_hooks<O: HookObservationPort>(
-    registry: &HookRegistry,
-    context: &PhaseContext,
-    observer: &O,
-) -> DtoResult<HookOutcome> {
-    let dispatched = registry.dispatch_with_observability(context)?;
-    for observation in dispatched.failures {
-        observer.observe_hook_failure(observation);
-    }
-    Ok(dispatched.outcome)
 }
 
 /// Complete engine command for one local tool invocation.
@@ -170,7 +146,6 @@ impl ToolInvocationRequestDto {
 /// DTO-only application facade over one semantic storage repository.
 pub struct ApplicationService<'a, Repository> {
     repository: &'a Repository,
-    hooks: HookRegistry,
     workspace_boundary: Box<dyn WorkspaceBoundaryPort + 'a>,
 }
 
@@ -190,26 +165,17 @@ where
         self.invoke_local_tool_with_publication(input, &())
     }
 
-    /// Executes, durably commits, hands each committed row to the commit sink,
-    /// then dispatches the after-publish hook.
+    /// Executes, durably commits, and hands each committed row to the commit
+    /// sink.
     ///
     /// # Errors
     ///
-    /// Returns the typed validation, storage, tool execution, or post-publish
-    /// hook error.
+    /// Returns the typed validation, storage, workspace, or tool execution
+    /// error.
     pub fn invoke_local_tool_with_publication<P: ModelRunCommitObserver>(
         &self,
         input: ToolInvocationRequestDto,
         publisher: &P,
-    ) -> DtoResult<LocalToolInvocationOutcomeDto> {
-        self.invoke_local_tool_through_ports(input, publisher, &())
-    }
-
-    fn invoke_local_tool_through_ports<P: ModelRunCommitObserver, O: HookObservationPort>(
-        &self,
-        input: ToolInvocationRequestDto,
-        publisher: &P,
-        observer: &O,
     ) -> DtoResult<LocalToolInvocationOutcomeDto> {
         let ToolInvocationRequestDto {
             workspace,
@@ -217,53 +183,13 @@ where
             run_id,
             call_id,
             tool_id,
-            mut input,
+            input,
             occurred_at,
             cancellation,
             arguments_json,
         } = input;
-        // The invocation phase dispatches at the application entry, before the
-        // typed input identity is validated.
-        let invocation = PhaseContext::Invocation {
-            call: call_id,
-            input: input.clone(),
-        };
-        match dispatch_hooks(&self.hooks, &invocation, observer) {
-            Err(error) | Ok(HookOutcome::Reject(error)) => {
-                self.append_rejected_invocation(
-                    session_id,
-                    run_id,
-                    call_id,
-                    &tool_id,
-                    &arguments_json,
-                    &error,
-                    occurred_at,
-                    publisher,
-                )?;
-                return Err(error);
-            }
-            Ok(HookOutcome::TransformResult(_)) => {
-                let error = ErrorDto::validation(
-                    "invalid_hook_outcome",
-                    "result transformation is not valid before execution",
-                );
-                self.append_rejected_invocation(
-                    session_id,
-                    run_id,
-                    call_id,
-                    &tool_id,
-                    &arguments_json,
-                    &error,
-                    occurred_at,
-                    publisher,
-                )?;
-                return Err(error);
-            }
-            Ok(HookOutcome::TransformInput(value)) => input = value,
-            Ok(HookOutcome::Continue) => {}
-        }
-        // The input identity is validated after the entry phase, so its owner
-        // can rewrite the input the application admits.
+        // The input identity is validated before the call row commits, so a
+        // mismatched identifier is rejected without a durable trace.
         if tool_id != input.tool_id().as_str() {
             return Err(ErrorDto::validation(
                 "tool_id_mismatch",
@@ -271,7 +197,7 @@ where
             ));
         }
         // The tool-call row commits before any dispatch: the model's requested
-        // call is durable evidence even when every later phase fails.
+        // call is durable evidence even when execution fails.
         self.append_tool_call(
             session_id,
             run_id,
@@ -281,56 +207,8 @@ where
             occurred_at,
             publisher,
         )?;
-        let workspace_context = PhaseContext::WorkspaceResolution {
-            call: call_id,
-            input: input.clone(),
-        };
-        match dispatch_hooks(&self.hooks, &workspace_context, observer) {
-            Err(error) => {
-                self.append_tool_failure(
-                    session_id,
-                    run_id,
-                    call_id,
-                    &tool_id,
-                    &error,
-                    occurred_at,
-                    publisher,
-                )?;
-                return Err(error);
-            }
-            Ok(HookOutcome::TransformInput(value)) => input = value,
-            Ok(HookOutcome::Reject(error)) => {
-                self.append_tool_failure(
-                    session_id,
-                    run_id,
-                    call_id,
-                    &tool_id,
-                    &error,
-                    occurred_at,
-                    publisher,
-                )?;
-                return Err(error);
-            }
-            Ok(HookOutcome::TransformResult(_)) => {
-                let error = ErrorDto::validation(
-                    "invalid_hook_outcome",
-                    "result transformation is not valid before execution",
-                );
-                self.append_tool_failure(
-                    session_id,
-                    run_id,
-                    call_id,
-                    &tool_id,
-                    &error,
-                    occurred_at,
-                    publisher,
-                )?;
-                return Err(error);
-            }
-            Ok(HookOutcome::Continue) => {}
-        }
-        // The workspace owner binds the authorized root between the two phases,
-        // and the invocation addresses only that bound root.
+        // The workspace owner binds the authorized root before execution, and
+        // the invocation addresses only that bound root.
         let workspace = self
             .workspace_boundary
             .resolve(&workspace)
@@ -345,104 +223,10 @@ where
                     publisher,
                 );
             })?;
-        let resolved = PhaseContext::WorkspaceResolved {
-            call: call_id,
-            input: input.clone(),
-        };
-        match dispatch_hooks(&self.hooks, &resolved, observer) {
-            Err(error) | Ok(HookOutcome::Reject(error)) => {
-                self.append_tool_failure(
-                    session_id,
-                    run_id,
-                    call_id,
-                    &tool_id,
-                    &error,
-                    occurred_at,
-                    publisher,
-                )?;
-                return Err(error);
-            }
-            Ok(HookOutcome::TransformResult(_)) => {
-                let error = ErrorDto::validation(
-                    "invalid_hook_outcome",
-                    "result transformation is not valid before execution",
-                );
-                self.append_tool_failure(
-                    session_id,
-                    run_id,
-                    call_id,
-                    &tool_id,
-                    &error,
-                    occurred_at,
-                    publisher,
-                )?;
-                return Err(error);
-            }
-            Ok(HookOutcome::TransformInput(value)) => input = value,
-            Ok(HookOutcome::Continue) => {}
-        }
-        let before_execution = PhaseContext::Execution {
-            call: call_id,
-            input: input.clone(),
-        };
-        let transformed_input = match dispatch_hooks(&self.hooks, &before_execution, observer) {
-            Err(error) | Ok(HookOutcome::Reject(error)) => {
-                self.append_tool_failure(
-                    session_id,
-                    run_id,
-                    call_id,
-                    &tool_id,
-                    &error,
-                    occurred_at,
-                    publisher,
-                )?;
-                return Err(error);
-            }
-            Ok(HookOutcome::TransformInput(value)) => value,
-            Ok(HookOutcome::Continue) => input,
-            Ok(HookOutcome::TransformResult(_)) => {
-                let error = ErrorDto::validation(
-                    "invalid_hook_outcome",
-                    "result transformation is not valid before execution",
-                );
-                self.append_tool_failure(
-                    session_id,
-                    run_id,
-                    call_id,
-                    &tool_id,
-                    &error,
-                    occurred_at,
-                    publisher,
-                )?;
-                return Err(error);
-            }
-        };
         let service = ToolService::new(workspace);
-        let outcome = service.dispatch_with_cancellation(
-            call_id,
-            transformed_input.clone(),
-            cancellation.clone(),
-        );
-        let mut result = match outcome {
-            Ok(ToolDispatchOutcome::Completed(value)) => {
-                let context = PhaseContext::Executed {
-                    call: call_id,
-                    input: transformed_input,
-                    result: value.clone(),
-                };
-                match dispatch_hooks(&self.hooks, &context, observer) {
-                    Err(error) | Ok(HookOutcome::Reject(error)) => Err(error),
-                    Ok(outcome) => match outcome {
-                        HookOutcome::TransformResult(value) => Ok(value),
-                        HookOutcome::Reject(error) => Err(error),
-                        HookOutcome::Continue => Ok(value),
-                        HookOutcome::TransformInput(_) => Err(ErrorDto::validation(
-                            "invalid_hook_outcome",
-                            "input transformation is not valid after execution",
-                        )),
-                    },
-                }
-            }
+        let outcome = service.dispatch_with_cancellation(call_id, input, cancellation.clone());
+        let result: DtoResult<ToolResult> = match outcome {
+            Ok(ToolDispatchOutcome::Completed(value)) => Ok(value),
             Ok(ToolDispatchOutcome::Interrupted { cause, partial }) => {
                 // An interrupted dispatch is a durable partial outcome, not a
                 // typed failure: the call ends with whatever output was
@@ -460,22 +244,6 @@ where
                     occurred_at,
                     publisher,
                 )?;
-                if let Some(value) = &partial {
-                    let context = PhaseContext::Published {
-                        call: call_id,
-                        result: value.clone(),
-                    };
-                    match dispatch_hooks(&self.hooks, &context, observer)? {
-                        HookOutcome::Continue => {}
-                        HookOutcome::TransformResult(_) | HookOutcome::TransformInput(_) => {
-                            return Err(ErrorDto::validation(
-                                "invalid_hook_outcome",
-                                "published result cannot be transformed",
-                            ));
-                        }
-                        HookOutcome::Reject(error) => return Err(error),
-                    }
-                }
                 return Ok(LocalToolInvocationOutcomeDto::Partial {
                     stopped,
                     result: partial,
@@ -494,38 +262,6 @@ where
                 return Err(error);
             }
         };
-        if result.is_ok() {
-            let Ok(checked) = &result else {
-                unreachable!("the result is checked before the post-execution phases");
-            };
-            let mut value = checked.clone();
-            let mut failure: Option<ErrorDto> = None;
-            // `BeforeToolResultPersist` and `BeforeToolResultModelContext`
-            // dispatch immediately before the one transaction that writes the
-            // evidence row together with the transcript message answering it.
-            for phase in [
-                Phase::BeforeToolResultPersist,
-                Phase::BeforeToolResultModelContext,
-            ] {
-                let context = result_phase_context(phase, call_id, &value);
-                match dispatch_hooks(&self.hooks, &context, observer) {
-                    Ok(HookOutcome::Continue) => {}
-                    Ok(HookOutcome::TransformResult(next)) => value = next,
-                    Ok(HookOutcome::TransformInput(_)) => {
-                        failure = Some(ErrorDto::validation(
-                            "invalid_hook_outcome",
-                            "input transformation is not valid after execution",
-                        ));
-                        break;
-                    }
-                    Ok(HookOutcome::Reject(error)) | Err(error) => {
-                        failure = Some(error);
-                        break;
-                    }
-                }
-            }
-            result = failure.map_or(Ok(value), Err);
-        }
         // The terminal result commits once, with its answering transcript row,
         // and the committed row is published immediately after that commit.
         let (status, content, metadata) = match &result {
@@ -551,66 +287,7 @@ where
             occurred_at,
             publisher,
         )?;
-        if let Ok(value) = &result {
-            // The committed result row is published before this phase runs, so
-            // the phase observes a frame that already reached subscribers.
-            let context = PhaseContext::Published {
-                call: call_id,
-                result: value.clone(),
-            };
-            match dispatch_hooks(&self.hooks, &context, observer)? {
-                HookOutcome::Continue => {}
-                HookOutcome::TransformResult(_) | HookOutcome::TransformInput(_) => {
-                    return Err(ErrorDto::validation(
-                        "invalid_hook_outcome",
-                        "published result cannot be transformed",
-                    ));
-                }
-                HookOutcome::Reject(error) => return Err(error),
-            }
-        }
         result.map(LocalToolInvocationOutcomeDto::Completed)
-    }
-
-    /// Commits the durable call evidence and its terminal failure for an
-    /// invocation the entry phase rejected before identity validation.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed validation or storage error when either row cannot commit.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "One flat rejection payload keeps the ordered pair of commits at one call site."
-    )]
-    fn append_rejected_invocation<P: ModelRunCommitObserver>(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        call_id: ToolCallId,
-        tool_id: &str,
-        arguments_json: &str,
-        error: &ErrorDto,
-        occurred_at: TimestampDto,
-        publisher: &P,
-    ) -> DtoResult<()> {
-        self.append_tool_call(
-            session_id,
-            run_id,
-            call_id,
-            tool_id,
-            arguments_json,
-            occurred_at,
-            publisher,
-        )?;
-        self.append_tool_failure(
-            session_id,
-            run_id,
-            call_id,
-            tool_id,
-            error,
-            occurred_at,
-            publisher,
-        )
     }
 
     /// Commits one tool-call row before the call is dispatched, then hands the
@@ -738,17 +415,6 @@ where
     pub fn new(repository: &'a Repository) -> Self {
         Self {
             repository,
-            hooks: HookRegistry::new(),
-            workspace_boundary: Box::new(()),
-        }
-    }
-
-    /// Creates an application facade with the supplied lifecycle hooks.
-    #[must_use]
-    pub fn with_hooks(repository: &'a Repository, hooks: HookRegistry) -> Self {
-        Self {
-            repository,
-            hooks,
             workspace_boundary: Box::new(()),
         }
     }
@@ -961,34 +627,36 @@ const fn accepted_user_turn(
 
 /// Renders one typed tool result into its bounded model-visible content.
 ///
-/// The projection is redacted and workspace-relative by construction: text and
-/// search payloads keep their own bounds, truncated content keeps its explicit
-/// marker, and mutations report their byte count.
+/// The typed result is redacted and workspace-relative by construction: text
+/// and search payloads keep their own bounds, truncated content keeps its
+/// explicit marker, and mutations report their byte count.
 ///
 /// # Errors
 ///
 /// Returns a validation error when the rendered content is blank, because a
 /// tool result row must always answer its call with readable content.
 fn render_tool_result_content(result: &ToolResult) -> DtoResult<String> {
-    let content = match result.projection().content {
-        ToolProjectedContent::Text { text, truncated } => {
-            if truncated {
-                format!("{}\n[truncated]", text.as_str())
+    let content = match result {
+        ToolResult::Read(value) | ToolResult::Execute(value) => {
+            if value.truncated {
+                format!("{}\n[truncated]", value.text.as_str())
             } else {
-                text.as_str().to_owned()
+                value.text.as_str().to_owned()
             }
         }
-        ToolProjectedContent::Paths { paths, truncated } => {
-            let mut content = paths
+        ToolResult::Glob(value) => {
+            let mut content = value
+                .paths
                 .iter()
                 .map(intention_proto::WorkspaceRelativePathDto::as_str)
                 .collect::<Vec<_>>()
                 .join("\n");
-            append_truncation_marker(&mut content, truncated);
+            append_truncation_marker(&mut content, value.truncated);
             content
         }
-        ToolProjectedContent::Matches { matches, truncated } => {
-            let mut content = matches
+        ToolResult::Grep(value) => {
+            let mut content = value
+                .matches
                 .iter()
                 .map(|matched| {
                     format!(
@@ -1001,10 +669,10 @@ fn render_tool_result_content(result: &ToolResult) -> DtoResult<String> {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            append_truncation_marker(&mut content, truncated);
+            append_truncation_marker(&mut content, value.truncated);
             content
         }
-        ToolProjectedContent::Mutation { bytes } => format!("{bytes} bytes"),
+        ToolResult::Write(value) | ToolResult::Edit(value) => format!("{} bytes", value.bytes),
     };
     if content.trim().is_empty() {
         return Err(ErrorDto::validation(
@@ -1032,11 +700,11 @@ fn append_truncation_marker(content: &mut String, truncated: bool) {
 /// Returns a validation error only when the static `truncated` entry is
 /// rejected, which the metadata constructor cannot do.
 fn tool_result_metadata(result: &ToolResult) -> DtoResult<Vec<ToolResultMetadataEntryDto>> {
-    let truncated = match result.projection().content {
-        ToolProjectedContent::Text { truncated, .. }
-        | ToolProjectedContent::Paths { truncated, .. }
-        | ToolProjectedContent::Matches { truncated, .. } => truncated,
-        ToolProjectedContent::Mutation { .. } => false,
+    let truncated = match result {
+        ToolResult::Read(value) | ToolResult::Execute(value) => value.truncated,
+        ToolResult::Glob(value) => value.truncated,
+        ToolResult::Grep(value) => value.truncated,
+        ToolResult::Write(_) | ToolResult::Edit(_) => false,
     };
     if truncated {
         Ok(vec![ToolResultMetadataEntryDto::new("truncated", "true")?])
@@ -1140,13 +808,12 @@ fn schedule_from_context(
 
 /// Builds the model-visible tool definitions advertised with every scheduled run.
 ///
-/// Active registry descriptors surface in registry order; reserved slots
-/// without a model-facing input schema stay private to the daemon.
+/// The model-visible tools surface in advertisement order.
 ///
 /// # Errors
 ///
-/// Returns a typed validation error when a model-visible descriptor cannot be
-/// mapped into a provider-neutral tool definition.
+/// Returns a typed validation error when a model-visible tool cannot be mapped
+/// into a provider-neutral tool definition.
 fn advertised_tool_definitions() -> DtoResult<Vec<ModelToolDefinitionDto>> {
     intention_tools::model_visible_descriptors()
         .iter()
@@ -1166,24 +833,6 @@ fn advertised_tool_definitions() -> DtoResult<Vec<ModelToolDefinitionDto>> {
         .collect()
 }
 
-fn result_phase_context(phase: Phase, call: ToolCallId, result: &ToolResult) -> PhaseContext {
-    match phase {
-        Phase::BeforeToolResultPersist => PhaseContext::Persist {
-            call,
-            result: result.clone(),
-        },
-        Phase::BeforeToolResultModelContext => PhaseContext::ModelContext {
-            call,
-            result: result.clone(),
-        },
-        Phase::AfterToolResultPublished => PhaseContext::Published {
-            call,
-            result: result.clone(),
-        },
-        _ => unreachable!("result lifecycle phase list contains only result phases"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -1191,12 +840,9 @@ mod tests {
         reason = "Rendering fixtures use expect to provide precise failures."
     )]
 
-    use super::{
-        partial_tool_result_content, render_tool_result_content, result_phase_context,
-        tool_result_metadata,
-    };
-    use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
-    use intention_tools::{BoundedText, Phase, PhaseContext, TextResult, ToolResult};
+    use super::{partial_tool_result_content, render_tool_result_content, tool_result_metadata};
+    use intention_proto::WorkspaceRelativePathDto;
+    use intention_tools::{BoundedText, TextResult, ToolResult};
 
     fn bounded(value: &str) -> BoundedText {
         BoundedText::new(value).unwrap_or_else(|_| unreachable!("fixture tool text is bounded"))
@@ -1205,30 +851,6 @@ mod tests {
     fn relative(value: &str) -> WorkspaceRelativePathDto {
         WorkspaceRelativePathDto::parse(value)
             .unwrap_or_else(|_| unreachable!("fixture relative path is valid"))
-    }
-
-    #[test]
-    fn maps_result_phases_to_their_contexts() {
-        let call = ToolCallId::new();
-        let result = ToolResult::Read(TextResult {
-            text: match BoundedText::new("ok") {
-                Ok(text) => text,
-                Err(_) => return,
-            },
-            truncated: false,
-        });
-        assert!(matches!(
-            result_phase_context(Phase::BeforeToolResultPersist, call, &result),
-            PhaseContext::Persist { .. }
-        ));
-        assert!(matches!(
-            result_phase_context(Phase::BeforeToolResultModelContext, call, &result),
-            PhaseContext::ModelContext { .. }
-        ));
-        assert!(matches!(
-            result_phase_context(Phase::AfterToolResultPublished, call, &result),
-            PhaseContext::Published { .. }
-        ));
     }
 
     #[test]

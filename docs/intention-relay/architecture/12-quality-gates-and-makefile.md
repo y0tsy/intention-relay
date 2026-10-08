@@ -161,7 +161,7 @@ Slice 1.5 (the current-state core) changes the evidence base without lowering it
 - the storage contract suite is rebuilt for the eight-table current-state schema and the one-transaction rule, and the
   event/snapshot/replay contract blocks are deleted with their surfaces;
 - the engine tests cover commit-and-publish without events or replays, and tool tests cover one transaction per call and
-  the eight wired hook phases;
+  the pre-effect identity rejection;
 - protocol contract fixtures cover the reduced current-state surface (current-state snapshots and `run.frame`
   notifications, no cursors or resync);
 - deleted-surface tests are deleted without replacement; per-crate coverage tiers in `quality/coverage.toml` stay as

@@ -55,8 +55,7 @@ impl ModelTimePort for TokioTime {
 /// Records every committed value the daemon dispatch path publishes.
 ///
 /// The daemon's suites observe committed values only through the facade's
-/// execution bridge; the engine's hook-observation port is crate-private, so
-/// no shared crate fixture can replace this recorder.
+/// execution bridge, so no shared crate fixture can replace this recorder.
 #[derive(Default)]
 pub struct RecordingObserver {
     commits: Mutex<Vec<ModelRunCommitDto>>,

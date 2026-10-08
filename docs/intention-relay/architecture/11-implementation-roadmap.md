@@ -24,7 +24,7 @@ flowchart TD
   P --> B[M2 Protocol client daemon]
   P --> C[M3 Storage sessions events]
   P --> D[M4 Model and one run]
-  P --> E[M5 Tools workspace hooks]
+  P --> E[M5 Tools and workspace]
   E --> K[M5+ Post-M5 alignment]
   K --> F[M6 Tauri bridge UI]
   K --> G[M7 Plan Build artifacts]
@@ -95,7 +95,7 @@ only when a first real consumer appears.
 -  **Slice 1.5 — Core simplification — activated.** It adds no product behavior: it collapsed the workspace to ten
 production crates and simplifies the internal interfaces every later slice builds on. The crate set is
 `intention-proto` (types and protocol), `intention-domain`, `intention-config`, `intention-engine` (application and
-runtime), `intention-tools` (tools, workspace, and hooks), `intention-providers` (provider-neutral model contract and
+runtime), `intention-tools` (tools and workspace), `intention-providers` (provider-neutral model contract and
 both drivers), `intention-storage` (storage contracts and SQLite), `intention-transport`, `intention-daemon`
 (composition, host, and binary), and `intention-client`; the adapter and skeleton crates stay as declared. The target
 keeps DTOs only at the three physical boundaries — the IPC wire, SQLite persistence, and provider SDKs — with internal
@@ -110,8 +110,8 @@ notifications built from the committed values; the single live protocol version 
 re-subscribing client receives current run state and bounded recent messages, then continues live; `intention-client`
 is an asynchronous client with its blocking API removed that covers connect/health, session snapshots, run
 subscriptions, and the command surface, and whose `intention-tui` proof adapter is migrated mechanically; the daemon
-end-to-end suite drives that client (`client_e2e`) instead of the low-level transport; the eight hook phases are wired
-into the real tool cycle; the ten-production-crate consolidation and the removal of the composition facade landed, so
+end-to-end suite drives that client (`client_e2e`) instead of the low-level transport; the tool cycle is one direct
+sequence of identity check, durable call row, workspace binding, dispatch, and durable terminal row; the ten-production-crate consolidation and the removal of the composition facade landed, so
 the daemon host calls the engine directly; and the single storage schema is created on open under one integer stamp,
 where a stamp bump discards and recreates the database with no migration or compatibility path.
 -  **Slice 2 — Control plane — not activated.** The cluster and provider session selection (architectures 25/29/22):
@@ -148,7 +148,7 @@ schema, crate-boundary, migration, or quality-policy change.
 -  M3/M4 startup-only configuration, recorded revisions, sessions, runs, and bytes remain authoritative and unchanged;
 SQLite storage is the single live schema created directly on open.
 -  Slice 1.5 preserves durable meaning: the single storage schema is created on open under one integer stamp, where a
-stamp bump discards and recreates the database with no migration or compatibility layer, and tool, hook, and lifecycle
+stamp bump discards and recreates the database with no migration or compatibility layer, and tool and lifecycle
 semantics keep their recorded law.
 -  The Slice 2 health, discovery, and pricing surfaces are non-authorizing: they create no RunId, tool
 permission, MCP capability, bridge grant, kernel epoch, context projection, or branch, and the activating
@@ -245,13 +245,13 @@ independent Session from a safe frozen context;
 
 ## Milestone 8: VFR and Headroom extensions
 
-Goal: independently enabled hook extensions over the base tool pipeline.
+Goal: independently enabled extensions over the base tool pipeline.
 
 ### Deliver
 
--  VFR hook, mapping, expansion/raw tools, and model instructions as the `Vfr` contribution of [architecture
+-  The VFR extension, mapping, expansion/raw tools, and model instructions as the `Vfr` contribution of [architecture
 30](30-instruction-sources-and-system-context.md);
-- Headroom hook, CCR retention contract, and retrieve tool;
+- The Headroom extension, CCR retention contract, and retrieve tool;
 - deterministic composition with the workspace/tool pipeline;
 - adapter/model representation policy.
 
@@ -259,14 +259,14 @@ Goal: independently enabled hook extensions over the base tool pipeline.
 
 - VFR transform/expand/raw fixtures;
 - Headroom retention/retrieval/expiry fixtures;
-- full hook-order integration test;
+- full extension-order integration test;
 - UI/model representation distinction test;
 -  coverage fixtures for transform, expiry, retrieval, and error paths under the per-crate tier floors
 ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ### Exit criteria
 
--  VFR and Headroom operate as independently enabled hook extensions; `retrieve` returns retained content while valid,
+-  VFR and Headroom operate as independently enabled extensions; `retrieve` returns retained content while valid,
 with typed expiry behavior afterward;
 - base tools do not import VFR or Headroom implementation crates;
 -  extension crates meet their declared tier floors ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).

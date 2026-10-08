@@ -30,7 +30,7 @@ use intention_proto::{
     SessionSubscriptionResponseDto, decode_request_line, encode_response, is_notification_line,
 };
 use intention_providers::ModelCancellationSignal;
-use intention_tools::{GrepResult, PathsResult, ToolInput, ToolProjectedContent, ToolResult};
+use intention_tools::{ToolInput, ToolResult};
 use intention_transport::{
     AsyncLocalListener, AsyncMessageSender, LocalEndpoint, local_protocol_version,
 };
@@ -623,37 +623,33 @@ fn partial_tool_result(
 
 /// Normalizes one typed tool result into bounded durable content.
 ///
-/// The projection is redacted and workspace-relative by construction, and
+/// The typed result is redacted and workspace-relative by construction, and
 /// `ToolResultOutcomeDto::succeeded` keeps the durable outcome within its own
 /// content bound. Search results serialize their own typed result DTO, so the
 /// retained window and its truncation flag stay self-describing and identical
 /// for glob paths and grep matches (C-04).
 fn normalize_tool_result_content(result: ToolResult) -> DtoResult<String> {
-    let content = match result.projection().content {
-        ToolProjectedContent::Text { text, truncated } => {
-            if truncated {
-                format!("{}\n[truncated]", text.as_str())
+    let content = match result {
+        ToolResult::Read(value) | ToolResult::Execute(value) => {
+            if value.truncated {
+                format!("{}\n[truncated]", value.text.as_str())
             } else {
-                text.as_str().to_owned()
+                value.text.as_str().to_owned()
             }
         }
-        ToolProjectedContent::Paths { paths, truncated } => {
-            serde_json::to_string(&PathsResult { paths, truncated }).map_err(|_| {
-                ErrorDto::validation(
-                    "invalid_tool_result_content",
-                    "tool result content could not be normalized",
-                )
-            })?
-        }
-        ToolProjectedContent::Matches { matches, truncated } => {
-            serde_json::to_string(&GrepResult { matches, truncated }).map_err(|_| {
-                ErrorDto::validation(
-                    "invalid_tool_result_content",
-                    "tool result content could not be normalized",
-                )
-            })?
-        }
-        ToolProjectedContent::Mutation { bytes } => format!("{bytes} bytes"),
+        ToolResult::Glob(value) => serde_json::to_string(&value).map_err(|_| {
+            ErrorDto::validation(
+                "invalid_tool_result_content",
+                "tool result content could not be normalized",
+            )
+        })?,
+        ToolResult::Grep(value) => serde_json::to_string(&value).map_err(|_| {
+            ErrorDto::validation(
+                "invalid_tool_result_content",
+                "tool result content could not be normalized",
+            )
+        })?,
+        ToolResult::Write(value) | ToolResult::Edit(value) => format!("{} bytes", value.bytes),
     };
     Ok(content)
 }
@@ -1091,6 +1087,7 @@ mod tests {
     )]
 
     use super::*;
+    use intention_tools::{GrepResult, PathsResult};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use intention_config::{

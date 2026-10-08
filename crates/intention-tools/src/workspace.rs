@@ -1,15 +1,11 @@
 //! WorkspaceRoot addressing anchor.
 //!
-//! This module owns the workspace hook boundary: the application applies
-//! [`WorkspaceRoot`] between the `BeforeWorkspaceResolution` and
-//! `AfterWorkspaceResolution` hook phases. The root is an addressing anchor: a
-//! relative path addresses the root joined with that path, child processes
-//! start in the root, and a pathless search addresses the root. It is not a
-//! security boundary — absolute paths and `..` are not contained, and symbolic
-//! links are ordinary filesystem material (architecture 05). Hook phase contexts may
-//! identify the workspace only through safe identity — the daemon-owned
-//! `intention_proto::WorkspaceId` — never through this module's root path. This
-//! module owns no persistence and no publication.
+//! The application binds a [`WorkspaceRoot`] before it executes an invocation.
+//! The root is an addressing anchor: a relative path addresses the root joined
+//! with that path, child processes start in the root, and a pathless search
+//! addresses the root. It is not a security boundary — absolute paths and `..`
+//! are not contained, and symbolic links are ordinary filesystem material
+//! (architecture 05). This module owns no persistence and no publication.
 
 use std::path::{Path, PathBuf};
 
@@ -59,9 +55,9 @@ impl WorkspaceRoot {
 
     /// Re-authorizes this anchor and returns the bound root.
     ///
-    /// The composition root binds the workspace between the two
-    /// workspace-resolution hook phases, so the root one invocation addresses is
-    /// authorized at that boundary rather than only when it was first resolved.
+    /// The composition root binds the workspace before execution, so the root
+    /// one invocation addresses is authorized at that boundary rather than only
+    /// when it was first resolved.
     ///
     /// # Errors
     ///

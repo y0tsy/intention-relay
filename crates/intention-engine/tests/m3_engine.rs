@@ -7,7 +7,7 @@ mod common;
 
 use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError};
 
 use common::{FakeRepository, RecordingDispatchPort, workspace_root};
 use intention_config::ConfigSnapshotDto;
@@ -30,32 +30,9 @@ use intention_proto::{ProtocolAcceptedResultDto, SendUserTurnOutcomeDto};
 use intention_storage::{AcceptedTurnOutcomeDto, StartingRunModelContextDto};
 use intention_test_support::fixture_snapshot;
 use intention_tools::{
-    BoundedText, CancellationSignal, ExecuteInput, Hook, HookRegistry, Outcome as HookOutcome,
-    Phase, PhaseContext, ReadInput, TextResult, ToolInput, ToolResult, WorkspaceRoot,
+    BoundedText, CancellationSignal, ExecuteInput, ReadInput, TextResult, ToolInput, ToolResult,
+    WorkspaceRoot,
 };
-
-struct RejectHook;
-impl Hook for RejectHook {
-    fn id(&self) -> &'static str {
-        "reject-local-tool"
-    }
-    fn phases(&self) -> &'static [Phase] {
-        &[Phase::BeforeToolExecution]
-    }
-    fn priority(&self) -> u32 {
-        0
-    }
-    fn run(&self, _: &PhaseContext) -> DtoResult<HookOutcome> {
-        Ok(HookOutcome::Reject(ErrorDto::validation(
-            "blocked_by_hook",
-            "blocked",
-        )))
-    }
-}
-
-struct DispatchErrorHook {
-    phase: Phase,
-}
 
 fn invoke_read_input(path: &str) -> ToolInvocationRequestDto {
     ToolInvocationRequestDto::new(
@@ -87,42 +64,6 @@ fn invoke_read_input_in_workspace(root: &WorkspaceRoot, path: &str) -> ToolInvoc
         fixture_time(),
     )
 }
-
-impl Hook for DispatchErrorHook {
-    fn id(&self) -> &'static str {
-        "dispatch-error"
-    }
-    fn phases(&self) -> &'static [Phase] {
-        Box::leak(vec![self.phase].into_boxed_slice())
-    }
-    fn priority(&self) -> u32 {
-        0
-    }
-    fn run(&self, _: &PhaseContext) -> DtoResult<HookOutcome> {
-        Err(ErrorDto::unavailable("hook_failed", "hook failed"))
-    }
-}
-
-struct PhaseOutcomeHook {
-    phase: Phase,
-    outcome: HookOutcome,
-    id: &'static str,
-}
-impl Hook for PhaseOutcomeHook {
-    fn id(&self) -> &'static str {
-        self.id
-    }
-    fn phases(&self) -> &'static [Phase] {
-        Box::leak(vec![self.phase].into_boxed_slice())
-    }
-    fn priority(&self) -> u32 {
-        0
-    }
-    fn run(&self, _: &PhaseContext) -> DtoResult<HookOutcome> {
-        Ok(self.outcome.clone())
-    }
-}
-
 fn fixture_time() -> TimestampDto {
     TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid")
 }
@@ -190,15 +131,25 @@ fn cancelled_execute_input() -> ToolInput {
     })
 }
 
-fn sleeping_execute_input() -> ToolInput {
+/// An execute invocation that reports its own start and keeps running.
+///
+/// The child writes `sentinel.txt` into the invocation's working directory and
+/// then waits, so a fixture can synchronize on the observed effect before it
+/// cancels the call.
+fn started_execute_input() -> ToolInput {
     ToolInput::Execute(ExecuteInput {
-        program: BoundedText::new(if cfg!(windows) { "ping" } else { "sh" }).expect("program"),
-        args: vec![
-            BoundedText::new(if cfg!(windows) { "-n" } else { "-c" }).expect("arg"),
-            BoundedText::new(if cfg!(windows) { "2" } else { "sleep 1" }).expect("arg"),
-            #[cfg(windows)]
-            BoundedText::new("127.0.0.1").expect("arg"),
-        ],
+        program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).expect("program"),
+        args: if cfg!(windows) {
+            vec![
+                BoundedText::new("/C").expect("arg"),
+                BoundedText::new("echo started> sentinel.txt & ping -n 2 127.0.0.1").expect("arg"),
+            ]
+        } else {
+            vec![
+                BoundedText::new("-c").expect("arg"),
+                BoundedText::new("printf x > sentinel.txt; sleep 2").expect("arg"),
+            ]
+        },
     })
 }
 
@@ -310,35 +261,6 @@ fn local_tool_rejects_unknown_or_mismatched_id_before_effects() {
 }
 
 #[test]
-fn local_tool_hook_rejection_is_durable_and_skips_execution() {
-    let root = hello_tool_root("hook-reject");
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = HookRegistry::new();
-    hooks
-        .register(Box::new(RejectHook))
-        .expect("hook registers");
-    // The readable file would have completed; the hook rejection is recorded
-    // as the terminal failed result of the already-committed call.
-    let error = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool(invoke_read_input_in_workspace(
-            &hello_workspace(&root),
-            "hello.txt",
-        ))
-        .expect_err("hook rejects");
-    assert_eq!(error.code(), "blocked_by_hook");
-    let messages = repository.committed_messages();
-    assert_eq!(messages.len(), 2);
-    assert_eq!(messages[0].kind(), MessageKindDto::ToolCall);
-    assert_eq!(messages[1].kind(), MessageKindDto::ToolResult);
-    assert_eq!(messages[1].text(), "blocked_by_hook");
-    let results = repository.committed_results();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
-    assert_eq!(results[0].content(), "blocked_by_hook");
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
 fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection() {
     let command = SendUserTurnCommandDto::new(SessionId::new(), IdempotencyKey::new(), "hello")
         .expect("command is valid");
@@ -389,215 +311,6 @@ fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection
         scheduled.safe_config().resolved().provider().model(),
         "fixture"
     );
-}
-
-#[test]
-fn pre_execution_hook_matrix_covers_errors_transforms_and_rejections_per_phase() {
-    for phase in [
-        Phase::BeforeToolInvocation,
-        Phase::BeforeWorkspaceResolution,
-        Phase::AfterWorkspaceResolution,
-        Phase::BeforeToolExecution,
-    ] {
-        // Operational hook failures fail closed and record the terminal failed
-        // result of the committed call without starting execution.
-        let root = hello_tool_root("matrix-error");
-        let repository =
-            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = HookRegistry::new();
-        hooks
-            .register(Box::new(DispatchErrorHook { phase }))
-            .expect("hook registers");
-        let error = ApplicationService::with_hooks(&repository, hooks)
-            .invoke_local_tool(invoke_read_input_in_workspace(
-                &hello_workspace(&root),
-                "hello.txt",
-            ))
-            .expect_err("hook dispatch errors fail closed");
-        assert_eq!(error.code(), "hook_failed");
-        assert_eq!(repository.committed_messages().len(), 2);
-        let results = repository.committed_results();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
-        assert_eq!(results[0].content(), "hook_failed");
-        let _ = fs::remove_dir_all(root);
-
-        // Input transformations reroute the invocation to an existing file and
-        // the tool executes with the transformed input.
-        let root = hello_tool_root("matrix-input");
-        let repository =
-            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = HookRegistry::new();
-        hooks
-            .register(Box::new(PhaseOutcomeHook {
-                phase,
-                id: "matrix-input",
-                outcome: HookOutcome::TransformInput(managed_read_input("hello.txt")),
-            }))
-            .expect("hook registers");
-        let result = ApplicationService::with_hooks(&repository, hooks)
-            .invoke_local_tool(invoke_read_input_in_workspace(
-                &hello_workspace(&root),
-                "missing-before-transform.txt",
-            ))
-            .expect("transformed input is executed");
-        let result = completed_outcome(result);
-        assert_eq!(result, hello_read_result());
-        assert_eq!(repository.committed_results()[0].content(), "hello");
-        let _ = fs::remove_dir_all(root);
-
-        // Result transformations are incompatible before execution: the hook
-        // registry fails closed before the invocation starts and the tolerated
-        // typed failure is durably recorded as the call's terminal result.
-        let root = hello_tool_root("matrix-result");
-        let repository =
-            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = HookRegistry::new();
-        hooks
-            .register(Box::new(PhaseOutcomeHook {
-                phase,
-                id: "matrix-result",
-                outcome: HookOutcome::TransformResult(ToolResult::Read(TextResult {
-                    text: BoundedText::new("changed").expect("text"),
-                    truncated: false,
-                })),
-            }))
-            .expect("hook registers");
-        let error = ApplicationService::with_hooks(&repository, hooks)
-            .invoke_local_tool(invoke_read_input_in_workspace(
-                &hello_workspace(&root),
-                "hello.txt",
-            ))
-            .expect_err("result transformations before execution are invalid");
-        assert_eq!(error.code(), "invalid_hook_outcome");
-        assert_eq!(
-            error.message(),
-            "hook outcome is incompatible with its phase"
-        );
-        assert_eq!(
-            repository.committed_results()[0].content(),
-            "invalid_hook_outcome"
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-}
-
-#[test]
-fn executed_phase_hook_outcomes_cover_invalid_input_and_error_paths() {
-    let root = hello_tool_root("executed-invalid");
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = HookRegistry::new();
-    hooks
-        .register(Box::new(PhaseOutcomeHook {
-            phase: Phase::AfterToolExecution,
-            id: "executed-invalid-input",
-            outcome: HookOutcome::TransformInput(managed_read_input("other.txt")),
-        }))
-        .expect("hook registers");
-    let error = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool(invoke_read_input_in_workspace(
-            &hello_workspace(&root),
-            "hello.txt",
-        ))
-        .expect_err("input transformations after execution are invalid");
-    assert_eq!(error.code(), "invalid_hook_outcome");
-    assert_eq!(
-        error.message(),
-        "input transformation is incompatible with its phase"
-    );
-    let results = repository.committed_results();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
-    assert_eq!(results[0].content(), "invalid_hook_outcome");
-    let _ = fs::remove_dir_all(root);
-
-    let root = hello_tool_root("executed-error");
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = HookRegistry::new();
-    hooks
-        .register(Box::new(DispatchErrorHook {
-            phase: Phase::AfterToolExecution,
-        }))
-        .expect("hook registers");
-    let error = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool(invoke_read_input_in_workspace(
-            &hello_workspace(&root),
-            "hello.txt",
-        ))
-        .expect_err("post-execution hook errors fail closed");
-    assert_eq!(error.code(), "hook_failed");
-    assert_eq!(
-        repository.committed_results()[0].status(),
-        ToolResultStatusDto::Failed
-    );
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn post_execution_result_phases_cover_rejection_and_invalid_input() {
-    for phase in [
-        Phase::BeforeToolResultPersist,
-        Phase::BeforeToolResultModelContext,
-    ] {
-        // Hook rejections after execution record the failed terminal result
-        // without any completed result.
-        let root = hello_tool_root("post-reject");
-        let repository =
-            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = HookRegistry::new();
-        hooks
-            .register(Box::new(PhaseOutcomeHook {
-                phase,
-                id: "post-reject",
-                outcome: HookOutcome::Reject(ErrorDto::validation(
-                    "result_phase_blocked",
-                    "hook blocks the committed result",
-                )),
-            }))
-            .expect("hook registers");
-        let error = ApplicationService::with_hooks(&repository, hooks)
-            .invoke_local_tool(invoke_read_input_in_workspace(
-                &hello_workspace(&root),
-                "hello.txt",
-            ))
-            .expect_err("post-execution rejections surface");
-        assert_eq!(error.code(), "result_phase_blocked");
-        let results = repository.committed_results();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
-        assert_eq!(results[0].content(), "result_phase_blocked");
-        assert_eq!(repository.completed_result_count(), 0);
-        let _ = fs::remove_dir_all(root);
-
-        // Input transformations remain invalid for result phases.
-        let root = hello_tool_root("post-input");
-        let repository =
-            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = HookRegistry::new();
-        hooks
-            .register(Box::new(PhaseOutcomeHook {
-                phase,
-                id: "post-input",
-                outcome: HookOutcome::TransformInput(managed_read_input("other.txt")),
-            }))
-            .expect("hook registers");
-        let error = ApplicationService::with_hooks(&repository, hooks)
-            .invoke_local_tool(invoke_read_input_in_workspace(
-                &hello_workspace(&root),
-                "hello.txt",
-            ))
-            .expect_err("input transformations in result phases are invalid");
-        assert_eq!(error.code(), "invalid_hook_outcome");
-        assert_eq!(
-            error.message(),
-            "input transformation is incompatible with its phase"
-        );
-        let results = repository.committed_results();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
-        assert_eq!(results[0].content(), "invalid_hook_outcome");
-        let _ = fs::remove_dir_all(root);
-    }
 }
 
 #[test]
@@ -690,300 +403,6 @@ fn create_and_remove_workflows_map_committed_results() {
 }
 
 #[test]
-fn local_tool_after_execution_transform_is_applied() {
-    let root = hello_tool_root("execution-transform");
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = HookRegistry::new();
-    hooks
-        .register(Box::new(PhaseOutcomeHook {
-            phase: Phase::AfterToolExecution,
-            id: "execution-transform",
-            outcome: HookOutcome::TransformResult(ToolResult::Read(TextResult {
-                text: BoundedText::new("changed").expect("text"),
-                truncated: false,
-            })),
-        }))
-        .expect("hook");
-    let result = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool(invoke_read_input_in_workspace(
-            &hello_workspace(&root),
-            "hello.txt",
-        ))
-        .expect("transformed read succeeds");
-    let result = completed_outcome(result);
-    assert_eq!(
-        result,
-        ToolResult::Read(TextResult {
-            text: BoundedText::new("changed").expect("text"),
-            truncated: false,
-        })
-    );
-    assert_eq!(repository.committed_results()[0].content(), "changed");
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn local_tool_covers_workspace_reject_and_all_post_execution_outcomes() {
-    let root = hello_tool_root("branches");
-    let workspace = hello_workspace(&root);
-
-    for (phase, outcome, expected) in [
-        (
-            Phase::BeforeWorkspaceResolution,
-            HookOutcome::Reject(ErrorDto::validation("workspace_blocked", "blocked")),
-            "workspace_blocked",
-        ),
-        (
-            Phase::AfterWorkspaceResolution,
-            HookOutcome::TransformResult(ToolResult::Read(TextResult {
-                text: BoundedText::new("x").expect("text"),
-                truncated: false,
-            })),
-            "invalid_hook_outcome",
-        ),
-        (
-            Phase::AfterToolExecution,
-            HookOutcome::Reject(ErrorDto::validation("result_blocked", "blocked")),
-            "result_blocked",
-        ),
-        (
-            Phase::BeforeToolResultModelContext,
-            HookOutcome::TransformInput(managed_read_input("hello.txt")),
-            "invalid_hook_outcome",
-        ),
-    ] {
-        let repository =
-            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = HookRegistry::new();
-        hooks
-            .register(Box::new(PhaseOutcomeHook {
-                phase,
-                id: "branch",
-                outcome,
-            }))
-            .expect("hook");
-        let error = ApplicationService::with_hooks(&repository, hooks)
-            .invoke_local_tool(ToolInvocationRequestDto::new(
-                workspace.clone(),
-                SessionId::new(),
-                RunId::new(),
-                ToolCallId::new(),
-                "read",
-                managed_read_input("hello.txt"),
-                fixture_time(),
-            ))
-            .expect_err("hook branch rejects");
-        assert_eq!(error.code(), expected);
-        let results = repository.committed_results();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
-        assert_eq!(results[0].content(), expected);
-    }
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
-    let root = hello_tool_root("dispatch-errors");
-    let workspace = hello_workspace(&root);
-    for phase in [
-        Phase::BeforeToolExecution,
-        Phase::BeforeWorkspaceResolution,
-        Phase::AfterWorkspaceResolution,
-        Phase::AfterToolExecution,
-        Phase::BeforeToolResultPersist,
-        Phase::BeforeToolResultModelContext,
-        Phase::AfterToolResultPublished,
-    ] {
-        let repository =
-            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = HookRegistry::new();
-        hooks
-            .register(Box::new(DispatchErrorHook { phase }))
-            .expect("hook");
-        let error = ApplicationService::with_hooks(&repository, hooks)
-            .invoke_local_tool(ToolInvocationRequestDto::new(
-                workspace.clone(),
-                SessionId::new(),
-                RunId::new(),
-                ToolCallId::new(),
-                "read",
-                managed_read_input("hello.txt"),
-                fixture_time(),
-            ))
-            .expect_err("dispatch error");
-        assert_eq!(error.code(), "hook_failed");
-    }
-    for phase in [
-        Phase::BeforeToolResultPersist,
-        Phase::BeforeToolResultModelContext,
-    ] {
-        let repository =
-            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = HookRegistry::new();
-        hooks
-            .register(Box::new(PhaseOutcomeHook {
-                phase,
-                id: "post-transform",
-                outcome: HookOutcome::TransformResult(ToolResult::Read(TextResult {
-                    text: BoundedText::new("changed").expect("text"),
-                    truncated: false,
-                })),
-            }))
-            .expect("hook");
-        let result = ApplicationService::with_hooks(&repository, hooks)
-            .invoke_local_tool(ToolInvocationRequestDto::new(
-                workspace.clone(),
-                SessionId::new(),
-                RunId::new(),
-                ToolCallId::new(),
-                "read",
-                managed_read_input("hello.txt"),
-                fixture_time(),
-            ))
-            .expect("transformed result");
-        let result = completed_outcome(result);
-        assert_eq!(
-            result,
-            ToolResult::Read(TextResult {
-                text: BoundedText::new("changed").expect("text"),
-                truncated: false,
-            })
-        );
-        let results = repository.committed_results();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
-        assert_eq!(results[0].content(), "changed");
-    }
-
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = HookRegistry::new();
-    hooks
-        .register(Box::new(PhaseOutcomeHook {
-            phase: Phase::AfterToolResultPublished,
-            id: "published-continue",
-            outcome: HookOutcome::Continue,
-        }))
-        .expect("hook");
-    let result = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool(ToolInvocationRequestDto::new(
-            workspace,
-            SessionId::new(),
-            RunId::new(),
-            ToolCallId::new(),
-            "read",
-            managed_read_input("hello.txt"),
-            fixture_time(),
-        ))
-        .expect("published Continue is valid");
-    let result = completed_outcome(result);
-    assert!(matches!(result, ToolResult::Read(_)));
-    assert_eq!(repository.completed_result_count(), 1);
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn local_tool_covers_invocation_and_pre_effect_hook_errors_and_rejections() {
-    let root = hello_tool_root("pre-hooks");
-    let workspace = hello_workspace(&root);
-    for phase in [
-        Phase::BeforeToolInvocation,
-        Phase::BeforeWorkspaceResolution,
-        Phase::BeforeToolExecution,
-    ] {
-        let outcome = HookOutcome::Reject(ErrorDto::validation("hook_rejected", "rejected"));
-        let repository =
-            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = HookRegistry::new();
-        hooks
-            .register(Box::new(PhaseOutcomeHook {
-                phase,
-                outcome,
-                id: "reject",
-            }))
-            .expect("hook");
-        let error = ApplicationService::with_hooks(&repository, hooks)
-            .invoke_local_tool(invoke_read_input_in_workspace(&workspace, "hello.txt"))
-            .expect_err("hook rejection");
-        assert_eq!(error.code(), "hook_rejected");
-        assert_eq!(repository.committed_results()[0].content(), "hook_rejected");
-
-        let repository =
-            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = HookRegistry::new();
-        hooks
-            .register(Box::new(DispatchErrorHook { phase }))
-            .expect("hook");
-        let error = ApplicationService::with_hooks(&repository, hooks)
-            .invoke_local_tool(invoke_read_input_in_workspace(&workspace, "hello.txt"))
-            .expect_err("hook error");
-        assert_eq!(error.code(), "hook_failed");
-    }
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn local_tool_covers_workspace_resolved_error_and_rejection() {
-    let outcome = HookOutcome::Reject(ErrorDto::validation("resolved_blocked", "blocked"));
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = HookRegistry::new();
-    hooks
-        .register(Box::new(PhaseOutcomeHook {
-            phase: Phase::AfterWorkspaceResolution,
-            outcome,
-            id: "resolved-reject",
-        }))
-        .expect("hook");
-    let error = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool(invoke_read_input("missing"))
-        .expect_err("resolved rejection");
-    assert_eq!(error.code(), "resolved_blocked");
-
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = HookRegistry::new();
-    hooks
-        .register(Box::new(DispatchErrorHook {
-            phase: Phase::AfterWorkspaceResolution,
-        }))
-        .expect("hook");
-    let error = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool(invoke_read_input("missing"))
-        .expect_err("resolved dispatch error");
-    assert_eq!(error.code(), "hook_failed");
-}
-
-struct CapturingPublisher {
-    publications: Mutex<Vec<MessageProjectionDto>>,
-}
-
-impl CapturingPublisher {
-    const fn recording() -> Self {
-        Self {
-            publications: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn published(&self) -> Vec<MessageProjectionDto> {
-        self.publications
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-}
-
-impl ModelRunCommitObserver for CapturingPublisher {
-    fn observe_model_run_commit(&self, commit: &ModelRunCommitDto) {
-        let ModelRunCommitDto::Content(message) = commit else {
-            return;
-        };
-        self.publications
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(message.clone());
-    }
-}
-
-#[test]
 fn committed_rows_reach_the_commit_sink_only_after_their_own_commit() {
     let root = hello_tool_root("publication-order");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
@@ -1007,160 +426,23 @@ fn committed_rows_reach_the_commit_sink_only_after_their_own_commit() {
 }
 
 #[test]
-fn after_publish_hook_rejection_surfaces_after_the_completed_commit() {
-    let root = hello_tool_root("publish-reject");
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = HookRegistry::new();
-    hooks
-        .register(Box::new(PhaseOutcomeHook {
-            phase: Phase::AfterToolResultPublished,
-            id: "published-reject",
-            outcome: HookOutcome::Reject(ErrorDto::validation(
-                "after_publish_blocked",
-                "hook refuses after publication",
-            )),
-        }))
-        .expect("hook registers");
-    let publisher = CapturingPublisher::recording();
-    let error = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool_with_publication(
-            invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt"),
-            &publisher,
-        )
-        .expect_err("post-publish rejection surfaces");
-    assert_eq!(error.code(), "after_publish_blocked");
-    assert_eq!(error.message(), "hook refuses after publication");
-    // The committed call and result rows were published before the post-publish
-    // hook ran.
-    let published = publisher.published();
-    assert_eq!(published.len(), 2);
-    assert_eq!(published[0].kind(), MessageKindDto::ToolCall);
-    assert_eq!(published[1].kind(), MessageKindDto::ToolResult);
-    // The completed commit is preserved and not duplicated as a failure.
-    let results = repository.committed_results();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn after_publish_transform_outcomes_are_invalidated_without_extra_failures() {
-    // Result transformations reach the application boundary and are refused
-    // after publication; input transformations are already refused by the hook
-    // registry as incompatible with the published phase. Both stay fail-closed
-    // without committing any post-completion row.
-    let outcomes = [
-        (
-            HookOutcome::TransformResult(ToolResult::Read(TextResult {
-                text: BoundedText::new("changed").expect("text"),
-                truncated: false,
-            })),
-            "published result cannot be transformed",
-        ),
-        (
-            HookOutcome::TransformInput(managed_read_input("elsewhere")),
-            "input transformation is incompatible with its phase",
-        ),
-    ];
-    for (outcome, expected_message) in outcomes {
-        let root = hello_tool_root("publish-transform");
-        let repository =
-            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        let mut hooks = HookRegistry::new();
-        hooks
-            .register(Box::new(PhaseOutcomeHook {
-                phase: Phase::AfterToolResultPublished,
-                id: "published-transform",
-                outcome,
-            }))
-            .expect("hook registers");
-        let error = ApplicationService::with_hooks(&repository, hooks)
-            .invoke_local_tool_with_publication(
-                invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt"),
-                &(),
-            )
-            .expect_err("published results cannot be transformed");
-        assert_eq!(error.code(), "invalid_hook_outcome");
-        assert_eq!(error.message(), expected_message);
-        // Completion stays durable and exactly one terminal row exists.
-        let results = repository.committed_results();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
-        let _ = fs::remove_dir_all(root);
-    }
-}
-
-#[test]
-fn after_publish_hook_error_fails_closed_on_the_completed_commit() {
-    let root = hello_tool_root("publish-dispatch-error");
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = HookRegistry::new();
-    hooks
-        .register(Box::new(DispatchErrorHook {
-            phase: Phase::AfterToolResultPublished,
-        }))
-        .expect("hook registers");
-    let error = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool_with_publication(
-            invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt"),
-            &(),
-        )
-        .expect_err("post-publish dispatch error surfaces");
-    assert_eq!(error.code(), "hook_failed");
-    let results = repository.committed_results();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
-    assert_eq!(repository.completed_result_count(), 1);
-    let _ = fs::remove_dir_all(root);
-}
-
-enum MatrixHook {
-    None,
-    Reject(Phase),
-}
-
-#[test]
 fn selected_commit_failures_propagate_from_each_commit_point() {
     // The call row commits first and the terminal result row second; each
     // selected failure must surface and leave only the earlier commit durable.
-    let scenarios: Vec<(&str, usize, MatrixHook, usize)> = vec![
-        ("tool-call-commit", 1, MatrixHook::None, 0),
-        ("completed-commit", 2, MatrixHook::None, 1),
-        (
-            "invocation-rejection-commit",
-            2,
-            MatrixHook::Reject(Phase::BeforeToolInvocation),
-            1,
-        ),
-        (
-            "execution-rejection-commit",
-            2,
-            MatrixHook::Reject(Phase::BeforeToolExecution),
-            1,
-        ),
+    let scenarios: Vec<(&str, usize, &str, usize)> = vec![
+        ("tool-call-commit", 1, "hello.txt", 0),
+        ("completed-commit", 2, "hello.txt", 1),
+        ("tool-failure-commit", 2, "missing.txt", 1),
     ];
-    for (label, failing_call, hook, expected_messages) in scenarios {
+    for (label, failing_call, path, expected_messages) in scenarios {
         let root = hello_tool_root("commit-failure");
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
         *repository.commit_failures.borrow_mut() = vec![failing_call];
-        let mut hooks = HookRegistry::new();
-        if let MatrixHook::Reject(phase) = hook {
-            hooks
-                .register(Box::new(PhaseOutcomeHook {
-                    phase,
-                    id: "commit-failure-reject",
-                    outcome: HookOutcome::Reject(ErrorDto::validation(
-                        "commit_scenario_blocked",
-                        "blocked",
-                    )),
-                }))
-                .expect("hook registers");
-        }
-        let error = ApplicationService::with_hooks(&repository, hooks)
+        let error = ApplicationService::new(&repository)
             .invoke_local_tool(invoke_read_input_in_workspace(
                 &hello_workspace(&root),
-                "hello.txt",
+                path,
             ))
             .expect_err("the selected commit failure must propagate");
         assert_eq!(error.code(), "append_unavailable", "scenario {label}");
@@ -1417,11 +699,18 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
     let publisher = TerminalOrderingProbe::new(&repository);
     let signal = CancellationSignal::new();
     let cancellation = signal.clone();
+    let sentinel = root.join("sentinel.txt");
     let canceller = std::thread::spawn(move || {
-        assert!(
-            cancellation.wait_until_spawn_observed(std::time::Duration::from_secs(10)),
-            "execute child was never observed after spawn"
-        );
+        // The sentinel proves the child started, so the cancellation can only
+        // land while the execution is in flight.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !sentinel.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "execute child never produced its start sentinel"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         cancellation.cancel();
     });
     let outcome = ApplicationService::new(&repository)
@@ -1432,7 +721,7 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
                 run_id,
                 call_id,
                 "execute",
-                sleeping_execute_input(),
+                started_execute_input(),
                 fixture_time(),
             )
             .with_cancellation(signal),
@@ -1508,141 +797,6 @@ impl WorkspaceBoundaryPort for RejectingWorkspaceBoundary {
             "workspace boundary refused the invocation",
         ))
     }
-}
-
-/// Records the dispatch order of the hook phases it declares.
-struct OrderRecordingHook {
-    order: Arc<Mutex<Vec<&'static str>>>,
-}
-
-impl Hook for OrderRecordingHook {
-    fn id(&self) -> &'static str {
-        "order-recorder"
-    }
-
-    fn phases(&self) -> &'static [Phase] {
-        &[
-            Phase::BeforeToolInvocation,
-            Phase::BeforeWorkspaceResolution,
-            Phase::AfterWorkspaceResolution,
-            Phase::BeforeToolExecution,
-            Phase::AfterToolExecution,
-            Phase::BeforeToolResultPersist,
-            Phase::BeforeToolResultModelContext,
-            Phase::AfterToolResultPublished,
-        ]
-    }
-
-    fn priority(&self) -> u32 {
-        0
-    }
-
-    fn run(&self, context: &PhaseContext) -> DtoResult<HookOutcome> {
-        self.order
-            .lock()
-            .expect("order lock is available")
-            .push(phase_name(context));
-        Ok(HookOutcome::Continue)
-    }
-}
-
-const fn phase_name(context: &PhaseContext) -> &'static str {
-    match context {
-        PhaseContext::Invocation { .. } => "invocation",
-        PhaseContext::WorkspaceResolution { .. } => "workspace_resolution",
-        PhaseContext::WorkspaceResolved { .. } => "workspace_resolved",
-        PhaseContext::Execution { .. } => "execution",
-        PhaseContext::Executed { .. } => "executed",
-        PhaseContext::Persist { .. } => "persist",
-        PhaseContext::ModelContext { .. } => "model_context",
-        PhaseContext::Published { .. } => "published",
-    }
-}
-
-/// Records its own resolution between the two workspace hook phases.
-struct OrderRecordingBoundary {
-    order: Arc<Mutex<Vec<&'static str>>>,
-}
-
-impl WorkspaceBoundaryPort for OrderRecordingBoundary {
-    fn resolve(&self, workspace: &WorkspaceRoot) -> DtoResult<WorkspaceRoot> {
-        self.order
-            .lock()
-            .expect("order lock is available")
-            .push("boundary");
-        Ok(workspace.clone())
-    }
-}
-
-#[test]
-fn hook_phases_dispatch_in_order_around_identity_validation_and_the_workspace_boundary() {
-    let root = hello_tool_root("phase-order");
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let order = Arc::new(Mutex::new(Vec::new()));
-    let mut hooks = HookRegistry::new();
-    hooks
-        .register(Box::new(OrderRecordingHook {
-            order: Arc::clone(&order),
-        }))
-        .expect("hook registers");
-    ApplicationService::with_hooks(&repository, hooks)
-        .with_workspace_boundary(OrderRecordingBoundary {
-            order: Arc::clone(&order),
-        })
-        .invoke_local_tool(invoke_read_input_in_workspace(
-            &hello_workspace(&root),
-            "hello.txt",
-        ))
-        .expect("read succeeds");
-    assert_eq!(
-        *order.lock().expect("order lock is available"),
-        vec![
-            "invocation",
-            "workspace_resolution",
-            "boundary",
-            "workspace_resolved",
-            "execution",
-            "executed",
-            "persist",
-            "model_context",
-            "published",
-        ],
-        "the entry phase precedes the boundary, and the terminal phases follow execution"
-    );
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn the_invocation_phase_dispatches_before_identity_validation() {
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let order = Arc::new(Mutex::new(Vec::new()));
-    let mut hooks = HookRegistry::new();
-    hooks
-        .register(Box::new(OrderRecordingHook {
-            order: Arc::clone(&order),
-        }))
-        .expect("hook registers");
-    let error = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool(ToolInvocationRequestDto::new(
-            WorkspaceRoot::resolve(
-                &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy())
-                    .expect("workspace dto"),
-            )
-            .expect("workspace is valid"),
-            SessionId::new(),
-            RunId::new(),
-            ToolCallId::new(),
-            "unknown",
-            managed_read_input("missing"),
-            fixture_time(),
-        ))
-        .expect_err("mismatched tool id is rejected");
-    assert_eq!(error.code(), "tool_id_mismatch");
-    assert_eq!(
-        *order.lock().expect("order lock is available"),
-        vec!["invocation"],
-        "the entry phase runs before the identity check rejects the call"
-    );
 }
 
 fn send_command(session_id: SessionId) -> SendUserTurnCommandDto {

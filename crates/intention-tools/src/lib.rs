@@ -1,5 +1,5 @@
-//! Typed, bounded contracts for workspace tools, their hook lifecycle, and the
-//! workspace addressing anchor.
+//! Typed, bounded contracts for workspace tools and the workspace addressing
+//! anchor.
 
 use intention_proto::{DtoResult, ToolCallId, WorkspaceRelativePathDto};
 use serde::{Deserialize, Serialize};
@@ -12,13 +12,8 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
-mod hooks;
 mod workspace;
 
-pub use hooks::{
-    DispatchResult, FailurePolicy, Hook, HookObservability, HookRegistry, Outcome, Phase,
-    PhaseContext,
-};
 pub use workspace::WorkspaceRoot;
 
 #[cfg(test)]
@@ -120,39 +115,6 @@ mod timeout_tests {
     }
 }
 
-#[cfg(test)]
-mod spawn_observation_tests {
-    use super::*;
-
-    #[test]
-    fn spawn_observation_is_shared_across_clones_and_wait_returns_on_observe() {
-        let signal = CancellationSignal::new();
-        let observer = signal.clone();
-        std::thread::spawn(move || {
-            thread::sleep(Duration::from_millis(20));
-            observer.observe_spawn();
-        });
-        assert!(
-            signal.wait_until_spawn_observed(Duration::from_secs(5)),
-            "spawn observation must be visible once the executor records it"
-        );
-        assert!(
-            signal.wait_until_spawn_observed(Duration::from_millis(1)),
-            "an already-observed spawn must return immediately"
-        );
-    }
-
-    #[test]
-    fn spawn_observation_wait_times_out_when_no_spawn_is_recorded() {
-        let signal = CancellationSignal::new();
-        assert!(
-            !signal.wait_until_spawn_observed(Duration::from_millis(10)),
-            "the wait must time out when no spawn is ever recorded"
-        );
-        assert!(!signal.is_cancelled(), "observation must not cancel");
-    }
-}
-
 const MAX_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 const EXECUTE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Upper bound on the serialized bytes of one search result, shared by glob
@@ -166,20 +128,10 @@ const MAX_GREP_AGGREGATE_BYTES: usize = 128 * 1024;
 /// which keeps edit reads and write preflights bounded (PR24-022).
 const MAX_EDIT_TARGET_BYTES: usize = 1024 * 1024;
 
-/// Redacted working-directory identity recorded in durable tool metadata. It
-/// marks the authorized workspace root as the effective CWD without disclosing
-/// its absolute location.
-pub const REDACTED_WORKSPACE_CWD: &str = "workspace_root";
-
 /// Typed cancellation signal for one tool invocation.
-///
-/// Besides cancellation state, the signal records whether the process executor
-/// has spawned the invocation's child, so deterministic fixtures can wait for
-/// a confirmed spawn instead of blind sleeps before requesting cancellation.
 #[derive(Clone, Debug, Default)]
 pub struct CancellationSignal {
     cancelled: Arc<AtomicBool>,
-    spawn_observed: Arc<AtomicBool>,
 }
 
 impl CancellationSignal {
@@ -187,14 +139,12 @@ impl CancellationSignal {
     pub fn new() -> Self {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
-            spawn_observed: Arc::new(AtomicBool::new(false)),
         }
     }
     #[must_use]
     pub fn cancelled() -> Self {
         Self {
             cancelled: Arc::new(AtomicBool::new(true)),
-            spawn_observed: Arc::new(AtomicBool::new(false)),
         }
     }
     #[must_use]
@@ -205,45 +155,9 @@ impl CancellationSignal {
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
     }
-    /// Records that the process executor spawned the invocation's child.
-    ///
-    /// Internal synchronization point for process-lifecycle fixtures; the
-    /// flag is never read by production behavior.
-    pub(crate) fn observe_spawn(&self) {
-        self.spawn_observed.store(true, Ordering::Release);
-    }
-    /// Waits until the invocation's child has been spawned, or until `timeout`
-    /// elapses.
-    ///
-    /// Returns whether the spawn was observed. This is a test-only
-    /// synchronization point for deterministic cancellation fixtures: waiting
-    /// on a confirmed spawn replaces blind sleeps while keeping the
-    /// platform-independent interruption classification intact. It
-    /// is hidden from the public documentation because no production caller
-    /// should depend on it.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn wait_until_spawn_observed(&self, timeout: Duration) -> bool {
-        let Some(deadline) = Instant::now().checked_add(timeout) else {
-            return false;
-        };
-        while !self.spawn_observed.load(Ordering::Acquire) {
-            if Instant::now() >= deadline {
-                return false;
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-        true
-    }
 }
 
 pub const TOOL_SCHEMA_VERSION: u16 = 1;
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolPolicy {
-    Allowed,
-    Denied,
-}
 
 /// Typed terminal classification for one executed program.
 ///
@@ -279,53 +193,6 @@ impl ToolProcessStatus {
             // one); a status with neither cannot occur.
             None => unreachable!("child status has neither signal nor exit code"),
         }
-    }
-}
-
-/// Redacted execution metadata for the durable result boundary.
-///
-/// `cwd` is the stable [`REDACTED_WORKSPACE_CWD`] identity marker and never an
-/// absolute path; `path` is the logical workspace-relative target of the
-/// invocation.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ToolExecutionMetadata {
-    pub cwd: String,
-    #[serde(default)]
-    pub path: Option<WorkspaceRelativePathDto>,
-    pub policy: ToolPolicy,
-    pub elapsed_ms: u64,
-    /// Typed terminal program status; populated only by Execute invocations.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub process_status: Option<ToolProcessStatus>,
-}
-
-impl ToolExecutionMetadata {
-    /// Builds redacted metadata for one workspace execution.
-    ///
-    /// The working-directory identity is the stable [`REDACTED_WORKSPACE_CWD`]
-    /// marker: durable records identify the authorized workspace root without
-    /// ever storing its absolute location.
-    #[must_use]
-    pub fn for_workspace(policy: ToolPolicy, elapsed_ms: u64) -> Self {
-        Self {
-            cwd: REDACTED_WORKSPACE_CWD.to_owned(),
-            path: None,
-            policy,
-            elapsed_ms,
-            process_status: None,
-        }
-    }
-    /// Attaches the logical workspace-relative path targeted by the invocation.
-    #[must_use]
-    pub fn with_path(mut self, path: Option<WorkspaceRelativePathDto>) -> Self {
-        self.path = path;
-        self
-    }
-    /// Attaches the typed terminal program status to this metadata.
-    #[must_use]
-    pub const fn with_process_status(mut self, process_status: Option<ToolProcessStatus>) -> Self {
-        self.process_status = process_status;
-        self
     }
 }
 
@@ -1273,95 +1140,6 @@ pub struct WriteResult {
     pub bytes: u64,
 }
 
-/// Normalized content shape of one projected concrete tool result.
-///
-/// The projection keeps the typed payload bounded and workspace-relative: text
-/// stays in [`BoundedText`], grep matches and glob path lists carry the
-/// byte-window truncation flag, and mutations carry only a byte count.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ToolProjectedContent {
-    /// Bounded text produced by Read or Execute.
-    Text { text: BoundedText, truncated: bool },
-    /// Byte-windowed workspace-relative path list produced by Glob.
-    Paths {
-        paths: Vec<WorkspaceRelativePathDto>,
-        truncated: bool,
-    },
-    /// Byte-windowed workspace-relative matches produced by Grep.
-    Matches {
-        matches: Vec<GrepMatch>,
-        truncated: bool,
-    },
-    /// Byte-count summary produced by Write or Edit.
-    Mutation { bytes: u64 },
-}
-
-/// Bounded, redacted, normalized projection of one tool result envelope,
-/// suitable for durable persistence and safe rendering.
-///
-/// The projection never carries an absolute path, OS resource detail, command
-/// line, or environment value: the working-directory identity is redacted to
-/// [`REDACTED_WORKSPACE_CWD`], paths stay workspace-relative, and grep content
-/// is clamped to its retained byte window.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ToolResultProjection {
-    pub schema_version: u16,
-    pub tool: ToolId,
-    pub content: ToolProjectedContent,
-    pub execution: ToolExecutionMetadata,
-}
-
-fn projected_content(result: &ToolResult) -> ToolProjectedContent {
-    match result {
-        ToolResult::Read(value) | ToolResult::Execute(value) => ToolProjectedContent::Text {
-            text: value.text.clone(),
-            truncated: value.truncated,
-        },
-        ToolResult::Glob(value) => ToolProjectedContent::Paths {
-            paths: value.paths.clone(),
-            truncated: value.truncated,
-        },
-        ToolResult::Grep(value) => ToolProjectedContent::Matches {
-            truncated: value.truncated,
-            matches: value.matches.clone(),
-        },
-        ToolResult::Write(value) | ToolResult::Edit(value) => {
-            ToolProjectedContent::Mutation { bytes: value.bytes }
-        }
-    }
-}
-
-impl ToolResult {
-    /// Returns the concrete registered tool this result belongs to.
-    #[must_use]
-    pub const fn tool_id(&self) -> ToolId {
-        match self {
-            Self::Read(_) => ToolId::Read,
-            Self::Glob(_) => ToolId::Glob,
-            Self::Grep(_) => ToolId::Grep,
-            Self::Write(_) => ToolId::Write,
-            Self::Edit(_) => ToolId::Edit,
-            Self::Execute(_) => ToolId::Execute,
-        }
-    }
-
-    /// Projects this result into the bounded, redacted, normalized form.
-    ///
-    /// A bare result carries no invocation timing, so the execution metadata
-    /// records the redacted workspace CWD, the `Allowed` policy, and zero
-    /// elapsed time.
-    #[must_use]
-    pub fn projection(&self) -> ToolResultProjection {
-        ToolResultProjection {
-            schema_version: TOOL_SCHEMA_VERSION,
-            tool: self.tool_id(),
-            content: projected_content(self),
-            execution: ToolExecutionMetadata::for_workspace(ToolPolicy::Allowed, 0),
-        }
-    }
-}
-
 /// Why one tool dispatch stopped before producing a final result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InterruptCause {
@@ -1489,7 +1267,6 @@ fn execute_tool(
             "unable to spawn workspace command",
         )
     })?;
-    cancellation.observe_spawn();
     let output = match bounded_output(child, cancellation) {
         Ok(output) => output,
         Err(ExecuteFailure::ReadFailed) => {

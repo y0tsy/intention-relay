@@ -4,29 +4,29 @@
 
 Owner: architecture 15.
 
-This document owns the unified tool registry, immutable tool selection, tool admission on the ordinary run path,
+This document owns the unified tool path, immutable tool selection, tool admission on the ordinary run path,
 `WorkspaceRoot` semantics, the model-tool-model loop, and the tool-effect recovery boundary. It applies to future
-ordinary runs and Build Autopilot. Slice 1.5 (core simplification) lands before this design activates: model steps and
-tool groups are addressed by plain indices rather than newtypes, identity stays within the eight newtypes Slice 1.5
-keeps, publication follows the committed values rather than a separate reread, and each descriptor's tool contract is
-code-owned input and result JSON Schema text. Ordinary runs and Build Autopilot admit compatible tools without
+ordinary runs and Build Autopilot. Slice 1.5 (core simplification) has landed: the tool layer is a six-variant `ToolId`
+enum with one `spec(id)` match, model steps and tool groups are addressed by plain indices rather than newtypes,
+publication follows the committed values rather than a separate reread, and each model-visible tool's contract is
+code-owned input JSON Schema text. This design activates no registry table: a new tool is a new `ToolId` variant with
+its own contract. Ordinary runs and Build Autopilot admit compatible tools without
 per-action confirmation; Plan denies ordinary `write`/`edit`, while Plan `execute` is advisory-guided and
 non-sandboxed.
 
 ## Ownership and one capability path
 
-`intention-tools` owns registry form, common typed contracts, the fixed slot list, revision validation, and duplicate
-rejection. Primitive owners own descriptor semantics; the composition root alone assembles active descriptors; the
-daemon owns active-run binding, durable orchestration, and post-commit publication; domain owns typed JSON record
-shapes, not implementation selection.
+`intention-tools` owns tool identity, common typed contracts, the six live tool contracts, and their model-visible spec
+match. The composition root alone assembles the model-visible set; the daemon owns active-run binding, durable
+orchestration, and post-commit publication; domain owns typed JSON record shapes, not implementation selection.
 
 Providers, models, adapters, bridge/kernel code, child work, MCP sources, Skills, and primitive owners cannot create a
-second registry, private model-function collection, direct primitive path, persistence authority, or publication
+second tool collection, private model-function collection, direct primitive path, persistence authority, or publication
 authority. Every invocation reaches the one daemon-owned, Rust-owned capability path.
 
-## Fixed registry and descriptor revisions
+## Tool identity and specs
 
-The initial registry contains exactly these fourteen slots in this canonical order:
+The live tool layer is exactly six tools, and `ToolId` is the closed enum that names them:
 
 ```text
 read
@@ -35,47 +35,29 @@ edit
 execute
 glob
 grep
-fetch_url
-ask_user
-todo
-retrieve
-plan_submit
-sub_agent
-expand
-mcp
 ```
 
 ```text
-ToolRegistryEntryDto
-  Reserved { tool_id, intended_owner }
-  Active { tool_id, intended_owner, descriptor_revision }
+ToolSpec
+  id
+  description
+  input_schema   (code-owned input JSON Schema text)
 ```
 
-| Owner boundary | Required slots |
-| --- | --- |
-| `intention-tools` | `read`, `write`, `edit`, `execute`, `glob`, `grep`, `fetch_url`, `ask_user`, `todo` |
-| `intention-headroom` | `retrieve` |
-| `intention-plans` | `plan_submit` |
-| `intention-vfr` | `expand` |
-| Future child boundary | `sub_agent` |
-| Future MCP boundary | `mcp` |
+`intention_tools::spec(id)` is the one place where a tool's identity, description, and schema are defined, and
+`intention_tools::model_visible_descriptors()` returns exactly the six specs in advertisement order. There is no
+registry table, no reserved slot, no descriptor revision, and no duplicate-registration outcome to reject: a name that
+is not one of the six `ToolId` values is `unknown_tool` before any effect.
 
-Each `ToolId` has one immutable intended owner and at most one active canonical descriptor; duplicate activation, owner
-reassignment, omitted or reordered slot, descriptor-owner mismatch, or capability-path bypass fails before any external
-action. A new `ToolId` needs a separate approved architecture and replanning decision.
+A new tool id is a new `ToolId` variant with its own typed input, its own spec, and a separate approved architecture and
+replanning decision. Until such a decision lands, the owners that are not shipped hold no slot and no partial contract:
+`intention-headroom` (`retrieve`), `intention-plans` (`plan_submit`), and `intention-vfr` (`expand`) have neither
+input/result DTOs nor model visibility, and a request for any of those names is the same pre-effect `unknown_tool`
+rejection.
 
-A `Reserved` entry has no input/result schema, executor, model-function schema, or model visibility; a direct, stale, or
-malformed request gets the known pre-effect outcome `ExecutionUnavailable`. Reservation neither invents undelivered DTOs
-nor requires every owner to ship together. Only the intended owner may activate through composition, creating new
-descriptor and registry revisions; active status alone establishes neither model visibility nor live readiness.
-
-An active descriptor carries credential-free fields for `ToolId`, intended owner, code-owned input and result JSON
-Schema, required model capabilities, `ToolEffectProfile`, workspace binding, mode relation, model-function schema
-revision, safe-result-projection revision, observation-contract revision, stream shape, and
-`model_schema_availability` (whether a
-code-owned function schema can reach a compatible model subset). `display_name` is presentation metadata, not identity.
-Public boundaries reject raw JSON/maps, unvalidated paths, provider/Python values, implementation handles, resources,
-and implementation errors.
+A spec carries credential-free fields only: the `ToolId`, its description, and its code-owned input JSON Schema.
+Identity is the enum variant, never a presentation string. Public boundaries reject raw JSON/maps, unvalidated paths,
+provider/Python values, implementation handles, resources, and implementation errors.
 
 `ToolEffectProfile` describes direct declared effects: workspace read or write, process start, network retrieval, user
 interaction, session mutation, retained-content read, and future child controls. It is not authority, sandbox, or a
@@ -103,17 +85,15 @@ get no fictional workspace path; their owners may require typed URL, question, t
 child-agent, or MCP-method references instead. Plan denies ordinary `write`/`edit`; plan mutation remains plan-policy
 work.
 
-`ToolDescriptorRevisionId`, `ToolRegistryRevisionId`, and selection records are typed serde JSON values
-([architecture 02](02-dto-and-contract-policy.md)); the removed `IRCR` / `typed-tlv-v1` / SHA-256 canonical codec is not
-replaced by a competing codec. Semantic
-changes require a new record version; labels, executor handles, live readiness, and opaque owner resources are excluded
-from identity.
+Selection records are typed serde JSON values ([architecture 02](02-dto-and-contract-policy.md)); the removed `IRCR` /
+`typed-tlv-v1` / SHA-256 canonical codec is not replaced by a competing codec. Semantic changes require a new record
+version; labels, executor handles, live readiness, and opaque owner resources are excluded from identity.
 
 ## Base-tool initial contracts
 
--  **`execute`** takes one `ShellCommandTextDto`; a private descriptor-selected local shell adapter interprets it, and
+-  **`execute`** takes one `ShellCommandTextDto`; a private local shell adapter interprets it, and
   the executable path, platform resource, and parser never cross a public DTO boundary. Shell syntax (pipelines,
-  redirects, compound commands) is descriptor-versioned semantics. `stdout`, `stderr`, and exit status stay separate
+  redirects, compound commands) is code-owned tool semantics. `stdout`, `stderr`, and exit status stay separate
   typed result fields before the bounded durable stream and safe projection and are never reconstructed from a formatted
   text footer. `execute` runs with the user's ordinary OS authority and `WorkspaceRoot` CWD, is not a sandbox, and
   claims no complete effect enumeration.
@@ -121,7 +101,7 @@ from identity.
   `HTTPS`: no request body, header map, cookie jar, credential source, URL userinfo, or non-HTTP(S) scheme. Every
   HTTP(S) address is permitted, including public, private, and literal loopback; it is deliberately not a local-network
   boundary and does not relax the separate provider-endpoint policy. Redirects remain retrievals under the same
-  restrictions with a descriptor-fixed bounded limit. The typed result distinguishes final URL, status, safe content
+  restrictions with a code-owned bounded limit. The typed result distinguishes final URL, status, safe content
   metadata, and bounded body; arbitrary response headers are not model-visible by default.
 -  **`ask_user`** is a normal long-running `user_interaction` tool. After
   `ToolCallStarted` the post-M4 run stays `Running`; other independently admitted calls may complete concurrently, and
@@ -139,7 +119,7 @@ from identity.
 
 Trusted-local is explicit: daemon, agent, IPython kernel, child agents, and Rust tools run with the same OS permissions
 as the user who starts the daemon; there is no agent sandbox, container/VM isolation, privilege separation, or
-restricted Python sidecar. `WorkspaceRoot`, Plan/Build mode, hooks, audit, redaction, and the capability
+restricted Python sidecar. `WorkspaceRoot`, Plan/Build mode, audit, redaction, and the capability
 plane are logical product policies, not security boundaries against a malicious or compromised program running as the
 user; an IPython kernel can bypass the facade via `pathlib`, `os`, and `subprocess`, which is accepted. Future work must
 not describe the facade, tool gateway, prompt policy, or audit trail as OS-level isolation.
@@ -149,26 +129,22 @@ not describe the facade, tool gateway, prompt policy, or audit trail as OS-level
 A run's frozen tool selection is a closed, credential-free `Disabled | Selected` typed serde JSON record. When
 selected it contains:
 
-- the exact `ToolRegistryRevisionId`;
-- a tool-admission-engine revision limited to common typed mechanics;
-- the hook-pipeline revision; and
--  an ordered list of only the active descriptors actually supplied to the model, each binding `ToolId`, intended owner,
-  descriptor revision, the descriptor's code-owned input and result JSON Schema text (the tool contract the model sees
-  and the registry enforces), required-capability binding, mode relation, model-function-schema revision,
-  safe-result-projection revision, observation-contract revision, and stream shape.
+- a tool-admission-engine revision limited to common typed mechanics; and
+- an ordered list of only the tools actually supplied to the model, each binding its `ToolId`, its code-owned input JSON
+  Schema text (the contract the model sees), its required-capability binding, and its mode relation.
 
-It excludes unexposed slots, credentials, untyped JSON payloads, provider-native schema forms, executor handles,
-readiness, current registry state, provider-native IDs, quotas, and mutable policy state. Ordering is the descriptor
-order of that list: semantic, preserved by the typed record, with no positions or cursors, and duplicate semantic keys
-are rejected. Admission, retry, recovery, forks, audit, or a later package must not rebuild a missing
-selection from current registry/descriptors, configuration, model/provider names, driver availability, hooks, workspace,
+It excludes unexposed tools, credentials, untyped JSON payloads, provider-native schema forms, executor handles,
+readiness, current advertisement state, provider-native IDs, quotas, and mutable policy state. Ordering is the
+advertisement order of that list: semantic, preserved by the typed record, with no positions or cursors, and duplicate
+semantic keys are rejected. Admission, retry, recovery, forks, audit, or a later package must not rebuild a missing
+selection from the current spec match, configuration, model/provider names, driver availability, workspace,
 ancestry, MCP discovery, bridge/kernel state, logs, or UI state; unknown, corrupt, or unsupported selections block
 dependent work before effect while unrelated readable history remains available.
 
 ## Validation ownership and limit classification
 
-Validation is layered: transport owns wire shape and protocol-version equality; this package owns fixed slots,
-descriptor revisions, selection ordering, and tool admission; typed serde JSON owns record shape
+Validation is layered: transport owns wire shape and protocol-version equality; this package owns the six tool
+contracts, selection ordering, and tool admission; typed serde JSON owns record shape
 ([architecture 02](02-dto-and-contract-policy.md)); runtime/application owns live readiness and mode preconditions;
 primitive owners validate typed inputs/outputs; storage
 owns persistence constraints. No layer may bypass or replace another. Every numeric value is classified before
@@ -178,19 +154,17 @@ ceiling are not permitted.
 
 ## Tool admission and WorkspaceRoot
 
-Tool admission is legal only when the run's frozen selection includes the exact active descriptor,
-descriptor/owner/revisions agree, typed input is valid, immutable model-capability and mode relations are satisfied,
-required hooks and workspace context are valid, idempotency and intrinsic bounds pass, and required live
-implementation/runtime resources are available.
+Tool admission is legal only when the run's frozen selection includes the exact `ToolId`, the typed input is valid, the
+immutable model-capability and mode relations are satisfied, the workspace context is valid, idempotency and intrinsic
+bounds pass, and the required live implementation/runtime resources are available.
 
 The only admission outcomes are `Admitted`, typed `Incompatible`, or typed `Unavailable`. `Incompatible` covers
-invalid input, selection/revision or capability mismatch, reserved/inactive descriptor, mode mismatch, malformed
-meaning, and intrinsic representation failure; `Unavailable` covers actual registry, implementation, workspace context,
+invalid input, selection or capability mismatch, an unknown tool id, mode mismatch, malformed
+meaning, and intrinsic representation failure; `Unavailable` covers implementation, workspace context,
 runtime, provider, storage, or capacity unavailability. Both are known pre-effect outcomes. A compatible selected
-active descriptor is not gated by a risk selector, parent, Goal, Skill, provider, MCP, prompt, model, quota, or
-product ceiling. Hooks remain mandatory for
-typed normalization, observation, redaction, mode enforcement, and lifecycle preparation but cannot recreate a
-discretionary authorization layer.
+tool is not gated by a risk selector, parent, Goal, Skill, provider, MCP, prompt, model, quota, or
+product ceiling. Normalization, observation, redaction, mode enforcement, and lifecycle preparation stay application
+responsibilities and cannot recreate a discretionary authorization layer.
 
 The workspace rule is the same for every run:
 
@@ -206,15 +180,15 @@ redaction, and observation completeness: audit evidence, not authorization, neit
 boundary. Non-path tools receive no fictional workspace path; plan artifacts stay outside `WorkspaceRoot` under their
 own typed plan authorization.
 
-Build admits otherwise compatible selected descriptors; Plan keeps ordinary project `write`/`edit` incompatible while
+Build admits otherwise compatible selected tools; Plan keeps ordinary project `write`/`edit` incompatible while
 physical-plan mutation stays a plan-owner operation. `execute` is admissible when otherwise compatible but is not a
 sandbox; `ask_user` is normal `user_interaction` tooling, and the run remains `Running`
 after it starts.
 
 The project script library (`.ir/scripts`, [architecture 20](20-ipython-kernel-lifecycle.md))
-follows these same tool-admission semantics: its logical relative path is a default base for existing frozen descriptors
+follows these same tool-admission semantics: its logical relative path is a default base for existing frozen tools
 and never an access boundary, `write`/`edit` create or change a module while `execute` or a kernel foreground cell runs
-it, and no new `ToolId`, registry slot, listener, or primitive path is admitted. Per-cell script-import evidence for
+it, and no new `ToolId`, tool variant, listener, or primitive path is admitted. Per-cell script-import evidence for
 imported library modules publishes as committed tool-result evidence under architecture 20's cell rules.
 
 ## Model-to-tool-to-model lifecycle
@@ -232,12 +206,12 @@ sequenceDiagram
   participant P as Provider
   participant L as Tool loop
   participant D as Durable state
-  participant T as Registry tool
+  participant T as Tool service
 
   P->>L: Completed step and calls
   L->>D: Commit step and group
     par Admitted calls
-    L->>T: Invoke through registry
+    L->>T: Invoke through the tool service
     T-->>L: Bounded output and result
     L->>D: Commit tool result
   end
@@ -281,7 +255,7 @@ It carries only safe model-visible projection and approved typed metadata; no va
 is never retried. `Deferred` is the asynchronous `sub_agent` acceptance outcome: it carries the child session handle,
 permits the next model step, and never changes category when the child's terminal markdown answer arrives later as the committed child-result message.
 
-Failure semantics are closed: invalid tool input, workspace denial, or hook denial produces a typed failed tool result
+Failure semantics are closed: invalid tool input or a refused workspace binding produces a typed failed tool result
 and the run terminalizes `Failed` without retry, and a tool infrastructure error produces a safe normalized failure
 without leaking provider or OS text.
 
@@ -320,11 +294,11 @@ committed values arrive as live `run.frame` notifications with `kind` `content` 
 no tool-history page, cursor, snapshot frame, or resynchronization; a re-subscribing client re-reads current state and
 continues live.
 
-`model_tool_loop_v1` is a descriptor/model capability, not a wire capability: there is no protocol capability
+`model_tool_loop_v1` is a tool/model capability, not a wire capability: there is no protocol capability
 negotiation or family gate ([architecture 03](03-daemon-transport-and-adapters.md)). A subscriber to a run containing
 model-tool-loop content receives the current
 typed state or a typed error, never a partially understood snapshot or live stream. New run-selection provenance records
-the descriptor/model `model_tool_loop_v1` support needed to reconstruct local exchanges.
+the tool/model `model_tool_loop_v1` support needed to reconstruct local exchanges.
 
 ## Model progress deadline
 
@@ -364,34 +338,34 @@ and its notice, and the old call is never retried.
 
 ## Compatibility and protocol boundary
 
-`model_tool_loop_v1` is a descriptor/model capability delivered through JSON-RPC 2.0 run subscriptions
+`model_tool_loop_v1` is a tool/model capability delivered through JSON-RPC 2.0 run subscriptions
 ([architecture 03](03-daemon-transport-and-adapters.md)): the correlated current run snapshot, then live `run.frame`
 notifications. A client that cannot represent loop content
 receives a typed error without partial state. Snapshots stay compact and safe; exact wire tags and storage schema remain
 deferred.
 
 The model-tool-loop executor requires a tool executor, and provider tool calls execute through the one durable tool
-path. A row carries no synthetic registry, descriptor, tool-loop, child, MCP, Skill, policy, or execution-kind state
+path. A row carries no synthetic tool collection, tool-loop, child, MCP, Skill, policy, or execution-kind state
 beyond the eight identity newtypes and the plain step and group indices.
 
 ## Dependencies and non-goals
 
-This document depends on the one-capability-path rules. It retains the `sub_agent` slot, descriptor, admission, and
-generic tool-effect boundary. Architecture 18 owns the `mcp` descriptor's source/discovery/capability/invocation
-semantics; this document retains fixed-slot, descriptor, admission, and generic loop ownership. Architecture 19 owns
+This document depends on the one-capability-path rules. It retains the future `sub_agent` tool contract, admission, and
+generic tool-effect boundary. Architecture 18 owns the future `mcp` tool's source/discovery/capability/invocation
+semantics; this document retains tool identity, admission, and generic loop ownership. Architecture 19 owns
 Gateway/RLM attachment, grants, bridge operation correlation, and bridge-visible delivery; its ingress must use this
-document's frozen descriptor selection, admission, `ToolCallId`, start/result state, and publication from the commit
+document's frozen tool selection, admission, `ToolCallId`, start/result state, and publication from the commit
 without bypass or duplication, and tool admission never grants target-mutation authority. Architecture 20 kernel host
-requests consume the same frozen descriptor selection, admission, `ToolCallId`, and publication path; kernel execution
-is not a new ToolId, registry, or primitive bypass.
+requests consume the same frozen tool selection, admission, `ToolCallId`, and publication path; kernel execution
+is not a new ToolId, tool variant, or primitive bypass.
 
 Architectures 03 and 21-23 own Goal/Skill/context, provider, fork, and activity semantics; none may add a
-descriptor, ToolId, admission exception, `WorkspaceRoot` authority, `ToolCallId`, or retry path, and context projections
+tool id, admission exception, `WorkspaceRoot` authority, `ToolCallId`, or retry path, and context projections
 may inform a
 model step only through immutable selected safe representations. A provider may normalize a tool call only when the
 immutable capability selection declares `model_tool_loop_v1`, and it cannot assign local IDs, use provider-built-in
-tools, create a registry, or bypass the frozen local exchange. Architecture 23 may preserve terminal tool provenance
-only as non-authorizing frozen fork evidence and cannot rebuild a tool selection from current registry state;
-architecture 03 may project safe tool provenance but cannot create ToolIds, descriptors, ToolCallIds, admission,
-effects, retries, or current-registry repair. No bridge/IPython/kernel, Skills/Goals/context, provider evolution, UI,
+tools, create a tool collection, or bypass the frozen local exchange. Architecture 23 may preserve terminal tool
+provenance only as non-authorizing frozen fork evidence and cannot rebuild a tool selection from current advertisement
+state; architecture 03 may project safe tool provenance but cannot create ToolIds, specs, ToolCallIds, admission,
+effects, retries, or current-identity repair. No bridge/IPython/kernel, Skills/Goals/context, provider evolution, UI,
 schema, migrations, crates, Cargo, Makefile/CI, or production implementation is defined here.
