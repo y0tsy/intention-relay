@@ -14,10 +14,12 @@ use common::{DispatchCompleted, fixture_service, relative, text};
 #[cfg(unix)]
 use common::{fixture_dir, service};
 use intention_proto::ToolCallId;
+#[cfg(unix)]
+use intention_tools::ToolDispatchOutcome;
 use intention_tools::{
     CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepScope, ReadInput,
-    TOOL_SCHEMA_VERSION, ToolDispatchOutcome, ToolExecutionMetadata, ToolInput, ToolPolicy,
-    ToolProcessStatus, ToolResult, WriteInput,
+    TOOL_SCHEMA_VERSION, ToolExecutionMetadata, ToolInput, ToolPolicy, ToolProcessStatus,
+    ToolResult, WriteInput,
 };
 
 #[test]
