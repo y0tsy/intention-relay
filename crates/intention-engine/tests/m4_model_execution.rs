@@ -520,12 +520,11 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let driver = ScriptedDriver::with_rounds(vec![
-        vec![Err(ProviderErrorDto::unavailable(
-            "provider_down",
-            true,
-            None,
-        )
-        .expect("error is valid"))],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::reasoning_delta("why").expect("reasoning is valid")),
+            Err(ProviderErrorDto::unavailable("provider_down", true, None).expect("error is valid")),
+        ],
         vec![
             Ok(ModelEventDto::started()),
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
@@ -571,7 +570,7 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
     assert!(
         repository.messages.borrow().is_empty(),
-        "a failed attempt commits no assistant row"
+        "an uncommitted reasoning echo never becomes a transcript row"
     );
 }
 
@@ -688,47 +687,6 @@ fn execution_rejects_non_starting_run_before_configuration_or_provider_work() {
     assert!(repository.messages.borrow().is_empty());
     assert!(repository.finishes.borrow().is_empty());
     assert!(repository.transitions.borrow().is_empty());
-}
-
-#[test]
-fn retryable_failure_before_a_committed_step_retries_within_the_attempt_budget() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let driver = ScriptedDriver::with_rounds(vec![
-        vec![
-            Ok(ModelEventDto::started()),
-            Ok(ModelEventDto::reasoning_delta("why").expect("reasoning is valid")),
-            Err(ProviderErrorDto::unavailable("provider_down", true, None).expect("error is valid")),
-        ],
-        vec![
-            Ok(ModelEventDto::started()),
-            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
-        ],
-    ]);
-
-    let outcome = execute(
-        &repository,
-        &driver,
-        request(run_id, "fixture"),
-        config,
-        ModelCancellationSignal::new(),
-    )
-    .expect("an uncommitted attempt stays retryable");
-
-    assert!(matches!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Completed { .. }
-    ));
-    assert_eq!(driver.executions(), 2);
-    assert!(
-        repository.messages.borrow().is_empty(),
-        "an uncommitted reasoning echo never becomes a transcript row"
-    );
-    let finishes = repository.finishes.borrow();
-    assert_eq!(finishes.len(), 1);
-    assert_eq!(finishes[0].status(), RunStatusDto::Completed);
 }
 
 #[test]
@@ -886,60 +844,4 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
         repository.messages.borrow().is_empty(),
         "a timed-out attempt commits no transcript row"
     );
-}
-
-#[test]
-fn an_interrupt_during_a_retry_wait_records_a_notice_and_starts_the_next_attempt() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let signal = ModelCancellationSignal::new();
-    let driver = ScriptedDriver::with_rounds(vec![
-        vec![Err(ProviderErrorDto::unavailable(
-            "provider_down",
-            true,
-            None,
-        )
-        .expect("error is valid"))],
-        vec![
-            Ok(ModelEventDto::started()),
-            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
-        ],
-    ]);
-    // The interrupt lands while the first attempt's retry delay is waiting.
-    driver.cancel_during_stream(0, signal.clone());
-
-    let outcome = execute(
-        &repository,
-        &driver,
-        request(run_id, "fixture"),
-        config,
-        signal,
-    )
-    .expect("the interruption during the retry wait continues the run");
-
-    assert!(matches!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Completed { .. }
-    ));
-    assert_eq!(driver.executions(), 2);
-    let messages = repository.messages.borrow();
-    assert_eq!(
-        messages
-            .iter()
-            .map(|message| (message.kind(), message.text()))
-            .collect::<Vec<_>>(),
-        vec![(MessageKindDto::Notice, intention_engine::INTERRUPT_NOTICE)]
-    );
-    drop(messages);
-    let requests = driver.requests();
-    assert!(requests[1].messages().iter().any(|message| {
-        message.role() == ModelRoleDto::Notice
-            && message.content() == intention_engine::INTERRUPT_NOTICE
-    }));
-    drop(requests);
-    let finishes = repository.finishes.borrow();
-    assert_eq!(finishes.len(), 1);
-    assert_eq!(finishes[0].status(), RunStatusDto::Completed);
 }

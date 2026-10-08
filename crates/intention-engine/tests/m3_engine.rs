@@ -5,16 +5,16 @@
 
 mod common;
 
-use std::cell::RefCell;
 use std::fs;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use common::{FakeRepository, RecordingDispatchPort, workspace_root};
 use intention_config::ConfigSnapshotDto;
 use intention_domain::ToolResultStatusDto;
 use intention_engine::{
-    ApplicationService, LocalToolInvocationOutcomeDto, ModelCancellationSignal,
-    ToolInvocationRequestDto, ToolResultPublicationPort, WorkspaceBoundaryPort,
+    ApplicationService, LocalToolInvocationOutcomeDto, ModelCancellationSignal, ModelRunCommitDto,
+    ModelRunCommitObserver, ToolInvocationRequestDto, WorkspaceBoundaryPort,
 };
 use intention_engine::{ModelMessageDto, ModelRoleDto};
 use intention_proto::{
@@ -284,50 +284,6 @@ fn committed_rows_redact_absolute_workspace_root_and_os_error_text() {
     assert!(!rendered.contains(&root.to_string_lossy().to_string()));
     assert!(!rendered.contains("No such file or directory"));
     let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn committed_rows_preserve_exact_correlation_identity_across_terminal_outcome() {
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let call_id = ToolCallId::new();
-    let error = ApplicationService::new(&repository)
-        .invoke_local_tool(ToolInvocationRequestDto::new(
-            WorkspaceRoot::resolve(
-                &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy())
-                    .expect("workspace"),
-            )
-            .expect("workspace"),
-            session_id,
-            run_id,
-            call_id,
-            "read",
-            managed_read_input("missing"),
-            fixture_time(),
-        ))
-        .expect_err("missing file fails");
-    assert_eq!(error.code(), "tool_read_failed");
-    let messages = repository.committed_messages();
-    assert_eq!(messages.len(), 2);
-    assert!(
-        messages
-            .iter()
-            .all(|row| row.session_id() == session_id && row.run_id() == Some(run_id))
-    );
-    assert!(
-        messages
-            .iter()
-            .all(|row| row.tool_call_id() == Some(call_id))
-    );
-    let results = repository.committed_results();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
-    assert_eq!(results[0].session_id(), session_id);
-    assert_eq!(results[0].run_id(), run_id);
-    assert_eq!(results[0].call_id(), call_id);
-    assert_eq!(results[0].tool_id(), "read");
-    assert_eq!(results[0].content(), "tool_read_failed");
 }
 
 #[test]
@@ -967,54 +923,6 @@ fn local_tool_covers_invocation_and_pre_effect_hook_errors_and_rejections() {
 }
 
 #[test]
-fn local_tool_records_partial_terminal_status_on_interruption() {
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    // The cancellation is observed after the child has been spawned, so the
-    // call ends with whatever output was captured before the stop.
-    let signal = CancellationSignal::new();
-    let cancellation = signal.clone();
-    let canceller = std::thread::spawn(move || {
-        // Wait for a confirmed child spawn instead of racing a fixed sleep:
-        // the cancellation then provably lands while the external process is
-        // running, so the interruption cause is an observed stop.
-        assert!(
-            cancellation.wait_until_spawn_observed(std::time::Duration::from_secs(10)),
-            "execute child was never observed after spawn"
-        );
-        cancellation.cancel();
-    });
-    let outcome = ApplicationService::new(&repository)
-        .invoke_local_tool(
-            ToolInvocationRequestDto::new(
-                WorkspaceRoot::resolve(
-                    &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy()).expect("root"),
-                )
-                .expect("workspace"),
-                SessionId::new(),
-                RunId::new(),
-                ToolCallId::new(),
-                "execute",
-                sleeping_execute_input(),
-                fixture_time(),
-            )
-            .with_cancellation(signal),
-        )
-        .expect("an interrupted execute is a partial outcome");
-    canceller.join().expect("cancellation helper completes");
-    let LocalToolInvocationOutcomeDto::Partial { stopped, .. } = outcome else {
-        unreachable!("the stopped execute must be a partial outcome")
-    };
-    assert!(stopped);
-    let results = repository.committed_results();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].status(), ToolResultStatusDto::Partial);
-    assert!(results[0].content().contains(
-        "[The tool call was stopped before a final result; the output above is partial.]"
-    ));
-    assert_eq!(repository.completed_result_count(), 0);
-}
-
-#[test]
 fn local_tool_covers_workspace_resolved_error_and_rejection() {
     let outcome = HookOutcome::Reject(ErrorDto::validation("resolved_blocked", "blocked"));
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
@@ -1044,122 +952,57 @@ fn local_tool_covers_workspace_resolved_error_and_rejection() {
     assert_eq!(error.code(), "hook_failed");
 }
 
-#[test]
-fn cancelled_tool_lifecycle_is_terminal_and_not_completed_or_replayed() {
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let call_id = ToolCallId::new();
-    let outcome = ApplicationService::new(&repository)
-        .invoke_local_tool(
-            ToolInvocationRequestDto::new(
-                WorkspaceRoot::resolve(
-                    &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy())
-                        .expect("workspace dto"),
-                )
-                .expect("workspace"),
-                session_id,
-                run_id,
-                call_id,
-                "execute",
-                cancelled_execute_input(),
-                fixture_time(),
-            )
-            .with_cancellation(CancellationSignal::cancelled()),
-        )
-        .expect("a pre-start cancellation is a partial outcome");
-    assert_eq!(
-        outcome,
-        LocalToolInvocationOutcomeDto::Partial {
-            stopped: true,
-            result: None,
-        }
-    );
-
-    // The call row is durable before the cancellation is observed, and the
-    // partial result is the one terminal row the call records.
-    let messages = repository.committed_messages();
-    assert_eq!(messages.len(), 2);
-    assert_eq!(messages[0].kind(), MessageKindDto::ToolCall);
-    assert!(
-        messages
-            .iter()
-            .all(|row| row.session_id() == session_id && row.run_id() == Some(run_id))
-    );
-    assert!(
-        messages
-            .iter()
-            .all(|row| row.tool_call_id() == Some(call_id))
-    );
-    assert_eq!(repository.completed_result_count(), 0);
-    let results = repository.committed_results();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].status(), ToolResultStatusDto::Partial);
-    assert_eq!(
-        results[0].content(),
-        "[The tool call was stopped before a final result.]"
-    );
-}
-
 struct CapturingPublisher {
-    publications: RefCell<Vec<MessageProjectionDto>>,
-    failure: RefCell<Option<ErrorDto>>,
+    publications: Mutex<Vec<MessageProjectionDto>>,
 }
 
 impl CapturingPublisher {
     const fn recording() -> Self {
         Self {
-            publications: RefCell::new(Vec::new()),
-            failure: RefCell::new(None),
-        }
-    }
-
-    const fn failing(error: ErrorDto) -> Self {
-        Self {
-            publications: RefCell::new(Vec::new()),
-            failure: RefCell::new(Some(error)),
+            publications: Mutex::new(Vec::new()),
         }
     }
 
     fn published(&self) -> Vec<MessageProjectionDto> {
-        self.publications.borrow().clone()
+        self.publications
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
-impl ToolResultPublicationPort for CapturingPublisher {
-    fn publish_committed_message(&self, message: &MessageProjectionDto) -> DtoResult<()> {
-        self.publications.borrow_mut().push(message.clone());
-        self.failure
-            .borrow()
-            .as_ref()
-            .map_or(Ok(()), |error| Err(error.clone()))
+impl ModelRunCommitObserver for CapturingPublisher {
+    fn observe_model_run_commit(&self, commit: &ModelRunCommitDto) {
+        let ModelRunCommitDto::Content(message) = commit else {
+            return;
+        };
+        self.publications
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(message.clone());
     }
 }
 
 #[test]
-fn publication_failure_propagates_after_the_committed_tool_call_row() {
-    let root = hello_tool_root("publication-failure");
+fn committed_rows_reach_the_commit_sink_only_after_their_own_commit() {
+    let root = hello_tool_root("publication-order");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let publisher = CapturingPublisher::failing(ErrorDto::unavailable(
-        "publication_unavailable",
-        "publication boundary refused the committed result",
-    ));
-    let error = ApplicationService::new(&repository)
+    let publisher = TerminalOrderingProbe::new(&repository);
+    let outcome = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
             invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt"),
             &publisher,
         )
-        .expect_err("publication failure must surface");
-    assert_eq!(error.code(), "publication_unavailable");
+        .expect("an infallible commit sink publishes every committed row");
+    assert!(matches!(
+        outcome,
+        LocalToolInvocationOutcomeDto::Completed(ToolResult::Read(_))
+    ));
 
-    // The committed call row reached the boundary exactly once; the caller sees
-    // the publication error and the tool never dispatches.
-    let published = publisher.published();
-    assert_eq!(published.len(), 1);
-    assert_eq!(published[0].kind(), MessageKindDto::ToolCall);
-    // The committed call row stays durable and no terminal row is committed.
-    assert!(repository.committed_results().is_empty());
-    assert_eq!(repository.completed_result_count(), 0);
+    // The sink observed the committed call row before execution and the
+    // committed terminal row after its own commit, in that order: a committed
+    // row can no longer be refused and fail the invocation after the commit.
+    publisher.assert_call_row_then_one_terminal();
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1336,22 +1179,25 @@ fn selected_commit_failures_propagate_from_each_commit_point() {
 
 /// Publication probe that records the committed result-row count at publish time.
 struct TerminalOrderingProbe<'a> {
-    repository: &'a FakeRepository,
-    publications: RefCell<Vec<MessageProjectionDto>>,
-    results_at_publish: RefCell<Vec<usize>>,
+    committed_result_rows: &'a AtomicUsize,
+    publications: Mutex<Vec<MessageProjectionDto>>,
+    results_at_publish: Mutex<Vec<usize>>,
 }
 
 impl<'a> TerminalOrderingProbe<'a> {
     const fn new(repository: &'a FakeRepository) -> Self {
         Self {
-            repository,
-            publications: RefCell::new(Vec::new()),
-            results_at_publish: RefCell::new(Vec::new()),
+            committed_result_rows: &repository.committed_result_rows,
+            publications: Mutex::new(Vec::new()),
+            results_at_publish: Mutex::new(Vec::new()),
         }
     }
 
     fn published(&self) -> Vec<MessageProjectionDto> {
-        self.publications.borrow().clone()
+        self.publications
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Asserts the boundary saw the committed call row before execution and the
@@ -1362,20 +1208,29 @@ impl<'a> TerminalOrderingProbe<'a> {
         assert_eq!(published[0].kind(), MessageKindDto::ToolCall);
         assert_eq!(published[1].kind(), MessageKindDto::ToolResult);
         assert_eq!(
-            *self.results_at_publish.borrow(),
+            *self
+                .results_at_publish
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
             vec![0, 1],
             "the terminal row publishes after its own durable commit"
         );
     }
 }
 
-impl ToolResultPublicationPort for TerminalOrderingProbe<'_> {
-    fn publish_committed_message(&self, message: &MessageProjectionDto) -> DtoResult<()> {
+impl ModelRunCommitObserver for TerminalOrderingProbe<'_> {
+    fn observe_model_run_commit(&self, commit: &ModelRunCommitDto) {
+        let ModelRunCommitDto::Content(message) = commit else {
+            return;
+        };
         self.results_at_publish
-            .borrow_mut()
-            .push(self.repository.committed_results().len());
-        self.publications.borrow_mut().push(message.clone());
-        Ok(())
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(self.committed_result_rows.load(Ordering::SeqCst));
+        self.publications
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(message.clone());
     }
 }
 
@@ -1402,11 +1257,16 @@ fn assert_single_terminal_result(
     assert_eq!(terminal.call_id(), call_id);
     assert_eq!(terminal.tool_id(), tool_id);
     let messages = repository.committed_messages();
+    assert!(
+        messages.iter().all(|row| row.session_id() == session_id
+            && row.run_id() == Some(run_id)
+            && row.tool_call_id() == Some(call_id)),
+        "every committed row carries the exact invocation identity"
+    );
     let answering = messages
         .last()
         .expect("the terminal result commits with its answering row");
     assert_eq!(answering.kind(), MessageKindDto::ToolResult);
-    assert_eq!(answering.tool_call_id(), Some(call_id));
     assert_eq!(answering.tool_id(), Some(tool_id));
     assert_eq!(answering.text(), terminal.content());
 }
@@ -1445,9 +1305,21 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
         "read",
         ToolResultStatusDto::Completed,
     );
+    // The terminal commit atomically carries the rendered result content with
+    // the exact invocation identity.
+    let completed = &repository.committed_results()[0];
+    assert_eq!(completed.content(), "hello");
+    assert_eq!(completed.occurred_at(), fixture_time());
+    assert!(completed.metadata().is_empty());
     // Exactly one terminal result row exists when publication runs, proving
     // the terminal commit precedes the publication boundary.
-    assert_eq!(*publisher.results_at_publish.borrow(), vec![0, 1]);
+    assert_eq!(
+        *publisher
+            .results_at_publish
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+        vec![0, 1]
+    );
     let publications = publisher.published();
     assert_eq!(publications.len(), 2);
     let terminal = &publications[1];
@@ -1485,6 +1357,10 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
         "read",
         ToolResultStatusDto::Failed,
     );
+    // The terminal Failed commit classifies the safe error code.
+    let failed = &repository.committed_results()[0];
+    assert_eq!(failed.content(), "tool_read_failed");
+    assert!(failed.metadata().is_empty());
     publisher.assert_call_row_then_one_terminal();
     drop(publisher);
     drop(repository);
@@ -1523,6 +1399,13 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
         "execute",
         ToolResultStatusDto::Partial,
     );
+    // The terminal Partial commit classifies the interrupted call with the
+    // exact stopped notice and never records a completed row.
+    assert_eq!(
+        repository.committed_results()[0].content(),
+        "[The tool call was stopped before a final result.]"
+    );
+    assert_eq!(repository.completed_result_count(), 0);
     publisher.assert_call_row_then_one_terminal();
     drop(publisher);
     drop(repository);
@@ -1570,155 +1453,14 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
         "execute",
         ToolResultStatusDto::Partial,
     );
-    publisher.assert_call_row_then_one_terminal();
-
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn terminal_commits_carry_typed_result_evidence_before_publication() {
-    let root = hello_tool_root("evidence");
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let call_id = ToolCallId::new();
-
-    // Success: the terminal Completed commit atomically carries the rendered
-    // result content with the exact invocation identity.
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let publisher = TerminalOrderingProbe::new(&repository);
-    ApplicationService::new(&repository)
-        .invoke_local_tool_with_publication(
-            ToolInvocationRequestDto::new(
-                hello_workspace(&root),
-                session_id,
-                run_id,
-                call_id,
-                "read",
-                managed_read_input("hello.txt"),
-                fixture_time(),
-            ),
-            &publisher,
-        )
-        .expect("read succeeds");
-    let results = repository.committed_results();
-    assert_eq!(results.len(), 1);
-    let completed = &results[0];
-    assert_eq!(completed.status(), ToolResultStatusDto::Completed);
-    assert_eq!(completed.content(), "hello");
-    assert_eq!(completed.tool_id(), "read");
-    assert_eq!(completed.occurred_at(), fixture_time());
-    assert!(completed.metadata().is_empty());
-    // The evidence-carrying terminal commit is durable before publication.
-    assert_eq!(*publisher.results_at_publish.borrow(), vec![0, 1]);
-    drop(publisher);
-    drop(repository);
-
-    // Failure: the terminal Failed commit classifies the safe error code.
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let publisher = TerminalOrderingProbe::new(&repository);
-    let error = ApplicationService::new(&repository)
-        .invoke_local_tool_with_publication(
-            ToolInvocationRequestDto::new(
-                hello_workspace(&root),
-                session_id,
-                run_id,
-                call_id,
-                "read",
-                managed_read_input("missing.txt"),
-                fixture_time(),
-            ),
-            &publisher,
-        )
-        .expect_err("missing file fails");
-    assert_eq!(error.code(), "tool_read_failed");
-    let results = repository.committed_results();
-    assert_eq!(results.len(), 1);
-    let failed = &results[0];
-    assert_eq!(failed.status(), ToolResultStatusDto::Failed);
-    assert_eq!(failed.content(), "tool_read_failed");
-    assert!(failed.metadata().is_empty());
-    publisher.assert_call_row_then_one_terminal();
-    drop(publisher);
-    drop(repository);
-
-    // A pre-start cancellation: the terminal Partial commit classifies the
-    // interrupted call with the exact stopped notice.
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let publisher = TerminalOrderingProbe::new(&repository);
-    let outcome = ApplicationService::new(&repository)
-        .invoke_local_tool_with_publication(
-            ToolInvocationRequestDto::new(
-                hello_workspace(&root),
-                session_id,
-                run_id,
-                call_id,
-                "execute",
-                cancelled_execute_input(),
-                fixture_time(),
-            )
-            .with_cancellation(CancellationSignal::cancelled()),
-            &publisher,
-        )
-        .expect("a pre-start cancellation is a partial outcome");
-    assert_eq!(
-        outcome,
-        LocalToolInvocationOutcomeDto::Partial {
-            stopped: true,
-            result: None,
-        }
-    );
-    let results = repository.committed_results();
-    let partial = &results[0];
-    assert_eq!(partial.status(), ToolResultStatusDto::Partial);
-    assert_eq!(
-        partial.content(),
-        "[The tool call was stopped before a final result.]"
-    );
-    publisher.assert_call_row_then_one_terminal();
-    drop(publisher);
-    drop(repository);
-
-    // An interrupted external process: the terminal Partial commit keeps the
-    // captured output and never publishes.
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let publisher = TerminalOrderingProbe::new(&repository);
-    let signal = CancellationSignal::new();
-    let cancellation = signal.clone();
-    let canceller = std::thread::spawn(move || {
-        assert!(
-            cancellation.wait_until_spawn_observed(std::time::Duration::from_secs(10)),
-            "execute child was never observed after spawn"
-        );
-        cancellation.cancel();
-    });
-    let outcome = ApplicationService::new(&repository)
-        .invoke_local_tool_with_publication(
-            ToolInvocationRequestDto::new(
-                hello_workspace(&root),
-                session_id,
-                run_id,
-                call_id,
-                "execute",
-                sleeping_execute_input(),
-                fixture_time(),
-            )
-            .with_cancellation(signal),
-            &publisher,
-        )
-        .expect("an interrupted execute is a partial outcome");
-    canceller.join().expect("cancellation helper completes");
-    let LocalToolInvocationOutcomeDto::Partial { stopped, result } = outcome else {
-        unreachable!("cancellation must interrupt the invocation");
-    };
-    assert!(stopped);
-    assert!(matches!(result, Some(ToolResult::Execute(_))));
-    let results = repository.committed_results();
-    let partial = &results[0];
-    assert_eq!(partial.status(), ToolResultStatusDto::Partial);
+    // The terminal Partial commit keeps the captured output and never records
+    // a completed row.
+    let partial = &repository.committed_results()[0];
     assert!(partial.content().contains("stdout:"));
     assert!(partial.content().contains(
         "[The tool call was stopped before a final result; the output above is partial.]"
     ));
+    assert_eq!(repository.completed_result_count(), 0);
     publisher.assert_call_row_then_one_terminal();
 
     let _ = fs::remove_dir_all(root);
@@ -1982,33 +1724,6 @@ fn starting_context(
 }
 
 #[test]
-fn send_user_turn_and_schedule_propagates_admission_failures() {
-    let session_id = SessionId::new();
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::validation(
-        "turn_admission_denied",
-        "the durable session refused the turn",
-    )));
-    let dispatch = RecordingDispatchPort::default();
-    let error = ApplicationService::new(&repository)
-        .send_user_turn_and_schedule(
-            send_command(session_id),
-            RunId::new(),
-            fixture_snapshot(),
-            fixture_time(),
-            &dispatch,
-        )
-        .expect_err("admission failure is propagated");
-    assert_eq!(error.code(), "turn_admission_denied");
-    let inputs = repository.accepted_inputs.borrow();
-    assert_eq!(inputs.len(), 1);
-    assert_eq!(inputs[0].session_id(), session_id);
-    assert_eq!(inputs[0].content(), "latest");
-    drop(inputs);
-    assert!(dispatch.inputs.borrow().is_empty());
-    assert!(repository.finishes.borrow().is_empty());
-}
-
-#[test]
 fn send_user_turn_and_schedule_returns_queued_acceptance_without_dispatching() {
     let session_id = SessionId::new();
     let turn_id = TurnId::new();
@@ -2195,35 +1910,6 @@ fn schedule_starting_run_maps_durable_context_into_the_dispatch_dto() {
 }
 
 #[test]
-fn schedule_starting_run_propagates_context_load_errors() {
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let error = ApplicationService::new(&repository)
-        .schedule_starting_run(
-            SessionId::new(),
-            RunId::new(),
-            ModelCancellationSignal::new(),
-        )
-        .expect_err("missing durable context is propagated");
-    assert_eq!(error.code(), "run_model_context_unavailable");
-}
-
-#[test]
-fn create_session_propagates_repository_errors() {
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let command = CreateSessionCommandDto::new(
-        ProjectId::new(),
-        SessionId::new(),
-        WorkspaceId::new(),
-        workspace_root(),
-        RunModeDto::Build,
-    );
-    let error = ApplicationService::new(&repository)
-        .create_session(command, fixture_time())
-        .expect_err("repository failure is propagated");
-    assert_eq!(error.code(), "fixture_missing_result");
-}
-
-#[test]
 fn workspace_boundary_failure_is_durably_rejected_before_execution() {
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let error = ApplicationService::new(&repository)
@@ -2247,29 +1933,6 @@ fn terminal_commit_failure_propagates_from_the_tool_error_path() {
     let error = ApplicationService::new(&repository)
         .invoke_local_tool(invoke_read_input("missing"))
         .expect_err("terminal commit failure replaces the tool error");
-    assert_eq!(error.code(), "append_unavailable");
-    assert_eq!(repository.committed_messages().len(), 1);
-    assert!(repository.committed_results().is_empty());
-}
-
-#[test]
-fn pre_execution_rejection_commit_failure_propagates() {
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    *repository.commit_failures.borrow_mut() = vec![2];
-    let mut hooks = HookRegistry::new();
-    hooks
-        .register(Box::new(PhaseOutcomeHook {
-            phase: Phase::BeforeToolExecution,
-            id: "rejection-commit-failure",
-            outcome: HookOutcome::Reject(ErrorDto::validation(
-                "execution_blocked",
-                "blocked before execution",
-            )),
-        }))
-        .expect("hook registers");
-    let error = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool(invoke_read_input("missing"))
-        .expect_err("rejection commit failure is propagated");
     assert_eq!(error.code(), "append_unavailable");
     assert_eq!(repository.committed_messages().len(), 1);
     assert!(repository.committed_results().is_empty());

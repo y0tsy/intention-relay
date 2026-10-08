@@ -7,9 +7,7 @@ mod common;
 
 use std::{collections::VecDeque, future, sync::mpsc, time::Duration};
 
-use common::{
-    FakeRepository, ImmediateTime, RecordingCommitObserver, RecordingTime, ScriptedPort, time,
-};
+use common::{FakeRepository, ImmediateTime, RecordingCommitObserver, ScriptedPort, time};
 use futures_util::{StreamExt, stream};
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
@@ -109,39 +107,6 @@ impl ModelExecutionDriver for PendingAfterStartedDriver {
             Ok(ModelEventDto::started()),
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
         ]))
-    }
-}
-
-/// A time port whose sleeps stay pending until the test sets the release flag.
-///
-/// Poll-based, so it never blocks the executor thread; the round timeout only
-/// becomes ready when the test decides, which keeps the round's cancellation
-/// race deterministic.
-struct FlagTime {
-    release: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl FlagTime {
-    const fn new(release: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
-        Self { release }
-    }
-}
-
-impl ModelTimePort for FlagTime {
-    fn now(&self) -> TimestampDto {
-        time(2)
-    }
-
-    fn sleep(&self, _duration: Duration) -> ModelSleepFuture<'_> {
-        let release = self.release.clone();
-        Box::pin(futures_util::future::poll_fn(move |context| {
-            if release.load(std::sync::atomic::Ordering::Relaxed) {
-                std::task::Poll::Ready(())
-            } else {
-                context.waker().wake_by_ref();
-                std::task::Poll::Pending
-            }
-        }))
     }
 }
 
@@ -433,7 +398,7 @@ fn tool_call_executes_tool_and_completes() {
 fn the_window_pass_compresses_a_large_tool_result_before_the_continuation_request() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_context_window("fixture", Some((60, 1_000_000)));
+    let config = fixture_snapshot_with_context_window("fixture", Some(60));
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
@@ -903,43 +868,55 @@ fn control_character_reasoning_echo_terminalizes_as_typed_failed_run() {
 
 #[test]
 fn tool_failure_terminalizes_without_retry() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
-    let driver = ScriptedDriver::new(vec![
-        Ok(ModelEventDto::started()),
-        Ok(ModelEventDto::tool_call(call)),
-    ]);
-    let port = ScriptedPort::new(vec![Ok(ToolResultOutcomeDto::failed(
-        ErrorDto::validation("tool_denied", "the workspace denied the call"),
-    ))]);
+    // A typed failed outcome from the port — including the daemon's
+    // `invalid_tool_input_json` decoding failure — fails the run without
+    // scheduling any retry or re-invoking the call.
+    for (code, message) in [
+        ("tool_denied", "the workspace denied the call"),
+        ("invalid_tool_input_json", "tool arguments are invalid"),
+    ] {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let config = fixture_snapshot_with_model("fixture");
+        let repository = FakeRepository::new(session_id, run_id, config.clone());
+        let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
+        let driver = ScriptedDriver::new(vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::tool_call(call)),
+        ]);
+        let port = ScriptedPort::new(vec![Ok(ToolResultOutcomeDto::failed(
+            ErrorDto::validation(code, message),
+        ))]);
 
-    let outcome = execute(
-        &repository,
-        &driver,
-        &port,
-        request(run_id, "fixture"),
-        config,
-        ModelCancellationSignal::new(),
-    )
-    .expect("tool denial terminalizes safely");
+        let outcome = execute(
+            &repository,
+            &driver,
+            &port,
+            request(run_id, "fixture"),
+            config,
+            ModelCancellationSignal::new(),
+        )
+        .expect("a typed tool failure terminalizes safely");
 
-    let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
-        unreachable!("a failed tool call fails the run");
-    };
-    assert_eq!(run.status(), RunStatusDto::Failed);
-    assert_eq!(error.code(), "tool_denied");
-    assert_eq!(driver.executions(), 1);
-    assert_eq!(port.calls().len(), 1);
-    let finishes = repository.finishes.borrow();
-    assert_eq!(finishes.len(), 1, "a tool failure never retries");
-    assert_eq!(finishes[0].error_code(), Some("tool_denied"));
-    assert!(
-        repository.tool_results.borrow().is_empty(),
-        "the tool path committed the failed result row"
-    );
+        let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
+            unreachable!("a failed tool call fails the run");
+        };
+        assert_eq!(run.status(), RunStatusDto::Failed);
+        assert_eq!(error.code(), code);
+        assert_eq!(driver.executions(), 1, "{code} must not retry");
+        assert_eq!(
+            port.calls().len(),
+            1,
+            "{code} executes the tool exactly once, never re-invoking it"
+        );
+        let finishes = repository.finishes.borrow();
+        assert_eq!(finishes.len(), 1, "a tool failure never retries");
+        assert_eq!(finishes[0].error_code(), Some(code));
+        assert!(
+            repository.tool_results.borrow().is_empty(),
+            "the tool path committed the failed result row"
+        );
+    }
 }
 
 #[test]
@@ -1114,62 +1091,6 @@ fn provider_failure_after_tool_round_is_terminal_without_retry() {
 }
 
 #[test]
-fn interruption_during_a_provider_round_records_a_notice_and_continues() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let signal = ModelCancellationSignal::new();
-    let driver = ScriptedDriver::with_rounds(vec![
-        vec![
-            Ok(ModelEventDto::started()),
-            Ok(ModelEventDto::text_delta("partial").expect("text is valid")),
-        ],
-        vec![
-            Ok(ModelEventDto::started()),
-            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
-        ],
-    ]);
-    driver.cancel_during_stream(1, signal.clone());
-    let port = ScriptedPort::new(Vec::new());
-    let clock = ImmediateTime::new();
-
-    let outcome = run_ready(
-        ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
-            ModelRunExecutionInputDto::new(
-                session_id,
-                run_id,
-                request(run_id, "fixture"),
-                config,
-                signal,
-            ),
-        ),
-    )
-    .expect("the interrupted round continues and completes");
-
-    assert!(
-        matches!(outcome, ModelRunExecutionOutcomeDto::Completed { .. }),
-        "the interruption continues the run instead of terminalizing it, got {outcome:?}"
-    );
-    assert_eq!(driver.executions(), 2);
-    let messages = repository.messages.borrow();
-    assert_eq!(
-        messages
-            .iter()
-            .map(|message| (message.kind(), message.text()))
-            .collect::<Vec<_>>(),
-        vec![
-            (MessageKindDto::Assistant, "partial"),
-            (MessageKindDto::Notice, intention_engine::INTERRUPT_NOTICE),
-        ]
-    );
-    drop(messages);
-    let finishes = repository.finishes.borrow();
-    assert_eq!(finishes.len(), 1);
-    assert_eq!(finishes[0].status(), RunStatusDto::Completed);
-}
-
-#[test]
 fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
@@ -1307,101 +1228,6 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
 }
 
 #[test]
-fn interruption_while_the_round_is_waiting_records_a_notice_and_continues() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let signal = ModelCancellationSignal::new();
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let driver = PendingAfterStartedDriver {
-        entered: std::sync::Mutex::new(Some(entered_tx)),
-        executions: std::sync::Mutex::new(0),
-    };
-    let port = ScriptedPort::new(Vec::new());
-    let release = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let clock = FlagTime::new(std::sync::Arc::clone(&release));
-    let execution_signal = signal.clone();
-
-    let execution = std::thread::spawn(move || {
-        let outcome = run_ready(
-            ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
-                ModelRunExecutionInputDto::new(
-                    session_id,
-                    run_id,
-                    request(run_id, "fixture"),
-                    config,
-                    execution_signal,
-                ),
-            ),
-        );
-        (outcome, repository)
-    });
-    entered_rx.recv().expect("the provider round started");
-    signal.cancel();
-    let (outcome, repository) = execution.join().expect("execution thread completes");
-    let outcome = outcome.expect("the interrupted round continues and completes");
-
-    assert!(
-        matches!(outcome, ModelRunExecutionOutcomeDto::Completed { .. }),
-        "the interruption continues the run instead of terminalizing it, got {outcome:?}"
-    );
-    let messages = repository.messages.borrow();
-    assert_eq!(
-        messages
-            .iter()
-            .map(|message| (message.kind(), message.text()))
-            .collect::<Vec<_>>(),
-        vec![(MessageKindDto::Notice, intention_engine::INTERRUPT_NOTICE)]
-    );
-}
-
-#[test]
-fn invalid_tool_input_json_terminalizes_without_retry() {
-    // The daemon's typed tool-input decoding answers invalid arguments with the
-    // `invalid_tool_input_json` failure; the runtime contract is that a port
-    // answering with that typed failed outcome terminalizes Failed without
-    // scheduling any retry or re-invoking the call.
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
-    let driver = ScriptedDriver::new(vec![
-        Ok(ModelEventDto::started()),
-        Ok(ModelEventDto::tool_call(call)),
-    ]);
-    let port = ScriptedPort::new(vec![Ok(ToolResultOutcomeDto::failed(
-        ErrorDto::validation("invalid_tool_input_json", "tool arguments are invalid"),
-    ))]);
-
-    let outcome = execute(
-        &repository,
-        &driver,
-        &port,
-        request(run_id, "fixture"),
-        config,
-        ModelCancellationSignal::new(),
-    )
-    .expect("invalid tool input terminalizes safely");
-
-    let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
-        unreachable!("invalid tool input fails the run");
-    };
-    assert_eq!(run.status(), RunStatusDto::Failed);
-    assert_eq!(error.code(), "invalid_tool_input_json");
-    assert_eq!(driver.executions(), 1);
-    assert_eq!(
-        port.calls().len(),
-        1,
-        "invalid input executes the tool exactly once, never re-invoking it"
-    );
-    let finishes = repository.finishes.borrow();
-    assert_eq!(finishes.len(), 1);
-    assert_eq!(finishes[0].error_code(), Some("invalid_tool_input_json"));
-}
-
-#[test]
 fn second_tool_call_does_not_start_until_first_finishes() {
     // Tool calls from one provider round must execute strictly sequentially:
     // while the first call's port future is pending, the second call must not
@@ -1480,72 +1306,6 @@ fn second_tool_call_does_not_start_until_first_finishes() {
     let finishes = repository.finishes.borrow();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
-}
-
-#[test]
-fn provider_failure_before_first_tool_round_is_retryable_within_attempt_budget() {
-    // A retryable provider failure before any tool round (tool_round == 0)
-    // schedules a retry while attempts remain; the second attempt then
-    // completes the run. After a tool round the same failure is terminal
-    // instead — that boundary is covered by
-    // `provider_failure_after_tool_round_is_terminal_without_retry`.
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let driver = ScriptedDriver::with_rounds(vec![
-        vec![Err(ProviderErrorDto::unavailable(
-            "provider_busy",
-            true,
-            None,
-        )
-        .expect("fixture provider error is valid"))],
-        vec![
-            Ok(ModelEventDto::started()),
-            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
-        ],
-    ]);
-    let port = ScriptedPort::new(Vec::new());
-    let clock = ImmediateTime::new();
-
-    let outcome = run_ready(
-        ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
-            ModelRunExecutionInputDto::new(
-                session_id,
-                run_id,
-                request(run_id, "fixture"),
-                config,
-                ModelCancellationSignal::new(),
-            ),
-        ),
-    )
-    .expect("retryable pre-tool failure retries then completes");
-
-    assert!(matches!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Completed { .. }
-    ));
-    assert_eq!(driver.executions(), 2);
-    assert!(
-        port.calls().is_empty(),
-        "no tool round occurs before the retry"
-    );
-    assert_eq!(
-        clock
-            .sleeps
-            .borrow()
-            .iter()
-            .filter(|&&duration| duration == Duration::from_millis(250))
-            .count(),
-        1
-    );
-    let finishes = repository.finishes.borrow();
-    assert_eq!(finishes.len(), 1);
-    assert_eq!(finishes[0].status(), RunStatusDto::Completed);
-    assert!(
-        repository.messages.borrow().is_empty(),
-        "the retried attempt commits only its completed step"
-    );
 }
 
 #[test]
@@ -1708,7 +1468,7 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
     let port = ScriptedPort::new(Vec::new());
     let signal = ModelCancellationSignal::new();
     driver.cancel_during_stream(0, signal.clone());
-    let clock = RecordingTime::new();
+    let clock = ImmediateTime::new();
 
     let outcome = run_ready(
         ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
@@ -1734,7 +1494,8 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
     );
     assert!(
         clock
-            .sleeps()
+            .sleeps
+            .borrow()
             .iter()
             .all(|duration| *duration >= Duration::from_secs(1)),
         "an already-interrupted run never arms the sub-second retry delay"

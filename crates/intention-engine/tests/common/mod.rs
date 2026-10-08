@@ -15,6 +15,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::future;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
@@ -69,12 +70,14 @@ pub struct FakeRepository {
     pub finishes: RefCell<Vec<FinishRunInputDto>>,
     pub transitions: RefCell<Vec<TransitionRunInputDto>>,
     pub tool_results: RefCell<Vec<WriteToolResultInputDto>>,
+    /// Counts committed tool-result rows for `Send + Sync` observers that must
+    /// not borrow this fixture; mirrors `tool_results`.
+    pub committed_result_rows: AtomicUsize,
     pub created: RefCell<Option<SessionProjectionDto>>,
     pub accepted: RefCell<DtoResult<AcceptedTurnOutcomeDto>>,
     pub accepted_inputs: RefCell<Vec<AcceptUserTurnInputDto>>,
     pub removed: RefCell<Option<PendingTurnProjectionDto>>,
     pub loaded_projection: RefCell<Option<SessionProjectionDto>>,
-    pub recent_messages: RefCell<Vec<MessageProjectionDto>>,
     pub starting_context: RefCell<Option<StartingRunModelContextDto>>,
     pub run: RefCell<Option<RunProjectionDto>>,
     pub commit_calls: RefCell<usize>,
@@ -85,7 +88,6 @@ pub struct FakeRepository {
     pub cancel_after_append: RefCell<Option<(usize, ModelCancellationSignal)>>,
     pub append_count: RefCell<usize>,
     pub config_error: RefCell<Option<ErrorDto>>,
-    pub transition_failure: RefCell<Option<(RunStatusDto, ErrorDto)>>,
     /// Pending user messages committed by the next context boundary.
     pub pending: RefCell<VecDeque<MessageProjectionDto>>,
     pub pending_consumes: RefCell<usize>,
@@ -105,12 +107,12 @@ impl FakeRepository {
             finishes: RefCell::new(Vec::new()),
             transitions: RefCell::new(Vec::new()),
             tool_results: RefCell::new(Vec::new()),
+            committed_result_rows: AtomicUsize::new(0),
             created: RefCell::new(None),
             accepted: RefCell::new(Err(ErrorDto::unavailable("fixture_unused", "unused"))),
             accepted_inputs: RefCell::new(Vec::new()),
             removed: RefCell::new(None),
             loaded_projection: RefCell::new(None),
-            recent_messages: RefCell::new(Vec::new()),
             starting_context: RefCell::new(None),
             run: RefCell::new(None),
             commit_calls: RefCell::new(0),
@@ -121,7 +123,6 @@ impl FakeRepository {
             cancel_after_append: RefCell::new(None),
             append_count: RefCell::new(0),
             config_error: RefCell::new(None),
-            transition_failure: RefCell::new(None),
             pending: RefCell::new(VecDeque::new()),
             pending_consumes: RefCell::new(0),
         }
@@ -264,19 +265,6 @@ impl StorageRepositoryDto for FakeRepository {
     fn transition_run(&self, input: TransitionRunInputDto) -> DtoResult<RunProjectionDto> {
         assert_eq!(input.session_id(), self.session_id);
         assert_eq!(input.run_id(), self.run_id);
-        if self
-            .transition_failure
-            .borrow()
-            .as_ref()
-            .is_some_and(|(status, _)| *status == input.status())
-        {
-            return Err(self
-                .transition_failure
-                .borrow_mut()
-                .take()
-                .expect("configured transition failure exists")
-                .1);
-        }
         self.store_status(input.status());
         self.transitions.borrow_mut().push(input);
         Ok(self.projection())
@@ -326,6 +314,7 @@ impl StorageRepositoryDto for FakeRepository {
         let evidence = input.evidence().clone();
         self.messages.borrow_mut().push(input.message().clone());
         self.tool_results.borrow_mut().push(input);
+        self.committed_result_rows.fetch_add(1, Ordering::SeqCst);
         Ok(evidence)
     }
 
@@ -408,7 +397,8 @@ impl StorageRepositoryDto for FakeRepository {
         _session_id: SessionId,
         _limit: u32,
     ) -> DtoResult<Vec<MessageProjectionDto>> {
-        Ok(self.recent_messages.borrow().clone())
+        // Suites seed the durable context explicitly and never history.
+        Ok(Vec::new())
     }
 
     fn load_run_messages(
@@ -463,44 +453,6 @@ impl ModelTimePort for ImmediateTime {
 
     fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
         self.sleeps.borrow_mut().push(duration);
-        Box::pin(future::ready(()))
-    }
-}
-
-/// A time port that answers immediately and records every requested delay.
-pub struct RecordingTime {
-    sleeps: Mutex<Vec<Duration>>,
-}
-
-impl RecordingTime {
-    /// Creates an empty recording clock.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            sleeps: Mutex::new(Vec::new()),
-        }
-    }
-
-    /// Returns every recorded delay in request order.
-    #[must_use]
-    pub fn sleeps(&self) -> Vec<Duration> {
-        self.sleeps
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-}
-
-impl ModelTimePort for RecordingTime {
-    fn now(&self) -> TimestampDto {
-        time(2)
-    }
-
-    fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
-        self.sleeps
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(duration);
         Box::pin(future::ready(()))
     }
 }
