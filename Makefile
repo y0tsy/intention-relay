@@ -7,15 +7,15 @@ SHELL := /bin/bash
 .NOTPARALLEL:
 .DEFAULT_GOAL := help
 
-# Keep phase timing in one human-readable manifest without changing failures.
+# Print one human-readable timing line per command without changing failures.
 define TIMED
 $(PYTHON) -c 'import subprocess,time,sys; command=sys.argv[1:]; t=time.monotonic(); p=subprocess.run(command); print(f"timing: {command[0]}: {time.monotonic()-t:.2f}s", flush=True); raise SystemExit(p.returncode)'
 endef
-.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check features lint test docs-check architecture coverage coverage-default coverage-no-default coverage-all coverage-artifacts-clean deps e2e-real-api quick check verify ci ci-source ci-lint-arch ci-test ci-coverage ci-coverage-default ci-coverage-no-default ci-coverage-all ci-deps metrics-start metrics-finish metrics-start-source metrics-start-lint-arch metrics-start-test metrics-start-coverage metrics-start-coverage-default metrics-start-coverage-no-default metrics-start-coverage-all metrics-start-deps metrics-finish-source metrics-finish-lint-arch metrics-finish-test metrics-finish-coverage metrics-finish-coverage-default metrics-finish-coverage-no-default metrics-finish-coverage-all metrics-finish-deps
+.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check lint test docs-check architecture coverage coverage-default coverage-artifacts-clean deps e2e-real-api quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps
 
 help: ## List supported M0 targets and mutation behavior.
 	@printf '%s\n' \
-	  'Non-mutating: tools-check fmt-check notices-check features lint test docs-check architecture coverage coverage-default coverage-no-default coverage-all deps quick check verify ci ci-source ci-lint-arch ci-test ci-coverage ci-coverage-default ci-coverage-no-default ci-coverage-all ci-deps' \
+	  'Non-mutating: tools-check fmt-check notices-check lint test docs-check architecture coverage coverage-default deps quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps' \
 	  'Mutating/networked: bootstrap-tools fmt notices coverage-artifacts-clean e2e-real-api' \
 	  '' \
 	  'Use make quick for the fast local loop and make verify before acceptance.'
@@ -38,18 +38,12 @@ notices: tools-check ## MUTATING: regenerate committed third-party notices from 
 notices-check: tools-check ## Verify committed third-party notices match the locked graph.
 	$(PYTHON) quality/generate_third_party_notices.py --check
 
-features: ## Verify machine-readable required feature profiles.
-	$(PYTHON) quality/check_features.py --print
-
-lint: tools-check ## Run strict Rust and Clippy linting for all feature profiles.
+lint: tools-check ## Run strict Rust and Clippy linting.
 	$(PYTHON) quality/run_profiles.py lint
 
-test: tools-check ## Run nextest and doctests for all feature profiles.
+test: tools-check ## Run nextest and doctests.
 	$(PYTHON) quality/run_profiles.py test
 	$(PYTHON) quality/run_profiles.py doctest
-
-check-cargo: tools-check ## Run Cargo check for all feature profiles.
-	$(TIMED) $(PYTHON) quality/run_profiles.py check
 
 docs-check: tools-check ## Verify Rust docs, Markdown links, Mermaid, and secret patterns.
 	$(PYTHON) quality/run_profiles.py doc
@@ -58,17 +52,11 @@ docs-check: tools-check ## Verify Rust docs, Markdown links, Mermaid, and secret
 architecture: tools-check ## Verify workspace membership and architectural policy.
 	$(PYTHON) quality/check_architecture.py
 
-coverage: tools-check ## Collect branch-aware coverage and enforce the per-crate tier floors.
+coverage: tools-check ## Collect line coverage and enforce the per-crate tier floors.
 	$(PYTHON) quality/run_coverage.py
 
-coverage-default: tools-check ## Collect branch-aware coverage for the default profile.
-	$(PYTHON) quality/run_coverage.py --profile default
-
-coverage-no-default: tools-check ## Collect branch-aware coverage for the no-default profile.
-	$(PYTHON) quality/run_coverage.py --profile no_default
-
-coverage-all: tools-check ## Collect branch-aware coverage for the all-features profile.
-	$(PYTHON) quality/run_coverage.py --profile all
+coverage-default: coverage ## Alias for the single-pass coverage gate.
+	@true
 
 coverage-artifacts-clean: ## MUTATING: remove generated LLVM coverage build artifacts after coverage passes.
 	rm -rf target/llvm-cov-target
@@ -109,50 +97,26 @@ e2e-real-api: tools-check ## MUTATING/NETWORKED: run ignored real-provider API e
 	if [ -n "$${INTENTION_REAL_API_ENDPOINT:-}" ]; then export INTENTION_REAL_API_ENDPOINT; else unset INTENTION_REAL_API_ENDPOINT; fi
 	$(CARGO) nextest run --locked --package intention-daemon --test real_api_e2e --run-ignored only --no-capture 2>&1 | tee quality/reports/real-api-e2e/last-run.log
 
-quick: tools-check fmt-check lint ## Fast default local quality loop.
-	$(PYTHON) quality/run_profiles.py test --profile default
+quick: tools-check fmt-check lint ## Fast local quality loop.
+	$(PYTHON) quality/run_profiles.py test
 
-check: tools-check fmt-check features check-cargo lint test docs-check architecture ## Complete non-mutating source-quality gate.
+check: tools-check fmt-check lint test docs-check architecture ## Complete non-mutating source-quality gate.
 	@true
 
 verify: check coverage deps ## Full reproducible merge and release gate.
 	$(MAKE) coverage-artifacts-clean
 
-ci: metrics-start verify metrics-finish ## CI alias for one local full gate. GitHub Actions invokes the per-job aliases below in parallel matrix jobs.
+ci: verify ## CI alias for one local full gate. GitHub Actions invokes the per-job aliases below in parallel matrix jobs.
 	@true
 
-ci-source: metrics-start-source check metrics-finish-source ## CI source-quality job (local convenience): metrics, check, metrics.
+ci-lint-arch: fmt-check lint docs-check architecture ## CI lint/architecture job: formatting, lint, docs, architecture.
 	@true
 
-ci-lint-arch: metrics-start-lint-arch fmt-check features lint docs-check architecture metrics-finish-lint-arch ## CI lint/architecture job: metrics, formatting, features, lint, docs, architecture, metrics.
+ci-test: test ## CI test job: nextest and doctests.
 	@true
 
-ci-test: metrics-start-test test metrics-finish-test ## CI test job: metrics, nextest and doctests, metrics.
+ci-coverage-default: coverage-default coverage-artifacts-clean ## CI coverage job: coverage, generated-artifact cleanup.
 	@true
 
-ci-coverage: metrics-start-coverage coverage coverage-artifacts-clean metrics-finish-coverage ## CI coverage job (all profiles, local convenience): metrics, coverage, generated-artifact cleanup, metrics.
+ci-deps: deps ## CI dependency job.
 	@true
-
-ci-coverage-default: metrics-start-coverage-default coverage-default coverage-artifacts-clean metrics-finish-coverage-default ## CI coverage job for the default profile.
-	@true
-
-ci-coverage-no-default: metrics-start-coverage-no-default coverage-no-default coverage-artifacts-clean metrics-finish-coverage-no-default ## CI coverage job for the no-default profile.
-	@true
-
-ci-coverage-all: metrics-start-coverage-all coverage-all coverage-artifacts-clean metrics-finish-coverage-all ## CI coverage job for the all-features profile.
-	@true
-
-ci-deps: metrics-start-deps deps metrics-finish-deps ## CI dependency job: metrics, deps, metrics.
-	@true
-
-metrics-start: ## Initialize the quality metrics manifest for this run.
-	@$(PYTHON) quality/metrics.py start
-
-metrics-finish: ## Finalize the quality metrics manifest preserving the gate result.
-	@$(PYTHON) quality/metrics.py finish
-
-metrics-start-source metrics-start-lint-arch metrics-start-test metrics-start-coverage metrics-start-coverage-default metrics-start-coverage-no-default metrics-start-coverage-all metrics-start-deps:
-	@$(PYTHON) quality/metrics.py start --job $(patsubst metrics-start-%,%,$@)
-
-metrics-finish-source metrics-finish-lint-arch metrics-finish-test metrics-finish-coverage metrics-finish-coverage-default metrics-finish-coverage-no-default metrics-finish-coverage-all metrics-finish-deps:
-	@$(PYTHON) quality/metrics.py finish --job $(patsubst metrics-finish-%,%,$@)

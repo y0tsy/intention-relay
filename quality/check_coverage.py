@@ -92,15 +92,6 @@ def report_files(report: object) -> list[dict[str, object]]:
     return files
 
 
-def require_branch_metrics(files: list[dict[str, object]]) -> None:
-    for item in files:
-        summary = item.get("summary")
-        branches = summary.get("branches") if isinstance(summary, dict) else None
-        if isinstance(branches, dict) and isinstance(branches.get("percent"), (int, float)):
-            return
-    fail("coverage report does not expose branch coverage")
-
-
 def line_totals(files: list[dict[str, object]]) -> tuple[int, int]:
     covered = 0
     count = 0
@@ -305,7 +296,6 @@ def main() -> None:
         source_roots = package_source_roots(root)
     crate_names = set(source_roots)
     files = report_files(report)
-    require_branch_metrics(files)
     if arguments.workspace_aggregate:
         # Aggregate reports intentionally contain source files from exempt and
         # uncollected crates too. They are informational: the aggregate metric

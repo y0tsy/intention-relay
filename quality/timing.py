@@ -10,49 +10,9 @@ from pathlib import Path
 import shlex
 import os
 import subprocess
-import datetime
 
 REPORTS = Path(__file__).resolve().parent / "reports"
 EVENTS = REPORTS / "quality-run.events.jsonl"
-MANIFEST = REPORTS / "quality-run.json"
-
-
-def run_manifest() -> dict[str, object]:
-    """Return one mutable manifest with run identity and current records."""
-    try:
-        with MANIFEST.open(encoding="utf-8") as stream:
-            return json.load(stream)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {
-            "schema_version": 1,
-            "run_id": os.environ.get("QUALITY_METRICS_RUN_ID", "local"),
-            "started_at": None,
-            "finished_at": None,
-            "status": "in_progress",
-            "commands": [],
-        }
-
-
-def load_events() -> list[dict[str, object]]:
-    """Read previously recorded events for the current run."""
-    try:
-        with EVENTS.open(encoding="utf-8") as stream:
-            return [json.loads(line) for line in stream if line.strip()]
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-
-
-def save_manifest(status: str = "passed") -> None:
-    """Write the final human-readable manifest atomically."""
-    manifest = run_manifest()
-    manifest["finished_at"] = datetime.datetime.now(
-        datetime.timezone.utc
-    ).isoformat()
-    manifest["status"] = status
-    manifest["commands"] = load_events()
-    temporary = MANIFEST.with_suffix(".tmp")
-    temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
-    temporary.replace(MANIFEST)
 
 
 def _safe_command(command: str) -> str:

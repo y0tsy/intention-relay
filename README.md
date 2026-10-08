@@ -52,9 +52,9 @@ of each.
 
 | Milestone | Status | Scope |
 | --- | --- | --- |
-| M0 Quality foundation | Closed | Reproducible Makefile-orchestrated quality pipeline (format, lint, feature profiles, nextest, docs, architecture, coverage, supply-chain gates) with pinned tools and a metrics manifest. |
+| M0 Quality foundation | Closed | Reproducible Makefile-orchestrated quality pipeline (format, lint, nextest, docs, architecture, coverage, supply-chain gates) with pinned tools. |
 | M1 Contracts, configuration, workspace skeleton | Closed | Tier-A crate boundaries (`intention-proto`, `intention-domain`, `intention-config`), DTO-first policy, TOML config with redacted projections, compile-only skeletons for every later crate. |
-| M1+ Quality policy hardening | Closed | Machine-readable policies (`quality/*.toml`) enforce workspace dependency graphs, executable test targets, public-API surface, coverage tiers, and feature profiles. |
+| M1+ Quality policy hardening | Closed | Machine-readable policies (`quality/*.toml`) enforce workspace dependency graphs, executable test targets, public-API surface, and coverage tiers. |
 | M2 Local protocol, client, daemon bootstrap | Closed | Private local IPC, hello/negotiation, correlated request/response codec, shared bootstrap client with startup lock and readiness polling, in-memory fixture composition, minimal TUI proof adapter. |
 | M3 SQLite sessions, transcript, queue | Closed | Durable SQLite-backed sessions, runs, turns, and transcript rows; turn queueing; canonical credential-free config revisions; recovery-before-ready. |
 | M4 Model contract, providers, one streaming run | Closed | Provider-neutral model contracts and validated stream facts; private OpenRouter and generic Chat Completions drivers; durable model evidence in the transcript; one daemon-owned streaming run with reconnect to current state and run-scoped delivery. |
@@ -221,14 +221,14 @@ quick` while iterating and run `make verify` before acceptance.
 | Command | Purpose |
 | --- | --- |
 | `make bootstrap-tools` | Mutating/networked: install exact pinned toolchains and quality tools. |
-| `make quick` | Fast local loop: tools check, `fmt-check`, lint, default-profile tests. |
-| `make check` | Complete non-mutating source gate: format, features, `check-cargo`, lint, tests/doctests, docs, architecture. |
-| `make docs-check` | Rustdoc across feature profiles, then Markdown link/Mermaid/secret-pattern validation. |
-| `make coverage` | Branch-aware coverage for all profiles, enforcing each collected crate's declared tier floor (see [quality/coverage.toml](quality/coverage.toml)). |
+| `make quick` | Fast local loop: tools check, `fmt-check`, lint, tests. |
+| `make check` | Complete non-mutating source gate: format, lint, tests/doctests, docs, architecture. |
+| `make docs-check` | Rustdoc, then Markdown link/Mermaid/secret-pattern validation. |
+| `make coverage` | Line coverage, enforcing each collected crate's declared tier floor (see [quality/coverage.toml](quality/coverage.toml)). |
 | `make verify` | Full acceptance gate: `check` plus coverage and dependency gates; removes only generated LLVM coverage artifacts. |
 | `make deps` | Supply-chain gates: deny, audit, outdated, machete, udeps, notices check. |
 | `make notices` / `make notices-check` | Regenerate / verify [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) against the locked graph. |
-| `make ci` | Local alias for the full gate; GitHub Actions runs the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default|no-default|all`, `ci-deps`) in parallel. |
+| `make ci` | Local alias for the full gate; GitHub Actions runs the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default`, `ci-deps`) in parallel. |
 
 `make verify` requires pinned tools, the committed lockfile, and performs no
 hidden dependency or tool installation. See
@@ -242,10 +242,9 @@ The blocking workflow is
 and pull requests to `main`:
 
 - `lint-arch` and `test` jobs on `ubuntu-24.04` and `windows-2025`;
-- `coverage-default`, `coverage-no-default`, `coverage-all`, and `deps` jobs on
-  `ubuntu-24.04`;
+- `coverage-default` and `deps` jobs on `ubuntu-24.04`;
 - pinned toolchains and per-job tool scopes, rust-cache, `mold` on Linux,
-  sccache for coverage builds, and uploaded quality reports/metrics.
+  sccache for coverage builds, and uploaded quality reports.
 
 Two supporting workflows are not part of the blocking gate: a weekly cache
 cleanup ([cache-cleanup.yml](.github/workflows/cache-cleanup.yml)) and a

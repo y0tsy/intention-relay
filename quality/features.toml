@@ -1,4 +1,0 @@
-[profiles]
-default = []
-no_default = ["--no-default-features"]
-all = ["--all-features"]

@@ -3,8 +3,8 @@ phase = "slice15"
 
 # Line-coverage floors. [crate_tiers] assigns every active production crate and
 # both presentation adapters to exactly one tier; the runner collects every
-# crate whose tier is above zero, with one isolated Cargo package invocation per
-# profile, and exempt crates stay outside collection and every aggregate.
+# crate whose tier is above zero with one isolated line-only Cargo package
+# invocation, and exempt crates stay outside collection and every aggregate.
 [tiers]
 core = 75.0
 standard = 60.0

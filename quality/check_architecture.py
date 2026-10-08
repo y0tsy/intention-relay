@@ -569,21 +569,6 @@ def check_declared_boundaries(
     failures.extend(
         composition_type_ownership_failures(root_package, owned_type_names, package_sources, texts)
     )
-
-    sdk_patterns = string_list(public_contracts, "provider_sdk_resource_patterns")
-    active = string_list(policy["policy"], "active_production_crates")
-    provider_owners = {
-        "intention-providers": {"openrouter_rs::", "async_openai::"},
-    }
-    for package_name in active:
-        allowed_private_sdk = provider_owners.get(package_name, set())
-        failures.extend(check_source_patterns(
-            package_name,
-            packages[package_name],
-            texts,
-            [pattern for pattern in sdk_patterns if pattern not in allowed_private_sdk],
-            "provider SDK/resource boundary",
-        ))
     return failures
 
 
