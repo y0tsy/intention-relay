@@ -82,10 +82,10 @@ and every retrospective change to M0-M5 code required by those directions activa
 contract, transaction, and outcome test. Each direction's activating specification is accepted at the start of the
 milestone that implements it.
 
--  **Slice 1 — Contracts and versions — activated.** The typed serde JSON contract and version foundation: the JSON-RPC
-2.0 local wire at exact protocol version 1.0, its method/notification table, and the removed capability plane
-([architecture 03](03-daemon-transport-and-adapters.md)); explicit DTO schema versions with exact-equality
-comparison; SQLite as one live storage schema created directly on open
+-  **Slice 1 — Contracts and versions — activated.** The typed serde JSON contract and version foundation, whose
+JSON-RPC 2.0 local wire, method/notification table, hello handshake, and per-payload version fields were later
+collapsed into one typed local wire ([architecture 03](03-daemon-transport-and-adapters.md)); explicit DTO schema
+versions with exact-equality comparison; SQLite as one live storage schema created directly on open
 ([architecture 00](00-principles-and-scope.md)); and crate ownership and coverage declarations
 under [Quality Gates and Makefile](12-quality-gates-and-makefile.md) for every activated family. The
 former contract ledger, `run-execution-meaning-v4` field tables, capability families, `typed-tlv-v1`/SHA-256 tags, and
@@ -106,10 +106,11 @@ replaced by the eight current-state tables (`projects`, `workspace_roots`, `sess
 newtypes (`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`,
 `IdempotencyKey`), with model steps and tool groups addressed by plain indices and mutating operations by
 `IdempotencyKey`; every state change commits in one SQLite transaction and the daemon publishes `run.frame`
-notifications built from the committed values; the single live protocol version is 1.0 with no cursors, and a
-re-subscribing client receives current run state and bounded recent messages, then continues live; `intention-client`
-is an asynchronous client with its blocking API removed that covers connect/health, session snapshots, run
-subscriptions, and the command surface, and whose `intention-tui` proof adapter is migrated mechanically; the daemon
+notifications built from the committed values; the single live wire version is a byte in the endpoint name with no
+cursors, and a re-subscribing client receives current run state and bounded recent messages, then continues live;
+`intention-client` is an asynchronous client with its blocking API removed that covers connect/health, session
+snapshots, run subscriptions, and the command surface, and whose `intention-tui` proof adapter is migrated
+mechanically; the daemon
 end-to-end suite drives that client (`client_e2e`) instead of the low-level transport; the tool cycle is one direct
 sequence of identity check, durable call row, workspace binding, dispatch, and durable terminal row; the ten-production-crate consolidation and the removal of the composition facade landed, so
 the daemon host calls the engine directly; and the single storage schema is created on open under one integer stamp,
@@ -290,7 +291,7 @@ coordination, and stale-listener recovery;
 include/import policy, and non-Unix configuration permissions;
 - the post-M4 evidence obligations of architecture 10 for the remaining post-M4 packages; and
 -  the removal-program evidence anchor for the single-version policy across every versioned system
-([architecture 00](00-principles-and-scope.md); EVD-066).
+([architecture 00](00-principles-and-scope.md)).
 
 ### Tests first
 
@@ -360,7 +361,7 @@ publication;
 verify`, and Linux/Windows CI;
 -  no two capability paths or registries exist, and supervision is topology only, never a second runtime or sandbox;
 - M3/M4 bytes and retained RLM history remain unchanged;
-- the milestone's activation evidence is recorded (EVD-068).
+- the milestone's activation evidence is recorded.
 
 ## Milestone 12: Capabilities and context — MCP, kernel, and Skills/context
 
@@ -418,7 +419,7 @@ never truncated or stringified;
 verify`, and Linux/Windows CI, and the kernel families' typed serde JSON contracts are declared in the same change;
 -  no second runtime, registry, persistence authority, or sandbox is introduced, and no module, capability, or context
 record gains authority;
-- the milestone's activation evidence is recorded (EVD-069).
+- the milestone's activation evidence is recorded.
 
 ## Exit criteria for the roadmap
 

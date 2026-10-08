@@ -63,10 +63,11 @@ The following are mandatory candidates for automated architecture tests:
 | Secret safety | Secret-bearing config cannot appear in public DTO/log/error/snapshot types. |
 
 The mandatory tooling is fixed by [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md). Architecture tests
-are executed through `make architecture`; the complete reproducible acceptance gate is `make verify` and CI invokes
-`make ci` only. `make architecture` also contains isolated expected-failure fixtures for adapter isolation, protocol
-isolation, composition-only concrete selection, provider-SDK public-contract leakage, policy-aligned workspace cycles,
-and executable Cargo test-target declarations.
+are executed through `make architecture`; the complete reproducible acceptance gate is `make verify`, `make ci` is the
+local single-pass alias, while CI invokes the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default`,
+`ci-deps`) as parallel matrix jobs. `make architecture` also contains isolated expected-failure fixtures for adapter
+isolation, protocol isolation, composition-only concrete selection, provider-SDK public-contract leakage,
+policy-aligned workspace cycles, and executable Cargo test-target declarations.
 
 ## Minimum test portfolio by crate
 

@@ -245,7 +245,7 @@ records, revisions, and cards carry identity and exact revision, and a list bind
 below, so catalog state has no durable order. Current cards and catalog caches accelerate queries but never reconstruct
 historical use.
 
-Skill operations are typed JSON-RPC 2.0 methods (card-only listing, exact inspect/disclosure, user invocation, lifecycle
+Skill operations are typed requests (card-only listing, exact inspect/disclosure, user invocation, lifecycle
 commands, and durable skill audit; [architecture
 03](03-daemon-transport-and-adapters.md)). A list captures one catalog revision, uses stable ordering and an opaque
 token, and returns `has_more`; a malformed, cross-scope, or stale token fails with a typed conflict.
@@ -347,7 +347,7 @@ connection, process, or unfinished effect. Child context is independent and non-
 
 MCP, bridge, and kernel context is safe projection only. Context cannot discover or invoke MCP, issue a bridge
 grant/operation, create a kernel epoch, restore a checkpoint, or cause a host request. Future delivery uses typed
-JSON-RPC 2.0 methods ([architecture 03](03-daemon-transport-and-adapters.md)): correlated, read-only current-state
+requests ([architecture 03](03-daemon-transport-and-adapters.md)): correlated, read-only current-state
 projections. Reconnect re-reads current state; there is no event tail, cursor, or resynchronization. Reconnection or
 audit cannot create a Goal, disclose memory,
 recompact, execute a model step, invoke a tool, start a child, issue authority, or perform external work. Partial

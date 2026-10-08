@@ -19,9 +19,12 @@ ModelExecutionDriver
 ```
 
 M4 defines text-only `ModelMessageDto` context, an optional system context, and `ModelStreamLifecycleDto`.
-Providers must emit `Started` first, then zero or more text/reasoning/tool/usage events,
-followed by exactly one terminal `Finished` event. A second start, a fact before start or after finish, duplicate usage,
-or a second finish fails validation. `ModelRunExecutionService` consumes an injected stream, requires exact
+Every provider stream starts with `Started`, then zero or more text/reasoning/tool/usage events, followed by exactly one
+terminal `Finished` event. The crate-private `stream` module (`crates/intention-providers/src/stream.rs`) owns that one
+normalizing stream (the pending queue, the seeded start, the translation order, and the terminal fact), and each adapter
+implements only the `EventTranslator` seam over its own native items. A second start, a fact before start or after
+finish, duplicate usage, or a second finish fails validation. `ModelRunExecutionService` consumes an injected stream,
+requires exact
 persisted/current safe-selection equality before execution, owns cancellation late-event suppression, deadlines, and
 retries, and commits only current-state rows (assistant transcript rows, run status, usage, finish, and failure) through
 the DTO-only storage contract. Its `ModelTimePort` exposes fresh
@@ -108,10 +111,11 @@ typed wire. It owns:
 - documented capability limitations; and
 - normalized failures.
 
-The adapters single-source every normalization rule that does not depend on their SDK. The crate-private `mapping`
-module owns the wire-role class (a daemon-synthesized notice is user-role context), native token counters to validated
-usage, complete tool-call assembly with the locally allocated canonical identity, the tool-result identity requirement,
-tool-parameter decoding, and the infallible normalized error tail (retry decision to safe code).
+The adapters single-source every normalization rule that does not depend on their SDK: both drive the one normalizing
+`stream` module above, and the crate-private `mapping` module owns the wire-role class (a daemon-synthesized notice is
+user-role context), native token counters to validated usage, complete tool-call assembly with the locally allocated
+canonical identity, the tool-result identity requirement, tool-parameter decoding, and the infallible normalized error
+tail (retry decision to safe code).
 Driver-specific rules stay with their adapter: OpenRouter maps its SDK finish-reason enum, the generic adapter maps its
 wire finish-reason strings, OpenRouter delegates retryability to the SDK classifier, the generic adapter classifies HTTP
 status ranges with a provider `type` fallback, and each adapter owns its native wire shapes and error codes.

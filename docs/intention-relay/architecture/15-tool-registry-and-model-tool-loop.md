@@ -338,7 +338,7 @@ and its notice, and the old call is never retried.
 
 ## Compatibility and protocol boundary
 
-`model_tool_loop_v1` is a tool/model capability delivered through JSON-RPC 2.0 run subscriptions
+`model_tool_loop_v1` is a tool/model capability delivered through typed run subscriptions
 ([architecture 03](03-daemon-transport-and-adapters.md)): the correlated current run snapshot, then live `run.frame`
 notifications. A client that cannot represent loop content
 receives a typed error without partial state. Snapshots stay compact and safe; exact wire tags and storage schema remain

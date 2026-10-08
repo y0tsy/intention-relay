@@ -282,7 +282,7 @@ provider-built-in tools are excluded. Closed effort/mode/summary values are capa
 only when frozen capability selection declares `model_tool_loop_v1`; otherwise unexpected calls fail safely before a
 local tool action.
 
-Future provider/reasoning delivery is history-before-live and rides the single JSON-RPC 2.0 connection without
+Future provider/reasoning delivery is history-before-live and rides the single typed local connection with no
 capability or family negotiation ([architecture 03](03-daemon-transport-and-adapters.md)). It exposes only safe
 typed projections, never raw provider bytes, native payloads, remote IDs, credentials, or private resources; a peer that
 cannot decode a typed frame fails closed.
@@ -363,7 +363,7 @@ provider work. Historical M4 runs remain readable with no synthetic manifests.
 `NotReported`, never a zero count. Reconnect, inheritance, and tree aggregation must not charge or count the
 same source `RunId` twice. There is no price, currency, or inferred cost.
 
-Initial reasoning delivery is an unconditional part of the ordinary run subscription: the correlated `run.subscribe`
+Initial reasoning delivery is an unconditional part of the ordinary run subscription: the correlated `SubscribeRun`
 current-state snapshot carries the committed `messages` rows (assistant text and whole reasoning), then the daemon
 streams live `run.frame` notifications with `kind` `content` or `status`, so a client never receives live reasoning
 before the initial snapshot completes. The snapshot exposes reasoning only in the same ordinary run-subscription

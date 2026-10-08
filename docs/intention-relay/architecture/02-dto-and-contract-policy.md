@@ -125,7 +125,8 @@ client re-reads current state and continues live; there is no event tail, resync
 Contracts are typed serde JSON DTOs. Public DTO deserialization is the structural validation boundary: required fields,
 field types, and closed enum variants are established on decode and cannot be bypassed by a decoder. Semantic invariants
 are enforced at the boundary that owns them and again at admission before any effect, because an admitting authority
-cannot assume the producer decoded through the same boundary.
+cannot assume the producer decoded through the same boundary. The in-process model DTOs of `intention-providers` are the
+recorded exception: they declare no decoder, and their typed constructors are their validation boundary.
 
 There is no binary canonical form: the wire and domain contracts are the serde JSON DTOs themselves, and no tag
 registry, canonical digest, or identity layer exists. Canonicalization is introduced only when a first real

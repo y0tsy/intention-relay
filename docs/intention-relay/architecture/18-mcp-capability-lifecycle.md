@@ -206,7 +206,7 @@ never a live process, connection, credential handle, accumulated selection, invo
 controls cannot invoke, widen, or inspect private resources, and an interrupted child MCP call's partial result remains
 child-local.
 
-Future MCP projections use typed JSON-RPC 2.0 methods ([architecture 03](03-daemon-transport-and-adapters.md))
+Future MCP projections use typed requests ([architecture 03](03-daemon-transport-and-adapters.md))
 layered with the `model_tool_loop_v1` descriptor/model
 capability: live notifications through one post-commit gate; reconnect re-reads current state, and there is no event
 tail, cursor, or resynchronization. No caller receives a partial ordinary snapshot. M3/M4 and retained bounded-MCP/RLM

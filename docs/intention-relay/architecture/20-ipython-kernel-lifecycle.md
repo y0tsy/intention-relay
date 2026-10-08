@@ -224,7 +224,7 @@ unfinished effect; a child may receive only a separately selected verified check
 independent, and child-local. Kernel-originated MCP work still uses the fixed `mcp` `ToolId` through
 architectures 19, 15, and 18; checkpoints never contain live MCP state and later runs reacquire capabilities.
 
-Future kernel delivery uses typed JSON-RPC 2.0 methods ([architecture 03](03-daemon-transport-and-adapters.md)):
+Future kernel delivery uses typed requests ([architecture 03](03-daemon-transport-and-adapters.md)):
 correlated results followed by live notifications.
 Reconnect re-reads current state; there is no event tail, cursor, or resynchronization. Delivery is read-only: it cannot
 create a kernel, restore a namespace, execute a cell, issue a grant, repeat a host request, start a child, or invoke

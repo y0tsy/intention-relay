@@ -64,11 +64,11 @@ expired grant but must obtain a newly issued grant before invoking a tool for a 
 
 ## Attachment, operation identity, and admission
 
-Bridge attachment is a future additive surface on the repository's JSON-RPC 2.0 local protocol ([architecture
+Bridge attachment is a future additive surface on the repository's typed local wire ([architecture
 03](03-daemon-transport-and-adapters.md)), reusing the
-version-only hello, the existing private per-user Unix-socket/Windows-named-pipe endpoint, the **1 MiB message bound**,
-and the OS-user access boundary; it requires `model_tool_loop_v1` descriptor/model support whenever the peer receives
-future tool-loop facts. An unsupported request fails with a typed error before a partial bridge result or live
+existing private per-user Unix-socket/Windows-named-pipe endpoint with its live wire-version byte, the **1 MiB message
+bound**, and the OS-user access boundary; it requires `model_tool_loop_v1` descriptor/model support whenever the peer
+receives future tool-loop facts. An unsupported request fails with a typed error before a partial bridge result or live
 notification is delivered. There is no second local listener, TCP/HTTP endpoint, remote attachment,
 credential, sandbox, or daemon.
 
@@ -118,7 +118,7 @@ sequenceDiagram
   participant D as Durable state
   participant T as Tool owner
 
-  F->>B: Attach over JSON-RPC
+  F->>B: Attach over the typed wire
   B->>D: Reread active context
   D-->>B: Ephemeral grant
   F->>B: Operation ID and typed call

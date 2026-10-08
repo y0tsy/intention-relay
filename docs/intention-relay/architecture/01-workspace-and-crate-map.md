@@ -33,7 +33,7 @@ and tool-result rows rather than in typed envelopes or per-run cursors. `intenti
 provider-neutral `intention-providers` contract only for its injected base execution service; it neither selects a concrete
 provider nor exposes an async runtime resource.
 -  M4 activates the daemon host as a private composition consumer. `intention-daemon` may depend on the composition
-facade plus the DTO/application/runtime/model/protocol/transport/type crates needed to host selected execution and
+root plus the DTO/application/runtime/model/protocol/transport/type crates needed to host selected execution and
 streaming, and on private Tokio/future support. It never depends directly on a concrete provider or storage
 implementation, selects no provider, and exposes no provider SDK, credential, Tokio, or storage resource in its public
 contract.
@@ -61,7 +61,7 @@ The M1-M5 activation notes are historical records: the coverage policy is now th
 | `intention-plans` | Plan artifacts, hidden frontmatter, Plan/Build policy. | Tools, storage contracts, domain, types. |
 | `intention-transport` | Socket/pipe framing, server/client protocol, subscriptions. | Protocol, types. |
 | `intention-client` | Bootstrap, connection, dispatch, subscription, reconnect. | Protocol, transport, types. |
-| `intention-daemon` | Composition root library (factories, dependency wiring, and the durable `DaemonApplicationFacade`) plus daemon host and binary. | All selected concrete implementations. |
+| `intention-daemon` | One durable composition holder (`DaemonApplicationFacade`) that selects and connects the configuration snapshot, SQLite storage, and the provider driver, plus the daemon host and binary. | All selected concrete implementations. |
 | `intention-tauri` | Tauri bootstrap and native bridge. | Client, protocol, presentation DTO mapping. |
 | `intention-tui` | TUI and REPL presentation adapters. | Client, protocol, presentation crates. |
 
@@ -105,20 +105,21 @@ flowchart BT
 ## Slice 1.5 crate map (activated)
 
 Slice 1.5 collapsed the workspace to ten production crates, shown below together with what each absorbed. The table
-above is the live crate map, and the exact permitted edges plus per-crate test targets and coverage tiers are declared
+below is the live crate map, and the exact permitted edges plus per-crate test targets and coverage tiers are declared
 by `quality/architecture.toml` under phase `slice15`.
 
 | Target crate | Absorbs | Owns |
 | --- | --- | --- |
-| `intention-proto` | `intention-proto`, `intention-protocol` | Identity newtypes, shared value types, schema versions, the versioned public protocol DTOs, and their typed serde payloads. |
+| `intention-proto` | `intention-proto`, `intention-protocol` | Identity newtypes, shared value types, schema versions, the typed public protocol DTOs, and their typed serde payloads. |
 | `intention-domain` | `intention-domain` | Domain records, value validation, and invariants. |
 | `intention-config` | `intention-config` | TOML parsing, validation, resolved configuration, and credential-free snapshots. |
 | `intention-engine` | `intention-application`, `intention-runtime` | Commands, queries, semantic use-case workflows, deterministic lifecycle decisions, interruption handling, and recovery. |
 | `intention-tools` | `intention-tools`, `intention-workspace`, `intention-hooks` | Tool identity and contracts, WorkspaceRoot policy, and the cancellation-aware dispatch surface. |
 | `intention-providers` | `intention-model`, `intention-provider-openrouter`, `intention-provider-generic-chat` | The provider-neutral model contract and both concrete SDK translation adapters. |
 | `intention-storage` | `intention-storage`, `intention-storage-sqlite` | Repository contracts and the bundled SQLite single-schema implementation. |
-| `intention-transport` | `intention-transport` | Socket/pipe framing, the JSON-RPC server and client protocol, and subscriptions. |
+| `intention-transport` | `intention-transport` | Socket/pipe framing, the typed server/client wire, and subscriptions. |
 | `intention-client` | `intention-client` | Bootstrap, connection, dispatch, subscriptions, and reconnect, fully asynchronous and covering every protocol command and query. |
+| `intention-daemon` | `intention` (the composition facade library) | One composition holder that selects and connects configuration, SQLite storage, and the provider driver, plus the daemon host and binary. |
 
 Retained outside the ten: the adapter crates `intention-tui` and `intention-tauri`, the future skeleton crates
 `intention-vfr`, `intention-headroom`, and `intention-plans`, the non-production `intention-test-support` crate, and the
@@ -126,7 +127,7 @@ Retained outside the ten: the adapter crates `intention-tui` and `intention-taur
 
 Rules the target map fixes:
 
-- One composition location. The composition facade library disappears; `intention-daemon` is the only crate that selects
+- One composition location. The composition facade library is gone; `intention-daemon` is the only crate that selects
   concrete implementations and the only place that wires them, and the daemon host calls the engine directly.
 - Boundaries own serialization. Only types crossing the three physical boundaries carry wire attributes: the IPC wire
   (`intention-proto` payloads served by `intention-transport`), SQLite rows (`intention-storage`), and provider SDK
@@ -182,29 +183,29 @@ creation, pending-turn context joins, and recovery. It has no provider, tool, ti
 M3.
 -  `intention-test-support` is a non-production workspace crate. It owns credential-free fixture configuration, native
 temporary roots under `std::env::temp_dir()`, `TempDir`-backed durable databases, deterministic sessions, and bounded
-fixture listener orchestration. `intention-daemon` exposes only hidden `test-support` facade seams for an injected
+fixture listener orchestration. `intention-daemon` exposes only hidden `test-support` seams for an injected
 database and current-state inspection; `intention-daemon` exposes only a hidden one-connection dispatch seam.
 Release production APIs and the daemon binary expose no fixture mode.
 
 ## Composition rules
 
-`intention-daemon` creates and connects:
+`intention-daemon` is one crate with one composition holder plus the host. It creates and connects:
 
 - resolved TOML configuration;
-- SQLite storage implementation;
-- selected provider drivers;
-- the engine-owned tool dispatch path over the six core tool contracts;
-- application facade and runtime actor factories;
-- a daemon application facade that `intention-daemon` hosts over transport.
+- SQLite storage, opened and recovered before ready;
+- the one selected provider driver;
+- command admission serialization;
+- the host-owned per-run registry, single cancellation handle, and injected tool-execution port through which the
+engine runs its typed tool sequence over the six core tool contracts.
+
+The composition holder (`composition.rs`) selects and connects every concrete implementation, and the host (`lib.rs`)
+owns the listener, typed connection hosting, and the streaming run loop; no per-purpose `*_for_daemon` bridge surface
+exists, and the host reaches the composition holder through crate-private accessors. Composition selects concrete
+implementations; the binary owns process lifecycle.
 
 For M5, this is the ownership boundary for the six active tools, `WorkspaceRoot`, and the direct tool sequence.
-Base tools remain primitive implementations; application owns lifecycle/result persistence and publication, and the
+Base tools remain primitive implementations; the engine owns lifecycle/result persistence and publication, and the
 future plan, VFR, and Headroom owners attach as ordinary calls when activated, not as extension points.
-
-`intention-daemon` depends on this composition facade, never the reverse. Its M4 private host may consume
-DTO/application/runtime/model contracts to own the task registry, cancellation, and streaming transport loop, but it
-never imports or selects concrete provider/storage implementations. Composition selects concrete implementations; the
-binary owns process lifecycle and typed connection hosting.
 
 No other crate chooses a concrete SQLite driver, OpenRouter client, or adapter implementation by global construction.
 

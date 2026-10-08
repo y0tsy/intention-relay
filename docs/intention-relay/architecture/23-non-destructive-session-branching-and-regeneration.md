@@ -113,10 +113,10 @@ no depth, descendant-count, source-boundary rate, or base-snapshot size limit
 representation/protocol constraints where their owning field table requires them.
 
 The typed fork preview, fork, ordinary regeneration, tree page, rename, archive, and restore DTOs are exposed as
-ordinary JSON-RPC methods over the single local connection; the former `session_fork_v1` negotiated family and its
+ordinary typed requests over the single local connection; the former `session_fork_v1` negotiated family and its
 capability gate were removed under [architecture 03](03-daemon-transport-and-adapters.md). Tree reads are bounded
 immediate-child projections with stable continuation order. They are not tree-wide event streams. A peer that does not
-speak protocol 1.0 receives the typed version-mismatch error before any method is served.
+speak the live wire fails closed with the typed `stale_daemon_protocol` error before any request is served.
 
 ## Detailed protocol DTOs, field tables, and bounds
 

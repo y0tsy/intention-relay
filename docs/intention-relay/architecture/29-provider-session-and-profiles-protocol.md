@@ -76,7 +76,7 @@ resolution service belong to this not-activated layer; the fork wire commands re
 The profiles protocol serves paginated catalog reads, catalog status, session default query/command, safe
 per-turn and fork overrides, resolved-selection projections, and pending-removal accept/reject. It is not gated on the
 capability plane: the negotiated `provider_profiles_v1` capability mechanism is removed under [architecture
-03](03-daemon-transport-and-adapters.md), so the surface uses plain typed methods with no
+03](03-daemon-transport-and-adapters.md), so the surface uses plain typed requests with no
 capability or family gate. It does not imply live reload, configuration editing, profile testing, credential entry, or
 model discovery; configuration editing belongs to the [architecture 25](25-configuration-provider-control-plane.md)
 atomic reload contract and is not part of this surface. The daemon advertises and serves no `provider_profiles_v1`

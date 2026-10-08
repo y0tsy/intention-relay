@@ -9,8 +9,8 @@ implemented through the closed M0-M5 milestones, the M5+ retrospective stack
 (the no-backward-compatibility removal program, request-side tool
 advertisement, the opt-in live-provider channel, the same-run reasoning round
 trip, and the project script library for kernel cells) is merged, and the
-post-M5 foundation (Milestone 5+) is in progress with one of its six slices
-delivered. No user-facing UI or released product exists yet.
+post-M5 foundation (Milestone 5+) is in progress with two of its six slices
+activated. No user-facing UI or released product exists yet.
 
 Everything here is development-machine software: there are no deployed users,
 no externally persisted data, and no third-party consumers. Backward
@@ -30,8 +30,8 @@ compatibility is neither required nor in demand (see `AGENTS.md`).
 - **Model-driven runs with workspace tools.** Provider-neutral model drivers
   (OpenRouter and generic OpenAI-compatible Chat Completions) stream into a
   run loop that can call typed, `WorkspaceRoot`-bounded tools (`read`,
-  `write`, `edit`, `execute`, `glob`, `grep`) with deterministic typed hooks
-  and durable, redacted tool-result evidence.
+  `write`, `edit`, `execute`, `glob`, `grep`) with one deterministic typed
+  tool sequence and durable, redacted tool-result evidence.
 - **SQLite-first durable state.** One composition crate selects the SQLite
   adapter; the durable store is eight current-state tables (`projects`,
   `workspace_roots`, `sessions`, `runs`, `turns`, `messages`, `tool_results`,
@@ -55,11 +55,11 @@ of each.
 | M0 Quality foundation | Closed | Reproducible Makefile-orchestrated quality pipeline (format, lint, nextest, docs, architecture, coverage, supply-chain gates) with pinned tools. |
 | M1 Contracts, configuration, workspace skeleton | Closed | Tier-A crate boundaries (`intention-proto`, `intention-domain`, `intention-config`), DTO-first policy, TOML config with redacted projections, compile-only skeletons for every later crate. |
 | M1+ Quality policy hardening | Closed | Machine-readable policies (`quality/*.toml`) enforce workspace dependency graphs, executable test targets, public-API surface, and coverage tiers. |
-| M2 Local protocol, client, daemon bootstrap | Closed | Private local IPC, hello/negotiation, correlated request/response codec, shared bootstrap client with startup lock and readiness polling, in-memory fixture composition, minimal TUI proof adapter. |
+| M2 Local protocol, client, daemon bootstrap | Closed | Private local IPC, correlated request/response codec, shared bootstrap client with startup lock and readiness polling, in-memory fixture composition, minimal TUI proof adapter (the hello/version handshake was later replaced by one typed wire). |
 | M3 SQLite sessions, transcript, queue | Closed | Durable SQLite-backed sessions, runs, turns, and transcript rows; turn queueing; canonical credential-free config revisions; recovery-before-ready. |
 | M4 Model contract, providers, one streaming run | Closed | Provider-neutral model contracts and validated stream facts; private OpenRouter and generic Chat Completions drivers; durable model evidence in the transcript; one daemon-owned streaming run with reconnect to current state and run-scoped delivery. |
-| M5 Typed tools, WorkspaceRoot, hooks | Closed | Production model-tool loop hosted by the real daemon binary: six executable tools, fail-closed `WorkspaceRoot` resolution, deterministic typed hooks, durable and redacted tool-result evidence, daemon-host end-to-end tests on Linux and Windows. |
-| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (defined in the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md); the instruction sources slice is owned by [architecture 30](docs/intention-relay/architecture/30-instruction-sources-and-system-context.md)) delivered as six slices: 1) contracts and versions, 1.5) core simplification, 2) control plane, 3) Goal domain, 4) UI foundation, 5) instruction sources and system context. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slice 1.5 is not activated: it freezes a current-state core where the ten production crates stay, DTOs remain only at the IPC wire, SQLite, and provider-SDK boundaries, tool inputs and outputs are schema-validated JSON, identity reduces to eight newtypes, the event log, snapshots, cursors, and resync give way to the eight current-state tables written in one SQLite transaction per state change with publication from the committed values, the eight hook phases stay and are wired into the real cycle, protocol version stays 1.0, and `intention-client` becomes fully asynchronous. Slices 2-5 are not implemented. |
+| M5 Typed tools and workspace | Closed | Production model-tool loop hosted by the real daemon binary: six executable tools, fail-closed `WorkspaceRoot` resolution, one deterministic typed tool sequence, durable and redacted tool-result evidence, daemon-host end-to-end tests on Linux and Windows. |
+| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (defined in the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md); the instruction sources slice is owned by [architecture 30](docs/intention-relay/architecture/30-instruction-sources-and-system-context.md)) delivered as six slices: 1) contracts and versions, 1.5) core simplification, 2) control plane, 3) Goal domain, 4) UI foundation, 5) instruction sources and system context. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slice 1.5 is activated and its current-state core has landed on this branch: it froze a current-state core where the ten production crates stay, DTOs remain only at the IPC wire, SQLite, and provider-SDK boundaries, tool inputs and outputs are schema-validated JSON, identity reduces to eight newtypes, the event log, snapshots, cursors, and resync gave way to the eight current-state tables written in one SQLite transaction per state change with publication from the committed values, the typed hook plane was removed, hello/version negotiation gave way to one typed wire, and `intention-client` is fully asynchronous. Slices 2-5 are not implemented. |
 | M6-M9 | Planned | M6 Tauri bridge and primary desktop UI; M7 Plan/Build policies, physical plans, and Build Autopilot; M8 VFR and Headroom; M9 hardening and acceptance verification. See the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md). |
 
 Everything beyond M5 is roadmap direction recorded in
@@ -80,9 +80,9 @@ exempt at 0% and outside collection.
 
 | Crate | Responsibility |
 | --- | --- |
-| [intention-proto](crates/intention-proto) | Shared, dependency-light DTOs plus the versioned public local-protocol surface: validated identifiers, schema versions, safe errors, time, pagination, model/tool value DTOs, JSON-RPC 2.0 request/response envelopes over NDJSON, and the typed command/query/notification payloads (protocol owned by [architecture 03](docs/intention-relay/architecture/03-daemon-transport-and-adapters.md) and [architecture 02](docs/intention-relay/architecture/02-dto-and-contract-policy.md)). |
+| [intention-proto](crates/intention-proto) | Shared, dependency-light DTOs plus the typed public local-protocol surface: validated identifiers, schema versions, safe errors, time, pagination, model/tool value DTOs, the one typed request/result/reply wire over NDJSON, and the typed command/query/frame payloads (protocol owned by [architecture 03](docs/intention-relay/architecture/03-daemon-transport-and-adapters.md) and [architecture 02](docs/intention-relay/architecture/02-dto-and-contract-policy.md)). |
 | [intention-domain](crates/intention-domain) | Domain DTOs and value validation: commands/queries, run modes and statuses, transcript and tool-result projections. |
-| [intention-config](crates/intention-config) | Versioned TOML parsing, migration, validation, path selection, and credential-free public configuration projections. |
+| [intention-config](crates/intention-config) | Versioned TOML parsing, validation, path selection, and credential-free public configuration projections. |
 
 ### Durable storage and application core
 
@@ -97,17 +97,17 @@ exempt at 0% and outside collection.
 | --- | --- |
 | [intention-providers](crates/intention-providers) | Provider-neutral model contracts (messages, tool calls/results, validated stream facts) plus the OpenRouter and generic Chat Completions translation adapters; `openrouter-rs` and `async-openai` stay private implementation details. |
 
-### Tools, workspace, and hooks
+### Tools and workspace
 
 | Crate | Responsibility |
 | --- | --- |
-| [intention-tools](crates/intention-tools) | Tool registry and contracts with JSON Schema descriptors, the typed hook phases and dispatcher, and the `WorkspaceRoot` addressing anchor (owned by [architecture 05](docs/intention-relay/architecture/05-tools-workspace-and-hooks.md)). |
+| [intention-tools](crates/intention-tools) | Tool contracts with JSON Schema descriptors, the static six-tool spec match, and the `WorkspaceRoot` addressing anchor (owned by [architecture 05](docs/intention-relay/architecture/05-tools-workspace-and-hooks.md)). |
 
 ### Transport, client, and daemon (active)
 
 | Crate | Responsibility |
 | --- | --- |
-| [intention-transport](crates/intention-transport) | Private per-user IPC: Unix sockets / Windows named pipes, NDJSON JSON-RPC 2.0 framing (1 MiB message cap), and the hello handshake with exact protocol-version equality. |
+| [intention-transport](crates/intention-transport) | Private per-user IPC: Unix sockets / Windows named pipes, NDJSON framing of one typed message per line (1 MiB message cap), and the single live wire version carried in the endpoint name. |
 | [intention-client](crates/intention-client) | Shared bootstrap, dispatch, subscription, and reconnect client for adapters, with advisory startup lock and daemon launch. |
 | [intention-daemon](crates/intention-daemon) | Composition root (`DaemonApplicationFacade`, the only selector of SQLite and concrete drivers), daemon host library, and the thin `intention-daemon` binary (the only binary in the workspace). |
 
@@ -246,11 +246,13 @@ and pull requests to `main`:
 - pinned toolchains and per-job tool scopes, rust-cache, `mold` on Linux,
   sccache for coverage builds, and uploaded quality reports.
 
-Two supporting workflows are not part of the blocking gate: a weekly cache
-cleanup ([cache-cleanup.yml](.github/workflows/cache-cleanup.yml)) and a
+Three supporting workflows are not part of the blocking gate: a weekly cache
+cleanup ([cache-cleanup.yml](.github/workflows/cache-cleanup.yml)), a
 manual, observational cargo `--jobs` build benchmark
-([quality-benchmark.yml](.github/workflows/quality-benchmark.yml)). Dependabot
-is enabled for dependency updates
+([quality-benchmark.yml](.github/workflows/quality-benchmark.yml)), and a
+manual live-provider end-to-end run
+([real-api-e2e.yml](.github/workflows/real-api-e2e.yml)). Dependabot is
+enabled for dependency updates
 ([dependabot.yml](.github/dependabot.yml)).
 
 ## Documentation
@@ -281,11 +283,11 @@ What `main` does not yet provide (all of it is documented roadmap work):
   branching, and no UI foundation or fork override commands (slices 3-4); no
   instruction-source, `AGENTS.md`, or effective instruction projection behavior
   (slice 5, owned by [architecture 30](docs/intention-relay/architecture/30-instruction-sources-and-system-context.md)).
-- No core simplification activation yet (slice 1.5): its event-core removal
-  has already landed on this branch, replacing the event log, snapshots,
-  cursors, and resync with the eight current-state tables written in one SQLite
-  transaction per state change; the ten-production-crate consolidation and the
-  composition-facade removal remain future work.
+- Slice 1.5 core simplification is activated on this branch, not yet on
+  `main`: the event log, snapshots, cursors, and resync are replaced by the
+  eight current-state tables written in one SQLite transaction per state
+  change, and the ten-production-crate consolidation and the composition-facade
+  removal landed as well.
 - Out of scope for v1: Web/remote transport, multi-user access, sandboxed
   execution, and automatic run resumption.
 
