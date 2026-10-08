@@ -7,7 +7,9 @@ mod common;
 
 use std::{collections::VecDeque, future, sync::mpsc, time::Duration};
 
-use common::{FakeRepository, ImmediateTime, RecordingCommitObserver, ScriptedPort, time};
+use common::{
+    FakeRepository, ImmediateTime, RecordedTransition, RecordingCommitObserver, ScriptedPort, time,
+};
 use futures_util::{StreamExt, stream};
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
@@ -22,7 +24,6 @@ use intention_providers::{
     ModelEventDto, ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto,
     ModelRoleDto, ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto,
 };
-use intention_storage::TransitionRunInputDto;
 use intention_test_support::{
     ScriptedDriver, fixture_snapshot_with_context_window, fixture_snapshot_with_model, run_ready,
 };
@@ -371,7 +372,7 @@ fn tool_call_executes_tool_and_completes() {
             .transitions
             .borrow()
             .iter()
-            .map(TransitionRunInputDto::status)
+            .map(RecordedTransition::status)
             .collect::<Vec<_>>(),
         vec![RunStatusDto::Running]
     );

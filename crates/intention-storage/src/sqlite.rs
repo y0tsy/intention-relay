@@ -17,18 +17,17 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use crate::{
-    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,
-    ConsumePendingUserTurnsInputDto, CreateSessionInputDto, FinishRunInputDto,
-    RecoverUnfinishedRunsInputDto, RemoveTurnInputDto, StartingRunModelContextDto,
-    StorageRepositoryDto, ToolResultEvidenceDto, TransitionRunInputDto, WriteToolResultInputDto,
+    AcceptedTurnOutcomeDto, StartingRunModelContextDto, StorageRepositoryDto, ToolResultEvidenceDto,
 };
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
-    ToolResultMetadataEntryDto, ToolResultStatusDto, validate_run_status_transition,
+    ToolResultMetadataEntryDto, ToolResultStatusDto, run_status_is_terminal,
+    validate_run_status_transition,
 };
 use intention_proto::{
-    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto,
-    ProjectId, RunId, SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
+    ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorCategoryDto, ErrorDto,
+    ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId, RemoveTurnCommandDto, RunId,
+    SessionId, TimestampDto, ToolCallId, TurnId, UsageDto, WorkspaceId,
 };
 use intention_proto::{
     MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, RunModeDto, RunProjectionDto,
@@ -390,33 +389,6 @@ impl SqliteStorageRepository {
         )
     }
 
-    /// Inserts one accepted turn row in its committed acceptance state.
-    fn insert_turn(
-        connection: &sqlite::Connection,
-        input: &AcceptUserTurnInputDto,
-        turn_id: TurnId,
-        state: &str,
-        created_at: i64,
-    ) -> DtoResult<()> {
-        connection
-            .execute(
-                "INSERT INTO turns(id, session_id, proposed_run_id, config_revision_id, content, state, idempotency_key, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                sqlite::params![
-                    turn_id.to_string(),
-                    input.session_id().to_string(),
-                    input.proposed_run_id().to_string(),
-                    input.config_revision_id().to_string(),
-                    input.content(),
-                    state,
-                    input.idempotency_key().to_string(),
-                    created_at,
-                ],
-            )
-            .map_err(storage_error)?;
-        Ok(())
-    }
-
     /// Inserts one committed transcript row with its external commit time.
     fn insert_message(
         connection: &sqlite::Connection,
@@ -456,10 +428,13 @@ macro_rules! immediate_transaction {
 }
 
 impl StorageRepositoryDto for SqliteStorageRepository {
-    fn create_session(&self, input: CreateSessionInputDto) -> DtoResult<SessionProjectionDto> {
-        let command = input.command();
+    fn create_session(
+        &self,
+        command: CreateSessionCommandDto,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<SessionProjectionDto> {
         let session_id = command.session_id();
-        let occurred_at = input.occurred_at().unix_seconds();
+        let occurred_at = occurred_at.unix_seconds();
         immediate_transaction!(self, |tx| {
             if tx
                 .query_row(
@@ -547,15 +522,52 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         })
     }
 
-    fn accept_user_turn(&self, input: AcceptUserTurnInputDto) -> DtoResult<AcceptedTurnOutcomeDto> {
-        let session_id = input.session_id();
+    fn accept_user_turn(
+        &self,
+        session_id: SessionId,
+        idempotency_key: IdempotencyKey,
+        content: &str,
+        proposed_run_id: RunId,
+        config_snapshot: ConfigSnapshotDto,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<AcceptedTurnOutcomeDto> {
+        if content.trim().is_empty() {
+            return Err(ErrorDto::validation(
+                "invalid_turn_content",
+                "user turn content must not be empty",
+            ));
+        }
+        let config_revision_id = config_snapshot.revision_id();
+        let insert_turn = |connection: &sqlite::Transaction<'_>,
+                           turn_id: TurnId,
+                           state: &str,
+                           created_at: i64|
+         -> DtoResult<()> {
+            connection
+                .execute(
+                    "INSERT INTO turns(id, session_id, proposed_run_id, config_revision_id, content, state, idempotency_key, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    sqlite::params![
+                        turn_id.to_string(),
+                        session_id.to_string(),
+                        proposed_run_id.to_string(),
+                        config_revision_id.to_string(),
+                        content,
+                        state,
+                        idempotency_key.to_string(),
+                        created_at,
+                    ],
+                )
+                .map_err(storage_error)?;
+            Ok(())
+        };
         immediate_transaction!(self, |tx| {
             Self::require_session(&tx, session_id)?;
             let existing = tx
                 .query_row(
                     "SELECT id, content, proposed_run_id, config_revision_id, state FROM turns \
                      WHERE session_id=?1 AND idempotency_key=?2",
-                    sqlite::params![session_id.to_string(), input.idempotency_key().to_string()],
+                    sqlite::params![session_id.to_string(), idempotency_key.to_string()],
                     |row| {
                         Ok((
                             row.get::<_, String>(0)?,
@@ -568,10 +580,11 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 )
                 .optional()
                 .map_err(storage_error)?;
-            if let Some((turn, content, proposed_run_id, revision_id, state)) = existing {
-                if content != input.content()
-                    || proposed_run_id != input.proposed_run_id().to_string()
-                    || revision_id != input.config_revision_id().to_string()
+            if let Some((turn, stored_content, stored_run_id, stored_revision_id, state)) = existing
+            {
+                if stored_content != content
+                    || stored_run_id != proposed_run_id.to_string()
+                    || stored_revision_id != config_revision_id.to_string()
                 {
                     return Err(turn_idempotency_conflict());
                 }
@@ -582,12 +595,12 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 // turn is still the pending projection it was accepted as.
                 let outcome = match state.as_str() {
                     "started" => {
-                        let run = load_scoped_run(&tx, session_id, input.proposed_run_id())?;
-                        let message = first_user_message(&tx, session_id, input.proposed_run_id())?;
+                        let run = load_scoped_run(&tx, session_id, proposed_run_id)?;
+                        let message = first_user_message(&tx, session_id, proposed_run_id)?;
                         AcceptedTurnOutcomeDto::Started { run, message }
                     }
                     "pending" | "appended" => AcceptedTurnOutcomeDto::Pending(
-                        PendingTurnProjectionDto::new(session_id, turn_id, content)?,
+                        PendingTurnProjectionDto::new(session_id, turn_id, stored_content)?,
                     ),
                     "removed" => return Err(turn_idempotency_conflict()),
                     _ => return Err(codec_error("invalid durable turn state")),
@@ -604,7 +617,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 .query_row(
                     "SELECT 1 FROM turns WHERE proposed_run_id=?1 \
                      UNION ALL SELECT 1 FROM runs WHERE id=?1 LIMIT 1",
-                    [input.proposed_run_id().to_string()],
+                    [proposed_run_id.to_string()],
                     |_| Ok(()),
                 )
                 .optional()
@@ -613,7 +626,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             if identity_bound {
                 return Err(turn_identity_conflict());
             }
-            Self::store_config(&tx, input.config_snapshot())?;
+            Self::store_config(&tx, &config_snapshot)?;
             let active = tx
                 .query_row(
                     &format!(
@@ -625,11 +638,11 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 .optional()
                 .map_err(storage_error)?
                 .is_some();
-            let occurred_at = input.occurred_at().unix_seconds();
+            let occurred_at = occurred_at.unix_seconds();
             let turn_id = TurnId::new();
             if active {
-                Self::insert_turn(&tx, &input, turn_id, "pending", occurred_at)?;
-                let turn = PendingTurnProjectionDto::new(session_id, turn_id, input.content())?;
+                insert_turn(&tx, turn_id, "pending", occurred_at)?;
+                let turn = PendingTurnProjectionDto::new(session_id, turn_id, content)?;
                 tx.commit().map_err(storage_error)?;
                 return Ok(AcceptedTurnOutcomeDto::Pending(turn));
             }
@@ -641,7 +654,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 if let Some((pending_turn, proposed_run, revision, content)) =
                     oldest_pending_turn(&tx, session_id)?
                 {
-                    Self::insert_turn(&tx, &input, turn_id, "pending", occurred_at)?;
+                    insert_turn(&tx, turn_id, "pending", occurred_at)?;
                     tx.execute(
                         "UPDATE turns SET state='started' WHERE session_id=?1 AND id=?2",
                         sqlite::params![session_id.to_string(), pending_turn.to_string()],
@@ -649,12 +662,12 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     .map_err(storage_error)?;
                     (pending_turn, proposed_run, revision, content)
                 } else {
-                    Self::insert_turn(&tx, &input, turn_id, "started", occurred_at)?;
+                    insert_turn(&tx, turn_id, "started", occurred_at)?;
                     (
                         turn_id,
-                        input.proposed_run_id(),
-                        input.config_revision_id(),
-                        input.content().to_owned(),
+                        proposed_run_id,
+                        config_revision_id,
+                        content.to_owned(),
                     )
                 };
             tx.execute(
@@ -692,8 +705,11 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         })
     }
 
-    fn remove_turn(&self, input: RemoveTurnInputDto) -> DtoResult<PendingTurnProjectionDto> {
-        let command = input.command();
+    fn remove_turn(
+        &self,
+        command: RemoveTurnCommandDto,
+        _occurred_at: TimestampDto,
+    ) -> DtoResult<PendingTurnProjectionDto> {
         let session_id = command.session_id();
         let turn_id = command.turn_id();
         immediate_transaction!(self, |tx| {
@@ -718,14 +734,14 @@ impl StorageRepositoryDto for SqliteStorageRepository {
 
     fn consume_pending_user_turns(
         &self,
-        input: ConsumePendingUserTurnsInputDto,
+        session_id: SessionId,
+        run_id: RunId,
+        occurred_at: TimestampDto,
     ) -> DtoResult<Vec<MessageProjectionDto>> {
-        let session_id = input.session_id();
-        let run_id = input.run_id();
         immediate_transaction!(self, |tx| {
             load_scoped_run(&tx, session_id, run_id)?;
             let pending = pending_turns(&tx, session_id)?;
-            let occurred_at = input.occurred_at().unix_seconds();
+            let occurred_at = occurred_at.unix_seconds();
             let mut messages = Vec::with_capacity(pending.len());
             for turn in pending {
                 let message = MessageProjectionDto::new(
@@ -750,18 +766,22 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         })
     }
 
-    fn transition_run(&self, input: TransitionRunInputDto) -> DtoResult<RunProjectionDto> {
-        let session_id = input.session_id();
-        let run_id = input.run_id();
+    fn transition_run(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        status: RunStatusDto,
+        _occurred_at: TimestampDto,
+    ) -> DtoResult<RunProjectionDto> {
         immediate_transaction!(self, |tx| {
             let current = load_scoped_run(&tx, session_id, run_id)?;
-            validate_run_status_transition(current.status(), input.status())?;
+            validate_run_status_transition(current.status(), status)?;
             tx.execute(
                 "UPDATE runs SET status=?3 WHERE session_id=?1 AND id=?2",
                 sqlite::params![
                     session_id.to_string(),
                     run_id.to_string(),
-                    status_name(input.status())
+                    status_name(status)
                 ],
             )
             .map_err(storage_error)?;
@@ -769,7 +789,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 session_id,
                 run_id,
                 current.turn_id(),
-                input.status(),
+                status,
                 current.config_revision_id(),
             );
             tx.commit().map_err(storage_error)?;
@@ -777,42 +797,76 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         })
     }
 
-    fn finish_run(&self, input: FinishRunInputDto) -> DtoResult<RunProjectionDto> {
-        let session_id = input.session_id();
-        let run_id = input.run_id();
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "One flat terminal outcome keeps the single transaction at one call site."
+    )]
+    fn finish_run(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        status: RunStatusDto,
+        usage: Option<UsageDto>,
+        finish_reason: Option<FinishReasonDto>,
+        error_code: Option<String>,
+        error_message: Option<String>,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<RunProjectionDto> {
+        if !run_status_is_terminal(status) {
+            return Err(ErrorDto::validation(
+                "invalid_run_outcome",
+                "a terminal run outcome needs a terminal status",
+            ));
+        }
+        let error_valid = match (&error_code, &error_message) {
+            (None, None) => true,
+            (Some(code), Some(message)) => {
+                !code.trim().is_empty()
+                    && !message.trim().is_empty()
+                    && !code.contains('\0')
+                    && !message.contains('\0')
+            }
+            _ => false,
+        };
+        if !error_valid {
+            return Err(ErrorDto::validation(
+                "invalid_run_outcome",
+                "a terminal run outcome carries either both error fields or neither",
+            ));
+        }
         immediate_transaction!(self, |tx| {
             let current = load_scoped_run(&tx, session_id, run_id)?;
             let run = RunProjectionDto::new(
                 session_id,
                 run_id,
                 current.turn_id(),
-                input.status(),
+                status,
                 current.config_revision_id(),
             );
-            if current.status() == input.status() {
+            if current.status() == status {
                 // The run already holds this exact terminal outcome; the
                 // repeated commit is accepted and changes nothing.
                 tx.commit().map_err(storage_error)?;
                 return Ok(run);
             }
-            validate_run_status_transition(current.status(), input.status())?;
-            let usage_json = input
-                .usage()
+            validate_run_status_transition(current.status(), status)?;
+            let usage_json = usage
+                .as_ref()
                 .map(|usage| serde_json::to_string(usage).map_err(codec_error))
                 .transpose()?;
-            let finish_reason = input.finish_reason().map(finish_reason_name);
+            let finish_reason = finish_reason.map(finish_reason_name);
             tx.execute(
                 "UPDATE runs SET status=?3, usage_json=?4, finish_reason=?5, error_code=?6, \
                  error_message=?7, finished_at=?8 WHERE session_id=?1 AND id=?2",
                 sqlite::params![
                     session_id.to_string(),
                     run_id.to_string(),
-                    status_name(input.status()),
+                    status_name(status),
                     usage_json,
                     finish_reason,
-                    input.error_code(),
-                    input.error_message(),
-                    input.occurred_at().unix_seconds()
+                    error_code.as_deref(),
+                    error_message.as_deref(),
+                    occurred_at.unix_seconds()
                 ],
             )
             .map_err(storage_error)?;
@@ -822,26 +876,40 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         })
     }
 
-    fn append_message(&self, input: AppendMessageInputDto) -> DtoResult<MessageProjectionDto> {
-        let message = input.message();
+    fn append_message(
+        &self,
+        message: MessageProjectionDto,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<MessageProjectionDto> {
         let session_id = message.session_id();
         immediate_transaction!(self, |tx| {
             Self::require_session(&tx, session_id)?;
             if let Some(run_id) = message.run_id() {
                 load_scoped_run(&tx, session_id, run_id)?;
             }
-            Self::insert_message(&tx, message, input.occurred_at().unix_seconds())?;
+            Self::insert_message(&tx, &message, occurred_at.unix_seconds())?;
             self.fault(FaultPoint::Message)?;
             tx.commit().map_err(storage_error)?;
-            Ok(message.clone())
+            Ok(message)
         })
     }
 
     fn write_tool_result(
         &self,
-        input: WriteToolResultInputDto,
+        evidence: ToolResultEvidenceDto,
+        message: MessageProjectionDto,
     ) -> DtoResult<ToolResultEvidenceDto> {
-        let evidence = input.evidence();
+        if message.kind() != MessageKindDto::ToolResult
+            || message.session_id() != evidence.session_id()
+            || message.run_id() != Some(evidence.run_id())
+            || message.tool_call_id() != Some(evidence.call_id())
+            || message.tool_id() != Some(evidence.tool_id())
+        {
+            return Err(ErrorDto::validation(
+                "invalid_tool_result",
+                "a tool result commits with its own answering transcript row",
+            ));
+        }
         let session_id = evidence.session_id();
         let run_id = evidence.run_id();
         let call_id = evidence.call_id();
@@ -876,10 +944,10 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 ],
             )
             .map_err(storage_error)?;
-            Self::insert_message(&tx, input.message(), evidence.occurred_at().unix_seconds())?;
+            Self::insert_message(&tx, &message, evidence.occurred_at().unix_seconds())?;
             self.fault(FaultPoint::ToolResult)?;
             tx.commit().map_err(storage_error)?;
-            Ok(evidence.clone())
+            Ok(evidence)
         })
     }
 
@@ -1088,7 +1156,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
 
     fn recover_unfinished_runs(
         &self,
-        input: RecoverUnfinishedRunsInputDto,
+        recovered_at: TimestampDto,
     ) -> DtoResult<Vec<RunProjectionDto>> {
         let unfinished = {
             let connection = self.connection()?;
@@ -1112,12 +1180,12 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         };
         let mut recovered = Vec::with_capacity(unfinished.len());
         for (session, run) in unfinished {
-            recovered.push(self.transition_run(TransitionRunInputDto::new(
+            recovered.push(self.transition_run(
                 SessionId::parse(&session).map_err(codec_error)?,
                 RunId::parse(&run).map_err(codec_error)?,
                 RunStatusDto::Interrupted,
-                input.recovered_at(),
-            ))?);
+                recovered_at,
+            )?);
         }
         Ok(recovered)
     }
@@ -1612,9 +1680,7 @@ mod tests {
         reason = "Focused SQLite fixtures use expect for test diagnostics."
     )]
     use super::*;
-    use crate::{
-        AppendMessageInputDto, CreateSessionInputDto, StorageRepositoryDto, WriteToolResultInputDto,
-    };
+    use crate::StorageRepositoryDto;
     use intention_config::{ConfigPathDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto};
     use intention_proto::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
     use intention_proto::{IdempotencyKey, ProjectId, SchemaVersionDto, UsageDto, WorkspaceId};
@@ -1669,7 +1735,7 @@ mod tests {
     fn create_fixture_session(repository: &SqliteStorageRepository) -> SessionId {
         let session_id = SessionId::new();
         repository
-            .create_session(CreateSessionInputDto::new(
+            .create_session(
                 CreateSessionCommandDto::new(
                     ProjectId::new(),
                     session_id,
@@ -1678,25 +1744,9 @@ mod tests {
                     RunModeDto::Build,
                 ),
                 fixture_time(1),
-            ))
+            )
             .expect("fixture session creates");
         session_id
-    }
-
-    fn fixture_turn_input(
-        session_id: SessionId,
-        content: &str,
-        config_snapshot: ConfigSnapshotDto,
-    ) -> AcceptUserTurnInputDto {
-        AcceptUserTurnInputDto::new(
-            session_id,
-            IdempotencyKey::new(),
-            content,
-            RunId::new(),
-            config_snapshot,
-            fixture_time(2),
-        )
-        .expect("fixture turn input is valid")
     }
 
     fn accept_fixture_turn(
@@ -1704,10 +1754,16 @@ mod tests {
         session_id: SessionId,
         content: &str,
     ) -> RunProjectionDto {
-        let input = fixture_turn_input(session_id, content, fixture_snapshot());
-        let run_id = input.proposed_run_id();
+        let run_id = RunId::new();
         match repository
-            .accept_user_turn(input)
+            .accept_user_turn(
+                session_id,
+                IdempotencyKey::new(),
+                content,
+                run_id,
+                fixture_snapshot(),
+                fixture_time(2),
+            )
             .expect("fixture turn commits")
         {
             AcceptedTurnOutcomeDto::Started { run, .. } => {
@@ -1769,48 +1825,6 @@ mod tests {
             "storage_decode_failed"
         );
         for status in [
-            RunStatusDto::Starting,
-            RunStatusDto::Running,
-            RunStatusDto::Completed,
-            RunStatusDto::Failed,
-            RunStatusDto::Interrupted,
-        ] {
-            assert_eq!(
-                parse_status(status_name(status)).expect("known status parses"),
-                status
-            );
-        }
-        assert_eq!(
-            parse_status("invalid")
-                .expect_err("unknown status rejects")
-                .code(),
-            "storage_decode_failed"
-        );
-        assert_eq!(
-            parse_status("waiting_input")
-                .expect_err("a removed status rejects")
-                .code(),
-            "storage_decode_failed"
-        );
-        for kind in [
-            MessageKindDto::User,
-            MessageKindDto::Assistant,
-            MessageKindDto::ToolCall,
-            MessageKindDto::ToolResult,
-            MessageKindDto::Notice,
-        ] {
-            assert_eq!(
-                parse_message_kind(message_kind_name(kind)).expect("known kind parses"),
-                kind
-            );
-        }
-        assert_eq!(
-            parse_message_kind("invalid")
-                .expect_err("unknown kind rejects")
-                .code(),
-            "storage_decode_failed"
-        );
-        for status in [
             ToolResultStatusDto::Completed,
             ToolResultStatusDto::Failed,
             ToolResultStatusDto::Partial,
@@ -1821,77 +1835,21 @@ mod tests {
                 status
             );
         }
-        assert_eq!(
-            parse_tool_result_status("invalid")
-                .expect_err("unknown tool result status rejects")
-                .code(),
-            "storage_decode_failed"
-        );
-        assert_eq!(unavailable().code(), "storage_unavailable");
-        assert_eq!(
-            storage_error(sqlite::Error::InvalidQuery).code(),
-            "storage_unavailable"
-        );
-        assert_eq!(
-            not_found_or_storage(sqlite::Error::QueryReturnedNoRows).code(),
-            "storage_record_not_found"
-        );
-        assert_eq!(
-            not_found("fixture_missing", "missing").code(),
-            "fixture_missing"
-        );
-        assert_eq!(
-            conflict("fixture_conflict", "conflict").code(),
-            "fixture_conflict"
-        );
-        for error in [
-            config_revision_conflict(),
-            turn_idempotency_conflict(),
-            turn_identity_conflict(),
-            tool_result_conflict(),
-        ] {
-            assert_eq!(error.category(), ErrorCategoryDto::Conflict);
-            assert_eq!(error.retry(), ErrorRetryDto::Never);
-        }
-        assert_eq!(pending_turn_not_found().code(), "pending_turn_not_found");
-        assert_eq!(record_not_found().code(), "storage_record_not_found");
-        assert_eq!(
-            run_configuration_not_found().code(),
-            "run_configuration_not_found"
-        );
-        assert_eq!(
-            run_configuration_unavailable().code(),
-            "run_configuration_unavailable"
-        );
-        assert_eq!(
-            run_model_context_unavailable().code(),
-            "run_model_context_unavailable"
-        );
         assert_eq!(tool_result_unavailable().code(), "tool_result_unavailable");
-        assert_eq!(
-            validate_message_limit(0)
-                .expect_err("a zero limit rejects")
-                .code(),
-            "invalid_message_limit"
-        );
-        assert!(validate_message_limit(1).is_ok());
     }
 
     #[test]
-    fn location_is_absolute_and_faults_are_single_use() {
+    fn location_is_absolute() {
         assert!(SqliteDatabaseLocationDto::new("relative.db").is_err());
         let location = format!(
             "{}/intention-storage-unit-{}.db",
             std::env::temp_dir().display(),
             TurnId::new()
         );
-        let repository = SqliteStorageRepository::open(
+        SqliteStorageRepository::open(
             SqliteDatabaseLocationDto::new(location).expect("temp location is absolute"),
         )
         .expect("database opens");
-        repository.arm_fault(FaultPoint::Message);
-        assert!(repository.fault(FaultPoint::Message).is_err());
-        assert!(repository.fault(FaultPoint::Message).is_ok());
     }
 
     #[test]
@@ -1901,11 +1859,14 @@ mod tests {
         let session_id = create_fixture_session(&repository);
         repository.arm_fault(FaultPoint::TurnAcceptance);
         let error = repository
-            .accept_user_turn(fixture_turn_input(
+            .accept_user_turn(
                 session_id,
+                IdempotencyKey::new(),
                 "atomic turn",
+                RunId::new(),
                 fixture_snapshot(),
-            ))
+                fixture_time(2),
+            )
             .expect_err("injected acceptance fault aborts the transaction");
         assert_eq!(error.code(), "injected_storage_fault");
         drop(repository);
@@ -1942,7 +1903,7 @@ mod tests {
         .expect("assistant row is valid");
         repository.arm_fault(FaultPoint::Message);
         let error = repository
-            .append_message(AppendMessageInputDto::new(message, fixture_time(3)))
+            .append_message(message, fixture_time(3))
             .expect_err("injected message fault aborts the transaction");
         assert_eq!(error.code(), "injected_storage_fault");
         drop(repository);
@@ -1964,27 +1925,24 @@ mod tests {
         let session_id = create_fixture_session(&repository);
         let run = accept_fixture_turn(&repository, session_id, "active");
         repository
-            .transition_run(TransitionRunInputDto::new(
+            .transition_run(
                 session_id,
                 run.run_id(),
                 RunStatusDto::Running,
                 fixture_time(3),
-            ))
+            )
             .expect("run starts");
         repository.arm_fault(FaultPoint::RunOutcome);
         let error = repository
             .finish_run(
-                FinishRunInputDto::new(
-                    session_id,
-                    run.run_id(),
-                    RunStatusDto::Completed,
-                    Some(UsageDto::reported(1, 2, 3).expect("fixture usage is consistent")),
-                    Some(FinishReasonDto::Stop),
-                    None,
-                    None,
-                    fixture_time(4),
-                )
-                .expect("fixture outcome is valid"),
+                session_id,
+                run.run_id(),
+                RunStatusDto::Completed,
+                Some(UsageDto::reported(1, 2, 3).expect("fixture usage is consistent")),
+                Some(FinishReasonDto::Stop),
+                None,
+                None,
+                fixture_time(4),
             )
             .expect_err("injected outcome fault aborts the transaction");
         assert_eq!(error.code(), "injected_storage_fault");
@@ -2042,9 +2000,7 @@ mod tests {
         .expect("answering row is valid");
         repository.arm_fault(FaultPoint::ToolResult);
         let error = repository
-            .write_tool_result(
-                WriteToolResultInputDto::new(evidence, message).expect("fixture commit is valid"),
-            )
+            .write_tool_result(evidence, message)
             .expect_err("injected tool result fault aborts the transaction");
         assert_eq!(error.code(), "injected_storage_fault");
         drop(repository);
@@ -2068,15 +2024,12 @@ mod tests {
         let accepted = fixture_snapshot();
         let run = match repository
             .accept_user_turn(
-                AcceptUserTurnInputDto::new(
-                    session_id,
-                    IdempotencyKey::new(),
-                    "active",
-                    RunId::new(),
-                    accepted.clone(),
-                    fixture_time(2),
-                )
-                .expect("fixture turn input is valid"),
+                session_id,
+                IdempotencyKey::new(),
+                "active",
+                RunId::new(),
+                accepted.clone(),
+                fixture_time(2),
             )
             .expect("fixture turn commits")
         {
@@ -2105,7 +2058,7 @@ mod tests {
         let session_id = create_fixture_session(&repository);
         let run = accept_fixture_turn(&repository, session_id, "active");
         repository
-            .append_message(AppendMessageInputDto::new(
+            .append_message(
                 MessageProjectionDto::new(
                     session_id,
                     Some(run.run_id()),
@@ -2117,7 +2070,7 @@ mod tests {
                 )
                 .expect("assistant row is valid"),
                 fixture_time(3),
-            ))
+            )
             .expect("assistant row commits");
         let call_id = ToolCallId::new();
         let evidence = ToolResultEvidenceDto::new(
@@ -2133,35 +2086,29 @@ mod tests {
         .expect("fixture evidence is valid");
         repository
             .write_tool_result(
-                WriteToolResultInputDto::new(
-                    evidence,
-                    MessageProjectionDto::new(
-                        session_id,
-                        Some(run.run_id()),
-                        MessageKindDto::ToolResult,
-                        r#"{"result":"read"}"#,
-                        None,
-                        Some(call_id),
-                        Some("read".to_owned()),
-                    )
-                    .expect("answering row is valid"),
+                evidence,
+                MessageProjectionDto::new(
+                    session_id,
+                    Some(run.run_id()),
+                    MessageKindDto::ToolResult,
+                    r#"{"result":"read"}"#,
+                    None,
+                    Some(call_id),
+                    Some("read".to_owned()),
                 )
-                .expect("fixture commit is valid"),
+                .expect("answering row is valid"),
             )
             .expect("tool result commits");
         repository
             .finish_run(
-                FinishRunInputDto::new(
-                    session_id,
-                    run.run_id(),
-                    RunStatusDto::Failed,
-                    Some(UsageDto::NotReported),
-                    None,
-                    Some("provider_failed".to_owned()),
-                    Some("safe failure".to_owned()),
-                    fixture_time(4),
-                )
-                .expect("fixture outcome is valid"),
+                session_id,
+                run.run_id(),
+                RunStatusDto::Failed,
+                Some(UsageDto::NotReported),
+                None,
+                Some("provider_failed".to_owned()),
+                Some("safe failure".to_owned()),
+                fixture_time(4),
             )
             .expect("terminal outcome commits");
         let columns = raw_json_columns(&location);

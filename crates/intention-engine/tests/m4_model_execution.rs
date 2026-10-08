@@ -7,7 +7,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{FakeRepository, ImmediateTime, RecordingCommitObserver};
+use common::{FakeRepository, ImmediateTime, RecordedTransition, RecordingCommitObserver};
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
     ModelRunCommitDto, ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto,
@@ -19,7 +19,6 @@ use intention_providers::{
     FinishReasonDto, ModelEventDto, ModelMessageDto, ModelRequestDto, ModelRoleDto,
     ProviderErrorDto, ToolCallDto, UsageDto,
 };
-use intention_storage::TransitionRunInputDto;
 use intention_test_support::{ScriptedDriver, fixture_snapshot_with_model, run_ready};
 
 fn request(run_id: RunId, model: &str) -> ModelRequestDto {
@@ -267,7 +266,7 @@ fn streams_commit_one_assistant_step_with_reasoning_and_complete() {
             .transitions
             .borrow()
             .iter()
-            .map(TransitionRunInputDto::status)
+            .map(RecordedTransition::status)
             .collect::<Vec<_>>(),
         vec![RunStatusDto::Running]
     );
@@ -386,7 +385,7 @@ fn interruption_records_a_notice_and_continues_the_same_run() {
             .transitions
             .borrow()
             .iter()
-            .map(TransitionRunInputDto::status)
+            .map(RecordedTransition::status)
             .collect::<Vec<_>>(),
         vec![RunStatusDto::Running]
     );
@@ -531,7 +530,7 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
             .transitions
             .borrow()
             .iter()
-            .map(TransitionRunInputDto::status)
+            .map(RecordedTransition::status)
             .collect::<Vec<_>>(),
         vec![RunStatusDto::Running]
     );

@@ -18,10 +18,7 @@ pub use intention_providers::{
     ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
     ModelToolDefinitionDto,
 };
-use intention_storage::{
-    AppendMessageInputDto, ConsumePendingUserTurnsInputDto, FinishRunInputDto,
-    StorageRepositoryDto, TransitionRunInputDto,
-};
+use intention_storage::StorageRepositoryDto;
 use intention_tools::CancellationSignal as ToolCancellationSignal;
 
 use crate::context_window::ContextWindowState;
@@ -67,7 +64,7 @@ where
             "scheduling failure requires the exact run to remain starting",
         ));
     }
-    repository.finish_run(FinishRunInputDto::new(
+    repository.finish_run(
         session_id,
         run_id,
         RunStatusDto::Failed,
@@ -76,7 +73,7 @@ where
         Some(failure_code.into()),
         Some("the starting run could not be scheduled".to_owned()),
         occurred_at,
-    )?)
+    )
 }
 
 /// Provider-neutral clock and delay boundary for model execution.
@@ -467,12 +464,12 @@ where
         let mut extra_messages: Vec<ModelMessageDto> = Vec::new();
         for attempt in 1..=u16::from(policy.max_attempts()) {
             if attempt == 1 {
-                let running = self.repository.transition_run(TransitionRunInputDto::new(
+                let running = self.repository.transition_run(
                     input.session_id,
                     input.run_id,
                     RunStatusDto::Running,
                     self.time.now(),
-                ))?;
+                )?;
                 self.publish_status(input.session_id, input.run_id, running.status());
             }
             let result = self
@@ -733,9 +730,7 @@ where
             None,
             None,
         )?;
-        let committed = self
-            .repository
-            .append_message(AppendMessageInputDto::new(message, self.time.now()))?;
+        let committed = self.repository.append_message(message, self.time.now())?;
         self.publish_content(&committed);
         Ok(committed)
     }
@@ -756,13 +751,11 @@ where
         messages: &mut Vec<ModelMessageDto>,
         extra_messages: &mut Vec<ModelMessageDto>,
     ) -> DtoResult<bool> {
-        let joined_messages =
-            self.repository
-                .consume_pending_user_turns(ConsumePendingUserTurnsInputDto::new(
-                    input.session_id,
-                    input.run_id,
-                    self.time.now(),
-                ))?;
+        let joined_messages = self.repository.consume_pending_user_turns(
+            input.session_id,
+            input.run_id,
+            self.time.now(),
+        )?;
         let mut joined = false;
         for message in &joined_messages {
             self.publish_content(message);
@@ -1024,9 +1017,7 @@ where
             None,
             None,
         )?;
-        let committed = self
-            .repository
-            .append_message(AppendMessageInputDto::new(message, self.time.now()))?;
+        let committed = self.repository.append_message(message, self.time.now())?;
         self.publish_content(&committed);
         Ok(Some(committed))
     }
@@ -1044,7 +1035,7 @@ where
         error: Option<&ErrorDto>,
         usage: Option<&UsageDto>,
     ) -> DtoResult<RunProjectionDto> {
-        let run = self.repository.finish_run(FinishRunInputDto::new(
+        let run = self.repository.finish_run(
             input.session_id,
             input.run_id,
             status,
@@ -1053,7 +1044,7 @@ where
             error.map(|error| error.code().to_owned()),
             error.map(|error| error.message().to_owned()),
             self.time.now(),
-        )?)?;
+        )?;
         self.publish_status(input.session_id, input.run_id, run.status());
         Ok(run)
     }

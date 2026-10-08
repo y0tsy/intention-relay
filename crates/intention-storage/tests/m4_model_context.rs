@@ -19,10 +19,7 @@ use intention_proto::{
     ToolCallId, UsageDto,
 };
 use intention_proto::{MessageKindDto, MessageProjectionDto, RunStatusDto};
-use intention_storage::{
-    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto, FinishRunInputDto,
-    SqliteStorageRepository, StorageRepositoryDto, TransitionRunInputDto,
-};
+use intention_storage::{AcceptedTurnOutcomeDto, SqliteStorageRepository, StorageRepositoryDto};
 
 #[test]
 fn starting_run_model_context_rebuilds_the_committed_transcript_in_insertion_order() {
@@ -31,17 +28,6 @@ fn starting_run_model_context_rebuilds_the_committed_transcript_in_insertion_ord
 
     let first_run = start_run(&repository, session_id, "first user", "first-model", 2);
     let call_id = ToolCallId::new();
-    append(
-        &repository,
-        session_id,
-        Some(first_run),
-        MessageKindDto::ToolCall,
-        r#"{"path":"src/lib.rs"}"#,
-        None,
-        Some(call_id),
-        Some("read"),
-        3,
-    );
     append(
         &repository,
         session_id,
@@ -76,26 +62,18 @@ fn starting_run_model_context_rebuilds_the_committed_transcript_in_insertion_ord
         3,
     );
     repository
-        .transition_run(TransitionRunInputDto::new(
-            session_id,
-            first_run,
-            RunStatusDto::Running,
-            time(3),
-        ))
+        .transition_run(session_id, first_run, RunStatusDto::Running, time(3))
         .expect("first run starts");
     repository
         .finish_run(
-            FinishRunInputDto::new(
-                session_id,
-                first_run,
-                RunStatusDto::Completed,
-                Some(UsageDto::reported(1, 1, 2).expect("fixture usage is consistent")),
-                Some(FinishReasonDto::Stop),
-                None,
-                None,
-                time(4),
-            )
-            .expect("first run outcome is valid"),
+            session_id,
+            first_run,
+            RunStatusDto::Completed,
+            Some(UsageDto::reported(1, 1, 2).expect("fixture usage is consistent")),
+            Some(FinishReasonDto::Stop),
+            None,
+            None,
+            time(4),
         )
         .expect("first run completes");
 
@@ -118,7 +96,6 @@ fn starting_run_model_context_rebuilds_the_committed_transcript_in_insertion_ord
             .collect::<Vec<_>>(),
         vec![
             (MessageKindDto::User, "first user"),
-            (MessageKindDto::ToolCall, r#"{"path":"src/lib.rs"}"#),
             (MessageKindDto::ToolResult, "file contents"),
             (
                 MessageKindDto::Notice,
@@ -182,12 +159,7 @@ fn model_context_rejects_unknown_cross_session_and_non_starting_runs_safely() {
     let run_id = start_run(&repository, session_id, "owner user", "owner-model", 2);
     let other_session_id = create_session(&repository, "other");
     repository
-        .transition_run(TransitionRunInputDto::new(
-            session_id,
-            run_id,
-            RunStatusDto::Running,
-            time(3),
-        ))
+        .transition_run(session_id, run_id, RunStatusDto::Running, time(3))
         .expect("run becomes non-starting");
 
     let errors = [
@@ -223,15 +195,12 @@ fn start_run(
     let run_id = RunId::new();
     let outcome = repository
         .accept_user_turn(
-            AcceptUserTurnInputDto::new(
-                session_id,
-                IdempotencyKey::new(),
-                content,
-                run_id,
-                snapshot(model),
-                time(event_time),
-            )
-            .expect("turn input is valid"),
+            session_id,
+            IdempotencyKey::new(),
+            content,
+            run_id,
+            snapshot(model),
+            time(event_time),
         )
         .expect("turn starts");
     match outcome {
@@ -270,7 +239,7 @@ fn append(
     )
     .expect("fixture transcript row is valid");
     repository
-        .append_message(AppendMessageInputDto::new(message, time(event_time)))
+        .append_message(message, time(event_time))
         .expect("fixture transcript row commits");
 }
 

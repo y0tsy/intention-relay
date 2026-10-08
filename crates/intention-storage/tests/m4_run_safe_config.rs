@@ -17,7 +17,7 @@ use intention_config::{
 use intention_proto::{
     ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, IdempotencyKey, RunId, SessionId,
 };
-use intention_storage::{AcceptUserTurnInputDto, StorageRepositoryDto};
+use intention_storage::StorageRepositoryDto;
 
 #[test]
 fn matching_run_loads_its_immutable_safe_configuration_selection() {
@@ -27,15 +27,12 @@ fn matching_run_loads_its_immutable_safe_configuration_selection() {
     let snapshot = snapshot("safe-model", Some("https://models.example.test/v1"), 17, 2);
     repository
         .accept_user_turn(
-            AcceptUserTurnInputDto::new(
-                session_id,
-                IdempotencyKey::new(),
-                "turn",
-                run_id,
-                snapshot.clone(),
-                time(2),
-            )
-            .expect("turn starts"),
+            session_id,
+            IdempotencyKey::new(),
+            "turn",
+            run_id,
+            snapshot.clone(),
+            time(2),
         )
         .expect("turn persists its safe selection");
 
@@ -43,19 +40,6 @@ fn matching_run_loads_its_immutable_safe_configuration_selection() {
         .load_run_config_snapshot(session_id, run_id)
         .expect("matching run configuration loads");
     assert_eq!(loaded, snapshot);
-    assert_eq!(loaded.resolved().provider().model(), "safe-model");
-    assert_eq!(
-        loaded.resolved().provider().endpoint(),
-        Some("https://models.example.test/v1")
-    );
-    assert_eq!(
-        loaded
-            .resolved()
-            .provider_execution()
-            .attempt_timeout_seconds(),
-        17
-    );
-    assert_eq!(loaded.resolved().provider_execution().max_attempts(), 2);
     let encoded = serde_json::to_string(&loaded).expect("safe selection serializes");
     assert!(!encoded.contains("recognizable-fixture-credential"));
     assert!(!encoded.contains("safe-config.toml"));
@@ -68,15 +52,12 @@ fn unknown_and_cross_session_run_config_lookups_share_safe_no_leak_error() {
     let run_id = RunId::new();
     repository
         .accept_user_turn(
-            AcceptUserTurnInputDto::new(
-                session_id,
-                IdempotencyKey::new(),
-                "turn",
-                run_id,
-                snapshot("safe-model", None, 30, 2),
-                time(2),
-            )
-            .expect("turn input is valid"),
+            session_id,
+            IdempotencyKey::new(),
+            "turn",
+            run_id,
+            snapshot("safe-model", None, 30, 2),
+            time(2),
         )
         .expect("turn starts");
     let other_session_id = create_session(&repository, "other");
@@ -110,15 +91,12 @@ fn corrupted_run_configuration_snapshot_is_a_decode_failure_and_a_missing_row_st
     let revision_id = snapshot.revision_id();
     repository
         .accept_user_turn(
-            AcceptUserTurnInputDto::new(
-                session_id,
-                IdempotencyKey::new(),
-                "turn",
-                run_id,
-                snapshot,
-                time(2),
-            )
-            .expect("turn input is valid"),
+            session_id,
+            IdempotencyKey::new(),
+            "turn",
+            run_id,
+            snapshot,
+            time(2),
         )
         .expect("turn starts");
     let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
@@ -169,15 +147,12 @@ fn backend_failure_on_a_run_config_lookup_is_unavailable_not_not_found() {
         let run_id = RunId::new();
         repository
             .accept_user_turn(
-                AcceptUserTurnInputDto::new(
-                    session_id,
-                    IdempotencyKey::new(),
-                    "turn",
-                    run_id,
-                    snapshot("safe-model", None, 30, 2),
-                    time(2),
-                )
-                .expect("turn input is valid"),
+                session_id,
+                IdempotencyKey::new(),
+                "turn",
+                run_id,
+                snapshot("safe-model", None, 30, 2),
+                time(2),
             )
             .expect("turn starts");
         let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))

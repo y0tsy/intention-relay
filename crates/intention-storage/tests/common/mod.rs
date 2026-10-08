@@ -7,9 +7,7 @@ use intention_proto::{
     CreateSessionCommandDto, ProjectId, RunModeDto, SessionId, TimestampDto, WorkspaceId,
     WorkspaceRootDto,
 };
-use intention_storage::{
-    CreateSessionInputDto, SqliteDatabaseLocationDto, SqliteStorageRepository, StorageRepositoryDto,
-};
+use intention_storage::{SqliteDatabaseLocationDto, SqliteStorageRepository, StorageRepositoryDto};
 use tempfile::TempDir;
 
 /// Returns one fixture timestamp in whole unix seconds.
@@ -60,7 +58,7 @@ pub fn repository() -> (TempDir, SqliteStorageRepository) {
 pub fn create_session(repository: &SqliteStorageRepository, label: &str) -> SessionId {
     let session_id = SessionId::new();
     repository
-        .create_session(CreateSessionInputDto::new(
+        .create_session(
             CreateSessionCommandDto::new(
                 ProjectId::new(),
                 session_id,
@@ -69,7 +67,7 @@ pub fn create_session(repository: &SqliteStorageRepository, label: &str) -> Sess
                 RunModeDto::Build,
             ),
             time(1),
-        ))
+        )
         .expect("session creates");
     session_id
 }

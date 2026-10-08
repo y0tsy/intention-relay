@@ -37,8 +37,8 @@ use intention_providers::{ModelCancellationSignal, ModelCapabilitiesDto, ModelEv
 #[cfg(test)]
 use intention_storage::ToolResultEvidenceDto;
 use intention_storage::{
-    AcceptedTurnOutcomeDto, RecoverUnfinishedRunsInputDto, SqliteDatabaseLocationDto,
-    SqliteStorageRepository, StorageRepositoryDto,
+    AcceptedTurnOutcomeDto, SqliteDatabaseLocationDto, SqliteStorageRepository,
+    StorageRepositoryDto,
 };
 #[cfg(test)]
 use intention_tools::{ToolInput, WorkspaceRoot};
@@ -320,10 +320,7 @@ impl DaemonApplicationFacade {
     }
 
     fn recover_before_ready(&self) -> DtoResult<()> {
-        let _interrupted = self
-            .inner
-            .repository
-            .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(now()?))?;
+        let _interrupted = self.inner.repository.recover_unfinished_runs(now()?)?;
         Ok(())
     }
 }
@@ -487,7 +484,6 @@ mod tests {
     use intention_domain::ToolResultStatusDto;
     use intention_engine::{ModelRunCommitDto, RunCancellation};
     use intention_proto::{MessageKindDto, MessageProjectionDto, SendUserTurnCommandDto};
-    use intention_storage::AppendMessageInputDto;
     use tempfile::TempDir;
 
     fn test_facade() -> (TempDir, DaemonApplicationFacade) {
@@ -931,10 +927,10 @@ mod tests {
         facade
             .inner
             .repository
-            .append_message(AppendMessageInputDto::new(
+            .append_message(
                 message,
                 TimestampDto::from_unix_seconds(2).expect("fixture timestamp is valid"),
-            ))
+            )
             .expect("fixture transcript row commits");
     }
 

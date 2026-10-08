@@ -17,14 +17,14 @@
 //! behind the typed field, and only the typed value is visible to callers.
 
 use intention_config::ConfigSnapshotDto;
-use intention_domain::{ToolResultMetadataEntryDto, ToolResultStatusDto, run_status_is_terminal};
-use intention_proto::{
-    ConfigRevisionId, DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, RunId, SessionId,
-    TimestampDto, ToolCallId, UsageDto,
-};
+use intention_domain::{ToolResultMetadataEntryDto, ToolResultStatusDto};
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
     RemoveTurnCommandDto, RunProjectionDto, RunStatusDto, SessionProjectionDto,
+};
+use intention_proto::{
+    DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, RunId, SessionId, TimestampDto,
+    ToolCallId, UsageDto,
 };
 
 mod sqlite;
@@ -148,182 +148,6 @@ impl ToolResultEvidenceDto {
     }
 }
 
-/// Inputs required to create one durable session.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CreateSessionInputDto {
-    command: CreateSessionCommandDto,
-    occurred_at: TimestampDto,
-}
-
-impl CreateSessionInputDto {
-    /// Creates typed session-creation storage input.
-    #[must_use]
-    pub const fn new(command: CreateSessionCommandDto, occurred_at: TimestampDto) -> Self {
-        Self {
-            command,
-            occurred_at,
-        }
-    }
-    /// Returns the typed session creation command.
-    #[must_use]
-    pub const fn command(&self) -> &CreateSessionCommandDto {
-        &self.command
-    }
-    /// Returns the externally selected creation time.
-    #[must_use]
-    pub const fn occurred_at(&self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
-/// Inputs required to durably accept a turn, including its possible first-run identity.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AcceptUserTurnInputDto {
-    session_id: SessionId,
-    idempotency_key: IdempotencyKey,
-    content: String,
-    proposed_run_id: RunId,
-    config_snapshot: ConfigSnapshotDto,
-    occurred_at: TimestampDto,
-}
-
-impl AcceptUserTurnInputDto {
-    /// Creates complete turn-acceptance storage input.
-    ///
-    /// `proposed_run_id` and `config_snapshot` are committed if this turn starts
-    /// immediately, or retained as the immutable future-run selection if queued.
-    /// Repeating an accepted `idempotency_key` replays the current durable
-    /// outcome instead of recording a second turn.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when content is blank or the safe snapshot is
-    /// not suitable for persistence.
-    pub fn new(
-        session_id: SessionId,
-        idempotency_key: IdempotencyKey,
-        content: impl Into<String>,
-        proposed_run_id: RunId,
-        config_snapshot: ConfigSnapshotDto,
-        occurred_at: TimestampDto,
-    ) -> DtoResult<Self> {
-        let content = content.into();
-        if content.trim().is_empty() {
-            return Err(ErrorDto::validation(
-                "invalid_turn_content",
-                "user turn content must not be empty",
-            ));
-        }
-        config_snapshot.validate_for_persistence()?;
-        Ok(Self {
-            session_id,
-            idempotency_key,
-            content,
-            proposed_run_id,
-            config_snapshot,
-            occurred_at,
-        })
-    }
-    /// Returns the owning session.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-    /// Returns the caller-supplied repeatable-operation identity.
-    #[must_use]
-    pub const fn idempotency_key(&self) -> IdempotencyKey {
-        self.idempotency_key
-    }
-    /// Returns the user-authored content.
-    #[must_use]
-    pub fn content(&self) -> &str {
-        &self.content
-    }
-    /// Returns the run identity to use if this turn starts.
-    #[must_use]
-    pub const fn proposed_run_id(&self) -> RunId {
-        self.proposed_run_id
-    }
-    /// Returns the credential-free immutable configuration snapshot for the run.
-    #[must_use]
-    pub const fn config_snapshot(&self) -> &ConfigSnapshotDto {
-        &self.config_snapshot
-    }
-    /// Returns the mandatory immutable configuration revision.
-    #[must_use]
-    pub const fn config_revision_id(&self) -> ConfigRevisionId {
-        self.config_snapshot.revision_id()
-    }
-    /// Returns the externally selected acceptance time.
-    #[must_use]
-    pub const fn occurred_at(&self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
-/// Inputs required to remove a pending turn.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RemoveTurnInputDto {
-    command: RemoveTurnCommandDto,
-    occurred_at: TimestampDto,
-}
-
-impl RemoveTurnInputDto {
-    /// Creates typed pending-turn removal storage input.
-    #[must_use]
-    pub const fn new(command: RemoveTurnCommandDto, occurred_at: TimestampDto) -> Self {
-        Self {
-            command,
-            occurred_at,
-        }
-    }
-    /// Returns the typed removal command.
-    #[must_use]
-    pub const fn command(self) -> RemoveTurnCommandDto {
-        self.command
-    }
-    /// Returns the externally selected removal time.
-    #[must_use]
-    pub const fn occurred_at(self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
-/// Inputs required to append every pending user turn to one active run context.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ConsumePendingUserTurnsInputDto {
-    session_id: SessionId,
-    run_id: RunId,
-    occurred_at: TimestampDto,
-}
-
-impl ConsumePendingUserTurnsInputDto {
-    /// Creates a pending-turn join request for one active run.
-    #[must_use]
-    pub const fn new(session_id: SessionId, run_id: RunId, occurred_at: TimestampDto) -> Self {
-        Self {
-            session_id,
-            run_id,
-            occurred_at,
-        }
-    }
-    /// Returns the owning session identity.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-    /// Returns the target active run identity.
-    #[must_use]
-    pub const fn run_id(&self) -> RunId {
-        self.run_id
-    }
-    /// Returns the selected commit time.
-    #[must_use]
-    pub const fn occurred_at(&self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
 /// Immutable outcome for an accepted user turn after committing it durably.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AcceptedTurnOutcomeDto {
@@ -336,277 +160,6 @@ pub enum AcceptedTurnOutcomeDto {
     },
     /// The turn is a pending message that joins the active run context later.
     Pending(PendingTurnProjectionDto),
-}
-
-impl AcceptedTurnOutcomeDto {
-    /// Returns the committed run projection when the turn started a run.
-    #[must_use]
-    pub const fn started_run(&self) -> Option<RunProjectionDto> {
-        match self {
-            Self::Started { run, .. } => Some(*run),
-            Self::Pending(_) => None,
-        }
-    }
-    /// Returns the committed user message when the turn started a run.
-    #[must_use]
-    pub const fn started_message(&self) -> Option<&MessageProjectionDto> {
-        match self {
-            Self::Started { message, .. } => Some(message),
-            Self::Pending(_) => None,
-        }
-    }
-    /// Returns the committed pending turn when the turn was queued.
-    #[must_use]
-    pub const fn pending_turn(&self) -> Option<&PendingTurnProjectionDto> {
-        match self {
-            Self::Started { .. } => None,
-            Self::Pending(turn) => Some(turn),
-        }
-    }
-}
-
-/// Inputs required to commit one run-status transition.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TransitionRunInputDto {
-    session_id: SessionId,
-    run_id: RunId,
-    status: RunStatusDto,
-    occurred_at: TimestampDto,
-}
-
-impl TransitionRunInputDto {
-    /// Creates typed run-transition storage input.
-    #[must_use]
-    pub const fn new(
-        session_id: SessionId,
-        run_id: RunId,
-        status: RunStatusDto,
-        occurred_at: TimestampDto,
-    ) -> Self {
-        Self {
-            session_id,
-            run_id,
-            status,
-            occurred_at,
-        }
-    }
-    /// Returns the owning session.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-    /// Returns the affected run.
-    #[must_use]
-    pub const fn run_id(&self) -> RunId {
-        self.run_id
-    }
-    /// Returns the requested successor status.
-    #[must_use]
-    pub const fn status(&self) -> RunStatusDto {
-        self.status
-    }
-    /// Returns the externally selected transition time.
-    #[must_use]
-    pub const fn occurred_at(&self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
-/// Inputs required to commit one terminal run outcome.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FinishRunInputDto {
-    session_id: SessionId,
-    run_id: RunId,
-    status: RunStatusDto,
-    usage: Option<UsageDto>,
-    finish_reason: Option<FinishReasonDto>,
-    error_code: Option<String>,
-    error_message: Option<String>,
-    occurred_at: TimestampDto,
-}
-
-impl FinishRunInputDto {
-    /// Creates a terminal run-outcome commit request.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the status is not terminal, when the
-    /// error pair is incomplete or blank, or when a carried value contains a NUL
-    /// byte.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "The flat terminal-outcome payload keeps one validating constructor."
-    )]
-    pub fn new(
-        session_id: SessionId,
-        run_id: RunId,
-        status: RunStatusDto,
-        usage: Option<UsageDto>,
-        finish_reason: Option<FinishReasonDto>,
-        error_code: Option<String>,
-        error_message: Option<String>,
-        occurred_at: TimestampDto,
-    ) -> DtoResult<Self> {
-        if !run_status_is_terminal(status) {
-            return Err(ErrorDto::validation(
-                "invalid_run_outcome",
-                "a terminal run outcome needs a terminal status",
-            ));
-        }
-        let error_valid = match (&error_code, &error_message) {
-            (None, None) => true,
-            (Some(code), Some(message)) => {
-                !code.trim().is_empty()
-                    && !message.trim().is_empty()
-                    && !code.contains('\0')
-                    && !message.contains('\0')
-            }
-            _ => false,
-        };
-        if !error_valid {
-            return Err(ErrorDto::validation(
-                "invalid_run_outcome",
-                "a terminal run outcome carries either both error fields or neither",
-            ));
-        }
-        Ok(Self {
-            session_id,
-            run_id,
-            status,
-            usage,
-            finish_reason,
-            error_code,
-            error_message,
-            occurred_at,
-        })
-    }
-    /// Returns the owning session.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-    /// Returns the finished run.
-    #[must_use]
-    pub const fn run_id(&self) -> RunId {
-        self.run_id
-    }
-    /// Returns the terminal status.
-    #[must_use]
-    pub const fn status(&self) -> RunStatusDto {
-        self.status
-    }
-    /// Returns the reported provider usage, when one was reported.
-    #[must_use]
-    pub const fn usage(&self) -> Option<&UsageDto> {
-        self.usage.as_ref()
-    }
-    /// Returns the provider finish reason, when one was reported.
-    #[must_use]
-    pub const fn finish_reason(&self) -> Option<FinishReasonDto> {
-        self.finish_reason
-    }
-    /// Returns the safe error code of a failed run, when it failed.
-    #[must_use]
-    pub fn error_code(&self) -> Option<&str> {
-        self.error_code.as_deref()
-    }
-    /// Returns the safe error message of a failed run, when it failed.
-    #[must_use]
-    pub fn error_message(&self) -> Option<&str> {
-        self.error_message.as_deref()
-    }
-    /// Returns the externally selected completion time.
-    #[must_use]
-    pub const fn occurred_at(&self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
-/// Inputs required to commit one transcript row.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AppendMessageInputDto {
-    message: MessageProjectionDto,
-    occurred_at: TimestampDto,
-}
-
-impl AppendMessageInputDto {
-    /// Creates one transcript-append input.
-    #[must_use]
-    pub const fn new(message: MessageProjectionDto, occurred_at: TimestampDto) -> Self {
-        Self {
-            message,
-            occurred_at,
-        }
-    }
-    /// Returns the validated transcript row to commit.
-    #[must_use]
-    pub const fn message(&self) -> &MessageProjectionDto {
-        &self.message
-    }
-    /// Returns the externally selected commit time.
-    #[must_use]
-    pub const fn occurred_at(&self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
-/// Inputs required to commit one tool result with its answering transcript row.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WriteToolResultInputDto {
-    evidence: ToolResultEvidenceDto,
-    message: MessageProjectionDto,
-}
-
-impl WriteToolResultInputDto {
-    /// Creates one tool-result commit request.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the answering message is not a
-    /// `tool_result` row for the same session, run, call, and tool identity.
-    pub fn new(evidence: ToolResultEvidenceDto, message: MessageProjectionDto) -> DtoResult<Self> {
-        if message.kind() != MessageKindDto::ToolResult
-            || message.session_id() != evidence.session_id()
-            || message.run_id() != Some(evidence.run_id())
-            || message.tool_call_id() != Some(evidence.call_id())
-            || message.tool_id() != Some(evidence.tool_id())
-        {
-            return Err(ErrorDto::validation(
-                "invalid_tool_result",
-                "a tool result commits with its own answering transcript row",
-            ));
-        }
-        Ok(Self { evidence, message })
-    }
-    /// Returns the typed durable evidence.
-    #[must_use]
-    pub const fn evidence(&self) -> &ToolResultEvidenceDto {
-        &self.evidence
-    }
-    /// Returns the answering transcript row committed in the same transaction.
-    #[must_use]
-    pub const fn message(&self) -> &MessageProjectionDto {
-        &self.message
-    }
-}
-
-/// Inputs required to mark all persisted unfinished runs interrupted at recovery time.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RecoverUnfinishedRunsInputDto {
-    recovered_at: TimestampDto,
-}
-
-impl RecoverUnfinishedRunsInputDto {
-    /// Creates recovery input with an explicit commit time.
-    #[must_use]
-    pub const fn new(recovered_at: TimestampDto) -> Self {
-        Self { recovered_at }
-    }
-    /// Returns the recovery time.
-    #[must_use]
-    pub const fn recovered_at(self) -> TimestampDto {
-        self.recovered_at
-    }
 }
 
 /// DTO-only full session model context for one current starting run.
@@ -685,17 +238,36 @@ pub trait StorageRepositoryDto {
     ///
     /// # Errors
     ///
-    /// Returns a validation or conflict error when the supplied creation input
-    /// cannot be committed, or an unavailable error when durable storage fails.
-    fn create_session(&self, input: CreateSessionInputDto) -> DtoResult<SessionProjectionDto>;
+    /// Returns a validation or conflict error when the supplied creation
+    /// command cannot be committed, or an unavailable error when durable
+    /// storage fails.
+    fn create_session(
+        &self,
+        command: CreateSessionCommandDto,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<SessionProjectionDto>;
 
     /// Accepts a turn and atomically records whether it starts a run or becomes a pending message.
     ///
+    /// `proposed_run_id` and `config_snapshot` are committed if this turn starts
+    /// immediately, or retained as the immutable future-run selection if queued.
+    /// Repeating an accepted `idempotency_key` replays the current durable
+    /// outcome instead of recording a second turn.
+    ///
     /// # Errors
     ///
-    /// Returns a validation, not-found, or conflict error when the turn cannot
-    /// be accepted for its session, or an unavailable error when storage fails.
-    fn accept_user_turn(&self, input: AcceptUserTurnInputDto) -> DtoResult<AcceptedTurnOutcomeDto>;
+    /// Returns a validation error when content is blank, a validation,
+    /// not-found, or conflict error when the turn cannot be accepted for its
+    /// session, or an unavailable error when storage fails.
+    fn accept_user_turn(
+        &self,
+        session_id: SessionId,
+        idempotency_key: IdempotencyKey,
+        content: &str,
+        proposed_run_id: RunId,
+        config_snapshot: ConfigSnapshotDto,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<AcceptedTurnOutcomeDto>;
 
     /// Removes a not-yet-seen pending turn and returns its committed projection.
     ///
@@ -703,7 +275,11 @@ pub trait StorageRepositoryDto {
     ///
     /// Returns a not-found or conflict error when the pending turn cannot be
     /// removed, or an unavailable error when durable storage fails.
-    fn remove_turn(&self, input: RemoveTurnInputDto) -> DtoResult<PendingTurnProjectionDto>;
+    fn remove_turn(
+        &self,
+        command: RemoveTurnCommandDto,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<PendingTurnProjectionDto>;
 
     /// Appends every pending user turn to one active run context in insertion order.
     ///
@@ -716,7 +292,9 @@ pub trait StorageRepositoryDto {
     /// cannot join its pending messages atomically.
     fn consume_pending_user_turns(
         &self,
-        input: ConsumePendingUserTurnsInputDto,
+        session_id: SessionId,
+        run_id: RunId,
+        occurred_at: TimestampDto,
     ) -> DtoResult<Vec<MessageProjectionDto>>;
 
     /// Transitions a run to one declared successor status.
@@ -725,15 +303,37 @@ pub trait StorageRepositoryDto {
     ///
     /// Returns a validation, not-found, or conflict error when the transition
     /// is invalid, or an unavailable error when storage fails.
-    fn transition_run(&self, input: TransitionRunInputDto) -> DtoResult<RunProjectionDto>;
+    fn transition_run(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        status: RunStatusDto,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<RunProjectionDto>;
 
     /// Commits one terminal run outcome with its usage, finish, and error evidence.
     ///
     /// # Errors
     ///
-    /// Returns a validation, not-found, or conflict error when the outcome is
-    /// invalid for the run, or an unavailable error when storage fails.
-    fn finish_run(&self, input: FinishRunInputDto) -> DtoResult<RunProjectionDto>;
+    /// Returns a validation error when the status is not terminal or the error
+    /// pair is incomplete, blank, or unsafe, a not-found or conflict error when
+    /// the outcome is invalid for the run, or an unavailable error when storage
+    /// fails.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "One flat terminal outcome keeps the single transaction at one call site."
+    )]
+    fn finish_run(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        status: RunStatusDto,
+        usage: Option<UsageDto>,
+        finish_reason: Option<FinishReasonDto>,
+        error_code: Option<String>,
+        error_message: Option<String>,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<RunProjectionDto>;
 
     /// Appends one transcript row and returns it as committed.
     ///
@@ -742,16 +342,25 @@ pub trait StorageRepositoryDto {
     /// Returns a validation, not-found, or conflict error when the row cannot be
     /// committed for its session and run, or an unavailable error when storage
     /// fails.
-    fn append_message(&self, input: AppendMessageInputDto) -> DtoResult<MessageProjectionDto>;
+    fn append_message(
+        &self,
+        message: MessageProjectionDto,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<MessageProjectionDto>;
 
     /// Commits one tool result with its answering transcript row in one transaction.
     ///
     /// # Errors
     ///
-    /// Returns a validation, not-found, or conflict error when the scoped call
-    /// cannot record its result, or an unavailable error when storage fails.
-    fn write_tool_result(&self, input: WriteToolResultInputDto)
-    -> DtoResult<ToolResultEvidenceDto>;
+    /// Returns a validation error when the answering row is not a `tool_result`
+    /// row for the same session, run, call, and tool identity, a not-found or
+    /// conflict error when the scoped call cannot record its result, or an
+    /// unavailable error when storage fails.
+    fn write_tool_result(
+        &self,
+        evidence: ToolResultEvidenceDto,
+        message: MessageProjectionDto,
+    ) -> DtoResult<ToolResultEvidenceDto>;
 
     /// Loads typed evidence durably recorded for one tool call.
     ///
@@ -856,7 +465,7 @@ pub trait StorageRepositoryDto {
     /// committed.
     fn recover_unfinished_runs(
         &self,
-        input: RecoverUnfinishedRunsInputDto,
+        recovered_at: TimestampDto,
     ) -> DtoResult<Vec<RunProjectionDto>>;
 
     /// Records an already credential-free configuration revision snapshot.

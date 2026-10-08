@@ -19,10 +19,7 @@ use intention_proto::{
     SessionProjectionDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
-use intention_storage::{
-    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto, CreateSessionInputDto,
-    RemoveTurnInputDto, StorageRepositoryDto, ToolResultEvidenceDto, WriteToolResultInputDto,
-};
+use intention_storage::{AcceptedTurnOutcomeDto, StorageRepositoryDto, ToolResultEvidenceDto};
 use intention_tools::{
     InterruptCause, ToolDispatchOutcome, ToolInput, ToolResult, ToolService, WorkspaceRoot,
     partial_tool_result_content, render_tool_result_content,
@@ -236,9 +233,7 @@ where
             Some(call_id),
             Some(tool_id.to_owned()),
         )?;
-        let committed = self
-            .repository
-            .append_message(AppendMessageInputDto::new(message, occurred_at))?;
+        let committed = self.repository.append_message(message, occurred_at)?;
         publisher.observe_model_run_commit(&ModelRunCommitDto::Content(committed.clone()));
         Ok(committed)
     }
@@ -322,7 +317,7 @@ where
         )?;
         let committed = self
             .repository
-            .write_tool_result(WriteToolResultInputDto::new(evidence, message.clone())?)?;
+            .write_tool_result(evidence, message.clone())?;
         publisher.observe_model_run_commit(&ModelRunCommitDto::Content(message));
         Ok(committed)
     }
@@ -343,8 +338,7 @@ where
         command: CreateSessionCommandDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<SessionProjectionDto> {
-        self.repository
-            .create_session(CreateSessionInputDto::new(command, occurred_at))
+        self.repository.create_session(command, occurred_at)
     }
 
     /// Accepts a user turn and returns its committed durable outcome.
@@ -366,15 +360,14 @@ where
         config_snapshot: ConfigSnapshotDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<AcceptedTurnOutcomeDto> {
-        self.repository
-            .accept_user_turn(AcceptUserTurnInputDto::new(
-                command.session_id(),
-                command.idempotency_key(),
-                command.content(),
-                proposed_run_id,
-                config_snapshot,
-                occurred_at,
-            )?)
+        self.repository.accept_user_turn(
+            command.session_id(),
+            command.idempotency_key(),
+            command.content(),
+            proposed_run_id,
+            config_snapshot,
+            occurred_at,
+        )
     }
 
     /// Removes one not-yet-seen pending turn and returns its committed projection.
@@ -387,8 +380,7 @@ where
         command: RemoveTurnCommandDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<PendingTurnProjectionDto> {
-        self.repository
-            .remove_turn(RemoveTurnInputDto::new(command, occurred_at))
+        self.repository.remove_turn(command, occurred_at)
     }
 
     /// Accepts an interruption request for one exact active run.

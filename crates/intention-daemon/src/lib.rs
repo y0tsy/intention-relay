@@ -31,7 +31,7 @@ use intention_proto::{
 use intention_proto::{
     ProtocolDaemonMessageDto, ProtocolResultDto, RunStreamFrameDto, decode_request_line,
 };
-use intention_storage::{FinishRunInputDto, StorageRepositoryDto};
+use intention_storage::StorageRepositoryDto;
 use intention_tools::{ToolInput, WorkspaceRoot};
 use intention_transport::{AsyncLocalListener, AsyncMessageSender, LocalEndpoint};
 
@@ -312,7 +312,7 @@ impl HostState {
         if run_status_is_terminal(run.status()) {
             return Ok(());
         }
-        repository.finish_run(FinishRunInputDto::new(
+        repository.finish_run(
             session_id,
             run_id,
             RunStatusDto::Failed,
@@ -321,7 +321,7 @@ impl HostState {
             Some(failure_code.to_owned()),
             Some("the scheduled run execution failed".to_owned()),
             composition::now()?,
-        )?)?;
+        )?;
         Ok(())
     }
 
