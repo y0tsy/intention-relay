@@ -14,6 +14,3 @@ fs4 = { version = "1.1.0", features = ["sync"] }
 intention-transport = { path = "../intention-transport", version = "=0.0.0" }
 intention-proto = { path = "../intention-proto", version = "=0.0.0" }
 tokio = { version = "1.53.1", features = ["rt", "time"] }
-
-[dev-dependencies]
-tempfile = "3.24.0"
