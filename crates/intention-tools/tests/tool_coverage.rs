@@ -16,9 +16,11 @@ use common::{fixture_dir, service};
 use intention_proto::ToolCallId;
 #[cfg(unix)]
 use intention_tools::ToolDispatchOutcome;
+#[cfg(unix)]
+use intention_tools::{EditInput, ReadInput, WriteInput};
 use intention_tools::{
-    CancellationSignal, EditInput, GrepInput, GrepScope, ReadInput, TOOL_SCHEMA_VERSION,
-    ToolExecutionMetadata, ToolInput, ToolPolicy, ToolProcessStatus, ToolResult, WriteInput,
+    CancellationSignal, GrepInput, GrepScope, TOOL_SCHEMA_VERSION, ToolExecutionMetadata,
+    ToolInput, ToolPolicy, ToolProcessStatus, ToolResult,
 };
 
 #[test]

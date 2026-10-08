@@ -11,9 +11,9 @@ use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
 use intention_tools::{
     BoundedText, CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepMatch,
     GrepResult, GrepScope, InterruptCause, PathsResult, REDACTED_WORKSPACE_CWD, ReadInput,
-    TOOL_DESCRIPTOR_REVISION, TOOL_SCHEMA_VERSION, TextResult, ToolDispatchOutcome, ToolId,
-    ToolInput, ToolProcessStatus, ToolProjectedContent, ToolResult, ToolResultProjection,
-    WriteInput, WriteResult, model_visible_descriptors, registry,
+    TOOL_SCHEMA_VERSION, TextResult, ToolDispatchOutcome, ToolId, ToolInput, ToolProcessStatus,
+    ToolProjectedContent, ToolResult, ToolResultProjection, WriteInput, WriteResult,
+    model_visible_descriptors,
 };
 
 #[test]
@@ -747,32 +747,8 @@ fn glob_empty_and_grep_read_failure_are_typed() {
 }
 
 #[test]
-fn dto_metadata_and_policy_round_trip_all_variants() {
-    use intention_tools::{MutationKind, ToolCapability, ToolPolicy};
-    for value in [
-        MutationKind::ReadOnly,
-        MutationKind::Mutating,
-        MutationKind::Process,
-    ] {
-        let json = serde_json::to_string(&value).expect("mutation json");
-        assert_eq!(
-            serde_json::from_str::<MutationKind>(&json).expect("mutation"),
-            value
-        );
-    }
-    for value in [
-        ToolCapability::Read,
-        ToolCapability::Search,
-        ToolCapability::Write,
-        ToolCapability::Edit,
-        ToolCapability::Execute,
-    ] {
-        let json = serde_json::to_string(&value).expect("capability json");
-        assert_eq!(
-            serde_json::from_str::<ToolCapability>(&json).expect("capability"),
-            value
-        );
-    }
+fn tool_policy_round_trips_all_variants() {
+    use intention_tools::ToolPolicy;
     for value in [ToolPolicy::Allowed, ToolPolicy::Denied] {
         let json = serde_json::to_string(&value).expect("policy json");
         assert_eq!(
@@ -1104,101 +1080,11 @@ fn exact_typed_errors_cover_search_edit_and_spawn_failures() {
     assert_eq!(error.code(), "tool_execute_spawn_failed");
 }
 
+/// The advertised list is the six exposed tools in order, each carrying a
+/// description and a model-facing input schema, and every advertised wire
+/// name decodes through the typed input authority.
 #[test]
-fn registry_exposes_all_fourteen_slots_in_canonical_order() {
-    let expected = [
-        (ToolId::Read, "read"),
-        (ToolId::Write, "write"),
-        (ToolId::Edit, "edit"),
-        (ToolId::Execute, "execute"),
-        (ToolId::Glob, "glob"),
-        (ToolId::Grep, "grep"),
-        (ToolId::FetchUrl, "fetch_url"),
-        (ToolId::AskUser, "ask_user"),
-        (ToolId::Todo, "todo"),
-        (ToolId::Retrieve, "retrieve"),
-        (ToolId::PlanSubmit, "plan_submit"),
-        (ToolId::SubAgent, "sub_agent"),
-        (ToolId::Expand, "expand"),
-        (ToolId::Mcp, "mcp"),
-    ];
-    let descriptors = registry();
-    assert_eq!(descriptors.len(), expected.len());
-    for (descriptor, (id, name)) in descriptors.into_iter().zip(expected) {
-        assert_eq!(descriptor.id(), id);
-        assert_eq!(descriptor.id().as_str(), name);
-    }
-    let mut sorted_ids = expected.iter().map(|(id, _)| *id).collect::<Vec<_>>();
-    sorted_ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-    sorted_ids.dedup_by(|a, b| a.as_str() == b.as_str());
-    assert_eq!(sorted_ids.len(), expected.len());
-}
-
-#[test]
-fn all_descriptor_metadata_values_are_verified() {
-    use intention_tools::{MutationKind, ToolCapability, ToolPolicy, ToolRegistrationStatus};
-    let expected = [
-        (
-            ToolId::Read,
-            MutationKind::ReadOnly,
-            &[ToolCapability::Read][..],
-        ),
-        (
-            ToolId::Write,
-            MutationKind::Mutating,
-            &[ToolCapability::Write][..],
-        ),
-        (
-            ToolId::Edit,
-            MutationKind::Mutating,
-            &[ToolCapability::Edit][..],
-        ),
-        (
-            ToolId::Execute,
-            MutationKind::Process,
-            &[ToolCapability::Execute][..],
-        ),
-        (
-            ToolId::Glob,
-            MutationKind::ReadOnly,
-            &[ToolCapability::Search][..],
-        ),
-        (
-            ToolId::Grep,
-            MutationKind::ReadOnly,
-            &[ToolCapability::Search][..],
-        ),
-    ];
-    for (descriptor, (id, mutation, capabilities)) in
-        registry().into_iter().take(expected.len()).zip(expected)
-    {
-        assert_eq!(descriptor.id(), id);
-        assert_eq!(descriptor.mutation(), mutation);
-        assert_eq!(descriptor.capabilities(), capabilities);
-        assert_eq!(descriptor.schema_version(), TOOL_SCHEMA_VERSION);
-        assert_eq!(descriptor.descriptor_revision(), TOOL_DESCRIPTOR_REVISION);
-        assert!(descriptor.input_schema().is_some());
-        assert!(descriptor.output_schema().is_some());
-        let input_schema_json: serde_json::Value =
-            serde_json::from_str(descriptor.input_schema().expect("active input schema"))
-                .expect("input schema json");
-        assert!(input_schema_json.is_object());
-        assert_eq!(input_schema_json["type"], "object");
-        let output_schema_json: serde_json::Value =
-            serde_json::from_str(descriptor.output_schema().expect("active output schema"))
-                .expect("output schema json");
-        assert!(output_schema_json.is_object());
-        assert_eq!(output_schema_json["type"], "object");
-        assert_eq!(descriptor.status(), ToolRegistrationStatus::Active);
-        assert_eq!(descriptor.observability_policy(), ToolPolicy::Allowed);
-        assert!(!descriptor.display_name().is_empty());
-        assert!(!descriptor.description().is_empty());
-    }
-}
-
-#[test]
-fn model_visible_descriptors_are_the_six_active_tools_in_registry_order() {
-    use intention_tools::ToolRegistrationStatus;
+fn model_visible_descriptors_are_the_six_exposed_tools_in_order() {
     let expected = [
         ToolId::Read,
         ToolId::Write,
@@ -1209,46 +1095,57 @@ fn model_visible_descriptors_are_the_six_active_tools_in_registry_order() {
     ];
     let visible = model_visible_descriptors();
     assert_eq!(visible.len(), expected.len());
-    for (descriptor, id) in visible.into_iter().zip(expected) {
-        assert_eq!(descriptor.id(), id);
-        assert_eq!(descriptor.status(), ToolRegistrationStatus::Active);
-        assert!(!descriptor.description().is_empty());
-        let schema = descriptor.input_schema().expect("model input schema");
-        assert!(!schema.is_empty());
+    for (spec, id) in visible.into_iter().zip(expected) {
+        assert_eq!(spec.id(), id);
+        assert!(!spec.description().is_empty());
+        let schema = spec.input_schema().expect("model input schema");
+        let schema_json: serde_json::Value =
+            serde_json::from_str(schema).expect("input schema json");
+        assert!(schema_json.is_object());
+        assert_eq!(schema_json["type"], "object");
+        if let Err(error) = ToolInput::from_arguments_json(id.as_str(), "{}") {
+            assert_ne!(
+                error.code(),
+                "unknown_tool",
+                "the decoder rejects the advertised tool {id}"
+            );
+        }
     }
 }
 
+/// The former reserved slots are not part of the product: their names stay
+/// undecodable and are never advertised to the model.
 #[test]
-fn reserved_slots_have_no_schemas_or_revision() {
-    use intention_tools::ToolRegistrationStatus;
-    let reserved_in_documented_order = [
-        ToolId::FetchUrl,
-        ToolId::AskUser,
-        ToolId::Todo,
-        ToolId::Retrieve,
-        ToolId::PlanSubmit,
-        ToolId::SubAgent,
-        ToolId::Expand,
-        ToolId::Mcp,
+fn former_reserved_tool_names_stay_unknown() {
+    let reserved = [
+        "fetch_url",
+        "ask_user",
+        "todo",
+        "retrieve",
+        "plan_submit",
+        "sub_agent",
+        "expand",
+        "mcp",
     ];
-    for (descriptor, id) in registry()
+    let advertised = model_visible_descriptors()
         .into_iter()
-        .skip(6)
-        .zip(reserved_in_documented_order)
-    {
-        assert_eq!(descriptor.id(), id);
-        assert_eq!(descriptor.status(), ToolRegistrationStatus::Reserved);
-        assert_eq!(descriptor.descriptor_revision(), 0);
-        assert_eq!(descriptor.schema_version(), 0);
-        assert_eq!(descriptor.input_schema(), None);
-        assert_eq!(descriptor.output_schema(), None);
-        assert!(descriptor.capabilities().is_empty());
+        .map(|spec| spec.id().as_str())
+        .collect::<Vec<_>>();
+    for name in reserved {
+        assert!(!advertised.contains(&name), "{name} is not advertised");
+        let error = ToolInput::from_arguments_json(name, "{}")
+            .expect_err("an unexposed tool name is not decodable");
+        assert_eq!(
+            error.code(),
+            "unknown_tool",
+            "decoded unexposed tool {name}"
+        );
     }
 }
 
-/// Asserts one descriptor schema document is a JSON object whose properties
-/// match the keys of the serialized typed payload, and that every required
-/// property is present and non-null in that payload.
+/// Asserts one tool schema document is a JSON object whose properties match
+/// the keys of the serialized typed payload, and that every required property
+/// is present and non-null in that payload.
 fn assert_schema_agrees_with_payload(
     id: ToolId,
     schema_json: &str,
@@ -1284,9 +1181,8 @@ fn assert_schema_agrees_with_payload(
     }
 }
 
-/// The argument side asserts each descriptor's input schema (the former model
-/// parameter schema) against the serialized typed inputs; the result side
-/// mirrors it against the serialized typed result payloads.
+/// Asserts each advertised tool's input schema (the former model parameter
+/// schema) against the serialized typed inputs.
 #[test]
 fn model_parameter_schemas_agree_with_serialized_inputs() {
     let path = WorkspaceRelativePathDto::parse("src/main.rs").expect("path");
@@ -1347,95 +1243,24 @@ fn model_parameter_schemas_agree_with_serialized_inputs() {
             serde_json::to_value(GrepInput {
                 pattern: text("needle"),
                 scope: Some(GrepScope::Directory { path: path.clone() }),
-                path: Some(path.clone()),
+                path: Some(path),
             })
             .expect("grep fixture"),
         ),
     ];
-    let result_fixtures = [
-        (
-            ToolId::Read,
-            &["text", "truncated"][..],
-            &["text", "truncated"][..],
-            serde_json::to_value(TextResult {
-                text: text("read output"),
-                truncated: false,
-            })
-            .expect("read result fixture"),
-        ),
-        (
-            ToolId::Write,
-            &["bytes"][..],
-            &["bytes"][..],
-            serde_json::to_value(WriteResult { bytes: 5 }).expect("write result fixture"),
-        ),
-        (
-            ToolId::Edit,
-            &["bytes"][..],
-            &["bytes"][..],
-            serde_json::to_value(WriteResult { bytes: 7 }).expect("edit result fixture"),
-        ),
-        (
-            ToolId::Execute,
-            &["text", "truncated"][..],
-            &["text", "truncated"][..],
-            serde_json::to_value(TextResult {
-                text: text("execute output"),
-                truncated: true,
-            })
-            .expect("execute result fixture"),
-        ),
-        (
-            ToolId::Glob,
-            &["paths", "truncated"][..],
-            &["paths", "truncated"][..],
-            serde_json::to_value(PathsResult {
-                paths: vec![path.clone()],
-                truncated: false,
-            })
-            .expect("glob result fixture"),
-        ),
-        (
-            ToolId::Grep,
-            &["matches", "truncated"][..],
-            &["matches", "truncated"][..],
-            serde_json::to_value(GrepResult {
-                matches: vec![GrepMatch {
-                    path,
-                    line: 1,
-                    column: 1,
-                    fragment: text("needle"),
-                }],
-                truncated: false,
-            })
-            .expect("grep result fixture"),
-        ),
-    ];
     let visible = model_visible_descriptors();
     assert_eq!(visible.len(), input_fixtures.len());
-    assert_eq!(visible.len(), result_fixtures.len());
-    for descriptor in visible {
+    for spec in visible {
         let input_fixture = input_fixtures
             .iter()
-            .find(|entry| entry.0 == descriptor.id())
+            .find(|entry| entry.0 == spec.id())
             .expect("input fixture for every model-visible tool");
         assert_schema_agrees_with_payload(
-            descriptor.id(),
-            descriptor.input_schema().expect("input schema"),
+            spec.id(),
+            spec.input_schema().expect("input schema"),
             input_fixture.1,
             input_fixture.2,
             &input_fixture.3,
-        );
-        let result_fixture = result_fixtures
-            .iter()
-            .find(|entry| entry.0 == descriptor.id())
-            .expect("result fixture for every model-visible tool");
-        assert_schema_agrees_with_payload(
-            descriptor.id(),
-            descriptor.output_schema().expect("result schema"),
-            result_fixture.1,
-            result_fixture.2,
-            &result_fixture.3,
         );
     }
 }

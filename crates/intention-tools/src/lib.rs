@@ -12,10 +12,7 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
-mod execute;
-mod file;
 mod hooks;
-mod search;
 mod workspace;
 
 pub use hooks::{
@@ -241,23 +238,6 @@ impl CancellationSignal {
 }
 
 pub const TOOL_SCHEMA_VERSION: u16 = 1;
-pub const TOOL_DESCRIPTOR_REVISION: u16 = 1;
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MutationKind {
-    ReadOnly,
-    Mutating,
-    Process,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolCapability {
-    Read,
-    Search,
-    Write,
-    Edit,
-    Execute,
-}
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolPolicy {
@@ -302,12 +282,6 @@ impl ToolProcessStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolRegistrationStatus {
-    Active,
-    Reserved,
-}
 /// Redacted execution metadata for the durable result boundary.
 ///
 /// `cwd` is the stable [`REDACTED_WORKSPACE_CWD`] identity marker and never an
@@ -880,14 +854,6 @@ pub enum ToolId {
     Execute,
     Glob,
     Grep,
-    FetchUrl,
-    AskUser,
-    Todo,
-    Retrieve,
-    PlanSubmit,
-    SubAgent,
-    Expand,
-    Mcp,
 }
 
 impl ToolId {
@@ -898,14 +864,6 @@ impl ToolId {
             Self::Read => "read",
             Self::Glob => "glob",
             Self::Grep => "grep",
-            Self::FetchUrl => "fetch_url",
-            Self::AskUser => "ask_user",
-            Self::Todo => "todo",
-            Self::Retrieve => "retrieve",
-            Self::PlanSubmit => "plan_submit",
-            Self::SubAgent => "sub_agent",
-            Self::Expand => "expand",
-            Self::Mcp => "mcp",
             Self::Write => "write",
             Self::Edit => "edit",
             Self::Execute => "execute",
@@ -918,24 +876,20 @@ impl Display for ToolId {
     }
 }
 
-/// Metadata describing one registered tool.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-pub struct ToolDescriptor {
+/// Static specification of one tool.
+///
+/// The specification carries the three strings the model boundary consumes:
+/// the tool identity, its description, and the JSON Schema document text for
+/// its typed model arguments. The typed input DTO is the decode authority and
+/// the typed result DTO is the result contract, so no result schema is kept.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ToolSpec {
     id: ToolId,
-    display_name: &'static str,
     description: &'static str,
-    /// JSON Schema document text for the tool's typed model arguments.
     input_schema: Option<&'static str>,
-    /// JSON Schema document text for the tool's typed result payload.
-    output_schema: Option<&'static str>,
-    descriptor_revision: u16,
-    schema_version: u16,
-    mutation: MutationKind,
-    capabilities: &'static [ToolCapability],
-    observability_policy: ToolPolicy,
-    status: ToolRegistrationStatus,
 }
-impl ToolDescriptor {
+impl ToolSpec {
+    /// Returns the tool this specification describes.
     #[must_use]
     pub const fn id(self) -> ToolId {
         self.id
@@ -944,45 +898,11 @@ impl ToolDescriptor {
     pub const fn description(self) -> &'static str {
         self.description
     }
-    #[must_use]
-    pub const fn display_name(self) -> &'static str {
-        self.display_name
-    }
     /// Returns the JSON Schema document text for this tool's typed model
     /// arguments, when the tool exposes one.
     #[must_use]
     pub const fn input_schema(self) -> Option<&'static str> {
         self.input_schema
-    }
-    /// Returns the JSON Schema document text for this tool's typed result
-    /// payload, when the tool exposes one.
-    #[must_use]
-    pub const fn output_schema(self) -> Option<&'static str> {
-        self.output_schema
-    }
-    #[must_use]
-    pub const fn descriptor_revision(self) -> u16 {
-        self.descriptor_revision
-    }
-    #[must_use]
-    pub const fn schema_version(self) -> u16 {
-        self.schema_version
-    }
-    #[must_use]
-    pub const fn mutation(self) -> MutationKind {
-        self.mutation
-    }
-    #[must_use]
-    pub const fn capabilities(self) -> &'static [ToolCapability] {
-        self.capabilities
-    }
-    #[must_use]
-    pub const fn observability_policy(self) -> ToolPolicy {
-        self.observability_policy
-    }
-    #[must_use]
-    pub const fn status(self) -> ToolRegistrationStatus {
-        self.status
     }
 }
 
@@ -1104,291 +1024,54 @@ pub const GREP_INPUT_SCHEMA: &str = r#"{
   "required": ["pattern"]
 }"#;
 
-/// JSON Schema for the `read` and `execute` tools' typed result payload.
-pub const TEXT_RESULT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "text": {
-      "type": "string",
-      "description": "Bounded text produced by the tool."
-    },
-    "truncated": {
-      "type": "boolean",
-      "description": "Whether the byte window cut the retained text."
-    }
-  },
-  "required": ["text", "truncated"]
-}"#;
-
-/// JSON Schema for the `write` and `edit` tools' typed result payload.
-pub const WRITE_RESULT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "bytes": {
-      "type": "integer",
-      "description": "Byte count written by the mutation."
-    }
-  },
-  "required": ["bytes"]
-}"#;
-
-/// JSON Schema for the `glob` tool's typed result payload.
-pub const PATHS_RESULT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "paths": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "Workspace-relative paths retained inside the shared search-result window."
-    },
-    "truncated": {
-      "type": "boolean",
-      "description": "Whether the byte window cut further matching paths."
-    }
-  },
-  "required": ["paths", "truncated"]
-}"#;
-
-/// JSON Schema for the `grep` tool's typed result payload.
-pub const GREP_RESULT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "matches": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "path": {
-            "type": "string",
-            "description": "Workspace-relative path of the match."
-          },
-          "line": {
-            "type": "integer",
-            "description": "One-based line number of the match."
-          },
-          "column": {
-            "type": "integer",
-            "description": "One-based column of the match."
-          },
-          "fragment": {
-            "type": "string",
-            "description": "Bounded text of the matching line."
-          }
-        },
-        "required": ["path", "line", "column", "fragment"]
-      },
-      "description": "Workspace-relative matches retained inside the shared search-result window."
-    },
-    "truncated": {
-      "type": "boolean",
-      "description": "Whether a dropped read window, an oversized line, or the retained serialized-match window cut content."
-    }
-  },
-  "required": ["matches", "truncated"]
-}"#;
-
-/// The immutable built-in registry.
+/// Returns the static specification of one tool.
 #[must_use]
-pub const fn registry() -> [ToolDescriptor; 14] {
-    [
-        ToolDescriptor {
-            id: ToolId::Read,
-            display_name: "Read",
-            input_schema: Some(READ_INPUT_SCHEMA),
-            output_schema: Some(TEXT_RESULT_SCHEMA),
-            descriptor_revision: TOOL_DESCRIPTOR_REVISION,
+pub const fn spec(id: ToolId) -> ToolSpec {
+    match id {
+        ToolId::Read => ToolSpec {
+            id,
             description: "Read bounded text from a workspace file.",
-            schema_version: TOOL_SCHEMA_VERSION,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[ToolCapability::Read],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Active,
+            input_schema: Some(READ_INPUT_SCHEMA),
         },
-        ToolDescriptor {
-            id: ToolId::Write,
-            display_name: "Write",
-            input_schema: Some(WRITE_INPUT_SCHEMA),
-            output_schema: Some(WRITE_RESULT_SCHEMA),
-            descriptor_revision: TOOL_DESCRIPTOR_REVISION,
+        ToolId::Write => ToolSpec {
+            id,
             description: "Write bounded text to a workspace file.",
-            schema_version: TOOL_SCHEMA_VERSION,
-            mutation: MutationKind::Mutating,
-            capabilities: &[ToolCapability::Write],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Active,
+            input_schema: Some(WRITE_INPUT_SCHEMA),
         },
-        ToolDescriptor {
-            id: ToolId::Edit,
-            display_name: "Edit",
-            input_schema: Some(EDIT_INPUT_SCHEMA),
-            output_schema: Some(WRITE_RESULT_SCHEMA),
-            descriptor_revision: TOOL_DESCRIPTOR_REVISION,
+        ToolId::Edit => ToolSpec {
+            id,
             description: "Apply a bounded text replacement.",
-            schema_version: TOOL_SCHEMA_VERSION,
-            mutation: MutationKind::Mutating,
-            capabilities: &[ToolCapability::Edit],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Active,
+            input_schema: Some(EDIT_INPUT_SCHEMA),
         },
-        ToolDescriptor {
-            id: ToolId::Execute,
-            display_name: "Execute",
-            input_schema: Some(EXECUTE_INPUT_SCHEMA),
-            output_schema: Some(TEXT_RESULT_SCHEMA),
-            descriptor_revision: TOOL_DESCRIPTOR_REVISION,
+        ToolId::Execute => ToolSpec {
+            id,
             description: "Execute an explicitly bounded command.",
-            schema_version: TOOL_SCHEMA_VERSION,
-            mutation: MutationKind::Process,
-            capabilities: &[ToolCapability::Execute],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Active,
+            input_schema: Some(EXECUTE_INPUT_SCHEMA),
         },
-        ToolDescriptor {
-            id: ToolId::Glob,
-            display_name: "Glob",
-            input_schema: Some(GLOB_INPUT_SCHEMA),
-            output_schema: Some(PATHS_RESULT_SCHEMA),
-            descriptor_revision: TOOL_DESCRIPTOR_REVISION,
+        ToolId::Glob => ToolSpec {
+            id,
             description: "List workspace paths matching a pattern.",
-            schema_version: TOOL_SCHEMA_VERSION,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[ToolCapability::Search],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Active,
+            input_schema: Some(GLOB_INPUT_SCHEMA),
         },
-        ToolDescriptor {
-            id: ToolId::Grep,
-            display_name: "Grep",
-            input_schema: Some(GREP_INPUT_SCHEMA),
-            output_schema: Some(GREP_RESULT_SCHEMA),
-            descriptor_revision: TOOL_DESCRIPTOR_REVISION,
+        ToolId::Grep => ToolSpec {
+            id,
             description: "Search bounded workspace text.",
-            schema_version: TOOL_SCHEMA_VERSION,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[ToolCapability::Search],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Active,
+            input_schema: Some(GREP_INPUT_SCHEMA),
         },
-        ToolDescriptor {
-            id: ToolId::FetchUrl,
-            display_name: "Fetch URL",
-            input_schema: None,
-            output_schema: None,
-            descriptor_revision: 0,
-            description: "Reserved tool slot.",
-            schema_version: 0,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Reserved,
-        },
-        ToolDescriptor {
-            id: ToolId::AskUser,
-            display_name: "Ask User",
-            input_schema: None,
-            output_schema: None,
-            descriptor_revision: 0,
-            description: "Reserved tool slot.",
-            schema_version: 0,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Reserved,
-        },
-        ToolDescriptor {
-            id: ToolId::Todo,
-            display_name: "Todo",
-            input_schema: None,
-            output_schema: None,
-            descriptor_revision: 0,
-            description: "Reserved tool slot.",
-            schema_version: 0,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Reserved,
-        },
-        ToolDescriptor {
-            id: ToolId::Retrieve,
-            display_name: "Retrieve",
-            input_schema: None,
-            output_schema: None,
-            descriptor_revision: 0,
-            description: "Reserved tool slot.",
-            schema_version: 0,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Reserved,
-        },
-        ToolDescriptor {
-            id: ToolId::PlanSubmit,
-            display_name: "Plan Submit",
-            input_schema: None,
-            output_schema: None,
-            descriptor_revision: 0,
-            description: "Reserved tool slot.",
-            schema_version: 0,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Reserved,
-        },
-        ToolDescriptor {
-            id: ToolId::SubAgent,
-            display_name: "Sub-Agent",
-            input_schema: None,
-            output_schema: None,
-            descriptor_revision: 0,
-            description: "Reserved tool slot.",
-            schema_version: 0,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Reserved,
-        },
-        ToolDescriptor {
-            id: ToolId::Expand,
-            display_name: "Expand",
-            input_schema: None,
-            output_schema: None,
-            descriptor_revision: 0,
-            description: "Reserved tool slot.",
-            schema_version: 0,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Reserved,
-        },
-        ToolDescriptor {
-            id: ToolId::Mcp,
-            display_name: "MCP",
-            input_schema: None,
-            output_schema: None,
-            descriptor_revision: 0,
-            description: "Reserved tool slot.",
-            schema_version: 0,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Reserved,
-        },
-    ]
+    }
 }
 
-/// Returns the active descriptors that advertise a model-facing input schema,
-/// in registry order.
+/// Returns the model-visible tool specifications in advertisement order.
 #[must_use]
-pub fn model_visible_descriptors() -> Vec<ToolDescriptor> {
-    registry()
-        .into_iter()
-        .filter(|descriptor| {
-            descriptor.status() == ToolRegistrationStatus::Active
-                && descriptor.input_schema().is_some()
-        })
-        .collect()
+pub fn model_visible_descriptors() -> Vec<ToolSpec> {
+    vec![
+        spec(ToolId::Read),
+        spec(ToolId::Write),
+        spec(ToolId::Edit),
+        spec(ToolId::Execute),
+        spec(ToolId::Glob),
+        spec(ToolId::Grep),
+    ]
 }
 
 /// Bounded text accepted by tool contracts.
@@ -1489,51 +1172,27 @@ pub struct ExecuteInput {
 }
 
 impl ToolInput {
-    /// Decodes raw model arguments into the typed input registered for one
-    /// tool id.
+    /// Decodes raw model arguments into the typed input of one exposed tool.
     ///
-    /// The registry is the decoding authority: an id decodes only while its
-    /// descriptor is active and advertises an input schema, and each
-    /// registered id decodes through its own typed input DTO. Registered
-    /// slots without a typed input are not decodable.
+    /// The wire name is the decoding authority: only the six exposed tools
+    /// decode, each through its own typed input DTO; every other name is
+    /// rejected as unknown, so a tool the product does not expose is never
+    /// reachable through raw model arguments.
     ///
     /// # Errors
     ///
-    /// Returns `unknown_tool` when the id is unregistered or not decodable,
-    /// and `invalid_tool_input_json` when the arguments are malformed or do
-    /// not match the tool's typed input.
+    /// Returns `unknown_tool` when the name is not an exposed tool, and
+    /// `invalid_tool_input_json` when the arguments are malformed or do not
+    /// match the tool's typed input.
     pub fn from_arguments_json(tool_id: &str, arguments_json: &str) -> DtoResult<Self> {
-        let Some(descriptor) = registry()
-            .into_iter()
-            .find(|descriptor| descriptor.id().as_str() == tool_id)
-        else {
-            return Err(unknown_tool());
-        };
-        if descriptor.status() != ToolRegistrationStatus::Active
-            || descriptor.input_schema().is_none()
-        {
-            return Err(unknown_tool());
-        }
-        let input = match descriptor.id() {
-            ToolId::Read => serde_json::from_str::<ReadInput>(arguments_json).map(Self::Read),
-            ToolId::Write => serde_json::from_str::<WriteInput>(arguments_json).map(Self::Write),
-            ToolId::Edit => serde_json::from_str::<EditInput>(arguments_json).map(Self::Edit),
-            ToolId::Execute => {
-                serde_json::from_str::<ExecuteInput>(arguments_json).map(Self::Execute)
-            }
-            ToolId::Glob => serde_json::from_str::<GlobInput>(arguments_json).map(Self::Glob),
-            ToolId::Grep => serde_json::from_str::<GrepInput>(arguments_json).map(Self::Grep),
-            // Registered slots without a typed input are not decodable; the
-            // active-only guard above keeps this arm unreachable for the
-            // current registry while the match stays exhaustive.
-            ToolId::FetchUrl
-            | ToolId::AskUser
-            | ToolId::Todo
-            | ToolId::Retrieve
-            | ToolId::PlanSubmit
-            | ToolId::SubAgent
-            | ToolId::Expand
-            | ToolId::Mcp => return Err(unknown_tool()),
+        let input = match tool_id {
+            "read" => serde_json::from_str::<ReadInput>(arguments_json).map(Self::Read),
+            "write" => serde_json::from_str::<WriteInput>(arguments_json).map(Self::Write),
+            "edit" => serde_json::from_str::<EditInput>(arguments_json).map(Self::Edit),
+            "execute" => serde_json::from_str::<ExecuteInput>(arguments_json).map(Self::Execute),
+            "glob" => serde_json::from_str::<GlobInput>(arguments_json).map(Self::Glob),
+            "grep" => serde_json::from_str::<GrepInput>(arguments_json).map(Self::Grep),
+            _ => return Err(unknown_tool()),
         };
         input.map_err(|_| {
             intention_proto::ErrorDto::validation(
@@ -1543,7 +1202,7 @@ impl ToolInput {
         })
     }
 
-    /// Returns the concrete registered tool this input belongs to.
+    /// Returns the concrete tool this input belongs to.
     #[must_use]
     pub const fn tool_id(&self) -> ToolId {
         match self {
@@ -1557,7 +1216,7 @@ impl ToolInput {
     }
 }
 
-/// Returns the stable error for a tool id the registry cannot decode.
+/// Returns the stable error for a name the product does not expose as a tool.
 fn unknown_tool() -> intention_proto::ErrorDto {
     intention_proto::ErrorDto::validation(
         "unknown_tool",
@@ -1726,24 +1385,13 @@ pub enum ToolDispatchOutcome {
     },
 }
 
-/// Outcome of one admitted execution before the result-boundary projection.
-pub(crate) enum ExecutedOutcome {
-    /// The tool produced its final typed result.
-    Completed(ToolResult),
-    /// The tool stopped before a final result.
-    Interrupted {
-        cause: InterruptCause,
-        partial: Option<ToolResult>,
-    },
-}
-
 /// Returns the interrupted outcome for one cooperatively observed stop.
 ///
 /// Every workspace tool checks its invocation signal between I/O steps, so a
 /// stop that arrives while the tool runs produces a partial result instead of
 /// an unbounded effect or a lost observation.
-const fn stopped_outcome(partial: Option<ToolResult>) -> ExecutedOutcome {
-    ExecutedOutcome::Interrupted {
+const fn stopped_outcome(partial: Option<ToolResult>) -> ToolDispatchOutcome {
+    ToolDispatchOutcome::Interrupted {
         cause: InterruptCause::Stopped,
         partial,
     }
@@ -1770,37 +1418,19 @@ impl ToolService {
         input: ToolInput,
         cancellation: CancellationSignal,
     ) -> DtoResult<ToolDispatchOutcome> {
-        Ok(match self.execute_checked(call, input, cancellation)? {
-            ExecutedOutcome::Completed(result) => ToolDispatchOutcome::Completed(result),
-            ExecutedOutcome::Interrupted { cause, partial } => {
-                ToolDispatchOutcome::Interrupted { cause, partial }
-            }
-        })
-    }
-
-    /// Checks admission and executes one tool effect.
-    fn execute_checked(
-        &self,
-        call: ToolCallId,
-        input: ToolInput,
-        cancellation: CancellationSignal,
-    ) -> DtoResult<ExecutedOutcome> {
+        // Call identity stays durable in the caller's request and committed
+        // rows; execution itself needs only the typed input.
         let _ = call;
-        // Keep the identity on the real dispatch path: adapters cannot execute
-        // a call while silently substituting another call id.
         if cancellation.is_cancelled() {
-            return Ok(ExecutedOutcome::Interrupted {
-                cause: InterruptCause::Stopped,
-                partial: None,
-            });
+            return Ok(stopped_outcome(None));
         }
         Ok(match input {
-            ToolInput::Read(i) => file::read(&self.root, i, &cancellation)?,
-            ToolInput::Write(i) => file::write(&self.root, i, &cancellation)?,
-            ToolInput::Edit(i) => file::edit(&self.root, i, &cancellation)?,
-            ToolInput::Glob(i) => search::glob(&self.root, i, &cancellation)?,
-            ToolInput::Grep(i) => search::grep(&self.root, i, &cancellation)?,
-            ToolInput::Execute(i) => execute::run(&self.root, i, cancellation)?,
+            ToolInput::Read(i) => read_tool(&self.root, i, &cancellation)?,
+            ToolInput::Write(i) => write_tool(&self.root, i, &cancellation)?,
+            ToolInput::Edit(i) => edit_tool(&self.root, i, &cancellation)?,
+            ToolInput::Glob(i) => glob_tool(&self.root, i, &cancellation)?,
+            ToolInput::Grep(i) => grep_tool(&self.root, i, &cancellation)?,
+            ToolInput::Execute(i) => execute_tool(&self.root, i, cancellation)?,
         })
     }
 }
@@ -1809,7 +1439,7 @@ fn read_tool(
     root: &WorkspaceRoot,
     input: ReadInput,
     cancellation: &CancellationSignal,
-) -> DtoResult<ExecutedOutcome> {
+) -> DtoResult<ToolDispatchOutcome> {
     if cancellation.is_cancelled() {
         return Ok(stopped_outcome(None));
     }
@@ -1830,14 +1460,14 @@ fn read_tool(
     if cancellation.is_cancelled() {
         return Ok(stopped_outcome(Some(result)));
     }
-    Ok(ExecutedOutcome::Completed(result))
+    Ok(ToolDispatchOutcome::Completed(result))
 }
 
 fn execute_tool(
     root: &WorkspaceRoot,
     input: ExecuteInput,
     cancellation: CancellationSignal,
-) -> DtoResult<ExecutedOutcome> {
+) -> DtoResult<ToolDispatchOutcome> {
     let mut command = Command::new(input.program.as_str());
     command.args(input.args.iter().map(BoundedText::as_str));
     command.current_dir(root.execute_cwd());
@@ -1870,7 +1500,7 @@ fn execute_tool(
         }
         Err(ExecuteFailure::Interrupted { cause, partial }) => {
             let partial = partial.map(PartialOutput::into_result).transpose()?;
-            return Ok(ExecutedOutcome::Interrupted { cause, partial });
+            return Ok(ToolDispatchOutcome::Interrupted { cause, partial });
         }
     };
     let process_status = ToolProcessStatus::classify(output.status);
@@ -1888,7 +1518,7 @@ fn execute_tool(
         "stdout:\n{stdout}\nstderr:\n{stderr}\n{status_text}{}",
         if truncated { "\n[truncated]" } else { "" }
     );
-    Ok(ExecutedOutcome::Completed(ToolResult::Execute(
+    Ok(ToolDispatchOutcome::Completed(ToolResult::Execute(
         TextResult {
             text: BoundedText::new(text)?,
             truncated,
@@ -1900,7 +1530,7 @@ fn write_tool(
     root: &WorkspaceRoot,
     input: WriteInput,
     cancellation: &CancellationSignal,
-) -> DtoResult<ExecutedOutcome> {
+) -> DtoResult<ToolDispatchOutcome> {
     if cancellation.is_cancelled() {
         return Ok(stopped_outcome(None));
     }
@@ -1944,16 +1574,16 @@ fn write_tool(
     std::fs::write(path, input.content.as_str()).map_err(|_| {
         intention_proto::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
     })?;
-    Ok(ExecutedOutcome::Completed(ToolResult::Write(WriteResult {
-        bytes,
-    })))
+    Ok(ToolDispatchOutcome::Completed(ToolResult::Write(
+        WriteResult { bytes },
+    )))
 }
 
 fn edit_tool(
     root: &WorkspaceRoot,
     input: EditInput,
     cancellation: &CancellationSignal,
-) -> DtoResult<ExecutedOutcome> {
+) -> DtoResult<ToolDispatchOutcome> {
     if cancellation.is_cancelled() {
         return Ok(stopped_outcome(None));
     }
@@ -2003,16 +1633,18 @@ fn edit_tool(
     std::fs::write(path, &replacement).map_err(|_| {
         intention_proto::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
     })?;
-    Ok(ExecutedOutcome::Completed(ToolResult::Edit(WriteResult {
-        bytes: replacement.len() as u64,
-    })))
+    Ok(ToolDispatchOutcome::Completed(ToolResult::Edit(
+        WriteResult {
+            bytes: replacement.len() as u64,
+        },
+    )))
 }
 
 fn glob_tool(
     root: &WorkspaceRoot,
     input: GlobInput,
     cancellation: &CancellationSignal,
-) -> DtoResult<ExecutedOutcome> {
+) -> DtoResult<ToolDispatchOutcome> {
     validate_search_pattern(input.pattern.as_str())?;
     if cancellation.is_cancelled() {
         return Ok(stopped_outcome(None));
@@ -2055,10 +1687,12 @@ fn glob_tool(
             truncated: true,
         }))));
     }
-    Ok(ExecutedOutcome::Completed(ToolResult::Glob(PathsResult {
-        paths: retained,
-        truncated: window_truncated,
-    })))
+    Ok(ToolDispatchOutcome::Completed(ToolResult::Glob(
+        PathsResult {
+            paths: retained,
+            truncated: window_truncated,
+        },
+    )))
 }
 
 /// Applies the shared search-result window to one sorted, deduplicated path list.
@@ -2087,7 +1721,7 @@ fn grep_tool(
     root: &WorkspaceRoot,
     input: GrepInput,
     cancellation: &CancellationSignal,
-) -> DtoResult<ExecutedOutcome> {
+) -> DtoResult<ToolDispatchOutcome> {
     validate_search_pattern(input.pattern.as_str())?;
     if cancellation.is_cancelled() {
         return Ok(stopped_outcome(None));
@@ -2181,17 +1815,16 @@ fn grep_tool(
             truncated: true,
         }))));
     }
-    Ok(ExecutedOutcome::Completed(ToolResult::Grep(GrepResult {
-        matches,
-        truncated,
-    })))
+    Ok(ToolDispatchOutcome::Completed(ToolResult::Grep(
+        GrepResult { matches, truncated },
+    )))
 }
 
 fn grep_scoped(
     root: &WorkspaceRoot,
     input: GrepInput,
     cancellation: &CancellationSignal,
-) -> DtoResult<ExecutedOutcome> {
+) -> DtoResult<ToolDispatchOutcome> {
     let scope = input.scope.ok_or_else(|| {
         intention_proto::ErrorDto::validation("invalid_tool_path", "grep requires a workspace path")
     })?;
@@ -2325,10 +1958,9 @@ fn grep_scoped(
                 line[..column].chars().count() as u64 + 1,
                 fragment,
             )? {
-                return Ok(ExecutedOutcome::Completed(ToolResult::Grep(GrepResult {
-                    matches,
-                    truncated,
-                })));
+                return Ok(ToolDispatchOutcome::Completed(ToolResult::Grep(
+                    GrepResult { matches, truncated },
+                )));
             }
         }
     }
@@ -2338,10 +1970,9 @@ fn grep_scoped(
             truncated: true,
         }))));
     }
-    Ok(ExecutedOutcome::Completed(ToolResult::Grep(GrepResult {
-        matches,
-        truncated,
-    })))
+    Ok(ToolDispatchOutcome::Completed(ToolResult::Grep(
+        GrepResult { matches, truncated },
+    )))
 }
 
 /// Records one grep match when its serialized cost fits the aggregate window.
@@ -2426,13 +2057,4 @@ mod coverage_helpers {
         assert!(text.ends_with("\n[truncated]"));
         assert!(!text.contains('\u{fffd}'));
     }
-}
-
-/// Private execution boundary; adapters implement this without leaking erased values.
-#[expect(
-    dead_code,
-    reason = "The private executor boundary is activated by the composition slice."
-)]
-trait ToolExecutor {
-    fn execute(&self, call: ToolCallId, input: ToolInput) -> DtoResult<ToolResult>;
 }

@@ -1805,21 +1805,22 @@ mod tests {
                 );
             }
         }
-        let advertised_names: Vec<&str> = advertised
-            .iter()
-            .map(|descriptor| descriptor.id().as_str())
-            .collect();
-        for descriptor in intention_tools::registry() {
-            let name = descriptor.id().as_str();
-            if advertised_names.contains(&name) {
-                continue;
-            }
+        for name in [
+            "fetch_url",
+            "ask_user",
+            "todo",
+            "retrieve",
+            "plan_submit",
+            "sub_agent",
+            "expand",
+            "mcp",
+        ] {
             let error = ToolInput::from_arguments_json(name, "{}")
-                .expect_err("registered but unadvertised tools are not decodable");
+                .expect_err("unexposed tools are not decodable");
             assert_eq!(
                 error.code(),
                 "unknown_tool",
-                "the daemon decodes the unadvertised tool {name}"
+                "the daemon decodes the unexposed tool {name}"
             );
         }
     }
