@@ -108,14 +108,14 @@ impl ModelExecutionDriver for GenericChatDriver {
         }
         if self.preflight(&request).is_err() {
             return Box::pin(stream::once(async {
-                Err(non_retryable_error("generic_chat_request_rejected"))
+                Err(mapping::fixed_error("generic_chat_request_rejected"))
             }));
         }
         let native_request = match translate_request(&request) {
             Ok(request) => request,
             Err(_) => {
                 return Box::pin(stream::once(async {
-                    Err(non_retryable_error("generic_chat_request_rejected"))
+                    Err(mapping::fixed_error("generic_chat_request_rejected"))
                 }));
             }
         };
@@ -261,7 +261,7 @@ where
             if let Some(reason) = choice.finish_reason
                 && self
                     .terminal_reason
-                    .replace(mapping::finish_reason(&reason))
+                    .replace(finish_reason(&reason))
                     .is_some()
             {
                 self.fail("generic_chat_duplicate_finish");
@@ -283,11 +283,7 @@ where
         if let Some(calls) = delta.tool_calls {
             for call in calls {
                 let fragments = self.tools.entry((choice_index, call.index)).or_default();
-                fragments.merge(
-                    call.id,
-                    call.r#type.map(|_| "function".to_owned()),
-                    call.function,
-                )?;
+                fragments.merge(call.id, call.function)?;
             }
         }
         Ok(())
@@ -361,14 +357,13 @@ where
     }
 
     fn fail(&mut self, code: &'static str) {
-        self.fail_error(non_retryable_error(code));
+        self.fail_error(mapping::fixed_error(code));
     }
 }
 
 #[derive(Default)]
 struct FunctionToolFragments {
     id: Option<String>,
-    kind: Option<String>,
     name: Option<String>,
     arguments: String,
 }
@@ -377,14 +372,9 @@ impl FunctionToolFragments {
     fn merge(
         &mut self,
         id: Option<String>,
-        kind: Option<String>,
         function: Option<async_openai::types::chat::FunctionCallStream>,
     ) -> Result<(), ()> {
         merge_constant(&mut self.id, id)?;
-        merge_constant(&mut self.kind, kind)?;
-        if self.kind.as_deref().is_some_and(|kind| kind != "function") {
-            return Err(());
-        }
         if let Some(function) = function {
             merge_constant(&mut self.name, function.name)?;
             if let Some(arguments) = function.arguments {
@@ -411,12 +401,20 @@ fn merge_constant(slot: &mut Option<String>, next: Option<String>) -> Result<(),
     Ok(())
 }
 
-fn provider_error(retryable: bool) -> DtoResult<ProviderErrorDto> {
-    mapping::provider_error(
-        "generic_chat_provider_unavailable",
-        "generic_chat_provider_request_rejected",
-        retryable,
-    )
+/// Maps one provider finish-reason string onto the closed canonical reason.
+///
+/// The provider value stays an open string, so every unlisted reason (a
+/// vendor-specific value or an extension such as `stop_sequence`) degrades to
+/// [`FinishReasonDto::Unknown`] instead of aborting the response.
+fn finish_reason(reason: &str) -> FinishReasonDto {
+    match reason {
+        "stop" => FinishReasonDto::Stop,
+        "length" => FinishReasonDto::Length,
+        "tool_calls" => FinishReasonDto::ToolCalls,
+        "content_filter" => FinishReasonDto::ContentFilter,
+        "error" => FinishReasonDto::Error,
+        _ => FinishReasonDto::Unknown,
+    }
 }
 
 fn map_openai_error(error: &OpenAIError) -> ProviderErrorDto {
@@ -428,8 +426,11 @@ fn map_openai_error(error: &OpenAIError) -> ProviderErrorDto {
         | OpenAIError::FileReadError(_)
         | OpenAIError::InvalidArgument(_) => false,
     };
-    provider_error(retryable)
-        .unwrap_or_else(|_| non_retryable_error("generic_chat_provider_failure"))
+    mapping::provider_error(
+        "generic_chat_provider_unavailable",
+        "generic_chat_provider_request_rejected",
+        retryable,
+    )
 }
 
 /// Classifies one SDK API error by its authoritative HTTP status.
@@ -449,11 +450,6 @@ fn api_error_retryable(error: &async_openai::error::ApiErrorResponse) -> bool {
             Some("rate_limit_exceeded" | "server_error")
         ),
     }
-}
-
-/// Builds one fixed non-retryable generic-chat failure that carries no native text.
-fn non_retryable_error(code: &'static str) -> ProviderErrorDto {
-    mapping::fixed_error(code, "generic_chat_provider_failure")
 }
 
 /// Translates one provider-neutral request into the exact wire request.
@@ -933,7 +929,6 @@ mod tests {
         first
             .merge(
                 Some("first".to_owned()),
-                Some("function".to_owned()),
                 Some(async_openai::types::chat::FunctionCallStream {
                     name: Some("inspect".to_owned()),
                     arguments: Some("{\"path\"".to_owned()),
@@ -943,7 +938,6 @@ mod tests {
         second
             .merge(
                 Some("second".to_owned()),
-                Some("function".to_owned()),
                 Some(async_openai::types::chat::FunctionCallStream {
                     name: Some("search".to_owned()),
                     arguments: Some("{\"query\"".to_owned()),
@@ -953,7 +947,6 @@ mod tests {
         first
             .merge(
                 None,
-                None,
                 Some(async_openai::types::chat::FunctionCallStream {
                     name: None,
                     arguments: Some(":\"src\"}".to_owned()),
@@ -962,7 +955,6 @@ mod tests {
             .expect("first continuation is valid");
         second
             .merge(
-                None,
                 None,
                 Some(async_openai::types::chat::FunctionCallStream {
                     name: None,
@@ -992,24 +984,18 @@ mod tests {
         conflicting
             .merge(
                 Some("call".to_owned()),
-                Some("function".to_owned()),
                 Some(async_openai::types::chat::FunctionCallStream {
                     name: Some("inspect".to_owned()),
                     arguments: Some("{}".to_owned()),
                 }),
             )
             .expect("initial fragment is valid");
-        assert!(
-            conflicting
-                .merge(Some("other".to_owned()), None, None)
-                .is_err()
-        );
+        assert!(conflicting.merge(Some("other".to_owned()), None).is_err());
         assert!(FunctionToolFragments::default().finish().is_err());
         let mut malformed = FunctionToolFragments::default();
         malformed
             .merge(
                 Some("call".to_owned()),
-                Some("function".to_owned()),
                 Some(async_openai::types::chat::FunctionCallStream {
                     name: Some("inspect".to_owned()),
                     arguments: Some("not-json".to_owned()),
@@ -1463,6 +1449,22 @@ mod tests {
             incomplete.pending.back(),
             Some(Err(error)) if error.code() == "generic_chat_invalid_tool_call"
         ));
+    }
+
+    #[test]
+    fn finish_reason_taxonomy_covers_every_closed_reason_and_degrades_unknown_values() {
+        for (reason, expected) in [
+            ("stop", FinishReasonDto::Stop),
+            ("length", FinishReasonDto::Length),
+            ("tool_calls", FinishReasonDto::ToolCalls),
+            ("content_filter", FinishReasonDto::ContentFilter),
+            ("error", FinishReasonDto::Error),
+            ("unknown", FinishReasonDto::Unknown),
+            ("other", FinishReasonDto::Unknown),
+            ("stop_sequence", FinishReasonDto::Unknown),
+        ] {
+            assert_eq!(finish_reason(reason), expected, "reason {reason}");
+        }
     }
 
     #[test]

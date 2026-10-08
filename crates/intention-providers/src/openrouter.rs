@@ -98,14 +98,14 @@ impl ModelExecutionDriver for OpenRouterDriver {
         }
         if self.preflight(&request).is_err() {
             return Box::pin(stream::once(async {
-                Err(safe_error("openrouter_request_rejected"))
+                Err(mapping::fixed_error("openrouter_request_rejected"))
             }));
         }
         let native_request = match translate_request(&request) {
             Ok(request) => request,
             Err(_) => {
                 return Box::pin(stream::once(async {
-                    Err(safe_error("openrouter_request_rejected"))
+                    Err(mapping::fixed_error("openrouter_request_rejected"))
                 }));
             }
         };
@@ -246,7 +246,7 @@ where
     }
 
     fn fail(&mut self, code: &'static str) {
-        self.fail_error(safe_error(code));
+        self.fail_error(mapping::fixed_error(code));
     }
 }
 
@@ -278,12 +278,6 @@ fn map_openrouter_error(error: &OpenRouterError) -> ProviderErrorDto {
         "openrouter_provider_request_rejected",
         retryable,
     )
-    .unwrap_or_else(|_| safe_error("openrouter_provider_failure"))
-}
-
-/// Builds one fixed non-retryable OpenRouter failure that carries no native text.
-fn safe_error(code: &'static str) -> ProviderErrorDto {
-    mapping::fixed_error(code, "openrouter_provider_failure")
 }
 
 /// Translates one provider-neutral request into the private native SDK shape.
@@ -399,7 +393,7 @@ fn translate_tool_message(tool_call_id: &str, message: &ModelMessageDto) -> Mess
 /// Returns a validation error when a tool-call message cannot be mapped.
 fn translate_assistant_message(message: &ModelMessageDto) -> DtoResult<Message> {
     let content = message.content();
-    let Some(tool_calls) = message.tool_calls().filter(|calls| !calls.is_empty()) else {
+    let Some(tool_calls) = message.tool_calls() else {
         return Ok(translate_text_message(Role::Assistant, message));
     };
     let native_calls = tool_calls

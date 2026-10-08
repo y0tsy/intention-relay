@@ -8,9 +8,7 @@
 
 use std::str::FromStr;
 
-use crate::model::{
-    FinishReasonDto, ModelMessageDto, ModelRoleDto, ProviderErrorDto, ToolCallDto, UsageDto,
-};
+use crate::model::{ModelMessageDto, ModelRoleDto, ProviderErrorDto, ToolCallDto, UsageDto};
 use intention_proto::{DtoResult, ErrorDto, ToolCallId};
 
 /// The wire-role class every adapter emits for one provider-neutral role.
@@ -36,22 +34,6 @@ pub const fn wire_role(role: ModelRoleDto) -> WireRole {
         ModelRoleDto::User | ModelRoleDto::Notice => WireRole::User,
         ModelRoleDto::Assistant => WireRole::Assistant,
         ModelRoleDto::Tool => WireRole::Tool,
-    }
-}
-
-/// Maps one provider finish-reason string onto the closed canonical reason.
-///
-/// The provider value stays an open string, so every unlisted reason (a
-/// vendor-specific value or an extension such as `stop_sequence`) degrades to
-/// [`FinishReasonDto::Unknown`] instead of aborting the response.
-pub fn finish_reason(reason: &str) -> FinishReasonDto {
-    match reason {
-        "stop" => FinishReasonDto::Stop,
-        "length" => FinishReasonDto::Length,
-        "tool_calls" => FinishReasonDto::ToolCalls,
-        "content_filter" => FinishReasonDto::ContentFilter,
-        "error" => FinishReasonDto::Error,
-        _ => FinishReasonDto::Unknown,
     }
 }
 
@@ -121,39 +103,33 @@ pub fn decode_parameters<T: FromStr>(
 
 /// Builds the normalized provider failure selected by one retry decision.
 ///
-/// # Errors
-///
-/// Returns a validation error only when a fixed code is blank.
+/// The adapter supplies both of its fixed codes; the retry decision selects
+/// which one the normalized error carries.
 pub fn provider_error(
     unavailable_code: &'static str,
     rejected_code: &'static str,
     retryable: bool,
-) -> DtoResult<ProviderErrorDto> {
-    ProviderErrorDto::unavailable(
-        if retryable {
-            unavailable_code
-        } else {
-            rejected_code
-        },
-        retryable,
-        None,
-    )
+) -> ProviderErrorDto {
+    let code = if retryable {
+        unavailable_code
+    } else {
+        rejected_code
+    };
+    error_dto(code, retryable)
 }
 
 /// Builds one fixed non-retryable provider failure that carries no native text.
-///
-/// Both codes are compile-time adapter constants, so the fallback is
-/// unreachable in practice; it keeps a malformed constant from failing a
-/// normalized response.
+pub fn fixed_error(code: &'static str) -> ProviderErrorDto {
+    error_dto(code, false)
+}
+
 #[allow(
     clippy::expect_used,
-    reason = "The fixed fallback normalized provider error code is validated by ProviderErrorDto."
+    reason = "Normalized provider error codes are compile-time adapter constants, so validation cannot fail."
 )]
-pub fn fixed_error(code: &'static str, fallback_code: &'static str) -> ProviderErrorDto {
-    ProviderErrorDto::unavailable(code, false, None).unwrap_or_else(|_| {
-        ProviderErrorDto::unavailable(fallback_code, false, None)
-            .expect("fixed fallback normalized provider error code is valid")
-    })
+fn error_dto(code: &'static str, retryable: bool) -> ProviderErrorDto {
+    ProviderErrorDto::unavailable(code, retryable, None)
+        .expect("normalized provider error codes are non-blank adapter constants")
 }
 
 #[cfg(test)]
@@ -165,22 +141,6 @@ mod tests {
     use super::*;
     use crate::model::ModelEventDto;
     use intention_proto::ErrorRetryDto;
-
-    #[test]
-    fn finish_reason_taxonomy_covers_every_closed_reason_and_degrades_unknown_values() {
-        for (reason, expected) in [
-            ("stop", FinishReasonDto::Stop),
-            ("length", FinishReasonDto::Length),
-            ("tool_calls", FinishReasonDto::ToolCalls),
-            ("content_filter", FinishReasonDto::ContentFilter),
-            ("error", FinishReasonDto::Error),
-            ("unknown", FinishReasonDto::Unknown),
-            ("other", FinishReasonDto::Unknown),
-            ("stop_sequence", FinishReasonDto::Unknown),
-        ] {
-            assert_eq!(finish_reason(reason), expected, "reason {reason}");
-        }
-    }
 
     // Text and reasoning reach the stream contract through these constructors
     // alone, so their canonical shape is part of the shared mapping evidence.
@@ -282,8 +242,7 @@ mod tests {
                 "openrouter_provider_unavailable",
                 "openrouter_provider_request_rejected",
                 retryable,
-            )
-            .expect("error maps");
+            );
             assert_eq!(error.code(), expected_code);
             assert_eq!(error.retry(), expected_retry);
             assert!(
@@ -296,21 +255,17 @@ mod tests {
             "generic_chat_provider_unavailable",
             "generic_chat_provider_request_rejected",
             true,
-        )
-        .expect("error maps");
+        );
         assert_eq!(error.code(), "generic_chat_provider_unavailable");
         assert_eq!(error.retry(), ErrorRetryDto::Delayed);
     }
 
     #[test]
     fn fixed_errors_are_non_retryable_and_never_carry_native_text() {
-        let error = fixed_error("openrouter_provider_failure", "openrouter_provider_failure");
+        let error = fixed_error("openrouter_provider_failure");
         assert_eq!(error.code(), "openrouter_provider_failure");
         assert_eq!(error.retry(), ErrorRetryDto::Never);
-        let error = fixed_error(
-            "generic_chat_provider_failure",
-            "generic_chat_provider_failure",
-        );
+        let error = fixed_error("generic_chat_provider_failure");
         assert_eq!(error.code(), "generic_chat_provider_failure");
         assert_eq!(error.retry(), ErrorRetryDto::Never);
     }
