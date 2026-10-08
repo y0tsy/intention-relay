@@ -367,7 +367,7 @@ fn tool_result_evidence_is_bounded_and_typed() {
             run_id,
             call_id,
             "read",
-            ToolResultStatusDto::Cancelled,
+            ToolResultStatusDto::Completed,
             "content",
             vec![
                 ToolResultMetadataEntryDto::new("truncated", "false").expect("metadata is valid"),

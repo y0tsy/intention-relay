@@ -3,9 +3,10 @@
 //! The public boundary is DTO-only. SQLite connections, SQL rows, paths, and
 //! JSON codecs remain private implementation details of this crate.
 //!
-//! The complete current schema is created directly on open: there is no
-//! migration chain and no version gate, and a database file that does not
-//! carry the complete current schema is recreated from scratch. Every
+//! The complete current schema is created directly on open and stamped with
+//! one integer in the SQLite header: there is no migration chain, and a
+//! database file that does not carry the current stamp is discarded and
+//! recreated from scratch. Every
 //! state-changing method commits its change in exactly one immediate
 //! transaction and returns the committed values; there is no event log,
 //! snapshot, cursor, or replay.
@@ -42,9 +43,9 @@ const TERMINAL_STATUSES: &str = "'completed','failed','interrupted'";
 const MESSAGE_COLUMNS: &str = "session_id, run_id, kind, text, reasoning, tool_call_id, tool_id";
 
 /// The complete current storage schema (logical version 1): the eight
-/// current-state tables created directly on open. There is no migration chain
-/// and no version gate, and no event log, snapshot, cursor, or journal table
-/// exists under the single live schema.
+/// current-state tables created directly on open. There is no migration chain,
+/// and no event log, snapshot, cursor, or journal table exists under the single
+/// live schema. `SCHEMA_STAMP` records the version this text implements.
 const SCHEMA_SQL: &str = "
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
@@ -124,160 +125,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_session ON runs(session_id)
   WHERE status NOT IN ('completed','failed','interrupted');
 ";
 
-/// The eight current-state tables with their declared columns, in declaration
-/// order, used to recognize a database that does not carry the current schema.
-const CURRENT_TABLE_COLUMNS: [(&str, &[&str]); 8] = [
-    ("projects", &["id", "name", "created_at"]),
-    (
-        "workspace_roots",
-        &["id", "project_id", "root", "created_at"],
-    ),
-    (
-        "sessions",
-        &[
-            "id",
-            "project_id",
-            "workspace_id",
-            "mode",
-            "created_at",
-            "updated_at",
-        ],
-    ),
-    (
-        "runs",
-        &[
-            "id",
-            "session_id",
-            "turn_id",
-            "config_revision_id",
-            "status",
-            "provider_kind",
-            "model",
-            "usage_json",
-            "finish_reason",
-            "error_code",
-            "error_message",
-            "started_at",
-            "finished_at",
-        ],
-    ),
-    (
-        "turns",
-        &[
-            "id",
-            "session_id",
-            "proposed_run_id",
-            "config_revision_id",
-            "content",
-            "state",
-            "idempotency_key",
-            "created_at",
-        ],
-    ),
-    (
-        "messages",
-        &[
-            "id",
-            "session_id",
-            "run_id",
-            "kind",
-            "text",
-            "reasoning",
-            "tool_call_id",
-            "tool_id",
-            "created_at",
-        ],
-    ),
-    (
-        "tool_results",
-        &[
-            "id",
-            "tool_call_id",
-            "session_id",
-            "run_id",
-            "tool_id",
-            "status",
-            "content",
-            "metadata_json",
-            "created_at",
-        ],
-    ),
-    (
-        "configuration_revisions",
-        &["id", "snapshot_json", "created_at"],
-    ),
-];
+/// The single schema stamp of the current storage schema, written to the
+/// `user_version` header field of every database this module creates.
+///
+/// Bump this integer whenever `SCHEMA_SQL` or the shape of any persisted JSON
+/// column changes: the next open discards the whole database file and its WAL
+/// sidecars and recreates the current schema from scratch. That discard is the
+/// only version gate; there is no migration path.
+const SCHEMA_STAMP: i32 = 1;
 
-/// The one explicit index of the current schema.
-const CURRENT_INDEX_NAMES: [&str; 1] = ["one_active_run_per_session"];
-
-/// Returns whether the open database already carries exactly the current
-/// schema: the eight current-state tables with their declared columns and the
-/// one explicit index. A database written by an earlier core fails this check.
-fn current_schema_is_present(connection: &sqlite::Connection) -> DtoResult<bool> {
-    let mut statement = connection
-        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+/// Returns whether the open database already carries the current schema stamp.
+/// A database written under any other stamp is discarded by its opener.
+fn carries_current_schema_stamp(connection: &sqlite::Connection) -> DtoResult<bool> {
+    let stamp: i32 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(storage_error)?;
-    let rows = statement
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(storage_error)?;
-    let tables = rows
-        .collect::<sqlite::Result<Vec<_>>>()
-        .map_err(storage_error)?;
-    drop(statement);
-    if tables.len() != CURRENT_TABLE_COLUMNS.len()
-        || !CURRENT_TABLE_COLUMNS
-            .iter()
-            .all(|(table, _)| tables.iter().any(|name| name.as_str() == *table))
-    {
-        return Ok(false);
-    }
-    let mut statement = connection
-        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'")
-        .map_err(storage_error)?;
-    let rows = statement
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(storage_error)?;
-    let indexes = rows
-        .collect::<sqlite::Result<Vec<_>>>()
-        .map_err(storage_error)?;
-    drop(statement);
-    if indexes.len() != CURRENT_INDEX_NAMES.len()
-        || !CURRENT_INDEX_NAMES
-            .iter()
-            .all(|index| indexes.iter().any(|name| name.as_str() == *index))
-    {
-        return Ok(false);
-    }
-    for (table, columns) in CURRENT_TABLE_COLUMNS {
-        let mut statement = connection
-            .prepare("SELECT name FROM pragma_table_info(?1) ORDER BY cid")
-            .map_err(storage_error)?;
-        let rows = statement
-            .query_map([table], |row| row.get::<_, String>(0))
-            .map_err(storage_error)?;
-        let present = rows
-            .collect::<sqlite::Result<Vec<_>>>()
-            .map_err(storage_error)?;
-        drop(statement);
-        if !present
-            .iter()
-            .map(String::as_str)
-            .eq(columns.iter().copied())
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    Ok(stamp == SCHEMA_STAMP)
 }
 
-/// Recreates the database file at a location that does not carry the complete
-/// current schema, removing the file and its WAL sidecars so the following
-/// open creates the current schema from scratch.
+/// Recreates the database file at a location that does not carry the current
+/// schema stamp, removing the file and its WAL sidecars so the following open
+/// creates the current schema from scratch. The discard is reported on stderr
+/// because it is the one path that loses durable data.
 fn recreate_stale_database(location: &str) -> DtoResult<()> {
     let current = {
         let connection = sqlite::Connection::open(location).map_err(storage_error)?;
-        current_schema_is_present(&connection)?
+        carries_current_schema_stamp(&connection)?
     };
     if current {
         return Ok(());
@@ -289,7 +162,17 @@ fn recreate_stale_database(location: &str) -> DtoResult<()> {
             Err(_) => return Err(unavailable()),
         }
     }
+    report_schema_discard();
     Ok(())
+}
+
+/// Reports one discarded database on stderr, the daemon's only observable log.
+#[allow(
+    clippy::print_stderr,
+    reason = "The schema discard is the one path that loses durable data and must be observable."
+)]
+fn report_schema_discard() {
+    eprintln!("storage_schema_discarded: database did not carry schema stamp {SCHEMA_STAMP}");
 }
 
 /// A local absolute SQLite database location whose string is never exposed again.
@@ -323,9 +206,9 @@ pub struct SqliteStorageRepository {
 
 impl SqliteStorageRepository {
     /// Opens or creates a local database at an explicitly supplied absolute
-    /// location. A database that does not carry the complete current schema is
-    /// recreated from scratch; the current schema is then created directly on
-    /// open.
+    /// location. A database that does not carry the current schema stamp is
+    /// discarded and recreated from scratch; the current schema is then created
+    /// directly on open and stamped with `SCHEMA_STAMP`.
     ///
     /// # Errors
     ///
@@ -342,6 +225,9 @@ impl SqliteStorageRepository {
             .map_err(storage_error)?;
         connection
             .execute_batch(SCHEMA_SQL)
+            .map_err(|_| unavailable())?;
+        connection
+            .execute_batch(&format!("PRAGMA user_version = {SCHEMA_STAMP};"))
             .map_err(|_| unavailable())?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -1540,7 +1426,6 @@ const fn tool_result_status_name(value: ToolResultStatusDto) -> &'static str {
     match value {
         ToolResultStatusDto::Completed => "completed",
         ToolResultStatusDto::Failed => "failed",
-        ToolResultStatusDto::Cancelled => "cancelled",
         ToolResultStatusDto::Partial => "partial",
     }
 }
@@ -1549,7 +1434,6 @@ fn parse_tool_result_status(value: &str) -> DtoResult<ToolResultStatusDto> {
     match value {
         "completed" => Ok(ToolResultStatusDto::Completed),
         "failed" => Ok(ToolResultStatusDto::Failed),
-        "cancelled" => Ok(ToolResultStatusDto::Cancelled),
         "partial" => Ok(ToolResultStatusDto::Partial),
         _ => Err(codec_error("invalid durable tool result status")),
     }
@@ -1928,7 +1812,6 @@ mod tests {
         for status in [
             ToolResultStatusDto::Completed,
             ToolResultStatusDto::Failed,
-            ToolResultStatusDto::Cancelled,
             ToolResultStatusDto::Partial,
         ] {
             assert_eq!(

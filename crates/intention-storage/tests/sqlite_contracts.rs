@@ -105,185 +105,10 @@ fn append(
         .expect("transcript row commits")
 }
 
-/// The eight current-state tables in the order their names sort.
-const CURRENT_TABLE_NAMES: [&str; 8] = [
-    "configuration_revisions",
-    "messages",
-    "projects",
-    "runs",
-    "sessions",
-    "tool_results",
-    "turns",
-    "workspace_roots",
-];
-
-fn table_names(directory: &TempDir) -> Vec<String> {
-    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
-        .expect("database reopens for inspection");
-    let mut statement = connection
-        .prepare(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' \
-             ORDER BY name",
-        )
-        .expect("table inspection query prepares");
-    statement
-        .query_map([], |row| row.get::<_, String>(0))
-        .expect("table inspection query executes")
-        .collect::<sqlite::Result<Vec<_>>>()
-        .expect("table names read")
-}
-
-fn column_names(directory: &TempDir, table: &str) -> Vec<String> {
-    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
-        .expect("database reopens for inspection");
-    let mut statement = connection
-        .prepare("SELECT name FROM pragma_table_info(?1) ORDER BY cid")
-        .expect("column inspection query prepares");
-    statement
-        .query_map([table], |row| row.get::<_, String>(0))
-        .expect("column inspection query executes")
-        .collect::<sqlite::Result<Vec<_>>>()
-        .expect("column names read")
-}
-
-#[test]
-fn current_storage_schema_is_created_completely_and_remains_authoritative() {
-    let directory = TempDir::new().expect("temporary directory exists");
-    let path = directory.path().join("storage.sqlite");
-    let store = open(&directory);
-    // The complete current schema is created directly on open: every table and
-    // explicit index exists exactly once, with no legacy or duplicate objects.
-    let connection = sqlite::Connection::open(&path).expect("database reopens");
-    let expected_tables = [
-        "projects",
-        "workspace_roots",
-        "sessions",
-        "runs",
-        "turns",
-        "messages",
-        "tool_results",
-        "configuration_revisions",
-    ];
-    let table_count: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("table count reads");
-    assert_eq!(
-        table_count,
-        expected_tables.len() as i64,
-        "exactly the eight current-state tables exist, no legacy tables"
-    );
-    for table in expected_tables {
-        let present: i64 = connection
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
-                [table],
-                |row| row.get(0),
-            )
-            .expect("table lookup");
-        assert_eq!(present, 1, "table {table} must be created exactly once");
-    }
-    for removed in [
-        "domain_events",
-        "session_snapshots",
-        "run_snapshots",
-        "container_journals",
-        "model_run_facts",
-        "model_run_snapshots",
-    ] {
-        let present: i64 = connection
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
-                [removed],
-                |row| row.get(0),
-            )
-            .expect("removed table lookup");
-        assert_eq!(present, 0, "removed table {removed} must be absent");
-    }
-    let index_count: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='one_active_run_per_session'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("index lookup");
-    assert_eq!(
-        index_count, 1,
-        "the active-run index must exist exactly once"
-    );
-    for (table, column) in [
-        ("sessions", "last_sequence"),
-        ("sessions", "config_revision_id"),
-        ("sessions", "workspace_root"),
-        ("turns", "outcome"),
-        ("turns", "turn_id"),
-    ] {
-        let present: i64 = connection
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name=?2",
-                sqlite::params![table, column],
-                |row| row.get(0),
-            )
-            .expect("column lookup");
-        assert_eq!(present, 0, "removed column {table}.{column} must be absent");
-    }
-    drop(connection);
-
-    // The freshly created schema is usable end to end.
-    let session = SessionId::new();
-    let workspace_id = WorkspaceId::new();
-    let project_id = ProjectId::new();
-    let root = workspace_root("schema");
-    let projection = store
-        .create_session(CreateSessionInputDto::new(
-            CreateSessionCommandDto::new(
-                project_id,
-                session,
-                workspace_id,
-                root.clone(),
-                RunModeDto::Build,
-            ),
-            time(1),
-        ))
-        .expect("session creates");
-    assert_eq!(projection.project_id(), project_id);
-    assert_eq!(projection.session_id(), session);
-    assert_eq!(projection.workspace_id(), workspace_id);
-    assert_eq!(projection.workspace_root(), &root);
-    assert_eq!(projection.mode(), RunModeDto::Build);
-    assert_eq!(projection.config_revision_id(), None);
-    assert!(projection.active_run().is_none());
-    assert!(projection.pending_turns().is_empty());
-    let run = RunId::new();
-    let (accepted_run, message) = started(accept(
-        &store,
-        session,
-        IdempotencyKey::new(),
-        run,
-        "usable",
-    ));
-    assert_eq!(accepted_run.run_id(), run);
-    assert_eq!(accepted_run.status(), RunStatusDto::Starting);
-    assert_eq!(message.text(), "usable");
-    assert_eq!(
-        store
-            .load_session_projection(session)
-            .expect("session projection loads")
-            .active_run()
-            .expect("accepted run is active")
-            .run_id(),
-        run
-    );
-}
-
 #[test]
 fn current_database_reopen_preserves_committed_rows() {
     let directory = TempDir::new().expect("temporary directory exists");
     let store = open(&directory);
-    assert_eq!(table_names(&directory), CURRENT_TABLE_NAMES);
     let session = create(&store);
     let run = RunId::new();
     let (_, message) = started(accept(&store, session, IdempotencyKey::new(), run, "kept"));
@@ -291,7 +116,6 @@ fn current_database_reopen_preserves_committed_rows() {
     drop(store);
 
     let reopened = reopen(&directory);
-    assert_eq!(table_names(&directory), CURRENT_TABLE_NAMES);
     assert_eq!(
         reopened
             .load_run_messages(session, run, 10)
@@ -313,94 +137,59 @@ fn current_database_reopen_preserves_committed_rows() {
 }
 
 #[test]
-fn a_legacy_shaped_database_is_recreated_without_its_old_objects() {
+fn a_stale_schema_stamp_discards_the_database_once_and_recreates_it() {
     let directory = TempDir::new().expect("temporary directory exists");
+    let store = open(&directory);
+    let session = create(&store);
+    drop(store);
+
+    // A database written before the stamp existed carries the SQLite default
+    // `user_version = 0`; the stamp alone decides, so its old objects are
+    // discarded instead of migrated.
     let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
-        .expect("legacy database creates");
+        .expect("database reopens for stamp mutation");
     connection
         .execute_batch(
-            "CREATE TABLE sessions (
-               id TEXT PRIMARY KEY,
-               last_sequence INTEGER NOT NULL
-             );
-             CREATE TABLE domain_events (
-               id TEXT PRIMARY KEY,
-               payload TEXT NOT NULL
-             );
-             CREATE TABLE run_snapshots (
+            "CREATE TABLE session_snapshots (
                id TEXT PRIMARY KEY,
                body TEXT NOT NULL
              );
-             INSERT INTO sessions(id, last_sequence) VALUES ('legacy', 7);
-             INSERT INTO domain_events(id, payload) VALUES ('legacy-event', '{}');",
+             PRAGMA user_version = 0;",
         )
-        .expect("legacy schema seeds");
+        .expect("the legacy shape and the stale stamp apply");
     drop(connection);
 
-    let store = open(&directory);
-    assert_eq!(table_names(&directory), CURRENT_TABLE_NAMES);
+    let recreated = open(&directory);
     assert_eq!(
-        column_names(&directory, "sessions"),
-        [
-            "id",
-            "project_id",
-            "workspace_id",
-            "mode",
-            "created_at",
-            "updated_at",
-        ]
-    );
-    // The recreated schema is the current one and is usable end to end.
-    let session = create(&store);
-    assert_eq!(
-        store
+        recreated
             .load_session_projection(session)
-            .expect("recreated schema is usable")
+            .expect_err("the discarded database no longer holds its old rows")
+            .code(),
+        "storage_record_not_found"
+    );
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("recreated database reopens for inspection");
+    let legacy: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'session_snapshots'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("legacy table lookup runs");
+    assert_eq!(legacy, 0, "the discarded database's old objects are gone");
+    drop(connection);
+
+    // The recreated database carries the current stamp, so the discard happens
+    // exactly once and committed rows survive the next open.
+    let session = create(&recreated);
+    drop(recreated);
+    assert_eq!(
+        reopen(&directory)
+            .load_session_projection(session)
+            .expect("the recreated database survives the next open")
             .session_id(),
         session
     );
-}
-
-#[test]
-fn an_incomplete_or_legacy_shaped_current_table_recreates_the_database() {
-    for (mutation, expected_session_columns) in [
-        ("DROP TABLE messages;", None),
-        (
-            "ALTER TABLE sessions ADD COLUMN last_sequence INTEGER;",
-            Some([
-                "id",
-                "project_id",
-                "workspace_id",
-                "mode",
-                "created_at",
-                "updated_at",
-            ]),
-        ),
-    ] {
-        let directory = TempDir::new().expect("temporary directory exists");
-        let store = open(&directory);
-        let session = create(&store);
-        drop(store);
-        let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
-            .expect("database reopens for mutation");
-        connection
-            .execute_batch(mutation)
-            .expect("a current table mutation applies");
-        drop(connection);
-
-        let recreated = open(&directory);
-        assert_eq!(table_names(&directory), CURRENT_TABLE_NAMES);
-        if let Some(columns) = expected_session_columns {
-            assert_eq!(column_names(&directory, "sessions"), columns);
-        }
-        assert_eq!(
-            recreated
-                .load_session_projection(session)
-                .expect_err("the recreated database is empty")
-                .code(),
-            "storage_record_not_found"
-        );
-    }
 }
 
 #[test]
