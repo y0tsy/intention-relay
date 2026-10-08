@@ -12,7 +12,7 @@ activity material remains research provenance and historical-only where it confl
 
 The removed execution-meaning envelope and decoders ([architecture
 02](02-dto-and-contract-policy.md)) leave no live path; 15 owns the
-fixed registry, frozen tool selection, direct admission, model-tool loop, `ToolCallId`, generic effect evidence, and
+fixed tool set, frozen tool selection, direct admission, model-tool loop, `ToolCallId`, generic effect evidence, and
 recovery; 18 owns MCP source, discovery, selection, invocation, and recovery.
 
 This document owns only bridge attachment, grant, operation identity, ingress correlation, safe bridge projection,

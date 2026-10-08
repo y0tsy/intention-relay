@@ -12,7 +12,7 @@ architectures 15--19.
 ## Ownership and non-authorities
 
 The removed execution-meaning machinery ([architecture
-02](02-dto-and-contract-policy.md)) leaves no live path; 15 owns registry
+02](02-dto-and-contract-policy.md)) leaves no live path; 15 owns frozen tool
 selection, direct tool admission, `ToolCallId`, generic tool-loop records, the committed call start, and publication;
 18 owns MCP lifecycle; 19 owns bridge attachment, grants, operation identity, ingress, delivery, and bridge recovery.
 
@@ -221,7 +221,7 @@ RunId, epoch, grant, cell identity, and operation identities.
 
 A child or unrelated run never receives a live kernel, namespace, grant, task, process, connection, MCP selection, or
 unfinished effect; a child may receive only a separately selected verified checkpoint copy, which is non-authorizing,
-independent, and child-local. Kernel-originated MCP work still uses the fixed `mcp` slot through
+independent, and child-local. Kernel-originated MCP work still uses the fixed `mcp` `ToolId` through
 architectures 19, 15, and 18; checkpoints never contain live MCP state and later runs reacquire capabilities.
 
 Future kernel delivery uses typed JSON-RPC 2.0 methods ([architecture 03](03-daemon-transport-and-adapters.md)):

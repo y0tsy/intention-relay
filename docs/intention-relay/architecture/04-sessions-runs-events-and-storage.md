@@ -31,7 +31,7 @@ association, while M5 owns the workspace addressing policy — the root as an an
 2. A session has at most one run in an active state.
 3. Every turn, run, plan, tool call, todo, permission, question, and message carries stable typed identity.
 4.  Every state-changing repository method commits its change in one SQLite transaction, or changes nothing. No
-filesystem-dependent validation, hook, provider call, or other external action runs inside that transaction.
+filesystem-dependent validation, provider call, or other external action runs inside that transaction.
 5.  Live updates publish only after commit, from the values the commit recorded; a publisher failure never rolls back
 committed state.
 6. A user turn accepted while a run is active is recorded pending and joins that run's live context at the next model
@@ -168,7 +168,7 @@ command path, which rejects it with `invalid_interrupt_dispatch`.
 An interrupt that arrives during a retry wait records the notice and starts the next attempt immediately. The executor
 owns suppression of late results from the stopped call. Recovery never admits old work to a provider.
 
-A filesystem-dependent validation or hook must finish before the transition transaction, and any stale result becomes a
+A filesystem-dependent validation must finish before the transition transaction, and any stale result becomes a
 typed known pre-effect outcome rather than an unrecorded second external check inside the transaction.
 
 ## Recovery

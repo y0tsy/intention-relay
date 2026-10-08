@@ -27,7 +27,7 @@ transition workflow is introduced. The Autopilot policy is immutable for the act
 
 Build mode:
 
-- exposes the full configured tool registry;
+- exposes the full configured tool surface;
 - operates autonomously by default;
 - applies WorkspaceRoot to every filesystem/process tool;
 - uses Build Autopilot when explicitly started by the user, in which case the
@@ -35,7 +35,7 @@ configured active tool surface is admitted without per-action confirmation;
 - records tool decisions and tool results durably.
 
 Build Autopilot is trusted-local and unrestricted by per-action confirmation, but it does not bypass typed validation,
-hooks, persistence, the daemon-owned capability path, cancellation, or recovery. It may execute destructive and external
+persistence, the daemon-owned capability path, cancellation, or recovery. It may execute destructive and external
 actions when those capabilities are configured. The system does not provide OS-level sandboxing.
 
 ## Plan mode
@@ -126,7 +126,7 @@ denied. This is deliberately different from `execute`, which is available for co
 state beyond tool-level path policy. Plan therefore has a product focus, not a shell containment guarantee.
 
 Mode does not currently filter the tool definitions advertised in model requests: both Plan and Build requests advertise
-all six active registered tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`). Mode-based advertisement filtering
+all six active tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`). Mode-based advertisement filtering
 is not part of the ordinary request path ([architecture 08](08-model-protocol-and-providers.md)); runtime tool policy,
 including Plan-mode
 `write` and `edit` denial, remains enforced at execution and is unchanged.

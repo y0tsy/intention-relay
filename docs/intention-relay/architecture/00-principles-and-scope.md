@@ -17,13 +17,13 @@ factories and connects implementations, not a catch-all core crate.
 
 ### 2. DTO-first at every boundary
 
-Every crate, process, persistence, provider, tool, hook, and adapter boundary exchanges explicit typed DTOs. Untyped
+Every crate, process, persistence, provider, tool, and adapter boundary exchanges explicit typed DTOs. Untyped
 maps, raw JSON, implementation records, SDK objects, and stringly typed identifiers are prohibited as contracts.
 
 ### 3. One daemon owns application runtime
 
 A local single-user daemon is the only owner of active session actors, run actors, SQLite connections, model streams,
-tools, hooks, and subscriptions. Adapters never own business runtime state.
+tools, and subscriptions. Adapters never own business runtime state.
 
 ### 4. Adapters share one contract
 
@@ -43,10 +43,11 @@ A session has an obligatory `WorkspaceRoot`. All filesystem tools resolve paths 
 an addressing anchor, not a containment boundary: a path may leave it through a symbolic link, and v1 is trusted local
 execution, not a sandbox ([architecture 05](05-tools-workspace-and-hooks.md)).
 
-### 7. Cross-cutting features use typed hooks
+### 7. Cross-cutting features attach as ordinary calls
 
-Workspace enforcement, VFR, Headroom/CCR, and plan-mode restrictions attach through an ordered, typed tool hook system.
-Base tools stay focused on their primitive work and do not hard-code extension behavior.
+Workspace enforcement, VFR, Headroom/CCR, and plan-mode restrictions attach as ordinary calls in the direct tool
+sequence; the typed hook plane was removed in Slice 1.5. Base tools stay focused on their primitive work and do not
+hard-code extension behavior.
 
 ### 8. Automatic durable state
 
@@ -82,7 +83,7 @@ flowchart LR
   PR --> DM[Daemon]
   DM --> AP[Application]
   AP --> RT[Runtime]
-  RT --> TO[Tools hooks]
+  RT --> TO[Tools]
   RT --> MO[Model drivers]
   AP --> DB[Storage]
 
@@ -101,7 +102,7 @@ The implementation must demonstrably provide:
 fallback.
 4.  A Plan-mode agent can create and refine a physical plan, while normal write/edit tools cannot mutate the project
 outside that plan's directory.
-5.  VFR and Headroom can be enabled independently through hooks, preserve typed observability, and expose their
+5.  VFR and Headroom can be enabled independently as ordinary calls, preserve typed observability, and expose their
 supporting tools.
 6. State visible to an adapter was committed before its corresponding live frame was published.
 7.  Provider secrets cannot appear in transport frames, persisted state, diagnostics, or normal UI output.

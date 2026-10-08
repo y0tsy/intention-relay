@@ -162,7 +162,7 @@ Daemon-owned observability must expose typed, safe operational data:
 - provider/model identity without credentials;
 - usage where reported;
 - tool lifecycle and policy outcomes;
-- hook/VFR/Headroom decisions with safe metadata;
+- VFR/Headroom decisions with safe metadata;
 - plan revision/status;
 - typed failure/correlation identifiers.
 

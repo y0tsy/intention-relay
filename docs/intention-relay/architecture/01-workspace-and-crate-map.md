@@ -37,9 +37,10 @@ facade plus the DTO/application/runtime/model/protocol/transport/type crates nee
 streaming, and on private Tokio/future support. It never depends directly on a concrete provider or storage
 implementation, selects no provider, and exposes no provider SDK, credential, Tokio, or storage resource in its public
 contract.
--  M5 activates the typed tool/workspace/hook path. The composition root (`intention-daemon`) owns assembly of the six active
-tools (`read`, `write`, `edit`, `execute`, `glob`, and `grep`) and the workspace/hook services; `intention-daemon` hosts
-the application path but does not select implementations. The remaining registry slots are reserved and unavailable.
+-  M5 activates the typed tool/workspace path. The composition root (`intention-daemon`) owns assembly of the six active
+tools (`read`, `write`, `edit`, `execute`, `glob`, and `grep`) and the workspace service; `intention-daemon` hosts
+the application path but does not select implementations. No registry or reserved slot exists: the tool set is the
+closed six-variant `ToolId`, and any other tool name is rejected as `unknown_tool` before effect.
 
 The M1-M5 activation notes are historical records: the coverage policy is now the per-crate tiers declared in
 `quality/coverage.toml` ([12 Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
@@ -54,10 +55,10 @@ The M1-M5 activation notes are historical records: the coverage policy is now th
 | `intention-storage` | DTO-only semantic repository methods, committed-change evidence, transcript and tool-result reads, and persisted configuration-revision inputs. | Config, domain, types. |
 | `intention-config` | TOML parsing, validation, resolved configuration and revision DTOs. | Types, domain as needed. |
 | `intention-providers` | Provider-neutral model DTOs and driver trait plus both SDK translation adapters. | Config, proto, and shared value types. |
-| `intention-tools` | Registry and core tool contracts with JSON Schema descriptors, the typed hook phases and dispatcher, and the WorkspaceRoot addressing anchor. | Proto. |
-| `intention-vfr` | VFR hook, mapping, expansion/raw-read tools. | Hooks, tools, domain, types. |
-| `intention-headroom` | Headroom hook, CCR contracts, retrieve tool. | Hooks, tools, storage contracts, domain, types. |
-| `intention-plans` | Plan artifacts, hidden frontmatter, Plan/Build policy hooks. | Hooks, tools, storage contracts, domain, types. |
+| `intention-tools` | Tool identity and core tool contracts with JSON Schema argument text, the static six-tool spec match, and the WorkspaceRoot addressing anchor. | Proto. |
+| `intention-vfr` | VFR transform, mapping, expansion/raw-read tools. | Tools, domain, types. |
+| `intention-headroom` | Headroom compression, CCR contracts, retrieve tool. | Tools, storage contracts, domain, types. |
+| `intention-plans` | Plan artifacts, hidden frontmatter, Plan/Build policy. | Tools, storage contracts, domain, types. |
 | `intention-transport` | Socket/pipe framing, server/client protocol, subscriptions. | Protocol, types. |
 | `intention-client` | Bootstrap, connection, dispatch, subscription, reconnect. | Protocol, transport, types. |
 | `intention-daemon` | Composition root library (factories, dependency wiring, and the durable `DaemonApplicationFacade`) plus daemon host and binary. | All selected concrete implementations. |
@@ -113,7 +114,7 @@ by `quality/architecture.toml` under phase `slice15`.
 | `intention-domain` | `intention-domain` | Domain records, value validation, and invariants. |
 | `intention-config` | `intention-config` | TOML parsing, validation, resolved configuration, and credential-free snapshots. |
 | `intention-engine` | `intention-application`, `intention-runtime` | Commands, queries, semantic use-case workflows, deterministic lifecycle decisions, interruption handling, and recovery. |
-| `intention-tools` | `intention-tools`, `intention-workspace`, `intention-hooks` | Tool registry and contracts, WorkspaceRoot policy, and the typed hook phases, contexts, and dispatcher. |
+| `intention-tools` | `intention-tools`, `intention-workspace`, `intention-hooks` | Tool identity and contracts, WorkspaceRoot policy, and the cancellation-aware dispatch surface. |
 | `intention-providers` | `intention-model`, `intention-provider-openrouter`, `intention-provider-generic-chat` | The provider-neutral model contract and both concrete SDK translation adapters. |
 | `intention-storage` | `intention-storage`, `intention-storage-sqlite` | Repository contracts and the bundled SQLite single-schema implementation. |
 | `intention-transport` | `intention-transport` | Socket/pipe framing, the JSON-RPC server and client protocol, and subscriptions. |
@@ -192,14 +193,13 @@ Release production APIs and the daemon binary expose no fixture mode.
 - resolved TOML configuration;
 - SQLite storage implementation;
 - selected provider drivers;
-- core tool registry;
-- workspace, plan, VFR, and Headroom hook registrations;
+- the engine-owned tool dispatch path over the six core tool contracts;
 - application facade and runtime actor factories;
 - a daemon application facade that `intention-daemon` hosts over transport.
 
-For M5, this is the ownership boundary for the active six-tool registry, `WorkspaceRoot`, and the typed hook dispatcher.
-Base tools remain primitive implementations; application owns lifecycle/result persistence and publication, while hooks
-transform or reject typed context without committing storage or publishing independently.
+For M5, this is the ownership boundary for the six active tools, `WorkspaceRoot`, and the direct tool sequence.
+Base tools remain primitive implementations; application owns lifecycle/result persistence and publication, and the
+future plan, VFR, and Headroom owners attach as ordinary calls when activated, not as extension points.
 
 `intention-daemon` depends on this composition facade, never the reverse. Its M4 private host may consume
 DTO/application/runtime/model contracts to own the task registry, cancellation, and streaming transport loop, but it

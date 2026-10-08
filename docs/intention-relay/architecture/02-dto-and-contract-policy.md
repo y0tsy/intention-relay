@@ -1,7 +1,7 @@
 # DTO and Contract Policy
 
 This document makes the DTO-first principle executable. It applies to all crate, process, persistence, provider, tool,
-hook, and presentation boundaries.
+and presentation boundaries.
 
 ## Non-negotiable rule
 
@@ -19,8 +19,7 @@ A DTO is a stable contract, not merely any serializable struct.
 | Persistence DTO | Storage-safe representation of a record or projection. | `RunProjectionDto`, `MessageProjectionDto`. |
 | Provider DTO | Provider-neutral model request/stream/error contract, including advertised tool definitions and the transient same-run reasoning attachment. | `ModelRequestDto`, `ModelToolDefinitionDto`, `AssistantReasoningDto`, `ModelEventDto`. |
 | Runtime execution DTO | Immutable selected execution input, safe terminal outcome, and provider-neutral time port over injected provider/storage contracts. | `ModelRunExecutionInputDto`, `ModelRunExecutionOutcomeDto`, `ModelTimePort`. |
-| Tool DTO | Typed tool invocation, bounded result, metadata, policy decision, and durable result projection. | `ToolInput`, `ToolResult`, `ToolResultProjection`, `ToolResultEvidenceDto`. |
-| Hook DTO | Controlled state passed between tool hook phases. | `ToolHookContextDto`. |
+| Tool DTO | Typed tool invocation, bounded result and interruption outcome, and durable result evidence. | `ToolInput`, `ToolResult`, `ToolResultEvidenceDto`. |
 | Config DTO | Parsed, validated, resolved, and revisioned TOML configuration. | `ResolvedConfigDto`, `ConfigSnapshotDto`. |
 | Presentation DTO | Explicit adapter projection, if transport DTO is not appropriate for display. | None today; adapters render transport projections directly. |
 
@@ -225,7 +224,7 @@ shape. This section records the landed model; the rules above are the live polic
   crates, and a type acquires wire attributes only when it crosses one of the three boundaries.
 - JSON only for tool payloads. Tool inputs and outputs are JSON objects validated at runtime against the tool's
   declared JSON Schema, and they are the only schemaless JSON values in the system. `serde_json::Value` stays
-  prohibited everywhere else, including errors, hooks, configuration, and storage.
+  prohibited everywhere else, including errors, configuration, and storage.
 - Eight identifiers. `SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`, and
   `IdempotencyKey` are the complete identity newtype set. `EventId`, `AssistantTurnId`, `PlanId`, `PlanRevisionId`,
   `ModelStepId`, and `ToolGroupId` are removed: model steps and tool groups are addressed by plain indices within their

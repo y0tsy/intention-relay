@@ -16,13 +16,13 @@ Owner: architecture 29.
 
 The removed run-execution meaning layer (its canonical codec was removed under [architecture
 02](02-dto-and-contract-policy.md)) leaves no live path.
-Architecture 15 owns the registry and tool loop, and architecture 23 session branching.
+Architecture 15 owns tool identity and the tool loop, and architecture 23 session branching.
 Architecture 22 owns provider kinds, profiles, catalogs, selections, and driver compatibility;
 architecture 25 owns the configuration/provider control plane.
 
 This document owns only the session-selection and presentation layer. A session default, override, usage aggregate, or
 protocol frame is not a second runtime, registry, persistence authority, catalog, or sandbox, and creates no `RunId`,
-lifecycle transition, tool permission, registry slot, child, MCP capability, bridge grant, kernel epoch, context
+lifecycle transition, tool permission, tool selection, child, MCP capability, bridge grant, kernel epoch, context
 projection, branch, or reconciliation result.
 
 ## Session selection, runs, and usage

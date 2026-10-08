@@ -9,9 +9,9 @@ multi-user operation are explicit v1 exclusions ([00 Principles and Scope](00-pr
 ## Ownership
 
 The daemon is the sole owner of application use cases and runtime actors; SQLite connections and persistence
-transactions; active sessions and runs; provider drivers and model streams; the tool registry, workspace policy, hooks,
-VFR, Headroom, and plan policies; frame publication and subscription source; and protocol frames and subscription
-current-state reads via `intention-transport`.
+transactions; active sessions and runs; provider drivers and model streams; the tool surface and workspace policy, plus
+VFR, Headroom, and plan policies when activated; frame publication and subscription source; and protocol frames and
+subscription current-state reads via `intention-transport`.
 
 Tauri, TUI, and REPL own only presentation, user input adaptation, local display state, and reconnect UX.
 

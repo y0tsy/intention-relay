@@ -141,7 +141,7 @@ projection that comes from project material.
 the root is an addressing anchor, not a security boundary, and no symlink or containment check exists
 ([architecture 05](05-tools-workspace-and-hooks.md)); an unreadable or non-regular file fails closed.
 - The file is read as bounded UTF-8 text; its content is never executed, never
-parsed as configuration, and never treated as a hook, tool definition, or policy input.
+parsed as configuration, and never treated as a tool definition or policy input.
 - An absent file contributes nothing and is not a failure; a project without
 instructions behaves exactly as a project with an empty source.
 - The file is project content, not authority: it cannot widen tool policy or

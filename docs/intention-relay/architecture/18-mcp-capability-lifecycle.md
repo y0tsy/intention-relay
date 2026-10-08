@@ -13,19 +13,19 @@ provenance, not future MCP capability state.
 
 The removed execution-meaning envelope, canonical framing, decoders, and compatibility classes
 ([architecture 02](02-dto-and-contract-policy.md)) leave no
-live path. Architecture 15 owns the fixed `mcp` slot, composition-only activation, direct
+live path. Architecture 15 owns the fixed `mcp` `ToolId`, composition-only activation, direct
 admission, `ToolCallId`, generic tool loop, and effect/publication boundary.
 
 This document owns only MCP-specific nested-selection semantics and capability lifecycle. It is not a second registry,
 lifecycle, provider, child, process supervisor, MCP administration surface, plugin system, or authority source. An MCP
 source, server, discovery response, capability, result, or error is evidence/data only: it cannot create or mutate a
-ToolId, registry entry, lifecycle, `RunId`, Goal, Skill, `ask_user`, child, session, ordinary turn input,
+`ToolId`, tool spec, lifecycle, `RunId`, Goal, Skill, `ask_user`, child, session, ordinary turn input,
 or provider selection.
 
 ## One fixed tool and immutable records
 
 Dynamic acquisition means immutable **run-local capabilities beneath the one fixed `mcp` ToolId**. It never creates
-another ToolId, registry entry, plugin, direct primitive path, daemon, or authority. Future work supersedes
+another ToolId, tool spec, plugin, direct primitive path, daemon, or authority. Future work supersedes
 retained requirements for user-created catalogs, complete-at-admission method sets, no discovery, and
 quota gates, and it preserves the one gateway, typed boundary, private resources, idempotency,
 redaction, publication after commit, cancellation/disposal, and no-resume law.
@@ -217,7 +217,7 @@ configuration, ancestry, Goal, Skill, UI, logs, or remote continuation state may
 ## MCP detail: bounded gateway, bounds, and safe failures
 
 The bounded MCP gateway is the canonical `mcp` gateway `ToolId`, owned by a future MCP boundary and assembled only
-through the existing Rust-owned registry and gateway; it is not a second registry. Its descriptor selects a bounded
+through the composition root's tool path and gateway; it is not a second registry. Its descriptor selects a bounded
 catalog of explicit user-approved `McpMethodDto` records, each naming exactly one connection and method, closed typed
 request/result families, schema reference, effect classification, safe result projection, and immutable revision. It is
 never a generic string-method call, raw JSON transport, arbitrary header map, or automatic exposure of a discovered
@@ -232,8 +232,8 @@ starts a local service only upon the first selected MCP call in one run; that pr
 is terminated when the run completes, cancels, fails, or is interrupted, and it is never attached by a later daemon,
 shared with another run, treated as a durable worker, or managed as a long-lived process.
 
-Every MCP call passes the same registry selection, daemon-bound authority, typed admission, durable outcome,
-cancellation, redaction, and post-commit publication rules as another registered tool. Connection, method,
+Every MCP call passes the same frozen tool selection, daemon-bound authority, typed admission, durable outcome,
+cancellation, redaction, and post-commit publication rules as another model-visible tool. Connection, method,
 schema, and gateway revisions are frozen in the call and run selection. A remote schema mismatch fails closed before an
 external effect; an already started ambiguous call is never
 repeated and commits a bounded `Partial` result with its notice when appropriate. A service may emit bounded safe

@@ -12,14 +12,14 @@ with architectures 15--20.
 ## Ownership and non-authorities
 
 The removed execution-meaning envelope and decoders ([architecture
-02](02-dto-and-contract-policy.md)) leave no live path; 15 owns the
-registry, frozen direct-tool selection, tool admission, model-tool loop, `ToolCallId`, and generic effect facts; 18 owns
+02](02-dto-and-contract-policy.md)) leave no live path; 15 owns tool
+identity, frozen direct-tool selection, tool admission, model-tool loop, `ToolCallId`, and generic effect facts; 18 owns
 MCP lifecycle; 19 owns bridge grants, ingress, operation correlation, and bridge delivery; 20 owns kernel epochs, cells,
 checkpoints, and kernel-local safe projection.
 
 This document owns only future non-authorizing context/evidence selection and safe representation. A Goal, Skill, source
 manifest, projection, memory record, card, disclosure, summary, omission, or compaction never creates or mutates a
-`RunId`, lifecycle state, tool permission, registry slot, `WorkspaceRoot`, MCP capability, bridge grant, kernel epoch,
+`RunId`, lifecycle state, tool permission, tool selection, `WorkspaceRoot`, MCP capability, bridge grant, kernel epoch,
 provider route, or reconciliation decision. Context is not a hidden prompt-mutation channel, sandbox, policy engine, or
 continuation mechanism.
 
@@ -82,7 +82,7 @@ mandatory `SKILL.md`-equivalent entry record, validated frontmatter, an instruct
 resources. Its required `name` and `description` are the routing surface: the description states the action, trigger,
 and boundary by which a model or user can select the Skill. A Skill is distinct from always-on instructions
 ([architecture 30](30-instruction-sources-and-system-context.md) owns that channel, and a Skill body never enters it), a
-user command, a delegated agent, a hook, an MCP server, and a registered tool.
+user command, a delegated agent, an MCP server, and a model-visible tool.
 
 ```text
 SkillDto

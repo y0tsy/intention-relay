@@ -11,13 +11,13 @@ Owner: architecture 28.
 ## Ownership and non-authorities
 
 The removed run-execution meaning layer (its canonical codec was removed under [architecture
-02](02-dto-and-contract-policy.md)) leaves no live path. Architecture 15 owns the registry and tool loop, architecture 18
+02](02-dto-and-contract-policy.md)) leaves no live path. Architecture 15 owns tool identity and the tool loop, architecture 18
 MCP lifecycle, architecture 21 context selection and projection (Goal context selection, Skills, memory/compaction
 selection), and architecture 03 activity-journal and notification projections.
 
 This document owns the Goal aggregate domain and its verification semantics. A Goal, revision, link, gate, memory
 record, role, template, proposal, or summary creates no `RunId` except through the ordinary admission path, lifecycle
-transition, tool permission, registry slot, child, MCP capability, bridge grant, kernel epoch, branch, or reconciliation
+transition, tool permission, tool selection, child, MCP capability, bridge grant, kernel epoch, branch, or reconciliation
 result, and is not a second runtime, registry, persistence authority, or sandbox.
 
 ## Goal identity, scope, and tree
@@ -127,7 +127,7 @@ memory/Skill/role/summary, credential, provider value, current machine state, ra
 or handle. Factory Skills use the exact `SkillSelectionV1` under the frozen snapshot.
 
 The admission transaction validates the Goal and session link, the complete target snapshot, all references and bounds,
-provider selection, registry revision, and applicable policy, then commits the run, selection, and audit evidence in one
+provider selection, tool-selection revision, and applicable policy, then commits the run, selection, and audit evidence in one
 transaction; no external action occurs inside it. An active run retains its frozen
 selection, and edits create newer revisions for future admission only. Unknown, corrupt, unavailable, incompatible, or
 over-limit selected records block dependent operations before external work; retry, child

@@ -1,8 +1,10 @@
 # VFR and Headroom
 
 **Approved future design. Not implemented; activation requires an activating specification.** Virtual File
-Representation (VFR) and Headroom/CCR are required v1 capabilities: separate extension crates attached through the typed
-tool hook system, not hard-coded dependencies of base tools.
+Representation (VFR) and Headroom/CCR are required v1 capabilities: separate extension crates attached as ordinary calls
+in the direct tool sequence, not hard-coded dependencies of base tools. The typed hook plane was removed in Slice 1.5 and
+is not part of this design: the stages below describe that call order, not a hook framework ([architecture
+05](05-tools-workspace-and-hooks.md)).
 
 ## Design principle
 
@@ -12,10 +14,10 @@ Base tools perform their primitive work. Extensions transform the result at cont
 flowchart LR
   RD[Read tool] --> WS[Workspace policy]
   WS --> PH[Physical result]
-  PH --> VF[VFR hook]
+  PH --> VF[VFR transform]
   VF --> NR[Normalized result]
   NR --> PS[Persist]
-  PS --> HR[Headroom hook]
+  PS --> HR[Headroom transform]
   HR --> MC[Model context]
   NR --> UI[UI event]
   EX[Expand or raw tool] --> WS
@@ -27,10 +29,10 @@ conflated.
 
 ## Ownership and non-authorities
 
-Architecture 05 owns the tool pipeline, hook phases, and workspace policy, so VFR and Headroom attach only through
-declared hook APIs and base tools never import or link either extension implementation crate. Architecture 30 owns the
-effective instruction projection and its assembly; this document contributes the `Vfr` contribution contract and no
-assembly order.
+Architecture 05 owns the tool pipeline and workspace policy, so VFR and Headroom attach only as declared ordinary calls
+in the direct tool sequence, and base tools never import or link either extension implementation crate. Architecture 30
+owns the effective instruction projection and its assembly; this document contributes the `Vfr` contribution contract
+and no assembly order.
 
 ## `intention-vfr`
 
@@ -87,7 +89,7 @@ The final user-facing tool names and DTO fields may differ, but they must retain
 - Headroom does not erase the audit trail of the pre-compression result.
 - Expiry, capacity, and storage failures are explicit policy outcomes.
 
-## Deterministic hook ordering
+## Deterministic extension ordering
 
 | Order | Stage | Owner | Result |
 | ---: | --- | --- | --- |
@@ -118,7 +120,7 @@ original/retrieved content.
   policy; it never emits an unresolvable placeholder.
 - Failure to retain required CCR content prevents an unsafe compressed reference from reaching the model.
 - An expired CCR reference returns a typed, observable result; it does not fabricate recovered content.
-- A hook failure records which extension phase failed without exposing source content or secrets in normal diagnostics.
+- An extension failure records which stage failed without exposing source content or secrets in normal diagnostics.
 
 ## Required tests and outcomes
 

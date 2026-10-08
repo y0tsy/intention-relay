@@ -28,7 +28,7 @@ flowchart TD
   DM --> AP[Application]
   AP --> RT[Run runtime]
   AP --> ST[SQLite storage]
-  RT --> TL[Tools and hooks]
+  RT --> TL[Tools]
   RT --> MD[Model drivers]
 ```
 
@@ -39,7 +39,7 @@ flowchart TD
 | Term | Meaning |
 | --- | --- |
 | **DTO** | A strictly typed data-transfer object used at every crate and process boundary. It has an explicit schema and does not expose implementation resources. |
-| **Daemon** | The single local process that owns runtime actors, persistence connections, active runs, providers, tools, hooks, and subscriptions. |
+| **Daemon** | The single local process that owns runtime actors, persistence connections, active runs, providers, tools, and subscriptions. |
 | **Project** | A logical user project associated with one or more sessions. |
 | **Session** | A durable project-backed conversation and work record. It has one `WorkspaceRoot` and at most one active run. |
 | **Turn** | A causally identified unit of conversation, such as a user request or assistant response. |
@@ -47,7 +47,6 @@ flowchart TD
 | **Run** | One agent execution lifecycle started from an accepted user turn. |
 | **WorkspaceRoot** | The required addressing anchor and process CWD for every session tool: relative paths join the root, `execute` starts there, and pathless `glob`/`grep` search from there ([architecture 05](05-tools-workspace-and-hooks.md)). |
 | **Artifact** | A durable work product associated with a session or run. Plans are artifacts. |
-| **Hook** | A typed, ordered extension point around tool execution and result processing. |
 | **Plan** | A physical, revisioned artifact produced by a planning-focused mode; ordinary project writes remain denied, while `execute` is available as trusted-local, advisory-guided execution. |
 | **Build Autopilot** | The single user-authorized Build policy that executes the configured active tool surface without per-action confirmation. |
 | **Projection** | A normalized current-state representation derived and stored for efficient queries. |
