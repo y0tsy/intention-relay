@@ -16,13 +16,13 @@ A DTO is a stable contract, not merely any serializable struct.
 | --- | --- | --- |
 | Command DTO | Requested state-changing work. | `SendUserTurnCommandDto`, `InterruptRunCommandDto`. |
 | Query DTO | Requested read model or snapshot. | `GetSessionSnapshotQueryDto`. |
-| Persistence DTO | Storage-safe representation of a record or projection. | `PersistedRunDto`. |
+| Persistence DTO | Storage-safe representation of a record or projection. | `RunProjectionDto`, `MessageProjectionDto`. |
 | Provider DTO | Provider-neutral model request/stream/error contract, including advertised tool definitions and the transient same-run reasoning attachment. | `ModelRequestDto`, `ModelToolDefinitionDto`, `AssistantReasoningDto`, `ModelEventDto`. |
 | Runtime execution DTO | Immutable selected execution input, safe terminal outcome, and provider-neutral time port over injected provider/storage contracts. | `ModelRunExecutionInputDto`, `ModelRunExecutionOutcomeDto`, `ModelTimePort`. |
-| Tool DTO | Typed tool invocation, bounded result, metadata, policy decision, and durable result projection. | `ToolInvocationDto`, `ToolResultDto`, `ToolResultProjection`, `ToolResultEvidenceDto`. |
+| Tool DTO | Typed tool invocation, bounded result, metadata, policy decision, and durable result projection. | `ToolInput`, `ToolResult`, `ToolResultProjection`, `ToolResultEvidenceDto`. |
 | Hook DTO | Controlled state passed between tool hook phases. | `ToolHookContextDto`. |
-| Config DTO | Parsed, validated, resolved, and revisioned TOML configuration. | `ResolvedConfigDto`, `ConfigRevisionDto`. |
-| Presentation DTO | Explicit adapter projection, if transport DTO is not appropriate for display. | `SessionViewDto`. |
+| Config DTO | Parsed, validated, resolved, and revisioned TOML configuration. | `ResolvedConfigDto`, `ConfigSnapshotDto`. |
+| Presentation DTO | Explicit adapter projection, if transport DTO is not appropriate for display. | None today; adapters render transport projections directly. |
 
 ## Type rules
 

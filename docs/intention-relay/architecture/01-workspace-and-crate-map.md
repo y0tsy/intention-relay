@@ -14,9 +14,9 @@ Contract Policy](02-dto-and-contract-policy.md).
 implementation, tools, or provider implementations.
 - Concrete drivers are selected only by the composition root.
 - Feature flags may choose implementations, but may not make the public contract type-unstable.
--  M1 establishes the `ConfigRevisionId` and credential-free `ConfigRevisionDto` contract foundation. M3 makes
-`ConfigRevisionDto` the canonical credential-free persisted configuration selection: the composition root supplies one
-startup revision, storage records it by `ConfigRevisionId`, and each accepted run retains its immutable revision. TOML
+-  M1 establishes the `ConfigRevisionId` and credential-free configuration-snapshot contract foundation. M3 makes
+`ConfigSnapshotDto` the canonical credential-free persisted configuration selection: the composition root supplies one
+startup snapshot, storage records it by `ConfigRevisionId`, and each accepted run retains its immutable revision. TOML
 is applied only at daemon startup; live reload remains deferred.
 -  M3 activates the engine and storage layers, merged since Slice 1.5 into `intention-engine` and `intention-storage`. The
 active graph adds the intentional `storage -> config`, `storage-sqlite -> config`, `application -> config`, and `runtime

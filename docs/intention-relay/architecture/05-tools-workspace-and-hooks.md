@@ -36,21 +36,22 @@ ToolDescriptorDto
   mutation_kind
   observability_policy
 
-ToolInvocationDto
-  invocation_id
+ToolContext
   session_id
   run_id
-  workspace_root
-  mode
-  input
+  call_id
 
-ToolResultDto
-  invocation_id
-  outcome
-  normalized_content
-  structured_metadata
-  policy_decisions
-  timing
+ToolInput
+  read | write | edit | execute | glob | grep  (typed per-tool parameters)
+
+ToolDispatchOutcome
+  completed(ToolResult) | interrupted(cause, partial)
+
+ToolResultProjection
+  schema_version
+  tool
+  content
+  execution
 ```
 
 Every active descriptor also declares `model_parameters_schema`: the code-owned JSON Schema text for its typed model
