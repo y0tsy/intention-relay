@@ -5,9 +5,7 @@
 
 //! Session, run, and transcript projection contracts.
 
-use intention_domain::{
-    PlanStatusDto, validate_plan_status_transition, validate_run_status_transition,
-};
+use intention_domain::validate_run_status_transition;
 use intention_proto::{
     ConfigRevisionId, ProjectId, RunId, SessionId, ToolCallId, TurnId, WorkspaceId,
 };
@@ -224,45 +222,6 @@ fn run_status_state_machine_accepts_only_declared_edges() {
                 "unexpected run transition: {from:?} -> {to:?}"
             );
         }
-    }
-}
-
-#[test]
-fn plan_transitions_accept_allowed_edges_and_reject_undeclared_edges() {
-    assert!(validate_plan_status_transition(None, PlanStatusDto::Drafting).is_ok());
-    for (from, to) in [
-        (PlanStatusDto::Drafting, PlanStatusDto::Revising),
-        (PlanStatusDto::Drafting, PlanStatusDto::Submitted),
-        (PlanStatusDto::Drafting, PlanStatusDto::Abandoned),
-        (PlanStatusDto::Revising, PlanStatusDto::Revising),
-        (PlanStatusDto::Revising, PlanStatusDto::Submitted),
-        (PlanStatusDto::Revising, PlanStatusDto::Abandoned),
-        (PlanStatusDto::Submitted, PlanStatusDto::Approved),
-        (PlanStatusDto::Submitted, PlanStatusDto::Rejected),
-        (PlanStatusDto::Submitted, PlanStatusDto::Abandoned),
-        (PlanStatusDto::Rejected, PlanStatusDto::Revising),
-        (PlanStatusDto::Rejected, PlanStatusDto::Abandoned),
-    ] {
-        assert!(validate_plan_status_transition(Some(from), to).is_ok());
-    }
-    for status in [
-        PlanStatusDto::Approved,
-        PlanStatusDto::Superseded,
-        PlanStatusDto::Abandoned,
-    ] {
-        assert!(validate_plan_status_transition(Some(status), PlanStatusDto::Drafting).is_err());
-    }
-    for (from, to) in [
-        (None, PlanStatusDto::Submitted),
-        (None, PlanStatusDto::Approved),
-        (Some(PlanStatusDto::Drafting), PlanStatusDto::Approved),
-        (Some(PlanStatusDto::Drafting), PlanStatusDto::Superseded),
-        (Some(PlanStatusDto::Submitted), PlanStatusDto::Drafting),
-        (Some(PlanStatusDto::Submitted), PlanStatusDto::Superseded),
-        (Some(PlanStatusDto::Rejected), PlanStatusDto::Submitted),
-        (Some(PlanStatusDto::Superseded), PlanStatusDto::Abandoned),
-    ] {
-        assert!(validate_plan_status_transition(from, to).is_err());
     }
 }
 

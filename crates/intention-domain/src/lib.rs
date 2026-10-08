@@ -63,48 +63,6 @@ pub fn validate_run_status_transition(from: RunStatusDto, to: RunStatusDto) -> D
     }
 }
 
-/// Validates a plan lifecycle transition.
-///
-/// # Errors
-///
-/// Returns a conflict error when the requested transition is not permitted.
-pub fn validate_plan_status_transition(
-    from: Option<PlanStatusDto>,
-    to: PlanStatusDto,
-) -> DtoResult<()> {
-    let allowed = matches!(
-        (from, to),
-        (None, PlanStatusDto::Drafting)
-            | (
-                Some(PlanStatusDto::Drafting),
-                PlanStatusDto::Revising | PlanStatusDto::Submitted | PlanStatusDto::Abandoned
-            )
-            | (
-                Some(PlanStatusDto::Revising),
-                PlanStatusDto::Revising | PlanStatusDto::Submitted | PlanStatusDto::Abandoned
-            )
-            | (
-                Some(PlanStatusDto::Submitted),
-                PlanStatusDto::Approved | PlanStatusDto::Rejected | PlanStatusDto::Abandoned
-            )
-            | (
-                Some(PlanStatusDto::Rejected),
-                PlanStatusDto::Revising | PlanStatusDto::Abandoned
-            )
-    );
-    if allowed {
-        Ok(())
-    } else {
-        Err(ErrorDto::new(
-            "invalid_plan_status_transition",
-            intention_proto::ErrorCategoryDto::Conflict,
-            "plan status transition is not permitted",
-            intention_proto::ErrorRetryDto::Never,
-            None,
-        )?)
-    }
-}
-
 /// The terminal outcome recorded for one local tool result.
 ///
 /// The taxonomy is deliberately closed to terminal outcomes: a call records
