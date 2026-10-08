@@ -705,12 +705,8 @@ mod tests {
             ProviderKindDto::Openrouter
         );
         assert!(snapshot.resolved().provider().credential_configured());
-        assert!(
-            !snapshot
-                .resolved()
-                .safe_debug_projection()
-                .contains("selected-provider-secret")
-        );
+        let encoded = serde_json::to_string(&snapshot).expect("safe snapshot serializes");
+        assert!(!encoded.contains("selected-provider-secret"));
 
         let source = ConfigSourceDto::Explicit(
             ConfigPathDto::parse(invalid.to_string_lossy().into_owned())

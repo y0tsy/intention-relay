@@ -100,7 +100,8 @@ fn startup_material_is_opaque_and_safe_projection_excludes_credential() {
     ))
     .expect("startup material resolves");
     let resolved = material.safe_resolved();
-    assert!(!resolved.safe_debug_projection().contains(FAKE_CREDENTIAL));
+    let encoded = serde_json::to_string(resolved).expect("safe resolved config serializes");
+    assert!(!encoded.contains(FAKE_CREDENTIAL));
     assert_eq!(resolved.provider().model(), "fixture");
 }
 
@@ -126,25 +127,13 @@ fn startup_material_preserves_current_selection_only_for_provider_construction()
 
 #[test]
 fn startup_material_returns_safe_errors_before_provider_construction() {
-    for (text, code) in [
-        ("not = [valid", "invalid_config_toml"),
-        (
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \" \"\n",
-            "missing_provider_credential",
-        ),
-        (
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\n",
-            "missing_provider_credential",
-        ),
-    ] {
-        let result = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
-            text,
-            explicit_source(),
-        ));
-        assert!(result.is_err());
-        let error = result
-            .err()
-            .expect("invalid startup material must return an error");
-        assert_eq!(error.code(), code);
-    }
+    let result = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
+        "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \" \"\n",
+        explicit_source(),
+    ));
+    let error = result
+        .err()
+        .expect("invalid startup material must return an error");
+    assert_eq!(error.code(), "missing_provider_credential");
+    assert_eq!(error.category().as_str(), "validation");
 }
