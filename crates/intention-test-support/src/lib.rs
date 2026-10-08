@@ -62,11 +62,11 @@ pub fn fixture_snapshot_with_model(model: &str) -> ConfigSnapshotDto {
 /// Returns a fixture snapshot with the exact context-window policy the caller requests.
 ///
 /// `None` keeps the resolved configuration's default window policy; `Some`
-/// writes the window token pair the sliding-window fixtures drive.
+/// writes the window token count the sliding-window fixtures drive.
 #[must_use]
 pub fn fixture_snapshot_with_context_window(
     model: &str,
-    context_window: Option<(u64, u64)>,
+    window_tokens: Option<u64>,
 ) -> ConfigSnapshotDto {
     let source = ConfigSourceDto::Explicit(
         ConfigPathDto::parse(
@@ -77,8 +77,8 @@ pub fn fixture_snapshot_with_context_window(
         )
         .unwrap_or_else(|_| unreachable!("fixture configuration source is absolute")),
     );
-    let context_window = context_window.map_or_else(String::new, |(window, capacity)| {
-        format!("context_window_tokens = {window}\ncontext_capacity_tokens = {capacity}\n")
+    let context_window = window_tokens.map_or_else(String::new, |window| {
+        format!("context_window_tokens = {window}\n")
     });
     let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
         format!(
@@ -155,7 +155,6 @@ pub fn session_messages(
 /// Owns a durable fixture database, one configured session, and its fixture host.
 pub struct FixtureHost {
     directory: TempDir,
-    facade: DaemonApplicationFacade,
     lifecycle: TestHostLifecycle,
 }
 
@@ -174,24 +173,11 @@ impl FixtureHost {
         })?;
         let facade = open_fixture_facade(directory.path().join("fixture.sqlite"))?;
         create_fixture_session(&facade, session_id)?;
-        let lifecycle = intention_daemon::test_host_lifecycle(facade.clone());
+        let lifecycle = intention_daemon::test_host_lifecycle(facade);
         Ok(Self {
             directory,
-            facade,
             lifecycle,
         })
-    }
-
-    /// Returns the fixture composition facade.
-    #[must_use]
-    pub const fn facade(&self) -> &DaemonApplicationFacade {
-        &self.facade
-    }
-
-    /// Returns the bounded fixture host that owns every task this host creates.
-    #[must_use]
-    pub const fn lifecycle(&self) -> &TestHostLifecycle {
-        &self.lifecycle
     }
 
     /// Serves a bounded fixture connection count through the real daemon dispatch path.
@@ -206,7 +192,6 @@ impl FixtureHost {
         let listener = AsyncLocalListener::bind(endpoint)?;
         let Self {
             directory,
-            facade: _facade,
             lifecycle,
         } = self;
         let _directory = directory;
