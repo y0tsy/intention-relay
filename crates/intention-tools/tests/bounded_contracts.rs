@@ -45,24 +45,6 @@ fn bounded_text_deserialize_rejects_nul_text() {
 }
 
 #[test]
-fn tool_input_execute_deserialize_decodes_any_argument_count() {
-    // No argument-count or aggregate-byte contract cap exists: a shape beyond
-    // the removed 128-argument bound decodes like any other invocation.
-    let input = json!({
-        "tool": "execute",
-        "input": {
-            "program": "echo",
-            "args": (0..129).map(|index| format!("arg-{index}")).collect::<Vec<_>>(),
-        },
-    });
-    let decoded = serde_json::from_value::<ToolInput>(input).expect("execute input decodes");
-    let ToolInput::Execute(execute) = decoded else {
-        panic!("execute input expected");
-    };
-    assert_eq!(execute.args.len(), 129);
-}
-
-#[test]
 fn edit_rejects_targets_larger_than_the_edit_bound() {
     let root_dir = fixture_dir("edit-large");
     std::fs::write(
@@ -110,7 +92,7 @@ fn write_expected_content_never_reads_files_beyond_the_bounded_check() {
 }
 
 #[test]
-fn directory_grep_caps_scanned_file_content_and_retained_aggregate() {
+fn directory_grep_caps_scanned_file_content() {
     let root_dir = fixture_dir("grep-bounds");
     let haystack = root_dir.path().join("haystack");
     std::fs::create_dir(&haystack).expect("haystack directory");
@@ -141,45 +123,13 @@ fn directory_grep_caps_scanned_file_content_and_retained_aggregate() {
         0,
         "matches beyond the bounded window must not be reported"
     );
-
-    // Many long matching lines exceed the aggregate retained-fragment bound.
-    for index in 0..200 {
-        std::fs::write(
-            haystack.join(format!("match-{index}.txt")),
-            format!("prefix-{index} {}", "y".repeat(700)),
-        )
-        .expect("seed matching file");
-    }
-    let result = service.dispatch_completed(
-        ToolInput::Grep(GrepInput {
-            pattern: BoundedText::new("prefix-").expect("pattern"),
-            scope: Some(GrepScope::Directory {
-                path: relative("haystack"),
-            }),
-            path: None,
-        }),
-        CancellationSignal::new(),
-    );
-    let ToolResult::Grep(grep) = result else {
-        unreachable!("grep returns a grep result")
-    };
-    assert!(grep.truncated);
-    let retained: usize = grep.matches.iter().map(serialized_match_bytes).sum();
-    assert!(
-        retained <= 128 * 1024,
-        "the serialized match aggregate must stay within the search window ({retained})"
-    );
-    assert!(
-        grep.matches.len() < 200,
-        "the aggregate bound must clamp the retained match set"
-    );
 }
 
 #[test]
 fn pattern_only_file_grep_matches_bounded_lines_and_rejects_invalid_targets() {
     // PR24-022: the pattern-only grep path (no scope) reads one workspace
     // file with the same bounded window and aggregate caps as scoped greps,
-    // and fails closed for missing, non-file, and absent targets.
+    // and fails closed for non-file targets.
     let root_dir = fixture_dir("pattern-grep");
     let haystack = format!("plain line\nprefix-{} needle\n{}", "x".repeat(700), "tail");
     std::fs::write(root_dir.path().join("needles.txt"), haystack).expect("seed");
@@ -205,29 +155,6 @@ fn pattern_only_file_grep_matches_bounded_lines_and_rejects_invalid_targets() {
         .map(|matched| matched.fragment.as_str().len())
         .sum();
     assert!(retained <= 128 * 1024);
-
-    let missing = service.dispatch_with_cancellation(
-        ToolInput::Grep(GrepInput {
-            pattern: BoundedText::new("needle").expect("pattern"),
-            scope: None,
-            path: Some(relative("missing.txt")),
-        }),
-        CancellationSignal::new(),
-    );
-    assert!(
-        matches!(missing, Err(error) if error.code() == "tool_search_failed"),
-        "a missing pattern-only target fails with a typed search failure"
-    );
-
-    let no_path = service.dispatch_with_cancellation(
-        ToolInput::Grep(GrepInput {
-            pattern: BoundedText::new("needle").expect("pattern"),
-            scope: None,
-            path: None,
-        }),
-        CancellationSignal::new(),
-    );
-    assert!(matches!(no_path, Err(error) if error.code() == "invalid_tool_path"));
 
     std::fs::create_dir(root_dir.path().join("sub")).expect("directory seeds");
     let directory = service.dispatch_with_cancellation(

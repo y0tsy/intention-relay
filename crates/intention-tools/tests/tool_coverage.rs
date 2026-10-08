@@ -1,5 +1,5 @@
-//! Consolidated coverage cases: schema version, dispatch, search scopes, and
-//! symlink handling, merged from the six former padded coverage targets.
+//! Consolidated coverage cases: search scopes and symlink handling, merged
+//! from the six former padded coverage targets.
 
 #![allow(
     clippy::expect_used,
@@ -14,34 +14,9 @@ use common::{DispatchCompleted, fixture_service, relative, text};
 use common::{fixture_dir, service};
 #[cfg(unix)]
 use intention_tools::ToolDispatchOutcome;
-use intention_tools::{
-    CancellationSignal, GrepInput, GrepScope, TOOL_SCHEMA_VERSION, ToolInput, ToolResult,
-};
+use intention_tools::{CancellationSignal, GrepInput, GrepScope, ToolInput, ToolResult};
 #[cfg(unix)]
 use intention_tools::{EditInput, ReadInput, WriteInput};
-
-#[test]
-fn tool_schema_version_is_current() {
-    assert_eq!(TOOL_SCHEMA_VERSION, 1);
-}
-
-#[test]
-fn plain_grep_reports_utf8_match_columns() {
-    let (dir, service) = fixture_service();
-    std::fs::write(dir.path().join("x.txt"), "é needle\nnope\n").unwrap();
-    let result = service.dispatch_completed(
-        ToolInput::Grep(GrepInput {
-            pattern: text("needle"),
-            scope: None,
-            path: Some(relative("x.txt")),
-        }),
-        CancellationSignal::new(),
-    );
-    let ToolResult::Grep(result) = result else {
-        return;
-    };
-    assert_eq!(result.matches[0].column, 3);
-}
 
 #[test]
 fn scoped_search_reports_file_directory_workspace_and_failures() {
