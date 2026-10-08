@@ -17,10 +17,10 @@ use std::{
 use futures_core::Stream;
 use intention_proto::{DtoResult, ErrorDto, ErrorRetryDto, RunId, ToolCallId};
 pub use intention_proto::{FinishReasonDto, ProviderErrorDto, ToolCallDto, UsageDto};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// The sender role of a model-context message, including tool calls and results.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelRoleDto {
     /// Daemon-selected model instruction context.
@@ -262,8 +262,7 @@ const fn forbidden_reasoning_text_character(character: char) -> bool {
 }
 
 /// The explicit capabilities declared by a selected provider driver.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct ModelCapabilitiesDto {
     text: bool,
     reasoning: bool,
