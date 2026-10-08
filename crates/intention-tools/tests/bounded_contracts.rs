@@ -12,7 +12,7 @@
 mod common;
 
 use common::{DispatchCompleted, fixture_dir, relative, service};
-use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
+use intention_proto::WorkspaceRelativePathDto;
 use intention_tools::{
     BoundedText, CancellationSignal, EditInput, GlobInput, GrepInput, GrepMatch, GrepScope,
     ToolInput, ToolResult, WriteInput,
@@ -72,7 +72,6 @@ fn edit_rejects_targets_larger_than_the_edit_bound() {
     .expect("seed oversized file");
     let service = service(&root_dir);
     let result = service.dispatch_with_cancellation(
-        ToolCallId::new(),
         ToolInput::Edit(EditInput {
             path: relative("huge.txt"),
             old: BoundedText::new("needle").expect("old"),
@@ -97,7 +96,6 @@ fn write_expected_content_never_reads_files_beyond_the_bounded_check() {
     .expect("seed oversized file");
     let service = service(&root_dir);
     let result = service.dispatch_with_cancellation(
-        ToolCallId::new(),
         ToolInput::Write(WriteInput {
             path: relative("huge.txt"),
             content: BoundedText::new("after").expect("content"),
@@ -122,7 +120,6 @@ fn directory_grep_caps_scanned_file_content_and_retained_aggregate() {
     large.extend_from_slice(b"needle-in-the-tail\n");
     std::fs::write(haystack.join("tail.txt"), large).expect("seed tail file");
     let result = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Grep(GrepInput {
             pattern: BoundedText::new("needle-in-the-tail").expect("pattern"),
             scope: Some(GrepScope::Directory {
@@ -154,7 +151,6 @@ fn directory_grep_caps_scanned_file_content_and_retained_aggregate() {
         .expect("seed matching file");
     }
     let result = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Grep(GrepInput {
             pattern: BoundedText::new("prefix-").expect("pattern"),
             scope: Some(GrepScope::Directory {
@@ -189,7 +185,6 @@ fn pattern_only_file_grep_matches_bounded_lines_and_rejects_invalid_targets() {
     std::fs::write(root_dir.path().join("needles.txt"), haystack).expect("seed");
     let service = service(&root_dir);
     let result = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Grep(GrepInput {
             pattern: BoundedText::new("needle").expect("pattern"),
             scope: None,
@@ -212,7 +207,6 @@ fn pattern_only_file_grep_matches_bounded_lines_and_rejects_invalid_targets() {
     assert!(retained <= 128 * 1024);
 
     let missing = service.dispatch_with_cancellation(
-        ToolCallId::new(),
         ToolInput::Grep(GrepInput {
             pattern: BoundedText::new("needle").expect("pattern"),
             scope: None,
@@ -226,7 +220,6 @@ fn pattern_only_file_grep_matches_bounded_lines_and_rejects_invalid_targets() {
     );
 
     let no_path = service.dispatch_with_cancellation(
-        ToolCallId::new(),
         ToolInput::Grep(GrepInput {
             pattern: BoundedText::new("needle").expect("pattern"),
             scope: None,
@@ -238,7 +231,6 @@ fn pattern_only_file_grep_matches_bounded_lines_and_rejects_invalid_targets() {
 
     std::fs::create_dir(root_dir.path().join("sub")).expect("directory seeds");
     let directory = service.dispatch_with_cancellation(
-        ToolCallId::new(),
         ToolInput::Grep(GrepInput {
             pattern: BoundedText::new("needle").expect("pattern"),
             scope: None,
@@ -258,7 +250,6 @@ fn write_expected_content_conflicts_when_target_is_missing() {
     let root_dir = fixture_dir("write-missing-expected");
     let service = service(&root_dir);
     let result = service.dispatch_with_cancellation(
-        ToolCallId::new(),
         ToolInput::Write(WriteInput {
             path: relative("new.txt"),
             content: BoundedText::new("created").expect("content"),
@@ -286,7 +277,6 @@ fn write_expected_content_conflicts_on_invalid_utf8_existing_file() {
     std::fs::write(root_dir.path().join("binary.dat"), &bytes).expect("seed binary file");
     let service = service(&root_dir);
     let result = service.dispatch_with_cancellation(
-        ToolCallId::new(),
         ToolInput::Write(WriteInput {
             path: relative("binary.dat"),
             content: BoundedText::new("after").expect("content"),
@@ -315,7 +305,6 @@ fn edit_rejects_invalid_utf8_target_before_any_mutation() {
     std::fs::write(root_dir.path().join("binary.dat"), &bytes).expect("seed binary file");
     let service = service(&root_dir);
     let result = service.dispatch_with_cancellation(
-        ToolCallId::new(),
         ToolInput::Edit(EditInput {
             path: relative("binary.dat"),
             old: BoundedText::new("needle").expect("old"),
@@ -367,8 +356,7 @@ fn grep_truncates_at_the_serialized_search_window() {
         }),
     ];
     for input in inputs {
-        let result =
-            service.dispatch_completed(ToolCallId::new(), input, CancellationSignal::new());
+        let result = service.dispatch_completed(input, CancellationSignal::new());
         let ToolResult::Grep(grep) = result else {
             unreachable!("grep returns a grep result")
         };
@@ -405,7 +393,6 @@ fn glob_truncates_at_the_serialized_search_window() {
     }
     let service = service(&root_dir);
     let result = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Glob(GlobInput {
             pattern: BoundedText::new("many/*").expect("pattern"),
         }),
@@ -452,7 +439,6 @@ fn scoped_grep_rejects_a_special_file_target() {
     let _listener = UnixListener::bind(&socket_path).expect("bind socket fixture");
     let service = service(&root_dir);
     let result = service.dispatch_with_cancellation(
-        ToolCallId::new(),
         ToolInput::Grep(GrepInput {
             pattern: BoundedText::new("needle").expect("pattern"),
             scope: Some(GrepScope::Directory {

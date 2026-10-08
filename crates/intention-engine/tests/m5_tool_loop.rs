@@ -12,7 +12,7 @@ use futures_util::{StreamExt, stream};
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
     ModelRunCommitDto, ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto,
-    ModelRunExecutionService, ModelSleepFuture, ModelTimePort, ToolExecutionPort,
+    ModelRunExecutionService, ModelSleepFuture, ModelTimePort, RunCancellation, ToolExecutionPort,
     ToolResultOutcomeDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto, ToolCallId};
@@ -283,19 +283,24 @@ fn execute(
     port: &ScriptedPort,
     request: ModelRequestDto,
     config: ConfigSnapshotDto,
-    signal: ModelCancellationSignal,
+    signal: RunCancellation,
 ) -> DtoResult<ModelRunExecutionOutcomeDto> {
     let clock = ImmediateTime::new();
     run_ready(
-        ModelRunExecutionService::new(repository, driver, &clock, port).execute(
-            ModelRunExecutionInputDto::new(
-                repository.session_id,
-                repository.run_id,
-                request,
-                config,
-                signal,
-            ),
-        ),
+        ModelRunExecutionService::new(
+            repository,
+            driver,
+            &clock,
+            &RecordingCommitObserver::new(),
+            port,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            repository.session_id,
+            repository.run_id,
+            request,
+            config,
+            signal,
+        )),
     )
 }
 
@@ -328,7 +333,7 @@ fn tool_call_executes_tool_and_completes() {
         &port,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("tool loop completes");
 
@@ -419,7 +424,7 @@ fn the_window_pass_compresses_a_large_tool_result_before_the_continuation_reques
         &port,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("windowed tool loop completes");
 
@@ -488,7 +493,7 @@ fn partial_tool_result_continues_the_loop_without_terminalizing() {
         &port,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("the loop continues after a partial tool result");
 
@@ -551,7 +556,7 @@ fn multiple_tool_calls_execute_sequentially_in_provider_order() {
         &port,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("sequential tool loop completes");
 
@@ -616,7 +621,7 @@ fn repeated_tool_rounds_continue_until_finished() {
         &port,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("repeated tool rounds complete");
 
@@ -686,7 +691,7 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
         &port,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("tool loop completes");
     assert!(matches!(
@@ -750,7 +755,7 @@ fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
         &port,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("textless reasoning round completes");
     assert!(matches!(
@@ -800,7 +805,7 @@ fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
         &port,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("an unrepresentable attachment terminalizes as a typed failed run");
 
@@ -845,7 +850,7 @@ fn control_character_reasoning_echo_terminalizes_as_typed_failed_run() {
         &port,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("an unrepresentable attachment terminalizes as a typed failed run");
 
@@ -891,7 +896,7 @@ fn tool_failure_terminalizes_without_retry() {
             &port,
             request(run_id, "fixture"),
             config,
-            ModelCancellationSignal::new(),
+            RunCancellation::new(),
         )
         .expect("a typed tool failure terminalizes safely");
 
@@ -938,7 +943,7 @@ fn port_infrastructure_error_terminalizes_with_the_safe_error() {
         &port,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("port failure terminalizes safely");
 
@@ -979,7 +984,7 @@ fn interruption_during_tool_execution_records_the_notice_and_continues() {
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
         ],
     ]);
-    let signal = ModelCancellationSignal::new();
+    let signal = RunCancellation::new();
     let (called_tx, called_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let port = GatedPort::new(called_tx, release_rx);
@@ -988,15 +993,20 @@ fn interruption_during_tool_execution_records_the_notice_and_continues() {
 
     let execution = std::thread::spawn(move || {
         let outcome = run_ready(
-            ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
-                ModelRunExecutionInputDto::new(
-                    session_id,
-                    run_id,
-                    request(run_id, "fixture"),
-                    config,
-                    execution_signal,
-                ),
-            ),
+            ModelRunExecutionService::new(
+                &repository,
+                &driver,
+                &clock,
+                &RecordingCommitObserver::new(),
+                &port,
+            )
+            .execute(ModelRunExecutionInputDto::new(
+                session_id,
+                run_id,
+                request(run_id, "fixture"),
+                config,
+                execution_signal,
+            )),
         );
         (outcome, repository, driver, port)
     });
@@ -1067,7 +1077,7 @@ fn provider_failure_after_tool_round_is_terminal_without_retry() {
         &port,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("provider failure after a tool round terminalizes");
 
@@ -1108,7 +1118,7 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
     let port = ScriptedPort::new(vec![Ok(
         ToolResultOutcomeDto::completed("never used").expect("content is valid")
     )]);
-    let signal = ModelCancellationSignal::new();
+    let signal = RunCancellation::new();
     // The interrupt lands on the assistant step commit, before the port
     // invocation of the round's call.
     repository
@@ -1118,15 +1128,20 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
     let clock = ImmediateTime::new();
 
     let outcome = run_ready(
-        ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
-            ModelRunExecutionInputDto::new(
-                session_id,
-                run_id,
-                request(run_id, "fixture"),
-                config,
-                signal,
-            ),
-        ),
+        ModelRunExecutionService::new(
+            &repository,
+            &driver,
+            &clock,
+            &RecordingCommitObserver::new(),
+            &port,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request(run_id, "fixture"),
+            config,
+            signal,
+        )),
     )
     .expect("the interrupted batch continues and completes");
 
@@ -1139,10 +1154,12 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
         "the interrupt never starts the tool effect"
     );
     let requests = driver.requests();
+    let stopped_notice = intention_tools::partial_tool_result_content(true, None)
+        .expect("the stopped-call notice renders");
     let answered = requests[1].messages().iter().any(|message| {
         message.role() == ModelRoleDto::Tool
             && message.tool_call_id() == Some(call.call_id())
-            && message.content() == intention_engine::TOOL_INTERRUPT_NOTICE
+            && message.content() == stopped_notice
     });
     assert!(
         answered,
@@ -1176,20 +1193,15 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
     let clock = ImmediateTime::new();
 
     let outcome = run_ready(
-        ModelRunExecutionService::with_commit_observer(
-            &repository,
-            &driver,
-            &clock,
-            &observer,
-            &port,
-        )
-        .execute(ModelRunExecutionInputDto::new(
-            session_id,
-            run_id,
-            request(run_id, "fixture"),
-            config,
-            ModelCancellationSignal::new(),
-        )),
+        ModelRunExecutionService::new(&repository, &driver, &clock, &observer, &port).execute(
+            ModelRunExecutionInputDto::new(
+                session_id,
+                run_id,
+                request(run_id, "fixture"),
+                config,
+                RunCancellation::new(),
+            ),
+        ),
     )
     .expect("the tool loop with an observer completes");
 
@@ -1262,14 +1274,20 @@ fn second_tool_call_does_not_start_until_first_finishes() {
 
     let execution = std::thread::spawn(move || {
         let outcome = run_ready(
-            ModelRunExecutionService::new(&repository, &driver, &clock, execution_port.as_ref())
-                .execute(ModelRunExecutionInputDto::new(
-                    session_id,
-                    run_id,
-                    request(run_id, "fixture"),
-                    config,
-                    ModelCancellationSignal::new(),
-                )),
+            ModelRunExecutionService::new(
+                &repository,
+                &driver,
+                &clock,
+                &RecordingCommitObserver::new(),
+                execution_port.as_ref(),
+            )
+            .execute(ModelRunExecutionInputDto::new(
+                session_id,
+                run_id,
+                request(run_id, "fixture"),
+                config,
+                RunCancellation::new(),
+            )),
         );
         (outcome, repository, driver)
     });
@@ -1315,7 +1333,7 @@ fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
     let run_id = RunId::new();
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let signal = ModelCancellationSignal::new();
+    let signal = RunCancellation::new();
     let (started_tx, _started_rx) = mpsc::channel();
     let driver = PendingAfterStartedDriver {
         entered: std::sync::Mutex::new(Some(started_tx)),
@@ -1330,15 +1348,20 @@ fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
 
     let execution = std::thread::spawn(move || {
         let outcome = run_ready(
-            ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
-                ModelRunExecutionInputDto::new(
-                    session_id,
-                    run_id,
-                    request(run_id, "fixture"),
-                    config,
-                    execution_signal,
-                ),
-            ),
+            ModelRunExecutionService::new(
+                &repository,
+                &driver,
+                &clock,
+                &RecordingCommitObserver::new(),
+                &port,
+            )
+            .execute(ModelRunExecutionInputDto::new(
+                session_id,
+                run_id,
+                request(run_id, "fixture"),
+                config,
+                execution_signal,
+            )),
         );
         (outcome, repository, driver)
     });
@@ -1393,7 +1416,7 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
         ],
     ]);
     let port = ScriptedPort::new(Vec::new());
-    let signal = ModelCancellationSignal::new();
+    let signal = RunCancellation::new();
     let (entered_tx, entered_rx) = mpsc::channel();
     let clock = RetryDelayTime {
         entered: entered_tx,
@@ -1402,15 +1425,20 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
 
     let execution = std::thread::spawn(move || {
         let outcome = run_ready(
-            ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
-                ModelRunExecutionInputDto::new(
-                    session_id,
-                    run_id,
-                    request(run_id, "fixture"),
-                    config,
-                    execution_signal,
-                ),
-            ),
+            ModelRunExecutionService::new(
+                &repository,
+                &driver,
+                &clock,
+                &RecordingCommitObserver::new(),
+                &port,
+            )
+            .execute(ModelRunExecutionInputDto::new(
+                session_id,
+                run_id,
+                request(run_id, "fixture"),
+                config,
+                execution_signal,
+            )),
         );
         (outcome, repository, driver, port)
     });
@@ -1463,20 +1491,25 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
         ],
     ]);
     let port = ScriptedPort::new(Vec::new());
-    let signal = ModelCancellationSignal::new();
-    driver.cancel_during_stream(0, signal.clone());
+    let signal = RunCancellation::new();
+    driver.cancel_during_stream(0, signal.model_signal());
     let clock = ImmediateTime::new();
 
     let outcome = run_ready(
-        ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
-            ModelRunExecutionInputDto::new(
-                session_id,
-                run_id,
-                request(run_id, "fixture"),
-                config,
-                signal,
-            ),
-        ),
+        ModelRunExecutionService::new(
+            &repository,
+            &driver,
+            &clock,
+            &RecordingCommitObserver::new(),
+            &port,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request(run_id, "fixture"),
+            config,
+            signal,
+        )),
     )
     .expect("interruption before the retry wait continues the run");
 
@@ -1540,7 +1573,7 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
         &port,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("a finished round with tool calls continues the loop");
 
@@ -1614,7 +1647,7 @@ fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
         &port,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("the run completes after joining the pending message");
 
@@ -1668,7 +1701,7 @@ fn a_pending_message_at_the_finish_boundary_continues_instead_of_completing() {
         &port,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("the run continues with the joined message and then completes");
 

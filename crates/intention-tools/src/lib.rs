@@ -1,7 +1,7 @@
 //! Typed, bounded contracts for workspace tools and the workspace addressing
 //! anchor.
 
-use intention_proto::{DtoResult, ToolCallId, WorkspaceRelativePathDto};
+use intention_proto::{DtoResult, WorkspaceRelativePathDto};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::process::{Child, Command, Stdio};
@@ -154,6 +154,11 @@ impl CancellationSignal {
     /// Requests cancellation of this invocation.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
+    }
+    /// Clears the request so the same run-scoped signal observes the next
+    /// interruption with fresh state.
+    pub fn reset(&self) {
+        self.cancelled.store(false, Ordering::Release);
     }
 }
 
@@ -753,7 +758,7 @@ impl Display for ToolId {
 pub struct ToolSpec {
     id: ToolId,
     description: &'static str,
-    input_schema: Option<&'static str>,
+    input_schema: &'static str,
 }
 impl ToolSpec {
     /// Returns the tool this specification describes.
@@ -766,9 +771,9 @@ impl ToolSpec {
         self.description
     }
     /// Returns the JSON Schema document text for this tool's typed model
-    /// arguments, when the tool exposes one.
+    /// arguments.
     #[must_use]
-    pub const fn input_schema(self) -> Option<&'static str> {
+    pub const fn input_schema(self) -> &'static str {
         self.input_schema
     }
 }
@@ -898,32 +903,32 @@ pub const fn spec(id: ToolId) -> ToolSpec {
         ToolId::Read => ToolSpec {
             id,
             description: "Read bounded text from a workspace file.",
-            input_schema: Some(READ_INPUT_SCHEMA),
+            input_schema: READ_INPUT_SCHEMA,
         },
         ToolId::Write => ToolSpec {
             id,
             description: "Write bounded text to a workspace file.",
-            input_schema: Some(WRITE_INPUT_SCHEMA),
+            input_schema: WRITE_INPUT_SCHEMA,
         },
         ToolId::Edit => ToolSpec {
             id,
             description: "Apply a bounded text replacement.",
-            input_schema: Some(EDIT_INPUT_SCHEMA),
+            input_schema: EDIT_INPUT_SCHEMA,
         },
         ToolId::Execute => ToolSpec {
             id,
             description: "Execute an explicitly bounded command.",
-            input_schema: Some(EXECUTE_INPUT_SCHEMA),
+            input_schema: EXECUTE_INPUT_SCHEMA,
         },
         ToolId::Glob => ToolSpec {
             id,
             description: "List workspace paths matching a pattern.",
-            input_schema: Some(GLOB_INPUT_SCHEMA),
+            input_schema: GLOB_INPUT_SCHEMA,
         },
         ToolId::Grep => ToolSpec {
             id,
             description: "Search bounded workspace text.",
-            input_schema: Some(GREP_INPUT_SCHEMA),
+            input_schema: GREP_INPUT_SCHEMA,
         },
     }
 }
@@ -1140,6 +1145,205 @@ pub struct WriteResult {
     pub bytes: u64,
 }
 
+/// Renders one typed tool result into its bounded model-visible content.
+///
+/// The typed result is redacted and workspace-relative by construction: text
+/// and search payloads keep their own bounds, truncated content keeps its
+/// explicit marker, and mutations report their byte count.
+///
+/// # Errors
+///
+/// Returns a validation error when the rendered content is blank, because a
+/// tool result must always answer its call with readable content.
+pub fn render_tool_result_content(result: &ToolResult) -> DtoResult<String> {
+    let content = match result {
+        ToolResult::Read(value) | ToolResult::Execute(value) => {
+            if value.truncated {
+                format!("{}\n[truncated]", value.text.as_str())
+            } else {
+                value.text.as_str().to_owned()
+            }
+        }
+        ToolResult::Glob(value) => {
+            let mut content = value
+                .paths
+                .iter()
+                .map(WorkspaceRelativePathDto::as_str)
+                .collect::<Vec<_>>()
+                .join("\n");
+            append_truncation_marker(&mut content, value.truncated);
+            content
+        }
+        ToolResult::Grep(value) => {
+            let mut content = value
+                .matches
+                .iter()
+                .map(|matched| {
+                    format!(
+                        "{}:{}:{}: {}",
+                        matched.path.as_str(),
+                        matched.line,
+                        matched.column,
+                        matched.fragment.as_str()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            append_truncation_marker(&mut content, value.truncated);
+            content
+        }
+        ToolResult::Write(value) | ToolResult::Edit(value) => format!("{} bytes", value.bytes),
+    };
+    if content.trim().is_empty() {
+        return Err(intention_proto::ErrorDto::validation(
+            "invalid_tool_result_content",
+            "tool result content must not be empty",
+        ));
+    }
+    Ok(content)
+}
+
+/// Appends the honest truncation marker to one bounded list projection.
+fn append_truncation_marker(content: &mut String, truncated: bool) {
+    if truncated {
+        if !content.is_empty() {
+            content.push('\n');
+        }
+        content.push_str("[truncated]");
+    }
+}
+
+/// Renders the durable partial result of one interrupted dispatch.
+///
+/// The captured output precedes the exact interruption notice selected by doc
+/// 15 for the stopped/lost and captured/uncaptured cases.
+///
+/// # Errors
+///
+/// Returns a validation error when the captured output cannot render.
+pub fn partial_tool_result_content(
+    stopped: bool,
+    result: Option<&ToolResult>,
+) -> DtoResult<String> {
+    let notice = match (stopped, result.is_some()) {
+        (true, true) => {
+            "[The tool call was stopped before a final result; the output above is partial.]"
+        }
+        (false, true) => {
+            "[The tool call did not receive a final result; the output above is partial.]"
+        }
+        (true, false) => "[The tool call was stopped before a final result.]",
+        (false, false) => "[The tool call did not receive a final result.]",
+    };
+    match result {
+        Some(result) => Ok(format!("{}\n{notice}", render_tool_result_content(result)?)),
+        None => Ok(notice.to_owned()),
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    reason = "Renderer fixtures use expect to provide precise failures."
+)]
+mod tool_result_renderer_tests {
+    use super::*;
+
+    fn bounded(value: &str) -> BoundedText {
+        BoundedText::new(value).unwrap_or_else(|_| unreachable!("fixture tool text is bounded"))
+    }
+
+    fn relative(value: &str) -> WorkspaceRelativePathDto {
+        WorkspaceRelativePathDto::parse(value)
+            .unwrap_or_else(|_| unreachable!("fixture relative path is valid"))
+    }
+
+    #[test]
+    fn tool_result_content_covers_each_typed_result_family() {
+        let read = ToolResult::Read(TextResult {
+            text: bounded("hello"),
+            truncated: false,
+        });
+        assert_eq!(
+            render_tool_result_content(&read).expect("read content renders"),
+            "hello"
+        );
+        let truncated = ToolResult::Execute(TextResult {
+            text: bounded("done"),
+            truncated: true,
+        });
+        assert_eq!(
+            render_tool_result_content(&truncated).expect("execute content renders"),
+            "done\n[truncated]"
+        );
+        let glob = ToolResult::Glob(PathsResult {
+            paths: vec![relative("src/a.rs"), relative("src/b.rs")],
+            truncated: true,
+        });
+        assert_eq!(
+            render_tool_result_content(&glob).expect("glob content renders"),
+            "src/a.rs\nsrc/b.rs\n[truncated]"
+        );
+        let grep = ToolResult::Grep(GrepResult {
+            matches: vec![GrepMatch {
+                path: relative("src/a.rs"),
+                line: 3,
+                column: 5,
+                fragment: bounded("needle"),
+            }],
+            truncated: false,
+        });
+        assert_eq!(
+            render_tool_result_content(&grep).expect("grep content renders"),
+            "src/a.rs:3:5: needle"
+        );
+        let write = ToolResult::Write(WriteResult { bytes: 17 });
+        assert_eq!(
+            render_tool_result_content(&write).expect("write content renders"),
+            "17 bytes"
+        );
+        let edit = ToolResult::Edit(WriteResult { bytes: 2 });
+        assert_eq!(
+            render_tool_result_content(&edit).expect("edit content renders"),
+            "2 bytes"
+        );
+    }
+
+    #[test]
+    fn blank_tool_result_content_is_rejected() {
+        let read = ToolResult::Read(TextResult {
+            text: bounded(""),
+            truncated: false,
+        });
+        let error = render_tool_result_content(&read).expect_err("blank content is rejected");
+        assert_eq!(error.code(), "invalid_tool_result_content");
+    }
+
+    #[test]
+    fn partial_content_carries_the_exact_interruption_notice() {
+        let captured = ToolResult::Read(TextResult {
+            text: bounded("half a line"),
+            truncated: false,
+        });
+        assert_eq!(
+            partial_tool_result_content(true, Some(&captured)).expect("partial content renders"),
+            "half a line\n[The tool call was stopped before a final result; the output above is partial.]"
+        );
+        assert_eq!(
+            partial_tool_result_content(false, Some(&captured)).expect("partial content renders"),
+            "half a line\n[The tool call did not receive a final result; the output above is partial.]"
+        );
+        assert_eq!(
+            partial_tool_result_content(true, None).expect("partial content renders"),
+            "[The tool call was stopped before a final result.]"
+        );
+        assert_eq!(
+            partial_tool_result_content(false, None).expect("partial content renders"),
+            "[The tool call did not receive a final result.]"
+        );
+    }
+}
+
 /// Why one tool dispatch stopped before producing a final result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InterruptCause {
@@ -1192,13 +1396,9 @@ impl ToolService {
     /// Returns a safe typed error when validation, workspace resolution, or execution fails.
     pub fn dispatch_with_cancellation(
         &self,
-        call: ToolCallId,
         input: ToolInput,
         cancellation: CancellationSignal,
     ) -> DtoResult<ToolDispatchOutcome> {
-        // Call identity stays durable in the caller's request and committed
-        // rows; execution itself needs only the typed input.
-        let _ = call;
         if cancellation.is_cancelled() {
             return Ok(stopped_outcome(None));
         }

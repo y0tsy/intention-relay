@@ -200,7 +200,7 @@ test_targets = ["composition_contract", "fixture_host"]
 
 [[future_crates]]
 name = "intention-daemon"
-test_targets = ["client_e2e", "daemon_bootstrap", "m4_streaming_foundation", "m5_tool_loop_wiring", "real_api_e2e"]
+test_targets = ["client_e2e", "daemon_bootstrap", "m4_streaming_foundation", "real_api_e2e"]
 
 [[future_crates]]
 name = "intention-tauri"

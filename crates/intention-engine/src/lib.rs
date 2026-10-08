@@ -27,62 +27,9 @@ use intention_storage::{
     RemoveTurnInputDto, StorageRepositoryDto, ToolResultEvidenceDto, WriteToolResultInputDto,
 };
 use intention_tools::{
-    CancellationSignal, InterruptCause, ToolDispatchOutcome, ToolInput, ToolResult, ToolService,
-    WorkspaceRoot,
+    InterruptCause, ToolDispatchOutcome, ToolInput, ToolResult, ToolService, WorkspaceRoot,
+    partial_tool_result_content, render_tool_result_content,
 };
-
-/// Synchronous DTO-only boundary that admits accepted work to daemon-owned scheduling.
-///
-/// Implementations must not invoke a provider. The daemon host owns all
-/// asynchronous execution after this bounded post-commit admission.
-pub trait ModelRunDispatchPort {
-    /// Schedules one fully constructed model run.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed local scheduling error when the daemon cannot accept the work.
-    fn dispatch_model_run(&self, input: ModelRunExecutionInputDto) -> DtoResult<()>;
-}
-
-/// Terminal application outcome of one explicit local tool invocation.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum LocalToolInvocationOutcomeDto {
-    /// The tool completed and produced its final typed result.
-    Completed(ToolResult),
-    /// The tool stopped before a final result.
-    Partial {
-        /// Whether the stop was an explicit cancellation.
-        stopped: bool,
-        /// Output captured before the stop, when the tool produced any.
-        result: Option<ToolResult>,
-    },
-}
-
-impl ModelRunCommitObserver for () {
-    fn observe_model_run_commit(&self, _: &ModelRunCommitDto) {}
-}
-
-/// Composition-owned boundary that binds the authorized workspace before the
-/// invocation executes.
-///
-/// Canonical paths stay inside the application: the bound root is returned to
-/// the application, never to an observation boundary.
-pub trait WorkspaceBoundaryPort {
-    /// Binds the authorized workspace and returns the root the invocation
-    /// addresses.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed workspace-resolution error when the workspace cannot be
-    /// authorized or prepared for the invocation.
-    fn resolve(&self, workspace: &WorkspaceRoot) -> DtoResult<WorkspaceRoot>;
-}
-
-impl WorkspaceBoundaryPort for () {
-    fn resolve(&self, workspace: &WorkspaceRoot) -> DtoResult<WorkspaceRoot> {
-        Ok(workspace.clone())
-    }
-}
 
 /// Complete engine command for one local tool invocation.
 #[derive(Debug)]
@@ -94,7 +41,7 @@ pub struct ToolInvocationRequestDto {
     tool_id: String,
     input: ToolInput,
     occurred_at: TimestampDto,
-    cancellation: CancellationSignal,
+    cancellation: RunCancellation,
     arguments_json: String,
 }
 
@@ -123,7 +70,7 @@ impl ToolInvocationRequestDto {
             tool_id: tool_id.into(),
             input,
             occurred_at,
-            cancellation: CancellationSignal::new(),
+            cancellation: RunCancellation::new(),
             arguments_json: "{}".to_owned(),
         }
     }
@@ -135,9 +82,9 @@ impl ToolInvocationRequestDto {
         self
     }
 
-    /// Requests cancellation of this invocation.
+    /// Binds this invocation to its run's cancellation handle.
     #[must_use]
-    pub fn with_cancellation(mut self, cancellation: CancellationSignal) -> Self {
+    pub fn with_cancellation(mut self, cancellation: RunCancellation) -> Self {
         self.cancellation = cancellation;
         self
     }
@@ -146,37 +93,24 @@ impl ToolInvocationRequestDto {
 /// DTO-only application facade over one semantic storage repository.
 pub struct ApplicationService<'a, Repository> {
     repository: &'a Repository,
-    workspace_boundary: Box<dyn WorkspaceBoundaryPort + 'a>,
 }
 
 impl<'a, Repository> ApplicationService<'a, Repository>
 where
     Repository: StorageRepositoryDto,
 {
-    /// Executes one explicit local invocation and durably records its lifecycle.
+    /// Executes one explicit local invocation, durably records its lifecycle,
+    /// and returns its model-visible outcome.
     ///
     /// # Errors
     ///
-    /// Returns the typed validation, storage, or tool execution error.
-    pub fn invoke_local_tool(
-        &self,
-        input: ToolInvocationRequestDto,
-    ) -> DtoResult<LocalToolInvocationOutcomeDto> {
-        self.invoke_local_tool_with_publication(input, &())
-    }
-
-    /// Executes, durably commits, and hands each committed row to the commit
-    /// sink.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed validation, storage, workspace, or tool execution
-    /// error.
+    /// Returns the typed validation, storage, or tool execution error when no
+    /// terminal outcome could be produced.
     pub fn invoke_local_tool_with_publication<P: ModelRunCommitObserver>(
         &self,
         input: ToolInvocationRequestDto,
         publisher: &P,
-    ) -> DtoResult<LocalToolInvocationOutcomeDto> {
+    ) -> DtoResult<ToolResultOutcomeDto> {
         let ToolInvocationRequestDto {
             workspace,
             session_id,
@@ -207,24 +141,10 @@ where
             occurred_at,
             publisher,
         )?;
-        // The workspace owner binds the authorized root before execution, and
-        // the invocation addresses only that bound root.
-        let workspace = self
-            .workspace_boundary
-            .resolve(&workspace)
-            .inspect_err(|error| {
-                let _ = self.append_tool_failure(
-                    session_id,
-                    run_id,
-                    call_id,
-                    &tool_id,
-                    error,
-                    occurred_at,
-                    publisher,
-                );
-            })?;
+        // The invocation addresses the workspace root its caller resolved; the
+        // root is an addressing anchor resolved once by the host.
         let service = ToolService::new(workspace);
-        let outcome = service.dispatch_with_cancellation(call_id, input, cancellation.clone());
+        let outcome = service.dispatch_with_cancellation(input, cancellation.tool_signal());
         let result: DtoResult<ToolResult> = match outcome {
             Ok(ToolDispatchOutcome::Completed(value)) => Ok(value),
             Ok(ToolDispatchOutcome::Interrupted { cause, partial }) => {
@@ -239,15 +159,12 @@ where
                     call_id,
                     &tool_id,
                     ToolResultStatusDto::Partial,
-                    content,
+                    content.clone(),
                     Vec::new(),
                     occurred_at,
                     publisher,
                 )?;
-                return Ok(LocalToolInvocationOutcomeDto::Partial {
-                    stopped,
-                    result: partial,
-                });
+                return ToolResultOutcomeDto::partial(content);
             }
             Err(error) => {
                 self.append_tool_failure(
@@ -259,7 +176,7 @@ where
                     occurred_at,
                     publisher,
                 )?;
-                return Err(error);
+                return Ok(ToolResultOutcomeDto::failed(error));
             }
         };
         // The terminal result commits once, with its answering transcript row,
@@ -282,12 +199,15 @@ where
             call_id,
             &tool_id,
             status,
-            content,
+            content.clone(),
             metadata,
             occurred_at,
             publisher,
         )?;
-        result.map(LocalToolInvocationOutcomeDto::Completed)
+        match result {
+            Ok(_) => ToolResultOutcomeDto::completed(content),
+            Err(error) => Ok(ToolResultOutcomeDto::failed(error)),
+        }
     }
 
     /// Commits one tool-call row before the call is dispatched, then hands the
@@ -412,17 +332,8 @@ where
 
     /// Creates an application facade around a DTO-only durable repository.
     #[must_use]
-    pub fn new(repository: &'a Repository) -> Self {
-        Self {
-            repository,
-            workspace_boundary: Box::new(()),
-        }
-    }
-
-    #[must_use]
-    pub fn with_workspace_boundary<B: WorkspaceBoundaryPort + 'a>(mut self, boundary: B) -> Self {
-        self.workspace_boundary = Box::new(boundary);
-        self
+    pub const fn new(repository: &'a Repository) -> Self {
+        Self { repository }
     }
 
     /// Creates a durable session and maps its committed evidence for protocol use.
@@ -447,31 +358,25 @@ where
         ))
     }
 
-    /// Accepts a user turn and schedules an exactly-started run only after its initial commit.
+    /// Accepts a user turn and maps its committed acceptance for protocol use.
     ///
-    /// A pending outcome returns immediately. A started outcome reads the model
-    /// context of the exact `Starting` run and dispatches it, so an acceptance
-    /// whose run has already left `Starting` neither reads context nor
-    /// dispatches and a repeated acceptance never schedules one run twice. Any
-    /// post-commit context or dispatch failure is durably recorded against the
-    /// exact `Starting` run and this method still returns the original
-    /// acceptance.
+    /// A pending outcome returns immediately, and a started outcome returns
+    /// once the exact `Starting` run is durably accepted. The daemon host owns
+    /// the single scheduling path: it observes the committed acceptance and
+    /// reads the exact `Starting` run through [`Self::schedule_starting_run`],
+    /// so acceptance never schedules work itself and a post-commit scheduling
+    /// failure cannot change the committed acceptance result.
     ///
     /// # Errors
     ///
-    /// Returns an admission or malformed durable-acceptance error. Post-commit
-    /// scheduling failures deliberately preserve the committed acceptance result.
-    pub fn send_user_turn_and_schedule<Dispatch>(
+    /// Returns an admission or malformed durable-acceptance error.
+    pub fn send_user_turn(
         &self,
         command: SendUserTurnCommandDto,
         proposed_run_id: RunId,
         config_snapshot: ConfigSnapshotDto,
         occurred_at: TimestampDto,
-        dispatch: &Dispatch,
-    ) -> DtoResult<ProtocolAcceptedResultDto>
-    where
-        Dispatch: ModelRunDispatchPort,
-    {
+    ) -> DtoResult<ProtocolAcceptedResultDto> {
         let outcome = self
             .repository
             .accept_user_turn(AcceptUserTurnInputDto::new(
@@ -482,54 +387,7 @@ where
                 config_snapshot,
                 occurred_at,
             )?)?;
-        let accepted = accepted_user_turn(&command, &outcome)?;
-        let ProtocolAcceptedResultDto::SendUserTurn(accepted_turn) = accepted else {
-            unreachable!("accepted user turn always returns user-turn acceptance")
-        };
-        let SendUserTurnOutcomeDto::Started { run_id, .. } = accepted_turn.outcome() else {
-            return Ok(ProtocolAcceptedResultDto::SendUserTurn(accepted_turn));
-        };
-        let session_id = accepted_turn.session_id();
-        let schedule = match self
-            .repository
-            .load_starting_run_model_context(session_id, run_id)
-        {
-            Ok(context) if context.session_id() == session_id && context.run_id() == run_id => {
-                match schedule_from_context(context, run_id, ModelCancellationSignal::new()) {
-                    Ok(schedule) => schedule,
-                    Err(_) => {
-                        preserve_accepted_after_scheduling_failure(
-                            self.repository,
-                            session_id,
-                            run_id,
-                            "model_context_unavailable",
-                            occurred_at,
-                        );
-                        return Ok(ProtocolAcceptedResultDto::SendUserTurn(accepted_turn));
-                    }
-                }
-            }
-            Ok(_) | Err(_) => {
-                preserve_accepted_after_scheduling_failure(
-                    self.repository,
-                    session_id,
-                    run_id,
-                    "model_context_unavailable",
-                    occurred_at,
-                );
-                return Ok(ProtocolAcceptedResultDto::SendUserTurn(accepted_turn));
-            }
-        };
-        if dispatch.dispatch_model_run(schedule).is_err() {
-            preserve_accepted_after_scheduling_failure(
-                self.repository,
-                session_id,
-                run_id,
-                "model_scheduling_unavailable",
-                occurred_at,
-            );
-        }
-        Ok(ProtocolAcceptedResultDto::SendUserTurn(accepted_turn))
+        accepted_user_turn(&command, &outcome)
     }
 
     /// Removes one not-yet-seen pending turn and maps its committed evidence.
@@ -584,8 +442,8 @@ where
     ///
     /// This is the daemon-host admission read. It deliberately does not dispatch
     /// work itself, so composition remains the owner of provider execution, and
-    /// the supplied cancellation signal becomes part of the returned execution
-    /// input so the host that registers it owns the run's interruption.
+    /// the supplied run-scoped cancellation handle becomes part of the returned
+    /// execution input so the host that created it owns the run's interruption.
     ///
     /// # Errors
     ///
@@ -595,7 +453,7 @@ where
         &self,
         session_id: SessionId,
         run_id: RunId,
-        cancellation: ModelCancellationSignal,
+        cancellation: RunCancellation,
     ) -> DtoResult<ModelRunExecutionInputDto> {
         schedule_from_context(
             self.repository
@@ -625,74 +483,6 @@ const fn accepted_user_turn(
     ))
 }
 
-/// Renders one typed tool result into its bounded model-visible content.
-///
-/// The typed result is redacted and workspace-relative by construction: text
-/// and search payloads keep their own bounds, truncated content keeps its
-/// explicit marker, and mutations report their byte count.
-///
-/// # Errors
-///
-/// Returns a validation error when the rendered content is blank, because a
-/// tool result row must always answer its call with readable content.
-fn render_tool_result_content(result: &ToolResult) -> DtoResult<String> {
-    let content = match result {
-        ToolResult::Read(value) | ToolResult::Execute(value) => {
-            if value.truncated {
-                format!("{}\n[truncated]", value.text.as_str())
-            } else {
-                value.text.as_str().to_owned()
-            }
-        }
-        ToolResult::Glob(value) => {
-            let mut content = value
-                .paths
-                .iter()
-                .map(intention_proto::WorkspaceRelativePathDto::as_str)
-                .collect::<Vec<_>>()
-                .join("\n");
-            append_truncation_marker(&mut content, value.truncated);
-            content
-        }
-        ToolResult::Grep(value) => {
-            let mut content = value
-                .matches
-                .iter()
-                .map(|matched| {
-                    format!(
-                        "{}:{}:{}: {}",
-                        matched.path.as_str(),
-                        matched.line,
-                        matched.column,
-                        matched.fragment.as_str()
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            append_truncation_marker(&mut content, value.truncated);
-            content
-        }
-        ToolResult::Write(value) | ToolResult::Edit(value) => format!("{} bytes", value.bytes),
-    };
-    if content.trim().is_empty() {
-        return Err(ErrorDto::validation(
-            "invalid_tool_result_content",
-            "tool result content must not be empty",
-        ));
-    }
-    Ok(content)
-}
-
-/// Appends the honest truncation marker to one bounded list projection.
-fn append_truncation_marker(content: &mut String, truncated: bool) {
-    if truncated {
-        if !content.is_empty() {
-            content.push('\n');
-        }
-        content.push_str("[truncated]");
-    }
-}
-
 /// Builds the approved credential-free metadata entries of one tool result.
 ///
 /// # Errors
@@ -713,50 +503,10 @@ fn tool_result_metadata(result: &ToolResult) -> DtoResult<Vec<ToolResultMetadata
     }
 }
 
-/// Renders the durable partial result of one interrupted dispatch.
-///
-/// The captured output precedes the exact interruption notice selected by doc
-/// 15 for the stopped/lost and captured/uncaptured cases.
-///
-/// # Errors
-///
-/// Returns a validation error when the captured output cannot render.
-fn partial_tool_result_content(stopped: bool, result: Option<&ToolResult>) -> DtoResult<String> {
-    let notice = match (stopped, result.is_some()) {
-        (true, true) => {
-            "[The tool call was stopped before a final result; the output above is partial.]"
-        }
-        (false, true) => {
-            "[The tool call did not receive a final result; the output above is partial.]"
-        }
-        (true, false) => "[The tool call was stopped before a final result.]",
-        (false, false) => "[The tool call did not receive a final result.]",
-    };
-    match result {
-        Some(result) => Ok(format!("{}\n{notice}", render_tool_result_content(result)?)),
-        None => Ok(notice.to_owned()),
-    }
-}
-
-fn preserve_accepted_after_scheduling_failure<Repository>(
-    repository: &Repository,
-    session_id: SessionId,
-    run_id: RunId,
-    failure_code: &'static str,
-    occurred_at: TimestampDto,
-) where
-    Repository: StorageRepositoryDto,
-{
-    if fail_starting_run(repository, session_id, run_id, failure_code, occurred_at).is_err() {
-        // The durable acceptance is already the externally documented result;
-        // a secondary failure write cannot replace it with a scheduling error.
-    }
-}
-
 fn schedule_from_context(
     context: intention_storage::StartingRunModelContextDto,
     run_id: RunId,
-    cancellation: ModelCancellationSignal,
+    cancellation: RunCancellation,
 ) -> DtoResult<ModelRunExecutionInputDto> {
     let messages = context
         .messages()
@@ -817,16 +567,10 @@ fn advertised_tool_definitions() -> DtoResult<Vec<ModelToolDefinitionDto>> {
     intention_tools::model_visible_descriptors()
         .iter()
         .map(|descriptor| {
-            let parameters_json = descriptor.input_schema().ok_or_else(|| {
-                ErrorDto::validation(
-                    "model_tool_schema_unavailable",
-                    "a model-visible tool must advertise an input schema",
-                )
-            })?;
             ModelToolDefinitionDto::new(
                 descriptor.id().as_str(),
                 descriptor.description(),
-                parameters_json,
+                descriptor.input_schema(),
             )
         })
         .collect()
@@ -836,82 +580,11 @@ fn advertised_tool_definitions() -> DtoResult<Vec<ModelToolDefinitionDto>> {
 mod tests {
     #![allow(
         clippy::expect_used,
-        reason = "Rendering fixtures use expect to provide precise failures."
+        reason = "Metadata fixtures use expect to provide precise failures."
     )]
 
-    use super::{partial_tool_result_content, render_tool_result_content, tool_result_metadata};
-    use intention_proto::WorkspaceRelativePathDto;
-    use intention_tools::{BoundedText, TextResult, ToolResult};
-
-    fn bounded(value: &str) -> BoundedText {
-        BoundedText::new(value).unwrap_or_else(|_| unreachable!("fixture tool text is bounded"))
-    }
-
-    fn relative(value: &str) -> WorkspaceRelativePathDto {
-        WorkspaceRelativePathDto::parse(value)
-            .unwrap_or_else(|_| unreachable!("fixture relative path is valid"))
-    }
-
-    #[test]
-    fn tool_result_content_covers_each_typed_result_family() {
-        let read = ToolResult::Read(TextResult {
-            text: bounded("hello"),
-            truncated: false,
-        });
-        assert_eq!(
-            render_tool_result_content(&read).expect("read content renders"),
-            "hello"
-        );
-        let truncated = ToolResult::Execute(TextResult {
-            text: bounded("done"),
-            truncated: true,
-        });
-        assert_eq!(
-            render_tool_result_content(&truncated).expect("execute content renders"),
-            "done\n[truncated]"
-        );
-        let glob = ToolResult::Glob(intention_tools::PathsResult {
-            paths: vec![relative("src/a.rs"), relative("src/b.rs")],
-            truncated: true,
-        });
-        assert_eq!(
-            render_tool_result_content(&glob).expect("glob content renders"),
-            "src/a.rs\nsrc/b.rs\n[truncated]"
-        );
-        let grep = ToolResult::Grep(intention_tools::GrepResult {
-            matches: vec![intention_tools::GrepMatch {
-                path: relative("src/a.rs"),
-                line: 3,
-                column: 5,
-                fragment: bounded("needle"),
-            }],
-            truncated: false,
-        });
-        assert_eq!(
-            render_tool_result_content(&grep).expect("grep content renders"),
-            "src/a.rs:3:5: needle"
-        );
-        let write = ToolResult::Write(intention_tools::WriteResult { bytes: 17 });
-        assert_eq!(
-            render_tool_result_content(&write).expect("write content renders"),
-            "17 bytes"
-        );
-        let edit = ToolResult::Edit(intention_tools::WriteResult { bytes: 2 });
-        assert_eq!(
-            render_tool_result_content(&edit).expect("edit content renders"),
-            "2 bytes"
-        );
-    }
-
-    #[test]
-    fn blank_tool_result_content_is_rejected() {
-        let read = ToolResult::Read(TextResult {
-            text: bounded(""),
-            truncated: false,
-        });
-        let error = render_tool_result_content(&read).expect_err("blank content is rejected");
-        assert_eq!(error.code(), "invalid_tool_result_content");
-    }
+    use super::tool_result_metadata;
+    use intention_tools::ToolResult;
 
     #[test]
     fn truncation_is_reported_as_approved_metadata() {
@@ -928,30 +601,6 @@ mod tests {
             tool_result_metadata(&complete)
                 .expect("complete metadata is valid")
                 .is_empty()
-        );
-    }
-
-    #[test]
-    fn partial_content_carries_the_exact_interruption_notice() {
-        let captured = ToolResult::Read(TextResult {
-            text: bounded("half a line"),
-            truncated: false,
-        });
-        assert_eq!(
-            partial_tool_result_content(true, Some(&captured)).expect("partial content renders"),
-            "half a line\n[The tool call was stopped before a final result; the output above is partial.]"
-        );
-        assert_eq!(
-            partial_tool_result_content(false, Some(&captured)).expect("partial content renders"),
-            "half a line\n[The tool call did not receive a final result; the output above is partial.]"
-        );
-        assert_eq!(
-            partial_tool_result_content(true, None).expect("partial content renders"),
-            "[The tool call was stopped before a final result.]"
-        );
-        assert_eq!(
-            partial_tool_result_content(false, None).expect("partial content renders"),
-            "[The tool call did not receive a final result.]"
         );
     }
 }

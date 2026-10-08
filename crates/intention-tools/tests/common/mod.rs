@@ -13,7 +13,7 @@
     reason = "Shared fixtures are called for their effect on the fixture, not for the returned value alone."
 )]
 
-use intention_proto::{ToolCallId, WorkspaceRelativePathDto, WorkspaceRootDto};
+use intention_proto::{WorkspaceRelativePathDto, WorkspaceRootDto};
 use intention_tools::{
     BoundedText, CancellationSignal, ToolDispatchOutcome, ToolInput, ToolResult, ToolService,
 };
@@ -61,23 +61,13 @@ pub fn text(value: &str) -> BoundedText {
 /// Test adapter: unwraps one completed dispatch and fails loudly on any
 /// interruption, so fixtures that expect a final typed result stay direct.
 pub trait DispatchCompleted {
-    fn dispatch_completed(
-        &self,
-        call: ToolCallId,
-        input: ToolInput,
-        cancellation: CancellationSignal,
-    ) -> ToolResult;
+    fn dispatch_completed(&self, input: ToolInput, cancellation: CancellationSignal) -> ToolResult;
 }
 
 impl DispatchCompleted for ToolService {
-    fn dispatch_completed(
-        &self,
-        call: ToolCallId,
-        input: ToolInput,
-        cancellation: CancellationSignal,
-    ) -> ToolResult {
+    fn dispatch_completed(&self, input: ToolInput, cancellation: CancellationSignal) -> ToolResult {
         match self
-            .dispatch_with_cancellation(call, input, cancellation)
+            .dispatch_with_cancellation(input, cancellation)
             .expect("completed dispatch succeeds")
         {
             ToolDispatchOutcome::Completed(result) => result,

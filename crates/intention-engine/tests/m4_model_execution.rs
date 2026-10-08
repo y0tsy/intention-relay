@@ -11,13 +11,13 @@ use common::{FakeRepository, ImmediateTime, RecordingCommitObserver};
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
     ModelRunCommitDto, ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto,
-    ModelRunExecutionService, ToolExecutionPort, ToolResultOutcomeDto,
+    ModelRunExecutionService, RunCancellation, ToolExecutionPort, ToolResultOutcomeDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId};
 use intention_proto::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
 use intention_providers::{
-    FinishReasonDto, ModelCancellationSignal, ModelEventDto, ModelMessageDto, ModelRequestDto,
-    ModelRoleDto, ProviderErrorDto, ToolCallDto, UsageDto,
+    FinishReasonDto, ModelEventDto, ModelMessageDto, ModelRequestDto, ModelRoleDto,
+    ProviderErrorDto, ToolCallDto, UsageDto,
 };
 use intention_storage::TransitionRunInputDto;
 use intention_test_support::{ScriptedDriver, fixture_snapshot_with_model, run_ready};
@@ -61,20 +61,20 @@ fn execute(
     driver: &ScriptedDriver,
     request: ModelRequestDto,
     config: ConfigSnapshotDto,
-    signal: ModelCancellationSignal,
+    signal: RunCancellation,
 ) -> DtoResult<ModelRunExecutionOutcomeDto> {
     let clock = ImmediateTime::new();
     let tool_executor = NeverInvokedToolExecutor;
+    let observer = RecordingCommitObserver::new();
     run_ready(
-        ModelRunExecutionService::new(repository, driver, &clock, &tool_executor).execute(
-            ModelRunExecutionInputDto::new(
+        ModelRunExecutionService::new(repository, driver, &clock, &observer, &tool_executor)
+            .execute(ModelRunExecutionInputDto::new(
                 repository.session_id,
                 repository.run_id,
                 request,
                 config,
                 signal,
-            ),
-        ),
+            )),
     )
 }
 
@@ -93,7 +93,7 @@ fn observer_receives_only_committed_transcript_rows_and_statuses() {
     let observer = RecordingCommitObserver::new();
 
     let outcome = run_ready(
-        ModelRunExecutionService::with_commit_observer(
+        ModelRunExecutionService::new(
             &repository,
             &driver,
             &clock,
@@ -105,7 +105,7 @@ fn observer_receives_only_committed_transcript_rows_and_statuses() {
             run_id,
             request(run_id, "fixture"),
             config,
-            ModelCancellationSignal::new(),
+            RunCancellation::new(),
         )),
     )
     .expect("execution completes");
@@ -181,7 +181,7 @@ fn observer_receives_no_content_when_a_message_commit_fails() {
     let observer = RecordingCommitObserver::new();
 
     let error = run_ready(
-        ModelRunExecutionService::with_commit_observer(
+        ModelRunExecutionService::new(
             &repository,
             &driver,
             &clock,
@@ -193,7 +193,7 @@ fn observer_receives_no_content_when_a_message_commit_fails() {
             run_id,
             request(run_id, "fixture"),
             config,
-            ModelCancellationSignal::new(),
+            RunCancellation::new(),
         )),
     )
     .expect_err("failed append must abort execution");
@@ -231,7 +231,7 @@ fn streams_commit_one_assistant_step_with_reasoning_and_complete() {
         &driver,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("run completes");
     let ModelRunExecutionOutcomeDto::Completed { run } = outcome else {
@@ -302,7 +302,7 @@ fn malformed_provider_and_eof_streams_safely_fail_without_committing_content() {
             &driver,
             request(run_id, "fixture"),
             config,
-            ModelCancellationSignal::new(),
+            RunCancellation::new(),
         )
         .expect("safe failure commits");
         let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
@@ -326,7 +326,7 @@ fn interruption_records_a_notice_and_continues_the_same_run() {
     let run_id = RunId::new();
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let signal = ModelCancellationSignal::new();
+    let signal = RunCancellation::new();
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
             Ok(ModelEventDto::started()),
@@ -340,7 +340,7 @@ fn interruption_records_a_notice_and_continues_the_same_run() {
     ]);
     // The interrupt is requested while the first provider stream is live,
     // after its partial text was delivered.
-    driver.cancel_during_stream(1, signal.clone());
+    driver.cancel_during_stream(1, signal.model_signal());
     let outcome = execute(
         &repository,
         &driver,
@@ -398,7 +398,7 @@ fn an_interrupt_before_the_first_round_still_records_a_notice_and_continues() {
     let run_id = RunId::new();
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let signal = ModelCancellationSignal::new();
+    let signal = RunCancellation::new();
     signal.cancel();
     let driver = ScriptedDriver::with_rounds(vec![
         Vec::new(),
@@ -447,7 +447,7 @@ fn an_interrupt_whose_notice_cannot_commit_surfaces_the_storage_error() {
     let run_id = RunId::new();
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let signal = ModelCancellationSignal::new();
+    let signal = RunCancellation::new();
     // The stopped step commits its text first; the interruption notice append
     // then fails as the second committed row.
     *repository.append_failure_at.borrow_mut() = Some((
@@ -461,7 +461,7 @@ fn an_interrupt_whose_notice_cannot_commit_surfaces_the_storage_error() {
         Ok(ModelEventDto::started()),
         Ok(ModelEventDto::text_delta("late").expect("text is valid")),
     ]);
-    driver.cancel_during_stream(1, signal.clone());
+    driver.cancel_during_stream(1, signal.model_signal());
 
     let error = execute(
         &repository,
@@ -496,14 +496,20 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
     ]);
     let clock = ImmediateTime::new();
     let outcome = run_ready(
-        ModelRunExecutionService::new(&repository, &driver, &clock, &NeverInvokedToolExecutor)
-            .execute(ModelRunExecutionInputDto::new(
-                session_id,
-                run_id,
-                request(run_id, "fixture"),
-                config,
-                ModelCancellationSignal::new(),
-            )),
+        ModelRunExecutionService::new(
+            &repository,
+            &driver,
+            &clock,
+            &RecordingCommitObserver::new(),
+            &NeverInvokedToolExecutor,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request(run_id, "fixture"),
+            config,
+            RunCancellation::new(),
+        )),
     )
     .expect("retry completes");
     assert!(matches!(
@@ -539,18 +545,20 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
 }
 
 #[test]
-fn configuration_mismatch_fails_without_provider_calls() {
+fn model_execution_preconditions_fail_without_provider_calls() {
+    // A persisted configuration that disagrees with the requested selection is
+    // a safe terminal failure with no provider work.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let persisted = fixture_snapshot_with_model("persisted");
-    let repository = FakeRepository::new(session_id, run_id, persisted);
+    let repository =
+        FakeRepository::new(session_id, run_id, fixture_snapshot_with_model("persisted"));
     let driver = ScriptedDriver::new(Vec::new());
     let outcome = execute(
         &repository,
         &driver,
         request(run_id, "current"),
         fixture_snapshot_with_model("current"),
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("mismatch safely fails");
     let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
@@ -565,10 +573,10 @@ fn configuration_mismatch_fails_without_provider_calls() {
         finishes[0].error_code(),
         Some("provider_configuration_unavailable")
     );
-}
+    drop(finishes);
+    drop(repository);
 
-#[test]
-fn unavailable_persisted_configuration_fails_without_provider_calls() {
+    // An unavailable persisted configuration behaves the same way.
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = fixture_snapshot_with_model("fixture");
@@ -578,16 +586,14 @@ fn unavailable_persisted_configuration_fails_without_provider_calls() {
         "the persisted configuration is unavailable",
     ));
     let driver = ScriptedDriver::new(Vec::new());
-
     let outcome = execute(
         &repository,
         &driver,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("configuration absence becomes durable safe failure");
-
     let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
         unreachable!("configuration absence fails the run");
     };
@@ -600,32 +606,35 @@ fn unavailable_persisted_configuration_fails_without_provider_calls() {
         finishes[0].error_code(),
         Some("provider_configuration_unavailable")
     );
-}
+    drop(finishes);
+    drop(repository);
 
-#[test]
-fn starting_run_with_wrong_request_identity_fails_without_provider_calls() {
+    // A request that names another run is rejected the same way.
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let driver = ScriptedDriver::new(Vec::new());
-
     let outcome = execute(
         &repository,
         &driver,
         request(RunId::new(), "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect("wrong request identity becomes durable safe failure");
-
     let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
         unreachable!("a wrong request identity fails the run");
     };
     assert_eq!(run.status(), RunStatusDto::Failed);
     assert_eq!(error.code(), "provider_configuration_unavailable");
     assert_eq!(driver.executions(), 0);
-    assert_eq!(repository.finishes.borrow().len(), 1);
+    let finishes = repository.finishes.borrow();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(
+        finishes[0].error_code(),
+        Some("provider_configuration_unavailable")
+    );
 }
 
 #[test]
@@ -642,7 +651,7 @@ fn execution_rejects_non_starting_run_before_configuration_or_provider_work() {
         &driver,
         request(run_id, "fixture"),
         config,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
     .expect_err("a non-starting run cannot execute");
 
@@ -659,7 +668,7 @@ fn retryable_failure_after_a_committed_step_does_not_retry() {
     let run_id = RunId::new();
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let signal = ModelCancellationSignal::new();
+    let signal = RunCancellation::new();
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
             Ok(ModelEventDto::started()),
@@ -672,18 +681,24 @@ fn retryable_failure_after_a_committed_step_does_not_retry() {
         )
         .expect("error is valid"))],
     ]);
-    driver.cancel_during_stream(1, signal.clone());
+    driver.cancel_during_stream(1, signal.model_signal());
     let clock = ImmediateTime::new();
 
     let outcome = run_ready(
-        ModelRunExecutionService::new(&repository, &driver, &clock, &NeverInvokedToolExecutor)
-            .execute(ModelRunExecutionInputDto::new(
-                session_id,
-                run_id,
-                request(run_id, "fixture"),
-                config,
-                signal,
-            )),
+        ModelRunExecutionService::new(
+            &repository,
+            &driver,
+            &clock,
+            &RecordingCommitObserver::new(),
+            &NeverInvokedToolExecutor,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request(run_id, "fixture"),
+            config,
+            signal,
+        )),
     )
     .expect("a committed step suppresses the retry");
 
@@ -733,14 +748,20 @@ fn exhausted_retryable_failure_stops_after_second_attempt() {
     let clock = ImmediateTime::new();
 
     let outcome = run_ready(
-        ModelRunExecutionService::new(&repository, &driver, &clock, &NeverInvokedToolExecutor)
-            .execute(ModelRunExecutionInputDto::new(
-                session_id,
-                run_id,
-                request(run_id, "fixture"),
-                config,
-                ModelCancellationSignal::new(),
-            )),
+        ModelRunExecutionService::new(
+            &repository,
+            &driver,
+            &clock,
+            &RecordingCommitObserver::new(),
+            &NeverInvokedToolExecutor,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request(run_id, "fixture"),
+            config,
+            RunCancellation::new(),
+        )),
     )
     .expect("second retryable failure becomes terminal");
 
@@ -776,14 +797,20 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
     let clock = ImmediateTime::new();
 
     let outcome = run_ready(
-        ModelRunExecutionService::new(&repository, &driver, &clock, &NeverInvokedToolExecutor)
-            .execute(ModelRunExecutionInputDto::new(
-                session_id,
-                run_id,
-                request(run_id, "fixture"),
-                config,
-                ModelCancellationSignal::new(),
-            )),
+        ModelRunExecutionService::new(
+            &repository,
+            &driver,
+            &clock,
+            &RecordingCommitObserver::new(),
+            &NeverInvokedToolExecutor,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request(run_id, "fixture"),
+            config,
+            RunCancellation::new(),
+        )),
     )
     .expect("exhausted timeouts become a durable failure");
 

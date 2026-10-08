@@ -7,7 +7,7 @@
 mod common;
 
 use common::{DispatchCompleted, fixture_dir, service};
-use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
+use intention_proto::WorkspaceRelativePathDto;
 use intention_tools::{
     BoundedText, CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepScope,
     InterruptCause, ReadInput, TextResult, ToolDispatchOutcome, ToolId, ToolInput,
@@ -26,7 +26,6 @@ fn execute_uses_workspace_cwd_and_returns_typed_result() {
         vec![]
     };
     let result = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Execute(ExecuteInput {
             program: BoundedText::new(program).expect("program"),
             args: args
@@ -58,7 +57,6 @@ fn write_expected_content_accepts_match_and_rejects_mismatch() {
     let service = service(&root_dir);
     let relative = WorkspaceRelativePathDto::parse("file.txt").expect("path");
     let result = service.dispatch_with_cancellation(
-        ToolCallId::new(),
         ToolInput::Write(WriteInput {
             path: relative.clone(),
             content: BoundedText::new("after").expect("content"),
@@ -71,7 +69,6 @@ fn write_expected_content_accepts_match_and_rejects_mismatch() {
 
     let error = service
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Write(WriteInput {
                 path: relative,
                 content: BoundedText::new("final").expect("content"),
@@ -92,7 +89,6 @@ fn edit_expected_content_accepts_match_and_rejects_mismatch() {
     let service = service(&root_dir);
     let relative = WorkspaceRelativePathDto::parse("file.txt").expect("path");
     let result = service.dispatch_with_cancellation(
-        ToolCallId::new(),
         ToolInput::Edit(EditInput {
             path: relative.clone(),
             old: BoundedText::new("needle").expect("old"),
@@ -109,7 +105,6 @@ fn edit_expected_content_accepts_match_and_rejects_mismatch() {
 
     let error = service
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Edit(EditInput {
                 path: relative,
                 old: BoundedText::new("changed").expect("old"),
@@ -150,11 +145,7 @@ fn tool_service_covers_nonzero_execute_as_normalized_result() {
     };
     // A known non-zero exit is a normalized program result on the typed
     // output path, not a transport-level error.
-    let result = service.dispatch_completed(
-        ToolCallId::new(),
-        nonzero_input(),
-        CancellationSignal::new(),
-    );
+    let result = service.dispatch_completed(nonzero_input(), CancellationSignal::new());
     let ToolResult::Execute(result) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
@@ -193,7 +184,6 @@ fn execute_cancellation_is_classified_as_a_stopped_interruption() {
     });
     let outcome = service
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Execute(ExecuteInput {
                 program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" })
                     .expect("program"),
@@ -236,7 +226,6 @@ fn tool_service_rejects_invalid_patterns_and_unreadable_files() {
     assert!(
         service
             .dispatch_with_cancellation(
-                ToolCallId::new(),
                 ToolInput::Glob(GlobInput {
                     pattern: BoundedText::new("[").expect("pattern")
                 }),
@@ -247,7 +236,6 @@ fn tool_service_rejects_invalid_patterns_and_unreadable_files() {
     assert!(
         service
             .dispatch_with_cancellation(
-                ToolCallId::new(),
                 ToolInput::Read(ReadInput {
                     path: WorkspaceRelativePathDto::parse("missing").expect("path")
                 }),
@@ -264,7 +252,6 @@ fn grep_reports_no_matches_for_a_valid_file_scope() {
     std::fs::write(root.join("file.txt"), "content").expect("seed");
     let service = service(&root_dir);
     let result = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Grep(GrepInput {
             pattern: BoundedText::new("x").expect("pattern"),
             path: None,
@@ -296,14 +283,12 @@ fn search_rejects_unsafe_patterns_and_reports_utf8_columns() {
     ] {
         let pattern = BoundedText::new(pattern).unwrap();
         let result = service.dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Glob(GlobInput { pattern }),
             CancellationSignal::new(),
         );
         assert_eq!(result.unwrap_err().code(), "invalid_tool_pattern");
     }
     let result = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Grep(GrepInput {
             pattern: BoundedText::new("needle").unwrap(),
             path: Some(WorkspaceRelativePathDto::parse("file.txt").unwrap()),
@@ -328,7 +313,6 @@ fn glob_matches_are_sorted_deduplicated_and_deterministic() {
     let service = service(&dir);
     for pattern in ["*.txt", "**/*.txt", "real/*.txt", "{target,deep}*"] {
         let result = service.dispatch_completed(
-            ToolCallId::new(),
             ToolInput::Glob(GlobInput {
                 pattern: BoundedText::new(pattern).unwrap(),
             }),
@@ -348,7 +332,6 @@ fn glob_matches_are_sorted_deduplicated_and_deterministic() {
     }
     // `**/` recursion reaches nested directories, not only the workspace root.
     let recursive = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Glob(GlobInput {
             pattern: BoundedText::new("**/*.txt").unwrap(),
         }),
@@ -374,7 +357,6 @@ fn bounded_sources_report_truncation_only_past_the_output_bound() {
     let service = service(&dir);
     for (name, truncated, length) in [("exact.bin", false, 65_536), ("over.bin", true, 65_536)] {
         let result = service.dispatch_completed(
-            ToolCallId::new(),
             ToolInput::Read(ReadInput {
                 path: WorkspaceRelativePathDto::parse(name).unwrap(),
             }),
@@ -399,7 +381,6 @@ fn grep_file_scope_rejects_directories_and_follows_file_links() {
     // A directory is not a valid explicit file scope.
     let error = service
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("needle").unwrap(),
                 path: Some(WorkspaceRelativePathDto::parse("folder").unwrap()),
@@ -415,7 +396,6 @@ fn grep_file_scope_rejects_directories_and_follows_file_links() {
     #[cfg(unix)]
     {
         let result = service.dispatch_completed(
-            ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("needle").unwrap(),
                 path: Some(WorkspaceRelativePathDto::parse("link.txt").unwrap()),
@@ -444,7 +424,6 @@ fn dispatch_reports_precise_errors_and_process_output_paths() {
 
     let cancelled = service
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Read(ReadInput { path: path.clone() }),
             CancellationSignal::cancelled(),
         )
@@ -460,7 +439,6 @@ fn dispatch_reports_precise_errors_and_process_output_paths() {
     let missing_parent = WorkspaceRelativePathDto::parse("missing/new.txt").expect("path");
     let write_error = service
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Write(WriteInput {
                 path: missing_parent,
                 content: BoundedText::new("x").expect("content"),
@@ -473,7 +451,6 @@ fn dispatch_reports_precise_errors_and_process_output_paths() {
 
     let edit_missing = service
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Edit(EditInput {
                 path: path.clone(),
                 old: BoundedText::new("absent").expect("old"),
@@ -486,7 +463,6 @@ fn dispatch_reports_precise_errors_and_process_output_paths() {
     assert_eq!(edit_missing.code(), "edit_target_missing");
 
     let grep = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Grep(GrepInput {
             pattern: BoundedText::new("needle").expect("pattern"),
             path: Some(path.clone()),
@@ -516,7 +492,6 @@ fn a_stopped_tool_never_starts_its_effect_and_keeps_partial_results() {
     // Write and edit report the stop instead of touching the file.
     let write = service
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Write(WriteInput {
                 path: WorkspaceRelativePathDto::parse("file.txt").expect("path"),
                 content: BoundedText::new("replacement").expect("content"),
@@ -528,7 +503,6 @@ fn a_stopped_tool_never_starts_its_effect_and_keeps_partial_results() {
     assert_eq!(write, stopped());
     let edit = service
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Edit(EditInput {
                 path: WorkspaceRelativePathDto::parse("file.txt").expect("path"),
                 old: BoundedText::new("original").expect("old"),
@@ -547,7 +521,6 @@ fn a_stopped_tool_never_starts_its_effect_and_keeps_partial_results() {
     // The search tools report the stop without collecting results.
     let glob = service
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Glob(GlobInput {
                 pattern: BoundedText::new("**/*.txt").expect("pattern"),
             }),
@@ -557,7 +530,6 @@ fn a_stopped_tool_never_starts_its_effect_and_keeps_partial_results() {
     assert_eq!(glob, stopped());
     let grep = service
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("original").expect("pattern"),
                 path: None,
@@ -579,7 +551,6 @@ fn execute_returns_stdout_stderr_and_truncation_metadata() {
         ("sh", vec!["-c", "printf out; printf err >&2"])
     };
     let result = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Execute(ExecuteInput {
             program: BoundedText::new(program).expect("program"),
             args: args
@@ -608,7 +579,6 @@ fn public_tool_errors_redact_secret_paths_commands_and_os_text() {
     let secret = format!("credential{}", "-leak-probe");
     let error = service
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Write(WriteInput {
                 path: WorkspaceRelativePathDto::parse("missing/new.txt").expect("path"),
                 content: BoundedText::new(secret.as_str()).expect("content"),
@@ -633,7 +603,6 @@ fn tool_service_covers_read_write_and_edit_error_variants() {
     assert!(
         service
             .dispatch_with_cancellation(
-                ToolCallId::new(),
                 ToolInput::Read(ReadInput {
                     path: directory.clone()
                 }),
@@ -644,7 +613,6 @@ fn tool_service_covers_read_write_and_edit_error_variants() {
     assert!(
         service
             .dispatch_with_cancellation(
-                ToolCallId::new(),
                 ToolInput::Write(WriteInput {
                     path: directory.clone(),
                     content: BoundedText::new("x").expect("content"),
@@ -657,7 +625,6 @@ fn tool_service_covers_read_write_and_edit_error_variants() {
     assert!(
         service
             .dispatch_with_cancellation(
-                ToolCallId::new(),
                 ToolInput::Edit(EditInput {
                     path: directory,
                     old: BoundedText::new("x").expect("old"),
@@ -678,7 +645,6 @@ fn tool_service_returns_search_matches_and_sorted_glob_paths() {
     std::fs::write(root.join("a.txt"), "needle").expect("seed");
     let service = service(&root_dir);
     let result = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Grep(GrepInput {
             pattern: BoundedText::new("needle").expect("pattern"),
             path: Some(WorkspaceRelativePathDto::parse("z.txt").expect("path")),
@@ -692,7 +658,6 @@ fn tool_service_returns_search_matches_and_sorted_glob_paths() {
         matches!(result, ToolResult::Grep(value) if value.matches.iter().map(|m| m.fragment.as_str()).collect::<Vec<_>>() == vec!["needle", "needle two"])
     );
     let result = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Glob(GlobInput {
             pattern: BoundedText::new("*.txt").expect("pattern"),
         }),
@@ -710,7 +675,6 @@ fn glob_empty_and_grep_read_failure_are_typed() {
     std::fs::create_dir_all(root).unwrap();
     let service = service(&root_dir);
     let glob = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Glob(GlobInput {
             pattern: BoundedText::new("*.none").unwrap(),
         }),
@@ -719,7 +683,6 @@ fn glob_empty_and_grep_read_failure_are_typed() {
     assert!(matches!(glob, ToolResult::Glob(value) if value.paths.is_empty()));
     let error = service
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("x").unwrap(),
                 path: Some(WorkspaceRelativePathDto::parse("missing").unwrap()),
@@ -738,7 +701,6 @@ fn cancelled_dispatch_is_interrupted_before_any_tool_effect() {
     let root_dir = fixture_dir("cancelled-before-dispatch");
     let outcome = service(&root_dir)
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Write(WriteInput {
                 path: WorkspaceRelativePathDto::parse("created.txt").unwrap(),
                 content: BoundedText::new("must not write").unwrap(),
@@ -786,7 +748,6 @@ fn tool_service_read_and_grep_report_truncation_for_invalid_utf8() {
     let service = service(&dir);
     let path = WorkspaceRelativePathDto::parse("bytes.bin").unwrap();
     let result = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Read(ReadInput { path: path.clone() }),
         CancellationSignal::new(),
     );
@@ -798,7 +759,6 @@ fn tool_service_read_and_grep_report_truncation_for_invalid_utf8() {
         })
     ));
     let result = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Grep(GrepInput {
             pattern: BoundedText::new("x").unwrap(),
             path: Some(path.clone()),
@@ -835,7 +795,7 @@ fn execute_success_reports_stderr_and_typed_success_status() {
             },
         })
     };
-    let result = service.dispatch_completed(ToolCallId::new(), input(), CancellationSignal::new());
+    let result = service.dispatch_completed(input(), CancellationSignal::new());
     let ToolResult::Execute(result) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
@@ -864,7 +824,6 @@ fn execute_inherits_the_invoking_environment() {
         ("sh", vec!["-c".to_owned(), "test -n \"$PATH\"".to_owned()])
     };
     let result = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Execute(ExecuteInput {
             program: BoundedText::new(program).unwrap(),
             args: args
@@ -891,7 +850,6 @@ fn dispatch_covers_empty_read_and_successful_empty_edit() {
     let service = service(&root_dir);
     let path = WorkspaceRelativePathDto::parse("empty.txt").expect("path");
     let read = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Read(ReadInput { path: path.clone() }),
         CancellationSignal::new(),
     );
@@ -899,7 +857,6 @@ fn dispatch_covers_empty_read_and_successful_empty_edit() {
         matches!(read, ToolResult::Read(TextResult { truncated: false, text }) if text.as_str().is_empty())
     );
     let edit = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Edit(EditInput {
             path,
             old: BoundedText::new("").expect("old"),
@@ -927,8 +884,7 @@ fn execute_reports_signal_termination_as_known_terminal_result() {
             ],
         })
     };
-    let result =
-        service.dispatch_completed(ToolCallId::new(), signal_input(), CancellationSignal::new());
+    let result = service.dispatch_completed(signal_input(), CancellationSignal::new());
     let ToolResult::Execute(result) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
@@ -943,7 +899,6 @@ fn grep_truncates_long_multibyte_fragments_on_character_boundary() {
     let line = format!("needle{}", "界".repeat(30_000));
     std::fs::write(root_dir.path().join("large.txt"), &line).unwrap();
     let result = service(&root_dir).dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Grep(GrepInput {
             pattern: BoundedText::new("needle").unwrap(),
             path: Some(WorkspaceRelativePathDto::parse("large.txt").unwrap()),
@@ -970,7 +925,6 @@ fn execute_formats_success_and_truncates_both_streams() {
     let service = service(&root_dir);
     let result = service
         .dispatch_completed(
-            ToolCallId::new(),
             ToolInput::Execute(ExecuteInput {
                 program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).unwrap(),
                 args: if cfg!(windows) {
@@ -1017,7 +971,6 @@ fn exact_typed_errors_cover_search_edit_and_spawn_failures() {
     let path = WorkspaceRelativePathDto::parse("file.txt").unwrap();
     let error = service
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Edit(EditInput {
                 path,
                 old: BoundedText::new("missing").unwrap(),
@@ -1030,7 +983,6 @@ fn exact_typed_errors_cover_search_edit_and_spawn_failures() {
     assert_eq!(error.code(), "edit_target_missing");
     let error = service
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("x").unwrap(),
                 path: Some(WorkspaceRelativePathDto::parse("missing").unwrap()),
@@ -1044,7 +996,6 @@ fn exact_typed_errors_cover_search_edit_and_spawn_failures() {
     assert_eq!(error.code(), "tool_search_failed");
     let error = service
         .dispatch_with_cancellation(
-            ToolCallId::new(),
             ToolInput::Execute(ExecuteInput {
                 program: BoundedText::new("not-a-real-program").unwrap(),
                 args: vec![],
@@ -1073,7 +1024,7 @@ fn model_visible_descriptors_are_the_six_exposed_tools_in_order() {
     for (spec, id) in visible.into_iter().zip(expected) {
         assert_eq!(spec.id(), id);
         assert!(!spec.description().is_empty());
-        let schema = spec.input_schema().expect("model input schema");
+        let schema = spec.input_schema();
         let schema_json: serde_json::Value =
             serde_json::from_str(schema).expect("input schema json");
         assert!(schema_json.is_object());
@@ -1232,7 +1183,7 @@ fn model_parameter_schemas_agree_with_serialized_inputs() {
             .expect("input fixture for every model-visible tool");
         assert_schema_agrees_with_payload(
             spec.id(),
-            spec.input_schema().expect("input schema"),
+            spec.input_schema(),
             input_fixture.1,
             input_fixture.2,
             &input_fixture.3,
@@ -1271,7 +1222,7 @@ fn dispatch_covers_each_tool_input_variant() {
     for input in calls {
         assert!(
             service
-                .dispatch_with_cancellation(ToolCallId::new(), input, CancellationSignal::new())
+                .dispatch_with_cancellation(input, CancellationSignal::new())
                 .is_ok()
         );
     }
@@ -1340,8 +1291,7 @@ fn dispatched_results_are_typed_and_redacted_for_every_concrete_tool() {
     ];
     let absolute_root = root_path.to_string_lossy().to_string();
     for (input, tool) in calls {
-        let result =
-            service.dispatch_completed(ToolCallId::new(), input, CancellationSignal::new());
+        let result = service.dispatch_completed(input, CancellationSignal::new());
         // A dispatched result never carries the absolute workspace root.
         let rendered = serde_json::to_string(&result).unwrap();
         assert!(

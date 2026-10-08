@@ -1,8 +1,10 @@
 //! Thin daemon process host for the local protocol facade.
 //!
-//! The daemon owns the local listener and typed connection hosting. It delegates
-//! health, query, command, and current-state subscription meaning to the durable
-//! composition facade.
+//! The daemon owns the local listener, typed connection hosting, and the one
+//! scheduling path: an accepted turn is admitted by the composition root and
+//! executed here, where the per-run registry, the single run cancellation
+//! handle, and the one commit observer live. Health, query, command, and
+//! current-state subscription meaning stay in the durable composition root.
 
 mod composition;
 
@@ -16,12 +18,14 @@ use std::{
 
 use intention_domain::run_status_is_terminal;
 use intention_engine::{
-    LocalToolInvocationOutcomeDto, ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture,
-    ModelTimePort, ToolResultOutcomeDto,
+    ApplicationService, ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionService,
+    ModelSleepFuture, ModelTimePort, RunCancellation, ToolExecutionPort, ToolInvocationRequestDto,
+    ToolResultOutcomeDto, fail_starting_run,
 };
 use intention_proto::RunStatusDto;
 use intention_proto::{
-    CorrelationIdDto, DtoResult, ErrorDto, RunId, SessionId, TimestampDto, ToolCallDto,
+    CorrelationIdDto, DtoResult, ErrorDto, InterruptRunCommandDto, RunId,
+    RunSubscriptionSnapshotDto, SessionId, TimestampDto, ToolCallDto,
 };
 use intention_proto::{
     JsonRpcResponseDto, ProtocolAcceptedDto, ProtocolCommandDto, ProtocolCommandResultDto,
@@ -29,8 +33,8 @@ use intention_proto::{
     ProtocolResponsePayloadDto, RunStatusFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
     SessionSubscriptionResponseDto, decode_request_line, encode_response, is_notification_line,
 };
-use intention_providers::ModelCancellationSignal;
-use intention_tools::{ToolInput, ToolResult};
+use intention_storage::{FinishRunInputDto, StorageRepositoryDto};
+use intention_tools::{ToolInput, WorkspaceRoot};
 use intention_transport::{
     AsyncLocalListener, AsyncMessageSender, LocalEndpoint, local_protocol_version,
 };
@@ -67,7 +71,7 @@ struct PublishedRun {
 }
 
 struct HostData {
-    tasks: HashMap<RunKey, ModelCancellationSignal>,
+    tasks: HashMap<RunKey, RunCancellation>,
     #[cfg(any(test, feature = "test-support"))]
     execution_tasks: Vec<tokio::task::JoinHandle<()>>,
     #[cfg(any(test, feature = "test-support"))]
@@ -111,15 +115,15 @@ impl HostState {
         if data.tasks.contains_key(&key) {
             return;
         }
-        // The admitted run's cancellation signal is created here and embedded
+        // The admitted run's cancellation handle is created here and embedded
         // in the execution input, so an interrupt and the executor share it.
-        let cancellation = ModelCancellationSignal::new();
-        let schedule = match self.facade.schedule_starting_run_for_daemon(
+        let cancellation = RunCancellation::new();
+        let input = match ApplicationService::new(self.facade.repository()).schedule_starting_run(
             session_id,
             run_id,
             cancellation.clone(),
         ) {
-            Ok(schedule) => schedule,
+            Ok(input) => input,
             Err(_) => {
                 drop(data);
                 self.fail_unadmitted_starting_run(session_id, run_id);
@@ -129,7 +133,7 @@ impl HostState {
         let std::collections::hash_map::Entry::Vacant(entry) = data.tasks.entry(key) else {
             return;
         };
-        entry.insert(cancellation);
+        entry.insert(cancellation.clone());
         #[cfg(any(test, feature = "test-support"))]
         {
             let (completion, _) = tokio::sync::watch::channel(false);
@@ -142,32 +146,31 @@ impl HostState {
                 host: Arc::clone(&host),
             };
             // The model-run executor and the tool-invocation path share this
-            // one commit sink.
-            let executor =
-                DaemonToolExecutor::with_publication(host.facade.clone(), observer.clone());
-            let result = host
-                .facade
-                .execute_scheduled_model_run_for_daemon_with_tool_executor(
-                    schedule.clone(),
-                    &TokioTime,
-                    &observer,
-                    &executor,
-                )
-                .await;
+            // one commit sink and this one per-run cancellation handle.
+            let executor = DaemonToolExecutor::with_publication(
+                host.facade.clone(),
+                observer.clone(),
+                cancellation,
+            );
+            let result = ModelRunExecutionService::new(
+                host.facade.repository(),
+                host.facade.driver(),
+                &TokioTime,
+                &observer,
+                &executor,
+            )
+            .execute(input)
+            .await;
             // An executor error must never leave a non-terminal durable run
             // without an owner (PR24-012/013): a still-active run is
             // terminalized as `Failed` with the executor's stable error code.
             if let Err(error) = result {
                 let active = host
                     .facade
-                    .load_run_projection_for_daemon(key.0, key.1)
+                    .repository()
+                    .load_run_projection(key.0, key.1)
                     .map_or(true, |run| !run_status_is_terminal(run.status()));
-                if active
-                    && host
-                        .facade
-                        .fail_active_run_for_daemon(key.0, key.1, error.code())
-                        .is_ok()
-                {
+                if active && host.fail_active_run(key.0, key.1, error.code()).is_ok() {
                     host.publish_current(key.0, key.1);
                     host.on_terminal(key.0);
                 }
@@ -189,17 +192,23 @@ impl HostState {
     /// Interrupts the current operation of one active run.
     ///
     /// The interrupt is accepted only for an exact active run; the run stays
-    /// `Running`. The registered execution task observes the shared signal,
-    /// ends its current provider stream or tool call with a partial result and
-    /// a context notice, and the model continues with the next step.
+    /// `Running`. The one registered run signal reaches the in-flight provider
+    /// stream or tool call, which ends with a partial result and a context
+    /// notice, and the model continues with the next step.
     fn interrupt_run(
         self: &Arc<Self>,
         session_id: SessionId,
         run_id: RunId,
     ) -> DtoResult<intention_proto::ProtocolAcceptedResultDto> {
-        let accepted = self
-            .facade
-            .interrupt_run_for_daemon_host(session_id, run_id)?;
+        let gate = self.facade.command_gate().lock().map_err(|_| {
+            ErrorDto::unavailable(
+                "daemon_command_unavailable",
+                "daemon command is unavailable",
+            )
+        })?;
+        let accepted = ApplicationService::new(self.facade.repository())
+            .interrupt_run(InterruptRunCommandDto::new(session_id, run_id))?;
+        drop(gate);
         let data = self.data.lock().map_err(|_| {
             ErrorDto::unavailable(
                 "daemon_task_registry_unavailable",
@@ -267,13 +276,80 @@ impl HostState {
 
     fn fail_unadmitted_starting_run(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
         if self
-            .facade
-            .fail_starting_run_for_daemon(session_id, run_id, "model_scheduling_unavailable")
+            .fail_starting_run(session_id, run_id, "model_scheduling_unavailable")
             .is_ok()
         {
             self.publish_current(session_id, run_id);
             self.on_terminal(session_id);
         }
+    }
+
+    /// Records a safe terminal scheduling failure for an exact unadmitted run.
+    ///
+    /// This preserves the already accepted user turn when durable context
+    /// reconstruction cannot produce executable work.
+    fn fail_starting_run(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        failure_code: &'static str,
+    ) -> DtoResult<()> {
+        let _gate = self.facade.command_gate().lock().map_err(|_| {
+            ErrorDto::unavailable(
+                "daemon_command_unavailable",
+                "daemon command is unavailable",
+            )
+        })?;
+        fail_starting_run(
+            self.facade.repository(),
+            session_id,
+            run_id,
+            failure_code,
+            composition::now()?,
+        )?;
+        Ok(())
+    }
+
+    /// Terminalizes one still-active run as durably `Failed`.
+    ///
+    /// An executor error must never leave a `Starting`/`Running` run without an
+    /// owner: this commits the terminal `Failed` run row with the executor
+    /// error's stable code, so deterministic bound and semantic failures (for
+    /// example `reasoning_output_limit_exceeded`) become the durable failed
+    /// outcome (PR24-012). Runs already terminal are a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns the repository's typed error when the terminal run row cannot
+    /// commit.
+    fn fail_active_run(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        failure_code: &str,
+    ) -> DtoResult<()> {
+        let _gate = self.facade.command_gate().lock().map_err(|_| {
+            ErrorDto::unavailable(
+                "daemon_command_unavailable",
+                "daemon command is unavailable",
+            )
+        })?;
+        let repository = self.facade.repository();
+        let run = repository.load_run_projection(session_id, run_id)?;
+        if run_status_is_terminal(run.status()) {
+            return Ok(());
+        }
+        repository.finish_run(FinishRunInputDto::new(
+            session_id,
+            run_id,
+            RunStatusDto::Failed,
+            None,
+            None,
+            Some(failure_code.to_owned()),
+            Some("the scheduled run execution failed".to_owned()),
+            composition::now()?,
+        )?)?;
+        Ok(())
     }
 
     /// Runs the terminal side effect for one run that just reached a durable
@@ -282,9 +358,40 @@ impl HostState {
     /// The terminal status frame is published directly from the committed
     /// transition value, so no publication retry is required.
     fn on_terminal(self: &Arc<Self>, session_id: SessionId) {
-        if let Ok(Some(promoted)) = self.facade.current_starting_run_for_daemon(session_id) {
+        if let Ok(Some(promoted)) = self.current_starting_run(session_id) {
             self.schedule_if_starting(session_id, promoted);
         }
+    }
+
+    /// Returns the currently active durable run when it is eligible for admission.
+    fn current_starting_run(&self, session_id: SessionId) -> DtoResult<Option<RunId>> {
+        Ok(self
+            .facade
+            .repository()
+            .load_session_projection(session_id)?
+            .active_run()
+            .filter(|run| run.status() == RunStatusDto::Starting)
+            .map(|run| run.run_id()))
+    }
+
+    /// Loads one coherent current-state run snapshot.
+    ///
+    /// The snapshot carries the current run projection and the byte-bounded
+    /// recent transcript rows of that run; a re-subscribing client receives
+    /// current state and continues from live frames.
+    fn load_run_snapshot(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<RunSubscriptionSnapshotDto> {
+        let repository = self.facade.repository();
+        let run = repository.load_run_projection(session_id, run_id)?;
+        let messages = composition::bounded_snapshot_messages(repository.load_run_messages(
+            session_id,
+            run_id,
+            composition::SESSION_SNAPSHOT_MESSAGES,
+        )?)?;
+        RunSubscriptionSnapshotDto::new(run, messages)
     }
 
     /// Publishes the current durable run status to live subscribers when it
@@ -292,7 +399,8 @@ impl HostState {
     fn publish_current(&self, session_id: SessionId, run_id: RunId) {
         if let Ok(run) = self
             .facade
-            .load_run_projection_for_daemon(session_id, run_id)
+            .repository()
+            .load_run_projection(session_id, run_id)
         {
             self.publish_status(session_id, run_id, run.status());
         }
@@ -410,7 +518,8 @@ impl HostState {
         };
         if let Err(error) = self
             .facade
-            .load_run_projection_for_daemon(session_id, run_id)
+            .repository()
+            .load_run_projection(session_id, run_id)
         {
             let _ = sender.try_send(run_subscription_response(
                 request_id,
@@ -430,7 +539,7 @@ impl HostState {
         // publication shares the registration gate: no later live frame can
         // place itself in this subscriber's FIFO queue before this response
         // enters it.
-        let response = match self.facade.load_run_snapshot_for_daemon(session_id, run_id) {
+        let response = match self.load_run_snapshot(session_id, run_id) {
             Ok(snapshot) => RunSubscriptionResponseDto::Snapshot(snapshot),
             Err(error) => {
                 // The run became unreadable between the admission read and this
@@ -510,41 +619,38 @@ impl ModelRunCommitObserver for HostCommitObserver {
     }
 }
 
-/// Executes provider-normalized tool calls through the durable daemon-owned tool path.
+/// The one blocking tool seam.
 ///
-/// Each call is decoded into the typed daemon tool input and executed through
-/// the facade's durable local-tool lifecycle, which hands every committed
-/// transcript row to the configured publication boundary. The blocking tool
-/// effect runs on a spawned worker so the async execution loop is never stalled.
-#[doc(hidden)]
+/// The engine's model loop calls it; each call is decoded into the typed local
+/// tool input and executed through the engine's durable local-tool lifecycle,
+/// which hands every committed transcript row to the configured publication
+/// boundary. The blocking effect runs on a spawned worker so the async
+/// execution loop is never stalled.
 #[derive(Clone)]
-pub struct DaemonToolExecutor<P = ()> {
+struct DaemonToolExecutor<P> {
     facade: DaemonApplicationFacade,
     publisher: P,
+    cancellation: RunCancellation,
 }
 
-impl DaemonToolExecutor<()> {
-    /// Binds one durable facade to the daemon tool-execution path without a
-    /// publication boundary, so committed rows stay unpublished.
+impl<P: ModelRunCommitObserver + Clone + Send + Sync + 'static> DaemonToolExecutor<P> {
+    /// Binds the durable composition, the host publication boundary, and the
+    /// exact run's single cancellation handle.
     #[must_use]
-    pub const fn new(facade: DaemonApplicationFacade) -> Self {
+    const fn with_publication(
+        facade: DaemonApplicationFacade,
+        publisher: P,
+        cancellation: RunCancellation,
+    ) -> Self {
         Self {
             facade,
-            publisher: (),
+            publisher,
+            cancellation,
         }
     }
 }
 
-impl<P: ModelRunCommitObserver + Clone + Send + Sync + 'static> DaemonToolExecutor<P> {
-    /// Binds one durable facade and the host publication boundary, so every
-    /// committed transcript row of a tool call reaches the live subscribers.
-    #[must_use]
-    pub const fn with_publication(facade: DaemonApplicationFacade, publisher: P) -> Self {
-        Self { facade, publisher }
-    }
-}
-
-impl<P: ModelRunCommitObserver + Clone + Send + Sync + 'static> intention_engine::ToolExecutionPort
+impl<P: ModelRunCommitObserver + Clone + Send + Sync + 'static> ToolExecutionPort
     for DaemonToolExecutor<P>
 {
     fn execute_tool(
@@ -557,15 +663,32 @@ impl<P: ModelRunCommitObserver + Clone + Send + Sync + 'static> intention_engine
     > {
         let facade = self.facade.clone();
         let publisher = self.publisher.clone();
+        let cancellation = self.cancellation.clone();
         Box::pin(async move {
             let tool_id = call.name().to_owned();
             let call_id = call.call_id();
             let arguments = call.arguments_json().to_owned();
             let input = ToolInput::from_arguments_json(&tool_id, &arguments)?;
-            let result = tokio::task::spawn_blocking(move || {
-                let workspace = facade.resolve_workspace_root_for_daemon(session_id)?;
-                facade.invoke_local_tool_for_daemon_with_publication(
-                    session_id, run_id, call_id, tool_id, input, workspace, arguments, &publisher,
+            tokio::task::spawn_blocking(move || {
+                let repository = facade.repository();
+                let workspace = WorkspaceRoot::resolve(
+                    repository
+                        .load_session_projection(session_id)?
+                        .workspace_root(),
+                )?;
+                ApplicationService::new(repository).invoke_local_tool_with_publication(
+                    ToolInvocationRequestDto::new(
+                        workspace,
+                        session_id,
+                        run_id,
+                        call_id,
+                        tool_id,
+                        input,
+                        composition::now()?,
+                    )
+                    .with_arguments_json(arguments)
+                    .with_cancellation(cancellation),
+                    &publisher,
                 )
             })
             .await
@@ -574,84 +697,9 @@ impl<P: ModelRunCommitObserver + Clone + Send + Sync + 'static> intention_engine
                     "tool_execution_task_failed",
                     "the tool execution task failed",
                 )
-            })?;
-            // Tool-level failures are typed outcomes, not port errors; only a
-            // lost execution task is a port-level infrastructure failure.
-            match result {
-                Ok(LocalToolInvocationOutcomeDto::Completed(result)) => {
-                    normalize_tool_result(result)
-                }
-                Ok(LocalToolInvocationOutcomeDto::Partial { stopped, result }) => {
-                    partial_tool_result(stopped, result)
-                }
-                Err(error) => Ok(ToolResultOutcomeDto::failed(error)),
-            }
+            })?
         })
     }
-}
-
-/// Normalizes one typed tool result into bounded durable outcome content.
-fn normalize_tool_result(result: ToolResult) -> DtoResult<ToolResultOutcomeDto> {
-    ToolResultOutcomeDto::completed(normalize_tool_result_content(result)?)
-}
-
-/// Maps one interrupted invocation into bounded, model-visible partial content.
-///
-/// Captured output is normalized exactly like a completed result; the notice
-/// line tells the model that the call never received a final result, and the
-/// model decides what the captured output means.
-fn partial_tool_result(
-    stopped: bool,
-    result: Option<ToolResult>,
-) -> DtoResult<ToolResultOutcomeDto> {
-    let notice = match (stopped, &result) {
-        (true, Some(_)) => {
-            "[The tool call was stopped before a final result; the output above is partial.]"
-        }
-        (false, Some(_)) => {
-            "[The tool call did not receive a final result; the output above is partial.]"
-        }
-        (true, None) => "[The tool call was stopped before a final result.]",
-        (false, None) => "[The tool call did not receive a final result.]",
-    };
-    let content = match result {
-        Some(result) => format!("{}\n{notice}", normalize_tool_result_content(result)?),
-        None => notice.to_owned(),
-    };
-    ToolResultOutcomeDto::partial(content)
-}
-
-/// Normalizes one typed tool result into bounded durable content.
-///
-/// The typed result is redacted and workspace-relative by construction, and
-/// `ToolResultOutcomeDto::succeeded` keeps the durable outcome within its own
-/// content bound. Search results serialize their own typed result DTO, so the
-/// retained window and its truncation flag stay self-describing and identical
-/// for glob paths and grep matches (C-04).
-fn normalize_tool_result_content(result: ToolResult) -> DtoResult<String> {
-    let content = match result {
-        ToolResult::Read(value) | ToolResult::Execute(value) => {
-            if value.truncated {
-                format!("{}\n[truncated]", value.text.as_str())
-            } else {
-                value.text.as_str().to_owned()
-            }
-        }
-        ToolResult::Glob(value) => serde_json::to_string(&value).map_err(|_| {
-            ErrorDto::validation(
-                "invalid_tool_result_content",
-                "tool result content could not be normalized",
-            )
-        })?,
-        ToolResult::Grep(value) => serde_json::to_string(&value).map_err(|_| {
-            ErrorDto::validation(
-                "invalid_tool_result_content",
-                "tool result content could not be normalized",
-            )
-        })?,
-        ToolResult::Write(value) | ToolResult::Edit(value) => format!("{} bytes", value.bytes),
-    };
-    Ok(content)
 }
 
 /// Runs the local daemon host until its process is terminated.
@@ -824,7 +872,7 @@ async fn serve_async_connection(
     }
 }
 
-/// Dispatches one decoded command against the shared facade and host registry.
+/// Dispatches one decoded command against the shared composition and host registry.
 fn dispatch_command(
     host: &Arc<HostState>,
     command: &ProtocolCommandDto,
@@ -967,30 +1015,7 @@ fn daemon_hello() -> DtoResult<ProtocolHelloDto> {
     ProtocolHelloDto::new(local_protocol_version(), "intention-daemon")
 }
 
-/// Serves a bounded number of fixture connections through one shared host.
-///
-/// This exists only for outcome tests that must exercise ordinary commands and
-/// persistent run-stream peers against the same task and subscriber registry.
-#[cfg(any(test, feature = "test-support"))]
-#[doc(hidden)]
-pub async fn serve_test_async_listener(
-    listener: AsyncLocalListener,
-    facade: DaemonApplicationFacade,
-    connection_count: usize,
-) {
-    let host = new_host(facade);
-    for _ in 0..connection_count {
-        let Ok(connection) = listener.accept().await else {
-            return;
-        };
-        let host = Arc::clone(&host);
-        tokio::spawn(async move {
-            serve_async_connection(connection, host).await;
-        });
-    }
-}
-
-/// Owns one bounded fixture host and every task it creates.
+/// The one fixture host seam: owns a bounded host and every task it creates.
 ///
 /// This deterministic test-only lifecycle is not production process shutdown:
 /// it aborts fixture connection and execution tasks so a subsequent facade open
@@ -1087,7 +1112,6 @@ mod tests {
     )]
 
     use super::*;
-    use intention_tools::{GrepResult, PathsResult};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use intention_config::{
@@ -1107,8 +1131,8 @@ mod tests {
         decode_response, encode_request,
     };
     use intention_providers::{
-        FinishReasonDto, ModelCapabilitiesDto, ModelEventDto, ModelEventStream,
-        ModelExecutionDriver,
+        FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
+        ModelEventStream, ModelExecutionDriver,
     };
     use intention_transport::{AsyncLocalClientConnection, AsyncLocalListener};
     use tempfile::TempDir;
@@ -1251,13 +1275,25 @@ mod tests {
             .expect("fixture hello is valid")
     }
 
+    /// Serves exactly one fixture peer through a host-owned connection task.
+    async fn serve_one_test_connection(
+        listener: AsyncLocalListener,
+        facade: DaemonApplicationFacade,
+    ) {
+        let host = new_host(facade);
+        let Ok(connection) = listener.accept().await else {
+            return;
+        };
+        serve_async_connection(connection, host).await;
+    }
+
     #[tokio::test]
     async fn one_connection_serves_requests_and_run_frames_together() {
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(CompletedDriver));
         let (session_id, run_id) = create_and_start(&facade);
         let endpoint = endpoint();
         let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
-        let server = tokio::spawn(serve_test_async_listener(listener, facade, 1));
+        let server = tokio::spawn(serve_one_test_connection(listener, facade));
 
         let connection = AsyncLocalClientConnection::connect(&endpoint)
             .await
@@ -1307,6 +1343,9 @@ mod tests {
             Ok(ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(health)))
                 if health.readiness() == intention_proto::DaemonReadinessDto::Ready
         ));
+        // The peer releases its socket so the host's serving loop observes
+        // end-of-stream; only then does the awaited connection task finish.
+        drop((requests, messages));
         server.await.expect("host serves the merged connection");
     }
 
@@ -1341,7 +1380,7 @@ mod tests {
 
         let endpoint = endpoint();
         let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
-        let server = tokio::spawn(serve_test_async_listener(listener, facade, 1));
+        let server = tokio::spawn(serve_one_test_connection(listener, facade));
         let connection = AsyncLocalClientConnection::connect(&endpoint)
             .await
             .expect("client connects");
@@ -1369,6 +1408,8 @@ mod tests {
             ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error))
                 if error.code() == "local_protocol_message_too_large"
         ));
+        // The refused peer releases its socket before the host task is awaited.
+        drop((requests, messages));
         server.await.expect("host serves the refused peer");
     }
 
@@ -1377,7 +1418,7 @@ mod tests {
         let (_directory, facade) = fixture_facade();
         let endpoint = endpoint();
         let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
-        let server = tokio::spawn(serve_test_async_listener(listener, facade, 1));
+        let server = tokio::spawn(serve_one_test_connection(listener, facade));
 
         let connection = AsyncLocalClientConnection::connect(&endpoint)
             .await
@@ -1416,7 +1457,7 @@ mod tests {
             .lock()
             .expect("host registry remains available")
             .tasks
-            .insert((session_id, run_id), ModelCancellationSignal::new());
+            .insert((session_id, run_id), RunCancellation::new());
         host.schedule_if_starting(session_id, run_id);
         assert_eq!(
             host.data
@@ -1447,7 +1488,8 @@ mod tests {
         );
         assert_eq!(
             host.facade
-                .load_run_projection_for_daemon(session_id, run_id)
+                .repository()
+                .load_run_projection(session_id, run_id)
                 .expect("starting run replay reads")
                 .status(),
             RunStatusDto::Starting
@@ -1458,7 +1500,7 @@ mod tests {
     async fn host_interrupt_signals_the_registered_task_and_the_run_stays_active() {
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(PendingDriver));
         let (session_id, run_id) = create_and_start(&facade);
-        let host = new_host(facade.clone());
+        let host = new_host(facade);
         host.schedule_if_starting(session_id, run_id);
         for _ in 0..20 {
             if host
@@ -1482,8 +1524,10 @@ mod tests {
             .expect("the admitted run registers its execution signal");
         // Wait until the pending provider stream is the run's live operation.
         for _ in 0..20 {
-            if facade
-                .load_run_projection_for_daemon(session_id, run_id)
+            if host
+                .facade
+                .repository()
+                .load_run_projection(session_id, run_id)
                 .expect("run replay reads")
                 .status()
                 == RunStatusDto::Running
@@ -1509,8 +1553,9 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert_eq!(
-            facade
-                .load_run_projection_for_daemon(session_id, run_id)
+            host.facade
+                .repository()
+                .load_run_projection(session_id, run_id)
                 .expect("interrupted run replay reads")
                 .status(),
             RunStatusDto::Running
@@ -1716,69 +1761,6 @@ mod tests {
         }
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         publisher.join().expect("the publisher thread joins");
-    }
-
-    #[test]
-    fn normalize_tool_result_reports_search_truncation_in_durable_content() {
-        // C-04: glob and grep durable content carries the same self-describing
-        // truncation flag, so an honest byte-window cut survives persistence.
-        let glob = ToolResult::Glob(PathsResult {
-            paths: vec![
-                intention_proto::WorkspaceRelativePathDto::parse("a.txt").expect("fixture path"),
-            ],
-            truncated: true,
-        });
-        let ToolResultOutcomeDto::Completed { content, .. } =
-            normalize_tool_result(glob).expect("a glob result normalizes")
-        else {
-            panic!("a glob result succeeds")
-        };
-        assert_eq!(content, "{\"paths\":[\"a.txt\"],\"truncated\":true}");
-
-        let grep = ToolResult::Grep(GrepResult {
-            matches: Vec::new(),
-            truncated: true,
-        });
-        let ToolResultOutcomeDto::Completed { content, .. } =
-            normalize_tool_result(grep).expect("a grep result normalizes")
-        else {
-            panic!("a grep result succeeds")
-        };
-        assert_eq!(content, "{\"matches\":[],\"truncated\":true}");
-    }
-
-    #[test]
-    fn partial_tool_result_carries_captured_output_and_an_interruption_notice() {
-        let captured = ToolResult::Read(intention_tools::TextResult {
-            text: intention_tools::BoundedText::new("half a line").expect("fixture text"),
-            truncated: false,
-        });
-        let ToolResultOutcomeDto::Partial { content, .. } =
-            partial_tool_result(true, Some(captured)).expect("a partial outcome normalizes")
-        else {
-            panic!("an interrupted call yields a partial outcome")
-        };
-        assert_eq!(
-            content,
-            "half a line\n[The tool call was stopped before a final result; the output above is partial.]"
-        );
-
-        let ToolResultOutcomeDto::Partial { content, .. } =
-            partial_tool_result(false, None).expect("a lost partial outcome normalizes")
-        else {
-            panic!("an interrupted call yields a partial outcome")
-        };
-        assert_eq!(content, "[The tool call did not receive a final result.]");
-
-        let ToolResultOutcomeDto::Partial { content, .. } =
-            partial_tool_result(true, None).expect("a stopped partial outcome normalizes")
-        else {
-            panic!("an interrupted call yields a partial outcome")
-        };
-        assert_eq!(
-            content,
-            "[The tool call was stopped before a final result.]"
-        );
     }
 
     #[test]

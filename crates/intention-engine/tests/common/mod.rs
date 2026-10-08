@@ -21,9 +21,8 @@ use std::time::Duration;
 
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
-    ModelCancellationSignal, ModelRunCommitDto, ModelRunCommitObserver, ModelRunDispatchPort,
-    ModelRunExecutionInputDto, ModelSleepFuture, ModelTimePort, ToolExecutionPort,
-    ToolResultOutcomeDto,
+    ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort, RunCancellation,
+    ToolExecutionPort, ToolResultOutcomeDto,
 };
 use intention_proto::{
     DtoResult, ErrorDto, MessageProjectionDto, PendingTurnProjectionDto, ProjectId, RunId,
@@ -85,7 +84,7 @@ pub struct FakeRepository {
     pub commit_error: RefCell<Option<ErrorDto>>,
     pub append_failure: RefCell<Option<ErrorDto>>,
     pub append_failure_at: RefCell<Option<(usize, ErrorDto)>>,
-    pub cancel_after_append: RefCell<Option<(usize, ModelCancellationSignal)>>,
+    pub cancel_after_append: RefCell<Option<(usize, RunCancellation)>>,
     pub append_count: RefCell<usize>,
     pub config_error: RefCell<Option<ErrorDto>>,
     /// Pending user messages committed by the next context boundary.
@@ -536,19 +535,5 @@ impl ToolExecutionPort for ScriptedPort {
             .pop_front()
             .expect("scripted tool outcome exists");
         Box::pin(future::ready(outcome))
-    }
-}
-
-/// Records every dispatched run and can fail the dispatch on request.
-#[derive(Default)]
-pub struct RecordingDispatchPort {
-    pub inputs: RefCell<Vec<ModelRunExecutionInputDto>>,
-    pub failure: RefCell<Option<ErrorDto>>,
-}
-
-impl ModelRunDispatchPort for RecordingDispatchPort {
-    fn dispatch_model_run(&self, input: ModelRunExecutionInputDto) -> DtoResult<()> {
-        self.inputs.borrow_mut().push(input);
-        self.failure.borrow_mut().take().map_or(Ok(()), Err)
     }
 }

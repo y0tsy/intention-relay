@@ -14,24 +14,21 @@ use intention_proto::{
 };
 use intention_proto::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
 pub use intention_providers::{
-    AssistantReasoningDto, ModelCancellationSignal, ModelEventDto, ModelExecutionDriver,
-    ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
+    AssistantReasoningDto, ModelCancellationSignal, ModelCancelledFuture, ModelEventDto,
+    ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
     ModelToolDefinitionDto,
 };
 use intention_storage::{
     AppendMessageInputDto, ConsumePendingUserTurnsInputDto, FinishRunInputDto,
     StorageRepositoryDto, TransitionRunInputDto,
 };
+use intention_tools::CancellationSignal as ToolCancellationSignal;
 
 use crate::context_window::ContextWindowState;
 
 /// The durable context notice recorded when an interrupted call produced no
 /// final result of its own.
 pub const INTERRUPT_NOTICE: &str = "[The call was stopped before a final result.]";
-
-/// The partial tool result recorded when an interrupt arrives before a
-/// model-requested tool call starts.
-pub const TOOL_INTERRUPT_NOTICE: &str = "[The tool call was stopped before a final result.]";
 
 /// The bounded delay between two provider attempts.
 const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
@@ -190,6 +187,77 @@ pub trait ToolExecutionPort: Send + Sync {
     >;
 }
 
+/// One run-scoped cancellation handle shared by the model stream and every
+/// tool invocation of the run.
+///
+/// The host creates one handle per admitted run, embeds it in the execution
+/// input, and signals it once for an interrupt: the model stream awaits the
+/// provider-neutral cancellation future while the blocking tool path observes
+/// the synchronous signal. The engine's interruption boundaries reset the
+/// handle, so the same run observes the next interrupt with fresh state and no
+/// per-invocation registration exists.
+#[derive(Clone, Default)]
+pub struct RunCancellation {
+    model: ModelCancellationSignal,
+    tool: ToolCancellationSignal,
+}
+
+/// The cancellation handle carries interior shared state with no safe debug
+/// rendering, so it renders its current observation only.
+impl std::fmt::Debug for RunCancellation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RunCancellation")
+            .field("cancelled", &self.is_cancelled())
+            .finish()
+    }
+}
+
+impl RunCancellation {
+    /// Creates an active handle for one admitted run.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Requests cancellation of the run's in-flight operation.
+    pub fn cancel(&self) {
+        self.model.cancel();
+        self.tool.cancel();
+    }
+
+    /// Clears the request so the continuing run observes the next interrupt.
+    pub fn reset(&self) {
+        self.model.reset();
+        self.tool.reset();
+    }
+
+    /// Returns whether cancellation has been requested for this run.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.model.is_cancelled() || self.tool.is_cancelled()
+    }
+
+    /// Returns a fresh independently awaitable future that completes on
+    /// cancellation.
+    #[must_use]
+    pub fn cancelled(&self) -> ModelCancelledFuture {
+        self.model.cancelled()
+    }
+
+    /// Returns the provider-neutral signal the model stream observes.
+    #[must_use]
+    pub fn model_signal(&self) -> ModelCancellationSignal {
+        self.model.clone()
+    }
+
+    /// Returns the synchronous signal one blocking tool invocation observes.
+    #[must_use]
+    pub fn tool_signal(&self) -> ToolCancellationSignal {
+        self.tool.clone()
+    }
+}
+
 /// Immutable caller-selected input for one model execution.
 #[derive(Clone)]
 pub struct ModelRunExecutionInputDto {
@@ -197,7 +265,7 @@ pub struct ModelRunExecutionInputDto {
     run_id: RunId,
     request: ModelRequestDto,
     safe_config: ConfigSnapshotDto,
-    cancellation: ModelCancellationSignal,
+    cancellation: RunCancellation,
 }
 
 /// The cancellation handle carries interior shared state with no safe debug
@@ -222,7 +290,7 @@ impl ModelRunExecutionInputDto {
         run_id: RunId,
         request: ModelRequestDto,
         safe_config: ConfigSnapshotDto,
-        cancellation: ModelCancellationSignal,
+        cancellation: RunCancellation,
     ) -> Self {
         Self {
             session_id,
@@ -307,13 +375,13 @@ pub trait ModelRunCommitObserver: Send + Sync {
     fn observe_model_run_commit(&self, commit: &ModelRunCommitDto);
 }
 
-/// DTO-only executor over injected storage, selected driver, time port, optional
-/// observer, and the mandatory tool executor.
+/// DTO-only executor over injected storage, selected driver, time port,
+/// commit observer, and tool executor.
 pub struct ModelRunExecutionService<'a, Repository, Driver: ?Sized, Time> {
     repository: &'a Repository,
     driver: &'a Driver,
     time: &'a Time,
-    observer: Option<&'a dyn ModelRunCommitObserver>,
+    observer: &'a dyn ModelRunCommitObserver,
     tool_executor: &'a dyn ToolExecutionPort,
 }
 
@@ -323,29 +391,14 @@ where
     Driver: ModelExecutionDriver + ?Sized,
     Time: ModelTimePort,
 {
-    /// Creates an executor with the mandatory tool executor.
+    /// Creates an executor over the injected collaborators.
     ///
     /// Provider-emitted tool calls always execute through the supplied
-    /// `ToolExecutionPort`; a no-port fallback no longer exists.
+    /// `ToolExecutionPort`, and every committed value is handed to the
+    /// supplied [`ModelRunCommitObserver`]; neither collaborator has a
+    /// fallback.
     #[must_use]
     pub const fn new(
-        repository: &'a Repository,
-        driver: &'a Driver,
-        time: &'a Time,
-        tool_executor: &'a dyn ToolExecutionPort,
-    ) -> Self {
-        Self {
-            repository,
-            driver,
-            time,
-            observer: None,
-            tool_executor,
-        }
-    }
-
-    /// Adds a post-commit observer without exposing storage or provider resources.
-    #[must_use]
-    pub const fn with_commit_observer(
         repository: &'a Repository,
         driver: &'a Driver,
         time: &'a Time,
@@ -356,7 +409,7 @@ where
             repository,
             driver,
             time,
-            observer: Some(observer),
+            observer,
             tool_executor,
         }
     }
@@ -577,7 +630,9 @@ where
                         // tool path owns every dispatched call's durable
                         // tool-call and tool-result rows.
                         let outcome = if input.cancellation.is_cancelled() {
-                            ToolResultOutcomeDto::partial(TOOL_INTERRUPT_NOTICE)?
+                            ToolResultOutcomeDto::partial(
+                                intention_tools::partial_tool_result_content(true, None)?,
+                            )?
                         } else {
                             let outcome = self
                                 .tool_executor
@@ -747,7 +802,9 @@ where
 
         let mut lifecycle = ModelStreamLifecycleDto::new();
         let request_characters = ContextWindowState::request_characters(&request);
-        let mut stream = self.driver.execute(request, input.cancellation.clone());
+        let mut stream = self
+            .driver
+            .execute(request, input.cancellation.model_signal());
         let timeout = self
             .time
             .sleep(std::time::Duration::from_secs(u64::from(timeout_seconds)))
@@ -1017,20 +1074,18 @@ where
 
     /// Publishes one committed transcript row.
     fn publish_content(&self, message: &MessageProjectionDto) {
-        if let Some(observer) = self.observer {
-            observer.observe_model_run_commit(&ModelRunCommitDto::Content(message.clone()));
-        }
+        self.observer
+            .observe_model_run_commit(&ModelRunCommitDto::Content(message.clone()));
     }
 
     /// Publishes one committed run status.
     fn publish_status(&self, session_id: SessionId, run_id: RunId, status: RunStatusDto) {
-        if let Some(observer) = self.observer {
-            observer.observe_model_run_commit(&ModelRunCommitDto::Status {
+        self.observer
+            .observe_model_run_commit(&ModelRunCommitDto::Status {
                 session_id,
                 run_id,
                 status,
             });
-        }
     }
 }
 

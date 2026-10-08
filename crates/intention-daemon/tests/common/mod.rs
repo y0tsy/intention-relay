@@ -23,7 +23,7 @@ use intention_config::ConfigSnapshotDto;
 use intention_daemon::DaemonApplicationFacade;
 use intention_engine::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto, ModelSleepFuture,
-    ModelTimePort,
+    ModelTimePort, RunCancellation,
 };
 use intention_proto::{
     CreateSessionCommandDto, IdempotencyKey, ProjectId, ProtocolAcceptedResultDto,
@@ -32,8 +32,7 @@ use intention_proto::{
     WorkspaceRootDto,
 };
 use intention_providers::{
-    ModelCancellationSignal, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
-    ModelToolDefinitionDto,
+    ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto,
 };
 use intention_test_support::fixture_snapshot;
 use intention_transport::LocalEndpoint;
@@ -171,7 +170,7 @@ pub fn schedule(
         run_id,
         request,
         snapshot,
-        ModelCancellationSignal::new(),
+        RunCancellation::new(),
     )
 }
 

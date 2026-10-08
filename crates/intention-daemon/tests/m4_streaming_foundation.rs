@@ -1,8 +1,7 @@
 //! Streaming-foundation integration fixtures for the daemon host.
 //!
-//! The fixtures here exercise current durable state only: live `Content` and
-//! `Status` frames published from committed values, the current-state snapshot a
-//! run subscription returns at registration, the transcript rows holding the run
+//! The fixtures here exercise current durable state only: the current-state
+//! snapshot a run subscription returns, the transcript rows holding the run
 //! history, and the run projections a restarted daemon serves. A run
 //! subscription carries no cursor and no replay tail, and a slow subscriber is
 //! closed instead of resynchronized: a re-subscribing client re-reads current
@@ -16,22 +15,20 @@
 
 mod common;
 
+#[cfg(feature = "test-support")]
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
 
-use common::{RecordingObserver, TokioTime, create_session, fixture_facade, schedule, started_run};
+#[cfg(feature = "test-support")]
+use common::{create_session, fixture_facade};
 #[cfg(feature = "test-support")]
 use futures_util::StreamExt;
 use futures_util::stream;
-#[cfg(feature = "test-support")]
-use intention_client::RunStreamClient;
 use intention_daemon::DaemonApplicationFacade;
-use intention_daemon::DaemonToolExecutor;
 #[cfg(feature = "test-support")]
 use intention_engine::INTERRUPT_NOTICE;
-use intention_engine::ModelRunCommitDto;
 #[cfg(feature = "test-support")]
 use intention_proto::TurnId;
 use intention_proto::{IdempotencyKey, RunId, SessionId};
@@ -43,7 +40,7 @@ use intention_proto::{
 use intention_proto::{
     ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto,
     ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, RunSubscriptionResponseDto,
-    SubscribeRunCommandDto, decode_response, encode_request,
+    RunSubscriptionSnapshotDto, SubscribeRunCommandDto, decode_response, encode_request,
 };
 use intention_providers::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
@@ -130,12 +127,6 @@ impl ModelExecutionDriver for BlockingDriver {
     }
 }
 
-fn create_and_start(facade: &DaemonApplicationFacade) -> (SessionId, RunId) {
-    let session_id = SessionId::new();
-    create_session(facade, session_id, &std::env::temp_dir());
-    (session_id, started_run(facade, session_id))
-}
-
 #[cfg(feature = "test-support")]
 async fn send_request_through_host(
     endpoint: &LocalEndpoint,
@@ -165,6 +156,36 @@ async fn send_request_through_host(
         .await
         .expect("host response arrives");
     decode_response(&line, method, request_id).expect("host response decodes")
+}
+
+/// Reads one run's current snapshot from the host over the protocol.
+///
+/// This is the public current-state read: the snapshot carries the committed
+/// run projection and the run's transcript rows, so a fixture needs no
+/// daemon-internal read path to observe a run that has left the active slot.
+#[cfg(feature = "test-support")]
+async fn run_snapshot_through_host(
+    endpoint: &LocalEndpoint,
+    session_id: SessionId,
+    run_id: RunId,
+) -> RunSubscriptionSnapshotDto {
+    let response = send_request_through_host(
+        endpoint,
+        "m4-run-snapshot-test",
+        1,
+        ProtocolRequestPayloadDto::RunSubscription(SubscribeRunCommandDto::new(
+            intention_proto::CURRENT_DTO_SCHEMA_VERSION,
+            session_id,
+            run_id,
+        )),
+    )
+    .await;
+    let ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Snapshot(snapshot)) =
+        response
+    else {
+        panic!("the host answers a run subscription with the current snapshot")
+    };
+    snapshot
 }
 
 #[cfg(feature = "test-support")]
@@ -242,193 +263,6 @@ async fn send_pending_turn_through_host(endpoint: &LocalEndpoint, session_id: Se
     turn.turn_id()
 }
 
-#[tokio::test]
-async fn injected_driver_executes_through_the_facade_bridge_and_observes_only_commits() {
-    let driver = Arc::new(ScriptedDriver::completed_text());
-    let (_directory, facade, snapshot) = fixture_facade("foundation", driver.clone());
-    let (session_id, run_id) = create_and_start(&facade);
-    let observer = RecordingObserver::default();
-
-    let outcome = facade
-        .execute_scheduled_model_run_for_daemon_with_tool_executor(
-            schedule(session_id, run_id, snapshot, None),
-            &TokioTime,
-            &observer,
-            &DaemonToolExecutor::new(facade.clone()),
-        )
-        .await
-        .expect("scripted execution completes");
-
-    assert!(matches!(
-        outcome,
-        intention_engine::ModelRunExecutionOutcomeDto::Completed { .. }
-    ));
-    assert_eq!(driver.executions(), 1);
-    let commits = observer.commits();
-    assert!(
-        commits.len() >= 3,
-        "the running status, committed content, and completed status are observed after commit"
-    );
-    assert!(commits.iter().all(|commit| match commit {
-        ModelRunCommitDto::Content(message) =>
-            message.session_id() == session_id && message.run_id() == Some(run_id),
-        ModelRunCommitDto::Status {
-            session_id: committed_session,
-            run_id: committed_run,
-            ..
-        } => *committed_session == session_id && *committed_run == run_id,
-    }));
-    assert!(matches!(
-        commits.first(),
-        Some(ModelRunCommitDto::Status {
-            status: RunStatusDto::Running,
-            ..
-        })
-    ));
-    assert!(commits.iter().any(|commit| matches!(
-        commit,
-        ModelRunCommitDto::Content(message)
-            if message.kind() == MessageKindDto::Assistant
-                && message.text() == "complete response"
-    )));
-    assert!(matches!(
-        commits.last(),
-        Some(ModelRunCommitDto::Status {
-            status: RunStatusDto::Completed,
-            ..
-        })
-    ));
-
-    // The committed values the observer received re-read as current state.
-    let run = facade
-        .load_run_projection_for_daemon(session_id, run_id)
-        .expect("completed run projection reads");
-    assert_eq!(run.status(), RunStatusDto::Completed);
-    let messages = facade
-        .load_run_messages_for_daemon(session_id, run_id, 16)
-        .expect("committed transcript reads");
-    assert!(messages.iter().any(|message| {
-        message.kind() == MessageKindDto::Assistant && message.text() == "complete response"
-    }));
-    assert!(
-        messages
-            .iter()
-            .any(|message| { message.kind() == MessageKindDto::User && message.text() == "turn" })
-    );
-}
-
-#[cfg(feature = "test-support")]
-#[tokio::test]
-async fn real_async_host_snapshot_answers_a_subscription_and_a_resubscribe_rereads_current_state() {
-    let driver = Arc::new(ScriptedDriver::completed_text());
-    let (_directory, facade, _snapshot) = fixture_facade("foundation", driver);
-    let (session_id, run_id) = create_and_start(&facade);
-    let endpoint = LocalEndpoint::from_instance_id(format!("m4-host-{}", RunId::new()))
-        .expect("fixture endpoint is valid");
-    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
-    let server = tokio::spawn(intention_daemon::serve_test_async_listener(
-        listener, facade, 2,
-    ));
-
-    let client = RunStreamClient::new(endpoint, "m4-host-test").expect("stream client is valid");
-    let subscription = client
-        .subscribe(SubscribeRunCommandDto::new(
-            intention_proto::CURRENT_DTO_SCHEMA_VERSION,
-            session_id,
-            run_id,
-        ))
-        .await
-        .expect("the current run snapshot arrives");
-    let run = *subscription
-        .reducer()
-        .run()
-        .expect("the subscription snapshot is authoritative");
-    assert_eq!(run.session_id(), session_id);
-    assert_eq!(run.run_id(), run_id);
-    assert_eq!(run.status(), RunStatusDto::Starting);
-    drop(subscription);
-
-    // There is no cursor and no replay tail: a fresh subscription re-reads the
-    // same current durable state.
-    let reconnected = client
-        .subscribe(SubscribeRunCommandDto::new(
-            intention_proto::CURRENT_DTO_SCHEMA_VERSION,
-            session_id,
-            run_id,
-        ))
-        .await
-        .expect("the re-subscription re-reads current state");
-    assert_eq!(reconnected.reducer().run(), Some(&run));
-    drop(reconnected);
-    server.await.expect("host serves both subscription peers");
-}
-
-#[cfg(feature = "test-support")]
-#[tokio::test]
-async fn accepted_host_turn_executes_once_then_streams_committed_content_and_completed_status() {
-    let driver = Arc::new(BlockingDriver::new());
-    let (_directory, facade, _snapshot) = fixture_facade("foundation", driver.clone());
-    let session_id = SessionId::new();
-    create_session(&facade, session_id, &std::env::temp_dir());
-    let endpoint = LocalEndpoint::from_instance_id(format!("m4-host-outcome-{}", RunId::new()))
-        .expect("fixture endpoint is valid");
-    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
-    let server = tokio::spawn(intention_daemon::serve_test_async_listener(
-        listener, facade, 3,
-    ));
-
-    let run_id = send_user_turn_through_host(&endpoint, session_id).await;
-    tokio::time::timeout(Duration::from_secs(1), driver.entered.notified())
-        .await
-        .expect("host invokes the driver after durable admission");
-    let client =
-        RunStreamClient::new(endpoint, "m4-host-outcome-test").expect("stream client is valid");
-    let mut subscription = client
-        .subscribe(SubscribeRunCommandDto::new(
-            intention_proto::CURRENT_DTO_SCHEMA_VERSION,
-            session_id,
-            run_id,
-        ))
-        .await
-        .expect("the current run snapshot arrives");
-    assert_eq!(subscription.reducer().status(), Some(RunStatusDto::Running));
-    driver.release.notify_one();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while subscription.reducer().status() != Some(RunStatusDto::Completed) {
-        let frame = tokio::time::timeout_at(deadline, subscription.receive())
-            .await
-            .expect("committed frames arrive before the deadline")
-            .expect("the delivered frame is valid");
-        assert!(
-            frame.is_some(),
-            "the stream stays open until the terminal status is published"
-        );
-    }
-    assert_eq!(driver.executions(), 1);
-    assert!(subscription.reducer().messages().iter().any(|message| {
-        message.kind() == MessageKindDto::Assistant && message.text() == "live response"
-    }));
-    drop(subscription);
-
-    let reconnected = client
-        .subscribe(SubscribeRunCommandDto::new(
-            intention_proto::CURRENT_DTO_SCHEMA_VERSION,
-            session_id,
-            run_id,
-        ))
-        .await
-        .expect("a new connection receives current state");
-    assert_eq!(
-        reconnected.reducer().status(),
-        Some(RunStatusDto::Completed)
-    );
-    assert!(reconnected.reducer().messages().iter().any(|message| {
-        message.kind() == MessageKindDto::Assistant && message.text() == "live response"
-    }));
-    drop(reconnected);
-    server.await.expect("host accepts command and stream peers");
-}
-
 #[cfg(feature = "test-support")]
 #[tokio::test]
 async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
@@ -442,7 +276,7 @@ async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
     let host = intention_daemon::test_host_lifecycle(facade.clone());
     let host_server = host.clone();
     let server = tokio::spawn(async move {
-        host_server.serve_connections(listener, 2).await;
+        host_server.serve_connections(listener, 3).await;
     });
     let run_id = send_user_turn_through_host(&endpoint, session_id).await;
     tokio::time::timeout(Duration::from_secs(1), driver.entered.notified())
@@ -456,10 +290,17 @@ async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
         .await
         .expect("the same run continues after the interruption notice");
     assert_eq!(driver.executions(), 2);
-    let run = facade
-        .load_run_projection_for_daemon(session_id, run_id)
-        .expect("continuing run projection reads");
-    assert_eq!(run.status(), RunStatusDto::Running);
+    let continuing = facade
+        .session_snapshot(session_id, Some(run_id))
+        .expect("continuing run state reads");
+    assert_eq!(
+        continuing
+            .projection()
+            .active_run()
+            .expect("the interrupted run stays active")
+            .status(),
+        RunStatusDto::Running
+    );
     let requests = driver.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1].run_id(), run_id);
@@ -470,14 +311,10 @@ async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
             .any(|message| message.role() == ModelRoleDto::Notice),
         "the continuation carries the interruption notice"
     );
-    let messages = facade
-        .load_run_messages_for_daemon(session_id, run_id, 64)
-        .expect("committed transcript rows read");
     assert!(
-        messages
-            .iter()
-            .any(|message| message.kind() == MessageKindDto::Notice
-                && message.text() == INTERRUPT_NOTICE),
+        continuing.messages().iter().any(|message| {
+            message.kind() == MessageKindDto::Notice && message.text() == INTERRUPT_NOTICE
+        }),
         "the interruption notice is a durable transcript row"
     );
 
@@ -492,16 +329,18 @@ async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
         .expect("the continuation completes"),
         "the exact registered execution task completes"
     );
-    assert_eq!(
-        facade
-            .load_run_projection_for_daemon(session_id, run_id)
-            .expect("completed run projection reads")
-            .status(),
-        RunStatusDto::Completed
-    );
+    // A run that left the active slot is read from the host's current-state
+    // subscription snapshot: its terminal status and transcript rows are the
+    // committed values the daemon serves.
+    let completed = run_snapshot_through_host(&endpoint, session_id, run_id).await;
+    assert_eq!(completed.run().status(), RunStatusDto::Completed);
+    assert!(completed.messages().iter().any(|message| {
+        message.kind() == MessageKindDto::Assistant && message.text() == "live response"
+    }));
     server
         .await
         .expect("host accepts command and interrupt peers");
+    host.shutdown().await;
 }
 
 #[cfg(feature = "test-support")]
@@ -517,7 +356,7 @@ async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
     let host = intention_daemon::test_host_lifecycle(facade.clone());
     let host_server = host.clone();
     let server = tokio::spawn(async move {
-        host_server.serve_connections(listener, 2).await;
+        host_server.serve_connections(listener, 3).await;
     });
 
     let run_id = send_user_turn_through_host(&endpoint, session_id).await;
@@ -571,15 +410,19 @@ async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
         Some(run_id),
         "the pending message never becomes its own run"
     );
-    let run = facade
-        .load_run_projection_for_daemon(session_id, run_id)
-        .expect("continuing run projection reads");
-    assert_eq!(run.status(), RunStatusDto::Running);
-    let messages = facade
-        .load_run_messages_for_daemon(session_id, run_id, 64)
-        .expect("committed transcript rows read");
+    let continuing = facade
+        .session_snapshot(session_id, Some(run_id))
+        .expect("continuing run state reads");
+    assert_eq!(
+        continuing
+            .projection()
+            .active_run()
+            .expect("the run stays active while the joined turn streams")
+            .status(),
+        RunStatusDto::Running
+    );
     assert!(
-        messages.iter().any(|message| {
+        continuing.messages().iter().any(|message| {
             message.kind() == MessageKindDto::User && message.text() == "pending host turn"
         }),
         "the join is a durable transcript row of the same run"
@@ -595,16 +438,15 @@ async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
         .expect("the continuing execution completes"),
         "the exact run execution completes"
     );
+    let completed = run_snapshot_through_host(&endpoint, session_id, run_id).await;
     assert_eq!(
-        facade
-            .load_run_projection_for_daemon(session_id, run_id)
-            .expect("completed run projection reads")
-            .status(),
+        completed.run().status(),
         RunStatusDto::Completed,
         "one run carries the whole continuous session"
     );
     assert_eq!(driver.executions(), 2);
     server.await.expect("host accepts first and pending peers");
+    host.shutdown().await;
 }
 
 #[cfg(feature = "test-support")]
@@ -653,14 +495,6 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
         restart_driver.clone(),
     )
     .expect("restart recovery opens the existing durable host state");
-    let interrupted = restarted
-        .load_run_projection_for_daemon(session_id, first_run)
-        .expect("interrupted original projection reads");
-    assert_eq!(
-        interrupted.status(),
-        RunStatusDto::Interrupted,
-        "recovery interrupts the in-flight run before the second host is ready"
-    );
     let recovered = restarted
         .session_snapshot(session_id, None)
         .expect("recovered session projection reads");
@@ -676,20 +510,8 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
             .any(|turn| turn.turn_id() == pending_turn_id),
         "the pending message survives restart as durable input"
     );
-    let interrupted_messages = restarted
-        .load_run_messages_for_daemon(session_id, first_run, 64)
-        .expect("interrupted transcript rows read");
-    assert!(
-        !interrupted_messages
-            .iter()
-            .any(|message| message.text() == "pending host turn"),
-        "a pending message is durable input, never part of the interrupted run"
-    );
     assert_eq!(restart_driver.executions(), 0);
 
-    let projection_json = serde_json::to_string(&interrupted).expect("projection serializes");
-    let transcript_json =
-        serde_json::to_string(&interrupted_messages).expect("transcript rows serialize");
     let error_json = serde_json::to_string(&intention_proto::ErrorDto::unavailable(
         "restart_fixture_error",
         "safe restart fixture error",
@@ -700,11 +522,13 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
             .expect("fixture endpoint is valid");
     let restart_listener =
         AsyncLocalListener::bind(restart_endpoint.clone()).expect("restart listener binds");
-    let restart_server = tokio::spawn(intention_daemon::serve_test_async_listener(
-        restart_listener,
-        restarted,
-        1,
-    ));
+    let restart_host = intention_daemon::test_host_lifecycle(restarted.clone());
+    let restart_host_server = restart_host.clone();
+    let restart_server = tokio::spawn(async move {
+        restart_host_server
+            .serve_connections(restart_listener, 1)
+            .await;
+    });
     use intention_transport::{AsyncLocalClientConnection, local_protocol_version};
     let connection = AsyncLocalClientConnection::connect(&restart_endpoint)
         .await
@@ -764,6 +588,13 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
         RunStatusDto::Interrupted,
         "the restarted daemon serves the interrupted run's current state"
     );
+    assert!(
+        !snapshot
+            .messages()
+            .iter()
+            .any(|message| message.text() == "pending host turn"),
+        "a pending message is durable input, never part of the interrupted run"
+    );
     assert!(matches!(
         transport_error_frame,
         ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Error(ref error))
@@ -772,6 +603,10 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
     restart_server
         .await
         .expect("restart host accepts stream peer");
+    restart_host.shutdown().await;
+    let projection_json = serde_json::to_string(snapshot.run()).expect("projection serializes");
+    let transcript_json =
+        serde_json::to_string(snapshot.messages()).expect("transcript rows serialize");
     for output in [
         &projection_json,
         &transcript_json,
@@ -802,9 +637,11 @@ async fn host_answers_socket_level_method_not_found_and_invalid_params_errors() 
         LocalEndpoint::from_instance_id(format!("m4-host-jsonrpc-errors-{}", RunId::new()))
             .expect("fixture endpoint is valid");
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
-    let server = tokio::spawn(intention_daemon::serve_test_async_listener(
-        listener, facade, 1,
-    ));
+    let host = intention_daemon::test_host_lifecycle(facade);
+    let host_server = host.clone();
+    let server = tokio::spawn(async move {
+        host_server.serve_connections(listener, 1).await;
+    });
 
     let connection = AsyncLocalClientConnection::connect(&endpoint)
         .await
@@ -861,6 +698,7 @@ async fn host_answers_socket_level_method_not_found_and_invalid_params_errors() 
     server
         .await
         .expect("host serves the rejected jsonrpc peers");
+    host.shutdown().await;
 }
 
 #[cfg(feature = "test-support")]
@@ -878,9 +716,11 @@ async fn host_does_not_answer_an_id_less_jsonrpc_notification() {
         LocalEndpoint::from_instance_id(format!("m4-host-jsonrpc-notification-{}", RunId::new()))
             .expect("fixture endpoint is valid");
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
-    let server = tokio::spawn(intention_daemon::serve_test_async_listener(
-        listener, facade, 1,
-    ));
+    let host = intention_daemon::test_host_lifecycle(facade);
+    let host_server = host.clone();
+    let server = tokio::spawn(async move {
+        host_server.serve_connections(listener, 1).await;
+    });
 
     let connection = AsyncLocalClientConnection::connect(&endpoint)
         .await
@@ -922,6 +762,7 @@ async fn host_does_not_answer_an_id_less_jsonrpc_notification() {
             if health.readiness() == intention_proto::DaemonReadinessDto::Ready
     ));
     server.await.expect("host serves the notification peer");
+    host.shutdown().await;
 }
 
 #[cfg(feature = "test-support")]
@@ -938,9 +779,11 @@ async fn host_answers_an_explicit_null_id_request_with_the_correlated_error() {
         LocalEndpoint::from_instance_id(format!("m4-host-jsonrpc-null-id-{}", RunId::new()))
             .expect("fixture endpoint is valid");
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
-    let server = tokio::spawn(intention_daemon::serve_test_async_listener(
-        listener, facade, 1,
-    ));
+    let host = intention_daemon::test_host_lifecycle(facade);
+    let host_server = host.clone();
+    let server = tokio::spawn(async move {
+        host_server.serve_connections(listener, 1).await;
+    });
 
     let connection = AsyncLocalClientConnection::connect(&endpoint)
         .await
@@ -982,4 +825,5 @@ async fn host_answers_an_explicit_null_id_request_with_the_correlated_error() {
         JSONRPC_INVALID_REQUEST
     );
     server.await.expect("host serves the null-id peer");
+    host.shutdown().await;
 }

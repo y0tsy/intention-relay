@@ -12,7 +12,6 @@ mod common;
 use common::{DispatchCompleted, fixture_service, relative, text};
 #[cfg(unix)]
 use common::{fixture_dir, service};
-use intention_proto::ToolCallId;
 #[cfg(unix)]
 use intention_tools::ToolDispatchOutcome;
 use intention_tools::{
@@ -31,7 +30,6 @@ fn plain_grep_reports_utf8_match_columns() {
     let (dir, service) = fixture_service();
     std::fs::write(dir.path().join("x.txt"), "é needle\nnope\n").unwrap();
     let result = service.dispatch_completed(
-        ToolCallId::new(),
         ToolInput::Grep(GrepInput {
             pattern: text("needle"),
             scope: None,
@@ -61,7 +59,6 @@ fn scoped_search_reports_file_directory_workspace_and_failures() {
         GrepScope::Workspace,
     ] {
         let result = service.dispatch_completed(
-            ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: text("needle"),
                 scope: Some(scope),
@@ -85,7 +82,6 @@ fn scoped_search_reports_file_directory_workspace_and_failures() {
         assert!(
             service
                 .dispatch_with_cancellation(
-                    ToolCallId::new(),
                     ToolInput::Grep(GrepInput {
                         pattern: text("needle"),
                         scope: Some(scope),
@@ -99,7 +95,6 @@ fn scoped_search_reports_file_directory_workspace_and_failures() {
     assert_eq!(
         service
             .dispatch_with_cancellation(
-                ToolCallId::new(),
                 ToolInput::Grep(GrepInput {
                     pattern: text("needle"),
                     scope: None,
@@ -125,7 +120,6 @@ fn read_write_edit_follow_symlink_paths() {
     // A symbolic link is ordinary filesystem material: an explicitly
     // addressed link is followed like any other path.
     let read = s.dispatch_with_cancellation(
-        ToolCallId::new(),
         ToolInput::Read(ReadInput {
             path: relative("link"),
         }),
@@ -140,7 +134,6 @@ fn read_write_edit_follow_symlink_paths() {
         "read follows the addressed link"
     );
     let write = s.dispatch_with_cancellation(
-        ToolCallId::new(),
         ToolInput::Write(WriteInput {
             path: relative("link"),
             content: text("written"),
@@ -150,7 +143,6 @@ fn read_write_edit_follow_symlink_paths() {
     );
     assert!(write.is_ok(), "write follows the addressed link");
     let edit = s.dispatch_with_cancellation(
-        ToolCallId::new(),
         ToolInput::Edit(EditInput {
             path: relative("link"),
             old: text("written"),
