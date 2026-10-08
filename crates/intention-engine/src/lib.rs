@@ -14,13 +14,12 @@ use intention_config::ConfigSnapshotDto;
 use intention_domain::{ToolResultMetadataEntryDto, ToolResultStatusDto};
 use intention_proto::ToolCallId;
 use intention_proto::{
-    CURRENT_DTO_SCHEMA_VERSION, CreateSessionAcceptedDto, InterruptRunAcceptedDto,
-    ProtocolAcceptedResultDto, RemoveTurnAcceptedDto, SendUserTurnAcceptedDto,
-    SendUserTurnOutcomeDto, SessionSnapshotDto,
+    CreateSessionAcceptedDto, InterruptRunAcceptedDto, ProtocolAcceptedResultDto,
+    RemoveTurnAcceptedDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
 };
 use intention_proto::{
-    CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageKindDto,
-    MessageProjectionDto, RemoveTurnCommandDto, SendUserTurnCommandDto,
+    CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
+    RemoveTurnCommandDto, SendUserTurnCommandDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
 use intention_storage::{
@@ -60,21 +59,8 @@ pub enum LocalToolInvocationOutcomeDto {
     },
 }
 
-/// Application boundary for one explicit local tool invocation.
-pub trait LocalToolInvocationPort {
-    /// Executes exactly one typed tool call after admission.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed storage or tool execution error.
-    fn invoke_local_tool(
-        &self,
-        input: ToolInvocationRequestDto,
-    ) -> DtoResult<LocalToolInvocationOutcomeDto>;
-}
-
 /// Application-owned observation boundary for tolerated hook failures.
-pub trait HookObservationPort {
+pub(crate) trait HookObservationPort {
     fn observe_hook_failure(&self, observation: HookObservability);
 }
 
@@ -229,23 +215,6 @@ where
         publisher: &P,
     ) -> DtoResult<LocalToolInvocationOutcomeDto> {
         self.invoke_local_tool_through_ports(input, publisher, &())
-    }
-
-    /// Executes one invocation while tolerated fail-open hook failures reach the
-    /// supplied application observation boundary.
-    ///
-    /// Observations carry only safe hook identity metadata; hook payloads and
-    /// typed error content never cross this boundary.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed validation, storage, or tool execution error.
-    pub fn invoke_local_tool_with_observation<O: HookObservationPort>(
-        &self,
-        input: ToolInvocationRequestDto,
-        observer: &O,
-    ) -> DtoResult<LocalToolInvocationOutcomeDto> {
-        self.invoke_local_tool_through_ports(input, &(), observer)
     }
 
     fn invoke_local_tool_through_ports<P: ToolResultPublicationPort, O: HookObservationPort>(
@@ -981,34 +950,7 @@ where
             cancellation,
         )
     }
-
-    /// Loads the current durable session projection as a versioned protocol snapshot.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed repository error when the requested session is absent
-    /// or cannot be loaded.
-    pub fn get_session_snapshot(
-        &self,
-        query: GetSessionSnapshotQueryDto,
-    ) -> DtoResult<SessionSnapshotDto> {
-        let projection = self
-            .repository
-            .load_session_projection(query.session_id())?;
-        let messages = self
-            .repository
-            .load_recent_messages(query.session_id(), SESSION_SNAPSHOT_MESSAGES)?;
-        SessionSnapshotDto::with_projection(
-            CURRENT_DTO_SCHEMA_VERSION,
-            query.session_id(),
-            projection,
-            messages,
-        )
-    }
 }
-
-/// Committed transcript rows returned with one session snapshot.
-const SESSION_SNAPSHOT_MESSAGES: u32 = 256;
 
 const fn accepted_user_turn(
     command: &SendUserTurnCommandDto,

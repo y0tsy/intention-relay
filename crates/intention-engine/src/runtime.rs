@@ -179,24 +179,6 @@ impl ToolResultOutcomeDto {
     pub const fn failed(error: ErrorDto) -> Self {
         Self::Failed { error }
     }
-
-    /// Attaches approved credential-free metadata entries to the outcome.
-    #[must_use]
-    pub fn with_metadata(mut self, metadata: Vec<ToolResultMetadataEntryDto>) -> Self {
-        match &mut self {
-            Self::Completed {
-                metadata: current, ..
-            }
-            | Self::Partial {
-                metadata: current, ..
-            }
-            | Self::Cancelled {
-                metadata: current, ..
-            } => *current = metadata,
-            Self::Failed { .. } => {}
-        }
-        self
-    }
 }
 
 /// Executes one provider-normalized tool call for the model-tool loop.

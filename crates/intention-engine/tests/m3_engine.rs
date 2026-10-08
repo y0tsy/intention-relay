@@ -12,23 +12,21 @@ use intention_config::{
 };
 use intention_domain::ToolResultStatusDto;
 use intention_engine::{
-    ApplicationService, HookObservationPort, LocalToolInvocationOutcomeDto,
-    ModelCancellationSignal, ModelRunDispatchPort, ModelRunExecutionInputDto,
-    ToolInvocationRequestDto, ToolResultPublicationPort, WorkspaceBoundaryPort,
+    ApplicationService, LocalToolInvocationOutcomeDto, ModelCancellationSignal,
+    ModelRunDispatchPort, ModelRunExecutionInputDto, ToolInvocationRequestDto,
+    ToolResultPublicationPort, WorkspaceBoundaryPort,
 };
 use intention_engine::{ModelMessageDto, ModelRoleDto};
-use intention_proto::{
-    CURRENT_DTO_SCHEMA_VERSION, ProtocolAcceptedResultDto, SendUserTurnOutcomeDto,
-};
 use intention_proto::{
     ConfigRevisionId, DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SchemaVersionDto,
     SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
 };
 use intention_proto::{
-    CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageKindDto,
-    MessageProjectionDto, PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto,
-    RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto, WorkspaceRootDto,
+    CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
+    PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
+    SendUserTurnCommandDto, SessionProjectionDto, WorkspaceRootDto,
 };
+use intention_proto::{ProtocolAcceptedResultDto, SendUserTurnOutcomeDto};
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,
     ConsumePendingUserTurnsInputDto, CreateSessionInputDto, FinishRunInputDto,
@@ -36,9 +34,8 @@ use intention_storage::{
     StorageRepositoryDto, ToolResultEvidenceDto, TransitionRunInputDto, WriteToolResultInputDto,
 };
 use intention_tools::{
-    BoundedText, CancellationSignal, ExecuteInput, FailurePolicy, Hook, HookObservability,
-    HookRegistry, Outcome as HookOutcome, Phase, PhaseContext, ReadInput, TextResult, ToolInput,
-    ToolResult, WorkspaceRoot,
+    BoundedText, CancellationSignal, ExecuteInput, Hook, HookRegistry, Outcome as HookOutcome,
+    Phase, PhaseContext, ReadInput, TextResult, ToolInput, ToolResult, WorkspaceRoot,
 };
 
 struct RejectHook;
@@ -920,7 +917,7 @@ fn post_execution_result_phases_cover_rejection_and_invalid_input() {
 }
 
 #[test]
-fn interrupt_and_snapshot_workflows_map_durable_results() {
+fn interrupt_run_workflow_maps_durable_results() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot();
@@ -935,24 +932,11 @@ fn interrupt_and_snapshot_workflows_map_durable_results() {
         )),
         Vec::new(),
     );
-    let messages = vec![
-        MessageProjectionDto::new(
-            session_id,
-            Some(run_id),
-            MessageKindDto::User,
-            "hello",
-            None,
-            None,
-            None,
-        )
-        .expect("fixture row is valid"),
-    ];
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable(
         "fixture_unused",
         "accept is not used by this fixture",
     )));
-    *repository.loaded_projection.borrow_mut() = Some(state.clone());
-    *repository.recent_messages.borrow_mut() = messages.clone();
+    *repository.loaded_projection.borrow_mut() = Some(state);
     let application = ApplicationService::new(&repository);
 
     let interrupted = application
@@ -963,14 +947,6 @@ fn interrupt_and_snapshot_workflows_map_durable_results() {
         ProtocolAcceptedResultDto::InterruptRun(value)
             if value.session_id() == session_id && value.run_id() == run_id
     ));
-
-    let snapshot = application
-        .get_session_snapshot(GetSessionSnapshotQueryDto::new(session_id))
-        .expect("snapshot maps");
-    assert_eq!(snapshot.session_id(), session_id);
-    assert_eq!(snapshot.schema_version(), CURRENT_DTO_SCHEMA_VERSION);
-    assert_eq!(snapshot.projection(), &state);
-    assert_eq!(snapshot.messages(), messages.as_slice());
 }
 
 #[test]
@@ -1397,105 +1373,6 @@ fn cancelled_tool_lifecycle_is_terminal_and_not_completed_or_replayed() {
     );
 }
 
-struct FailOpenFailingHook {
-    hook_id: &'static str,
-    revision: u32,
-}
-impl Hook for FailOpenFailingHook {
-    fn id(&self) -> &'static str {
-        self.hook_id
-    }
-    fn registration_revision(&self) -> u32 {
-        self.revision
-    }
-    fn phases(&self) -> &'static [Phase] {
-        &[Phase::BeforeWorkspaceResolution]
-    }
-    fn priority(&self) -> u32 {
-        0
-    }
-    fn failure_policy(&self, _: Phase) -> FailurePolicy {
-        FailurePolicy::FailOpen
-    }
-    fn run(&self, _: &PhaseContext) -> DtoResult<HookOutcome> {
-        Err(ErrorDto::validation(
-            "fail_open_failure",
-            "FAKE_SECRET_9f3a workspace detail",
-        ))
-    }
-}
-
-struct RecordingObserver {
-    observations: RefCell<Vec<HookObservability>>,
-}
-impl HookObservationPort for RecordingObserver {
-    fn observe_hook_failure(&self, observation: HookObservability) {
-        self.observations.borrow_mut().push(observation);
-    }
-}
-
-#[test]
-fn fail_open_hook_failures_reach_the_observation_boundary_with_redacted_metadata() {
-    let root = hello_tool_root("fail-open");
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = HookRegistry::new();
-    hooks
-        .register(Box::new(FailOpenFailingHook {
-            hook_id: "fail-open-alpha",
-            revision: 5,
-        }))
-        .expect("hook registers");
-    hooks
-        .register(Box::new(FailOpenFailingHook {
-            hook_id: "fail-open-beta",
-            revision: 7,
-        }))
-        .expect("hook registers");
-    let observer = RecordingObserver {
-        observations: RefCell::new(Vec::new()),
-    };
-    let result = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool_with_observation(
-            invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt"),
-            &observer,
-        )
-        .expect("fail-open failures continue execution");
-    let result = completed_outcome(result);
-    assert!(matches!(result, ToolResult::Read(_)));
-
-    // Metadata is not discarded: every tolerated failure reaches the boundary
-    // with its exact safe identity, in registry-deterministic order.
-    let observations = observer.observations.borrow();
-    assert_eq!(
-        *observations,
-        vec![
-            HookObservability {
-                hook_id: "fail-open-alpha",
-                registration_revision: 5,
-                phase: Phase::BeforeWorkspaceResolution,
-                failure_policy: FailurePolicy::FailOpen,
-            },
-            HookObservability {
-                hook_id: "fail-open-beta",
-                registration_revision: 7,
-                phase: Phase::BeforeWorkspaceResolution,
-                failure_policy: FailurePolicy::FailOpen,
-            },
-        ]
-    );
-    // The committed rows stay redacted: the tolerated hook error's code and
-    // message detail, and absolute filesystem paths, never cross the durable
-    // boundary even though the failure carried them as input.
-    let messages = repository.committed_messages();
-    assert_eq!(messages.len(), 2);
-    assert_eq!(repository.completed_result_count(), 1);
-    let rendered = format!("{messages:?} {:?}", repository.committed_results());
-    assert!(!rendered.contains("FAKE_SECRET"));
-    assert!(!rendered.contains(&root.to_string_lossy().to_string()));
-    assert!(!rendered.contains("fail_open_failure"));
-    let _ = fs::remove_dir_all(root);
-}
-
 struct CapturingPublisher {
     publications: RefCell<Vec<MessageProjectionDto>>,
     failure: RefCell<Option<ErrorDto>>,
@@ -1528,29 +1405,6 @@ impl ToolResultPublicationPort for CapturingPublisher {
             .borrow()
             .as_ref()
             .map_or(Ok(()), |error| Err(error.clone()))
-    }
-}
-
-struct FailOpenPublishedHook;
-
-impl Hook for FailOpenPublishedHook {
-    fn id(&self) -> &'static str {
-        "fail-open-published"
-    }
-    fn phases(&self) -> &'static [Phase] {
-        &[Phase::AfterToolResultPublished]
-    }
-    fn priority(&self) -> u32 {
-        0
-    }
-    fn failure_policy(&self, _: Phase) -> FailurePolicy {
-        FailurePolicy::FailOpen
-    }
-    fn run(&self, _: &PhaseContext) -> DtoResult<HookOutcome> {
-        Err(ErrorDto::validation(
-            "fail_open_published",
-            "post-publish tolerated failure",
-        ))
     }
 }
 
@@ -1686,41 +1540,6 @@ fn after_publish_hook_error_fails_closed_on_the_completed_commit() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
     assert_eq!(repository.completed_result_count(), 1);
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn fail_open_failures_in_the_published_phase_reach_the_observer() {
-    let root = hello_tool_root("published-observation");
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let mut hooks = HookRegistry::new();
-    hooks
-        .register(Box::new(FailOpenPublishedHook))
-        .expect("hook registers");
-    let observer = RecordingObserver {
-        observations: RefCell::new(Vec::new()),
-    };
-    let result = ApplicationService::with_hooks(&repository, hooks)
-        .invoke_local_tool_with_observation(
-            invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt"),
-            &observer,
-        )
-        .expect("fail-open failures after publication stay tolerated");
-    let result = completed_outcome(result);
-    assert_eq!(result, hello_read_result());
-    // The tolerated post-publish failure is forwarded with safe identity only.
-    assert_eq!(
-        *observer.observations.borrow(),
-        vec![HookObservability {
-            hook_id: "fail-open-published",
-            registration_revision: 1,
-            phase: Phase::AfterToolResultPublished,
-            failure_policy: FailurePolicy::FailOpen,
-        }]
-    );
-    let results = repository.committed_results();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
     let _ = fs::remove_dir_all(root);
 }
 
