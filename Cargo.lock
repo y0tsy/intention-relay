@@ -793,6 +793,7 @@ dependencies = [
  "intention-proto",
  "intention-providers",
  "intention-storage",
+ "intention-test-support",
  "intention-tools",
  "intention-transport",
  "serde_json",

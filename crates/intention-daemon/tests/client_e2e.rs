@@ -14,15 +14,18 @@
     reason = "Client end-to-end fixtures use assertion conveniences for precise diagnostics."
 )]
 
+mod common;
+
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use common::{config_path, unique_endpoint};
 use intention_client::{
     IntentionClient, ProcessDaemonLauncher, RunStreamClient, RunStreamSubscription,
 };
@@ -62,7 +65,7 @@ impl E2eHost {
         let credential = format!("fixture-credential-{}", std::process::id());
         let provider = FakeProvider::start(tool_arguments);
         write_config(config_home.path(), provider.port(), &credential);
-        let endpoint = unique_endpoint();
+        let endpoint = unique_endpoint("e2e");
         let daemon = spawn_daemon(&endpoint, config_home.path(), state_home.path());
         Self {
             config_home,
@@ -113,19 +116,10 @@ impl Drop for E2eHost {
         self.kill_daemon();
         self.provider.stop();
         #[cfg(unix)]
-        if let Some(path) = endpoint_socket_path(&self.endpoint) {
+        if let Some(path) = common::endpoint_socket_path(&self.endpoint) {
             let _ = std::fs::remove_file(path);
         }
     }
-}
-
-static NEXT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
-
-/// Builds a unique safe endpoint instance id for this test process.
-fn unique_endpoint() -> LocalEndpoint {
-    let sequence = NEXT_ENDPOINT.fetch_add(1, Ordering::Relaxed);
-    LocalEndpoint::from_instance_id(format!("e2e-{}-{}", std::process::id(), sequence))
-        .expect("fixture endpoint is valid")
 }
 
 /// Spawns the real daemon binary with only per-process environment overrides.
@@ -150,28 +144,6 @@ fn spawn_daemon(endpoint: &LocalEndpoint, config_home: &Path, state_home: &Path)
     command.spawn().expect("daemon binary spawns")
 }
 
-/// Returns the platform config path the daemon resolves from its environment.
-fn config_path(config_home: &Path) -> PathBuf {
-    #[cfg(target_os = "linux")]
-    {
-        config_home.join("intention-relay").join("config.toml")
-    }
-    #[cfg(target_os = "macos")]
-    {
-        config_home
-            .join("Library/Application Support/intention-relay")
-            .join("config.toml")
-    }
-    #[cfg(windows)]
-    {
-        config_home.join("intention-relay").join("config.toml")
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-    {
-        config_home.join("intention-relay").join("config.toml")
-    }
-}
-
 /// Writes the daemon configuration file with owner-only permissions on Unix.
 fn write_config(config_home: &Path, port: u16, credential: &str) {
     let config_text = format!(
@@ -193,44 +165,6 @@ fn write_config(config_home: &Path, port: u16, credential: &str) {
     {
         std::fs::write(&config_path, config_text).expect("config file writes");
     }
-}
-
-/// Replicates the daemon transport's platform endpoint path resolution so the
-/// fixture can remove exactly the socket file its own daemon created.
-#[cfg(unix)]
-fn endpoint_socket_path(endpoint: &LocalEndpoint) -> Option<PathBuf> {
-    let base = {
-        #[cfg(target_os = "linux")]
-        {
-            std::env::var_os("XDG_RUNTIME_DIR")
-                .map(PathBuf::from)
-                .filter(|candidate| candidate.is_absolute())
-                .or_else(|| {
-                    std::env::var_os("XDG_CONFIG_HOME")
-                        .map(PathBuf::from)
-                        .filter(|candidate| candidate.is_absolute())
-                        .map(|candidate| candidate.join("intention-relay"))
-                })
-                .or_else(|| {
-                    std::env::var_os("HOME")
-                        .map(PathBuf::from)
-                        .filter(|candidate| candidate.is_absolute())
-                        .map(|candidate| candidate.join(".config/intention-relay"))
-                })
-        }
-        #[cfg(target_os = "macos")]
-        {
-            std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .filter(|candidate| candidate.is_absolute())
-                .map(|candidate| candidate.join("Library/Application Support/intention-relay"))
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        {
-            None
-        }
-    }?;
-    Some(base.join(format!("{}.sock", endpoint.instance_id())))
 }
 
 /// A fake OpenAI-compatible provider serving two scripted SSE rounds.

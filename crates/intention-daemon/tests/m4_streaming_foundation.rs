@@ -14,28 +14,27 @@
     reason = "Focused daemon-foundation fixtures use assertion conveniences for precise diagnostics."
 )]
 
+mod common;
+
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
 
+use common::{RecordingObserver, TokioTime, create_session, fixture_facade, schedule, started_run};
 #[cfg(feature = "test-support")]
 use futures_util::StreamExt;
 use futures_util::stream;
 #[cfg(feature = "test-support")]
 use intention_client::RunStreamClient;
-use intention_config::ConfigSnapshotDto;
 use intention_daemon::DaemonApplicationFacade;
 use intention_daemon::DaemonToolExecutor;
 #[cfg(feature = "test-support")]
 use intention_engine::INTERRUPT_NOTICE;
-use intention_engine::ModelRunExecutionInputDto;
-use intention_engine::{
-    ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
-};
+use intention_engine::ModelRunCommitDto;
 #[cfg(feature = "test-support")]
 use intention_proto::TurnId;
-use intention_proto::{IdempotencyKey, RunId, SessionId, TimestampDto};
+use intention_proto::{IdempotencyKey, RunId, SessionId};
 use intention_proto::{MessageKindDto, RunStatusDto, SendUserTurnCommandDto};
 use intention_proto::{
     ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, SendUserTurnOutcomeDto,
@@ -48,17 +47,21 @@ use intention_proto::{
 };
 use intention_providers::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
-    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
+    ModelEventStream, ModelExecutionDriver, ModelRequestDto, ModelRoleDto,
 };
+use intention_test_support::ScriptedDriver;
+#[cfg(feature = "test-support")]
+use intention_test_support::{FIXTURE_CREDENTIAL, fixture_snapshot};
 #[cfg(feature = "test-support")]
 use intention_transport::{AsyncLocalListener, LocalEndpoint};
 use tempfile::TempDir;
 
-struct ScriptedDriver {
-    events: Mutex<Vec<ModelEventDto>>,
-    executions: Mutex<usize>,
-}
-
+/// Blocks a provider round until the scenario releases it.
+///
+/// The shared test-support driver scripts only round-by-round events; the
+/// interrupt, restart, and pending-turn scenarios need a round that is still
+/// streaming when the command arrives, so this driver stays local to the
+/// streaming-foundation suite.
 #[cfg(feature = "test-support")]
 struct BlockingDriver {
     executions: Mutex<usize>,
@@ -130,179 +133,10 @@ impl ModelExecutionDriver for BlockingDriver {
     }
 }
 
-impl ScriptedDriver {
-    fn completed_text() -> Self {
-        Self {
-            events: Mutex::new(vec![
-                ModelEventDto::started(),
-                ModelEventDto::text_delta("complete response").expect("fixture text is valid"),
-                ModelEventDto::finished(FinishReasonDto::Stop),
-            ]),
-            executions: Mutex::new(0),
-        }
-    }
-
-    fn executions(&self) -> usize {
-        *self
-            .executions
-            .lock()
-            .expect("driver recorder remains available")
-    }
-}
-
-impl ModelDriver for ScriptedDriver {
-    fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
-    }
-}
-
-impl ModelExecutionDriver for ScriptedDriver {
-    fn execute(
-        &self,
-        _request: ModelRequestDto,
-        _cancellation: ModelCancellationSignal,
-    ) -> ModelEventStream {
-        *self
-            .executions
-            .lock()
-            .expect("driver recorder remains available") += 1;
-        let events = std::mem::take(&mut *self.events.lock().expect("script remains available"));
-        Box::pin(stream::iter(events.into_iter().map(Ok)))
-    }
-}
-
-struct TokioTime;
-
-impl ModelTimePort for TokioTime {
-    fn now(&self) -> TimestampDto {
-        TimestampDto::from_unix_seconds(2).expect("fixture timestamp is valid")
-    }
-
-    fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
-        Box::pin(tokio::time::sleep(duration))
-    }
-}
-
-#[derive(Default)]
-struct RecordingObserver {
-    commits: Mutex<Vec<ModelRunCommitDto>>,
-}
-
-impl RecordingObserver {
-    fn commits(&self) -> Vec<ModelRunCommitDto> {
-        self.commits
-            .lock()
-            .expect("observer recorder remains available")
-            .clone()
-    }
-}
-
-impl ModelRunCommitObserver for RecordingObserver {
-    fn observe_model_run_commit(&self, committed: &ModelRunCommitDto) {
-        self.commits
-            .lock()
-            .expect("observer recorder remains available")
-            .push(committed.clone());
-    }
-}
-
-fn fixture_facade(
-    driver: Arc<dyn ModelExecutionDriver + Send + Sync>,
-) -> (TempDir, DaemonApplicationFacade, ConfigSnapshotDto) {
-    let directory = TempDir::new().expect("temporary directory exists");
-    let snapshot = intention_test_snapshot();
-    let facade = DaemonApplicationFacade::open_for_test_support_with_driver(
-        directory.path().join("foundation.sqlite"),
-        snapshot.clone(),
-        driver,
-    )
-    .expect("fixture facade opens");
-    (directory, facade, snapshot)
-}
-
-fn intention_test_snapshot() -> ConfigSnapshotDto {
-    intention_test_snapshot_with_credential("fixture-credential")
-}
-
-fn intention_test_snapshot_with_credential(credential: &str) -> ConfigSnapshotDto {
-    let source = intention_config::ConfigSourceDto::Explicit(
-        intention_config::ConfigPathDto::parse(
-            std::env::temp_dir()
-                .join("intention-daemon-foundation.toml")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("fixture source is absolute"),
-    );
-    let resolved = intention_config::ResolvedConfigDto::parse_resolve(
-        intention_config::RawConfigInputDto::new(
-            format!(
-                "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"{credential}\""
-            ),
-            source,
-        ),
-    )
-    .expect("fixture configuration resolves");
-    ConfigSnapshotDto::new(
-        intention_proto::SchemaVersionDto::new(1, 0),
-        intention_proto::ConfigRevisionId::new(),
-        TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid"),
-        resolved,
-    )
-    .expect("fixture snapshot is valid")
-}
-
-fn schedule(
-    session_id: SessionId,
-    run_id: RunId,
-    snapshot: ConfigSnapshotDto,
-) -> ModelRunExecutionInputDto {
-    ModelRunExecutionInputDto::new(
-        session_id,
-        run_id,
-        ModelRequestDto::new(
-            run_id,
-            "fixture",
-            vec![ModelMessageDto::new(ModelRoleDto::User, "turn").expect("message is valid")],
-            None,
-            None,
-        )
-        .expect("request is valid"),
-        snapshot,
-        ModelCancellationSignal::new(),
-    )
-}
-
 fn create_and_start(facade: &DaemonApplicationFacade) -> (SessionId, RunId) {
     let session_id = SessionId::new();
-    let create = ProtocolCommandDto::CreateSession(intention_proto::CreateSessionCommandDto::new(
-        intention_proto::ProjectId::new(),
-        session_id,
-        intention_proto::WorkspaceId::new(),
-        intention_proto::WorkspaceRootDto::parse(
-            std::env::temp_dir().to_string_lossy().into_owned(),
-        )
-        .expect("fixture workspace is absolute"),
-        intention_proto::RunModeDto::Build,
-    ));
-    assert!(matches!(
-        facade.command(create),
-        ProtocolCommandResultDto::Accepted(_)
-    ));
-    let result = facade.command(ProtocolCommandDto::SendUserTurn(
-        SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "turn")
-            .expect("turn is valid"),
-    ));
-    let ProtocolCommandResultDto::Accepted(accepted) = result else {
-        panic!("fixture turn starts")
-    };
-    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
-        panic!("fixture result is a turn")
-    };
-    let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
-        panic!("first turn starts")
-    };
-    (session_id, run_id)
+    create_session(facade, session_id, &std::env::temp_dir());
+    (session_id, started_run(facade, session_id))
 }
 
 #[cfg(feature = "test-support")]
@@ -414,13 +248,13 @@ async fn send_pending_turn_through_host(endpoint: &LocalEndpoint, session_id: Se
 #[tokio::test]
 async fn injected_driver_executes_through_the_facade_bridge_and_observes_only_commits() {
     let driver = Arc::new(ScriptedDriver::completed_text());
-    let (_directory, facade, snapshot) = fixture_facade(driver.clone());
+    let (_directory, facade, snapshot) = fixture_facade("foundation", driver.clone());
     let (session_id, run_id) = create_and_start(&facade);
     let observer = RecordingObserver::default();
 
     let outcome = facade
         .execute_scheduled_model_run_for_daemon_with_tool_executor(
-            schedule(session_id, run_id, snapshot),
+            schedule(session_id, run_id, snapshot, None),
             &TokioTime,
             &observer,
             &DaemonToolExecutor::new(facade.clone()),
@@ -490,7 +324,7 @@ async fn injected_driver_executes_through_the_facade_bridge_and_observes_only_co
 #[tokio::test]
 async fn real_async_host_snapshot_answers_a_subscription_and_a_resubscribe_rereads_current_state() {
     let driver = Arc::new(ScriptedDriver::completed_text());
-    let (_directory, facade, _snapshot) = fixture_facade(driver);
+    let (_directory, facade, _snapshot) = fixture_facade("foundation", driver);
     let (session_id, run_id) = create_and_start(&facade);
     let endpoint = LocalEndpoint::from_instance_id(format!("m4-host-{}", RunId::new()))
         .expect("fixture endpoint is valid");
@@ -536,23 +370,9 @@ async fn real_async_host_snapshot_answers_a_subscription_and_a_resubscribe_rerea
 #[tokio::test]
 async fn accepted_host_turn_executes_once_then_streams_committed_content_and_completed_status() {
     let driver = Arc::new(BlockingDriver::new());
-    let (_directory, facade, _snapshot) = fixture_facade(driver.clone());
+    let (_directory, facade, _snapshot) = fixture_facade("foundation", driver.clone());
     let session_id = SessionId::new();
-    assert!(matches!(
-        facade.command(ProtocolCommandDto::CreateSession(
-            intention_proto::CreateSessionCommandDto::new(
-                intention_proto::ProjectId::new(),
-                session_id,
-                intention_proto::WorkspaceId::new(),
-                intention_proto::WorkspaceRootDto::parse(
-                    std::env::temp_dir().to_string_lossy().into_owned(),
-                )
-                .expect("fixture workspace is absolute"),
-                intention_proto::RunModeDto::Build,
-            ),
-        )),
-        ProtocolCommandResultDto::Accepted(_)
-    ));
+    create_session(&facade, session_id, &std::env::temp_dir());
     let endpoint = LocalEndpoint::from_instance_id(format!("m4-host-outcome-{}", RunId::new()))
         .expect("fixture endpoint is valid");
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
@@ -616,23 +436,9 @@ async fn accepted_host_turn_executes_once_then_streams_committed_content_and_com
 #[tokio::test]
 async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
     let driver = Arc::new(BlockingDriver::new());
-    let (_directory, facade, _snapshot) = fixture_facade(driver.clone());
+    let (_directory, facade, _snapshot) = fixture_facade("foundation", driver.clone());
     let session_id = SessionId::new();
-    assert!(matches!(
-        facade.command(ProtocolCommandDto::CreateSession(
-            intention_proto::CreateSessionCommandDto::new(
-                intention_proto::ProjectId::new(),
-                session_id,
-                intention_proto::WorkspaceId::new(),
-                intention_proto::WorkspaceRootDto::parse(
-                    std::env::temp_dir().to_string_lossy().into_owned(),
-                )
-                .expect("fixture workspace is absolute"),
-                intention_proto::RunModeDto::Build,
-            ),
-        )),
-        ProtocolCommandResultDto::Accepted(_)
-    ));
+    create_session(&facade, session_id, &std::env::temp_dir());
     let endpoint = LocalEndpoint::from_instance_id(format!("m4-host-interrupt-{}", RunId::new()))
         .expect("fixture endpoint is valid");
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
@@ -705,23 +511,9 @@ async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
 #[tokio::test]
 async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
     let driver = Arc::new(BlockingDriver::new());
-    let (_directory, facade, _snapshot) = fixture_facade(driver.clone());
+    let (_directory, facade, _snapshot) = fixture_facade("foundation", driver.clone());
     let session_id = SessionId::new();
-    assert!(matches!(
-        facade.command(ProtocolCommandDto::CreateSession(
-            intention_proto::CreateSessionCommandDto::new(
-                intention_proto::ProjectId::new(),
-                session_id,
-                intention_proto::WorkspaceId::new(),
-                intention_proto::WorkspaceRootDto::parse(
-                    std::env::temp_dir().to_string_lossy().into_owned(),
-                )
-                .expect("fixture workspace is absolute"),
-                intention_proto::RunModeDto::Build,
-            ),
-        )),
-        ProtocolCommandResultDto::Accepted(_)
-    ));
+    create_session(&facade, session_id, &std::env::temp_dir());
     let endpoint = LocalEndpoint::from_instance_id(format!("m4-host-pending-{}", RunId::new()))
         .expect("fixture endpoint is valid");
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
@@ -821,11 +613,10 @@ async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
 #[cfg(feature = "test-support")]
 #[tokio::test]
 async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_credentials() {
-    const FAKE_CREDENTIAL: &str = "F-STREAM-RESTART-FAKE-CREDENTIAL-48271";
     let first_driver = Arc::new(BlockingDriver::new());
     let directory = TempDir::new().expect("temporary directory exists");
     let database = directory.path().join("restart.sqlite");
-    let snapshot = intention_test_snapshot_with_credential(FAKE_CREDENTIAL);
+    let snapshot = fixture_snapshot();
     let first_facade = DaemonApplicationFacade::open_for_test_support_with_driver(
         &database,
         snapshot.clone(),
@@ -833,21 +624,7 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
     )
     .expect("first durable host facade opens");
     let session_id = SessionId::new();
-    assert!(matches!(
-        first_facade.command(ProtocolCommandDto::CreateSession(
-            intention_proto::CreateSessionCommandDto::new(
-                intention_proto::ProjectId::new(),
-                session_id,
-                intention_proto::WorkspaceId::new(),
-                intention_proto::WorkspaceRootDto::parse(
-                    std::env::temp_dir().to_string_lossy().into_owned(),
-                )
-                .expect("fixture workspace is absolute"),
-                intention_proto::RunModeDto::Build,
-            ),
-        )),
-        ProtocolCommandResultDto::Accepted(_)
-    ));
+    create_session(&first_facade, session_id, &std::env::temp_dir());
     let first_endpoint =
         LocalEndpoint::from_instance_id(format!("m4-host-restart-first-{}", RunId::new()))
             .expect("fixture endpoint is valid");
@@ -1006,7 +783,7 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
         &transport_error_json,
     ] {
         assert!(
-            !output.contains(FAKE_CREDENTIAL),
+            !output.contains(FIXTURE_CREDENTIAL),
             "actual durable projection/transcript/error fixture output never contains the credential"
         );
     }
@@ -1023,7 +800,7 @@ async fn host_answers_socket_level_method_not_found_and_invalid_params_errors() 
     // W-14: the daemon loop answers a bogus method and a wrong-params request
     // with the spec-mandated codes, correlated by request id.
     let driver = Arc::new(ScriptedDriver::completed_text());
-    let (_directory, facade, _snapshot) = fixture_facade(driver);
+    let (_directory, facade, _snapshot) = fixture_facade("foundation", driver);
     let endpoint =
         LocalEndpoint::from_instance_id(format!("m4-host-jsonrpc-errors-{}", RunId::new()))
             .expect("fixture endpoint is valid");
@@ -1099,7 +876,7 @@ async fn host_does_not_answer_an_id_less_jsonrpc_notification() {
     // daemon must not answer it. The next line the client reads must be the
     // reply to the correlated request that follows it.
     let driver = Arc::new(ScriptedDriver::completed_text());
-    let (_directory, facade, _snapshot) = fixture_facade(driver);
+    let (_directory, facade, _snapshot) = fixture_facade("foundation", driver);
     let endpoint =
         LocalEndpoint::from_instance_id(format!("m4-host-jsonrpc-notification-{}", RunId::new()))
             .expect("fixture endpoint is valid");
@@ -1159,7 +936,7 @@ async fn host_answers_an_explicit_null_id_request_with_the_correlated_error() {
     // W-06 boundary: an explicit `"id": null` member is a request rather than
     // a notification, so the daemon answers it with a null-id error reply.
     let driver = Arc::new(ScriptedDriver::completed_text());
-    let (_directory, facade, _snapshot) = fixture_facade(driver);
+    let (_directory, facade, _snapshot) = fixture_facade("foundation", driver);
     let endpoint =
         LocalEndpoint::from_instance_id(format!("m4-host-jsonrpc-null-id-{}", RunId::new()))
             .expect("fixture endpoint is valid");

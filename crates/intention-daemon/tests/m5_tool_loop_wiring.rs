@@ -4,176 +4,22 @@
     reason = "Focused daemon tool-loop fixtures use assertion conveniences for precise diagnostics."
 )]
 
-use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+mod common;
 
-use futures_util::stream;
-use intention_config::ConfigSnapshotDto;
+use std::sync::Arc;
+
+use common::{RecordingObserver, TokioTime, create_session, fixture_facade, schedule, started_run};
 use intention_daemon::DaemonApplicationFacade;
 use intention_daemon::DaemonToolExecutor;
-use intention_engine::ModelRunExecutionInputDto;
-use intention_engine::{
-    ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionOutcomeDto, ModelSleepFuture,
-    ModelTimePort,
-};
-use intention_proto::{IdempotencyKey, RunId, SessionId, TimestampDto, ToolCallId};
-use intention_proto::{
-    MessageKindDto, MessageProjectionDto, RunStatusDto, SendUserTurnCommandDto, WorkspaceRootDto,
-};
-use intention_proto::{
-    ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, SendUserTurnOutcomeDto,
-};
+use intention_engine::ModelRunExecutionOutcomeDto;
+use intention_proto::ToolCallId;
+use intention_proto::{MessageKindDto, MessageProjectionDto, RunId, RunStatusDto, SessionId};
 use intention_providers::{
-    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
-    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
-    ModelToolDefinitionDto, ToolCallDto,
+    FinishReasonDto, ModelEventDto, ModelMessageDto, ModelRoleDto, ModelToolDefinitionDto,
+    ToolCallDto,
 };
+use intention_test_support::{FIXTURE_CREDENTIAL, ScriptedDriver};
 use tempfile::TempDir;
-
-/// Emits one scripted event round per provider execution and records requests.
-struct ScriptedDriver {
-    rounds: Mutex<VecDeque<Vec<ModelEventDto>>>,
-    executions: Mutex<usize>,
-    requests: Mutex<Vec<ModelRequestDto>>,
-}
-
-impl ScriptedDriver {
-    fn with_rounds(rounds: Vec<Vec<ModelEventDto>>) -> Self {
-        Self {
-            rounds: Mutex::new(rounds.into()),
-            executions: Mutex::new(0),
-            requests: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn executions(&self) -> usize {
-        *self
-            .executions
-            .lock()
-            .expect("driver recorder remains available")
-    }
-
-    fn requests(&self) -> Vec<ModelRequestDto> {
-        self.requests
-            .lock()
-            .expect("driver request recorder remains available")
-            .clone()
-    }
-}
-
-impl ModelDriver for ScriptedDriver {
-    fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
-    }
-}
-
-impl ModelExecutionDriver for ScriptedDriver {
-    fn execute(
-        &self,
-        request: ModelRequestDto,
-        _cancellation: ModelCancellationSignal,
-    ) -> ModelEventStream {
-        *self
-            .executions
-            .lock()
-            .expect("driver recorder remains available") += 1;
-        self.requests
-            .lock()
-            .expect("driver request recorder remains available")
-            .push(request);
-        let events = self
-            .rounds
-            .lock()
-            .expect("scripted rounds remain available")
-            .pop_front()
-            .expect("scripted round exists");
-        Box::pin(stream::iter(events.into_iter().map(Ok)))
-    }
-}
-
-struct TokioTime;
-
-impl ModelTimePort for TokioTime {
-    fn now(&self) -> TimestampDto {
-        TimestampDto::from_unix_seconds(2).expect("fixture timestamp is valid")
-    }
-
-    fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
-        Box::pin(tokio::time::sleep(duration))
-    }
-}
-
-#[derive(Default)]
-struct RecordingObserver {
-    commits: Mutex<Vec<ModelRunCommitDto>>,
-}
-
-impl RecordingObserver {
-    /// Returns every committed status the runtime published, in order.
-    fn observed_statuses(&self) -> Vec<RunStatusDto> {
-        self.commits
-            .lock()
-            .expect("observer recorder remains available")
-            .iter()
-            .filter_map(|committed| match committed {
-                ModelRunCommitDto::Status { status, .. } => Some(*status),
-                ModelRunCommitDto::Content(_) => None,
-            })
-            .collect()
-    }
-}
-
-impl ModelRunCommitObserver for RecordingObserver {
-    fn observe_model_run_commit(&self, committed: &ModelRunCommitDto) {
-        self.commits
-            .lock()
-            .expect("observer recorder remains available")
-            .push(committed.clone());
-    }
-}
-
-fn fixture_facade(
-    driver: Arc<dyn ModelExecutionDriver + Send + Sync>,
-) -> (TempDir, DaemonApplicationFacade, ConfigSnapshotDto) {
-    let directory = TempDir::new().expect("temporary directory exists");
-    let snapshot = intention_test_snapshot();
-    let facade = DaemonApplicationFacade::open_for_test_support_with_driver(
-        directory.path().join("tool-loop.sqlite"),
-        snapshot.clone(),
-        driver,
-    )
-    .expect("fixture facade opens");
-    (directory, facade, snapshot)
-}
-
-fn intention_test_snapshot() -> ConfigSnapshotDto {
-    let source = intention_config::ConfigSourceDto::Explicit(
-        intention_config::ConfigPathDto::parse(
-            std::env::temp_dir()
-                .join("intention-daemon-tool-loop.toml")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("fixture source is absolute"),
-    );
-    let resolved = intention_config::ResolvedConfigDto::parse_resolve(
-        intention_config::RawConfigInputDto::new(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"",
-            source,
-        ),
-    )
-    .expect("fixture configuration resolves");
-    ConfigSnapshotDto::new(
-        intention_proto::SchemaVersionDto::new(1, 0),
-        intention_proto::ConfigRevisionId::new(),
-        TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid"),
-        resolved,
-    )
-    .expect("fixture snapshot is valid")
-}
 
 /// The exact model-visible tool definitions the application advertises.
 fn advertised_tool_definitions() -> Vec<ModelToolDefinitionDto> {
@@ -190,65 +36,6 @@ fn advertised_tool_definitions() -> Vec<ModelToolDefinitionDto> {
             .expect("fixture tool definition is valid")
         })
         .collect()
-}
-
-fn schedule(
-    session_id: SessionId,
-    run_id: RunId,
-    snapshot: ConfigSnapshotDto,
-) -> ModelRunExecutionInputDto {
-    ModelRunExecutionInputDto::new(
-        session_id,
-        run_id,
-        ModelRequestDto::new(
-            run_id,
-            "fixture",
-            vec![ModelMessageDto::new(ModelRoleDto::User, "turn").expect("message is valid")],
-            None,
-            None,
-        )
-        .expect("request is valid")
-        .with_tools(advertised_tool_definitions())
-        .expect("tool advertisement is valid"),
-        snapshot,
-        ModelCancellationSignal::new(),
-    )
-}
-
-fn create_session(
-    facade: &DaemonApplicationFacade,
-    session_id: SessionId,
-    workspace: &std::path::Path,
-) {
-    let create = ProtocolCommandDto::CreateSession(intention_proto::CreateSessionCommandDto::new(
-        intention_proto::ProjectId::new(),
-        session_id,
-        intention_proto::WorkspaceId::new(),
-        WorkspaceRootDto::parse(workspace.to_string_lossy().into_owned())
-            .expect("fixture workspace is absolute"),
-        intention_proto::RunModeDto::Build,
-    ));
-    assert!(matches!(
-        facade.command(create),
-        ProtocolCommandResultDto::Accepted(_)
-    ));
-}
-
-fn started_run(facade: &DaemonApplicationFacade, session_id: SessionId) -> RunId {
-    let result = facade.command(ProtocolCommandDto::SendUserTurn(
-        SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "turn")
-            .expect("turn is valid"),
-    ));
-    let ProtocolCommandResultDto::Accepted(accepted) = result else {
-        panic!("fixture turn starts")
-    };
-    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
-        panic!("fixture result is a turn")
-    };
-    let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
-        panic!("first turn starts")
-    };
-    run_id
 }
 
 /// Reads the committed transcript rows of one run through the daemon seam.
@@ -274,15 +61,15 @@ async fn daemon_tool_executor_executes_real_read_tool_through_loop() {
         .expect("fixture call is valid");
     let driver = Arc::new(ScriptedDriver::with_rounds(vec![
         vec![
-            ModelEventDto::started(),
-            ModelEventDto::tool_call(call.clone()),
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::tool_call(call.clone())),
         ],
         vec![
-            ModelEventDto::started(),
-            ModelEventDto::finished(FinishReasonDto::Stop),
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
         ],
     ]));
-    let (_database_directory, facade, snapshot) = fixture_facade(driver.clone());
+    let (_database_directory, facade, snapshot) = fixture_facade("tool-loop", driver.clone());
     let session_id = SessionId::new();
     create_session(&facade, session_id, workspace_directory.path());
     let run_id = started_run(&facade, session_id);
@@ -291,7 +78,12 @@ async fn daemon_tool_executor_executes_real_read_tool_through_loop() {
     let observer = RecordingObserver::default();
     let outcome = facade
         .execute_scheduled_model_run_for_daemon_with_tool_executor(
-            schedule(session_id, run_id, snapshot),
+            schedule(
+                session_id,
+                run_id,
+                snapshot,
+                Some(advertised_tool_definitions()),
+            ),
             &TokioTime,
             &observer,
             &executor,
@@ -387,7 +179,7 @@ async fn daemon_tool_executor_executes_real_read_tool_through_loop() {
         "the durable transcript never discloses the workspace absolute path"
     );
     assert!(
-        !transcript_json.contains("fixture-credential"),
+        !transcript_json.contains(FIXTURE_CREDENTIAL),
         "the durable transcript never discloses the provider credential"
     );
 }
@@ -398,10 +190,10 @@ async fn daemon_tool_executor_missing_file_returns_typed_failure() {
     let call = ToolCallDto::new(ToolCallId::new(), "read", r#"{"path":"missing.txt"}"#)
         .expect("fixture call is valid");
     let driver = Arc::new(ScriptedDriver::with_rounds(vec![vec![
-        ModelEventDto::started(),
-        ModelEventDto::tool_call(call.clone()),
+        Ok(ModelEventDto::started()),
+        Ok(ModelEventDto::tool_call(call.clone())),
     ]]));
-    let (_database_directory, facade, snapshot) = fixture_facade(driver.clone());
+    let (_database_directory, facade, snapshot) = fixture_facade("tool-loop", driver.clone());
     let session_id = SessionId::new();
     create_session(&facade, session_id, workspace_directory.path());
     let run_id = started_run(&facade, session_id);
@@ -410,7 +202,12 @@ async fn daemon_tool_executor_missing_file_returns_typed_failure() {
     let observer = RecordingObserver::default();
     let outcome = facade
         .execute_scheduled_model_run_for_daemon_with_tool_executor(
-            schedule(session_id, run_id, snapshot),
+            schedule(
+                session_id,
+                run_id,
+                snapshot,
+                Some(advertised_tool_definitions()),
+            ),
             &TokioTime,
             &observer,
             &executor,

@@ -50,12 +50,14 @@
     reason = "Opt-in live-provider end-to-end fixtures use assertion conveniences and one stderr diagnostic on the unwind path for precise failures."
 )]
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use common::{config_path, unique_endpoint};
 use intention_client::{IntentionClient, ProcessDaemonLauncher, RunStreamClient};
 use intention_config::{
     ConfigPathDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto,
@@ -264,28 +266,6 @@ fn escape_toml_basic_string(value: &str) -> String {
     escaped
 }
 
-/// Returns the platform config path the daemon resolves from its environment.
-fn config_path(config_home: &Path) -> PathBuf {
-    #[cfg(target_os = "linux")]
-    {
-        config_home.join("intention-relay").join("config.toml")
-    }
-    #[cfg(target_os = "macos")]
-    {
-        config_home
-            .join("Library/Application Support/intention-relay")
-            .join("config.toml")
-    }
-    #[cfg(windows)]
-    {
-        config_home.join("intention-relay").join("config.toml")
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-    {
-        config_home.join("intention-relay").join("config.toml")
-    }
-}
-
 /// Resolves the daemon's durable state directory for the fixture environment.
 ///
 /// `spawn_daemon` overrides the platform state root that the daemon's private
@@ -384,15 +364,6 @@ fn write_config(config_home: &Path, provider: &LiveProviderConfig) {
     }
 }
 
-static NEXT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
-
-/// Builds a unique safe endpoint instance id for this test process.
-fn unique_endpoint() -> LocalEndpoint {
-    let sequence = NEXT_ENDPOINT.fetch_add(1, Ordering::Relaxed);
-    LocalEndpoint::from_instance_id(format!("real-api-e2e-{}-{}", std::process::id(), sequence))
-        .expect("live e2e endpoint is valid")
-}
-
 /// Spawns the real daemon binary with per-process environment overrides and
 /// both output streams redirected into the fixture log file.
 ///
@@ -436,44 +407,6 @@ fn spawn_daemon(
     command.spawn().expect("daemon binary spawns")
 }
 
-/// Replicates the daemon transport's platform endpoint path resolution so the
-/// fixture can remove exactly the socket file its own daemon created.
-#[cfg(unix)]
-fn endpoint_socket_path(endpoint: &LocalEndpoint) -> Option<PathBuf> {
-    let base = {
-        #[cfg(target_os = "linux")]
-        {
-            std::env::var_os("XDG_RUNTIME_DIR")
-                .map(PathBuf::from)
-                .filter(|candidate| candidate.is_absolute())
-                .or_else(|| {
-                    std::env::var_os("XDG_CONFIG_HOME")
-                        .map(PathBuf::from)
-                        .filter(|candidate| candidate.is_absolute())
-                        .map(|candidate| candidate.join("intention-relay"))
-                })
-                .or_else(|| {
-                    std::env::var_os("HOME")
-                        .map(PathBuf::from)
-                        .filter(|candidate| candidate.is_absolute())
-                        .map(|candidate| candidate.join(".config/intention-relay"))
-                })
-        }
-        #[cfg(target_os = "macos")]
-        {
-            std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .filter(|candidate| candidate.is_absolute())
-                .map(|candidate| candidate.join("Library/Application Support/intention-relay"))
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        {
-            None
-        }
-    }?;
-    Some(base.join(format!("{}.sock", endpoint.instance_id())))
-}
-
 /// One live-provider fixture: isolated config/state/workspace directories, one
 /// spawned daemon process, and its private capture log.
 ///
@@ -502,7 +435,7 @@ impl LiveE2eHost {
             std::fs::write(workspace.path().join(name), content).expect("workspace fixture writes");
         }
         write_config(config_home.path(), provider);
-        let endpoint = unique_endpoint();
+        let endpoint = unique_endpoint("real-api-e2e");
         let log_path = config_home.path().join("daemon-live-e2e.log");
         let daemon = spawn_daemon(&endpoint, config_home.path(), state_home.path(), &log_path);
         Self {
@@ -583,7 +516,7 @@ impl Drop for LiveE2eHost {
     fn drop(&mut self) {
         self.kill_daemon();
         #[cfg(unix)]
-        if let Some(path) = endpoint_socket_path(&self.endpoint) {
+        if let Some(path) = common::endpoint_socket_path(&self.endpoint) {
             let _ = std::fs::remove_file(path);
         }
     }
