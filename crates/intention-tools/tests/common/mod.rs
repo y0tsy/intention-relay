@@ -13,10 +13,9 @@
     reason = "Shared fixtures are called for their effect on the fixture, not for the returned value alone."
 )]
 
-use intention_proto::{RunId, SessionId, ToolCallId, WorkspaceRelativePathDto, WorkspaceRootDto};
+use intention_proto::{ToolCallId, WorkspaceRelativePathDto, WorkspaceRootDto};
 use intention_tools::{
-    BoundedText, CancellationSignal, ToolContext, ToolDispatchOutcome, ToolInput, ToolResult,
-    ToolService,
+    BoundedText, CancellationSignal, ToolDispatchOutcome, ToolInput, ToolResult, ToolService,
 };
 use std::path::Path;
 use tempfile::TempDir;
@@ -57,15 +56,6 @@ pub fn relative(path: &str) -> WorkspaceRelativePathDto {
 /// Builds bounded fixture text.
 pub fn text(value: &str) -> BoundedText {
     BoundedText::new(value).expect("bounded text")
-}
-
-/// Builds the shared fixture context that identifies one tool call.
-pub fn fixture_context(call_id: ToolCallId) -> ToolContext {
-    ToolContext {
-        session_id: SessionId::parse("00000000-0000-4000-8000-000000000001").expect("session id"),
-        run_id: RunId::parse("00000000-0000-4000-8000-000000000002").expect("run id"),
-        call_id,
-    }
 }
 
 /// Test adapter: unwraps one completed dispatch and fails loudly on any

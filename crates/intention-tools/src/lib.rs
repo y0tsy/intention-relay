@@ -1,7 +1,7 @@
 //! Typed, bounded contracts for workspace tools, their hook lifecycle, and the
 //! workspace addressing anchor.
 
-use intention_proto::{DtoResult, RunId, SessionId, ToolCallId, WorkspaceRelativePathDto};
+use intention_proto::{DtoResult, ToolCallId, WorkspaceRelativePathDto};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::process::{Child, Command, Stdio};
@@ -260,12 +260,6 @@ pub enum ToolCapability {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ToolOutcome {
-    Succeeded,
-    Failed,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ToolPolicy {
     Allowed,
     Denied,
@@ -314,19 +308,6 @@ pub enum ToolRegistrationStatus {
     Active,
     Reserved,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ToolObservability {
-    pub outcome: ToolOutcome,
-    pub policy: ToolPolicy,
-    pub elapsed_ms: u64,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ToolContext {
-    pub session_id: SessionId,
-    pub run_id: RunId,
-    pub call_id: ToolCallId,
-}
-
 /// Redacted execution metadata for the durable result boundary.
 ///
 /// `cwd` is the stable [`REDACTED_WORKSPACE_CWD`] identity marker and never an
@@ -503,15 +484,6 @@ fn interruption_cause(cancellation: &CancellationSignal) -> InterruptCause {
         InterruptCause::Stopped
     } else {
         InterruptCause::Lost
-    }
-}
-
-/// Stable error code for one interrupted execution surfaced through the
-/// envelope boundary.
-const fn interruption_code(cause: InterruptCause) -> &'static str {
-    match cause {
-        InterruptCause::Stopped => "tool_cancelled",
-        InterruptCause::Lost => "tool_execution_interrupted",
     }
 }
 
@@ -1484,68 +1456,6 @@ pub enum ToolInput {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ToolInvocation {
-    pub schema_version: u16,
-    pub context: ToolContext,
-    pub input: ToolInput,
-}
-
-impl ToolInvocation {
-    /// Constructs an invocation with an explicit expected call identity.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the call identity does not match.
-    pub fn new(
-        schema_version: u16,
-        context: ToolContext,
-        input: ToolInput,
-        expected_call: ToolCallId,
-    ) -> DtoResult<Self> {
-        let invocation = Self {
-            schema_version,
-            context,
-            input,
-        };
-        invocation.validate_call_id(expected_call)?;
-        Ok(invocation)
-    }
-
-    /// Validates the invocation schema against the active tool contract.
-    /// # Errors
-    ///
-    /// Returns a validation error when the invocation schema version differs
-    /// from the active tool schema.
-    pub fn validate_schema_version(&self) -> DtoResult<()> {
-        if self.schema_version == TOOL_SCHEMA_VERSION {
-            Ok(())
-        } else {
-            Err(intention_proto::ErrorDto::validation(
-                "tool_schema_mismatch",
-                "tool invocation schema version does not match the active schema",
-            ))
-        }
-    }
-}
-
-impl ToolInvocation {
-    /// Validates the invocation against the expected call identity.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the call identity does not match.
-    pub fn validate_call_id(&self, expected: ToolCallId) -> DtoResult<()> {
-        if self.context.call_id == expected {
-            Ok(())
-        } else {
-            Err(intention_proto::ErrorDto::validation(
-                "tool_call_id_mismatch",
-                "tool call identity does not match invocation context",
-            ))
-        }
-    }
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReadInput {
     pub path: WorkspaceRelativePathDto,
 }
@@ -1681,15 +1591,6 @@ pub enum ToolResult {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ToolResultEnvelope {
-    pub schema_version: u16,
-    pub context: ToolContext,
-    pub result: ToolResult,
-    pub observability: ToolObservability,
-    #[serde(default)]
-    pub execution: Option<ToolExecutionMetadata>,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TextResult {
     pub text: BoundedText,
     pub truncated: bool,
@@ -1802,9 +1703,8 @@ impl ToolResult {
     /// Projects this result into the bounded, redacted, normalized form.
     ///
     /// A bare result carries no invocation timing, so the execution metadata
-    /// defaults to zero elapsed time; prefer
-    /// [`ToolResultEnvelope::projection`] when durable records need real
-    /// timing and invocation metadata.
+    /// records the redacted workspace CWD, the `Allowed` policy, and zero
+    /// elapsed time.
     #[must_use]
     pub fn projection(&self) -> ToolResultProjection {
         ToolResultProjection {
@@ -1812,44 +1712,6 @@ impl ToolResult {
             tool: self.tool_id(),
             content: projected_content(self),
             execution: ToolExecutionMetadata::for_workspace(ToolPolicy::Allowed, 0),
-        }
-    }
-}
-
-impl ToolResultEnvelope {
-    /// Projects the envelope into the bounded, redacted, normalized form
-    /// suitable for durable persistence.
-    ///
-    /// Timing and policy come from the recorded execution metadata, falling
-    /// back to the envelope observability when metadata is absent.
-    #[must_use]
-    pub fn projection(&self) -> ToolResultProjection {
-        ToolResultProjection {
-            schema_version: self.schema_version,
-            tool: self.result.tool_id(),
-            content: projected_content(&self.result),
-            execution: self.execution.clone().unwrap_or_else(|| {
-                ToolExecutionMetadata::for_workspace(
-                    self.observability.policy,
-                    self.observability.elapsed_ms,
-                )
-            }),
-        }
-    }
-}
-
-/// Outcome of one admitted tool execution together with the typed terminal
-/// status of the executed program, when the tool ran one.
-pub(crate) struct ExecutedTool {
-    pub(crate) result: ToolResult,
-    pub(crate) process_status: Option<ToolProcessStatus>,
-}
-
-impl ExecutedTool {
-    pub(crate) const fn bare(result: ToolResult) -> Self {
-        Self {
-            result,
-            process_status: None,
         }
     }
 }
@@ -1880,7 +1742,7 @@ pub enum ToolDispatchOutcome {
 /// Outcome of one admitted execution before the result-boundary projection.
 pub(crate) enum ExecutedOutcome {
     /// The tool produced its final typed result.
-    Completed(ExecutedTool),
+    Completed(ToolResult),
     /// The tool stopped before a final result.
     Interrupted {
         cause: InterruptCause,
@@ -1922,15 +1784,14 @@ impl ToolService {
         cancellation: CancellationSignal,
     ) -> DtoResult<ToolDispatchOutcome> {
         Ok(match self.execute_checked(call, input, cancellation)? {
-            ExecutedOutcome::Completed(executed) => ToolDispatchOutcome::Completed(executed.result),
+            ExecutedOutcome::Completed(result) => ToolDispatchOutcome::Completed(result),
             ExecutedOutcome::Interrupted { cause, partial } => {
                 ToolDispatchOutcome::Interrupted { cause, partial }
             }
         })
     }
 
-    /// Validates admission, executes one tool effect, and reports the typed
-    /// terminal program status when the tool executed a program.
+    /// Checks admission and executes one tool effect.
     fn execute_checked(
         &self,
         call: ToolCallId,
@@ -1953,65 +1814,6 @@ impl ToolService {
             ToolInput::Glob(i) => search::glob(&self.root, i, &cancellation)?,
             ToolInput::Grep(i) => search::grep(&self.root, i, &cancellation)?,
             ToolInput::Execute(i) => execute::run(&self.root, i, cancellation)?,
-        })
-    }
-
-    /// Invokes a tool and returns the result-boundary envelope.
-    ///
-    /// The invocation context is validated before any tool effect occurs.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed error produced while validating and dispatching.
-    pub fn invoke_enveloped(&self, invocation: ToolInvocation) -> DtoResult<ToolResultEnvelope> {
-        self.invoke_enveloped_with_cancellation(invocation, CancellationSignal::new())
-    }
-
-    /// Invokes a tool with cancellation and records result-boundary metadata.
-    ///
-    /// An interrupted execution has no result-boundary envelope: the envelope
-    /// carries only a completed typed result, so the interruption surfaces as
-    /// its stable typed error code through this boundary.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed error produced while validating and dispatching.
-    pub fn invoke_enveloped_with_cancellation(
-        &self,
-        invocation: ToolInvocation,
-        cancellation: CancellationSignal,
-    ) -> DtoResult<ToolResultEnvelope> {
-        invocation.validate_schema_version()?;
-        let call_id = invocation.context.call_id;
-        invocation.validate_call_id(call_id)?;
-        let logical_path = invocation.input.logical_path().cloned();
-        let started = Instant::now();
-        let executed =
-            self.execute_checked(invocation.context.call_id, invocation.input, cancellation);
-        let elapsed_ms = started.elapsed().as_millis() as u64;
-        let executed = match executed? {
-            ExecutedOutcome::Completed(executed) => executed,
-            ExecutedOutcome::Interrupted { cause, .. } => {
-                return Err(intention_proto::ErrorDto::validation(
-                    interruption_code(cause),
-                    "workspace command execution was interrupted",
-                ));
-            }
-        };
-        Ok(ToolResultEnvelope {
-            schema_version: invocation.schema_version,
-            context: invocation.context,
-            result: executed.result,
-            observability: ToolObservability {
-                outcome: ToolOutcome::Succeeded,
-                policy: ToolPolicy::Allowed,
-                elapsed_ms,
-            },
-            execution: Some(
-                ToolExecutionMetadata::for_workspace(ToolPolicy::Allowed, elapsed_ms)
-                    .with_path(logical_path)
-                    .with_process_status(executed.process_status),
-            ),
         })
     }
 }
@@ -2041,7 +1843,7 @@ fn read_tool(
     if cancellation.is_cancelled() {
         return Ok(stopped_outcome(Some(result)));
     }
-    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(result)))
+    Ok(ExecutedOutcome::Completed(result))
 }
 
 fn execute_tool(
@@ -2099,13 +1901,12 @@ fn execute_tool(
         "stdout:\n{stdout}\nstderr:\n{stderr}\n{status_text}{}",
         if truncated { "\n[truncated]" } else { "" }
     );
-    Ok(ExecutedOutcome::Completed(ExecutedTool {
-        result: ToolResult::Execute(TextResult {
+    Ok(ExecutedOutcome::Completed(ToolResult::Execute(
+        TextResult {
             text: BoundedText::new(text)?,
             truncated,
-        }),
-        process_status: Some(process_status),
-    }))
+        },
+    )))
 }
 
 fn write_tool(
@@ -2156,9 +1957,9 @@ fn write_tool(
     std::fs::write(path, input.content.as_str()).map_err(|_| {
         intention_proto::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
     })?;
-    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
-        ToolResult::Write(WriteResult { bytes }),
-    )))
+    Ok(ExecutedOutcome::Completed(ToolResult::Write(WriteResult {
+        bytes,
+    })))
 }
 
 fn edit_tool(
@@ -2215,11 +2016,9 @@ fn edit_tool(
     std::fs::write(path, &replacement).map_err(|_| {
         intention_proto::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
     })?;
-    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
-        ToolResult::Edit(WriteResult {
-            bytes: replacement.len() as u64,
-        }),
-    )))
+    Ok(ExecutedOutcome::Completed(ToolResult::Edit(WriteResult {
+        bytes: replacement.len() as u64,
+    })))
 }
 
 fn glob_tool(
@@ -2269,12 +2068,10 @@ fn glob_tool(
             truncated: true,
         }))));
     }
-    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
-        ToolResult::Glob(PathsResult {
-            paths: retained,
-            truncated: window_truncated,
-        }),
-    )))
+    Ok(ExecutedOutcome::Completed(ToolResult::Glob(PathsResult {
+        paths: retained,
+        truncated: window_truncated,
+    })))
 }
 
 /// Applies the shared search-result window to one sorted, deduplicated path list.
@@ -2397,9 +2194,10 @@ fn grep_tool(
             truncated: true,
         }))));
     }
-    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
-        ToolResult::Grep(GrepResult { matches, truncated }),
-    )))
+    Ok(ExecutedOutcome::Completed(ToolResult::Grep(GrepResult {
+        matches,
+        truncated,
+    })))
 }
 
 fn grep_scoped(
@@ -2540,9 +2338,10 @@ fn grep_scoped(
                 line[..column].chars().count() as u64 + 1,
                 fragment,
             )? {
-                return Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
-                    ToolResult::Grep(GrepResult { matches, truncated }),
-                )));
+                return Ok(ExecutedOutcome::Completed(ToolResult::Grep(GrepResult {
+                    matches,
+                    truncated,
+                })));
             }
         }
     }
@@ -2552,9 +2351,10 @@ fn grep_scoped(
             truncated: true,
         }))));
     }
-    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
-        ToolResult::Grep(GrepResult { matches, truncated }),
-    )))
+    Ok(ExecutedOutcome::Completed(ToolResult::Grep(GrepResult {
+        matches,
+        truncated,
+    })))
 }
 
 /// Records one grep match when its serialized cost fits the aggregate window.

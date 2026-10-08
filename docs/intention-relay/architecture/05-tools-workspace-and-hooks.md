@@ -36,11 +36,6 @@ ToolDescriptorDto
   mutation_kind
   observability_policy
 
-ToolContext
-  session_id
-  run_id
-  call_id
-
 ToolInput
   read | write | edit | execute | glob | grep  (typed per-tool parameters)
 
@@ -143,14 +138,15 @@ returns its captured output as a partial result when stopped.
 
 ### Tooling execution API and status rendering
 
-`intention-tools` exposes exactly one current execution surface: the cancellation-aware bare-result dispatch
-(`dispatch_with_cancellation`) and the envelope entry (`invoke_enveloped` / `invoke_enveloped_with_cancellation`) that
-returns the result-boundary envelope with observability and execution metadata. There are no compatibility wrappers
-without cancellation, and no caller-facing path that bypasses the typed invocation envelope when invocation identity and
-durable metadata are required. Every executed program is classified by a typed `ToolProcessStatus` (`success`,
-`non_zero` with its numeric code, or `signal` with its recorded signal); the classification is carried on the durable
-execution metadata. The execute result's text rendering is derived from that same typed status, so the text and the
-typed classification can never disagree and no arbitrary sentinel exit code is invented for signal termination.
+`intention-tools` exposes exactly one current execution surface: the cancellation-aware dispatch
+`ToolService::dispatch_with_cancellation(call, input, cancellation)` returns a typed `ToolDispatchOutcome`
+(`completed(ToolResult)` or `interrupted(cause, partial)`), and `ToolResult::projection()` turns a completed result into
+the bounded, redacted `ToolResultProjection` that durable records use. There are no compatibility wrappers without
+cancellation and no second invocation or result-boundary entry. Every executed program is classified by a typed
+`ToolProcessStatus` (`success`, `non_zero` with its numeric code, or `signal` with its recorded signal); the
+classification is carried on the durable execution metadata. The execute result's text rendering is derived from that
+same typed status, so the text and the typed classification can never disagree and no arbitrary sentinel exit code is
+invented for signal termination.
 
 ## Hook system
 

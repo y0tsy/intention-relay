@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{DispatchCompleted, fixture_context, fixture_dir, service};
+use common::{DispatchCompleted, fixture_dir, service};
 use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
 use intention_tools::{
     BoundedText, CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepMatch,
@@ -162,29 +162,21 @@ fn tool_service_covers_nonzero_execute_as_normalized_result() {
     };
     assert!(result.text.as_str().contains("exit_code:2"));
 
+    // The real path renders the typed classification into the durable
+    // projection: the non-zero exit stays a normalized result whose projected
+    // text carries the stable status.
     let call_id = ToolCallId::new();
-    let envelope = service
-        .invoke_enveloped(intention_tools::ToolInvocation {
-            schema_version: TOOL_SCHEMA_VERSION,
-            context: intention_tools::ToolContext {
-                session_id: intention_proto::SessionId::parse(
-                    "00000000-0000-4000-8000-000000000003",
-                )
-                .unwrap(),
-                run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000004")
-                    .unwrap(),
-                call_id,
-            },
-            input: nonzero_input(),
-        })
-        .expect("envelope for a known terminal exit");
-    assert_eq!(envelope.context.call_id, call_id);
-    assert_eq!(
-        envelope
-            .execution
-            .and_then(|metadata| metadata.process_status),
-        Some(ToolProcessStatus::NonZero { code: 2 })
-    );
+    let projection = service
+        .dispatch_completed(call_id, nonzero_input(), CancellationSignal::new())
+        .projection();
+    assert_eq!(projection.tool, ToolId::Execute);
+    assert!(matches!(
+        projection.content,
+        ToolProjectedContent::Text {
+            text,
+            truncated: false
+        } if text.as_str().contains("exit_code:2")
+    ));
 
     let encoded = serde_json::to_string(&ToolProcessStatus::NonZero { code: 2 }).unwrap();
     assert_eq!(encoded, r#"{"kind":"non_zero","code":2}"#);
@@ -755,11 +747,8 @@ fn glob_empty_and_grep_read_failure_are_typed() {
 }
 
 #[test]
-fn dto_metadata_and_observability_round_trip_all_variants() {
-    use intention_tools::{
-        MutationKind, ToolCapability, ToolObservability, ToolOutcome, ToolPolicy,
-        ToolResultEnvelope,
-    };
+fn dto_metadata_and_policy_round_trip_all_variants() {
+    use intention_tools::{MutationKind, ToolCapability, ToolPolicy};
     for value in [
         MutationKind::ReadOnly,
         MutationKind::Mutating,
@@ -784,13 +773,6 @@ fn dto_metadata_and_observability_round_trip_all_variants() {
             value
         );
     }
-    for value in [ToolOutcome::Succeeded, ToolOutcome::Failed] {
-        let json = serde_json::to_string(&value).expect("outcome json");
-        assert_eq!(
-            serde_json::from_str::<ToolOutcome>(&json).expect("outcome"),
-            value
-        );
-    }
     for value in [ToolPolicy::Allowed, ToolPolicy::Denied] {
         let json = serde_json::to_string(&value).expect("policy json");
         assert_eq!(
@@ -798,48 +780,6 @@ fn dto_metadata_and_observability_round_trip_all_variants() {
             value
         );
     }
-    let context = fixture_context(ToolCallId::new());
-    let envelope = ToolResultEnvelope {
-        schema_version: TOOL_SCHEMA_VERSION,
-        context,
-        result: ToolResult::Read(TextResult {
-            text: BoundedText::new("ok").expect("text"),
-            truncated: false,
-        }),
-        observability: ToolObservability {
-            outcome: ToolOutcome::Succeeded,
-            policy: ToolPolicy::Allowed,
-            elapsed_ms: 3,
-        },
-        execution: None,
-    };
-    assert_eq!(
-        serde_json::from_str::<ToolResultEnvelope>(
-            &serde_json::to_string(&envelope).expect("envelope json")
-        )
-        .expect("envelope"),
-        envelope
-    );
-}
-
-#[test]
-fn invocation_call_identity_is_validated() {
-    let id = ToolCallId::new();
-    let invocation = intention_tools::ToolInvocation {
-        schema_version: TOOL_SCHEMA_VERSION,
-        context: fixture_context(id),
-        input: ToolInput::Glob(GlobInput {
-            pattern: BoundedText::new("*.rs").unwrap(),
-        }),
-    };
-    assert!(invocation.validate_call_id(id).is_ok());
-    assert_eq!(
-        invocation
-            .validate_call_id(ToolCallId::new())
-            .unwrap_err()
-            .code(),
-        "tool_call_id_mismatch"
-    );
 }
 
 #[test]
@@ -945,30 +885,13 @@ fn execute_success_reports_stderr_and_typed_success_status() {
         })
     };
     let result = service.dispatch_completed(ToolCallId::new(), input(), CancellationSignal::new());
-    assert!(
-        matches!(result, ToolResult::Execute(TextResult { text, .. }) if text.as_str().contains("stderr:\nerr"))
-    );
-    let envelope = service
-        .invoke_enveloped(intention_tools::ToolInvocation {
-            schema_version: TOOL_SCHEMA_VERSION,
-            context: intention_tools::ToolContext {
-                session_id: intention_proto::SessionId::parse(
-                    "00000000-0000-4000-8000-000000000009",
-                )
-                .unwrap(),
-                run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000010")
-                    .unwrap(),
-                call_id: ToolCallId::new(),
-            },
-            input: input(),
-        })
-        .unwrap();
-    assert_eq!(
-        envelope
-            .execution
-            .and_then(|metadata| metadata.process_status),
-        Some(ToolProcessStatus::Success)
-    );
+    let ToolResult::Execute(result) = result else {
+        unreachable!("dispatch returned a non-execute result")
+    };
+    assert!(result.text.as_str().contains("stderr:\nerr"));
+    // The typed `success` classification renders into the result text on the
+    // real path, so the text and the classification can never disagree.
+    assert!(result.text.as_str().contains("exit_code:0"));
 }
 
 #[test]
@@ -1038,29 +961,6 @@ fn dispatch_covers_empty_read_and_successful_empty_edit() {
 }
 
 #[test]
-fn tool_invocation_round_trips_with_optional_grep_path() {
-    let invocation = intention_tools::ToolInvocation {
-        schema_version: TOOL_SCHEMA_VERSION,
-        context: intention_tools::ToolContext {
-            session_id: intention_proto::SessionId::parse("00000000-0000-4000-8000-000000000010")
-                .unwrap(),
-            run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000020").unwrap(),
-            call_id: ToolCallId::new(),
-        },
-        input: ToolInput::Grep(GrepInput {
-            pattern: BoundedText::new("needle").unwrap(),
-            path: None,
-            scope: None,
-        }),
-    };
-    let encoded = serde_json::to_string(&invocation).unwrap();
-    assert_eq!(
-        serde_json::from_str::<intention_tools::ToolInvocation>(&encoded).unwrap(),
-        invocation
-    );
-}
-
-#[test]
 fn execute_reports_signal_termination_as_known_terminal_result() {
     if cfg!(windows) {
         return;
@@ -1084,27 +984,6 @@ fn execute_reports_signal_termination_as_known_terminal_result() {
     // Signal termination renders from the typed status; there is no invented
     // numeric exit code for a signal.
     assert!(result.text.as_str().contains("signal:15"));
-    let envelope = service
-        .invoke_enveloped(intention_tools::ToolInvocation {
-            schema_version: TOOL_SCHEMA_VERSION,
-            context: intention_tools::ToolContext {
-                session_id: intention_proto::SessionId::parse(
-                    "00000000-0000-4000-8000-000000000005",
-                )
-                .unwrap(),
-                run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000006")
-                    .unwrap(),
-                call_id: ToolCallId::new(),
-            },
-            input: signal_input(),
-        })
-        .unwrap();
-    assert_eq!(
-        envelope
-            .execution
-            .and_then(|metadata| metadata.process_status),
-        Some(ToolProcessStatus::Signal { signal: 15 })
-    );
 }
 
 #[test]
@@ -1614,41 +1493,36 @@ fn dispatch_covers_each_tool_input_variant() {
 }
 
 #[test]
-fn enveloped_invocation_preserves_identity_and_records_metadata() {
-    use intention_tools::{ToolContext, ToolInvocation, ToolOutcome, ToolPolicy};
-    let dir = fixture_dir("envelope");
+fn glob_dispatch_projects_redacted_execution_metadata() {
+    let dir = fixture_dir("projection-metadata");
 
-    let call_id = ToolCallId::new();
-    let envelope = service(&dir)
-        .invoke_enveloped(ToolInvocation {
-            schema_version: TOOL_SCHEMA_VERSION,
-            context: ToolContext {
-                session_id: intention_proto::SessionId::parse(
-                    "00000000-0000-4000-8000-000000000007",
-                )
-                .unwrap(),
-                run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000008")
-                    .unwrap(),
-                call_id,
-            },
-            input: ToolInput::Glob(GlobInput {
+    let outcome = service(&dir)
+        .dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Glob(GlobInput {
                 pattern: BoundedText::new("*.txt").unwrap(),
             }),
-        })
-        .unwrap();
-    assert_eq!(envelope.context.call_id, call_id);
-    assert_eq!(envelope.observability.outcome, ToolOutcome::Succeeded);
-    assert_eq!(envelope.observability.policy, ToolPolicy::Allowed);
+            CancellationSignal::new(),
+        )
+        .expect("a glob dispatch succeeds");
+    let ToolDispatchOutcome::Completed(result) = outcome else {
+        unreachable!("a bare glob completes");
+    };
+    assert!(matches!(result, ToolResult::Glob(_)));
+    let projection = result.projection();
+    assert_eq!(projection.tool, ToolId::Glob);
+    assert_eq!(
+        projection.execution.policy,
+        intention_tools::ToolPolicy::Allowed
+    );
     // Durable metadata identifies the workspace root only through the stable
     // redacted marker; the absolute location is never recorded.
-    let execution = envelope.execution.as_ref().unwrap();
-    assert_eq!(execution.cwd, REDACTED_WORKSPACE_CWD);
-    assert_eq!(execution.path, None);
-    assert!(matches!(envelope.result, ToolResult::Glob(_)));
+    assert_eq!(projection.execution.cwd, REDACTED_WORKSPACE_CWD);
+    assert_eq!(projection.execution.path, None);
 }
 
 #[test]
-fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
+fn dispatch_projections_are_redacted_and_normalized_for_every_concrete_tool() {
     let root_dir = fixture_dir("projection");
     let root_path = root_dir.path();
     std::fs::write(root_path.join("data.txt"), "alpha\nneedle\n").unwrap();
@@ -1658,7 +1532,6 @@ fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
         (
             ToolInput::Read(ReadInput { path: path.clone() }),
             ToolId::Read,
-            "data.txt",
         ),
         (
             ToolInput::Write(WriteInput {
@@ -1667,7 +1540,6 @@ fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
                 expected_content: None,
             }),
             ToolId::Write,
-            "data.txt",
         ),
         (
             ToolInput::Edit(EditInput {
@@ -1677,14 +1549,12 @@ fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
                 expected_content: None,
             }),
             ToolId::Edit,
-            "data.txt",
         ),
         (
             ToolInput::Glob(GlobInput {
                 pattern: BoundedText::new("*.txt").unwrap(),
             }),
             ToolId::Glob,
-            "",
         ),
         (
             ToolInput::Grep(GrepInput {
@@ -1693,7 +1563,6 @@ fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
                 scope: Some(GrepScope::File { path }),
             }),
             ToolId::Grep,
-            "data.txt",
         ),
         (
             ToolInput::Execute(ExecuteInput {
@@ -1711,67 +1580,37 @@ fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
                 },
             }),
             ToolId::Execute,
-            "",
         ),
     ];
     let absolute_root = root_path.to_string_lossy().to_string();
-    for (input, tool, expected_path) in calls {
-        let envelope = service
-            .invoke_enveloped(intention_tools::ToolInvocation {
-                schema_version: TOOL_SCHEMA_VERSION,
-                context: intention_tools::ToolContext {
-                    session_id: intention_proto::SessionId::parse(
-                        "00000000-0000-4000-8000-000000000011",
-                    )
-                    .unwrap(),
-                    run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000012")
-                        .unwrap(),
-                    call_id: ToolCallId::new(),
-                },
-                input,
-            })
-            .expect("projection fixture dispatch must succeed");
-        let projection = envelope.projection();
+    for (input, tool) in calls {
+        let result =
+            service.dispatch_completed(ToolCallId::new(), input, CancellationSignal::new());
+        let projection = result.projection();
         assert_eq!(projection.schema_version, TOOL_SCHEMA_VERSION, "{tool}");
         assert_eq!(projection.tool, tool);
         assert_eq!(projection.execution.cwd, REDACTED_WORKSPACE_CWD, "{tool}");
-        assert_eq!(
-            projection.execution.elapsed_ms, envelope.observability.elapsed_ms,
-            "{tool} timing"
-        );
+        // A bare result carries no invocation timing or logical path, so the
+        // projection records the zero default and no path.
+        assert_eq!(projection.execution.elapsed_ms, 0, "{tool} timing");
         assert_eq!(
             projection.execution.policy,
             intention_tools::ToolPolicy::Allowed,
             "{tool} policy"
         );
-        let expected_logical = if expected_path.is_empty() {
-            None
-        } else {
-            Some(expected_path.to_owned())
-        };
-        assert_eq!(
-            projection
-                .execution
-                .path
-                .as_ref()
-                .map(WorkspaceRelativePathDto::as_str),
-            expected_logical.as_deref(),
-            "{tool} metadata path"
-        );
-        if tool != ToolId::Execute {
-            assert_eq!(projection.execution.process_status, None, "{tool}");
-        }
-        // Neither the projection nor the full envelope may persist the
-        // absolute workspace root.
+        assert_eq!(projection.execution.path, None, "{tool} metadata path");
+        assert_eq!(projection.execution.process_status, None, "{tool}");
+        // Neither the projection nor the typed result may carry the absolute
+        // workspace root.
         let rendered = serde_json::to_string(&projection).unwrap();
         assert!(
             !rendered.contains(&absolute_root),
             "{tool} projection leaked the absolute root"
         );
-        let envelope_rendered = serde_json::to_string(&envelope).unwrap();
+        let result_rendered = serde_json::to_string(&result).unwrap();
         assert!(
-            !envelope_rendered.contains(&absolute_root),
-            "{tool} envelope leaked the absolute root"
+            !result_rendered.contains(&absolute_root),
+            "{tool} result leaked the absolute root"
         );
         match (&projection.content, tool) {
             (ToolProjectedContent::Text { text, truncated }, ToolId::Read) => {
@@ -1802,10 +1641,6 @@ fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
             (ToolProjectedContent::Text { text, truncated }, ToolId::Execute) => {
                 assert!(text.as_str().contains("ok"));
                 assert!(!*truncated);
-                assert_eq!(
-                    projection.execution.process_status,
-                    Some(ToolProcessStatus::Success)
-                );
             }
             (content, id) => unreachable!("unexpected projection for {id}: {content:?}"),
         }
@@ -1855,8 +1690,8 @@ fn projections_preserve_collections_and_round_trip() {
 }
 
 #[test]
-fn envelope_reports_an_interrupted_execute_as_its_stable_error_code() {
-    let root_dir = fixture_dir("envelope-interrupted");
+fn cancelled_execute_surfaces_as_an_interrupted_outcome() {
+    let root_dir = fixture_dir("execute-interrupted");
     let service = service(&root_dir);
     let cancellation = CancellationSignal::new();
     let canceller = cancellation.clone();
@@ -1867,67 +1702,39 @@ fn envelope_reports_an_interrupted_execute_as_its_stable_error_code() {
         );
         canceller.cancel();
     });
-    let error = service
-        .invoke_enveloped_with_cancellation(
-            intention_tools::ToolInvocation {
-                schema_version: TOOL_SCHEMA_VERSION,
-                context: intention_tools::ToolContext {
-                    session_id: intention_proto::SessionId::parse(
-                        "00000000-0000-4000-8000-000000000013",
-                    )
-                    .unwrap(),
-                    run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000014")
-                        .unwrap(),
-                    call_id: ToolCallId::new(),
+    let outcome = service
+        .dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Execute(ExecuteInput {
+                program: BoundedText::new(if cfg!(windows) { "ping" } else { "sh" }).unwrap(),
+                args: if cfg!(windows) {
+                    vec![
+                        BoundedText::new("-n").unwrap(),
+                        BoundedText::new("2").unwrap(),
+                        BoundedText::new("127.0.0.1").unwrap(),
+                    ]
+                } else {
+                    vec![
+                        BoundedText::new("-c").unwrap(),
+                        BoundedText::new("sleep 2").unwrap(),
+                    ]
                 },
-                input: ToolInput::Execute(ExecuteInput {
-                    program: BoundedText::new(if cfg!(windows) { "ping" } else { "sh" }).unwrap(),
-                    args: if cfg!(windows) {
-                        vec![
-                            BoundedText::new("-n").unwrap(),
-                            BoundedText::new("2").unwrap(),
-                            BoundedText::new("127.0.0.1").unwrap(),
-                        ]
-                    } else {
-                        vec![
-                            BoundedText::new("-c").unwrap(),
-                            BoundedText::new("sleep 2").unwrap(),
-                        ]
-                    },
-                }),
-            },
+            }),
             cancellation,
         )
-        .expect_err("an interrupted execution has no result-boundary envelope");
+        .expect("an interrupted execution is an outcome, not an error");
     helper.join().expect("cancellation helper completes");
-    assert_eq!(error.code(), "tool_cancelled");
+    assert!(matches!(
+        outcome,
+        ToolDispatchOutcome::Interrupted {
+            cause: InterruptCause::Stopped,
+            ..
+        }
+    ));
 }
 
 #[test]
-fn projection_falls_back_to_observability_and_bare_results_stay_bounded() {
-    use intention_tools::{ToolObservability, ToolOutcome, ToolPolicy};
-    let envelope = intention_tools::ToolResultEnvelope {
-        schema_version: TOOL_SCHEMA_VERSION,
-        context: fixture_context(ToolCallId::new()),
-        result: ToolResult::Read(TextResult {
-            text: BoundedText::new("payload").unwrap(),
-            truncated: false,
-        }),
-        observability: ToolObservability {
-            outcome: ToolOutcome::Succeeded,
-            policy: ToolPolicy::Allowed,
-            elapsed_ms: 42,
-        },
-        execution: None,
-    };
-    let projection = envelope.projection();
-    assert_eq!(projection.tool, ToolId::Read);
-    assert_eq!(projection.execution.elapsed_ms, 42);
-    assert_eq!(projection.execution.policy, ToolPolicy::Allowed);
-    assert_eq!(projection.execution.cwd, REDACTED_WORKSPACE_CWD);
-    assert_eq!(projection.execution.path, None);
-    assert_eq!(projection.execution.process_status, None);
-
+fn bare_result_projections_stay_bounded_and_redacted() {
     let bare = ToolResult::Edit(WriteResult { bytes: 7 }).projection();
     assert_eq!(bare.schema_version, TOOL_SCHEMA_VERSION);
     assert_eq!(bare.tool, ToolId::Edit);

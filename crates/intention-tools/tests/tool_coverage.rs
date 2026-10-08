@@ -1,6 +1,6 @@
-//! Consolidated coverage cases: schema version, dispatch and envelope
-//! fallbacks, metadata validation, search scopes, logical paths, and symlink
-//! handling, merged from the six former padded coverage targets.
+//! Consolidated coverage cases: schema version, dispatch, metadata
+//! validation, search scopes, logical paths, and symlink handling, merged from
+//! the six former padded coverage targets.
 
 #![allow(
     clippy::expect_used,
@@ -10,17 +10,14 @@
 
 mod common;
 
-use common::{DispatchCompleted, fixture_context, fixture_service, relative, text};
+use common::{DispatchCompleted, fixture_service, relative, text};
 #[cfg(unix)]
 use common::{fixture_dir, service};
 use intention_proto::ToolCallId;
-#[cfg(unix)]
-use intention_tools::ToolDispatchOutcome;
 use intention_tools::{
-    BoundedText, CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepScope,
-    ReadInput, TOOL_SCHEMA_VERSION, TextResult, ToolContext, ToolExecutionMetadata, ToolInput,
-    ToolInvocation, ToolObservability, ToolOutcome, ToolPolicy, ToolProcessStatus, ToolResult,
-    ToolResultEnvelope, WriteInput,
+    CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepScope, ReadInput,
+    TOOL_SCHEMA_VERSION, ToolDispatchOutcome, ToolExecutionMetadata, ToolInput, ToolPolicy,
+    ToolProcessStatus, ToolResult, WriteInput,
 };
 
 #[test]
@@ -63,7 +60,7 @@ fn logical_paths_cover_all_inputs() {
 }
 
 #[test]
-fn exercises_plain_grep_and_envelope_fallback() {
+fn plain_grep_reports_utf8_match_columns() {
     let (dir, service) = fixture_service();
     std::fs::write(dir.path().join("x.txt"), "é needle\nnope\n").unwrap();
     let result = service.dispatch_completed(
@@ -79,25 +76,6 @@ fn exercises_plain_grep_and_envelope_fallback() {
         return;
     };
     assert_eq!(result.matches[0].column, 3);
-    let envelope = ToolResultEnvelope {
-        schema_version: TOOL_SCHEMA_VERSION,
-        context: ToolContext {
-            session_id: intention_proto::SessionId::new(),
-            run_id: intention_proto::RunId::new(),
-            call_id: ToolCallId::new(),
-        },
-        result: ToolResult::Read(TextResult {
-            text: text("ok"),
-            truncated: false,
-        }),
-        observability: ToolObservability {
-            outcome: ToolOutcome::Succeeded,
-            policy: ToolPolicy::Denied,
-            elapsed_ms: 7,
-        },
-        execution: None,
-    };
-    assert_eq!(envelope.projection().execution.policy, ToolPolicy::Denied);
 }
 
 #[test]
@@ -169,7 +147,7 @@ fn scoped_search_reports_file_directory_workspace_and_failures() {
 }
 
 #[test]
-fn metadata_builders_and_schema_validation_are_checked() {
+fn metadata_builders_record_path_and_typed_process_status() {
     let path = relative("file.txt");
     let metadata = ToolExecutionMetadata::for_workspace(ToolPolicy::Denied, 7)
         .with_path(Some(path.clone()))
@@ -179,18 +157,6 @@ fn metadata_builders_and_schema_validation_are_checked() {
         metadata.process_status,
         Some(ToolProcessStatus::NonZero { code: 3 })
     );
-
-    let (_dir, service) = fixture_service();
-    let error = service
-        .invoke_enveloped(ToolInvocation {
-            schema_version: TOOL_SCHEMA_VERSION + 1,
-            context: fixture_context(ToolCallId::new()),
-            input: ToolInput::Glob(GlobInput {
-                pattern: BoundedText::new("*").unwrap(),
-            }),
-        })
-        .unwrap_err();
-    assert_eq!(error.code(), "tool_schema_mismatch");
 }
 
 #[cfg(unix)]
