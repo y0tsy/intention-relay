@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, VecDeque};
 use crate::mapping;
 use crate::mapping::WireRole;
 use crate::model::{
-    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
+    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ProviderErrorDto,
     ToolCallDto,
 };
@@ -80,24 +80,13 @@ impl GenericChatDriver {
         );
         Ok(Self { resolved, client })
     }
-
-    /// Returns the non-network preflight validation result.
-    ///
-    /// # Errors
-    ///
-    /// Returns a policy error for unsupported request capabilities.
-    pub fn preflight(&self, request: &ModelRequestDto) -> DtoResult<()> {
-        ModelDriver::preflight(self, request)
-    }
-}
-
-impl ModelDriver for GenericChatDriver {
-    fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
-    }
 }
 
 impl ModelExecutionDriver for GenericChatDriver {
+    fn capabilities(&self) -> ModelCapabilitiesDto {
+        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+    }
+
     fn execute(
         &self,
         request: ModelRequestDto,
@@ -105,11 +94,6 @@ impl ModelExecutionDriver for GenericChatDriver {
     ) -> ModelEventStream {
         if cancellation.is_cancelled() {
             return Box::pin(stream::empty());
-        }
-        if self.preflight(&request).is_err() {
-            return Box::pin(stream::once(async {
-                Err(mapping::fixed_error("generic_chat_request_rejected"))
-            }));
         }
         let native_request = match translate_request(&request) {
             Ok(request) => request,
@@ -617,7 +601,6 @@ mod tests {
                 .expect("notice is valid"),
             ],
             None,
-            None,
         )
         .expect("request is valid");
         let wire = serde_json::to_value(translate_request(&request).expect("request translates"))
@@ -648,7 +631,6 @@ mod tests {
                 ModelMessageDto::tool_result(call.call_id(), "hello world")
                     .expect("message is valid"),
             ],
-            None,
             None,
         )
         .expect("request is valid");
@@ -695,7 +677,6 @@ mod tests {
                     .expect("message is valid"),
             ],
             None,
-            None,
         )
         .expect("request is valid");
         let wire = serde_json::to_value(translate_request(&follow_up).expect("request translates"))
@@ -731,7 +712,6 @@ mod tests {
                 result,
             ],
             Some("instructions".to_owned()),
-            None,
         )
         .expect("request is valid");
 
@@ -761,7 +741,6 @@ mod tests {
             RunId::new(),
             "fixture",
             vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
-            None,
             None,
         )
         .expect("request is valid")
@@ -825,7 +804,6 @@ mod tests {
             RunId::new(),
             "fixture",
             vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
-            None,
             None,
         )
         .expect("request is valid");
@@ -916,7 +894,6 @@ mod tests {
                 ModelMessageDto::assistant_tool_calls(None, vec![first.clone(), second.clone()])
                     .expect("message is valid"),
             ],
-            None,
             None,
         )
         .expect("request is valid")

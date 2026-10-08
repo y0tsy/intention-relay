@@ -784,7 +784,6 @@ fn schedule_from_context(
         context.safe_config().resolved().provider().model(),
         messages,
         None,
-        None,
     )?
     .with_tools(advertised_tool_definitions()?)?;
     // The constructed request must agree with the requested run identity and

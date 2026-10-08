@@ -44,7 +44,7 @@ use intention_providers::GenericChatDriver;
 use intention_providers::OpenRouterDriver;
 use intention_providers::{ModelCancellationSignal, ModelExecutionDriver};
 #[cfg(any(test, feature = "test-support"))]
-use intention_providers::{ModelCapabilitiesDto, ModelDriver, ModelEventStream};
+use intention_providers::{ModelCapabilitiesDto, ModelEventStream};
 #[cfg(test)]
 use intention_storage::ToolResultEvidenceDto;
 use intention_storage::{
@@ -96,14 +96,11 @@ enum SelectedProvider {
 struct TestSupportUnconfiguredDriver;
 
 #[cfg(any(test, feature = "test-support"))]
-impl ModelDriver for TestSupportUnconfiguredDriver {
+impl ModelExecutionDriver for TestSupportUnconfiguredDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
         ModelCapabilitiesDto::new(false, false, false, false, false, false)
     }
-}
 
-#[cfg(any(test, feature = "test-support"))]
-impl ModelExecutionDriver for TestSupportUnconfiguredDriver {
     fn execute(
         &self,
         _request: intention_providers::ModelRequestDto,
@@ -115,14 +112,21 @@ impl ModelExecutionDriver for TestSupportUnconfiguredDriver {
 
 impl SelectedProvider {
     fn from_startup_material(material: StartupProviderMaterial) -> DtoResult<Self> {
-        match material.safe_resolved().provider().kind() {
+        let selected = match material.safe_resolved().provider().kind() {
             ProviderKindDto::Openrouter => {
-                OpenRouterDriver::from_startup_material(material).map(Self::OpenRouter)
+                OpenRouterDriver::from_startup_material(material).map(Self::OpenRouter)?
             }
             ProviderKindDto::GenericChatCompletionApi => {
-                GenericChatDriver::from_startup_material(material).map(Self::GenericChat)
+                GenericChatDriver::from_startup_material(material).map(Self::GenericChat)?
             }
-        }
+        };
+        // The runtime streams text with tool calls, so the single capability
+        // negotiation happens once at provider selection.
+        selected
+            .driver()
+            .capabilities()
+            .ensure_runtime_requirements()?;
+        Ok(selected)
     }
 
     #[cfg(any(test, feature = "test-support"))]

@@ -15,8 +15,8 @@ mod openrouter;
 pub use generic_chat::GenericChatDriver;
 pub use model::{
     AssistantReasoningDto, FinishReasonDto, ModelCancellationSignal, ModelCancelledFuture,
-    ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelEventStream, ModelExecutionDriver,
-    ModelMessageDto, ModelRequestDto, ModelRequestedCapabilitiesDto, ModelRoleDto,
-    ModelStreamLifecycleDto, ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto, UsageDto,
+    ModelCapabilitiesDto, ModelEventDto, ModelEventStream, ModelExecutionDriver, ModelMessageDto,
+    ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto, ModelToolDefinitionDto,
+    ProviderErrorDto, ToolCallDto, UsageDto,
 };
 pub use openrouter::OpenRouterDriver;

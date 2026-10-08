@@ -323,58 +323,6 @@ const fn forbidden_reasoning_text_character(character: char) -> bool {
     character.is_control() && !matches!(character, '\n' | '\r' | '\t')
 }
 
-/// Requested model-context capabilities that require preflight support.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub struct ModelRequestedCapabilitiesDto {
-    reasoning: bool,
-    multimodal: bool,
-    tool_calls: bool,
-    vendor_extensions: bool,
-}
-
-impl ModelRequestedCapabilitiesDto {
-    /// Creates an explicit request capability set.
-    #[must_use]
-    pub const fn new(
-        reasoning: bool,
-        multimodal: bool,
-        tool_calls: bool,
-        vendor_extensions: bool,
-    ) -> Self {
-        Self {
-            reasoning,
-            multimodal,
-            tool_calls,
-            vendor_extensions,
-        }
-    }
-
-    /// Returns whether reasoning output was requested.
-    #[must_use]
-    pub const fn reasoning(self) -> bool {
-        self.reasoning
-    }
-
-    /// Returns whether multimodal input or output was requested.
-    #[must_use]
-    pub const fn multimodal(self) -> bool {
-        self.multimodal
-    }
-
-    /// Returns whether function-style tool calls were requested.
-    #[must_use]
-    pub const fn tool_calls(self) -> bool {
-        self.tool_calls
-    }
-
-    /// Returns whether provider-specific extensions were requested.
-    #[must_use]
-    pub const fn vendor_extensions(self) -> bool {
-        self.vendor_extensions
-    }
-}
-
 /// The explicit capabilities declared by a selected provider driver.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -444,26 +392,26 @@ impl ModelCapabilitiesDto {
         self.streaming
     }
 
-    /// Rejects a request requiring an undeclared capability before any outbound call.
+    /// Verifies this declaration can serve every request the runtime builds.
+    ///
+    /// The runtime streams text with tool calls, so a driver that cannot
+    /// declare both cannot serve any run; the check runs once when the
+    /// selected provider is composed.
     ///
     /// # Errors
     ///
-    /// Returns a policy error when the requested model behavior is unsupported.
-    pub fn ensure_supports(self, requested: ModelRequestedCapabilitiesDto) -> DtoResult<()> {
-        let unsupported = (requested.reasoning && !self.reasoning)
-            || (requested.multimodal && !self.multimodal)
-            || (requested.tool_calls && !self.tool_calls)
-            || (requested.vendor_extensions && !self.vendor_extensions);
-        if unsupported {
+    /// Returns a policy error when text or tool-call support is not declared.
+    pub fn ensure_runtime_requirements(self) -> DtoResult<()> {
+        if self.text && self.tool_calls {
+            Ok(())
+        } else {
             Err(ErrorDto::new(
                 "unsupported_model_capability",
                 intention_proto::ErrorCategoryDto::Policy,
-                "the selected provider does not support the requested model capability",
+                "the selected provider cannot serve streamed text with tool calls",
                 ErrorRetryDto::Never,
                 None,
             )?)
-        } else {
-            Ok(())
         }
     }
 }
@@ -589,7 +537,6 @@ pub struct ModelRequestDto {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     assistant_reasoning: Vec<AssistantReasoningDto>,
     system_context: Option<String>,
-    requested_capabilities: ModelRequestedCapabilitiesDto,
 }
 
 impl<'de> Deserialize<'de> for ModelRequestDto {
@@ -609,19 +556,11 @@ impl<'de> Deserialize<'de> for ModelRequestDto {
             assistant_reasoning: Vec<AssistantReasoningDto>,
             #[serde(default)]
             system_context: Option<String>,
-            #[serde(default)]
-            requested_capabilities: ModelRequestedCapabilitiesDto,
         }
 
         let raw = RawModelRequestDto::deserialize(deserializer)?;
-        let request = Self::new(
-            raw.run_id,
-            raw.model,
-            raw.messages,
-            raw.system_context,
-            Some(raw.requested_capabilities),
-        )
-        .map_err(de::Error::custom)?;
+        let request = Self::new(raw.run_id, raw.model, raw.messages, raw.system_context)
+            .map_err(de::Error::custom)?;
         request
             .with_tools(raw.tools)
             .map_err(de::Error::custom)?
@@ -641,7 +580,6 @@ impl ModelRequestDto {
         model: impl Into<String>,
         messages: Vec<ModelMessageDto>,
         system_context: Option<String>,
-        requested_capabilities: Option<ModelRequestedCapabilitiesDto>,
     ) -> DtoResult<Self> {
         let model = model.into();
         if model.trim().is_empty() {
@@ -672,7 +610,6 @@ impl ModelRequestDto {
             tools: Vec::new(),
             assistant_reasoning: Vec::new(),
             system_context,
-            requested_capabilities: requested_capabilities.unwrap_or_default(),
         })
     }
 
@@ -720,7 +657,6 @@ impl ModelRequestDto {
             self.model.clone(),
             messages,
             self.system_context.clone(),
-            Some(self.requested_capabilities),
         )?;
         request.tools = self.tools.clone();
         request.assistant_reasoning = self.assistant_reasoning.clone();
@@ -729,9 +665,6 @@ impl ModelRequestDto {
 
     /// Returns a copy of this request with the advertised tool definitions replaced.
     ///
-    /// A non-empty replacement forces the requested-capabilities `tool_calls`
-    /// flag to `true`, so preflight only accepts providers that can honor the
-    /// advertised tools; an empty replacement leaves the flag unchanged.
     /// Transient reasoning attachments are preserved.
     ///
     /// # Errors
@@ -739,22 +672,11 @@ impl ModelRequestDto {
     /// Returns a validation error when the retained request fields no longer
     /// satisfy request validation.
     pub fn with_tools(&self, tools: Vec<ModelToolDefinitionDto>) -> DtoResult<Self> {
-        let requested_capabilities = if tools.is_empty() {
-            self.requested_capabilities
-        } else {
-            ModelRequestedCapabilitiesDto::new(
-                self.requested_capabilities.reasoning(),
-                self.requested_capabilities.multimodal(),
-                true,
-                self.requested_capabilities.vendor_extensions(),
-            )
-        };
         let mut request = Self::new(
             self.run_id,
             self.model.clone(),
             self.messages.clone(),
             self.system_context.clone(),
-            Some(requested_capabilities),
         )?;
         request.tools = tools;
         request.assistant_reasoning = self.assistant_reasoning.clone();
@@ -782,7 +704,6 @@ impl ModelRequestDto {
             self.model.clone(),
             self.messages.clone(),
             self.system_context.clone(),
-            Some(self.requested_capabilities),
         )?;
         request.tools = self.tools.clone();
         request.assistant_reasoning = reasoning;
@@ -793,12 +714,6 @@ impl ModelRequestDto {
     #[must_use]
     pub fn system_context(&self) -> Option<&str> {
         self.system_context.as_deref()
-    }
-
-    /// Returns capability requirements for preflight.
-    #[must_use]
-    pub const fn requested_capabilities(&self) -> ModelRequestedCapabilitiesDto {
-        self.requested_capabilities
     }
 }
 
@@ -993,22 +908,6 @@ fn stream_order_error() -> ErrorDto {
     )
 }
 
-/// Provider-neutral stream driver boundary. SDK and runtime resources stay private to providers/runtime.
-pub trait ModelDriver {
-    /// Returns the static capability declaration for this configured driver.
-    fn capabilities(&self) -> ModelCapabilitiesDto;
-
-    /// Validates whether this driver can accept the request before outbound work begins.
-    ///
-    /// # Errors
-    ///
-    /// Returns a policy error when a request requires unsupported capability.
-    fn preflight(&self, request: &ModelRequestDto) -> DtoResult<()> {
-        self.capabilities()
-            .ensure_supports(request.requested_capabilities())
-    }
-}
-
 /// Provider-neutral cancellation state shared with a model execution stream.
 #[derive(Clone, Default)]
 pub struct ModelCancellationSignal {
@@ -1130,8 +1029,11 @@ fn remove_waiter(waiters: &mut Vec<(usize, Waker)>, waiter_id: usize) {
 pub type ModelEventStream =
     Pin<Box<dyn Stream<Item = Result<ModelEventDto, ProviderErrorDto>> + Send>>;
 
-/// Provider-neutral asynchronous execution boundary.
-pub trait ModelExecutionDriver: ModelDriver {
+/// Provider-neutral stream driver boundary. SDK and runtime resources stay private to providers/runtime.
+pub trait ModelExecutionDriver {
+    /// Returns the static capability declaration for this configured driver.
+    fn capabilities(&self) -> ModelCapabilitiesDto;
+
     /// Starts a validated model request and returns ordered normalized provider events.
     fn execute(
         &self,

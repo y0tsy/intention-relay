@@ -21,8 +21,8 @@ use intention_config::{
 };
 use intention_proto::RunId;
 use intention_providers::{
-    ModelEventDto, ModelEventStream, ModelMessageDto, ModelRequestDto,
-    ModelRequestedCapabilitiesDto, ModelRoleDto, ProviderErrorDto,
+    ModelEventDto, ModelEventStream, ModelMessageDto, ModelRequestDto, ModelRoleDto,
+    ProviderErrorDto,
 };
 
 /// The fake credential every provider fixture carries instead of a real key.
@@ -45,25 +45,12 @@ pub fn startup_material(provider_body: &str, file_name: &str) -> StartupProvider
     .expect("fixture config resolves")
 }
 
-/// Builds one driver request with the given requested capabilities and system context.
-pub fn capability_request(capabilities: ModelRequestedCapabilitiesDto) -> ModelRequestDto {
-    ModelRequestDto::new(
-        RunId::new(),
-        "fixture",
-        vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
-        Some("system".to_owned()),
-        Some(capabilities),
-    )
-    .expect("request is valid")
-}
-
-/// Builds one plain request without requested capabilities or system context.
+/// Builds one plain driver request without system context.
 pub fn plain_request() -> ModelRequestDto {
     ModelRequestDto::new(
         RunId::new(),
         "fixture-model",
         vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
-        None,
         None,
     )
     .expect("request is valid")

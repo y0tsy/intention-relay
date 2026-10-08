@@ -4,9 +4,8 @@ use std::collections::VecDeque;
 use std::sync::{Mutex, PoisonError};
 
 use futures_util::StreamExt;
-use intention_proto::{DtoResult, ErrorDto};
 use intention_providers::{
-    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
+    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelRequestDto, ProviderErrorDto,
 };
 
@@ -25,10 +24,9 @@ pub type ScriptedRound = Vec<Result<ModelEventDto, ProviderErrorDto>>;
 ///
 /// The driver records every request and execution count, reports the same
 /// full capability set every suite asserts, and offers explicit injection
-/// points for preflight failure, a never-ending stream, and an in-stream
-/// cancellation at a selected event index of the first round.
+/// points for a never-ending stream and an in-stream cancellation at a
+/// selected event index of the first round.
 pub struct ScriptedDriver {
-    preflight_error: Mutex<Option<ErrorDto>>,
     rounds: Mutex<VecDeque<ScriptedRound>>,
     executions: Mutex<usize>,
     requests: Mutex<Vec<ModelRequestDto>>,
@@ -47,7 +45,6 @@ impl ScriptedDriver {
     #[must_use]
     pub fn with_rounds(rounds: Vec<ScriptedRound>) -> Self {
         Self {
-            preflight_error: Mutex::new(None),
             rounds: Mutex::new(rounds.into()),
             executions: Mutex::new(0),
             requests: Mutex::new(Vec::new()),
@@ -65,14 +62,6 @@ impl ScriptedDriver {
                 .unwrap_or_else(|_| unreachable!("fixture text is valid"))),
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
         ])
-    }
-
-    /// Fails every preflight with the supplied typed error.
-    pub fn fail_preflight(&self, error: ErrorDto) {
-        *self
-            .preflight_error
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(error);
     }
 
     /// Makes every execution stream stay pending without yielding an event.
@@ -111,21 +100,11 @@ impl ScriptedDriver {
     }
 }
 
-impl ModelDriver for ScriptedDriver {
+impl ModelExecutionDriver for ScriptedDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
         ModelCapabilitiesDto::new(true, true, true, false, false, true)
     }
 
-    fn preflight(&self, _request: &ModelRequestDto) -> DtoResult<()> {
-        self.preflight_error
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-            .map_or(Ok(()), Err)
-    }
-}
-
-impl ModelExecutionDriver for ScriptedDriver {
     fn execute(
         &self,
         request: ModelRequestDto,

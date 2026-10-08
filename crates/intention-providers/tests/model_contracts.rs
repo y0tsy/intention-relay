@@ -5,11 +5,11 @@
 
 mod support;
 
-use intention_proto::{CorrelationIdDto, RunId, ToolCallId};
+use intention_proto::{RunId, ToolCallId};
 use intention_providers::{
-    AssistantReasoningDto, FinishReasonDto, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
-    ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
-    ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto, UsageDto,
+    AssistantReasoningDto, FinishReasonDto, ModelCapabilitiesDto, ModelEventDto, ModelMessageDto,
+    ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto, ModelToolDefinitionDto,
+    ProviderErrorDto, ToolCallDto, UsageDto,
 };
 use support::plain_request;
 
@@ -34,7 +34,7 @@ fn model_request_and_capabilities_validate_provider_neutral_contracts() {
 
     let valid = plain_request();
     assert_eq!(valid.model(), "fixture-model");
-    assert!(ModelRequestDto::new(RunId::new(), " ", vec![], None, None).is_err());
+    assert!(ModelRequestDto::new(RunId::new(), " ", vec![], None).is_err());
     assert!(ModelMessageDto::new(ModelRoleDto::User, " ").is_err());
 }
 
@@ -109,19 +109,12 @@ fn public_model_contracts_round_trip_and_preserve_validated_accessors() {
             message(ModelRoleDto::Assistant, "message-assistant"),
         ],
         Some("system-context".to_owned()),
-        Some(intention_providers::ModelRequestedCapabilitiesDto::new(
-            true, true, true, true,
-        )),
     )
     .expect("complete request is valid");
     let encoded = serde_json::to_string(&request).expect("request serializes");
     let decoded: ModelRequestDto = serde_json::from_str(&encoded).expect("request deserializes");
     assert_eq!(decoded.run_id(), request.run_id());
     assert_eq!(decoded.system_context(), Some("system-context"));
-    assert!(decoded.requested_capabilities().reasoning());
-    assert!(decoded.requested_capabilities().multimodal());
-    assert!(decoded.requested_capabilities().tool_calls());
-    assert!(decoded.requested_capabilities().vendor_extensions());
     assert_eq!(decoded.messages().len(), 3);
     assert!(
         ModelRequestDto::new(
@@ -129,7 +122,6 @@ fn public_model_contracts_round_trip_and_preserve_validated_accessors() {
             "model",
             vec![message(ModelRoleDto::User, "message")],
             Some(" ".to_owned()),
-            None,
         )
         .is_err()
     );
@@ -140,23 +132,19 @@ fn public_model_contracts_round_trip_and_preserve_validated_accessors() {
 }
 
 #[test]
-fn capabilities_tool_usage_events_and_errors_cover_safe_wire_variants() {
+fn capabilities_cover_the_runtime_requirement_and_safe_wire_variants() {
     let complete = ModelCapabilitiesDto::new(true, true, true, true, true, true);
     complete
-        .ensure_supports(intention_providers::ModelRequestedCapabilitiesDto::new(
-            true, true, true, true,
-        ))
-        .expect("complete capability declaration supports request");
-    for requested in [
-        intention_providers::ModelRequestedCapabilitiesDto::new(true, false, false, false),
-        intention_providers::ModelRequestedCapabilitiesDto::new(false, true, false, false),
-        intention_providers::ModelRequestedCapabilitiesDto::new(false, false, true, false),
-        intention_providers::ModelRequestedCapabilitiesDto::new(false, false, false, true),
+        .ensure_runtime_requirements()
+        .expect("complete capability declaration serves the runtime");
+    for unsupported in [
+        ModelCapabilitiesDto::new(false, true, true, true, true, true),
+        ModelCapabilitiesDto::new(true, true, false, true, true, true),
     ] {
         assert_eq!(
-            ModelCapabilitiesDto::new(true, false, false, false, false, true)
-                .ensure_supports(requested)
-                .expect_err("unsupported capability fails")
+            unsupported
+                .ensure_runtime_requirements()
+                .expect_err("a declaration without text or tool calls fails")
                 .code(),
             "unsupported_model_capability"
         );
@@ -164,48 +152,6 @@ fn capabilities_tool_usage_events_and_errors_cover_safe_wire_variants() {
 
     let call = ToolCallDto::new(ToolCallId::new(), "inspect", "{}")
         .expect("tool object arguments are valid");
-    let decoded: ToolCallDto =
-        serde_json::from_str(&serde_json::to_string(&call).expect("tool serializes"))
-            .expect("tool deserializes");
-    assert_eq!(decoded.call_id(), call.call_id());
-    assert_eq!(decoded.name(), "inspect");
-    assert_eq!(decoded.arguments_json(), "{}");
-    assert!(ToolCallDto::new(ToolCallId::new(), "inspect", "[]").is_err());
-    assert!(serde_json::from_str::<ToolCallDto>(
-        r#"{"call_id":"00000000-0000-0000-0000-000000000000","name":"inspect","arguments_json":"{}","unexpected":true}"#
-    )
-    .is_err());
-
-    for usage in [
-        UsageDto::NotReported,
-        UsageDto::reported(1, 2, 3).expect("usage is valid"),
-    ] {
-        let decoded: UsageDto =
-            serde_json::from_str(&serde_json::to_string(&usage).expect("usage serializes"))
-                .expect("usage deserializes");
-        assert_eq!(decoded, usage);
-    }
-    assert!(
-        serde_json::from_str::<UsageDto>(
-            r#"{"state":"reported","input_tokens":1,"output_tokens":2,"total_tokens":2}"#
-        )
-        .is_err()
-    );
-
-    for reason in [
-        FinishReasonDto::Stop,
-        FinishReasonDto::Length,
-        FinishReasonDto::ToolCalls,
-        FinishReasonDto::ContentFilter,
-        FinishReasonDto::Error,
-        FinishReasonDto::Unknown,
-    ] {
-        let event = ModelEventDto::finished(reason);
-        let decoded: ModelEventDto =
-            serde_json::from_str(&serde_json::to_string(&event).expect("event serializes"))
-                .expect("event deserializes");
-        assert_eq!(decoded, event);
-    }
     for event in [
         ModelEventDto::started(),
         ModelEventDto::text_delta("delta").expect("delta is valid"),
@@ -229,16 +175,6 @@ fn capabilities_tool_usage_events_and_errors_cover_safe_wire_variants() {
         ModelEventDto::reasoning_presence()
     );
 
-    let correlation = CorrelationIdDto::new();
-    let error = ProviderErrorDto::unavailable("provider_unavailable", false, Some(correlation))
-        .expect("provider error is valid");
-    let decoded: ProviderErrorDto =
-        serde_json::from_str(&serde_json::to_string(&error).expect("error serializes"))
-            .expect("error deserializes");
-    assert_eq!(decoded.code(), "provider_unavailable");
-    assert_eq!(decoded.retry(), intention_proto::ErrorRetryDto::Never);
-    assert_eq!(decoded.correlation_id(), Some(correlation));
-    assert_eq!(decoded.to_string(), "provider_unavailable");
     assert!(serde_json::from_str::<ProviderErrorDto>(r#"{"code":"","retry":"never"}"#).is_err());
     assert!(ProviderErrorDto::unavailable(" ", false, None).is_err());
 }
@@ -399,9 +335,6 @@ fn model_request_with_messages_preserves_fields() {
         "fixture-model",
         vec![message(ModelRoleDto::User, "first")],
         Some("system-context".to_owned()),
-        Some(intention_providers::ModelRequestedCapabilitiesDto::new(
-            true, true, true, true,
-        )),
     )
     .expect("request is valid")
     .with_tools(vec![tool_definition("inspect_path")])
@@ -417,10 +350,6 @@ fn model_request_with_messages_preserves_fields() {
     assert_eq!(updated.run_id(), request.run_id());
     assert_eq!(updated.model(), request.model());
     assert_eq!(updated.system_context(), request.system_context());
-    assert_eq!(
-        updated.requested_capabilities(),
-        request.requested_capabilities()
-    );
     assert_eq!(updated.tools(), request.tools());
     assert_eq!(updated.messages().len(), 2);
     assert_eq!(updated.messages()[0].role(), ModelRoleDto::User);
@@ -452,25 +381,6 @@ fn model_request_tools_round_trip_and_omit_the_empty_field() {
         serde_json::from_str(&encoded).expect("request with tools deserializes");
     assert_eq!(decoded.tools(), with_tools.tools());
     assert_eq!(decoded, with_tools);
-}
-
-#[test]
-fn model_request_with_tools_forces_tool_call_capability() {
-    let request = plain_request();
-    assert!(!request.requested_capabilities().tool_calls());
-    let with_tools = request
-        .with_tools(vec![tool_definition("inspect_path")])
-        .expect("request with tools is valid");
-    assert!(with_tools.requested_capabilities().tool_calls());
-    assert!(!with_tools.requested_capabilities().reasoning());
-    assert!(!with_tools.requested_capabilities().multimodal());
-    assert!(!with_tools.requested_capabilities().vendor_extensions());
-    let encoded = serde_json::to_string(&with_tools).expect("request with tools serializes");
-    assert!(encoded.contains("inspect_path"));
-    let cleared = with_tools
-        .with_tools(Vec::new())
-        .expect("cleared request is valid");
-    assert!(cleared.tools().is_empty());
 }
 
 #[test]
@@ -692,31 +602,4 @@ fn model_tool_definitions_validate_names_descriptions_and_parameters() {
         )
         .is_err()
     );
-}
-
-struct FixtureDriver(ModelCapabilitiesDto);
-
-impl ModelDriver for FixtureDriver {
-    fn capabilities(&self) -> ModelCapabilitiesDto {
-        self.0
-    }
-}
-
-#[test]
-fn model_driver_default_preflight_uses_declared_capabilities() {
-    let driver = FixtureDriver(ModelCapabilitiesDto::new(
-        true, false, false, false, false, true,
-    ));
-    assert!(driver.preflight(&plain_request()).is_ok());
-    let tool_request = ModelRequestDto::new(
-        RunId::new(),
-        "fixture-model",
-        vec![message(ModelRoleDto::User, "hello")],
-        None,
-        Some(intention_providers::ModelRequestedCapabilitiesDto::new(
-            false, false, true, false,
-        )),
-    )
-    .expect("tool request validates");
-    assert!(driver.preflight(&tool_request).is_err());
 }

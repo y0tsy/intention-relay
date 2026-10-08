@@ -400,9 +400,6 @@ where
         if !same_execution_selection(&persisted, &input.safe_config) {
             return self.failed_outcome(&input, provider_configuration_unavailable());
         }
-        if let Err(error) = self.driver.preflight(&input.request) {
-            return self.failed_outcome(&input, error);
-        }
 
         let policy = persisted.resolved().provider_execution();
         let context_window = persisted.resolved().context_window();

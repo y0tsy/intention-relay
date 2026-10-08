@@ -46,7 +46,7 @@ use intention_proto::{
     SubscribeRunCommandDto, decode_response, encode_request,
 };
 use intention_providers::{
-    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
+    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelRequestDto, ModelRoleDto,
 };
 use intention_test_support::ScriptedDriver;
@@ -97,14 +97,11 @@ impl BlockingDriver {
 }
 
 #[cfg(feature = "test-support")]
-impl ModelDriver for BlockingDriver {
+impl ModelExecutionDriver for BlockingDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
         ModelCapabilitiesDto::new(true, true, true, false, false, true)
     }
-}
 
-#[cfg(feature = "test-support")]
-impl ModelExecutionDriver for BlockingDriver {
     fn execute(
         &self,
         request: ModelRequestDto,

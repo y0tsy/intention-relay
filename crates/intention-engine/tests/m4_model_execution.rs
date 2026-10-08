@@ -28,7 +28,6 @@ fn request(run_id: RunId, model: &str) -> ModelRequestDto {
         model,
         vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
         None,
-        None,
     )
     .expect("request is valid")
 }
@@ -209,41 +208,6 @@ fn observer_receives_no_content_when_a_message_commit_fails() {
     );
     assert!(repository.messages.borrow().is_empty());
     assert!(repository.finishes.borrow().is_empty());
-}
-
-#[test]
-fn preflight_failure_does_not_execute_and_fails_starting_run() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let driver = ScriptedDriver::new(Vec::new());
-    driver.fail_preflight(ErrorDto::validation(
-        "unsupported_model_capability",
-        "unsupported",
-    ));
-    let outcome = execute(
-        &repository,
-        &driver,
-        request(run_id, "fixture"),
-        config,
-        ModelCancellationSignal::new(),
-    )
-    .expect("failure is committed");
-    let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
-        unreachable!("preflight failure terminalizes the run");
-    };
-    assert_eq!(run.status(), RunStatusDto::Failed);
-    assert_eq!(error.code(), "unsupported_model_capability");
-    assert_eq!(driver.executions(), 0);
-    let finishes = repository.finishes.borrow();
-    assert_eq!(finishes.len(), 1);
-    assert_eq!(finishes[0].status(), RunStatusDto::Failed);
-    assert_eq!(
-        finishes[0].error_code(),
-        Some("unsupported_model_capability")
-    );
-    assert!(repository.messages.borrow().is_empty());
 }
 
 #[test]

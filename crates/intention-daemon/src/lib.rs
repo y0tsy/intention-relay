@@ -1107,7 +1107,7 @@ mod tests {
         decode_response, encode_request,
     };
     use intention_providers::{
-        FinishReasonDto, ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelEventStream,
+        FinishReasonDto, ModelCapabilitiesDto, ModelEventDto, ModelEventStream,
         ModelExecutionDriver,
     };
     use intention_transport::{AsyncLocalClientConnection, AsyncLocalListener};
@@ -1165,13 +1165,11 @@ mod tests {
 
     struct EmptyDriver;
 
-    impl ModelDriver for EmptyDriver {
+    impl ModelExecutionDriver for EmptyDriver {
         fn capabilities(&self) -> ModelCapabilitiesDto {
             ModelCapabilitiesDto::new(true, true, true, false, false, true)
         }
-    }
 
-    impl ModelExecutionDriver for EmptyDriver {
         fn execute(
             &self,
             _request: intention_providers::ModelRequestDto,
@@ -1183,13 +1181,11 @@ mod tests {
 
     struct CompletedDriver;
 
-    impl ModelDriver for CompletedDriver {
+    impl ModelExecutionDriver for CompletedDriver {
         fn capabilities(&self) -> ModelCapabilitiesDto {
             ModelCapabilitiesDto::new(true, true, true, false, false, true)
         }
-    }
 
-    impl ModelExecutionDriver for CompletedDriver {
         fn execute(
             &self,
             _request: intention_providers::ModelRequestDto,
@@ -1205,13 +1201,11 @@ mod tests {
 
     struct PendingDriver;
 
-    impl ModelDriver for PendingDriver {
+    impl ModelExecutionDriver for PendingDriver {
         fn capabilities(&self) -> ModelCapabilitiesDto {
             ModelCapabilitiesDto::new(true, true, true, false, false, true)
         }
-    }
 
-    impl ModelExecutionDriver for PendingDriver {
         fn execute(
             &self,
             _request: intention_providers::ModelRequestDto,

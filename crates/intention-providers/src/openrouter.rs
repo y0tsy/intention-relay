@@ -9,7 +9,7 @@ use crate::mapping;
 use crate::mapping::WireRole;
 use crate::model::ModelToolDefinitionDto;
 use crate::model::{
-    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
+    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ProviderErrorDto,
 };
 use futures_util::{
@@ -70,24 +70,13 @@ impl OpenRouterDriver {
             })?;
         Ok(Self { resolved, client })
     }
-
-    /// Returns the non-network preflight validation result.
-    ///
-    /// # Errors
-    ///
-    /// Returns a policy error for unsupported request capabilities.
-    pub fn preflight(&self, request: &ModelRequestDto) -> DtoResult<()> {
-        ModelDriver::preflight(self, request)
-    }
-}
-
-impl ModelDriver for OpenRouterDriver {
-    fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
-    }
 }
 
 impl ModelExecutionDriver for OpenRouterDriver {
+    fn capabilities(&self) -> ModelCapabilitiesDto {
+        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+    }
+
     fn execute(
         &self,
         request: ModelRequestDto,
@@ -95,11 +84,6 @@ impl ModelExecutionDriver for OpenRouterDriver {
     ) -> ModelEventStream {
         if cancellation.is_cancelled() {
             return Box::pin(stream::empty());
-        }
-        if self.preflight(&request).is_err() {
-            return Box::pin(stream::once(async {
-                Err(mapping::fixed_error("openrouter_request_rejected"))
-            }));
         }
         let native_request = match translate_request(&request) {
             Ok(request) => request,
@@ -447,7 +431,6 @@ mod tests {
             "fixture-model",
             vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
             None,
-            None,
         )
         .expect("request is valid")
     }
@@ -636,7 +619,6 @@ mod tests {
                 result,
             ],
             Some("instructions".to_owned()),
-            None,
         )
         .expect("request is valid");
 
@@ -750,7 +732,6 @@ mod tests {
                 .expect("notice is valid"),
             ],
             None,
-            None,
         )
         .expect("request is valid");
         let wire = serde_json::to_value(translate_request(&request).expect("request translates"))
@@ -786,7 +767,6 @@ mod tests {
                 ModelMessageDto::tool_result(call.call_id(), "hello world")
                     .expect("message is valid"),
             ],
-            None,
             None,
         )
         .expect("request is valid")
@@ -834,13 +814,13 @@ mod tests {
                 .expect("message is valid"),
             ModelMessageDto::tool_result(call.call_id(), "hello world").expect("message is valid"),
         ];
-        let plain = ModelRequestDto::new(run_id, "fixture-model", messages.clone(), None, None)
+        let plain = ModelRequestDto::new(run_id, "fixture-model", messages.clone(), None)
             .expect("request is valid");
         assert!(plain.assistant_reasoning().is_empty());
         let attachment =
             crate::model::AssistantReasoningDto::new(vec![call.call_id()], "chain of thought")
                 .expect("reasoning attachment is valid");
-        let attached = ModelRequestDto::new(run_id, "fixture-model", messages, None, None)
+        let attached = ModelRequestDto::new(run_id, "fixture-model", messages, None)
             .expect("request is valid")
             .with_assistant_reasoning(vec![attachment])
             .expect("attachment is retained on the request");

@@ -158,7 +158,6 @@ pub fn schedule(
         "fixture",
         vec![ModelMessageDto::new(ModelRoleDto::User, "turn").expect("message is valid")],
         None,
-        None,
     )
     .expect("request is valid");
     let request = match tools {

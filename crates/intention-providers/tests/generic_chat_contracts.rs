@@ -8,10 +8,8 @@ mod support;
 
 use intention_config::StartupProviderMaterial;
 use intention_providers::GenericChatDriver;
-use intention_providers::{
-    ModelCancellationSignal, ModelDriver, ModelExecutionDriver, ModelRequestedCapabilitiesDto,
-};
-use support::{FAKE_CREDENTIAL, capability_request, collect_ready, startup_material};
+use intention_providers::{ModelCancellationSignal, ModelExecutionDriver};
+use support::{FAKE_CREDENTIAL, collect_ready, plain_request, startup_material};
 
 fn material() -> StartupProviderMaterial {
     startup_material(
@@ -23,33 +21,13 @@ fn material() -> StartupProviderMaterial {
 }
 
 #[test]
-fn generic_driver_declares_supported_subset_and_rejects_unsupported_preflight() {
+fn generic_driver_declares_supported_subset() {
     let driver = GenericChatDriver::from_startup_material(material()).expect("driver builds");
     assert!(driver.capabilities().supports_text());
     assert!(driver.capabilities().supports_tool_calls());
     assert!(driver.capabilities().supports_reasoning());
     assert!(!driver.capabilities().supports_multimodal());
     assert!(!driver.capabilities().supports_vendor_extensions());
-    assert!(
-        driver
-            .preflight(&capability_request(ModelRequestedCapabilitiesDto::new(
-                true, false, true, false,
-            )))
-            .is_ok()
-    );
-
-    for unsupported in [
-        ModelRequestedCapabilitiesDto::new(false, true, false, false),
-        ModelRequestedCapabilitiesDto::new(false, false, false, true),
-    ] {
-        assert_eq!(
-            driver
-                .preflight(&capability_request(unsupported))
-                .expect_err("unsupported generic capability rejects before preparation")
-                .code(),
-            "unsupported_model_capability"
-        );
-    }
 }
 
 #[test]
@@ -64,26 +42,8 @@ fn generic_execution_cancels_before_stream_creation_without_network_work() {
     let driver = GenericChatDriver::from_startup_material(material()).expect("driver builds");
     let cancellation = ModelCancellationSignal::new();
     cancellation.cancel();
-    let events = collect_ready(driver.execute(
-        capability_request(ModelRequestedCapabilitiesDto::default()),
-        cancellation,
-    ));
+    let events = collect_ready(driver.execute(plain_request(), cancellation));
     assert!(events.is_empty());
-}
-
-#[test]
-fn generic_execution_rejects_preflight_before_stream_creation_without_network_work() {
-    let driver = GenericChatDriver::from_startup_material(material()).expect("driver builds");
-    let events = collect_ready(driver.execute(
-        capability_request(ModelRequestedCapabilitiesDto::new(
-            false, true, false, false,
-        )),
-        ModelCancellationSignal::new(),
-    ));
-    assert!(matches!(
-        events.as_slice(),
-        [Err(error)] if error.code() == "generic_chat_request_rejected"
-    ));
 }
 
 #[test]

@@ -19,8 +19,8 @@ use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto, ToolC
 use intention_proto::{MessageKindDto, MessageProjectionDto, RunStatusDto};
 use intention_providers::{
     AssistantReasoningDto, FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto,
-    ModelDriver, ModelEventDto, ModelEventStream, ModelExecutionDriver, ModelMessageDto,
-    ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto,
+    ModelEventDto, ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto,
+    ModelRoleDto, ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto,
 };
 use intention_storage::TransitionRunInputDto;
 use intention_test_support::{
@@ -41,7 +41,6 @@ fn request(run_id: RunId, model: &str) -> ModelRequestDto {
         run_id,
         model,
         vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
-        None,
         None,
     )
     .expect("request is valid")
@@ -65,13 +64,11 @@ struct PendingAfterStartedDriver {
     executions: std::sync::Mutex<usize>,
 }
 
-impl ModelDriver for PendingAfterStartedDriver {
+impl ModelExecutionDriver for PendingAfterStartedDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
         ModelCapabilitiesDto::new(true, true, true, false, false, true)
     }
-}
 
-impl ModelExecutionDriver for PendingAfterStartedDriver {
     fn execute(
         &self,
         _request: ModelRequestDto,
