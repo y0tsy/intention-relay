@@ -58,8 +58,11 @@ the `ci-*` job aliases, and the opt-in `e2e-real-api`.
   configured in the root Cargo lint configuration. The policy deliberately does not deny all `pedantic` or all
   `restriction` lints, because some are subjective or ergonomically harmful.
 - `make architecture` enforces the architectural protections encoded in `quality/architecture.toml` and implemented by
-  `quality/check_architecture.py`: the active crate set, dependency directions, private provider-SDK ownership,
-  DTO-only boundaries, no process-CWD fallback, forbidden escape hatches, and the closed ordering-authority set.
+  `quality/check_architecture.py`: the active crate set, dependency directions, the acyclic production dependency
+  graph, private provider-SDK ownership, DTO-only boundaries, no process-CWD fallback, forbidden escape hatches, and
+  the closed ordering-authority set. Development-dependency edges follow Cargo and are excluded from cycle detection:
+  a shared test-fixture crate may depend on the crate under test without closing a production cycle, while a
+  production dependency cycle still fails.
 
 ## Coverage policy
 

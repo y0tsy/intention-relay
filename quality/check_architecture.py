@@ -200,16 +200,23 @@ def integration_test_targets(package: dict[str, object]) -> set[str]:
     return result
 
 
-def workspace_dependency_graph(packages: dict[str, dict[str, object]]) -> dict[str, set[str]]:
+def production_dependency_graph(packages: dict[str, dict[str, object]]) -> dict[str, set[str]]:
+    """Builds the production dependency graph used for cycle detection.
+
+    Development-dependency edges are excluded because Cargo permits a
+    dev-dependency cycle and a dev edge never enters another crate's production
+    build, so it cannot close a production cycle. A shared test-fixture crate
+    that depends on the crate under test is exactly that shape.
+    """
     workspace_names = set(packages)
     return {
-        package_name: workspace_dependencies(package, workspace_names)
+        package_name: production_workspace_dependencies(package, workspace_names)
         for package_name, package in packages.items()
     }
 
 
 def check_workspace_dependency_cycles(packages: dict[str, dict[str, object]]) -> list[str]:
-    graph = workspace_dependency_graph(packages)
+    graph = production_dependency_graph(packages)
     states: dict[str, str] = {name: "unvisited" for name in graph}
     stack: list[str] = []
     failures: list[str] = []
@@ -706,6 +713,31 @@ def self_test_composition_type_ownership() -> None:
         fail("composition ownership self-test: a declaration no crate defines must fail")
 
 
+def self_test_dependency_cycle_scope() -> None:
+    """Proves the cycle check follows production edges and tolerates dev edges."""
+
+    def package(name: str, dependencies: list[tuple[str, str | None]]) -> dict[str, object]:
+        return {
+            "name": name,
+            "dependencies": [
+                {"name": dependency, "kind": kind} for dependency, kind in dependencies
+            ],
+        }
+
+    tolerated = {
+        "intention-library": package("intention-library", [("intention-support", None)]),
+        "intention-support": package("intention-support", [("intention-library", "dev")]),
+    }
+    if check_workspace_dependency_cycles(tolerated):
+        fail("dependency cycle self-test: a dev-dependency edge must not close a production cycle")
+    rejected = {
+        "intention-library": package("intention-library", [("intention-support", None)]),
+        "intention-support": package("intention-support", [("intention-library", None)]),
+    }
+    if not check_workspace_dependency_cycles(rejected):
+        fail("dependency cycle self-test: a production dependency cycle must fail")
+
+
 def self_test_ordering_authorities() -> None:
     """Proves the ordering-authority check can fail before it is trusted."""
     suffixes = ["SequenceDto"]
@@ -812,6 +844,7 @@ def main() -> None:
 
     self_test_ordering_authorities()
     self_test_composition_type_ownership()
+    self_test_dependency_cycle_scope()
     ordering = policy.get("ordering_authorities")
     if not isinstance(ordering, dict):
         fail("missing [ordering_authorities] table")
