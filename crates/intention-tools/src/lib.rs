@@ -911,18 +911,6 @@ impl ToolId {
             Self::Execute => "execute",
         }
     }
-
-    /// Parses one stable wire name back into its registered identifier.
-    ///
-    /// The lookup matches `as_str` over the built-in registry, so no second
-    /// name list can disagree with the names the product advertises.
-    #[must_use]
-    pub fn from_wire_name(name: &str) -> Option<Self> {
-        registry()
-            .into_iter()
-            .map(ToolDescriptor::id)
-            .find(|id| id.as_str() == name)
-    }
 }
 impl Display for ToolId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -1555,17 +1543,16 @@ impl ToolInput {
         })
     }
 
-    /// Returns the logical workspace-relative path targeted by this input, when
-    /// the tool operates on a single one. Glob matches by pattern and Execute
-    /// runs a program, so neither targets one workspace path.
+    /// Returns the concrete registered tool this input belongs to.
     #[must_use]
-    pub const fn logical_path(&self) -> Option<&WorkspaceRelativePathDto> {
+    pub const fn tool_id(&self) -> ToolId {
         match self {
-            Self::Read(input) => Some(&input.path),
-            Self::Write(input) => Some(&input.path),
-            Self::Edit(input) => Some(&input.path),
-            Self::Grep(input) => input.path.as_ref(),
-            Self::Glob(_) | Self::Execute(_) => None,
+            Self::Read(_) => ToolId::Read,
+            Self::Glob(_) => ToolId::Glob,
+            Self::Grep(_) => ToolId::Grep,
+            Self::Write(_) => ToolId::Write,
+            Self::Edit(_) => ToolId::Edit,
+            Self::Execute(_) => ToolId::Execute,
         }
     }
 }
@@ -1918,7 +1905,7 @@ fn write_tool(
         return Ok(stopped_outcome(None));
     }
     let bytes = input.content.as_str().len() as u64;
-    let path = root.resolve_new_file_path(&input.path);
+    let path = root.resolve_path(&input.path);
     if let Some(expected) = input.expected_content.as_ref() {
         // Expected-content equality is checked against a bounded read: a
         // larger file can never equal the bounded expected content and is

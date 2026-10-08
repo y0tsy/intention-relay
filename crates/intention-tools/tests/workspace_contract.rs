@@ -66,23 +66,6 @@ fn relative_resolution_joins_the_declared_root_independent_of_process_cwd() {
     let _guard = cwd_guard();
     let _cwd = CwdGuard::change_to(&std::env::temp_dir());
     assert_eq!(workspace.resolve_path(&path), expected);
-}
-
-#[test]
-fn new_file_resolution_shares_the_join_rule() {
-    let root = TempDir::new("new-file");
-    let workspace = common::workspace(root.path());
-    let path = WorkspaceRelativePathDto::parse("new.txt").expect("path");
-    let expected = std::fs::canonicalize(root.path())
-        .expect("canonical root")
-        .join("new.txt");
-    assert_eq!(workspace.resolve_new_file_path(&path), expected);
-}
-
-#[test]
-fn execute_cwd_is_the_declared_root() {
-    let root = TempDir::new("cwd");
-    let workspace = common::workspace(root.path());
     assert_eq!(workspace.execute_cwd(), workspace.root());
     assert_eq!(
         workspace.execute_cwd(),

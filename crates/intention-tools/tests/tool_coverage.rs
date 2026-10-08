@@ -1,6 +1,6 @@
 //! Consolidated coverage cases: schema version, dispatch, metadata
-//! validation, search scopes, logical paths, and symlink handling, merged from
-//! the six former padded coverage targets.
+//! validation, search scopes, and symlink handling, merged from the six former
+//! padded coverage targets.
 
 #![allow(
     clippy::expect_used,
@@ -17,48 +17,13 @@ use intention_proto::ToolCallId;
 #[cfg(unix)]
 use intention_tools::ToolDispatchOutcome;
 use intention_tools::{
-    CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepScope, ReadInput,
-    TOOL_SCHEMA_VERSION, ToolExecutionMetadata, ToolInput, ToolPolicy, ToolProcessStatus,
-    ToolResult, WriteInput,
+    CancellationSignal, EditInput, GrepInput, GrepScope, ReadInput, TOOL_SCHEMA_VERSION,
+    ToolExecutionMetadata, ToolInput, ToolPolicy, ToolProcessStatus, ToolResult, WriteInput,
 };
 
 #[test]
 fn tool_schema_version_is_current() {
     assert_eq!(TOOL_SCHEMA_VERSION, 1);
-}
-
-#[test]
-fn logical_paths_cover_all_inputs() {
-    let path = relative("x.txt");
-    let inputs = [
-        ToolInput::Read(ReadInput { path: path.clone() }),
-        ToolInput::Write(WriteInput {
-            path: path.clone(),
-            content: text("x"),
-            expected_content: None,
-        }),
-        ToolInput::Edit(EditInput {
-            path: path.clone(),
-            old: text("x"),
-            new: text("y"),
-            expected_content: None,
-        }),
-        ToolInput::Grep(GrepInput {
-            pattern: text("x"),
-            path: Some(path.clone()),
-            scope: None,
-        }),
-        ToolInput::Glob(GlobInput { pattern: text("*") }),
-        ToolInput::Execute(ExecuteInput {
-            program: text("true"),
-            args: vec![],
-        }),
-    ];
-    assert_eq!(inputs[0].logical_path(), Some(&path));
-    assert_eq!(inputs[1].logical_path(), Some(&path));
-    assert_eq!(inputs[2].logical_path(), Some(&path));
-    assert_eq!(inputs[3].logical_path(), Some(&path));
-    assert!(inputs[4].logical_path().is_none() && inputs[5].logical_path().is_none());
 }
 
 #[test]

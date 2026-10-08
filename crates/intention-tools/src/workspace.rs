@@ -77,13 +77,6 @@ impl WorkspaceRoot {
         Self::resolve(&declared)
     }
 
-    /// Addresses a new file under the root with the same join rule as
-    /// [`Self::resolve_path`].
-    #[must_use]
-    pub fn resolve_new_file_path(&self, path: &WorkspaceRelativePathDto) -> PathBuf {
-        self.root.join(path.as_str())
-    }
-
     /// Prepares an execute working directory, explicitly independent of CWD.
     #[must_use]
     pub fn execute_cwd(&self) -> &Path {
