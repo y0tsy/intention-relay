@@ -24,8 +24,7 @@ failure-path, or outcome tests.
   `ci-deps` on Linux. Branch protection requires the six resulting status checks.
 - CI installs exact tool releases through checksum-verified actions, scopes tools per job, uses `rust-cache`, the mold
   linker on Linux jobs whose flags request it, and sccache for coverage builds.
-- A manual `quality-benchmark` workflow, the opt-in `real-api-e2e` workflow, and a `cache-cleanup` workflow support the
-  gate without ever being part of it.
+- The opt-in `real-api-e2e` workflow supports the gate without ever being part of it.
 - The gates never install tools, update the lockfile, or resolve dependencies differently from the committed state.
 
 `make help` is the contract for the supported targets, their dependencies, and their mutation status. The principal
@@ -55,11 +54,11 @@ targets are `bootstrap-tools` (mutating and networked), `fmt`/`fmt-check`, `lint
   configured in the root Cargo lint configuration. The policy deliberately does not deny all `pedantic` or all
   `restriction` lints, because some are subjective or ergonomically harmful.
 - `make architecture` enforces the architectural protections encoded in `quality/architecture.toml` and implemented by
-  `quality/check_architecture.py`: the active crate set, dependency directions, the acyclic production dependency
-  graph, private provider-SDK ownership, DTO-only boundaries, no process-CWD fallback, forbidden escape hatches, and
-  the closed ordering-authority set. Development-dependency edges follow Cargo and are excluded from cycle detection:
-  a shared test-fixture crate may depend on the crate under test without closing a production cycle, while a
-  production dependency cycle still fails.
+  `quality/check_architecture.py`: the crate classification, the allowed cross-crate edges, the acyclic production
+  dependency graph, private provider-SDK ownership, DTO-only boundaries, no process-CWD fallback, forbidden escape
+  hatches, and the closed ordering-authority set. Development-dependency edges follow Cargo and are excluded from
+  cycle detection: a shared test-fixture crate may depend on the crate under test without closing a production cycle,
+  while a production dependency cycle still fails.
 
 ## Coverage policy
 
@@ -132,7 +131,7 @@ fixtures themselves live with their checkers.
 | Unreasoned or broad lint suppression | `make lint` or `make architecture`. |
 | Missing/mismatched pinned tool | `make tools-check`. |
 | Missing, stale, or hand-edited third-party notices | `make notices-check` and `make deps`. |
-| Missing required crate/test-target policy metadata | `make architecture`. |
+| Missing, conflicting, or incomplete crate classification metadata | `make architecture`. |
 | Forbidden crate dependency or import | `make architecture`. |
 | DTO/SDK implementation leak | `make architecture`. |
 | Coverage below a crate's tier floor | `make coverage`. |
@@ -143,7 +142,7 @@ fixtures themselves live with their checkers.
 
 ## Test-first integration
 
-Every production boundary is activated with its machine-readable architecture, test-target, and coverage policies
+Every production boundary is activated with its machine-readable architecture and coverage policies
 updated in the same change, together with focused expected-failure architecture fixtures and outcome evidence.
 A focused test suite is not a substitute for the full gates.
 

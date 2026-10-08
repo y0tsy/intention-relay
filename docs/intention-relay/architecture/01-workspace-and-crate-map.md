@@ -105,7 +105,7 @@ flowchart BT
 ## Slice 1.5 crate map (activated)
 
 Slice 1.5 collapsed the workspace to ten production crates, shown below together with what each absorbed. The table
-below is the live crate map, and the exact permitted edges plus per-crate test targets and coverage tiers are declared
+below is the live crate map, and the exact permitted edges and coverage tiers are declared
 by `quality/architecture.toml` under phase `slice15`.
 
 | Target crate | Absorbs | Owns |

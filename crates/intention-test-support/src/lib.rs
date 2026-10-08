@@ -15,9 +15,7 @@ use intention_proto::{
     ConfigRevisionId, DtoResult, ProjectId, ProtocolResultDto, SchemaVersionDto, SessionId,
     TimestampDto, WorkspaceId,
 };
-use intention_proto::{
-    CreateSessionCommandDto, MessageProjectionDto, RunModeDto, WorkspaceRootDto,
-};
+use intention_proto::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
 use intention_transport::{AsyncLocalListener, LocalEndpoint};
 
 /// The provider credential every fixture snapshot carries.
@@ -26,25 +24,13 @@ use intention_transport::{AsyncLocalListener, LocalEndpoint};
 /// fixture change can never silently drift away from the assertions.
 pub const FIXTURE_CREDENTIAL: &str = "fixture-secret";
 
-/// Opens a durable facade at an explicit test-only database path.
-///
-/// # Errors
-///
-/// Returns the typed facade startup failure.
-pub fn open_facade(
-    path: impl AsRef<Path>,
-    snapshot: ConfigSnapshotDto,
-) -> DtoResult<DaemonApplicationFacade> {
-    DaemonApplicationFacade::open_for_test_support(path, snapshot)
-}
-
 /// Creates a durable facade with a controlled credential-free fixture snapshot.
 ///
 /// # Errors
 ///
 /// Returns the typed facade startup failure.
-pub fn open_fixture_facade(path: impl AsRef<Path>) -> DtoResult<DaemonApplicationFacade> {
-    open_facade(path, fixture_snapshot())
+fn open_fixture_facade(path: impl AsRef<Path>) -> DtoResult<DaemonApplicationFacade> {
+    DaemonApplicationFacade::open_for_test_support(path, fixture_snapshot())
 }
 
 /// Returns a credential-free fixture snapshot with a native absolute source path.
@@ -110,9 +96,9 @@ pub fn fixture_workspace_root(label: &str) -> WorkspaceRootDto {
     .unwrap_or_else(|_| unreachable!("native temporary fixture root is absolute"))
 }
 
-/// Returns a controlled session-creation command for integration scenarios.
+/// Returns a controlled session-creation command for the fixture session.
 #[must_use]
-pub fn fixture_session_command(session_id: SessionId) -> CreateSessionCommandDto {
+fn fixture_session_command(session_id: SessionId) -> CreateSessionCommandDto {
     CreateSessionCommandDto::new(
         ProjectId::new(),
         session_id,
@@ -127,7 +113,7 @@ pub fn fixture_session_command(session_id: SessionId) -> CreateSessionCommandDto
 /// # Errors
 ///
 /// Returns the typed facade rejection.
-pub fn create_fixture_session(
+fn create_fixture_session(
     facade: &DaemonApplicationFacade,
     session_id: SessionId,
 ) -> DtoResult<()> {
@@ -135,19 +121,6 @@ pub fn create_fixture_session(
         ProtocolResultDto::SessionCreated(_) => Ok(()),
         _ => unreachable!("fixture session creation answers with a session creation"),
     }
-}
-
-/// Loads the fixture session's committed transcript rows through the facade.
-///
-/// # Errors
-///
-/// Returns the typed read failure when the session is unknown or storage fails.
-pub fn session_messages(
-    facade: &DaemonApplicationFacade,
-    session_id: SessionId,
-) -> DtoResult<Vec<MessageProjectionDto>> {
-    let snapshot = facade.session_snapshot(session_id)?;
-    Ok(snapshot.messages().to_vec())
 }
 
 /// Owns a durable fixture database, one configured session, and its fixture host.

@@ -246,11 +246,8 @@ and pull requests to `main`:
 - pinned toolchains and per-job tool scopes, rust-cache, `mold` on Linux,
   sccache for coverage builds, and uploaded quality reports.
 
-Three supporting workflows are not part of the blocking gate: a weekly cache
-cleanup ([cache-cleanup.yml](.github/workflows/cache-cleanup.yml)), a
-manual, observational cargo `--jobs` build benchmark
-([quality-benchmark.yml](.github/workflows/quality-benchmark.yml)), and a
-manual live-provider end-to-end run
+One supporting workflow is not part of the blocking gate: the manual
+live-provider end-to-end run
 ([real-api-e2e.yml](.github/workflows/real-api-e2e.yml)). Dependabot is
 enabled for dependency updates
 ([dependabot.yml](.github/dependabot.yml)).

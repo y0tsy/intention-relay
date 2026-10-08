@@ -3,6 +3,8 @@
     reason = "M4 contract fixtures use expect to provide precise test failure messages."
 )]
 
+//! Resolved-value, startup-material, and public snapshot fixture contracts.
+
 #[allow(
     dead_code,
     reason = "Shared fixtures serve every integration target in this crate; each target compiles the subset its suite calls."
@@ -11,7 +13,10 @@ mod common;
 
 use common::{FAKE_CREDENTIAL, explicit_source};
 
-use intention_config::{RawConfigInputDto, ResolvedConfigDto};
+use intention_config::{ConfigSnapshotDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto};
+use intention_proto::{ConfigRevisionId, SchemaVersionDto, TimestampDto};
+
+const VALID_RESOLVED: &str = r#"{"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000},"source_kind":"explicit"}"#;
 
 fn resolve(execution: &str) -> ResolvedConfigDto {
     ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
@@ -136,4 +141,59 @@ fn startup_material_returns_safe_errors_before_provider_construction() {
         .expect("invalid startup material must return an error");
     assert_eq!(error.code(), "missing_provider_credential");
     assert_eq!(error.category().as_str(), "validation");
+}
+
+#[test]
+fn config_snapshot_fixture_decodes_and_rejects_a_foreign_schema() {
+    let fixture = include_str!("fixtures/config-snapshot-v1.json");
+    let snapshot: ConfigSnapshotDto =
+        serde_json::from_str(fixture).expect("config snapshot fixture must decode");
+
+    assert_eq!(
+        snapshot.resolved().provider().kind(),
+        ProviderKindDto::Openrouter
+    );
+    assert_eq!(snapshot.resolved().provider().model(), "example-chat-model");
+
+    let constructed = ConfigSnapshotDto::new(
+        SchemaVersionDto::new(1, 0),
+        ConfigRevisionId::new(),
+        TimestampDto::from_unix_seconds(1_700_000_001).expect("fixture timestamp is valid"),
+        snapshot.resolved().clone(),
+    )
+    .expect("compatible snapshot schema is valid");
+    assert_eq!(constructed.schema_version(), SchemaVersionDto::new(1, 0));
+    assert!(
+        ConfigSnapshotDto::new(
+            SchemaVersionDto::new(2, 0),
+            ConfigRevisionId::new(),
+            TimestampDto::from_unix_seconds(1_700_000_001).expect("fixture timestamp is valid"),
+            snapshot.resolved().clone(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn malformed_config_snapshot_wire_shapes_are_rejected() {
+    for wire in [
+        r#"{"schema_version":{"major":2,"minor":0},"revision_id":"44444444-4444-4444-8444-444444444444","captured_at":1700000000,"resolved":{"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000},"source_kind":"explicit"}}"#,
+        r#"{"schema_version":{"major":1,"minor":0},"revision_id":"44444444-4444-4444-8444-444444444444","captured_at":1700000000,"resolved":{}}"#,
+    ] {
+        assert!(serde_json::from_str::<ConfigSnapshotDto>(wire).is_err());
+    }
+}
+
+#[test]
+fn resolved_config_public_contract_is_credential_free_and_closed() {
+    let resolved: ResolvedConfigDto =
+        serde_json::from_str(VALID_RESOLVED).expect("public resolved config must decode");
+
+    assert_eq!(resolved.provider().kind(), ProviderKindDto::Openrouter);
+    assert!(
+        serde_json::from_str::<ResolvedConfigDto>(
+            r#"{"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000},"source_kind":"explicit","unexpected":true}"#
+        )
+        .is_err()
+    );
 }

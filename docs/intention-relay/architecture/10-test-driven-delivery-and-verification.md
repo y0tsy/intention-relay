@@ -50,7 +50,7 @@ The following are mandatory candidates for automated architecture tests:
 | Rule | Required protection |
 | --- | --- |
 | Small-crate structure | Dependency graph check, deny cycles, and a manifest assertion for the required v1 crate set. |
-| Crate accountability | A manifest-backed test that every required crate has one declared responsibility and a test target. |
+| Crate accountability | A Cargo-metadata-backed check that every workspace crate is classified exactly once and every active production crate keeps an integration test target. |
 | Composition ownership | Only `intention-daemon` selects concrete storage/provider/tool implementations. |
 | Adapter isolation | `intention-tauri` and `intention-tui` cannot depend directly on application runtime/storage implementations. |
 | DTO-first | Public cross-crate APIs use DTOs; forbidden implementation resources/SDK types cannot escape. |
@@ -67,14 +67,14 @@ are executed through `make architecture`; the complete reproducible acceptance g
 local single-pass alias, while CI invokes the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default`,
 `ci-deps`) as parallel matrix jobs. `make architecture` also contains isolated expected-failure fixtures for adapter
 isolation, protocol isolation, composition-only concrete selection, provider-SDK public-contract leakage,
-policy-aligned workspace cycles, and executable Cargo test-target declarations.
+and policy-aligned workspace cycles.
 
 ## Minimum test portfolio by crate
 
-`quality/architecture.toml` declares every crate and its required test targets, and `quality/coverage.toml` declares
-the per-crate tier floors ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)). Every declared test target
-must exist before implementation and prove the contracts, invariants, failure modes, and outcomes its owner
-architecture document states. The smallest portfolio that proves every stated invariant, contract, failure mode, and
+`quality/architecture.toml` classifies every workspace crate and declares each production crate's allowed workspace
+dependency edges, and `quality/coverage.toml` declares the per-crate tier floors ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
+Every production crate's test targets must exist before implementation and prove the contracts, invariants, failure
+modes, and outcomes its owner architecture document states. The smallest portfolio that proves every stated invariant, contract, failure mode, and
 outcome is required; no aggregate coverage number replaces it, and boundary crates prove behavior over fixture daemons
 and current-schema state rather than private implementation steps.
 
