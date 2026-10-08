@@ -137,7 +137,7 @@ original/retrieved content.
 
 Both crates are subject to the coverage tier declared when they are activated; their transform, retrieval, expiry,
 ordering, and adapter/model
-distinction tests are blocking `make verify` inputs under every relevant feature profile. Architecture checks must prove
+distinction tests are blocking `make verify` inputs in the single feature configuration. Architecture checks must prove
 base tools do not import either extension implementation crate. See [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md).
 

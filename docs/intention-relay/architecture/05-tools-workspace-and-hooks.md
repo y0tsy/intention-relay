@@ -105,10 +105,10 @@ container, or ACL, never a lexical path check.
 
 ### Safe missing-path outcome
 
-When M5 implements a file-oriented `not_found` outcome, it uses `ErrorDto` with `ErrorDetailDto::MissingWorkspacePath {
-path: WorkspaceRelativePathDto }`. `path` is the logical relative path supplied under the session workspace, such as
-`src/missing.rs`. The tool must not disclose the absolute workspace root, a resolved symlink target, an OS error string,
-command details, or file content in the error message, detail, or display form.
+A file-oriented failure outcome uses `ErrorDto` with a stable code and a code-owned safe message: a workspace read that
+cannot open or read its target reports `tool_read_failed` with `unable to read workspace file`. The tool must not
+disclose the absolute workspace root, a resolved symlink target, an OS error string, command details, or file content,
+and the error carries no dynamic path detail payload.
 
 ## Tool pipeline
 

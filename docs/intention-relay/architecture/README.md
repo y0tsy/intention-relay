@@ -52,7 +52,7 @@ flowchart TD
 | **Build Autopilot** | The single user-authorized Build policy that executes the configured active tool surface without per-action confirmation. |
 | **Projection** | A normalized current-state representation derived and stored for efficient queries. |
 | **TTD** | Test-driven delivery. Each milestone starts from executable contracts and observable outcomes, not only structural design. |
-| **Quality gate** | A reproducible, blocking Makefile pipeline that verifies formatting, linting, feature profiles, tests, documentation, architecture, coverage, and supply-chain policy. |
+| **Quality gate** | A reproducible, blocking Makefile pipeline that verifies formatting, linting, tests, documentation, architecture, coverage, and supply-chain policy. |
 
 ## Reading paths
 

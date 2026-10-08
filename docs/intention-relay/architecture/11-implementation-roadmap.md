@@ -6,7 +6,7 @@ This is a dependency-aware delivery roadmap, not a time estimate. The first impl
 quality foundation. Every later milestone begins with failing tests and is accepted only after its applicable `make
 verify` evidence passes. This roadmap owns milestone order, dependencies, activation, and status only: required quality
 commands, pinned tools, the coverage policy, lint policy,
-feature profiles, architecture checks, and supply-chain gates live in [Quality Gates and
+architecture checks, and supply-chain gates live in [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md); test-first and outcome-verification rules live in [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md).
 
@@ -57,8 +57,8 @@ flowchart TD
 Every milestone after Milestone 0 follows the test-first rules of [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md) and the quality policy of [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md): new production crates meet the tier floor declared for them before merge,
-new optional Cargo features are classified in the
-feature-profile policy in the same change, only pinned dependencies and tools are used, `make quick` runs during
+new optional Cargo features extend the single feature
+configuration in the same change, only pinned dependencies and tools are used, `make quick` runs during
 development and `make verify` before acceptance, and any policy exception is recorded in a reviewed, versioned policy
 file with rationale and equivalent test evidence.
 
@@ -86,9 +86,8 @@ milestone that implements it.
 2.0 local wire at exact protocol version 1.0, its method/notification table, and the removed capability plane
 ([architecture 03](03-daemon-transport-and-adapters.md)); explicit DTO schema versions with exact-equality
 comparison; SQLite as one live storage schema created directly on open
-([architecture 00](00-principles-and-scope.md)); and crate ownership, feature-profile, and
-coverage declarations under [Quality Gates and Makefile](12-quality-gates-and-makefile.md) for every activated
-family. The
+([architecture 00](00-principles-and-scope.md)); and crate ownership and coverage declarations
+under [Quality Gates and Makefile](12-quality-gates-and-makefile.md) for every activated family. The
 former contract ledger, `run-execution-meaning-v4` field tables, capability families, `typed-tlv-v1`/SHA-256 tags, and
 digests were deleted ([architecture 02](02-dto-and-contract-policy.md)): no ledger, tag registry, canonical
 digest, or identity record remains, and every future contract family is typed serde JSON with RFC 8785 canonicalization
@@ -113,8 +112,8 @@ is an asynchronous client with its blocking API removed that covers connect/heal
 subscriptions, and the command surface, and whose `intention-tui` proof adapter is migrated mechanically; the daemon
 end-to-end suite drives that client (`client_e2e`) instead of the low-level transport; the eight hook phases are wired
 into the real tool cycle; the ten-production-crate consolidation and the removal of the composition facade landed, so
-the daemon host calls the engine directly; and the single storage schema evolves in place with no migration or
-compatibility path.
+the daemon host calls the engine directly; and the single storage schema is created on open under one integer stamp,
+where a stamp bump discards and recreates the database with no migration or compatibility path.
 -  **Slice 2 — Control plane — not activated.** The cluster and provider session selection (architectures 25/29/22):
 controlled live reload, credential rotation, provider health checks, model discovery, pricing policy, provider profile
 UI and raw-TOML/configuration editing, arbitrary authentication headers, session defaults and per-turn/fork overrides,
@@ -148,8 +147,9 @@ instruction contract families as typed serde JSON contracts and changes no earli
 schema, crate-boundary, migration, or quality-policy change.
 -  M3/M4 startup-only configuration, recorded revisions, sessions, runs, and bytes remain authoritative and unchanged;
 SQLite storage is the single live schema created directly on open.
--  Slice 1.5 preserves durable meaning: the single storage schema evolves in place with no migration or compatibility
-layer, and tool, hook, and lifecycle semantics keep their recorded law.
+-  Slice 1.5 preserves durable meaning: the single storage schema is created on open under one integer stamp, where a
+stamp bump discards and recreates the database with no migration or compatibility layer, and tool, hook, and lifecycle
+semantics keep their recorded law.
 -  The Slice 2 health, discovery, and pricing surfaces are non-authorizing: they create no RunId, tool
 permission, MCP capability, bridge grant, kernel epoch, context projection, or branch, and the activating
 specification must prove that non-authority.
@@ -269,8 +269,7 @@ Goal: independently enabled hook extensions over the base tool pipeline.
 -  VFR and Headroom operate as independently enabled hook extensions; `retrieve` returns retained content while valid,
 with typed expiry behavior afterward;
 - base tools do not import VFR or Headroom implementation crates;
--  extension crates meet their declared tier floors ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)) and
-feature-profile checks.
+-  extension crates meet their declared tier floors ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ## Milestone 9: Hardening and acceptance verification
 
@@ -335,7 +334,7 @@ durable operation correlation, the one-path ingress into registry admission and 
 ingress), re-subscription reading current state, cancellation propagation, recovery, and the closed `bridge_*`
 failures (architecture 19);
 -  worker/process supervision topology, never a second runtime, registry, persistence authority, or sandbox (architecture 03);
--  crate ownership, feature-profile, and coverage declarations under [Quality Gates and
+-  crate ownership and coverage declarations under [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations for every activated family.
 
 ### Tests first
@@ -390,7 +389,7 @@ context manifests, model-step safe projections, typed memory, and immutable comp
 (architecture 21), with the Goal domain itself owned by architecture 28;
 -  the canonical `responses` provider driver, `SafeHeader` live wire injection, and the user-kind parser (architecture
 22);
--  crate ownership, feature-profile, and coverage declarations under [Quality Gates and
+-  crate ownership and coverage declarations under [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations for every activated family.
 
 ### Tests first

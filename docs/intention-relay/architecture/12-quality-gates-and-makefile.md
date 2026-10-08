@@ -8,7 +8,7 @@ adapter, quality tool, or an explicitly approved stronger check.
 ## Scope
 
 The policy covers pinned toolchains and external quality tools; formatting and strict pragmatic linting; per-crate
-coverage tiers; required Cargo feature profiles; tests, doctests, documentation, and architecture checks; dependency,
+coverage tiers; tests, doctests, documentation, and architecture checks; dependency,
 license, advisory, unused-dependency, stale-dependency, and manifest hygiene; the Makefile contract and CI entry point;
 and explicit, reviewable exception handling. It complements, and does not replace, [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md): numeric coverage never replaces contract, architecture,
@@ -16,25 +16,22 @@ failure-path, or outcome tests.
 
 ## Quality model
 
-- `make quick` is the fast inner-loop signal: tools check, `fmt-check`, the profile-based lint matrix, and the
-  default-profile test suite.
+- `make quick` is the fast inner-loop signal: tools check, `fmt-check`, lint, and the test suite.
 - `make check` is the complete non-mutating source gate; `make verify` adds coverage and the dependency/supply-chain
   gates; `make ci` aliases the full gate so local and CI behavior cannot drift.
 - `.github/workflows/quality.yml` runs the blocking gate as parallel matrix jobs through the per-job aliases:
-  `ci-lint-arch` (formatting, features, lint, docs, architecture) and `ci-test` on Linux and Windows,
-  `ci-coverage-default`/`ci-coverage-no-default`/`ci-coverage-all` and `ci-deps` on Linux. Branch protection requires the
-  eight resulting status checks.
+  `ci-lint-arch` (formatting, lint, docs, architecture) and `ci-test` on Linux and Windows, `ci-coverage-default` and
+  `ci-deps` on Linux. Branch protection requires the six resulting status checks.
 - CI installs exact tool releases through checksum-verified actions, scopes tools per job, uses `rust-cache`, the mold
-  linker on Linux jobs whose flags request it, and sccache for coverage builds; each job writes a job-scoped metrics
-  manifest (`quality-run-<job>.json`) that is observational only and never changes a gate's verdict.
+  linker on Linux jobs whose flags request it, and sccache for coverage builds.
 - A manual `quality-benchmark` workflow, the opt-in `real-api-e2e` workflow, and a `cache-cleanup` workflow support the
   gate without ever being part of it.
 - The gates never install tools, update the lockfile, or resolve dependencies differently from the committed state.
 
 `make help` is the contract for the supported targets, their dependencies, and their mutation status. The principal
 targets are `bootstrap-tools` (mutating and networked), `fmt`/`fmt-check`, `lint`, `test`, `docs-check`, `architecture`,
-`features`, `coverage` and its per-profile variants, `deps`, `notices`/`notices-check`, `quick`, `check`, `verify`, `ci`,
-the `ci-*` job aliases, and the opt-in `e2e-real-api`.
+`coverage`, `deps`, `notices`/`notices-check`, `quick`, `check`, `verify`, `ci`, the `ci-*` job aliases, and the opt-in
+`e2e-real-api`.
 
 ## Reproducible tooling
 
@@ -49,7 +46,7 @@ the `ci-*` job aliases, and the opt-in `e2e-real-api`.
 ## Formatting and lint policy
 
 - `rustfmt` is mandatory; `make fmt-check` fails on formatting drift and never modifies files.
-- All warnings are errors in every non-mutating verification target, for every required feature profile. `unsafe` is
+- All warnings are errors in every non-mutating verification target. `unsafe` is
   denied by default, and production code denies unreviewed `unwrap`, `expect`, `panic`, `todo!`, `unimplemented!`,
   `dbg!`, direct stdout/stderr printing, direct process termination, and memory-forget patterns.
 - A lint suppression uses a narrow local scope with a mandatory `reason` that explains why it is safe; test-only
@@ -67,8 +64,9 @@ the `ci-*` job aliases, and the opt-in `e2e-real-api`.
 ## Coverage policy
 
 Coverage is a blocking guardrail from the moment a crate contains production code; there is no grace baseline and no
-gradual ramp. Every collected crate's own branch-aware `cargo llvm-cov` report must reach its tier floor; the workspace
-aggregate report is informational and never a threshold authority.
+gradual ramp. Every collected crate gets one line-only `cargo llvm-cov` pass under the workspace's single feature
+configuration, and its own report must reach its tier floor; the workspace aggregate report is informational and never
+a threshold authority.
 
 `quality/coverage.toml` declares the numeric ladder and assigns every crate:
 
@@ -79,33 +77,32 @@ aggregate report is informational and never a threshold authority.
 | `edge` | 20% | `intention-tauri`, `intention-tui`, `intention-client` |
 | `exempt` | 0% (not collected) | `intention-proto` |
 
-- Every required feature profile contributes to coverage where the crate supports that profile; a coverage decrease
-  below a crate's tier floor fails `make coverage` and `make verify`.
+- A coverage decrease below a crate's tier floor fails `make coverage` and `make verify`.
 - Generated code and technically unmeasurable code may be excluded only through a versioned policy entry with
   rationale, owner, and equivalent test evidence, and exclusions cannot hide core runtime, policy, provider
   translation, persistence, redaction, or security logic. Coverage reports are stored as CI artifacts, and test code
   must not inflate the production denominator.
 - The one enabled exclusion is `intention-daemon/src/main.rs`: a thin process adapter whose real-binary bootstrap
   fixtures are accepted as equivalent evidence, while all daemon library behavior stays under the `standard` floor.
-- `quality/run_coverage.py` normalizes the daemon's feature-profile flags (`seen_effective`): because the daemon report
-  always appends `--all-features`, profiles that reduce to that set are skipped instead of producing duplicate reports.
-  This is the only deliberate equivalence in the runner and it does not weaken the feature-profile policy.
+- `quality/run_coverage.py` makes one line-only pass per collected crate under the workspace's single feature
+  configuration (`--all-features`, which enables the daemon's non-production `test-support` feature); `intention-daemon`
+  and `intention-tools` run through `cargo test` so their library harnesses merge, and a crate with no executable test
+  code is skipped.
 
-## Cargo feature-profile policy
+## Cargo feature policy
 
-`make features` verifies the required profiles: default features, `--no-default-features`, `--all-features`, and the
-explicitly versioned critical combinations in `quality/features.toml` (currently none). This is intentionally not an
-exhaustive matrix; a change that adds an optional provider, adapter, or feature covers it through one of those profiles,
-or adds a critical combination, in the same change.
+The workspace declares exactly one feature: `intention-daemon`'s non-production `test-support`. Every gate runs the
+single configuration `--all-features`, the superset the daemon's feature-gated tests require; a new optional provider,
+adapter, or feature extends that one configuration instead of adding a profile matrix.
 
 ## Makefile contract
 
 The root `Makefile` is the sole supported orchestration surface for local and CI quality workflows. Recipes use strict
 shell behavior and label each command as mutating or non-mutating. `make verify` runs `check`, `coverage`, and `deps`,
-then removes only the generated LLVM coverage target; coverage reports remain available for CI upload. `make ci` wraps
-`verify` with `metrics-start` and `metrics-finish`, which write `quality/reports/quality-run.json` and a JSONL event
-stream for phase, profile, crate, stage, duration, and outcome records. `make check`, `make verify`, and `make ci` fail
-rather than modify source, update the lockfile, install tools, or resolve dependencies differently from committed state.
+then removes only the generated LLVM coverage target; coverage reports remain available for CI upload. `make ci`,
+`make ci-lint-arch`, `make ci-test`, `make ci-coverage-default`, and `make ci-deps` are thin aliases for the gate
+sequences CI runs. `make check`, `make verify`, and `make ci` fail rather than modify source, update the lockfile,
+install tools, or resolve dependencies differently from committed state.
 
 An ordinary `cargo build`, `cargo run`, or destructive `cargo clean` is not an independent required quality gate when
 the compile and test contracts are already covered.
@@ -140,15 +137,14 @@ fixtures themselves live with their checkers.
 | DTO/SDK implementation leak | `make architecture`. |
 | Coverage below a crate's tier floor | `make coverage`. |
 | Unapproved coverage exclusion metadata | `make coverage`. |
-| Uncovered required feature profile | `make features`. |
 | Dependency advisory/license/source/ban/duplicate violation | `make deps`. |
 | Unused, stale, or manifest-only dependency | `make deps`. |
 | Recognizable fake secret in output fixture | `make test` and `make verify`. |
 
 ## Test-first integration
 
-Every production boundary is activated with its machine-readable architecture, test-target, coverage, and feature
-policies updated in the same change, together with focused expected-failure architecture fixtures and outcome evidence.
+Every production boundary is activated with its machine-readable architecture, test-target, and coverage policies
+updated in the same change, together with focused expected-failure architecture fixtures and outcome evidence.
 A focused test suite is not a substitute for the full gates.
 
 ## Opt-in live-provider e2e

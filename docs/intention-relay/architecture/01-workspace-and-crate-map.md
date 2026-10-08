@@ -233,8 +233,7 @@ The workspace must have tests that fail when these rules are broken:
 
 The exact test strategy and minimum test portfolio are defined in [10 Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (per-crate tiers),
-feature profiles, lint policy, and
-Makefile/CI contract in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+lint policy, and Makefile/CI contract in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Non-goals
 

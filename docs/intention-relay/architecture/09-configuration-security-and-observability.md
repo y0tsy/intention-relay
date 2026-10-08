@@ -79,11 +79,9 @@ without new contracts and outcome evidence.
 
 ### M5+ provider context-window policy
 
-The `[provider]` table carries the dynamic context-window policy as the optional `context_window_tokens` and
-`context_capacity_tokens` fields. `context_window_tokens` defaults to `250000` and `context_capacity_tokens` defaults to
-`1000000`; resolution requires a positive capacity and `0 < context_window_tokens < context_capacity_tokens`, and a
-value outside that range fails closed with the typed `invalid_provider_context_window_tokens` or
-`invalid_provider_context_capacity_tokens` validation error. The policy resolves into the credential-free
+The `[provider]` table carries the dynamic context-window policy as the optional `context_window_tokens` field. It
+defaults to `250000`, and resolution requires a positive window; a value outside that range fails closed with the typed
+`invalid_provider_context_window_tokens` validation error. The policy resolves into the credential-free
 `ContextWindowPolicyDto` included in `ResolvedConfigDto` and therefore in every `ConfigSnapshotDto`. [Architecture
 08](08-model-protocol-and-providers.md) owns the window mechanics that consume it.
 
@@ -119,7 +117,7 @@ The current bounds are:
 
 | Bound | Class and purpose |
 | --- | --- |
-| Transport message cap (`MAX_MESSAGE_BYTES`, 1 MiB) | Liveness: rejects an over-size frame before unbounded allocation. |
+| Transport message cap (`MAX_MESSAGE_BYTES`, 1 MiB) | Liveness: the single owner of the envelope bound; rejects an over-size frame before unbounded allocation, and an over-size correlated response is answered with the typed `local_protocol_message_too_large` failure instead of a silent close. |
 | Tool read and output windows (`MAX_TOOL_OUTPUT_BYTES`, `MAX_EDIT_TARGET_BYTES`, `MAX_GREP_AGGREGATE_BYTES`) | Representation: bounds one tool read or rendered result; a cut is marked, never hidden. |
 | Assistant-message bound (`MAX_ASSISTANT_CONTENT_BYTES`) | Representation: bounds one committed assistant message; long assistant text is split at this size. |
 | Process timeout and drain windows (`EXECUTE_TIMEOUT` 30 s, `READER_DRAIN_GRACE` 5 s) | Liveness: a child process that stops producing progress or never exits cannot hang the loop. |
@@ -156,7 +154,7 @@ A redaction failure is a security defect and must have regression coverage.
 
 Daemon-owned observability must expose typed, safe operational data:
 
-- daemon health/readiness/version;
+- daemon health/readiness with the current DTO schema version;
 - protocol compatibility status;
 - connection/subscription health;
 - session/run states and durations;

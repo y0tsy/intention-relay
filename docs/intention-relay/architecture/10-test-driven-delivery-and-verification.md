@@ -5,8 +5,8 @@
 This document makes TTD a delivery requirement for Intention Relay: it defines how architecture rules become executable
 checks and how implementation is judged by observable product outcomes, not only source structure or unit coverage. It
 applies to every crate, vertical slice, and adapter. The mandatory pinned tooling, strict linting, the coverage policy
-(per-crate tiers), feature profiles,
-Makefile targets, and supply-chain gates are defined in [Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+(per-crate tiers), Makefile targets, and supply-chain gates are defined in [Quality Gates and
+Makefile](12-quality-gates-and-makefile.md).
 
 ## Delivery principle
 

@@ -95,7 +95,8 @@ context; and
 ## Persistence model
 
 SQLite is the `intention-storage` implementation. It uses bundled SQLite and creates the complete current storage
-schema directly on open; there is no migration chain and no version gate
+schema directly on open under one integer schema stamp; a database that does not carry the current stamp is discarded
+and recreated from scratch, that discard is the only version gate, and there is no migration chain
 ([architecture 00](00-principles-and-scope.md)). Storage combines:
 
 - normalized current-state tables for projects, workspace roots, sessions, runs, and turns;
@@ -138,8 +139,8 @@ because they relate to the same user operation.
 
 `messages.kind` is a closed set: `user`, `assistant`, `tool_call`, `tool_result`, and `notice`. Assistant rows carry the
 whole reasoning text of the step, not deltas or fragments. `tool_results` is the structured view of tool calls;
-`tool_call_id` is unique, and the read path is production code, not a write-only table. Model context is rebuilt from
-`messages` plus `tool_results`; `turns` stays the acceptance and queue state machine.
+`tool_call_id` is unique, and the daemon publishes the committed values a write returned rather than re-reading durable
+state. Model context is rebuilt from `messages`; `turns` stays the acceptance and queue state machine.
 
 The daemon writes no mid-stream content: text and reasoning accumulate in memory and commit once per completed model
 step as one `messages` row, while usage, finish reason, and error commit on the `runs` row. A crash mid-step loses the
@@ -196,8 +197,8 @@ tool and run evidence is evidence of intent and observed state, not proof of ext
 ## Quality-gate integration
 
 Session, run, turn, transcript, and transaction tests are mandatory `make verify` inputs under the coverage policy of
-[12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate tiers), and must exercise every declared
-feature profile. Numeric
+[12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate tiers), and must run in the single feature
+configuration. Numeric
 coverage does not excuse missing fault-injection, recovery, ordering, or durable turn outcome tests.
 
 ## Non-goals

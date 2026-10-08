@@ -288,7 +288,7 @@ without leaking provider or OS text.
 #### Lifecycle vocabulary and interruption notices
 
 The tool lifecycle vocabulary is closed: `ToolLifecycleStatusDto` is `Admitted`, `Rejected`, `Started`, `Completed`,
-`Failed`, `Cancelled`, or `Partial`, and `ToolResultStatusDto` is `Completed`, `Failed`, `Cancelled`, or `Partial`,
+`Failed`, `Cancelled`, or `Partial`, and `ToolResultStatusDto` is `Completed`, `Failed`, or `Partial`,
 mapping one to one onto the matching terminal lifecycle member. The transition set is closed: none to `Admitted`;
 `Admitted` to `Cancelled`, `Started`, or `Rejected`; `Started` to `Completed`, `Failed`, or `Partial`. A `Partial`
 result records one execution that was interrupted before a final result, requires non-blank content exactly like a

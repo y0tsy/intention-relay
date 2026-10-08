@@ -78,18 +78,14 @@ ErrorDto
   message: safe human-readable message
   retry: never | immediate | delayed | manual
   correlation_id: optional `CorrelationIdDto` UUID diagnostic reference
-  detail: optional closed `ErrorDetailDto`
 ```
 
-`CorrelationIdDto` accepts only a canonical UUID string and is an opaque reference, not diagnostic content. Dynamic
-user-visible context belongs only in a reviewed `ErrorDetailDto` variant. M1 defines `MissingWorkspacePath { path:
-WorkspaceRelativePathDto }`: the path is normalized, slash-separated, logical, and relative to an already-authorized
-workspace. It never includes an absolute root, canonical target, symlink target, OS error, command line, stack trace, or
-file content.
+`CorrelationIdDto` accepts only a canonical UUID string and is an opaque reference, not diagnostic content. An error
+carries no dynamic detail payload: user-visible context is code-owned safe guidance, never a path, an OS error, a
+command line, a stack trace, or file content.
 
 Messages are code-owned safe guidance. Runtime data must never be interpolated into `message` or placed in a
-map/`serde_json::Value`; it must be added through a reviewed typed detail variant. `Display` remains exactly `code:
-message` and never renders correlation or detail data.
+map/`serde_json::Value`. `Display` remains exactly `code: message` and never renders correlation data.
 
 Provider secrets, filesystem content not intended for display, raw stack traces, and SDK objects never appear in
 `ErrorDto`.
@@ -176,7 +172,7 @@ typed identity for an adapter to reconcile state.
 
 - Every transport schema and persisted row schema has an explicit version.
 - Changes are additive by default. Current payloads may omit additive fields
-such as `ErrorDto.detail` and `ErrorDto.correlation_id`; omitted fields decode as `None`.
+such as `ErrorDto.correlation_id`; omitted fields decode as `None`.
 - Public DTOs tolerate unknown additive JSON fields unless a closed
 configuration schema explicitly documents `deny_unknown_fields`. Required fields, invalid types, invalid IDs, unknown
 closed variants, and any schema/protocol version other than the current one always fail safely.
@@ -185,8 +181,9 @@ protocol version (1.0) and rejects any other version with the typed `-32001` ver
 ([architecture 03](03-daemon-transport-and-adapters.md)); the public DTO schema compares by exact equality (no
 same-major tolerance).
 - SQLite storage is the single live schema (logical version 1) created
-directly on open; there is no migration chain, no version gate, and no opening of older schemas, and persisted rows keep
-their recorded meaning.
+directly on open under one integer schema stamp; a database that does not carry the current stamp is discarded and
+recreated from scratch, that discard is the only version gate, and no migration chain or older-schema open exists, while
+persisted rows keep their recorded meaning.
 - Provider DTOs are versioned independently from provider SDK models.
 
 ## Contract tests required before implementation
@@ -203,8 +200,8 @@ cases;
 ## Quality-gate integration
 
 DTO compatibility, validation, redaction, and public-API boundary tests are blocking `make verify` inputs. Every
-DTO-owning crate is subject to its declared coverage tier, and contract fixtures run across the required feature
-profiles.
+DTO-owning crate is subject to its declared coverage tier, and contract fixtures run in the single feature
+configuration.
 See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Outcome criteria
@@ -228,7 +225,7 @@ shape. This section records the landed model; the rules above are the live polic
   crates, and a type acquires wire attributes only when it crosses one of the three boundaries.
 - JSON only for tool payloads. Tool inputs and outputs are JSON objects validated at runtime against the tool's
   declared JSON Schema, and they are the only schemaless JSON values in the system. `serde_json::Value` stays
-  prohibited everywhere else, including error details, hooks, configuration, and storage.
+  prohibited everywhere else, including errors, hooks, configuration, and storage.
 - Eight identifiers. `SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`, and
   `IdempotencyKey` are the complete identity newtype set. `EventId`, `AssistantTurnId`, `PlanId`, `PlanRevisionId`,
   `ModelStepId`, and `ToolGroupId` are removed: model steps and tool groups are addressed by plain indices within their

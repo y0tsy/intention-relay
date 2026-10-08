@@ -70,7 +70,7 @@ The daemon host accepts each local connection, completes the JSON-RPC 2.0 `hello
 A one-shot connection reads one request, writes the correlated response, and closes; a long-lived connection may send
 further requests and receive subscription notifications. Each connection carries bounded liveness safeguards, not contract bureaucracy ([architecture 09](09-configuration-security-and-observability.md)):
 
-- `MAX_MESSAGE_BYTES` (1 MiB) rejects an over-size message before unbounded allocation; it is a transport liveness cap, not a contract limit on message content;
+- `MAX_MESSAGE_BYTES` (1 MiB) is the single owner of the envelope bound: it rejects an over-size message before unbounded allocation, the snapshot read stays byte-bounded below it (`MAX_TRANSCRIPT_SNAPSHOT_BYTES`), and an over-size correlated response is answered with a typed error instead of a silent close;
 - `CONNECT_TIMEOUT` (500 ms) bounds the connect wait;
 - a stale-socket probe reclaims an abandoned Unix endpoint only after proving no live listener owns it.
 

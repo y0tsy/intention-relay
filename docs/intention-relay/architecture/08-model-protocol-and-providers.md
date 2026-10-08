@@ -184,9 +184,9 @@ provider-neutral message shape carries the transient marker and the in-place con
 driver translates the result into its private request. The optional system context is not part of the window: the instruction projection of architecture 30 stays the stable leading block. It is never compressed and never
 re-derived.
 
-The `[provider]` configuration keys `context_window_tokens` (default `250000`) and `context_capacity_tokens` (default
-`1000000`) resolve into the credential-free `ContextWindowPolicyDto` of every `ConfigSnapshotDto`; resolution requires a
-positive capacity and `0 < window < capacity`, and a value outside that range fails closed with a typed validation error
+The `[provider]` configuration key `context_window_tokens` (default `250000`) resolves into the credential-free
+`ContextWindowPolicyDto` of every `ConfigSnapshotDto`; resolution requires a positive window, and a value outside that
+range fails closed with a typed validation error
 ([architecture 09](09-configuration-security-and-observability.md)).
 
 Token accounting estimates one request's input from its character count at four characters per token, rounded up,
@@ -201,10 +201,6 @@ When nothing printable remains, a compressed result becomes a fixed placeholder,
 blank.
 The pass runs after the starting context is built and again after every appended tool result; only the in-memory request
 is windowed, and every durable tool-result fact keeps its full recorded content.
-
-An estimate above `context_capacity_tokens` invokes the named `compress_context` pass. That pass is not implemented: it
-changes nothing, fails nothing, and records nothing, so an over-capacity estimate remains windowed exactly like a
-window-only crossing; compression is a future capability with a named owner.
 The window pass introduces no new durable order, event, schema version, or compatibility path.
 
 Prompt-cache breakpoints are part of the request. The window pass clears every earlier marker and then marks at most two
@@ -255,7 +251,7 @@ wait starts the next attempt immediately.
 
 `intention-providers` is subject to its `standard` tier floor. Stream normalization, capability
 validation, retry,
-SDK-isolation, and secret-redaction fixtures are blocking `make verify` inputs under every relevant feature profile.
+SDK-isolation, and secret-redaction fixtures are blocking `make verify` inputs in the single feature configuration.
 Dependency and public-API checks must prevent provider SDK types and secrets from escaping their crate. See [12 Quality
 Gates and Makefile](12-quality-gates-and-makefile.md).
 
