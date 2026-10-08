@@ -158,10 +158,7 @@ fn backend_failure_on_a_run_config_lookup_is_unavailable_not_not_found() {
     // failure on the run-identity or the persisted-snapshot lookup stays
     // transient `storage_unavailable`.
     for (label, mutation) in [
-        (
-            "backend-failure",
-            "PRAGMA foreign_keys = OFF;\nDROP TABLE runs;",
-        ),
+        ("backend-failure", "DROP TABLE runs;"),
         (
             "snapshot-backend-failure",
             "DROP TABLE configuration_revisions;",

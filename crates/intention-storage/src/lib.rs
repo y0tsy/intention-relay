@@ -29,7 +29,7 @@ use intention_proto::{
 
 mod sqlite;
 
-pub use sqlite::{FaultPoint, SqliteDatabaseLocationDto, SqliteStorageRepository};
+pub use sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 
 /// The maximum durable tool result content size in bytes.
 const MAX_TOOL_RESULT_CONTENT_BYTES: usize = 512 * 1024;

@@ -129,9 +129,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_session ON runs(session_id)
 /// `user_version` header field of every database this module creates.
 ///
 /// Bump this integer whenever `SCHEMA_SQL` or the shape of any persisted JSON
-/// column changes: the next open discards the whole database file and its WAL
-/// sidecars and recreates the current schema from scratch. That discard is the
-/// only version gate; there is no migration path.
+/// column changes: the next open discards the whole database file and its
+/// rollback journal and recreates the current schema from scratch. That discard
+/// is the only version gate; there is no migration path.
 const SCHEMA_STAMP: i32 = 1;
 
 /// Returns whether the open database already carries the current schema stamp.
@@ -144,9 +144,9 @@ fn carries_current_schema_stamp(connection: &sqlite::Connection) -> DtoResult<bo
 }
 
 /// Recreates the database file at a location that does not carry the current
-/// schema stamp, removing the file and its WAL sidecars so the following open
-/// creates the current schema from scratch. The discard is reported on stderr
-/// because it is the one path that loses durable data.
+/// schema stamp, removing the file and its rollback journal so the following
+/// open creates the current schema from scratch. The discard is reported on
+/// stderr because it is the one path that loses durable data.
 fn recreate_stale_database(location: &str) -> DtoResult<()> {
     let current = {
         let connection = sqlite::Connection::open(location).map_err(storage_error)?;
@@ -155,7 +155,7 @@ fn recreate_stale_database(location: &str) -> DtoResult<()> {
     if current {
         return Ok(());
     }
-    for suffix in ["", "-wal", "-shm"] {
+    for suffix in ["", "-journal"] {
         match remove_file(format!("{location}{suffix}")) {
             Ok(()) => {}
             Err(error) if error.kind() == ErrorKind::NotFound => {}
@@ -220,9 +220,10 @@ impl SqliteStorageRepository {
             recreate_stale_database(&location)?;
         }
         let connection = sqlite::Connection::open(&location).map_err(storage_error)?;
-        connection
-            .execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
-            .map_err(storage_error)?;
+        // No pragma is set here: the schema declares no foreign keys, and the
+        // repository owns exactly one connection, so WAL's concurrent readers
+        // buy nothing. The database deliberately keeps SQLite's default
+        // rollback journal.
         connection
             .execute_batch(SCHEMA_SQL)
             .map_err(|_| unavailable())?;
@@ -1591,7 +1592,7 @@ fn conflict(code: &'static str, message: &'static str) -> ErrorDto {
 /// A deterministic test-only write stage whose injected failure must roll back
 /// the whole transaction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FaultPoint {
+enum FaultPoint {
     /// The stage that commits an accepted turn, its run, and its first message.
     TurnAcceptance,
     /// The stage that commits one appended transcript row.
