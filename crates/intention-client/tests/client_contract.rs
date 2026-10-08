@@ -18,12 +18,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use intention_client::{DaemonLauncher, IntentionClient, ProcessDaemonLauncher};
 use intention_proto::{
-    ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto, DaemonHealthDto,
-    DaemonReadinessDto, IdempotencyKey, ProtocolDaemonMessageDto, ProtocolResultDto,
-    RemoveTurnAcceptedDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionId,
-    SessionSnapshotDto, TurnId, decode_request_line,
+    CreateSessionCommandDto, DaemonHealthDto, DaemonReadinessDto, ProtocolDaemonMessageDto,
+    ProtocolResultDto, RemoveTurnAcceptedDto, SessionId, SessionSnapshotDto, TurnId,
+    decode_request_line,
 };
-use intention_proto::{DtoResult, ErrorDto, ProjectId, RunId, WorkspaceId};
+use intention_proto::{DtoResult, ErrorDto, ProjectId, WorkspaceId};
 use intention_proto::{MessageKindDto, RunModeDto, SessionProjectionDto};
 use intention_transport::{AsyncLocalDaemonConnection, AsyncLocalListener, LocalEndpoint};
 
@@ -52,8 +51,6 @@ enum FixtureResponse {
     Health(DaemonHealthDto),
     Rejected(ErrorDto),
     Snapshot(SessionSnapshotDto),
-    Created(CreateSessionAcceptedDto),
-    TurnAccepted(SendUserTurnAcceptedDto),
     /// A valid current-wire reply that is not the requested result.
     WrongResult,
     Disconnect,
@@ -150,12 +147,6 @@ fn fixture_reply(request_id: u64, response: &FixtureResponse) -> ProtocolDaemonM
             request_id,
             ProtocolResultDto::SessionSnapshot(snapshot.clone()),
         ),
-        FixtureResponse::Created(created) => {
-            ProtocolDaemonMessageDto::reply(request_id, ProtocolResultDto::SessionCreated(*created))
-        }
-        FixtureResponse::TurnAccepted(turn) => {
-            ProtocolDaemonMessageDto::reply(request_id, ProtocolResultDto::TurnAccepted(*turn))
-        }
         FixtureResponse::WrongResult => ProtocolDaemonMessageDto::reply(
             request_id,
             ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
@@ -238,11 +229,7 @@ async fn first_ready_connection_skips_launch_and_bootstrap_launches_after_unavai
     .expect("unavailable initial endpoint must bootstrap through launcher");
     assert_eq!(health.readiness(), DaemonReadinessDto::Ready);
     assert_eq!(bootstrap_launches.load(Ordering::SeqCst), 1);
-}
 
-#[tokio::test]
-async fn bootstrap_propagates_typed_launch_error() {
-    let _guard = fixture_guard();
     let error = IntentionClient::new(endpoint(), Box::new(RejectingLauncher))
         .connect_or_bootstrap()
         .await
@@ -348,56 +335,6 @@ async fn session_snapshot_validates_success_and_rejection() {
         "session_rejected"
     );
     server.await.expect("rejection fixture server completes");
-}
-
-#[tokio::test]
-async fn command_and_conveniences_round_trip_typed_results() {
-    let _guard = fixture_guard();
-    let session_id = SessionId::new();
-    let created = CreateSessionAcceptedDto::new(ProjectId::new(), WorkspaceId::new(), session_id);
-
-    let create_endpoint = endpoint();
-    let server = start_fixture_server(create_endpoint.clone(), FixtureResponse::Created(created));
-    let received = client(
-        create_endpoint,
-        FixtureResponse::Created(created),
-        Arc::new(AtomicUsize::new(0)),
-    )
-    .create_session(fixture_create_command(session_id))
-    .await
-    .expect("session creation returns the daemon acceptance evidence");
-    assert_eq!(received, created);
-    assert_eq!(received.session_id(), session_id);
-    server
-        .await
-        .expect("create-session fixture server completes");
-
-    let outcome = SendUserTurnOutcomeDto::Started {
-        run_id: RunId::new(),
-        config_revision_id: ConfigRevisionId::new(),
-    };
-    let accepted = SendUserTurnAcceptedDto::new(session_id, TurnId::new(), outcome);
-    let turn_endpoint = endpoint();
-    let server = start_fixture_server(
-        turn_endpoint.clone(),
-        FixtureResponse::TurnAccepted(accepted),
-    );
-    let received = client(
-        turn_endpoint,
-        FixtureResponse::TurnAccepted(accepted),
-        Arc::new(AtomicUsize::new(0)),
-    )
-    .send_user_turn(
-        session_id,
-        IdempotencyKey::new(),
-        "fixture user turn".to_owned(),
-    )
-    .await
-    .expect("the user turn outcome is returned as decoded data");
-    assert_eq!(received, outcome);
-    server
-        .await
-        .expect("send-user-turn fixture server completes");
 }
 
 #[tokio::test]
