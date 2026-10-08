@@ -5,12 +5,14 @@
 //! `openrouter` and `generic_chat` modules translate their provider SDK traffic
 //! into those DTOs; each keeps its SDK client private and exposes only its
 //! driver. The `mapping` module owns the normalization rules both adapters
-//! share.
+//! share, and the `stream` module owns the one normalized event stream they
+//! both drive.
 
 mod generic_chat;
 mod mapping;
 mod model;
 mod openrouter;
+mod stream;
 
 pub use generic_chat::GenericChatDriver;
 pub use model::{

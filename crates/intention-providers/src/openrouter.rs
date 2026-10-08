@@ -3,8 +3,6 @@
 //! This adapter owns OpenRouter SDK construction and request translation. It
 //! emits only provider-neutral model DTOs and never exposes SDK stream resources.
 
-use std::collections::VecDeque;
-
 use crate::mapping;
 use crate::mapping::WireRole;
 use crate::model::ModelToolDefinitionDto;
@@ -12,11 +10,8 @@ use crate::model::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ProviderErrorDto,
 };
-use futures_util::{
-    Stream, StreamExt,
-    future::{Either, select},
-    stream,
-};
+use crate::stream::{EventTranslator, NormalizedEvents, normalized_stream};
+use futures_util::{StreamExt, stream};
 use intention_config::{ProviderKindDto, ResolvedConfigDto, StartupProviderMaterial};
 use intention_proto::{DtoResult, ErrorDto};
 use openrouter_rs::{
@@ -106,7 +101,7 @@ impl ModelExecutionDriver for OpenRouterDriver {
                                 async move { Err(map_openrouter_error(&error)) },
                             )) as ModelEventStream
                         },
-                        |native| normalize_stream(native, cancellation),
+                        |native| normalized_stream(native, OpenRouterTranslator, cancellation),
                     )
             })
             .flatten(),
@@ -114,66 +109,21 @@ impl ModelExecutionDriver for OpenRouterDriver {
     }
 }
 
-fn normalize_stream<S>(native: S, cancellation: ModelCancellationSignal) -> ModelEventStream
-where
-    S: Stream<Item = StreamEvent> + Send + 'static,
-{
-    Box::pin(stream::unfold(
-        OpenRouterStreamState::new(native, cancellation),
-        |mut state| async move { state.next().await.map(|event| (event, state)) },
-    ))
-}
+/// Translates the OpenRouter adapter's native events into normalized events.
+struct OpenRouterTranslator;
 
-struct OpenRouterStreamState<S> {
-    native: std::pin::Pin<Box<S>>,
-    cancellation: ModelCancellationSignal,
-    pending: VecDeque<Result<ModelEventDto, ProviderErrorDto>>,
-    terminal: bool,
-}
+impl EventTranslator for OpenRouterTranslator {
+    type Item = StreamEvent;
 
-impl<S> OpenRouterStreamState<S>
-where
-    S: Stream<Item = StreamEvent>,
-{
-    fn new(native: S, cancellation: ModelCancellationSignal) -> Self {
-        let mut pending = VecDeque::new();
-        pending.push_back(Ok(ModelEventDto::started()));
-        Self {
-            native: Box::pin(native),
-            cancellation,
-            pending,
-            terminal: false,
-        }
-    }
-
-    async fn next(&mut self) -> Option<Result<ModelEventDto, ProviderErrorDto>> {
-        loop {
-            if self.cancellation.is_cancelled() {
-                return None;
-            }
-            if let Some(event) = self.pending.pop_front() {
-                return Some(event);
-            }
-            if self.terminal {
-                return None;
-            }
-            match select(self.native.next(), self.cancellation.cancelled()).await {
-                Either::Left((Some(event), _)) => self.accept(event),
-                Either::Left((None, _)) => self.fail("openrouter_stream_incomplete"),
-                Either::Right(((), _)) => return None,
-            }
-        }
-    }
-
-    fn accept(&mut self, event: StreamEvent) {
+    fn translate_item(&mut self, event: Self::Item, events: &mut NormalizedEvents<'_>) {
         match event {
             StreamEvent::ContentDelta(content) => match ModelEventDto::text_delta(content) {
-                Ok(event) => self.pending.push_back(Ok(event)),
-                Err(_) => self.fail("openrouter_invalid_text"),
+                Ok(event) => events.push(event),
+                Err(_) => events.fail("openrouter_invalid_text"),
             },
             StreamEvent::ReasoningDelta(content) => match ModelEventDto::reasoning_delta(content) {
-                Ok(event) => self.pending.push_back(Ok(event)),
-                Err(_) => self.fail("openrouter_invalid_reasoning"),
+                Ok(event) => events.push(event),
+                Err(_) => events.fail("openrouter_invalid_reasoning"),
             },
             StreamEvent::Done {
                 tool_calls,
@@ -189,48 +139,38 @@ where
                     .collect::<DtoResult<Vec<_>>>();
                 match calls {
                     Ok(calls) => {
-                        self.pending.extend(
-                            calls
-                                .into_iter()
-                                .map(|call| Ok(ModelEventDto::tool_call(call))),
-                        );
+                        for call in calls {
+                            events.push(ModelEventDto::tool_call(call));
+                        }
                         if let Some(usage) = usage {
                             match mapping::reported_usage(
                                 usage.prompt_tokens,
                                 usage.completion_tokens,
                                 usage.total_tokens,
                             ) {
-                                Ok(usage) => {
-                                    self.pending.push_back(Ok(ModelEventDto::usage(usage)))
-                                }
+                                Ok(usage) => events.push(ModelEventDto::usage(usage)),
                                 Err(_) => {
-                                    self.fail("openrouter_invalid_usage");
+                                    events.fail("openrouter_invalid_usage");
                                     return;
                                 }
                             }
                         }
-                        self.pending.push_back(Ok(ModelEventDto::finished(
+                        events.finish(
                             finish_reason
                                 .map_or(FinishReasonDto::Unknown, map_native_finish_reason),
-                        )));
-                        self.terminal = true;
+                        );
                     }
-                    Err(_) => self.fail("openrouter_invalid_tool_call"),
+                    Err(_) => events.fail("openrouter_invalid_tool_call"),
                 }
             }
-            StreamEvent::Error(error) => self.fail_error(map_openrouter_error(&error)),
+            StreamEvent::Error(error) => events.fail_error(map_openrouter_error(&error)),
             StreamEvent::ReasoningDetailsDelta(_) => {}
-            _ => self.fail("openrouter_unsupported_stream_event"),
+            _ => events.fail("openrouter_unsupported_stream_event"),
         }
     }
 
-    fn fail_error(&mut self, error: ProviderErrorDto) {
-        self.pending.push_back(Err(error));
-        self.terminal = true;
-    }
-
-    fn fail(&mut self, code: &'static str) {
-        self.fail_error(mapping::fixed_error(code));
+    fn native_ended(&mut self, events: &mut NormalizedEvents<'_>) {
+        events.fail("openrouter_stream_incomplete");
     }
 }
 
@@ -475,98 +415,92 @@ mod tests {
         .expect("private SDK usage fixture decodes")
     }
 
-    fn state() -> OpenRouterStreamState<impl Stream<Item = StreamEvent>> {
-        OpenRouterStreamState::new(stream::empty(), ModelCancellationSignal::new())
+    /// Collects the shared stream's events for one fixed native event sequence.
+    fn collect_events(native: Vec<StreamEvent>) -> Vec<Result<ModelEventDto, ProviderErrorDto>> {
+        futures_executor::block_on(
+            normalized_stream(
+                stream::iter(native),
+                OpenRouterTranslator,
+                ModelCancellationSignal::new(),
+            )
+            .collect::<Vec<_>>(),
+        )
     }
 
     #[test]
     fn native_stream_normalizes_content_reasoning_tools_usage_and_finish() {
-        let mut state = state();
-        state.accept(StreamEvent::ContentDelta("answer".to_owned()));
-        state.accept(StreamEvent::ReasoningDelta("because".to_owned()));
-        state.accept(done(
-            vec![openrouter_rs::types::ToolCall::new("call", "inspect", "{}")],
-            Some(OpenRouterFinishReason::ToolCalls),
-            Some(usage(2, 3, 5)),
-        ));
+        let events = collect_events(vec![
+            StreamEvent::ContentDelta("answer".to_owned()),
+            StreamEvent::ReasoningDelta("because".to_owned()),
+            done(
+                vec![openrouter_rs::types::ToolCall::new("call", "inspect", "{}")],
+                Some(OpenRouterFinishReason::ToolCalls),
+                Some(usage(2, 3, 5)),
+            ),
+        ]);
 
         assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::started()))
-        );
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::text_delta("answer").expect("valid text")))
-        );
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(
-                ModelEventDto::reasoning_delta("because").expect("valid reasoning")
-            ))
+            events[..3],
+            [
+                Ok(ModelEventDto::started()),
+                Ok(ModelEventDto::text_delta("answer").expect("valid text")),
+                Ok(ModelEventDto::reasoning_delta("because").expect("valid reasoning")),
+            ]
         );
         assert!(matches!(
-            state.pending.pop_front(),
+            events.get(3),
             Some(Ok(ModelEventDto::ToolCall { call })) if call.name() == "inspect"
         ));
         assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::usage(
+            events.get(4),
+            Some(&Ok(ModelEventDto::usage(
                 UsageDto::reported(2, 3, 5).expect("valid usage")
             )))
         );
         assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::finished(FinishReasonDto::ToolCalls)))
+            events.get(5),
+            Some(&Ok(ModelEventDto::finished(FinishReasonDto::ToolCalls)))
         );
-        assert!(state.terminal);
+        assert_eq!(events.len(), 6);
     }
 
     #[test]
     fn native_stream_rejects_invalid_incomplete_and_unsupported_events_safely() {
-        let mut invalid_text = state();
-        invalid_text.accept(StreamEvent::ContentDelta(String::new()));
+        let invalid_text = collect_events(vec![StreamEvent::ContentDelta(String::new())]);
         assert!(matches!(
-            invalid_text.pending.back(),
+            invalid_text.last(),
             Some(Err(error)) if error.code() == "openrouter_invalid_text"
         ));
 
-        let mut invalid_reasoning = state();
-        invalid_reasoning.accept(StreamEvent::ReasoningDelta(String::new()));
+        let invalid_reasoning = collect_events(vec![StreamEvent::ReasoningDelta(String::new())]);
         assert!(matches!(
-            invalid_reasoning.pending.back(),
+            invalid_reasoning.last(),
             Some(Err(error)) if error.code() == "openrouter_invalid_reasoning"
         ));
 
-        let mut invalid_usage = state();
-        invalid_usage.accept(done(Vec::new(), None, Some(usage(1, 1, 1))));
+        let invalid_usage = collect_events(vec![done(Vec::new(), None, Some(usage(1, 1, 1)))]);
         assert!(matches!(
-            invalid_usage.pending.back(),
+            invalid_usage.last(),
             Some(Err(error)) if error.code() == "openrouter_invalid_usage"
         ));
 
-        let mut invalid_tool = state();
-        invalid_tool.accept(done(
+        let invalid_tool = collect_events(vec![done(
             vec![openrouter_rs::types::ToolCall::new("call", "", "{}")],
             None,
             None,
-        ));
+        )]);
         assert!(matches!(
-            invalid_tool.pending.back(),
+            invalid_tool.last(),
             Some(Err(error)) if error.code() == "openrouter_invalid_tool_call"
         ));
 
-        // An empty reasoning-details event carries no reasoning and is a no-op.
-        let mut empty_details = state();
-        empty_details.accept(StreamEvent::ReasoningDetailsDelta(Vec::new()));
-        assert_eq!(empty_details.pending.len(), 1);
-        assert!(!empty_details.terminal);
-
-        let mut unsupported = state();
-        unsupported.accept(StreamEvent::ReasoningDetailsDelta(Vec::new()));
-        assert_eq!(unsupported.pending.len(), 1);
-        unsupported.fail("openrouter_stream_incomplete");
+        // An empty reasoning-details event carries no reasoning: it emits no
+        // fact, so the stream reports only the missing terminal event.
+        let empty_details = collect_events(vec![StreamEvent::ReasoningDetailsDelta(Vec::new())]);
+        assert_eq!(empty_details.len(), 2);
+        assert_eq!(empty_details[0], Ok(ModelEventDto::started()));
         assert!(matches!(
-            unsupported.pending.back(),
+            empty_details.last(),
             Some(Err(error)) if error.code() == "openrouter_stream_incomplete"
         ));
     }
@@ -657,7 +591,11 @@ mod tests {
 
     #[test]
     fn normalized_stream_emits_started_and_incomplete_error() {
-        let mut stream = normalize_stream(stream::empty(), ModelCancellationSignal::new());
+        let mut stream = normalized_stream(
+            stream::empty::<StreamEvent>(),
+            OpenRouterTranslator,
+            ModelCancellationSignal::new(),
+        );
         assert_eq!(
             stream.next().now_or_never(),
             Some(Some(Ok(ModelEventDto::started())))
@@ -694,28 +632,32 @@ mod tests {
 
     #[test]
     fn native_stream_error_maps_retryability_and_cancellation_stops_delivery() {
-        let mut retryable = state();
-        retryable.accept(StreamEvent::Error(api_error(
+        let retryable = collect_events(vec![StreamEvent::Error(api_error(
             http::StatusCode::SERVICE_UNAVAILABLE,
-        )));
+        ))]);
         assert!(matches!(
-            retryable.pending.back(),
+            retryable.last(),
             Some(Err(error)) if error.code() == "openrouter_provider_unavailable"
                 && error.retry() == intention_proto::ErrorRetryDto::Delayed
         ));
 
-        let mut permanent = state();
-        permanent.accept(StreamEvent::Error(api_error(http::StatusCode::BAD_REQUEST)));
+        let permanent = collect_events(vec![StreamEvent::Error(api_error(
+            http::StatusCode::BAD_REQUEST,
+        ))]);
         assert!(matches!(
-            permanent.pending.back(),
+            permanent.last(),
             Some(Err(error)) if error.code() == "openrouter_provider_request_rejected"
                 && error.retry() == intention_proto::ErrorRetryDto::Never
         ));
 
         let cancellation = ModelCancellationSignal::new();
         cancellation.cancel();
-        let mut cancelled = OpenRouterStreamState::new(stream::empty(), cancellation);
-        assert!(cancelled.cancellation.is_cancelled());
+        assert!(cancellation.is_cancelled());
+        let mut cancelled = normalized_stream(
+            stream::empty::<StreamEvent>(),
+            OpenRouterTranslator,
+            cancellation,
+        );
         assert_eq!(cancelled.next().now_or_never(), Some(None));
     }
 

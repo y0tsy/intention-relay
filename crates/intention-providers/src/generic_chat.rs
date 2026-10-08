@@ -4,7 +4,7 @@
 //! retains SDK-owned SSE parsing and translates only its parsed stream values
 //! into provider-neutral model events.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 
 use crate::mapping;
 use crate::mapping::WireRole;
@@ -13,6 +13,7 @@ use crate::model::{
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ProviderErrorDto,
     ToolCallDto,
 };
+use crate::stream::{EventTranslator, NormalizedEvents, normalized_stream};
 use async_openai::{
     Client,
     config::OpenAIConfig,
@@ -22,11 +23,7 @@ use async_openai::{
         ChatCompletionTool, ChatCompletionTools, FunctionCall, FunctionObject,
     },
 };
-use futures_util::{
-    Stream, StreamExt,
-    future::{Either, select},
-    stream,
-};
+use futures_util::{StreamExt, stream};
 use intention_config::{ProviderKindDto, ResolvedConfigDto, StartupProviderMaterial};
 use intention_proto::{DtoResult, ErrorDto, ToolCallId};
 
@@ -115,7 +112,9 @@ impl ModelExecutionDriver for GenericChatDriver {
                             Box::pin(stream::once(async move { Err(map_openai_error(&error)) }))
                                 as ModelEventStream
                         },
-                        |native| normalize_stream(native, cancellation),
+                        |native| {
+                            normalized_stream(native, GenericTranslator::default(), cancellation)
+                        },
                     )
             })
             .flatten(),
@@ -123,67 +122,41 @@ impl ModelExecutionDriver for GenericChatDriver {
     }
 }
 
-fn normalize_stream<S>(native: S, cancellation: ModelCancellationSignal) -> ModelEventStream
-where
-    S: Stream<Item = Result<WireChunk, OpenAIError>> + Send + 'static,
-{
-    Box::pin(stream::unfold(
-        GenericStreamState::new(native, cancellation),
-        |mut state| async move { state.next().await.map(|event| (event, state)) },
-    ))
-}
-
-struct GenericStreamState<S> {
-    native: std::pin::Pin<Box<S>>,
-    cancellation: ModelCancellationSignal,
-    pending: VecDeque<Result<ModelEventDto, ProviderErrorDto>>,
+/// Translates the generic adapter's native chunks into normalized events.
+#[derive(Default)]
+struct GenericTranslator {
     tools: BTreeMap<(u32, u32), FunctionToolFragments>,
-    terminal: bool,
     terminal_reason: Option<FinishReasonDto>,
     usage_reported: bool,
     reasoning_presence_reported: bool,
 }
 
-impl<S> GenericStreamState<S>
-where
-    S: Stream<Item = Result<WireChunk, OpenAIError>>,
-{
-    fn new(native: S, cancellation: ModelCancellationSignal) -> Self {
-        let mut pending = VecDeque::new();
-        pending.push_back(Ok(ModelEventDto::started()));
-        Self {
-            native: Box::pin(native),
-            cancellation,
-            pending,
-            tools: BTreeMap::new(),
-            terminal: false,
-            terminal_reason: None,
-            usage_reported: false,
-            reasoning_presence_reported: false,
+impl EventTranslator for GenericTranslator {
+    type Item = Result<WireChunk, OpenAIError>;
+
+    fn translate_item(&mut self, item: Self::Item, events: &mut NormalizedEvents<'_>) {
+        match item {
+            Ok(chunk) => self.accept_chunk(chunk, events),
+            Err(error) => events.fail_error(map_openai_error(&error)),
         }
     }
 
-    async fn next(&mut self) -> Option<Result<ModelEventDto, ProviderErrorDto>> {
-        loop {
-            if self.cancellation.is_cancelled() {
-                return None;
-            }
-            if let Some(event) = self.pending.pop_front() {
-                return Some(event);
-            }
-            if self.terminal {
-                return None;
-            }
-            match select(self.native.next(), self.cancellation.cancelled()).await {
-                Either::Left((Some(Ok(chunk)), _)) => self.accept_chunk(chunk),
-                Either::Left((Some(Err(error)), _)) => self.fail_error(map_openai_error(&error)),
-                Either::Left((None, _)) => self.native_ended(),
-                Either::Right(((), _)) => return None,
-            }
+    /// A recorded finish reason is terminal only once the native stream ends:
+    /// standard streams deliver a trailing usage-only chunk after the
+    /// finish-reason chunk, and the driver requested usage inclusion.
+    /// Recording the reason and continuing to poll collects that usage
+    /// exactly once (PR24-009). An absent reason fails the incomplete stream.
+    fn native_ended(&mut self, events: &mut NormalizedEvents<'_>) {
+        if let Some(reason) = self.terminal_reason.take() {
+            self.finish(reason, events);
+        } else {
+            events.fail("generic_chat_stream_incomplete");
         }
     }
+}
 
-    fn accept_chunk(&mut self, chunk: WireChunk) {
+impl GenericTranslator {
+    fn accept_chunk(&mut self, chunk: WireChunk, events: &mut NormalizedEvents<'_>) {
         let post_finish = self.terminal_reason.is_some();
         if post_finish
             && chunk.choices.iter().any(|choice| {
@@ -209,15 +182,18 @@ where
                 .iter()
                 .any(|choice| choice.finish_reason.is_some())
             {
-                self.fail("generic_chat_duplicate_finish");
+                events.fail("generic_chat_duplicate_finish");
             } else {
-                self.fail("generic_chat_post_finish_content");
+                events.fail("generic_chat_post_finish_content");
             }
             return;
         }
+        // A rejected usage total already queued this chunk's failure, so a
+        // later malformed tool fragment must not replace it.
+        let mut usage_rejected = false;
         if let Some(usage) = chunk.usage {
             if self.usage_reported {
-                self.fail("generic_chat_duplicate_usage");
+                events.fail("generic_chat_duplicate_usage");
                 return;
             }
             match mapping::reported_usage(
@@ -227,18 +203,24 @@ where
             ) {
                 Ok(usage) => {
                     self.usage_reported = true;
-                    self.pending.push_back(Ok(ModelEventDto::usage(usage)));
+                    events.push(ModelEventDto::usage(usage));
                 }
-                Err(_) => self.fail("generic_chat_invalid_usage"),
+                Err(_) => {
+                    usage_rejected = true;
+                    events.fail("generic_chat_invalid_usage");
+                }
             }
         }
         if post_finish {
             return;
         }
         for choice in chunk.choices {
-            if self.accept_delta(choice.index, choice.delta).is_err() {
-                if !self.terminal {
-                    self.fail("generic_chat_invalid_tool_call");
+            if self
+                .accept_delta(choice.index, choice.delta, events)
+                .is_err()
+            {
+                if !usage_rejected {
+                    events.fail("generic_chat_invalid_tool_call");
                 }
                 return;
             }
@@ -248,21 +230,25 @@ where
                     .replace(finish_reason(&reason))
                     .is_some()
             {
-                self.fail("generic_chat_duplicate_finish");
+                events.fail("generic_chat_duplicate_finish");
                 return;
             }
         }
     }
 
-    fn accept_delta(&mut self, choice_index: u32, delta: WireDelta) -> Result<(), ()> {
+    fn accept_delta(
+        &mut self,
+        choice_index: u32,
+        delta: WireDelta,
+        events: &mut NormalizedEvents<'_>,
+    ) -> Result<(), ()> {
         // The provider streams the thinking channel before the answer it
         // informs, so a delta carrying both keeps that order.
         if let Some(reasoning) = delta.reasoning_content {
-            self.accept_reasoning(reasoning);
+            self.accept_reasoning(reasoning, events);
         }
         if let Some(content) = delta.content.filter(|content| !content.is_empty()) {
-            self.pending
-                .push_back(Ok(ModelEventDto::text_delta(content).map_err(|_| ())?));
+            events.push(ModelEventDto::text_delta(content).map_err(|_| ())?);
         }
         if let Some(calls) = delta.tool_calls {
             for call in calls {
@@ -287,61 +273,33 @@ where
     /// reasoning-delta constructor rejects, which is why this adapter has no
     /// reasoning failure class of its own: no provider value reaches it as a
     /// failure.
-    fn accept_reasoning(&mut self, reasoning: String) {
+    fn accept_reasoning(&mut self, reasoning: String, events: &mut NormalizedEvents<'_>) {
         if reasoning.is_empty() {
             if !self.reasoning_presence_reported {
                 self.reasoning_presence_reported = true;
-                self.pending
-                    .push_back(Ok(ModelEventDto::reasoning_presence()));
+                events.push(ModelEventDto::reasoning_presence());
             }
             return;
         }
         if let Ok(event) = ModelEventDto::reasoning_delta(reasoning) {
-            self.pending.push_back(Ok(event));
+            events.push(event);
         }
     }
 
-    /// Handles the native end-of-stream.
-    ///
-    /// A recorded finish reason is terminal only once the native stream ends:
-    /// standard streams deliver a trailing usage-only chunk after the
-    /// finish-reason chunk, and the driver requested usage inclusion.
-    /// Recording the reason and continuing to poll collects that usage
-    /// exactly once (PR24-009). An absent reason fails the incomplete stream.
-    fn native_ended(&mut self) {
-        if let Some(reason) = self.terminal_reason.take() {
-            self.finish(reason);
-        } else {
-            self.fail("generic_chat_stream_incomplete");
-        }
-    }
-
-    fn finish(&mut self, reason: FinishReasonDto) {
+    fn finish(&mut self, reason: FinishReasonDto, events: &mut NormalizedEvents<'_>) {
         match std::mem::take(&mut self.tools)
             .into_values()
             .map(FunctionToolFragments::finish)
             .collect::<Result<Vec<_>, _>>()
         {
             Ok(calls) => {
-                self.pending.extend(
-                    calls
-                        .into_iter()
-                        .map(|call| Ok(ModelEventDto::tool_call(call))),
-                );
-                self.pending.push_back(Ok(ModelEventDto::finished(reason)));
-                self.terminal = true;
+                for call in calls {
+                    events.push(ModelEventDto::tool_call(call));
+                }
+                events.finish(reason);
             }
-            Err(()) => self.fail("generic_chat_invalid_tool_call"),
+            Err(()) => events.fail("generic_chat_invalid_tool_call"),
         }
-    }
-
-    fn fail_error(&mut self, error: ProviderErrorDto) {
-        self.pending.push_back(Err(error));
-        self.terminal = true;
-    }
-
-    fn fail(&mut self, code: &'static str) {
-        self.fail_error(mapping::fixed_error(code));
     }
 }
 
@@ -587,6 +545,30 @@ mod tests {
     use super::*;
     use crate::model::{ModelRoleDto, UsageDto};
     use intention_proto::{ErrorRetryDto, RunId};
+
+    /// Collects the shared stream's events for one fixed native chunk sequence.
+    fn collect_chunks(
+        chunks: Vec<Result<WireChunk, OpenAIError>>,
+    ) -> Vec<Result<ModelEventDto, ProviderErrorDto>> {
+        futures_executor::block_on(
+            normalized_stream(
+                stream::iter(chunks),
+                GenericTranslator::default(),
+                ModelCancellationSignal::new(),
+            )
+            .collect::<Vec<_>>(),
+        )
+    }
+
+    fn usage() -> async_openai::types::chat::CompletionUsage {
+        async_openai::types::chat::CompletionUsage {
+            prompt_tokens: 2,
+            completion_tokens: 3,
+            total_tokens: 5,
+            prompt_tokens_details: None,
+            completion_tokens_details: None,
+        }
+    }
 
     #[test]
     fn notice_role_translates_as_a_user_message_with_its_text_unchanged() {
@@ -1064,132 +1046,69 @@ mod tests {
         // Standard stream order: finish-reason chunk, trailing usage-only
         // chunk, then end. The finish reason must not terminalize the stream
         // before the usage chunk is polled (PR24-009).
-        let mut state = GenericStreamState::new(
-            futures_util::stream::empty::<Result<WireChunk, OpenAIError>>(),
-            ModelCancellationSignal::new(),
-        );
-        state.accept_chunk(chunk(vec![choice(None, None, None, Some("stop"))], None));
-        assert!(
-            state.terminal_reason.is_some(),
-            "the finish reason is recorded when its chunk arrives"
-        );
-        assert!(
-            !state.terminal,
-            "a recorded finish reason must not terminalize the stream"
-        );
-        state.accept_chunk(chunk(
-            Vec::new(),
-            Some(async_openai::types::chat::CompletionUsage {
-                prompt_tokens: 2,
-                completion_tokens: 3,
-                total_tokens: 5,
-                prompt_tokens_details: None,
-                completion_tokens_details: None,
-            }),
-        ));
-        // The native stream ends: the recorded reason becomes terminal and
-        // the collected usage is emitted before Finished.
-        state.native_ended();
+        let events = collect_chunks(vec![
+            Ok(chunk(vec![choice(None, None, None, Some("stop"))], None)),
+            Ok(chunk(Vec::new(), Some(usage()))),
+        ]);
         assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::started()))
+            events,
+            vec![
+                Ok(ModelEventDto::started()),
+                Ok(ModelEventDto::usage(
+                    UsageDto::reported(2, 3, 5).expect("usage is valid")
+                )),
+                Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+            ]
         );
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::usage(
-                UsageDto::reported(2, 3, 5).expect("usage is valid")
-            )))
-        );
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::finished(FinishReasonDto::Stop)))
-        );
-        assert_eq!(state.pending.pop_front(), None);
-        assert!(state.terminal);
     }
 
     #[test]
     fn usage_is_emitted_at_most_once_and_post_finish_content_fails() {
-        let mut duplicated =
-            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-        let usage = || async_openai::types::chat::CompletionUsage {
-            prompt_tokens: 2,
-            completion_tokens: 3,
-            total_tokens: 5,
-            prompt_tokens_details: None,
-            completion_tokens_details: None,
-        };
-        duplicated.accept_chunk(chunk(Vec::new(), Some(usage())));
-        duplicated.accept_chunk(chunk(Vec::new(), Some(usage())));
+        let duplicated = collect_chunks(vec![
+            Ok(chunk(Vec::new(), Some(usage()))),
+            Ok(chunk(Vec::new(), Some(usage()))),
+        ]);
         assert!(matches!(
-            duplicated.pending.back(),
+            duplicated.last(),
             Some(Err(error)) if error.code() == "generic_chat_duplicate_usage"
         ));
 
-        let mut post_finish =
-            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-        post_finish.accept_chunk(chunk(vec![choice(None, None, None, Some("stop"))], None));
-        post_finish.accept_chunk(chunk(vec![choice(Some("late"), None, None, None)], None));
+        let post_finish = collect_chunks(vec![
+            Ok(chunk(vec![choice(None, None, None, Some("stop"))], None)),
+            Ok(chunk(vec![choice(Some("late"), None, None, None)], None)),
+        ]);
         assert!(matches!(
-            post_finish.pending.back(),
+            post_finish.last(),
             Some(Err(error)) if error.code() == "generic_chat_post_finish_content"
         ));
     }
 
     #[test]
     fn reasoning_deltas_keep_their_order_among_text_usage_and_finish() {
-        let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-        state.accept_chunk(chunk(
-            vec![choice(Some("answer"), Some("weighing"), None, None)],
-            None,
-        ));
-        state.accept_chunk(chunk(vec![choice(None, Some(" harder"), None, None)], None));
-        state.accept_chunk(chunk(vec![choice(None, None, None, Some("stop"))], None));
-        state.accept_chunk(chunk(
-            Vec::new(),
-            Some(async_openai::types::chat::CompletionUsage {
-                prompt_tokens: 2,
-                completion_tokens: 3,
-                total_tokens: 5,
-                prompt_tokens_details: None,
-                completion_tokens_details: None,
-            }),
-        ));
-        state.native_ended();
+        let events = collect_chunks(vec![
+            Ok(chunk(
+                vec![choice(Some("answer"), Some("weighing"), None, None)],
+                None,
+            )),
+            Ok(chunk(vec![choice(None, Some(" harder"), None, None)], None)),
+            Ok(chunk(vec![choice(None, None, None, Some("stop"))], None)),
+            Ok(chunk(Vec::new(), Some(usage()))),
+        ]);
 
         assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::started()))
+            events,
+            vec![
+                Ok(ModelEventDto::started()),
+                Ok(ModelEventDto::reasoning_delta("weighing")
+                    .expect("reasoning fragment is valid")),
+                Ok(ModelEventDto::text_delta("answer").expect("text delta is valid")),
+                Ok(ModelEventDto::reasoning_delta(" harder").expect("reasoning fragment is valid")),
+                Ok(ModelEventDto::usage(
+                    UsageDto::reported(2, 3, 5).expect("usage is valid")
+                )),
+                Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+            ]
         );
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(
-                ModelEventDto::reasoning_delta("weighing").expect("reasoning fragment is valid")
-            ))
-        );
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(
-                ModelEventDto::text_delta("answer").expect("text delta is valid")
-            ))
-        );
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(
-                ModelEventDto::reasoning_delta(" harder").expect("reasoning fragment is valid")
-            ))
-        );
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::usage(
-                UsageDto::reported(2, 3, 5).expect("usage is valid")
-            )))
-        );
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::finished(FinishReasonDto::Stop)))
-        );
-        assert_eq!(state.pending.pop_front(), None);
     }
 
     #[test]
@@ -1197,108 +1116,103 @@ mod tests {
         // The provider repeats an empty reasoning value on nearly every chunk;
         // it stays a single textless presence event instead of one event per
         // chunk, and it creates no reasoning fact.
-        let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-        for _ in 0..3 {
-            state.accept_chunk(chunk(vec![choice(None, Some(""), None, None)], None));
-        }
+        let events = collect_chunks(vec![
+            Ok(chunk(vec![choice(None, Some(""), None, None)], None)),
+            Ok(chunk(vec![choice(None, Some(""), None, None)], None)),
+            Ok(chunk(vec![choice(None, Some(""), None, None)], None)),
+            Ok(chunk(vec![choice(None, None, None, Some("stop"))], None)),
+        ]);
         assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::started()))
-        );
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::reasoning_presence()))
-        );
-        assert_eq!(state.pending.pop_front(), None);
-        assert!(
-            !state.terminal,
-            "an empty reasoning fragment marks presence and never fails the stream"
+            events,
+            vec![
+                Ok(ModelEventDto::started()),
+                Ok(ModelEventDto::reasoning_presence()),
+                Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+            ]
         );
     }
 
     #[test]
     fn reasoning_after_finish_reason_fails_the_stream() {
-        let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-        state.accept_chunk(chunk(vec![choice(None, None, None, Some("stop"))], None));
-        state.accept_chunk(chunk(vec![choice(None, Some("late"), None, None)], None));
+        let events = collect_chunks(vec![
+            Ok(chunk(vec![choice(None, None, None, Some("stop"))], None)),
+            Ok(chunk(vec![choice(None, Some("late"), None, None)], None)),
+        ]);
         assert!(matches!(
-            state.pending.back(),
+            events.last(),
             Some(Err(error)) if error.code() == "generic_chat_post_finish_content"
         ));
     }
 
     #[test]
     fn tool_fragments_merge_across_interleaved_reasoning_deltas() {
-        let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-        state.accept_chunk(chunk(
-            vec![choice(
+        let events = collect_chunks(vec![
+            Ok(chunk(
+                vec![choice(
+                    None,
+                    Some("planning the call"),
+                    Some(vec![
+                        async_openai::types::chat::ChatCompletionMessageToolCallChunk {
+                            index: 0,
+                            id: Some("call".to_owned()),
+                            r#type: Some(async_openai::types::chat::FunctionType::Function),
+                            function: Some(async_openai::types::chat::FunctionCallStream {
+                                name: Some("inspect".to_owned()),
+                                arguments: Some("{\"path\"".to_owned()),
+                            }),
+                        },
+                    ]),
+                    None,
+                )],
                 None,
-                Some("planning the call"),
-                Some(vec![
-                    async_openai::types::chat::ChatCompletionMessageToolCallChunk {
-                        index: 0,
-                        id: Some("call".to_owned()),
-                        r#type: Some(async_openai::types::chat::FunctionType::Function),
-                        function: Some(async_openai::types::chat::FunctionCallStream {
-                            name: Some("inspect".to_owned()),
-                            arguments: Some("{\"path\"".to_owned()),
-                        }),
-                    },
-                ]),
+            )),
+            Ok(chunk(
+                vec![choice(
+                    None,
+                    Some(""),
+                    Some(vec![
+                        async_openai::types::chat::ChatCompletionMessageToolCallChunk {
+                            index: 0,
+                            id: None,
+                            r#type: None,
+                            function: Some(async_openai::types::chat::FunctionCallStream {
+                                name: None,
+                                arguments: Some(":\"src\"}".to_owned()),
+                            }),
+                        },
+                    ]),
+                    None,
+                )],
                 None,
-            )],
-            None,
-        ));
-        state.accept_chunk(chunk(
-            vec![choice(
+            )),
+            Ok(chunk(
+                vec![choice(None, None, None, Some("tool_calls"))],
                 None,
-                Some(""),
-                Some(vec![
-                    async_openai::types::chat::ChatCompletionMessageToolCallChunk {
-                        index: 0,
-                        id: None,
-                        r#type: None,
-                        function: Some(async_openai::types::chat::FunctionCallStream {
-                            name: None,
-                            arguments: Some(":\"src\"}".to_owned()),
-                        }),
-                    },
-                ]),
-                None,
-            )],
-            None,
-        ));
-        state.accept_chunk(chunk(
-            vec![choice(None, None, None, Some("tool_calls"))],
-            None,
-        ));
-        state.native_ended();
+            )),
+        ]);
 
         assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::started()))
-        );
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::reasoning_delta("planning the call")
-                .expect("reasoning fragment is valid")))
-        );
-        // The interleaved empty value repeats the channel without text; it
-        // stays one presence marker before the call it belongs to.
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::reasoning_presence()))
+            events[..3],
+            [
+                Ok(ModelEventDto::started()),
+                Ok(ModelEventDto::reasoning_delta("planning the call")
+                    .expect("reasoning fragment is valid")),
+                // The interleaved empty value repeats the channel without
+                // text; it stays one presence marker before the call it
+                // belongs to.
+                Ok(ModelEventDto::reasoning_presence()),
+            ]
         );
         assert!(matches!(
-            state.pending.pop_front(),
+            events.get(3),
             Some(Ok(ModelEventDto::ToolCall { call }))
                 if call.name() == "inspect" && call.arguments_json() == r#"{"path":"src"}"#
         ));
         assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::finished(FinishReasonDto::ToolCalls)))
+            events.get(4),
+            Some(&Ok(ModelEventDto::finished(FinishReasonDto::ToolCalls)))
         );
-        assert_eq!(state.pending.pop_front(), None);
+        assert_eq!(events.len(), 5);
     }
 
     fn chunk(
@@ -1327,8 +1241,7 @@ mod tests {
 
     #[test]
     fn native_chunks_normalize_content_tools_and_terminal_finish() {
-        let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-        state.accept_chunk(chunk(
+        let events = collect_chunks(vec![Ok(chunk(
             vec![choice(
                 Some("answer"),
                 None,
@@ -1346,42 +1259,38 @@ mod tests {
                 Some("tool_calls"),
             )],
             None,
-        ));
-        let reason = state.terminal_reason.take().expect("finish is present");
-        state.finish(reason);
+        ))]);
 
         assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::started()))
-        );
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::text_delta("answer").expect("valid text")))
+            events[..2],
+            [
+                Ok(ModelEventDto::started()),
+                Ok(ModelEventDto::text_delta("answer").expect("valid text")),
+            ]
         );
         assert!(matches!(
-            state.pending.pop_front(),
+            events.get(2),
             Some(Ok(ModelEventDto::ToolCall { call })) if call.name() == "inspect"
         ));
         assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::finished(FinishReasonDto::ToolCalls)))
+            events.get(3),
+            Some(&Ok(ModelEventDto::finished(FinishReasonDto::ToolCalls)))
         );
+        assert_eq!(events.len(), 4);
     }
 
     #[test]
     fn native_chunks_reject_duplicate_finish_invalid_usage_and_incomplete_tools() {
-        let mut duplicate =
-            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-        duplicate.accept_chunk(chunk(vec![choice(None, None, None, Some("stop"))], None));
-        duplicate.accept_chunk(chunk(vec![choice(None, None, None, Some("length"))], None));
+        let duplicate = collect_chunks(vec![
+            Ok(chunk(vec![choice(None, None, None, Some("stop"))], None)),
+            Ok(chunk(vec![choice(None, None, None, Some("length"))], None)),
+        ]);
         assert!(matches!(
-            duplicate.pending.back(),
+            duplicate.last(),
             Some(Err(error)) if error.code() == "generic_chat_duplicate_finish"
         ));
 
-        let mut invalid_usage =
-            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-        invalid_usage.accept_chunk(chunk(
+        let invalid_usage = collect_chunks(vec![Ok(chunk(
             Vec::new(),
             Some(async_openai::types::chat::CompletionUsage {
                 prompt_tokens: 1,
@@ -1390,15 +1299,13 @@ mod tests {
                 prompt_tokens_details: None,
                 completion_tokens_details: None,
             }),
-        ));
+        ))]);
         assert!(matches!(
-            invalid_usage.pending.back(),
+            invalid_usage.last(),
             Some(Err(error)) if error.code() == "generic_chat_invalid_usage"
         ));
 
-        let mut incomplete =
-            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-        incomplete.accept_chunk(chunk(
+        let incomplete = collect_chunks(vec![Ok(chunk(
             vec![choice(
                 None,
                 None,
@@ -1416,32 +1323,11 @@ mod tests {
                 Some("tool_calls"),
             )],
             None,
-        ));
-        let reason = incomplete
-            .terminal_reason
-            .take()
-            .expect("finish is present");
-        incomplete.finish(reason);
+        ))]);
         assert!(matches!(
-            incomplete.pending.back(),
+            incomplete.last(),
             Some(Err(error)) if error.code() == "generic_chat_invalid_tool_call"
         ));
-    }
-
-    #[test]
-    fn finish_reason_taxonomy_covers_every_closed_reason_and_degrades_unknown_values() {
-        for (reason, expected) in [
-            ("stop", FinishReasonDto::Stop),
-            ("length", FinishReasonDto::Length),
-            ("tool_calls", FinishReasonDto::ToolCalls),
-            ("content_filter", FinishReasonDto::ContentFilter),
-            ("error", FinishReasonDto::Error),
-            ("unknown", FinishReasonDto::Unknown),
-            ("other", FinishReasonDto::Unknown),
-            ("stop_sequence", FinishReasonDto::Unknown),
-        ] {
-            assert_eq!(finish_reason(reason), expected, "reason {reason}");
-        }
     }
 
     #[test]
@@ -1451,29 +1337,19 @@ mod tests {
         // The chunk must decode and the response must complete with the closed
         // `Unknown` reason instead of failing the whole response.
         for reason in ["stop_sequence", "max_tokens", "vendor_specific_reason"] {
-            let mut state =
-                GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-            state.accept_chunk(decode_chunk(&format!(
+            let events = collect_chunks(vec![Ok(decode_chunk(&format!(
                 r#"{{"choices":[{{"index":0,"delta":{{"content":"answer"}},"finish_reason":"{reason}"}}]}}"#
-            )));
-            state.native_ended();
+            )))]);
 
             assert_eq!(
-                state.pending.pop_front(),
-                Some(Ok(ModelEventDto::started())),
+                events,
+                vec![
+                    Ok(ModelEventDto::started()),
+                    Ok(ModelEventDto::text_delta("answer").expect("valid text")),
+                    Ok(ModelEventDto::finished(FinishReasonDto::Unknown)),
+                ],
                 "reason {reason}"
             );
-            assert_eq!(
-                state.pending.pop_front(),
-                Some(Ok(ModelEventDto::text_delta("answer").expect("valid text"))),
-                "reason {reason}"
-            );
-            assert_eq!(
-                state.pending.pop_front(),
-                Some(Ok(ModelEventDto::finished(FinishReasonDto::Unknown))),
-                "reason {reason}"
-            );
-            assert_eq!(state.pending.pop_front(), None, "reason {reason}");
         }
     }
 
@@ -1489,20 +1365,15 @@ mod tests {
             // provider value keeps degrading to `Unknown` as before.
             ("function_call", FinishReasonDto::Unknown),
         ] {
-            let mut state =
-                GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-            state.accept_chunk(decode_chunk(&format!(
+            let events = collect_chunks(vec![Ok(decode_chunk(&format!(
                 r#"{{"choices":[{{"index":0,"delta":{{}},"finish_reason":"{reason}"}}]}}"#
-            )));
-            state.native_ended();
+            )))]);
             assert_eq!(
-                state.pending.pop_front(),
-                Some(Ok(ModelEventDto::started())),
-                "reason {reason}"
-            );
-            assert_eq!(
-                state.pending.pop_front(),
-                Some(Ok(ModelEventDto::finished(expected))),
+                events,
+                vec![
+                    Ok(ModelEventDto::started()),
+                    Ok(ModelEventDto::finished(expected)),
+                ],
                 "reason {reason}"
             );
         }

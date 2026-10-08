@@ -57,35 +57,6 @@ fn stream_lifecycle_accepts_ordered_normalized_events() {
 }
 
 #[test]
-fn stream_lifecycle_rejects_invalid_order_and_invalid_payloads() {
-    let mut lifecycle = ModelStreamLifecycleDto::new();
-    assert_eq!(
-        lifecycle
-            .accept(&ModelEventDto::text_delta("first").expect("text is valid"))
-            .expect_err("content before start must fail")
-            .code(),
-        "invalid_model_stream_order"
-    );
-    assert_eq!(
-        lifecycle
-            .accept(&ModelEventDto::reasoning_delta("first").expect("reasoning is valid"))
-            .expect_err("reasoning before start must fail")
-            .code(),
-        "invalid_model_stream_order"
-    );
-    lifecycle
-        .accept(&ModelEventDto::started())
-        .expect("start is valid");
-    assert!(ToolCallDto::new(ToolCallId::new(), " ", "{}").is_err());
-    assert!(ToolCallDto::new(ToolCallId::new(), "inspect", "not-json").is_err());
-    assert!(UsageDto::reported(3, 5, 7).is_err());
-    lifecycle
-        .accept(&ModelEventDto::finished(FinishReasonDto::Stop))
-        .expect("finish is valid");
-    assert!(lifecycle.accept(&ModelEventDto::started()).is_err());
-}
-
-#[test]
 fn public_model_contracts_round_trip_and_preserve_validated_accessors() {
     for role in [
         ModelRoleDto::System,
@@ -180,8 +151,25 @@ fn capabilities_cover_the_runtime_requirement_and_safe_wire_variants() {
 }
 
 #[test]
-fn lifecycle_rejects_duplicate_usage_and_all_terminal_preconditions() {
+fn stream_lifecycle_rejects_invalid_order_payloads_duplicate_usage_and_terminal_preconditions() {
+    // Facts before `Started` are rejected whichever kind follows the order
+    // violation, and the closed payload constructors keep rejecting invalid
+    // values.
     let mut before_start = ModelStreamLifecycleDto::new();
+    assert_eq!(
+        before_start
+            .accept(&ModelEventDto::text_delta("first").expect("text is valid"))
+            .expect_err("content before start must fail")
+            .code(),
+        "invalid_model_stream_order"
+    );
+    assert_eq!(
+        before_start
+            .accept(&ModelEventDto::reasoning_delta("first").expect("reasoning is valid"))
+            .expect_err("reasoning before start must fail")
+            .code(),
+        "invalid_model_stream_order"
+    );
     assert!(
         before_start
             .accept(&ModelEventDto::usage(UsageDto::NotReported))
@@ -192,7 +180,11 @@ fn lifecycle_rejects_duplicate_usage_and_all_terminal_preconditions() {
             .accept(&ModelEventDto::finished(FinishReasonDto::Length))
             .is_err()
     );
+    assert!(ToolCallDto::new(ToolCallId::new(), " ", "{}").is_err());
+    assert!(ToolCallDto::new(ToolCallId::new(), "inspect", "not-json").is_err());
+    assert!(UsageDto::reported(3, 5, 7).is_err());
 
+    // One accepted sequence: start, a single usage summary, one terminal finish.
     let mut lifecycle = ModelStreamLifecycleDto::new();
     lifecycle
         .accept(&ModelEventDto::started())
@@ -208,21 +200,17 @@ fn lifecycle_rejects_duplicate_usage_and_all_terminal_preconditions() {
     lifecycle
         .accept(&ModelEventDto::finished(FinishReasonDto::ToolCalls))
         .expect("finish is valid");
-    assert!(
-        lifecycle
-            .accept(&ModelEventDto::text_delta("after").expect("text is valid"))
-            .is_err()
-    );
-    assert!(
-        lifecycle
-            .accept(&ModelEventDto::reasoning_delta("after").expect("reasoning is valid"))
-            .is_err()
-    );
-    assert!(
-        lifecycle
-            .accept(&ModelEventDto::finished(FinishReasonDto::Unknown))
-            .is_err()
-    );
+    for event in [
+        ModelEventDto::started(),
+        ModelEventDto::text_delta("after").expect("text is valid"),
+        ModelEventDto::reasoning_delta("after").expect("reasoning is valid"),
+        ModelEventDto::finished(FinishReasonDto::Unknown),
+    ] {
+        assert!(
+            lifecycle.accept(&event).is_err(),
+            "no fact follows the terminal finish"
+        );
+    }
 }
 
 #[test]
