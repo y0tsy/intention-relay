@@ -10,15 +10,17 @@
 
 mod common;
 
-use common::{
-    DispatchCompleted, fixture_context, fixture_dir, fixture_service, relative, service, text,
-};
+use common::{DispatchCompleted, fixture_context, fixture_service, relative, text};
+#[cfg(unix)]
+use common::{fixture_dir, service};
 use intention_proto::ToolCallId;
+#[cfg(unix)]
+use intention_tools::ToolDispatchOutcome;
 use intention_tools::{
     BoundedText, CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepScope,
-    ReadInput, TOOL_SCHEMA_VERSION, TextResult, ToolContext, ToolDispatchOutcome,
-    ToolExecutionMetadata, ToolInput, ToolInvocation, ToolObservability, ToolOutcome, ToolPolicy,
-    ToolProcessStatus, ToolResult, ToolResultEnvelope, WriteInput,
+    ReadInput, TOOL_SCHEMA_VERSION, TextResult, ToolContext, ToolExecutionMetadata, ToolInput,
+    ToolInvocation, ToolObservability, ToolOutcome, ToolPolicy, ToolProcessStatus, ToolResult,
+    ToolResultEnvelope, WriteInput,
 };
 
 #[test]
