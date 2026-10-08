@@ -180,12 +180,6 @@ impl DaemonHealthDto {
         self.schema_version
     }
 
-    /// Returns the protocol version served by the daemon.
-    #[must_use]
-    pub const fn protocol_version(self) -> ProtocolVersionDto {
-        self.protocol_version
-    }
-
     /// Returns the current daemon readiness state.
     #[must_use]
     pub const fn readiness(self) -> DaemonReadinessDto {
