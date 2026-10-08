@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 const CURRENT_SCHEMA_MAJOR: u16 = 1;
 const CURRENT_SCHEMA_MINOR: u16 = 0;
 const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = 250_000;
-const DEFAULT_CONTEXT_CAPACITY_TOKENS: u64 = 1_000_000;
 
 /// Requires a schema version exactly equal to the current configuration schema.
 ///
@@ -416,10 +415,8 @@ impl ResolvedConfigDto {
                 "provider credential must not be empty",
             ));
         }
-        let context_window = ContextWindowPolicyDto::from_raw(
-            config.provider.context_window_tokens,
-            config.provider.context_capacity_tokens,
-        )?;
+        let context_window =
+            ContextWindowPolicyDto::from_raw(config.provider.context_window_tokens)?;
         let provider = ProviderSelectionDto::new(
             config.provider.kind,
             config.provider.model,
@@ -500,7 +497,7 @@ impl ResolvedConfigDto {
     #[must_use]
     pub fn safe_debug_projection(&self) -> String {
         format!(
-            "schema_version={}.{} source={} provider={} model={} credential_configured={} attempt_timeout_seconds={} max_attempts={} context_window_tokens={} context_capacity_tokens={}",
+            "schema_version={}.{} source={} provider={} model={} credential_configured={} attempt_timeout_seconds={} max_attempts={} context_window_tokens={}",
             self.schema_version.major(),
             self.schema_version.minor(),
             self.source_kind,
@@ -510,7 +507,6 @@ impl ResolvedConfigDto {
             self.provider_execution.attempt_timeout_seconds,
             self.provider_execution.max_attempts,
             self.context_window.window_tokens,
-            self.context_window.capacity_tokens,
         )
     }
 }
@@ -670,7 +666,6 @@ impl ProviderExecutionPolicyDto {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct ContextWindowPolicyDto {
     window_tokens: u64,
-    capacity_tokens: u64,
 }
 
 impl<'de> Deserialize<'de> for ContextWindowPolicyDto {
@@ -682,47 +677,29 @@ impl<'de> Deserialize<'de> for ContextWindowPolicyDto {
         #[serde(deny_unknown_fields)]
         struct RawContextWindowPolicyDto {
             window_tokens: u64,
-            capacity_tokens: u64,
         }
 
         let raw = RawContextWindowPolicyDto::deserialize(deserializer)?;
-        Self::from_raw(Some(raw.window_tokens), Some(raw.capacity_tokens))
-            .map_err(serde::de::Error::custom)
+        Self::from_raw(Some(raw.window_tokens)).map_err(serde::de::Error::custom)
     }
 }
 
 impl ContextWindowPolicyDto {
-    fn from_raw(window_tokens: Option<u64>, capacity_tokens: Option<u64>) -> DtoResult<Self> {
+    fn from_raw(window_tokens: Option<u64>) -> DtoResult<Self> {
         let window_tokens = window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS);
-        let capacity_tokens = capacity_tokens.unwrap_or(DEFAULT_CONTEXT_CAPACITY_TOKENS);
-        if capacity_tokens == 0 {
-            return Err(ErrorDto::validation(
-                "invalid_provider_context_capacity_tokens",
-                "provider context capacity tokens must be greater than zero",
-            ));
-        }
-        if window_tokens == 0 || window_tokens >= capacity_tokens {
+        if window_tokens == 0 {
             return Err(ErrorDto::validation(
                 "invalid_provider_context_window_tokens",
-                "provider context window tokens must be greater than zero and less than the context capacity",
+                "provider context window tokens must be greater than zero",
             ));
         }
-        Ok(Self {
-            window_tokens,
-            capacity_tokens,
-        })
+        Ok(Self { window_tokens })
     }
 
     /// Returns the sliding context window size in tokens.
     #[must_use]
     pub const fn window_tokens(self) -> u64 {
         self.window_tokens
-    }
-
-    /// Returns the full model context capacity in tokens.
-    #[must_use]
-    pub const fn capacity_tokens(self) -> u64 {
-        self.capacity_tokens
     }
 }
 
@@ -768,7 +745,6 @@ struct RawProviderConfig {
     credential: String,
     endpoint: Option<String>,
     execution: Option<RawProviderExecutionPolicyDto>,
-    context_capacity_tokens: Option<u64>,
     context_window_tokens: Option<u64>,
 }
 
@@ -950,17 +926,22 @@ credential = \"{credential}\"
             assert_eq!(kind.as_str(), expected);
             assert_eq!(kind.to_string(), expected);
         }
-        for provider in ["openrouter", "openrouter", "generic-chat-completion-api"] {
+        for (provider, model) in [
+            ("openrouter", "fixture-model"),
+            ("generic-chat-completion-api", "example-chat-model"),
+        ] {
             let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
                 v1(
                     provider,
-                    "fixture-model",
+                    model,
                     CREDENTIAL,
                     Some("https://example.invalid/v1"),
                 ),
                 explicit_source(),
             ))
             .expect("supported provider resolves");
+            assert_eq!(resolved.provider().kind().as_str(), provider);
+            assert_eq!(resolved.provider().model(), model);
             assert_eq!(
                 resolved.provider().endpoint(),
                 Some("https://example.invalid/v1")
@@ -1053,26 +1034,6 @@ credential = \"{credential}\"
         ))
         .expect_err("unversioned configuration must fail closed");
         assert_eq!(unversioned.code(), "invalid_config_schema");
-    }
-
-    #[test]
-    fn generic_provider_preserves_configured_model_identifier() {
-        let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            v1(
-                "generic-chat-completion-api",
-                "example-chat-model",
-                CREDENTIAL,
-                None,
-            ),
-            explicit_source(),
-        ))
-        .expect("generic provider selection must preserve the configured model identifier");
-
-        assert_eq!(
-            resolved.provider().kind(),
-            ProviderKindDto::GenericChatCompletionApi
-        );
-        assert_eq!(resolved.provider().model(), "example-chat-model");
     }
 
     #[cfg(unix)]

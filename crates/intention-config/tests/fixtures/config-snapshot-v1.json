@@ -21,8 +21,7 @@
       "max_attempts": 2
     },
     "context_window": {
-      "window_tokens": 250000,
-      "capacity_tokens": 1000000
+      "window_tokens": 250000
     },
     "source_kind": "explicit"
   }

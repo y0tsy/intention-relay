@@ -64,18 +64,6 @@ fn provider_policy_rejects_out_of_range_values_without_redacting_errors() {
             "context_window_tokens = 0\n",
             "invalid_provider_context_window_tokens",
         ),
-        (
-            "context_capacity_tokens = 0\n",
-            "invalid_provider_context_capacity_tokens",
-        ),
-        (
-            "context_window_tokens = 4000\ncontext_capacity_tokens = 4000\n",
-            "invalid_provider_context_window_tokens",
-        ),
-        (
-            "context_window_tokens = 5000\ncontext_capacity_tokens = 4000\n",
-            "invalid_provider_context_window_tokens",
-        ),
     ] {
         let error = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
             format!(
@@ -93,11 +81,9 @@ fn provider_policy_rejects_out_of_range_values_without_redacting_errors() {
 fn context_window_policy_defaults_and_overrides_are_safe_snapshot_data() {
     let defaulted = resolve("");
     assert_eq!(defaulted.context_window().window_tokens(), 250_000);
-    assert_eq!(defaulted.context_window().capacity_tokens(), 1_000_000);
 
-    let overridden = resolve("context_window_tokens = 1000\ncontext_capacity_tokens = 4000\n");
+    let overridden = resolve("context_window_tokens = 1000\n");
     assert_eq!(overridden.context_window().window_tokens(), 1_000);
-    assert_eq!(overridden.context_window().capacity_tokens(), 4_000);
 
     let encoded = serde_json::to_string(&overridden).expect("safe projection serializes");
     assert!(encoded.contains("\"context_window\""));
