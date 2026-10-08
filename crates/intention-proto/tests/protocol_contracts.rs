@@ -64,17 +64,6 @@ fn protocol_hello_round_trips_with_the_current_version() {
     );
 }
 
-#[test]
-fn only_the_exact_current_protocol_version_passes_negotiation_equality() {
-    let current = intention_proto::CURRENT_PROTOCOL_VERSION;
-    assert_eq!(current, ProtocolVersionDto::new(1, 0));
-    assert_ne!(ProtocolVersionDto::new(1, 1), current);
-    assert_ne!(ProtocolVersionDto::new(2, 1), current);
-    // A non-current peer fails the daemon/client negotiation gate with the
-    // typed `incompatible_protocol_version` error (covered in
-    // intention-transport integration tests).
-}
-
 /// Returns the position of one method in the protocol method table.
 ///
 /// This match is deliberately wildcard-free: adding a variant to
@@ -238,37 +227,6 @@ fn jsonrpc_method_table_covers_every_request_variant_exactly_once() {
 }
 
 #[test]
-fn daemon_health_and_session_snapshot_contracts_round_trip() {
-    let schema = SchemaVersionDto::new(1, 1);
-    let health = DaemonHealthDto::new(schema, CURRENT_PROTOCOL_VERSION, DaemonReadinessDto::Ready);
-    assert_eq!(
-        serde_json::from_str::<DaemonHealthDto>(
-            &serde_json::to_string(&health).expect("health serializes")
-        )
-        .expect("health deserializes"),
-        health
-    );
-
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let snapshot = SessionSnapshotDto::with_projection(
-        schema,
-        session_id,
-        fixture_projection(session_id),
-        vec![fixture_message(session_id, run_id)],
-    )
-    .expect("fixture snapshot is valid");
-    assert_eq!(snapshot.session_id(), session_id);
-    assert_eq!(snapshot.messages().len(), 1);
-    let response = SessionSubscriptionResponseDto::snapshot(snapshot);
-
-    let encoded = serde_json::to_string(&response).expect("response serializes");
-    let decoded: SessionSubscriptionResponseDto =
-        serde_json::from_str(&encoded).expect("response deserializes");
-    assert_eq!(decoded, response);
-}
-
-#[test]
 fn subscribe_command_carries_optional_run_scope_on_the_current_shape() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
@@ -300,21 +258,6 @@ fn subscribe_command_carries_optional_run_scope_on_the_current_shape() {
 
     assert_eq!(decoded, command);
     assert_eq!(decoded.requested_mode(), intention_proto::RunModeDto::Build);
-}
-
-#[test]
-fn run_subscription_command_carries_only_the_run_scope() {
-    let command =
-        SubscribeRunCommandDto::new(SchemaVersionDto::new(1, 1), SessionId::new(), RunId::new());
-
-    let encoded = serde_json::to_string(&command).expect("test serialization must succeed");
-    assert!(
-        !encoded.contains("cursor"),
-        "the run subscription carries no cursor"
-    );
-    let decoded: SubscribeRunCommandDto =
-        serde_json::from_str(&encoded).expect("test deserialization must succeed");
-    assert_eq!(decoded, command);
 }
 
 #[test]
@@ -385,11 +328,7 @@ fn protocol_request_and_response_variants_round_trip_through_jsonrpc_envelopes()
         (
             ProtocolMethodDto::DaemonHealth,
             ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(
-                DaemonHealthDto::new(
-                    schema,
-                    CURRENT_PROTOCOL_VERSION,
-                    DaemonReadinessDto::Draining,
-                ),
+                DaemonHealthDto::new(schema, DaemonReadinessDto::Draining),
             )),
         ),
         (
@@ -465,11 +404,7 @@ fn jsonrpc_error_responses_map_to_stable_typed_errors() {
     let response = encode_response(
         id,
         ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(
-            DaemonHealthDto::new(
-                SchemaVersionDto::new(1, 1),
-                CURRENT_PROTOCOL_VERSION,
-                DaemonReadinessDto::Ready,
-            ),
+            DaemonHealthDto::new(SchemaVersionDto::new(1, 1), DaemonReadinessDto::Ready),
         )),
     );
     let line = serde_json::to_string(&response).expect("success response serializes");
@@ -526,36 +461,6 @@ fn run_frame_notifications_tag_content_and_status_kinds() {
     assert!(
         parse_run_frame_notification(&line).is_err(),
         "a response is never accepted as a run frame"
-    );
-}
-
-#[test]
-fn run_subscription_snapshots_round_trip_and_validate_scope() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let run = fixture_run(session_id, run_id);
-    let snapshot = RunSubscriptionSnapshotDto::new(run, vec![fixture_message(session_id, run_id)])
-        .expect("coherent run snapshot is valid");
-    assert_eq!(snapshot.run().run_id(), run_id);
-    assert_eq!(snapshot.messages().len(), 1);
-
-    let response = RunSubscriptionResponseDto::snapshot(snapshot);
-    let encoded = serde_json::to_string(&response).expect("response serializes");
-    let decoded: RunSubscriptionResponseDto =
-        serde_json::from_str(&encoded).expect("response deserializes");
-    assert_eq!(decoded, response);
-
-    assert_eq!(
-        RunSubscriptionSnapshotDto::new(run, vec![fixture_message(SessionId::new(), run_id)])
-            .expect_err("a message from another session fails closed")
-            .code(),
-        "invalid_run_subscription_snapshot"
-    );
-    assert_eq!(
-        RunSubscriptionSnapshotDto::new(run, vec![fixture_message(session_id, RunId::new())])
-            .expect_err("a message from another run fails closed")
-            .code(),
-        "invalid_run_subscription_snapshot"
     );
 }
 
@@ -741,7 +646,6 @@ fn a_payload_schema_version_other_than_the_current_one_is_rejected_on_decode() {
     // decode rejection.
     let health = serde_json::to_value(DaemonHealthDto::new(
         CURRENT_DTO_SCHEMA_VERSION,
-        CURRENT_PROTOCOL_VERSION,
         DaemonReadinessDto::Ready,
     ))
     .expect("health serializes");

@@ -30,7 +30,6 @@ use intention_proto::{DtoResult, ErrorDto, ProjectId, RunId, SessionId, Workspac
 use intention_proto::{MessageKindDto, RunModeDto, SessionProjectionDto};
 use intention_transport::{
     AsyncLocalClientConnection, AsyncLocalDaemonConnection, AsyncLocalListener, LocalEndpoint,
-    local_protocol_version,
 };
 
 fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
@@ -198,19 +197,11 @@ async fn serve_fixture_connection(
 }
 
 const fn ready_health() -> DaemonHealthDto {
-    DaemonHealthDto::new(
-        SCHEMA_VERSION,
-        local_protocol_version(),
-        DaemonReadinessDto::Ready,
-    )
+    DaemonHealthDto::new(SCHEMA_VERSION, DaemonReadinessDto::Ready)
 }
 
 const fn starting_health() -> DaemonHealthDto {
-    DaemonHealthDto::new(
-        SCHEMA_VERSION,
-        local_protocol_version(),
-        DaemonReadinessDto::Starting,
-    )
+    DaemonHealthDto::new(SCHEMA_VERSION, DaemonReadinessDto::Starting)
 }
 
 const fn subscription(session_id: SessionId) -> SubscribeSessionCommandDto {
@@ -510,11 +501,7 @@ async fn non_ready_health_is_not_returned_as_a_successful_connection() {
         let endpoint = endpoint();
         let server = start_fixture_server(
             endpoint.clone(),
-            FixtureResponse::Health(DaemonHealthDto::new(
-                SCHEMA_VERSION,
-                local_protocol_version(),
-                readiness,
-            )),
+            FixtureResponse::Health(DaemonHealthDto::new(SCHEMA_VERSION, readiness)),
         );
         let error = client(
             endpoint,

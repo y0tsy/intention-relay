@@ -12,14 +12,13 @@ mod common;
 use common::{fixture_message, fixture_projection};
 
 use intention_proto::{
-    CURRENT_PROTOCOL_VERSION, CreateSessionAcceptedDto, InterruptRunAcceptedDto,
-    ProtocolAcceptedDto, ProtocolAcceptedResultDto, ProtocolVersionDto, RemoveTurnAcceptedDto,
-    SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionSnapshotDto,
-    SessionSubscriptionResponseDto,
-};
-use intention_proto::{
     ConfigRevisionId, CorrelationIdDto, ProjectId, RunId, SchemaVersionDto, SessionId, TurnId,
     WorkspaceId,
+};
+use intention_proto::{
+    CreateSessionAcceptedDto, InterruptRunAcceptedDto, ProtocolAcceptedDto,
+    ProtocolAcceptedResultDto, RemoveTurnAcceptedDto, SendUserTurnAcceptedDto,
+    SendUserTurnOutcomeDto, SessionSnapshotDto, SessionSubscriptionResponseDto,
 };
 
 #[test]
@@ -61,15 +60,6 @@ fn typed_acceptance_results_carry_required_durable_evidence() {
     assert!(
         !encoded.contains("sequence"),
         "acceptance evidence carries no committed sequence"
-    );
-}
-
-#[test]
-fn current_protocol_version_is_pinned_to_the_wire_literal() {
-    assert_eq!(
-        CURRENT_PROTOCOL_VERSION,
-        ProtocolVersionDto::new(1, 0),
-        "the wire protocol version is pinned independently of the fixture constant"
     );
 }
 

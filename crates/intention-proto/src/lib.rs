@@ -277,12 +277,6 @@ impl CorrelationIdDto {
     pub fn parse(value: &str) -> DtoResult<Self> {
         parse_canonical_uuid(value, "invalid_correlation_id").map(Self)
     }
-
-    /// Returns the canonical opaque identifier representation.
-    #[must_use]
-    pub fn as_str(&self) -> String {
-        self.0.to_string()
-    }
 }
 
 /// A normalized logical path relative to an already-authorized workspace root.
@@ -334,21 +328,6 @@ impl WorkspaceRelativePathDto {
     }
 }
 
-/// A closed set of safe dynamic details for a boundary error.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ErrorDetailDto {
-    /// An authorized logical workspace-relative path was not found.
-    ///
-    /// Reserved vocabulary: no production path produces this variant today;
-    /// the file-oriented tools answer `tool_read_failed` instead. It is kept as
-    /// the reviewed not-found detail shape rather than deleted.
-    MissingWorkspacePath {
-        /// The logical path relative to the authorized workspace root.
-        path: WorkspaceRelativePathDto,
-    },
-}
-
 /// A safe, structured error usable at crate and process boundaries.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ErrorDto {
@@ -358,8 +337,6 @@ pub struct ErrorDto {
     retry: ErrorRetryDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     correlation_id: Option<CorrelationIdDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    detail: Option<ErrorDetailDto>,
 }
 
 impl<'de> Deserialize<'de> for ErrorDto {
@@ -375,8 +352,6 @@ impl<'de> Deserialize<'de> for ErrorDto {
             retry: ErrorRetryDto,
             #[serde(default)]
             correlation_id: Option<CorrelationIdDto>,
-            #[serde(default)]
-            detail: Option<ErrorDetailDto>,
         }
 
         let raw = RawErrorDto::deserialize(deserializer)?;
@@ -386,7 +361,6 @@ impl<'de> Deserialize<'de> for ErrorDto {
             raw.message,
             raw.retry,
             raw.correlation_id,
-            raw.detail,
         )
         .map_err(de::Error::custom)
     }
@@ -405,37 +379,7 @@ impl ErrorDto {
         retry: ErrorRetryDto,
         correlation_id: Option<CorrelationIdDto>,
     ) -> DtoResult<Self> {
-        Self::build(
-            code.into(),
-            category,
-            message.into(),
-            retry,
-            correlation_id,
-            None,
-        )
-    }
-
-    /// Creates a safe error with a reviewed typed dynamic detail.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the code or message is blank.
-    pub fn with_detail(
-        code: impl Into<String>,
-        category: ErrorCategoryDto,
-        message: impl Into<String>,
-        retry: ErrorRetryDto,
-        correlation_id: Option<CorrelationIdDto>,
-        detail: ErrorDetailDto,
-    ) -> DtoResult<Self> {
-        Self::build(
-            code.into(),
-            category,
-            message.into(),
-            retry,
-            correlation_id,
-            Some(detail),
-        )
+        Self::build(code.into(), category, message.into(), retry, correlation_id)
     }
 
     fn build(
@@ -444,7 +388,6 @@ impl ErrorDto {
         message: String,
         retry: ErrorRetryDto,
         correlation_id: Option<CorrelationIdDto>,
-        detail: Option<ErrorDetailDto>,
     ) -> DtoResult<Self> {
         if code.trim().is_empty() || message.trim().is_empty() {
             return Err(Self {
@@ -453,7 +396,6 @@ impl ErrorDto {
                 message: "error code and message must not be empty".to_owned(),
                 retry: ErrorRetryDto::Never,
                 correlation_id: None,
-                detail: None,
             });
         }
         Ok(Self {
@@ -462,7 +404,6 @@ impl ErrorDto {
             message,
             retry,
             correlation_id,
-            detail,
         })
     }
 
@@ -475,7 +416,6 @@ impl ErrorDto {
             message: message.to_owned(),
             retry: ErrorRetryDto::Manual,
             correlation_id: None,
-            detail: None,
         }
     }
 
@@ -488,7 +428,18 @@ impl ErrorDto {
             message: message.to_owned(),
             retry: ErrorRetryDto::Manual,
             correlation_id: None,
-            detail: None,
+        }
+    }
+
+    /// Creates a stable unavailable error asking the caller to retry after a delay.
+    #[must_use]
+    pub fn unavailable_delayed(code: &'static str, message: &'static str) -> Self {
+        Self {
+            code: code.to_owned(),
+            category: ErrorCategoryDto::Unavailable,
+            message: message.to_owned(),
+            retry: ErrorRetryDto::Delayed,
+            correlation_id: None,
         }
     }
 
@@ -520,12 +471,6 @@ impl ErrorDto {
     #[must_use]
     pub const fn correlation_id(&self) -> Option<CorrelationIdDto> {
         self.correlation_id
-    }
-
-    /// Returns the reviewed typed dynamic detail, when one was provided.
-    #[must_use]
-    pub const fn detail(&self) -> Option<&ErrorDetailDto> {
-        self.detail.as_ref()
     }
 }
 

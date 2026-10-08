@@ -19,7 +19,7 @@ use intention_proto::{
     SessionSubscriptionResponseDto, SubscribeRunCommandDto, SubscribeSessionCommandDto,
     decode_response, encode_request, parse_run_frame_notification,
 };
-use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, IdempotencyKey, RunId, SessionId};
+use intention_proto::{DtoResult, ErrorDto, IdempotencyKey, RunId, SessionId};
 use intention_proto::{
     GetSessionSnapshotQueryDto, MessageProjectionDto, RunProjectionDto, RunStatusDto,
 };
@@ -77,14 +77,10 @@ impl DaemonLauncher for ProcessDaemonLauncher {
             .spawn()
             .map(|_| ())
             .map_err(|_| {
-                ErrorDto::new(
+                ErrorDto::unavailable(
                     "local_daemon_launch_failed",
-                    ErrorCategoryDto::Unavailable,
                     "the local daemon could not be started",
-                    intention_proto::ErrorRetryDto::Manual,
-                    None,
                 )
-                .unwrap_or_else(|_| unavailable("local_daemon_launch_failed"))
             })
     }
 }
@@ -312,23 +308,15 @@ impl IntentionClient {
                 health,
             )) => match health.readiness() {
                 DaemonReadinessDto::Ready => Ok(health),
-                DaemonReadinessDto::Starting => Err(ErrorDto::new(
+                DaemonReadinessDto::Starting => Err(ErrorDto::unavailable_delayed(
                     "local_daemon_starting",
-                    ErrorCategoryDto::Unavailable,
                     "the local daemon is starting",
-                    intention_proto::ErrorRetryDto::Delayed,
-                    None,
-                )
-                .unwrap_or_else(|_| unavailable("local_daemon_starting"))),
+                )),
                 DaemonReadinessDto::Draining | DaemonReadinessDto::Unavailable => {
-                    Err(ErrorDto::new(
+                    Err(ErrorDto::unavailable_delayed(
                         "local_daemon_not_ready",
-                        ErrorCategoryDto::Unavailable,
                         "the local daemon is not ready to serve requests",
-                        intention_proto::ErrorRetryDto::Delayed,
-                        None,
-                    )
-                    .unwrap_or_else(|_| unavailable("local_daemon_not_ready")))
+                    ))
                 }
             },
             ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {

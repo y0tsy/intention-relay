@@ -155,29 +155,17 @@ pub enum DaemonReadinessDto {
 pub struct DaemonHealthDto {
     #[serde(deserialize_with = "current_schema_version")]
     schema_version: SchemaVersionDto,
-    protocol_version: ProtocolVersionDto,
     readiness: DaemonReadinessDto,
 }
 
 impl DaemonHealthDto {
     /// Creates a typed daemon health and readiness projection.
     #[must_use]
-    pub const fn new(
-        schema_version: SchemaVersionDto,
-        protocol_version: ProtocolVersionDto,
-        readiness: DaemonReadinessDto,
-    ) -> Self {
+    pub const fn new(schema_version: SchemaVersionDto, readiness: DaemonReadinessDto) -> Self {
         Self {
             schema_version,
-            protocol_version,
             readiness,
         }
-    }
-
-    /// Returns the projection schema version.
-    #[must_use]
-    pub const fn schema_version(self) -> SchemaVersionDto {
-        self.schema_version
     }
 
     /// Returns the current daemon readiness state.
@@ -230,12 +218,6 @@ impl SubscribeSessionCommandDto {
             run_id,
             requested_mode,
         }
-    }
-
-    /// Returns the request schema version.
-    #[must_use]
-    pub const fn schema_version(self) -> SchemaVersionDto {
-        self.schema_version
     }
 
     /// Returns the subscribed session identity.
@@ -505,12 +487,6 @@ impl ProtocolAcceptedDto {
             correlation_id,
             result,
         }
-    }
-
-    /// Returns the opaque canonical correlation reference.
-    #[must_use]
-    pub const fn correlation_id(&self) -> CorrelationIdDto {
-        self.correlation_id
     }
 
     /// Returns operation-specific acceptance evidence.
