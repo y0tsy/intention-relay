@@ -13,18 +13,18 @@ re-exports for source compatibility. `intention-domain` owns the durable project
 Domain, storage, and protocol retain no dependency on `intention-providers`.
 
 ```text
-ModelDriver
+ModelExecutionDriver
   capabilities() -> ModelCapabilitiesDto
-  preflight(ModelRequestDto) -> DtoResult<()>
+  execute(ModelRequestDto, ModelCancellationSignal) -> ModelEventStream
 ```
 
-M4 defines text-only `ModelMessageDto` context, an optional system context, explicit requested capability flags, and
-`ModelStreamLifecycleDto`. Providers must emit `Started` first, then zero or more text/reasoning/tool/usage events,
+M4 defines text-only `ModelMessageDto` context, an optional system context, and `ModelStreamLifecycleDto`.
+Providers must emit `Started` first, then zero or more text/reasoning/tool/usage events,
 followed by exactly one terminal `Finished` event. A second start, a fact before start or after finish, duplicate usage,
-or a second finish fails validation. `ModelRunExecutionService` consumes an injected stream, performs preflight only
-after exact persisted/current safe-selection equality, owns cancellation late-event suppression, deadlines, and retries,
-and commits only current-state rows (assistant transcript rows, run status, usage, finish, and failure) through the
-DTO-only storage contract. Its `ModelTimePort` exposes fresh
+or a second finish fails validation. `ModelRunExecutionService` consumes an injected stream, requires exact
+persisted/current safe-selection equality before execution, owns cancellation late-event suppression, deadlines, and
+retries, and commits only current-state rows (assistant transcript rows, run status, usage, finish, and failure) through
+the DTO-only storage contract. Its `ModelTimePort` exposes fresh
 provider-neutral delay futures and safe timestamps, never Tokio. The service does not select a provider or own a Tokio
 runtime; the daemon-owned composition host supplies those private execution resources.
 
@@ -32,7 +32,7 @@ Core DTO families:
 
 | DTO | Responsibility |
 | --- | --- |
-| `ModelRequestDto` | System context, text messages, advertised typed `ModelToolDefinitionDto` tool definitions, the transient same-run assistant reasoning attachment, requested reasoning/multimodal/tool/vendor-extension capabilities, and run identity. |
+| `ModelRequestDto` | System context, text messages, advertised typed `ModelToolDefinitionDto` tool definitions, the transient same-run assistant reasoning attachment, and run identity. |
 | `ModelCapabilitiesDto` | Supported input, output, reasoning, tool, multimodal, vendor-extension, and streaming capability declarations. |
 | `ModelEventDto` | Text, reasoning, tool, usage, lifecycle, and provider-normalized stream events. |
 | `ToolCallDto` | Typed tool identity and typed tool input. |
@@ -79,8 +79,8 @@ sequenceDiagram
 ```
 
 The provider adapter translates native formats into typed DTOs. It must not erase a capability merely because another
-current provider lacks it. Instead, `ModelCapabilitiesDto` describes support and application/runtime decides whether a
-requested feature is valid.
+current provider lacks it. Instead, `ModelCapabilitiesDto` describes support and provider selection validates the
+declaration once before any request is built.
 
 ## Initial provider drivers
 
@@ -109,12 +109,12 @@ typed wire. It owns:
 - normalized failures.
 
 The adapters single-source every normalization rule that does not depend on their SDK. The crate-private `mapping`
-module owns the wire-role class (a daemon-synthesized notice is user-role context), the finish-reason taxonomy, native
-token counters to validated usage, complete tool-call assembly with the locally allocated canonical identity, the
-tool-result identity requirement, tool-parameter decoding, and the normalized error tail (retry decision to safe code).
-Driver-specific rules stay with their adapter: OpenRouter maps its SDK finish-reason enum and delegates retryability to
-the SDK classifier, the generic adapter classifies HTTP status ranges with a provider `type` fallback, and each adapter
-owns its native wire shapes and error codes.
+module owns the wire-role class (a daemon-synthesized notice is user-role context), native token counters to validated
+usage, complete tool-call assembly with the locally allocated canonical identity, the tool-result identity requirement,
+tool-parameter decoding, and the infallible normalized error tail (retry decision to safe code).
+Driver-specific rules stay with their adapter: OpenRouter maps its SDK finish-reason enum, the generic adapter maps its
+wire finish-reason strings, OpenRouter delegates retryability to the SDK classifier, the generic adapter classifies HTTP
+status ranges with a provider `type` fallback, and each adapter owns its native wire shapes and error codes.
 
 The completed M4 daemon host starts the selected SDK-backed stream through the private provider composition path.
 Provider crates continue to expose only provider-neutral contracts; runtime-owned execution and persistent delivery do
@@ -125,14 +125,16 @@ and `generic-chat-completion-api`; the latter preserves any non-blank model ID w
 `openai` is not an M4 configuration kind and requires a separately declared OpenAI Responses driver crate and contract
 decision before it is introduced. The generic provider accepts text context/output, advertised tool definitions, usage,
 finish reasons, `tool_calls` tool-call fragments, and textual `reasoning_content` output; multimodal and vendor
-extensions fail preflight before any outbound request is prepared. Reasoning output is normalized as
+extensions stay outside its capability declaration, which provider selection validates before any outbound request is
+prepared. Reasoning output is normalized as
 `ModelEventDto::ReasoningDelta` (`Primary`), and when a configured thinking-mode gateway requires it the adapter
 serializes the same round's accepted reasoning as `reasoning_content` on the assistant tool-call message of the same-run
 continuation, as transient request state with no durable representation; an empty channel is only a presence marker.
 The OpenRouter adapter ignores the transient attachment because its pinned SDK request type has no reasoning
 field and its wire does not require the echo. OpenRouter declares text, reasoning, tool-call, and streaming capability
-while its M4 foundation rejects multimodal context. Execution-time capability behavior belongs to the selected provider
-driver and runtime policy.
+while its M4 foundation declares no multimodal or vendor-extension support. Capability negotiation happens once at
+provider selection: the selected driver's declaration must serve streamed text with tool calls, and the per-request
+execution path carries no capability check.
 
 ## Provider selection
 
@@ -154,10 +156,10 @@ assistant-tool-call and tool-role messages until the provider finishes.
 
 Ordinary production requests advertise the active registered tools: the request carries validated typed
 `ModelToolDefinitionDto` definitions built by `intention_tools::model_visible_descriptors()` in advertisement order
-(`read`, `write`, `edit`, `execute`, `glob`, `grep`). A non-empty advertisement forces the requested `tool_calls` capability, so
-a driver that does not declare tool-call support fails closed at preflight with `unsupported_model_capability`. Both
-current adapters translate the definitions into their private SDK request and omit `tool_choice`; an empty advertisement
-preserves the previous request shape. A definition validates its input: the name is an ASCII `[A-Za-z0-9_-]` token of
+(`read`, `write`, `edit`, `execute`, `glob`, `grep`). Provider selection already requires a driver that declares
+streamed text with tool calls, so a driver without tool-call support fails closed there with
+`unsupported_model_capability`. Both current adapters translate the definitions into their private SDK request and omit
+`tool_choice`; an empty advertisement preserves the previous request shape. A definition validates its input: the name is an ASCII `[A-Za-z0-9_-]` token of
 at most 64 characters (`invalid_tool_definition_name`), the description is non-blank
 (`invalid_tool_definition_description`), and the schema text is non-empty JSON-object text of at most 64 KiB
 (`invalid_tool_definition_parameters`). A model-visible tool without a schema fails with
@@ -239,9 +241,9 @@ wait starts the next attempt immediately.
 | --- | --- | --- |
 | SDK isolation | Compile/dependency test. | OpenRouter SDK types do not escape provider crate public API. |
 | Event normalization | Provider fixture stream tests. | Equivalent native sequences map to valid ordered `ModelEventDto` values. |
-| Capability check | Application/runtime test. | Unsupported requested feature fails before an invalid provider call. |
-| Tool advertisement | Model/adapter/runtime/daemon-host tests. | The outgoing request contains the six active tool definitions in advertisement order, both adapters translate them without `tool_choice`, a driver without tool-call support fails preflight, and the advertisement survives the tool-result continuation request. |
-| Reasoning round trip | Model/adapter/runtime tests. | The generic adapter normalizes typed `reasoning_content` deltas as `Primary` reasoning events and serializes the same round's accepted reasoning on the assistant tool-call continuation without adding a durable representation; empty text is presence-only; multimodal and vendor extensions still fail preflight. |
+| Capability check | Model contract test. | A declaration without streamed text or tool calls fails closed with `unsupported_model_capability` at provider selection. |
+| Tool advertisement | Model/adapter/runtime/daemon-host tests. | The outgoing request contains the six active tool definitions in advertisement order, both adapters translate them without `tool_choice`, a driver without tool-call support is rejected at provider selection, and the advertisement survives the tool-result continuation request. |
+| Reasoning round trip | Model/adapter/runtime tests. | The generic adapter normalizes typed `reasoning_content` deltas as `Primary` reasoning events and serializes the same round's accepted reasoning on the assistant tool-call continuation without adding a durable representation; empty text is presence-only; multimodal and vendor extensions stay outside the declared capabilities. |
 | Tool loop integration | Runtime/provider/application integration test. | Provider emits a tool-call DTO; the application builds the typed invocation, the daemon-owned tool service executes it, and the runtime persists the correlated result and continues the exchange. |
 | Provider selection | Configuration contract test. | A configured provider and model ID are preserved. |
 | Retry | Controlled provider failure test. | Retry lifecycle is typed, bounded, and durable. |

@@ -298,21 +298,21 @@ because it consumes and preserves `reasoning_content` ([architecture
 08](08-model-protocol-and-providers.md)); that declaration is the existing driver capability
 contract, not a descriptor revision, and a future descriptor that cannot represent the selected model's reasoning
 dialect still requires its own closed capability declaration. Model identifiers remain byte-exact and are never used to
-infer capabilities. Preflight rejects a requested capability or value that is absent from either level before any
-outbound work occurs.
+infer capabilities. A capability or value that is absent from either level fails validation at provider selection, before
+any outbound work occurs.
 
 The resolved reasoning policy includes the closed fragment-category and summary support, the
 `ReasoningHistoryTransferDto` mode, and `compatibility_id` when transfer is enabled. It also records the fixed 4 MiB
 output/history limits. The optional typed reasoning-usage interpretation and its `ReasoningUsageDto` were removed by the
 unconsumed-surface audit (2026-09). A selection that cannot represent the descriptor's declared history transfer fails
-preflight before provider work; it never falls back to a different transfer policy.
+validation before provider work; it never falls back to a different transfer policy.
 
 `responses` v1 is local-history-first. Every request sets `store: false`; the daemon continues to construct model
 context from Intention Relay durable history and does not use OpenAI Conversations or `previous_response_id`. It must
 neither request nor persist, publish, replay, or depend on encrypted reasoning, opaque response output items, remote
 conversation identifiers, or provider-managed history state. The provider-neutral contract adds closed
 `ReasoningEffortLevel` values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`). A profile may select
-only values declared in its model subset; an unsupported effort fails preflight. The resolved execution policy records
+only values declared in its model subset; an unsupported effort fails validation. The resolved execution policy records
 the selected effort as immutable safe provenance. The former Responses-specific reasoning-mode projection and the
 protocol-side effort copy were removed by the unconsumed-surface audit (2026-09).
 
