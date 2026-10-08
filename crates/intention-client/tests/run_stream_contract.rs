@@ -27,9 +27,8 @@ async fn receive_run_subscription(
 ) -> (u64, SubscribeRunCommandDto) {
     let line = requests.receive_line().await.expect("request arrives");
     let request = decode_request_line(&line).expect("request decodes");
-    let id = request.id();
-    match request.into_payload() {
-        ProtocolRequestPayloadDto::RunSubscription(subscription) => (id, subscription),
+    match request.payload() {
+        ProtocolRequestPayloadDto::RunSubscription(subscription) => (request.id(), *subscription),
         other => panic!("expected a run subscription request, got {other:?}"),
     }
 }

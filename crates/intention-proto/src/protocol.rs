@@ -1014,12 +1014,6 @@ impl ProtocolRequestDto {
     pub const fn payload(&self) -> &ProtocolRequestPayloadDto {
         &self.payload
     }
-
-    /// Consumes the request and returns its typed payload.
-    #[must_use]
-    pub fn into_payload(self) -> ProtocolRequestPayloadDto {
-        self.payload
-    }
 }
 
 /// A daemon-to-client message: either a response or a stream notification.
