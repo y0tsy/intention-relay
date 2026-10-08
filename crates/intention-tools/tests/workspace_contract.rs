@@ -7,6 +7,8 @@
     reason = "Test setup failures are reported with local context."
 )]
 
+mod common;
+
 use intention_proto::WorkspaceRelativePathDto;
 use intention_proto::WorkspaceRootDto;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -28,13 +30,6 @@ impl TempDir {
     fn path(&self) -> &std::path::Path {
         &self.0
     }
-}
-
-fn resolve(root: &std::path::Path) -> intention_tools::WorkspaceRoot {
-    intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-    )
-    .expect("workspace")
 }
 
 struct CwdGuard(std::path::PathBuf);
@@ -65,7 +60,7 @@ fn cwd_guard() -> MutexGuard<'static, ()> {
 fn relative_resolution_joins_the_declared_root_independent_of_process_cwd() {
     let root = TempDir::new("contract");
     std::fs::write(root.path().join("file.txt"), "ok").expect("file");
-    let workspace = resolve(root.path());
+    let workspace = common::workspace(root.path());
     let path = WorkspaceRelativePathDto::parse("file.txt").expect("path");
     let expected = std::fs::canonicalize(root.path().join("file.txt")).expect("canonical file");
     let _guard = cwd_guard();
@@ -76,7 +71,7 @@ fn relative_resolution_joins_the_declared_root_independent_of_process_cwd() {
 #[test]
 fn new_file_resolution_shares_the_join_rule() {
     let root = TempDir::new("new-file");
-    let workspace = resolve(root.path());
+    let workspace = common::workspace(root.path());
     let path = WorkspaceRelativePathDto::parse("new.txt").expect("path");
     let expected = std::fs::canonicalize(root.path())
         .expect("canonical root")
@@ -87,7 +82,7 @@ fn new_file_resolution_shares_the_join_rule() {
 #[test]
 fn execute_cwd_is_the_declared_root() {
     let root = TempDir::new("cwd");
-    let workspace = resolve(root.path());
+    let workspace = common::workspace(root.path());
     assert_eq!(workspace.execute_cwd(), workspace.root());
     assert_eq!(
         workspace.execute_cwd(),

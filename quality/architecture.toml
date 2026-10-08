@@ -171,7 +171,7 @@ test_targets = ["generic_chat_contracts", "m4_execution_contracts", "model_contr
 
 [[future_crates]]
 name = "intention-tools"
-test_targets = ["bounded_contracts", "hook_contracts", "tool_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search", "workspace_contract"]
+test_targets = ["bounded_contracts", "hook_contracts", "tool_contracts", "tool_coverage", "workspace_contract"]
 
 [[future_crates]]
 name = "intention-vfr"

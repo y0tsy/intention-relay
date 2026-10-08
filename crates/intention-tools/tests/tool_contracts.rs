@@ -4,61 +4,23 @@
     reason = "Integration tests use expect and unwrap only for deterministic fixture setup; failures indicate a broken test fixture."
 )]
 
-use intention_proto::WorkspaceRootDto;
+mod common;
+
+use common::{DispatchCompleted, fixture_context, fixture_dir, service};
 use intention_proto::{ToolCallId, WorkspaceRelativePathDto};
 use intention_tools::{
     BoundedText, CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepMatch,
     GrepResult, GrepScope, InterruptCause, PathsResult, REDACTED_WORKSPACE_CWD, ReadInput,
     TOOL_DESCRIPTOR_REVISION, TOOL_SCHEMA_VERSION, TextResult, ToolDispatchOutcome, ToolId,
     ToolInput, ToolProcessStatus, ToolProjectedContent, ToolResult, ToolResultProjection,
-    ToolService, WriteInput, WriteResult, model_visible_descriptors, registry,
+    WriteInput, WriteResult, model_visible_descriptors, registry,
 };
-use tempfile::TempDir;
-
-fn fixture_dir(label: &str) -> TempDir {
-    tempfile::Builder::new()
-        .prefix(&format!("intention-tools-{label}-"))
-        .tempdir()
-        .expect("temporary workspace")
-}
-
-/// Test adapter: unwraps one completed dispatch and fails loudly on any
-/// interruption, so fixtures that expect a final typed result stay direct.
-trait DispatchCompleted {
-    fn dispatch_completed(
-        &self,
-        call: ToolCallId,
-        input: ToolInput,
-        cancellation: CancellationSignal,
-    ) -> ToolResult;
-}
-
-impl DispatchCompleted for ToolService {
-    fn dispatch_completed(
-        &self,
-        call: ToolCallId,
-        input: ToolInput,
-        cancellation: CancellationSignal,
-    ) -> ToolResult {
-        match self
-            .dispatch_with_cancellation(call, input, cancellation)
-            .expect("completed dispatch succeeds")
-        {
-            ToolDispatchOutcome::Completed(result) => result,
-            ToolDispatchOutcome::Interrupted { cause, partial } => {
-                unreachable!("unexpected interrupted dispatch: {cause:?} {partial:?}")
-            }
-        }
-    }
-}
 
 #[test]
 fn execute_uses_workspace_cwd_and_returns_typed_result() {
     let root_dir = fixture_dir("execute");
     let root = root_dir.path().to_owned();
-    let dto = WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root dto");
-    let workspace = intention_tools::WorkspaceRoot::resolve(&dto).expect("workspace");
-    let service = ToolService::new(workspace);
+    let service = service(&root_dir);
     let program = if cfg!(windows) { "cmd" } else { "pwd" };
     let args = if cfg!(windows) {
         vec!["/C", "cd"]
@@ -95,12 +57,7 @@ fn write_expected_content_accepts_match_and_rejects_mismatch() {
     let root_dir = fixture_dir("write-expected-content");
     let path = root_dir.path().join("file.txt");
     std::fs::write(&path, "before").expect("seed");
-    let service = ToolService::new(
-        intention_tools::WorkspaceRoot::resolve(
-            &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).expect("root"),
-        )
-        .expect("workspace"),
-    );
+    let service = service(&root_dir);
     let relative = WorkspaceRelativePathDto::parse("file.txt").expect("path");
     let result = service.dispatch_with_cancellation(
         ToolCallId::new(),
@@ -134,12 +91,7 @@ fn edit_expected_content_accepts_match_and_rejects_mismatch() {
     let root_dir = fixture_dir("edit-expected-content");
     let path = root_dir.path().join("file.txt");
     std::fs::write(&path, "before needle").expect("seed");
-    let service = ToolService::new(
-        intention_tools::WorkspaceRoot::resolve(
-            &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).expect("root"),
-        )
-        .expect("workspace"),
-    );
+    let service = service(&root_dir);
     let relative = WorkspaceRelativePathDto::parse("file.txt").expect("path");
     let result = service.dispatch_with_cancellation(
         ToolCallId::new(),
@@ -181,11 +133,7 @@ fn tool_service_covers_nonzero_execute_as_normalized_result() {
     let root_dir = fixture_dir("execute-");
     let root = root_dir.path();
     std::fs::write(root.join("file.txt"), "content").expect("seed");
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-    )
-    .expect("workspace root");
-    let service = ToolService::new(workspace);
+    let service = service(&root_dir);
     let nonzero_input = || {
         ToolInput::Execute(ExecuteInput {
             program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).expect("program"),
@@ -249,12 +197,7 @@ fn tool_service_covers_nonzero_execute_as_normalized_result() {
 #[test]
 fn execute_cancellation_is_classified_as_a_stopped_interruption() {
     let root_dir = fixture_dir("timeout-");
-    let root = root_dir.path();
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-    )
-    .expect("workspace root");
-    let service = ToolService::new(workspace);
+    let service = service(&root_dir);
     let cancellation = CancellationSignal::new();
     let canceller = cancellation.clone();
     let cancellation_helper = std::thread::spawn(move || {
@@ -310,12 +253,7 @@ fn execute_cancellation_is_classified_as_a_stopped_interruption() {
 #[test]
 fn tool_service_rejects_invalid_patterns_and_unreadable_files() {
     let root_dir = fixture_dir("invalid-");
-    let root = root_dir.path();
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-    )
-    .expect("workspace root");
-    let service = ToolService::new(workspace);
+    let service = service(&root_dir);
     assert!(
         service
             .dispatch_with_cancellation(
@@ -345,11 +283,7 @@ fn grep_reports_no_matches_for_a_valid_file_scope() {
     let root_dir = fixture_dir("search-");
     let root = root_dir.path();
     std::fs::write(root.join("file.txt"), "content").expect("seed");
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-    )
-    .expect("workspace root");
-    let service = ToolService::new(workspace);
+    let service = service(&root_dir);
     let result = service.dispatch_completed(
         ToolCallId::new(),
         ToolInput::Grep(GrepInput {
@@ -368,11 +302,7 @@ fn grep_reports_no_matches_for_a_valid_file_scope() {
 fn search_rejects_unsafe_patterns_and_reports_utf8_columns() {
     let dir = fixture_dir("search-validation");
     std::fs::write(dir.path().join("file.txt"), "é needle\n").unwrap();
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
-    )
-    .unwrap();
-    let service = ToolService::new(workspace);
+    let service = service(&dir);
     for pattern in [
         "",
         "../*",
@@ -416,11 +346,7 @@ fn glob_matches_are_sorted_deduplicated_and_deterministic() {
     std::fs::create_dir(dir.path().join("real")).unwrap();
     std::fs::write(dir.path().join("target.txt"), "x").unwrap();
     std::fs::write(dir.path().join("real/deep.txt"), "x").unwrap();
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
-    )
-    .unwrap();
-    let service = ToolService::new(workspace);
+    let service = service(&dir);
     for pattern in ["*.txt", "**/*.txt", "real/*.txt", "{target,deep}*"] {
         let result = service.dispatch_completed(
             ToolCallId::new(),
@@ -466,11 +392,7 @@ fn bounded_sources_report_truncation_only_past_the_output_bound() {
     let dir = fixture_dir("bounded-source");
     std::fs::write(dir.path().join("exact.bin"), vec![b'a'; 65_536]).unwrap();
     std::fs::write(dir.path().join("over.bin"), vec![b'b'; 65_537]).unwrap();
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
-    )
-    .unwrap();
-    let service = ToolService::new(workspace);
+    let service = service(&dir);
     for (name, truncated, length) in [("exact.bin", false, 65_536), ("over.bin", true, 65_536)] {
         let result = service.dispatch_completed(
             ToolCallId::new(),
@@ -494,11 +416,7 @@ fn grep_file_scope_rejects_directories_and_follows_file_links() {
     std::fs::create_dir(dir.path().join("folder")).unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(dir.path().join("target.txt"), dir.path().join("link.txt")).unwrap();
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
-    )
-    .unwrap();
-    let service = ToolService::new(workspace);
+    let service = service(&dir);
     // A directory is not a valid explicit file scope.
     let error = service
         .dispatch_with_cancellation(
@@ -542,11 +460,7 @@ fn dispatch_reports_precise_errors_and_process_output_paths() {
     let root_dir = fixture_dir("dispatch-errors");
     let root = root_dir.path();
     std::fs::write(root.join("file.txt"), "needle\nother").expect("seed");
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-    )
-    .expect("workspace root");
-    let service = ToolService::new(workspace);
+    let service = service(&root_dir);
     let path = WorkspaceRelativePathDto::parse("file.txt").expect("path");
 
     let cancelled = service
@@ -614,11 +528,7 @@ fn a_stopped_tool_never_starts_its_effect_and_keeps_partial_results() {
     let root_dir = fixture_dir("stop-effects");
     let root = root_dir.path();
     std::fs::write(root.join("file.txt"), "original").expect("seed");
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-    )
-    .expect("workspace root");
-    let service = ToolService::new(workspace);
+    let service = service(&root_dir);
     let stopped = || ToolDispatchOutcome::Interrupted {
         cause: InterruptCause::Stopped,
         partial: None,
@@ -683,11 +593,7 @@ fn a_stopped_tool_never_starts_its_effect_and_keeps_partial_results() {
 #[test]
 fn execute_returns_stdout_stderr_and_truncation_metadata() {
     let root_dir = fixture_dir("execute-output");
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).expect("root"),
-    )
-    .expect("workspace root");
-    let service = ToolService::new(workspace);
+    let service = service(&root_dir);
     let (program, args) = if cfg!(windows) {
         ("cmd", vec!["/C", "echo out & echo err 1>&2"])
     } else {
@@ -717,11 +623,7 @@ fn execute_returns_stdout_stderr_and_truncation_metadata() {
 fn public_tool_errors_redact_secret_paths_commands_and_os_text() {
     let root_dir = fixture_dir("redaction");
     let root = root_dir.path();
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-    )
-    .expect("workspace");
-    let service = ToolService::new(workspace);
+    let service = service(&root_dir);
     // Assembled at runtime: recognizably fake, yet never a literal
     // secret-shaped assignment that docs-check rejects.
     let secret = format!("credential{}", "-leak-probe");
@@ -747,12 +649,7 @@ fn tool_service_covers_read_write_and_edit_error_variants() {
     let root_dir = fixture_dir("errors-2");
     let root = root_dir.path();
     std::fs::create_dir(root.join("directory")).expect("directory");
-    let service = ToolService::new(
-        intention_tools::WorkspaceRoot::resolve(
-            &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-        )
-        .expect("workspace root"),
-    );
+    let service = service(&root_dir);
     let directory = WorkspaceRelativePathDto::parse("directory").expect("path");
     assert!(
         service
@@ -800,12 +697,7 @@ fn tool_service_returns_search_matches_and_sorted_glob_paths() {
     let root = root_dir.path();
     std::fs::write(root.join("z.txt"), "first\nneedle\nneedle two").expect("seed");
     std::fs::write(root.join("a.txt"), "needle").expect("seed");
-    let service = ToolService::new(
-        intention_tools::WorkspaceRoot::resolve(
-            &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-        )
-        .expect("workspace root"),
-    );
+    let service = service(&root_dir);
     let result = service.dispatch_completed(
         ToolCallId::new(),
         ToolInput::Grep(GrepInput {
@@ -837,12 +729,7 @@ fn glob_empty_and_grep_read_failure_are_typed() {
     let root_dir = fixture_dir("search-extra-");
     let root = root_dir.path();
     std::fs::create_dir_all(root).unwrap();
-    let service = ToolService::new(
-        intention_tools::WorkspaceRoot::resolve(
-            &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).unwrap(),
-        )
-        .unwrap(),
-    );
+    let service = service(&root_dir);
     let glob = service.dispatch_completed(
         ToolCallId::new(),
         ToolInput::Glob(GlobInput {
@@ -870,7 +757,7 @@ fn glob_empty_and_grep_read_failure_are_typed() {
 #[test]
 fn dto_metadata_and_observability_round_trip_all_variants() {
     use intention_tools::{
-        MutationKind, ToolCapability, ToolContext, ToolObservability, ToolOutcome, ToolPolicy,
+        MutationKind, ToolCapability, ToolObservability, ToolOutcome, ToolPolicy,
         ToolResultEnvelope,
     };
     for value in [
@@ -911,12 +798,7 @@ fn dto_metadata_and_observability_round_trip_all_variants() {
             value
         );
     }
-    let context = ToolContext {
-        session_id: intention_proto::SessionId::parse("00000000-0000-4000-8000-000000000001")
-            .unwrap(),
-        run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000002").unwrap(),
-        call_id: ToolCallId::new(),
-    };
+    let context = fixture_context(ToolCallId::new());
     let envelope = ToolResultEnvelope {
         schema_version: TOOL_SCHEMA_VERSION,
         context,
@@ -945,12 +827,7 @@ fn invocation_call_identity_is_validated() {
     let id = ToolCallId::new();
     let invocation = intention_tools::ToolInvocation {
         schema_version: TOOL_SCHEMA_VERSION,
-        context: intention_tools::ToolContext {
-            session_id: intention_proto::SessionId::parse("00000000-0000-4000-8000-000000000001")
-                .unwrap(),
-            run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000002").unwrap(),
-            call_id: id,
-        },
+        context: fixture_context(id),
         input: ToolInput::Glob(GlobInput {
             pattern: BoundedText::new("*.rs").unwrap(),
         }),
@@ -968,11 +845,7 @@ fn invocation_call_identity_is_validated() {
 #[test]
 fn cancelled_dispatch_is_interrupted_before_any_tool_effect() {
     let root_dir = fixture_dir("cancelled-before-dispatch");
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
-    )
-    .unwrap();
-    let outcome = ToolService::new(workspace)
+    let outcome = service(&root_dir)
         .dispatch_with_cancellation(
             ToolCallId::new(),
             ToolInput::Write(WriteInput {
@@ -1019,11 +892,7 @@ fn tool_service_read_and_grep_report_truncation_for_invalid_utf8() {
     let dir = fixture_dir("invalid-utf8");
     let bytes = vec![0xff; 70_000];
     std::fs::write(dir.path().join("bytes.bin"), bytes).unwrap();
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
-    )
-    .unwrap();
-    let service = ToolService::new(workspace);
+    let service = service(&dir);
     let path = WorkspaceRelativePathDto::parse("bytes.bin").unwrap();
     let result = service.dispatch_completed(
         ToolCallId::new(),
@@ -1058,11 +927,7 @@ fn tool_service_read_and_grep_report_truncation_for_invalid_utf8() {
 #[test]
 fn execute_success_reports_stderr_and_typed_success_status() {
     let dir = fixture_dir("execute-stderr");
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
-    )
-    .unwrap();
-    let service = ToolService::new(workspace);
+    let service = service(&dir);
     let input = || {
         ToolInput::Execute(ExecuteInput {
             program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).unwrap(),
@@ -1109,11 +974,7 @@ fn execute_success_reports_stderr_and_typed_success_status() {
 #[test]
 fn execute_inherits_the_invoking_environment() {
     let dir = fixture_dir("execute-env");
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
-    )
-    .unwrap();
-    let service = ToolService::new(workspace);
+    let service = service(&dir);
     // Edition 2024 makes `std::env::set_var` unsafe and the workspace denies
     // `unsafe_code`, so the probe reads a variable that is present in the
     // invoking process on every supported platform. A child that does not
@@ -1153,11 +1014,7 @@ fn execute_inherits_the_invoking_environment() {
 fn dispatch_covers_empty_read_and_successful_empty_edit() {
     let root_dir = fixture_dir("empty-read-edit");
     std::fs::write(root_dir.path().join("empty.txt"), "").expect("seed");
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).expect("root"),
-    )
-    .expect("workspace");
-    let service = ToolService::new(workspace);
+    let service = service(&root_dir);
     let path = WorkspaceRelativePathDto::parse("empty.txt").expect("path");
     let read = service.dispatch_completed(
         ToolCallId::new(),
@@ -1209,11 +1066,7 @@ fn execute_reports_signal_termination_as_known_terminal_result() {
         return;
     }
     let root_dir = fixture_dir("signal-exit");
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
-    )
-    .unwrap();
-    let service = ToolService::new(workspace);
+    let service = service(&root_dir);
     let signal_input = || {
         ToolInput::Execute(ExecuteInput {
             program: BoundedText::new("sh").unwrap(),
@@ -1259,11 +1112,7 @@ fn grep_truncates_long_multibyte_fragments_on_character_boundary() {
     let root_dir = fixture_dir("large-multibyte-grep");
     let line = format!("needle{}", "界".repeat(30_000));
     std::fs::write(root_dir.path().join("large.txt"), &line).unwrap();
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
-    )
-    .unwrap();
-    let result = ToolService::new(workspace).dispatch_completed(
+    let result = service(&root_dir).dispatch_completed(
         ToolCallId::new(),
         ToolInput::Grep(GrepInput {
             pattern: BoundedText::new("needle").unwrap(),
@@ -1288,11 +1137,7 @@ fn grep_truncates_long_multibyte_fragments_on_character_boundary() {
 #[test]
 fn execute_formats_success_and_truncates_both_streams() {
     let root_dir = fixture_dir("execute-output");
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
-    )
-    .unwrap();
-    let service = ToolService::new(workspace);
+    let service = service(&root_dir);
     let result = service
         .dispatch_completed(
             ToolCallId::new(),
@@ -1338,11 +1183,7 @@ fn execute_formats_success_and_truncates_both_streams() {
 fn exact_typed_errors_cover_search_edit_and_spawn_failures() {
     let root_dir = fixture_dir("exact-errors");
     std::fs::write(root_dir.path().join("file.txt"), "content").unwrap();
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
-    )
-    .unwrap();
-    let service = ToolService::new(workspace);
+    let service = service(&root_dir);
     let path = WorkspaceRelativePathDto::parse("file.txt").unwrap();
     let error = service
         .dispatch_with_cancellation(
@@ -1739,11 +1580,7 @@ fn model_parameter_schemas_agree_with_serialized_inputs() {
 fn dispatch_covers_each_tool_input_variant() {
     let dir = fixture_dir("dispatch-variants");
     std::fs::write(dir.path().join("a.txt"), "needle").unwrap();
-    let root = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
-    )
-    .unwrap();
-    let service = ToolService::new(root);
+    let service = service(&dir);
     let path = WorkspaceRelativePathDto::parse("a.txt").unwrap();
     let calls = [
         ToolInput::Read(ReadInput { path: path.clone() }),
@@ -1780,12 +1617,9 @@ fn dispatch_covers_each_tool_input_variant() {
 fn enveloped_invocation_preserves_identity_and_records_metadata() {
     use intention_tools::{ToolContext, ToolInvocation, ToolOutcome, ToolPolicy};
     let dir = fixture_dir("envelope");
-    let root = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
-    )
-    .unwrap();
+
     let call_id = ToolCallId::new();
-    let envelope = ToolService::new(root)
+    let envelope = service(&dir)
         .invoke_enveloped(ToolInvocation {
             schema_version: TOOL_SCHEMA_VERSION,
             context: ToolContext {
@@ -1818,12 +1652,7 @@ fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
     let root_dir = fixture_dir("projection");
     let root_path = root_dir.path();
     std::fs::write(root_path.join("data.txt"), "alpha\nneedle\n").unwrap();
-    let service = ToolService::new(
-        intention_tools::WorkspaceRoot::resolve(
-            &WorkspaceRootDto::parse(root_path.to_string_lossy().into_owned()).unwrap(),
-        )
-        .unwrap(),
-    );
+    let service = service(&root_dir);
     let path = WorkspaceRelativePathDto::parse("data.txt").unwrap();
     let calls = [
         (
@@ -2028,11 +1857,7 @@ fn projections_preserve_collections_and_round_trip() {
 #[test]
 fn envelope_reports_an_interrupted_execute_as_its_stable_error_code() {
     let root_dir = fixture_dir("envelope-interrupted");
-    let workspace = intention_tools::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
-    )
-    .unwrap();
-    let service = ToolService::new(workspace);
+    let service = service(&root_dir);
     let cancellation = CancellationSignal::new();
     let canceller = cancellation.clone();
     let helper = std::thread::spawn(move || {
@@ -2080,15 +1905,10 @@ fn envelope_reports_an_interrupted_execute_as_its_stable_error_code() {
 
 #[test]
 fn projection_falls_back_to_observability_and_bare_results_stay_bounded() {
-    use intention_tools::{ToolContext, ToolObservability, ToolOutcome, ToolPolicy};
+    use intention_tools::{ToolObservability, ToolOutcome, ToolPolicy};
     let envelope = intention_tools::ToolResultEnvelope {
         schema_version: TOOL_SCHEMA_VERSION,
-        context: ToolContext {
-            session_id: intention_proto::SessionId::parse("00000000-0000-4000-8000-000000000001")
-                .unwrap(),
-            run_id: intention_proto::RunId::parse("00000000-0000-4000-8000-000000000002").unwrap(),
-            call_id: ToolCallId::new(),
-        },
+        context: fixture_context(ToolCallId::new()),
         result: ToolResult::Read(TextResult {
             text: BoundedText::new("payload").unwrap(),
             truncated: false,
