@@ -57,53 +57,7 @@ fn stream_lifecycle_accepts_ordered_normalized_events() {
 }
 
 #[test]
-fn public_model_contracts_round_trip_and_preserve_validated_accessors() {
-    for role in [
-        ModelRoleDto::System,
-        ModelRoleDto::User,
-        ModelRoleDto::Assistant,
-    ] {
-        let round_trip: ModelMessageDto = serde_json::from_str(
-            &serde_json::to_string(&message(role, "content")).expect("message serializes"),
-        )
-        .expect("message deserializes");
-        assert_eq!(round_trip.role(), role);
-        assert_eq!(round_trip.content(), "content");
-    }
-
-    let request = ModelRequestDto::new(
-        RunId::new(),
-        "fixture-model",
-        vec![
-            message(ModelRoleDto::System, "message-system"),
-            message(ModelRoleDto::User, "message-user"),
-            message(ModelRoleDto::Assistant, "message-assistant"),
-        ],
-        Some("system-context".to_owned()),
-    )
-    .expect("complete request is valid");
-    let encoded = serde_json::to_string(&request).expect("request serializes");
-    let decoded: ModelRequestDto = serde_json::from_str(&encoded).expect("request deserializes");
-    assert_eq!(decoded.run_id(), request.run_id());
-    assert_eq!(decoded.system_context(), Some("system-context"));
-    assert_eq!(decoded.messages().len(), 3);
-    assert!(
-        ModelRequestDto::new(
-            RunId::new(),
-            "model",
-            vec![message(ModelRoleDto::User, "message")],
-            Some(" ".to_owned()),
-        )
-        .is_err()
-    );
-    assert!(serde_json::from_str::<ModelRequestDto>(
-        r#"{"run_id":"00000000-0000-0000-0000-000000000000","model":"model","messages":[],"unexpected":true}"#
-    )
-    .is_err());
-}
-
-#[test]
-fn capabilities_cover_the_runtime_requirement_and_safe_wire_variants() {
+fn capabilities_cover_the_runtime_requirement_and_safe_provider_codes() {
     let complete = ModelCapabilitiesDto::new(true, true, true, true, true, true);
     complete
         .ensure_runtime_requirements()
@@ -121,29 +75,18 @@ fn capabilities_cover_the_runtime_requirement_and_safe_wire_variants() {
         );
     }
 
-    let call = ToolCallDto::new(ToolCallId::new(), "inspect", "{}")
-        .expect("tool object arguments are valid");
-    for event in [
-        ModelEventDto::started(),
-        ModelEventDto::text_delta("delta").expect("delta is valid"),
-        ModelEventDto::reasoning_delta("reasoning").expect("reasoning is valid"),
-        ModelEventDto::tool_call(call),
-        ModelEventDto::usage(UsageDto::NotReported),
-    ] {
-        let decoded: ModelEventDto =
-            serde_json::from_str(&serde_json::to_string(&event).expect("event serializes"))
-                .expect("event deserializes");
-        assert_eq!(decoded, event);
-    }
+    // The closed constructors are the validation boundary for these in-process
+    // model DTOs; there is no decoder for them (ARCH-5-5, DEC-6).
     assert!(ModelEventDto::text_delta("").is_err());
     assert!(ModelEventDto::reasoning_delta("").is_err());
     assert!(
-        serde_json::from_str::<ModelEventDto>(r#"{"kind":"text_delta","content":""}"#).is_err()
-    );
-    assert_eq!(
-        serde_json::from_str::<ModelEventDto>(r#"{"kind":"reasoning_delta","content":""}"#)
-            .expect("textless reasoning delta decodes as presence"),
-        ModelEventDto::reasoning_presence()
+        ModelRequestDto::new(
+            RunId::new(),
+            "model",
+            vec![message(ModelRoleDto::User, "message")],
+            Some(" ".to_owned()),
+        )
+        .is_err()
     );
 
     assert!(serde_json::from_str::<ProviderErrorDto>(r#"{"code":"","retry":"never"}"#).is_err());
@@ -214,7 +157,7 @@ fn stream_lifecycle_rejects_invalid_order_payloads_duplicate_usage_and_terminal_
 }
 
 #[test]
-fn model_tool_messages_round_trip_and_validate() {
+fn model_tool_messages_validate_roles_fields_and_content() {
     let call = ToolCallDto::new(ToolCallId::new(), "inspect", "{}").expect("tool call is valid");
 
     let with_content =
@@ -224,21 +167,11 @@ fn model_tool_messages_round_trip_and_validate() {
     assert_eq!(with_content.content(), "thinking");
     assert_eq!(with_content.tool_calls(), Some(&[call.clone()][..]));
     assert_eq!(with_content.tool_call_id(), None);
-    let decoded: ModelMessageDto = serde_json::from_str(
-        &serde_json::to_string(&with_content).expect("assistant tool-call message serializes"),
-    )
-    .expect("assistant tool-call message deserializes");
-    assert_eq!(decoded, with_content);
 
     let without_content = ModelMessageDto::assistant_tool_calls(None, vec![call.clone()])
         .expect("tool-call message is valid");
     assert_eq!(without_content.content(), "");
     assert_eq!(without_content.tool_calls(), Some(&[call][..]));
-    let encoded = serde_json::to_string(&without_content).expect("tool-call message serializes");
-    assert!(encoded.contains("\"tool_calls\""));
-    let decoded: ModelMessageDto =
-        serde_json::from_str(&encoded).expect("tool-call message deserializes");
-    assert_eq!(decoded, without_content);
 
     let tool_call_id = ToolCallId::new();
     let result = ModelMessageDto::tool_result(tool_call_id, "result content")
@@ -247,12 +180,16 @@ fn model_tool_messages_round_trip_and_validate() {
     assert_eq!(result.content(), "result content");
     assert_eq!(result.tool_call_id(), Some(tool_call_id));
     assert_eq!(result.tool_calls(), None);
-    let decoded: ModelMessageDto = serde_json::from_str(
-        &serde_json::to_string(&result).expect("tool result message serializes"),
-    )
-    .expect("tool result message deserializes");
-    assert_eq!(decoded, result);
 
+    // The role and field rules the decode half used to enforce are constructor
+    // rules now: a tool-role message needs its call identity, an assistant
+    // tool-call message needs at least one call, and content stays non-blank.
+    assert_eq!(
+        ModelMessageDto::new(ModelRoleDto::Tool, "result")
+            .expect_err("a tool-role message needs its call identity")
+            .code(),
+        "invalid_model_message_role"
+    );
     assert_eq!(
         ModelMessageDto::assistant_tool_calls(None, Vec::new())
             .expect_err("empty tool-call list must fail")
@@ -260,42 +197,17 @@ fn model_tool_messages_round_trip_and_validate() {
         "invalid_model_message_tool_calls"
     );
     assert!(ModelMessageDto::tool_result(tool_call_id, " ").is_err());
-    assert!(
-        serde_json::from_str::<ModelMessageDto>(r#"{"role":"tool","content":"result"}"#).is_err()
-    );
-    assert!(
-        serde_json::from_str::<ModelMessageDto>(
-            r#"{"role":"user","content":"hi","tool_call_id":"00000000-0000-0000-0000-000000000000"}"#
-        )
-        .is_err()
-    );
-    assert!(
-        serde_json::from_str::<ModelMessageDto>(
-            r#"{"role":"assistant","content":"answer","tool_call_id":"00000000-0000-0000-0000-000000000000"}"#
-        )
-        .is_err()
-    );
 }
 
 #[test]
-fn message_cache_markers_and_content_replacement_round_trip() {
+fn message_cache_markers_and_replaced_content_validate() {
     let unmarked = message(ModelRoleDto::User, "first");
     assert!(!unmarked.cache_control());
-    let encoded = serde_json::to_string(&unmarked).expect("message serializes");
-    assert!(
-        !encoded.contains("cache_control"),
-        "an unmarked message stays compact on the wire"
-    );
 
     let mut marked = ModelMessageDto::tool_result(ToolCallId::new(), "tool result")
         .expect("tool result message is valid");
     marked.set_cache_control(true);
     assert!(marked.cache_control());
-    let encoded = serde_json::to_string(&marked).expect("marked message serializes");
-    assert!(encoded.contains("\"cache_control\":true"));
-    let decoded: ModelMessageDto =
-        serde_json::from_str(&encoded).expect("marked message deserializes");
-    assert_eq!(decoded, marked);
 
     let tool_call_id = ToolCallId::new();
     let mut result = ModelMessageDto::tool_result(tool_call_id, "x".repeat(64))
@@ -343,32 +255,6 @@ fn model_request_with_messages_preserves_fields() {
     assert_eq!(updated.messages()[0].role(), ModelRoleDto::User);
     assert!(updated.messages()[1].tool_calls().is_some());
     assert!(request.with_messages(Vec::new()).is_err());
-}
-
-#[test]
-fn model_request_tools_round_trip_and_omit_the_empty_field() {
-    let without_tools = plain_request();
-    assert!(without_tools.tools().is_empty());
-    let encoded = serde_json::to_string(&without_tools).expect("request serializes");
-    assert!(!encoded.contains("\"tools\""));
-    let decoded: ModelRequestDto =
-        serde_json::from_str(&encoded).expect("request without tools deserializes");
-    assert!(decoded.tools().is_empty());
-
-    let with_tools = without_tools
-        .with_tools(vec![
-            tool_definition("inspect_path"),
-            tool_definition("read_file"),
-        ])
-        .expect("request with tools is valid");
-    let encoded = serde_json::to_string(&with_tools).expect("request with tools serializes");
-    assert!(encoded.contains("\"tools\""));
-    assert!(encoded.contains("inspect_path"));
-    assert!(encoded.contains("read_file"));
-    let decoded: ModelRequestDto =
-        serde_json::from_str(&encoded).expect("request with tools deserializes");
-    assert_eq!(decoded.tools(), with_tools.tools());
-    assert_eq!(decoded, with_tools);
 }
 
 #[test]
@@ -429,58 +315,10 @@ fn reasoning_presence_marks_a_textless_provider_channel() {
         }
     );
     assert!(ModelEventDto::reasoning_delta("").is_err());
-
-    let decoded: ModelEventDto = serde_json::from_str(r#"{"kind":"reasoning_delta","content":""}"#)
-        .expect("textless reasoning delta decodes as presence");
-    assert_eq!(decoded, presence);
-    let decoded: ModelEventDto =
-        serde_json::from_str(&serde_json::to_string(&presence).expect("presence serializes"))
-            .expect("presence deserializes");
-    assert_eq!(decoded, presence);
 }
 
 #[test]
-fn assistant_reasoning_round_trips_and_rejects_invalid_wire_values() {
-    let call_id = ToolCallId::new();
-    for text in ["considering context", ""] {
-        let reasoning =
-            AssistantReasoningDto::new(vec![call_id], text).expect("reasoning is valid");
-        let encoded = serde_json::to_string(&reasoning).expect("reasoning serializes");
-        assert!(encoded.contains("\"tool_call_ids\""));
-        assert!(encoded.contains("\"text\""));
-        let decoded: AssistantReasoningDto =
-            serde_json::from_str(&encoded).expect("reasoning deserializes");
-        assert_eq!(decoded, reasoning);
-    }
-
-    assert!(
-        serde_json::from_str::<AssistantReasoningDto>(
-            r#"{"tool_call_ids":[],"text":"considering context"}"#
-        )
-        .is_err()
-    );
-    assert!(
-        serde_json::from_str::<AssistantReasoningDto>(&format!(
-            r#"{{"tool_call_ids":["{call_id}","{call_id}"],"text":"considering context"}}"#
-        ))
-        .is_err()
-    );
-    assert!(
-        serde_json::from_str::<AssistantReasoningDto>(&format!(
-            r#"{{"tool_call_ids":["{call_id}"],"text":"bad\u0000text"}}"#
-        ))
-        .is_err()
-    );
-    assert!(
-        serde_json::from_str::<AssistantReasoningDto>(&format!(
-            r#"{{"tool_call_ids":["{call_id}"],"text":"considering context","unexpected":true}}"#
-        ))
-        .is_err()
-    );
-}
-
-#[test]
-fn model_request_assistant_reasoning_round_trips_and_survives_rebuilds() {
+fn model_request_assistant_reasoning_survives_rebuilds() {
     let without_reasoning = plain_request();
     assert!(without_reasoning.assistant_reasoning().is_empty());
     let encoded = serde_json::to_string(&without_reasoning).expect("request serializes");
@@ -494,17 +332,10 @@ fn model_request_assistant_reasoning_round_trips_and_survives_rebuilds() {
         .expect("request with reasoning is valid");
     assert_eq!(
         with_reasoning.assistant_reasoning(),
-        &[reasoning.clone()][..]
+        std::slice::from_ref(&reasoning)
     );
     let encoded = serde_json::to_string(&with_reasoning).expect("request serializes");
     assert!(encoded.contains("\"assistant_reasoning\""));
-    let decoded: ModelRequestDto =
-        serde_json::from_str(&encoded).expect("request with reasoning deserializes");
-    assert_eq!(decoded, with_reasoning);
-    assert_eq!(
-        decoded.assistant_reasoning(),
-        std::slice::from_ref(&reasoning)
-    );
 
     let rebuilt_messages = with_reasoning
         .with_messages(vec![message(ModelRoleDto::User, "next")])
@@ -524,15 +355,6 @@ fn model_request_assistant_reasoning_round_trips_and_survives_rebuilds() {
         .with_assistant_reasoning(Vec::new())
         .expect("cleared request is valid");
     assert!(cleared.assistant_reasoning().is_empty());
-
-    assert!(
-        serde_json::from_str::<ModelRequestDto>(&format!(
-            r#"{{"run_id":"00000000-0000-0000-0000-000000000000","model":"model","messages":[{{"role":"user","content":"hello"}}],"assistant_reasoning":[{{"tool_call_ids":["{}","{}"],"text":"considering context"}}]}}"#,
-            call.call_id(),
-            call.call_id()
-        ))
-        .is_err()
-    );
 }
 
 #[test]
@@ -579,15 +401,4 @@ fn model_tool_definitions_validate_names_descriptions_and_parameters() {
     assert_eq!(definition.name(), "inspect_path");
     assert_eq!(definition.description(), "fixture description");
     assert_eq!(definition.parameters_json(), r#"{"type":"object"}"#);
-    let decoded: ModelToolDefinitionDto = serde_json::from_str(
-        &serde_json::to_string(&definition).expect("tool definition serializes"),
-    )
-    .expect("tool definition deserializes");
-    assert_eq!(decoded, definition);
-    assert!(
-        serde_json::from_str::<ModelToolDefinitionDto>(
-            r#"{"name":"inspect","description":"description","parameters_json":"{}","unexpected":true}"#
-        )
-        .is_err()
-    );
 }

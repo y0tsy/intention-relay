@@ -4,22 +4,21 @@
 //! translation of one native item into normalized events, its native error
 //! classification, and its error codes. The stream machinery is
 //! provider-neutral and therefore lives here once: the pending queue, the
-//! `Started` seeding, the terminal flag, the cancellation race, and the
-//! emission order.
+//! `Started` seeding, the terminal flag, and the emission order.
+//!
+//! Interruption is not observed here: the adapter refuses an already-cancelled
+//! request before it builds a stream (`ModelExecutionDriver::execute`), and
+//! the consumer that owns the run owns mid-stream interruption by racing the
+//! cancellation signal and dropping this stream. Dropping propagates the stop
+//! into the SDK's in-flight response.
 
 use std::collections::VecDeque;
 use std::pin::Pin;
 
-use futures_util::{
-    Stream, StreamExt,
-    future::{Either, select},
-    stream,
-};
+use futures_util::{Stream, StreamExt, stream};
 
 use crate::mapping;
-use crate::model::{
-    FinishReasonDto, ModelCancellationSignal, ModelEventDto, ModelEventStream, ProviderErrorDto,
-};
+use crate::model::{FinishReasonDto, ModelEventDto, ModelEventStream, ProviderErrorDto};
 
 /// Translates one adapter's native stream into normalized model events.
 pub trait EventTranslator {
@@ -70,17 +69,13 @@ impl NormalizedEvents<'_> {
 }
 
 /// Builds the normalized event stream over an adapter's native item stream.
-pub fn normalized_stream<S, T>(
-    native: S,
-    translator: T,
-    cancellation: ModelCancellationSignal,
-) -> ModelEventStream
+pub fn normalized_stream<S, T>(native: S, translator: T) -> ModelEventStream
 where
     S: Stream<Item = T::Item> + Send + 'static,
     T: EventTranslator + Send + 'static,
 {
     Box::pin(stream::unfold(
-        NormalizedStream::new(native, translator, cancellation),
+        NormalizedStream::new(native, translator),
         |mut state| async move { state.next().await.map(|event| (event, state)) },
     ))
 }
@@ -88,7 +83,6 @@ where
 struct NormalizedStream<S, T> {
     native: Pin<Box<S>>,
     translator: T,
-    cancellation: ModelCancellationSignal,
     pending: VecDeque<Result<ModelEventDto, ProviderErrorDto>>,
     terminal: bool,
 }
@@ -98,13 +92,12 @@ where
     S: Stream<Item = T::Item>,
     T: EventTranslator,
 {
-    fn new(native: S, translator: T, cancellation: ModelCancellationSignal) -> Self {
+    fn new(native: S, translator: T) -> Self {
         let mut pending = VecDeque::new();
         pending.push_back(Ok(ModelEventDto::started()));
         Self {
             native: Box::pin(native),
             translator,
-            cancellation,
             pending,
             terminal: false,
         }
@@ -112,35 +105,26 @@ where
 
     async fn next(&mut self) -> Option<Result<ModelEventDto, ProviderErrorDto>> {
         loop {
-            if self.cancellation.is_cancelled() {
-                return None;
-            }
             if let Some(event) = self.pending.pop_front() {
                 return Some(event);
             }
             if self.terminal {
                 return None;
             }
-            match select(self.native.next(), self.cancellation.cancelled()).await {
-                Either::Left((Some(item), _)) => {
-                    let Self {
-                        translator,
-                        pending,
-                        terminal,
-                        ..
-                    } = self;
+            let item = self.native.next().await;
+            let Self {
+                translator,
+                pending,
+                terminal,
+                ..
+            } = self;
+            match item {
+                Some(item) => {
                     translator.translate_item(item, &mut NormalizedEvents { pending, terminal });
                 }
-                Either::Left((None, _)) => {
-                    let Self {
-                        translator,
-                        pending,
-                        terminal,
-                        ..
-                    } = self;
+                None => {
                     translator.native_ended(&mut NormalizedEvents { pending, terminal });
                 }
-                Either::Right(((), _)) => return None,
             }
         }
     }

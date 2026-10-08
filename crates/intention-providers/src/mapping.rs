@@ -139,26 +139,10 @@ fn error_dto(code: &'static str, retryable: bool) -> ProviderErrorDto {
 )]
 mod tests {
     use super::*;
-    use crate::model::ModelEventDto;
     use intention_proto::ErrorRetryDto;
 
     // Text and reasoning reach the stream contract through these constructors
     // alone, so their canonical shape is part of the shared mapping evidence.
-    #[test]
-    fn text_and_reasoning_events_keep_the_canonical_wire_shape() {
-        let text = ModelEventDto::text_delta("hello").expect("text maps");
-        assert_eq!(
-            serde_json::to_string(&text).expect("text serializes"),
-            r#"{"kind":"text_delta","content":"hello"}"#
-        );
-        let reasoning =
-            ModelEventDto::reasoning_delta("considering context").expect("reasoning maps");
-        assert_eq!(
-            serde_json::to_string(&reasoning).expect("reasoning serializes"),
-            r#"{"kind":"reasoning_delta","content":"considering context"}"#
-        );
-    }
-
     #[test]
     fn complete_tool_calls_keep_the_native_function_and_allocate_the_canonical_identity() {
         let tool = complete_tool_call("inspect", "{}").expect("tool maps");

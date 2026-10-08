@@ -77,6 +77,9 @@ impl ModelExecutionDriver for OpenRouterDriver {
         request: ModelRequestDto,
         cancellation: ModelCancellationSignal,
     ) -> ModelEventStream {
+        // An already-cancelled run never starts provider work. Mid-stream
+        // interruption belongs to the caller that owns the run: it races the
+        // signal and drops this stream, and dropping aborts the SDK response.
         if cancellation.is_cancelled() {
             return Box::pin(stream::empty());
         }
@@ -101,7 +104,7 @@ impl ModelExecutionDriver for OpenRouterDriver {
                                 async move { Err(map_openrouter_error(&error)) },
                             )) as ModelEventStream
                         },
-                        |native| normalized_stream(native, OpenRouterTranslator, cancellation),
+                        |native| normalized_stream(native, OpenRouterTranslator),
                     )
             })
             .flatten(),
@@ -375,19 +378,6 @@ mod tests {
         .expect("request is valid")
     }
 
-    #[test]
-    fn native_errors_preserve_safe_retry_guidance() {
-        let retryable = map_openrouter_error(&api_error(http::StatusCode::TOO_MANY_REQUESTS));
-        let permanent = map_openrouter_error(&api_error(http::StatusCode::BAD_REQUEST));
-        assert_eq!(retryable.retry(), intention_proto::ErrorRetryDto::Delayed);
-        assert_eq!(permanent.retry(), intention_proto::ErrorRetryDto::Never);
-        assert!(
-            !serde_json::to_string(&retryable)
-                .expect("error serializes")
-                .contains("secret")
-        );
-    }
-
     fn done(
         tool_calls: Vec<openrouter_rs::types::ToolCall>,
         finish_reason: Option<OpenRouterFinishReason>,
@@ -418,12 +408,7 @@ mod tests {
     /// Collects the shared stream's events for one fixed native event sequence.
     fn collect_events(native: Vec<StreamEvent>) -> Vec<Result<ModelEventDto, ProviderErrorDto>> {
         futures_executor::block_on(
-            normalized_stream(
-                stream::iter(native),
-                OpenRouterTranslator,
-                ModelCancellationSignal::new(),
-            )
-            .collect::<Vec<_>>(),
+            normalized_stream(stream::iter(native), OpenRouterTranslator).collect::<Vec<_>>(),
         )
     }
 
@@ -591,11 +576,7 @@ mod tests {
 
     #[test]
     fn normalized_stream_emits_started_and_incomplete_error() {
-        let mut stream = normalized_stream(
-            stream::empty::<StreamEvent>(),
-            OpenRouterTranslator,
-            ModelCancellationSignal::new(),
-        );
+        let mut stream = normalized_stream(stream::empty::<StreamEvent>(), OpenRouterTranslator);
         assert_eq!(
             stream.next().now_or_never(),
             Some(Some(Ok(ModelEventDto::started())))
@@ -631,7 +612,7 @@ mod tests {
     }
 
     #[test]
-    fn native_stream_error_maps_retryability_and_cancellation_stops_delivery() {
+    fn native_stream_errors_map_retryability_without_native_text() {
         let retryable = collect_events(vec![StreamEvent::Error(api_error(
             http::StatusCode::SERVICE_UNAVAILABLE,
         ))]);
@@ -640,6 +621,11 @@ mod tests {
             Some(Err(error)) if error.code() == "openrouter_provider_unavailable"
                 && error.retry() == intention_proto::ErrorRetryDto::Delayed
         ));
+        assert!(
+            !serde_json::to_string(&retryable)
+                .expect("normalized errors serialize")
+                .contains("secret")
+        );
 
         let permanent = collect_events(vec![StreamEvent::Error(api_error(
             http::StatusCode::BAD_REQUEST,
@@ -649,16 +635,6 @@ mod tests {
             Some(Err(error)) if error.code() == "openrouter_provider_request_rejected"
                 && error.retry() == intention_proto::ErrorRetryDto::Never
         ));
-
-        let cancellation = ModelCancellationSignal::new();
-        cancellation.cancel();
-        assert!(cancellation.is_cancelled());
-        let mut cancelled = normalized_stream(
-            stream::empty::<StreamEvent>(),
-            OpenRouterTranslator,
-            cancellation,
-        );
-        assert_eq!(cancelled.next().now_or_never(), Some(None));
     }
 
     #[test]

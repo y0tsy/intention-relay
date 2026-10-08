@@ -89,6 +89,9 @@ impl ModelExecutionDriver for GenericChatDriver {
         request: ModelRequestDto,
         cancellation: ModelCancellationSignal,
     ) -> ModelEventStream {
+        // An already-cancelled run never starts provider work. Mid-stream
+        // interruption belongs to the caller that owns the run: it races the
+        // signal and drops this stream, and dropping aborts the SDK response.
         if cancellation.is_cancelled() {
             return Box::pin(stream::empty());
         }
@@ -112,9 +115,7 @@ impl ModelExecutionDriver for GenericChatDriver {
                             Box::pin(stream::once(async move { Err(map_openai_error(&error)) }))
                                 as ModelEventStream
                         },
-                        |native| {
-                            normalized_stream(native, GenericTranslator::default(), cancellation)
-                        },
+                        |native| normalized_stream(native, GenericTranslator::default()),
                     )
             })
             .flatten(),
@@ -551,12 +552,8 @@ mod tests {
         chunks: Vec<Result<WireChunk, OpenAIError>>,
     ) -> Vec<Result<ModelEventDto, ProviderErrorDto>> {
         futures_executor::block_on(
-            normalized_stream(
-                stream::iter(chunks),
-                GenericTranslator::default(),
-                ModelCancellationSignal::new(),
-            )
-            .collect::<Vec<_>>(),
+            normalized_stream(stream::iter(chunks), GenericTranslator::default())
+                .collect::<Vec<_>>(),
         )
     }
 

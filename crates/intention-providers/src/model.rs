@@ -17,7 +17,7 @@ use std::{
 use futures_core::Stream;
 use intention_proto::{DtoResult, ErrorDto, ErrorRetryDto, RunId, ToolCallId};
 pub use intention_proto::{FinishReasonDto, ProviderErrorDto, ToolCallDto, UsageDto};
-use serde::{Deserialize, Deserializer, Serialize, de};
+use serde::{Deserialize, Serialize};
 
 /// The sender role of a model-context message, including tool calls and results.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -40,62 +40,17 @@ pub enum ModelRoleDto {
 pub struct ModelMessageDto {
     role: ModelRoleDto,
     content: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<ToolCallDto>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<ToolCallId>,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(skip_serializing_if = "is_false")]
     cache_control: bool,
 }
 
 /// Reports whether an optional message flag stays off the wire.
 const fn is_false(value: &bool) -> bool {
     !*value
-}
-
-impl<'de> Deserialize<'de> for ModelMessageDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawModelMessageDto {
-            role: ModelRoleDto,
-            content: String,
-            #[serde(default)]
-            tool_calls: Option<Vec<ToolCallDto>>,
-            #[serde(default)]
-            tool_call_id: Option<ToolCallId>,
-            #[serde(default)]
-            cache_control: bool,
-        }
-
-        let raw = RawModelMessageDto::deserialize(deserializer)?;
-        let message = match (raw.role, raw.tool_calls, raw.tool_call_id) {
-            (ModelRoleDto::Tool, None, Some(tool_call_id)) => {
-                Self::tool_result(tool_call_id, raw.content)
-            }
-            (ModelRoleDto::Assistant, Some(tool_calls), None) => {
-                Self::assistant_tool_calls(Some(raw.content), tool_calls)
-            }
-            (
-                role @ (ModelRoleDto::System
-                | ModelRoleDto::User
-                | ModelRoleDto::Assistant
-                | ModelRoleDto::Notice),
-                None,
-                None,
-            ) => Self::new(role, raw.content),
-            _ => Err(ErrorDto::validation(
-                "invalid_model_message_shape",
-                "model message role and tool-call fields are inconsistent",
-            )),
-        };
-        let mut message = message.map_err(de::Error::custom)?;
-        message.set_cache_control(raw.cache_control);
-        Ok(message)
-    }
 }
 
 impl ModelMessageDto {
@@ -243,23 +198,6 @@ const MAX_MODEL_ASSISTANT_REASONING_BYTES: usize = 512 * 1024;
 pub struct AssistantReasoningDto {
     tool_call_ids: Vec<ToolCallId>,
     text: String,
-}
-
-impl<'de> Deserialize<'de> for AssistantReasoningDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawAssistantReasoningDto {
-            tool_call_ids: Vec<ToolCallId>,
-            text: String,
-        }
-
-        let raw = RawAssistantReasoningDto::deserialize(deserializer)?;
-        Self::new(raw.tool_call_ids, raw.text).map_err(de::Error::custom)
-    }
 }
 
 impl AssistantReasoningDto {
@@ -430,24 +368,6 @@ pub struct ModelToolDefinitionDto {
     parameters_json: String,
 }
 
-impl<'de> Deserialize<'de> for ModelToolDefinitionDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawModelToolDefinitionDto {
-            name: String,
-            description: String,
-            parameters_json: String,
-        }
-
-        let raw = RawModelToolDefinitionDto::deserialize(deserializer)?;
-        Self::new(raw.name, raw.description, raw.parameters_json).map_err(de::Error::custom)
-    }
-}
-
 impl ModelToolDefinitionDto {
     /// Creates a validated tool definition with object-shaped JSON parameters.
     ///
@@ -532,41 +452,11 @@ pub struct ModelRequestDto {
     run_id: RunId,
     model: String,
     messages: Vec<ModelMessageDto>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<ModelToolDefinitionDto>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     assistant_reasoning: Vec<AssistantReasoningDto>,
     system_context: Option<String>,
-}
-
-impl<'de> Deserialize<'de> for ModelRequestDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawModelRequestDto {
-            run_id: RunId,
-            model: String,
-            messages: Vec<ModelMessageDto>,
-            #[serde(default)]
-            tools: Vec<ModelToolDefinitionDto>,
-            #[serde(default)]
-            assistant_reasoning: Vec<AssistantReasoningDto>,
-            #[serde(default)]
-            system_context: Option<String>,
-        }
-
-        let raw = RawModelRequestDto::deserialize(deserializer)?;
-        let request = Self::new(raw.run_id, raw.model, raw.messages, raw.system_context)
-            .map_err(de::Error::custom)?;
-        request
-            .with_tools(raw.tools)
-            .map_err(de::Error::custom)?
-            .with_assistant_reasoning(raw.assistant_reasoning)
-            .map_err(de::Error::custom)
-    }
 }
 
 impl ModelRequestDto {
@@ -733,41 +623,6 @@ pub enum ModelEventDto {
     Usage { usage: UsageDto },
     /// The provider stream reached a terminal reason.
     Finished { reason: FinishReasonDto },
-}
-
-impl<'de> Deserialize<'de> for ModelEventDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(tag = "kind", rename_all = "snake_case")]
-        enum RawModelEventDto {
-            Started,
-            TextDelta { content: String },
-            ReasoningDelta { content: String },
-            ToolCall { call: ToolCallDto },
-            Usage { usage: UsageDto },
-            Finished { reason: FinishReasonDto },
-        }
-
-        match RawModelEventDto::deserialize(deserializer)? {
-            RawModelEventDto::Started => Ok(Self::started()),
-            RawModelEventDto::TextDelta { content } => {
-                Self::text_delta(content).map_err(de::Error::custom)
-            }
-            RawModelEventDto::ReasoningDelta { content } => {
-                if content.is_empty() {
-                    Ok(Self::reasoning_presence())
-                } else {
-                    Self::reasoning_delta(content).map_err(de::Error::custom)
-                }
-            }
-            RawModelEventDto::ToolCall { call } => Ok(Self::tool_call(call)),
-            RawModelEventDto::Usage { usage } => Ok(Self::usage(usage)),
-            RawModelEventDto::Finished { reason } => Ok(Self::finished(reason)),
-        }
-    }
 }
 
 impl ModelEventDto {
