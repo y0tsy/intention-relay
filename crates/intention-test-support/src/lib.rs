@@ -14,10 +14,7 @@ use intention_proto::{
 use intention_proto::{
     CreateSessionCommandDto, MessageProjectionDto, RunModeDto, WorkspaceRootDto,
 };
-use intention_proto::{
-    DaemonReadinessDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto,
-    ProtocolQueryResultDto,
-};
+use intention_proto::{ProtocolCommandDto, ProtocolCommandResultDto};
 use intention_transport::{AsyncLocalListener, LocalEndpoint};
 
 /// Opens a durable facade at an explicit test-only database path.
@@ -108,15 +105,6 @@ pub fn create_fixture_session(
         ProtocolCommandResultDto::Accepted(_) => Ok(()),
         ProtocolCommandResultDto::Rejected(error) => Err(error),
     }
-}
-
-/// Returns whether the fixture facade reports ready through the protocol boundary.
-#[must_use]
-pub fn fixture_ready(facade: &DaemonApplicationFacade) -> bool {
-    matches!(
-        facade.query(ProtocolQueryDto::GetDaemonHealth),
-        ProtocolQueryResultDto::DaemonHealth(health) if health.readiness() == DaemonReadinessDto::Ready
-    )
 }
 
 /// Loads the fixture session's committed transcript rows through the facade.
