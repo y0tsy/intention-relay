@@ -31,8 +31,6 @@ use intention_proto::{
 };
 use intention_providers::ModelCancellationSignal;
 use intention_tools::{GrepResult, PathsResult, ToolInput, ToolProjectedContent, ToolResult};
-#[cfg(test)]
-use intention_transport::LocalListener;
 use intention_transport::{
     AsyncLocalListener, AsyncMessageSender, LocalEndpoint, local_protocol_version,
 };
@@ -1794,7 +1792,15 @@ mod tests {
     #[test]
     fn run_rejects_an_endpoint_already_owned_by_another_host() {
         let endpoint = endpoint();
-        let _listener = LocalListener::bind(endpoint.clone()).expect("fixture listener binds");
+        // The fixture listener binds inside a runtime because interprocess
+        // requires a Tokio reactor context when it wraps the Unix socket.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("fixture runtime builds");
+        let _listener = runtime
+            .block_on(async { AsyncLocalListener::bind(endpoint.clone()) })
+            .expect("fixture listener binds");
         assert_eq!(
             run(endpoint)
                 .expect_err("daemon must not reclaim an owned endpoint")

@@ -15,23 +15,22 @@ use common::{SCHEMA_VERSION, TEST_REPLY_BOUND, endpoint, hello, message};
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::thread;
 
 use intention_client::{DaemonLauncher, IntentionClient, ProcessDaemonLauncher};
 use intention_proto::{
     ConfigRevisionId, CorrelationIdDto, CreateSessionAcceptedDto, CreateSessionCommandDto,
-    DaemonHealthDto, DaemonReadinessDto, IdempotencyKey, JsonRpcErrorDto, JsonRpcRequestDto,
-    JsonRpcResponseDto, PROTOCOL_HELLO_METHOD, ProtocolAcceptedDto, ProtocolAcceptedResultDto,
-    ProtocolCommandDto, ProtocolCommandResultDto, ProtocolHelloDto, ProtocolQueryResultDto,
-    ProtocolResponsePayloadDto, ProtocolVersionDto, SendUserTurnAcceptedDto,
-    SendUserTurnOutcomeDto, SessionSnapshotDto, SessionSubscriptionResponseDto,
-    SubscribeSessionCommandDto, TurnId, decode_request_line, encode_hello_response,
+    DaemonHealthDto, DaemonReadinessDto, IdempotencyKey, ProtocolAcceptedDto,
+    ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolHelloDto,
+    ProtocolQueryResultDto, ProtocolResponsePayloadDto, ProtocolVersionDto,
+    SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionSnapshotDto,
+    SessionSubscriptionResponseDto, SubscribeSessionCommandDto, TurnId, decode_request_line,
     encode_response,
 };
 use intention_proto::{DtoResult, ErrorDto, ProjectId, RunId, SessionId, WorkspaceId};
 use intention_proto::{MessageKindDto, RunModeDto, SessionProjectionDto};
 use intention_transport::{
-    LocalConnection, LocalEndpoint, LocalListener, local_protocol_version, negotiate_daemon,
+    AsyncLocalClientConnection, AsyncLocalDaemonConnection, AsyncLocalListener, LocalEndpoint,
+    local_protocol_version,
 };
 
 fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
@@ -63,8 +62,6 @@ enum FixtureResponse {
     Command(ProtocolCommandResultDto),
     Invalid,
     CorrelationMismatch,
-    /// The fixture daemon answers the hello with the typed version-mismatch error.
-    ProtocolMismatch,
     /// The fixture daemon replies with a same-major minor-mismatched hello.
     MinorProtocolMismatch,
     Disconnect,
@@ -79,7 +76,12 @@ struct FixtureLauncher {
 impl DaemonLauncher for FixtureLauncher {
     fn launch(&self, endpoint: &LocalEndpoint) -> DtoResult<()> {
         self.launches.fetch_add(1, Ordering::SeqCst);
-        let _ = start_fixture_server(endpoint.clone(), self.response.clone());
+        // The fixture task is detached: it serves the launched endpoint until
+        // the test's runtime shuts down.
+        drop(start_fixture_server(
+            endpoint.clone(),
+            self.response.clone(),
+        ));
         Ok(())
     }
 }
@@ -120,58 +122,43 @@ fn client(
 fn start_fixture_server(
     endpoint: LocalEndpoint,
     response: FixtureResponse,
-) -> thread::JoinHandle<()> {
-    let listener = LocalListener::bind(endpoint).expect("fixture listener binds");
-    thread::spawn(move || serve_one_fixture_connection(listener, response))
+) -> tokio::task::JoinHandle<()> {
+    let listener = AsyncLocalListener::bind(endpoint).expect("fixture listener binds");
+    tokio::spawn(serve_one_fixture_connection(listener, response))
 }
 
-fn serve_one_fixture_connection(listener: LocalListener, response: FixtureResponse) {
-    let connection = listener.accept().expect("fixture client connects");
-    serve_fixture_connection(connection, response);
+async fn serve_one_fixture_connection(listener: AsyncLocalListener, response: FixtureResponse) {
+    let connection = listener.accept().await.expect("fixture client connects");
+    serve_fixture_connection(connection, response).await;
 }
 
-fn serve_fixture_connection(
-    mut connection: intention_transport::LocalConnection,
+async fn serve_fixture_connection(
+    connection: AsyncLocalDaemonConnection,
     response: FixtureResponse,
 ) {
-    if matches!(response, FixtureResponse::ProtocolMismatch)
-        || matches!(response, FixtureResponse::MinorProtocolMismatch)
-    {
-        let line = connection
-            .receive_line()
-            .expect("fixture client hello arrives");
-        let request: JsonRpcRequestDto<ProtocolHelloDto> =
-            JsonRpcRequestDto::parse(&line).expect("fixture client hello parses");
-        assert_eq!(request.method(), PROTOCOL_HELLO_METHOD);
-        if matches!(response, FixtureResponse::ProtocolMismatch) {
-            let error = JsonRpcErrorDto::from_error(
-                intention_proto::JSONRPC_VERSION_MISMATCH,
-                ErrorDto::unavailable(
-                    "incompatible_protocol_version",
-                    "protocol version must equal the current version",
-                ),
-            );
-            connection
-                .send_message(&JsonRpcResponseDto::<ProtocolHelloDto>::error(
-                    Some(request.id()),
-                    error,
-                ))
-                .expect("fixture version-mismatch error sends");
-        } else {
-            let incompatible =
-                ProtocolHelloDto::new(ProtocolVersionDto::new(2, 1), "minor-mismatched-daemon")
-                    .expect("fixture mismatch hello is valid");
-            connection
-                .send_message(&encode_hello_response(request.id(), incompatible))
-                .expect("fixture mismatch hello sends");
-        }
+    // The daemon gate checks the client's exact version before replying, so a
+    // future minor version in the fixture daemon's own handshake exercises the
+    // client-side exact-version gate.
+    let local = if matches!(response, FixtureResponse::MinorProtocolMismatch) {
+        ProtocolHelloDto::new(ProtocolVersionDto::new(2, 1), "minor-mismatched-daemon")
+            .expect("fixture mismatch hello is valid")
+    } else {
+        hello("fixture-daemon")
+    };
+    let (_, mut requests, mut messages) = connection
+        .negotiate(local)
+        .await
+        .expect("fixture hello negotiates");
+    if matches!(
+        response,
+        FixtureResponse::MinorProtocolMismatch | FixtureResponse::Disconnect
+    ) {
         return;
     }
-    negotiate_daemon(&mut connection, hello("fixture-daemon")).expect("fixture hello negotiates");
-    if matches!(response, FixtureResponse::Disconnect) {
-        return;
-    }
-    let line = connection.receive_line().expect("fixture request arrives");
+    let line = requests
+        .receive_line()
+        .await
+        .expect("fixture request arrives");
     let request = decode_request_line(&line).expect("fixture request decodes");
     let payload = match &response {
         FixtureResponse::Health(health) => {
@@ -197,15 +184,16 @@ fn serve_fixture_connection(
                 "fixture intentionally returns a mismatched payload",
             )),
         ),
-        FixtureResponse::ProtocolMismatch | FixtureResponse::MinorProtocolMismatch => return,
+        FixtureResponse::MinorProtocolMismatch => return,
     };
     let id = if matches!(response, FixtureResponse::CorrelationMismatch) {
         request.id() + 100
     } else {
         request.id()
     };
-    connection
+    messages
         .send_message(&encode_response(id, payload))
+        .await
         .expect("fixture response sends");
 }
 
@@ -260,15 +248,15 @@ fn accepted_command(result: ProtocolAcceptedResultDto) -> ProtocolCommandResultD
 fn start_starting_health_server(
     endpoint: LocalEndpoint,
     stop: Arc<AtomicBool>,
-) -> thread::JoinHandle<()> {
-    let listener = LocalListener::bind(endpoint).expect("fixture listener binds");
-    thread::spawn(move || {
+) -> tokio::task::JoinHandle<()> {
+    let listener = AsyncLocalListener::bind(endpoint).expect("fixture listener binds");
+    tokio::spawn(async move {
         loop {
-            let connection = listener.accept().expect("fixture client connects");
+            let connection = listener.accept().await.expect("fixture client connects");
             if stop.load(Ordering::SeqCst) {
                 return;
             }
-            serve_fixture_connection(connection, FixtureResponse::Health(starting_health()));
+            serve_fixture_connection(connection, FixtureResponse::Health(starting_health())).await;
         }
     })
 }
@@ -319,7 +307,7 @@ async fn first_ready_connection_skips_launch_and_bootstrap_launches_after_unavai
     .expect("already-ready daemon must be used without launch");
     assert_eq!(health.readiness(), DaemonReadinessDto::Ready);
     assert_eq!(launches.load(Ordering::SeqCst), 0);
-    server.join().expect("ready fixture server completes");
+    server.await.expect("ready fixture server completes");
 
     let bootstrap_launches = Arc::new(AtomicUsize::new(0));
     let health = client(
@@ -359,10 +347,6 @@ async fn health_rejection_invalid_response_correlation_and_protocol_mismatch_are
             "invalid_local_protocol_response",
         ),
         (
-            FixtureResponse::ProtocolMismatch,
-            "incompatible_protocol_version",
-        ),
-        (
             FixtureResponse::MinorProtocolMismatch,
             "incompatible_protocol_version",
         ),
@@ -379,7 +363,7 @@ async fn health_rejection_invalid_response_correlation_and_protocol_mismatch_are
             .await
             .expect_err("fixture must return the selected health failure");
         assert_eq!(error.code(), expected_code);
-        server.join().expect("failure fixture server completes");
+        server.await.expect("failure fixture server completes");
     }
 }
 
@@ -401,7 +385,7 @@ async fn closed_response_channel_is_a_typed_error_instead_of_a_hang() {
     .expect("a closed response channel must not hang the request")
     .expect_err("a closed response channel is a typed error");
     assert_eq!(error.code(), "local_daemon_connection_unavailable");
-    server.join().expect("closed fixture server completes");
+    server.await.expect("closed fixture server completes");
 }
 
 #[tokio::test]
@@ -436,7 +420,7 @@ async fn snapshot_and_subscription_validate_success_rejection_and_response_shape
     assert_eq!(received, snapshot);
     assert_eq!(received.session_id(), session_id);
     assert_eq!(received.messages(), snapshot.messages());
-    server.join().expect("snapshot fixture server completes");
+    server.await.expect("snapshot fixture server completes");
 
     let rejected_endpoint = endpoint();
     let rejection = ErrorDto::validation("session_rejected", "fixture session rejected");
@@ -456,7 +440,7 @@ async fn snapshot_and_subscription_validate_success_rejection_and_response_shape
         .code(),
         "session_rejected"
     );
-    server.join().expect("rejection fixture server completes");
+    server.await.expect("rejection fixture server completes");
 
     let invalid_snapshot_endpoint = endpoint();
     let server = start_fixture_server(invalid_snapshot_endpoint.clone(), FixtureResponse::Invalid);
@@ -473,7 +457,7 @@ async fn snapshot_and_subscription_validate_success_rejection_and_response_shape
         "invalid_local_protocol_response"
     );
     server
-        .join()
+        .await
         .expect("invalid snapshot fixture server completes");
 
     let response = SessionSubscriptionResponseDto::snapshot(snapshot.clone());
@@ -491,9 +475,7 @@ async fn snapshot_and_subscription_validate_success_rejection_and_response_shape
     .await
     .expect("typed subscription response is returned");
     assert_eq!(received, SessionSubscriptionResponseDto::snapshot(snapshot));
-    server
-        .join()
-        .expect("subscription fixture server completes");
+    server.await.expect("subscription fixture server completes");
 
     let invalid_subscription_endpoint = endpoint();
     let server = start_fixture_server(
@@ -513,7 +495,7 @@ async fn snapshot_and_subscription_validate_success_rejection_and_response_shape
         "invalid_local_protocol_response"
     );
     server
-        .join()
+        .await
         .expect("invalid subscription fixture server completes");
 }
 
@@ -548,7 +530,7 @@ async fn non_ready_health_is_not_returned_as_a_successful_connection() {
             "local_daemon_not_ready"
         };
         assert_eq!(error.code(), expected);
-        server.join().expect("non-ready fixture server completes");
+        server.await.expect("non-ready fixture server completes");
     }
 }
 
@@ -575,7 +557,7 @@ async fn command_and_conveniences_round_trip_typed_acceptances() {
     .await
     .expect("an accepted command result is returned as decoded data");
     assert_eq!(received, accepted);
-    server.join().expect("command fixture server completes");
+    server.await.expect("command fixture server completes");
 
     let create_endpoint = endpoint();
     let accepted = accepted_command(ProtocolAcceptedResultDto::CreateSession(created));
@@ -594,7 +576,7 @@ async fn command_and_conveniences_round_trip_typed_acceptances() {
     assert_eq!(received, created);
     assert_eq!(received.session_id(), session_id);
     server
-        .join()
+        .await
         .expect("create-session fixture server completes");
 
     let outcome = SendUserTurnOutcomeDto::Started {
@@ -623,7 +605,7 @@ async fn command_and_conveniences_round_trip_typed_acceptances() {
     .expect("the user turn outcome is returned as decoded data");
     assert_eq!(received, outcome);
     server
-        .join()
+        .await
         .expect("send-user-turn fixture server completes");
 }
 
@@ -651,7 +633,7 @@ async fn command_rejection_and_unexpected_acceptance_payloads_are_typed() {
         .code(),
         "fixture_command_rejected"
     );
-    server.join().expect("rejection fixture server completes");
+    server.await.expect("rejection fixture server completes");
 
     let wrong_turn = accepted_command(ProtocolAcceptedResultDto::SendUserTurn(
         SendUserTurnAcceptedDto::new(session_id, TurnId::new(), SendUserTurnOutcomeDto::Pending),
@@ -674,7 +656,7 @@ async fn command_rejection_and_unexpected_acceptance_payloads_are_typed() {
         "local_command_shape_mismatch"
     );
     server
-        .join()
+        .await
         .expect("create-session shape fixture server completes");
 
     let wrong_create = accepted_command(ProtocolAcceptedResultDto::CreateSession(
@@ -702,7 +684,7 @@ async fn command_rejection_and_unexpected_acceptance_payloads_are_typed() {
         "local_command_shape_mismatch"
     );
     server
-        .join()
+        .await
         .expect("send-user-turn shape fixture server completes");
 }
 
@@ -724,7 +706,7 @@ async fn await_ready_returns_ready_health_and_reports_starting() {
     .await
     .expect("ready daemon health is returned by the readiness wait");
     assert_eq!(health.readiness(), DaemonReadinessDto::Ready);
-    server.join().expect("ready fixture server completes");
+    server.await.expect("ready fixture server completes");
 
     let starting_endpoint = endpoint();
     let stop = Arc::new(AtomicBool::new(false));
@@ -739,7 +721,8 @@ async fn await_ready_returns_ready_health_and_reports_starting() {
     .expect_err("a starting daemon must not be reported ready");
     assert_eq!(error.code(), "local_daemon_starting");
     stop.store(true, Ordering::SeqCst);
-    let _final_connection = LocalConnection::connect(&starting_endpoint)
+    let _final_connection = AsyncLocalClientConnection::connect(&starting_endpoint)
+        .await
         .expect("fixture listener accepts the final connection");
-    server.join().expect("starting fixture server stops");
+    server.await.expect("starting fixture server stops");
 }

@@ -72,30 +72,29 @@ further requests and receive subscription notifications. Each connection carries
 
 - `MAX_MESSAGE_BYTES` (1 MiB) rejects an over-size message before unbounded allocation; it is a transport liveness cap, not a contract limit on message content;
 - `CONNECT_TIMEOUT` (500 ms) bounds the connect wait;
--  `SYNC_IO_TIMEOUT` (ten seconds) bounds read and write deadlines, applied to client connect and listener accept on
-  Unix-domain sockets;
 - a stale-socket probe reclaims an abandoned Unix endpoint only after proving no live listener owns it.
 
-Windows named pipes keep their documented blocking behavior, a recorded limitation rather than a second bound (the
-locked `interprocess` transport exposes no per-call named-pipe timeout, so only the bounded connect wait applies there),
-anchored at `apply_sync_io_timeout` in `crates/intention-transport/src/lib.rs`. A peer that accepts a connection and
-never answers therefore fails with a typed unavailable error instead of blocking its thread indefinitely.
+The transport is asynchronous end to end and applies no per-call read or write deadline, on Unix-domain sockets and
+Windows named pipes alike: a peer that accepts a connection and then stops answering leaves the awaiting task pending,
+and each caller owns its own bound (the client bounds every correlated and stream reply, and the daemon host bounds each
+subscriber write).
 
 ### Asynchronous transport
 
-The asynchronous implementation binds the same private `LocalEndpoint` mapping and endpoint ownership policy and uses
-the locked `interprocess` Tokio feature with its private local Unix-socket / Windows-named-pipe mapping. After the typed
-`hello` handshake succeeds, the connection exchanges typed JSON-RPC requests, responses, and notifications; Tokio,
-interprocess, socket, endpoint-path, and I/O-half resources remain private to `intention-transport`. There are no
-direction-specific connection roles and no feature negotiation: one connection speaks JSON-RPC 2.0 for commands,
-queries, subscriptions, and notifications alike.
+This is the only transport implementation: the crate keeps the shared private `LocalEndpoint` mapping, the
+`AsyncLocalListener`, `AsyncLocalClientConnection`, and `AsyncLocalDaemonConnection` types, and their asynchronous I/O
+halves, and carries no synchronous twin. It uses the locked `interprocess` Tokio feature with its private local
+Unix-socket / Windows-named-pipe mapping. After the typed `hello` handshake succeeds, the connection exchanges typed
+JSON-RPC requests, responses, and notifications; Tokio, interprocess, socket, endpoint-path, and I/O-half resources
+remain private to `intention-transport`. There are no direction-specific connection roles and no feature negotiation:
+one connection speaks JSON-RPC 2.0 for commands, queries, subscriptions, and notifications alike.
 
 Oversize messages are rejected before payload allocation or write; malformed JSON produces the JSON-RPC parse error
 `-32700`; an incomplete or closed message stream is `local_daemon_connection_unavailable`. The transport preserves the
 Unix modes and endpoint-reclaim rules above; an identity-verified probe at bind is the only stale-endpoint-removal path,
 and a dropped listener never unlinks its endpoint. Its required transport test target exercises real endpoint hello
 handshake, ordered correlated request/response exchanges, concurrent reader/writer use, notification delivery, framing
-safety outcomes, retained M3 synchronous behavior, and Windows named-pipe multi-message fixtures under `cfg(windows)`.
+safety outcomes, handshake error codes, and Windows named-pipe multi-message fixtures under `cfg(windows)`.
 
 ### Persistent subscriptions and the run stream
 

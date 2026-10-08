@@ -5,20 +5,17 @@
 )]
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use intention_proto::ErrorDto;
 use intention_proto::{
-    JsonRpcErrorDto, JsonRpcRequestDto, JsonRpcResponseDto, ProtocolDaemonMessageDto,
-    ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto,
-    ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, ProtocolVersionDto, RunStreamFrameDto,
-    decode_request_line, decode_response, encode_hello_request, encode_hello_response,
-    encode_request, encode_response, parse_run_frame_notification,
+    JsonRpcRequestDto, JsonRpcResponseDto, ProtocolDaemonMessageDto, ProtocolHelloDto,
+    ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestPayloadDto,
+    ProtocolResponsePayloadDto, ProtocolVersionDto, RunStreamFrameDto, decode_request_line,
+    decode_response, encode_request, encode_response, parse_run_frame_notification,
 };
 use intention_transport::{
-    AsyncLocalClientConnection, AsyncLocalListener, LocalConnection, LocalEndpoint, LocalListener,
-    local_protocol_version, negotiate_client, negotiate_daemon,
+    AsyncLocalClientConnection, AsyncLocalListener, LocalEndpoint, local_protocol_version,
 };
 use tempfile::TempDir;
 
@@ -238,129 +235,18 @@ async fn async_transport_split_roles_exchange_concurrent_multiple_frames_without
     server.await.expect("server task completes");
 }
 
-#[test]
-fn framed_transport_negotiates_and_preserves_correlated_dtos() {
+#[tokio::test]
+async fn unavailable_endpoint_is_a_typed_error() {
     let directory = TempDir::new().expect("temporary directory is available");
-    let endpoint = endpoint(&directory);
-    let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
-    let client_endpoint = endpoint;
-
-    let server = thread::spawn(move || {
-        let mut connection = listener.accept().expect("server accepts client");
-        let remote =
-            negotiate_daemon(&mut connection, hello("fixture-daemon")).expect("hello negotiates");
-        assert_eq!(remote.adapter_name(), "fixture-client");
-        let line = connection.receive_line().expect("server receives request");
-        let request = decode_request_line(&line).expect("request decodes");
-        connection
-            .send_message(&unavailable_response(request.id()))
-            .expect("server sends response");
-    });
-
-    let mut client = LocalConnection::connect(&client_endpoint).expect("client connects");
-    let remote = negotiate_client(&mut client, hello("fixture-client"))
-        .expect("compatible hello negotiates");
-    assert_eq!(remote.adapter_name(), "fixture-daemon");
-    client
-        .send_message(&health_request(1))
-        .expect("request sends");
-    let line = client.receive_line().expect("response arrives");
-    assert_eq!(
-        decode_response(&line, ProtocolMethodDto::DaemonHealth, 1).expect("response decodes"),
-        rejected_payload()
-    );
-
-    server.join().expect("server thread completes");
-}
-
-#[test]
-fn incompatible_protocol_version_answers_with_a_typed_error_before_closing() {
-    let directory = TempDir::new().expect("temporary directory is available");
-    let endpoint = endpoint(&directory);
-    let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
-    let client_endpoint = endpoint;
-
-    let server = thread::spawn(move || {
-        let mut connection = listener.accept().expect("server accepts client");
-        let error = negotiate_daemon(&mut connection, hello("fixture-daemon"))
-            .expect_err("mismatched version must fail");
-        assert_eq!(error.code(), "incompatible_protocol_version");
-    });
-
-    let mut client = LocalConnection::connect(&client_endpoint).expect("client connects");
-    client
-        .send_message(&encode_hello_request(
-            1,
-            hello_at(ProtocolVersionDto::new(1, 1), "future-client"),
-        ))
-        .expect("future client hello sends");
-    let line = client
-        .receive_line()
-        .expect("the daemon answers the version mismatch before closing");
-    let response: JsonRpcResponseDto<ProtocolHelloDto> =
-        JsonRpcResponseDto::parse(&line).expect("error response parses");
-    assert!(response.result_value().is_none());
-    let error = response.error_value().expect("an error object is present");
-    assert_eq!(error.code(), intention_proto::JSONRPC_VERSION_MISMATCH);
-    assert_eq!(
-        error.data().map(ErrorDto::code),
-        Some("incompatible_protocol_version")
-    );
-
-    server.join().expect("server thread completes");
-}
-
-#[test]
-fn a_first_request_that_is_not_hello_is_answered_with_the_invalid_request_code() {
-    let directory = TempDir::new().expect("temporary directory is available");
-    let endpoint = endpoint(&directory);
-    let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
-    let client_endpoint = endpoint;
-
-    let server = thread::spawn(move || {
-        let mut connection = listener.accept().expect("server accepts client");
-        let error = negotiate_daemon(&mut connection, hello("fixture-daemon"))
-            .expect_err("a first request that is not hello never negotiates");
-        assert_eq!(error.code(), "jsonrpc_hello_required");
-    });
-
-    let mut client = LocalConnection::connect(&client_endpoint).expect("client connects");
-    client
-        .send_message(&JsonRpcRequestDto::new(
-            1,
-            ProtocolMethodDto::DaemonHealth.as_str(),
-            hello("fixture-client"),
-        ))
-        .expect("a non-hello first request sends");
-    let line = client
-        .receive_line()
-        .expect("the daemon answers a non-conformant first request");
-    let response: JsonRpcResponseDto<ProtocolHelloDto> =
-        JsonRpcResponseDto::parse(&line).expect("the error response parses");
-    assert!(response.result_value().is_none());
-    assert_eq!(response.id(), Some(1), "the recovered identity is echoed");
-    let error = response.error_value().expect("an error object is present");
-    assert_eq!(error.code(), intention_proto::JSONRPC_INVALID_REQUEST);
-    assert_eq!(
-        error.data().map(ErrorDto::code),
-        Some("jsonrpc_hello_required")
-    );
-
-    server.join().expect("server thread completes");
-}
-
-#[test]
-fn unavailable_endpoint_is_a_typed_error() {
-    let directory = TempDir::new().expect("temporary directory is available");
-    let error = match LocalConnection::connect(&endpoint(&directory)) {
+    let error = match AsyncLocalClientConnection::connect(&endpoint(&directory)).await {
         Ok(_) => panic!("absent endpoint must not connect"),
         Err(error) => error,
     };
     assert_eq!(error.code(), "local_daemon_unavailable");
 }
 
-#[test]
-fn endpoint_identifiers_validate_and_listener_binding_does_not_reclaim_active_names() {
+#[tokio::test]
+async fn endpoint_identifiers_validate_and_listener_binding_does_not_reclaim_active_names() {
     let long_instance_id = "x".repeat(101);
     for instance_id in [
         "",
@@ -377,8 +263,8 @@ fn endpoint_identifiers_validate_and_listener_binding_does_not_reclaim_active_na
     let directory = TempDir::new().expect("temporary directory is available");
     let endpoint = endpoint(&directory);
     assert!(endpoint.instance_id().starts_with("transport-fixture-"));
-    let listener = LocalListener::bind(endpoint.clone()).expect("initial listener binds");
-    let second_listener = LocalListener::bind(endpoint);
+    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("initial listener binds");
+    let second_listener = AsyncLocalListener::bind(endpoint);
     assert!(
         second_listener.is_err(),
         "active endpoint must not be reclaimed"
@@ -446,136 +332,8 @@ async fn windows_async_named_pipe_fixture_negotiates_multiple_frames_and_cleans_
     );
 }
 
-#[cfg(windows)]
-#[test]
-fn windows_named_pipe_fixture_binds_negotiates_frames_and_cleans_up() {
-    let directory = TempDir::new().expect("temporary directory is available");
-    let endpoint = endpoint(&directory);
-    let listener = LocalListener::bind(endpoint.clone()).expect("named-pipe listener binds");
-    let client_endpoint = endpoint;
-    let server = thread::spawn(move || {
-        let mut connection = listener
-            .accept()
-            .expect("named-pipe listener accepts client");
-        negotiate_daemon(&mut connection, hello("windows-fixture-daemon"))
-            .expect("named-pipe hello negotiates");
-        let line = connection
-            .receive_line()
-            .expect("named-pipe request arrives");
-        let request = decode_request_line(&line).expect("named-pipe request decodes");
-        connection
-            .send_message(&unavailable_response(request.id()))
-            .expect("named-pipe response sends");
-    });
-    let mut client =
-        LocalConnection::connect(&client_endpoint).expect("named-pipe client connects");
-    negotiate_client(&mut client, hello("windows-fixture-client"))
-        .expect("named-pipe hello negotiates");
-    client
-        .send_message(&health_request(1))
-        .expect("named-pipe request sends");
-    let line = client.receive_line().expect("named-pipe response arrives");
-    assert_eq!(
-        decode_response(&line, ProtocolMethodDto::DaemonHealth, 1)
-            .expect("named-pipe response decodes"),
-        rejected_payload()
-    );
-    server.join().expect("named-pipe server completes");
-}
-
-#[test]
-fn client_negotiation_rejects_an_incompatible_daemon_response() {
-    let directory = TempDir::new().expect("temporary directory is available");
-    let endpoint = endpoint(&directory);
-    let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
-    let client_endpoint = endpoint;
-
-    let server = thread::spawn(move || {
-        let mut connection = listener.accept().expect("server accepts client");
-        let line = connection.receive_line().expect("server receives hello");
-        let request: JsonRpcRequestDto<ProtocolHelloDto> =
-            JsonRpcRequestDto::parse(&line).expect("hello parses");
-        assert_eq!(request.method(), intention_proto::PROTOCOL_HELLO_METHOD);
-        assert_eq!(request.params().adapter_name(), "fixture-client");
-        let error = JsonRpcErrorDto::from_error(
-            intention_proto::JSONRPC_VERSION_MISMATCH,
-            ErrorDto::unavailable(
-                "incompatible_protocol_version",
-                "protocol version must equal the current version",
-            ),
-        );
-        connection
-            .send_message(&JsonRpcResponseDto::<ProtocolHelloDto>::error(
-                Some(request.id()),
-                error,
-            ))
-            .expect("server sends incompatible hello");
-    });
-
-    let mut client = LocalConnection::connect(&client_endpoint).expect("client connects");
-    let error = negotiate_client(&mut client, hello("fixture-client"))
-        .expect_err("client must reject incompatible daemon version");
-    assert_eq!(error.code(), "incompatible_protocol_version");
-
-    server.join().expect("server thread completes");
-}
-
 // Exact-version negotiation must reject a same-major minor mismatch exactly
 // like a major mismatch, on every path: the wire carries one protocol version.
-
-#[test]
-fn incompatible_protocol_minor_fails_closed_without_hanging() {
-    let directory = TempDir::new().expect("temporary directory is available");
-    let endpoint = endpoint(&directory);
-    let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
-    let client_endpoint = endpoint;
-
-    let server = thread::spawn(move || {
-        let mut connection = listener.accept().expect("server accepts client");
-        let error = negotiate_daemon(&mut connection, hello("fixture-daemon"))
-            .expect_err("mismatched minor must fail on the daemon side");
-        assert_eq!(error.code(), "incompatible_protocol_version");
-    });
-
-    let mut client = LocalConnection::connect(&client_endpoint).expect("client connects");
-    let error = negotiate_client(
-        &mut client,
-        hello_at(ProtocolVersionDto::new(2, 1), "fixture-client"),
-    )
-    .expect_err("a same-major minor mismatch fails closed");
-    assert_eq!(error.code(), "incompatible_protocol_version");
-
-    server.join().expect("server thread completes");
-}
-
-#[test]
-fn client_negotiation_rejects_an_incompatible_daemon_minor_response() {
-    let directory = TempDir::new().expect("temporary directory is available");
-    let endpoint = endpoint(&directory);
-    let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
-    let client_endpoint = endpoint;
-
-    let server = thread::spawn(move || {
-        let mut connection = listener.accept().expect("server accepts client");
-        let line = connection.receive_line().expect("server receives hello");
-        let request: JsonRpcRequestDto<ProtocolHelloDto> =
-            JsonRpcRequestDto::parse(&line).expect("hello parses");
-        assert_eq!(request.params().adapter_name(), "fixture-client");
-        connection
-            .send_message(&encode_hello_response(
-                request.id(),
-                hello_at(ProtocolVersionDto::new(2, 1), "minor-mismatched-daemon"),
-            ))
-            .expect("server sends minor-mismatched hello");
-    });
-
-    let mut client = LocalConnection::connect(&client_endpoint).expect("client connects");
-    let error = negotiate_client(&mut client, hello("fixture-client"))
-        .expect_err("client must reject the daemon minor mismatch");
-    assert_eq!(error.code(), "incompatible_protocol_version");
-
-    server.join().expect("server thread completes");
-}
 
 #[tokio::test]
 async fn async_negotiation_rejects_minor_mismatch_on_the_daemon_side() {
@@ -614,26 +372,23 @@ async fn async_negotiation_rejects_minor_mismatch_on_the_daemon_side() {
 
 #[tokio::test]
 async fn async_negotiation_rejects_minor_mismatch_on_the_client_side() {
-    // The daemon gate checks the client version before replying, so a fixture
-    // daemon that claims a future minor version is scripted at the line level
-    // to exercise the client-side exact-version gate.
+    // The daemon gate checks the client's exact version before replying, so the
+    // fixture daemon offers a future minor version in its own handshake to
+    // exercise the client-side exact-version gate.
     let directory = TempDir::new().expect("temporary directory is available");
     let endpoint = endpoint(&directory);
-    let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
-    let client_endpoint = endpoint;
-    let server = thread::spawn(move || {
-        let mut connection = listener.accept().expect("scripted daemon accepts");
-        let line = connection.receive_line().expect("scripted hello arrives");
-        let request: JsonRpcRequestDto<ProtocolHelloDto> =
-            JsonRpcRequestDto::parse(&line).expect("scripted hello parses");
+    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+    let server = tokio::spawn(async move {
+        let connection = listener.accept().await.expect("scripted daemon accepts");
         connection
-            .send_message(&encode_hello_response(
-                request.id(),
-                hello_at(ProtocolVersionDto::new(2, 1), "scripted-future-daemon"),
+            .negotiate(hello_at(
+                ProtocolVersionDto::new(2, 1),
+                "scripted-future-daemon",
             ))
+            .await
             .expect("scripted future hello sends");
     });
-    let connection = AsyncLocalClientConnection::connect(&client_endpoint)
+    let connection = AsyncLocalClientConnection::connect(&endpoint)
         .await
         .expect("client connects");
     let error = match connection.negotiate(hello("async-fixture-client")).await {
@@ -641,5 +396,5 @@ async fn async_negotiation_rejects_minor_mismatch_on_the_client_side() {
         Err(error) => error,
     };
     assert_eq!(error.code(), "incompatible_protocol_version");
-    server.join().expect("scripted daemon completes");
+    server.await.expect("scripted daemon completes");
 }
