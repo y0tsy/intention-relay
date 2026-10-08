@@ -98,8 +98,6 @@ struct HostState {
     facade: DaemonApplicationFacade,
     data: Mutex<HostData>,
     publication_gate: Mutex<()>,
-    #[cfg(any(test, feature = "test-support"))]
-    task_completed: tokio::sync::Notify,
 }
 
 #[cfg(test)]
@@ -108,8 +106,6 @@ fn host_for_test(facade: DaemonApplicationFacade) -> Arc<HostState> {
         facade,
         data: Mutex::new(HostData::default()),
         publication_gate: Mutex::new(()),
-        #[cfg(any(test, feature = "test-support"))]
-        task_completed: tokio::sync::Notify::new(),
     })
 }
 
@@ -196,7 +192,6 @@ impl HostState {
             #[cfg(any(test, feature = "test-support"))]
             {
                 host.signal_execution_completion(key);
-                host.task_completed.notify_one();
             }
         });
         #[cfg(any(test, feature = "test-support"))]
@@ -247,16 +242,6 @@ impl HostState {
             return Vec::new();
         };
         std::mem::take(&mut data.execution_tasks)
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    async fn wait_for_task_cleanup(&self) {
-        loop {
-            if self.data.lock().is_ok_and(|data| data.tasks.is_empty()) {
-                return;
-            }
-            self.task_completed.notified().await;
-        }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -757,8 +742,6 @@ fn new_host(facade: DaemonApplicationFacade) -> Arc<HostState> {
         facade,
         data: Mutex::new(HostData::default()),
         publication_gate: Mutex::new(()),
-        #[cfg(any(test, feature = "test-support"))]
-        task_completed: tokio::sync::Notify::new(),
     })
 }
 
@@ -999,16 +982,6 @@ fn daemon_hello() -> DtoResult<ProtocolHelloDto> {
     ProtocolHelloDto::new(local_protocol_version(), "intention-daemon")
 }
 
-/// Serves one injected asynchronous connection for a bounded integration fixture.
-#[cfg(any(test, feature = "test-support"))]
-#[doc(hidden)]
-pub async fn serve_test_async_connection(
-    connection: intention_transport::AsyncLocalDaemonConnection,
-    facade: DaemonApplicationFacade,
-) {
-    serve_async_connection(connection, new_host(facade)).await;
-}
-
 /// Serves a bounded number of fixture connections through one shared host.
 ///
 /// This exists only for outcome tests that must exercise ordinary commands and
@@ -1058,21 +1031,10 @@ pub fn test_host_lifecycle(facade: DaemonApplicationFacade) -> TestHostLifecycle
 
 #[cfg(any(test, feature = "test-support"))]
 impl TestHostLifecycle {
-    /// Attempts exact durable admission through this fixture host.
-    pub fn admit_starting_run(&self, session_id: SessionId, run_id: RunId) {
-        self.host.schedule_if_starting(session_id, run_id);
-    }
-
     /// Returns the currently registered fixture execution count.
     #[must_use]
     pub fn task_count(&self) -> usize {
         self.host.data.lock().map_or(0, |data| data.tasks.len())
-    }
-
-    /// Waits until every currently registered fixture task has removed its entry.
-    #[doc(hidden)]
-    pub async fn wait_for_task_cleanup(&self) {
-        self.host.wait_for_task_cleanup().await;
     }
 
     /// Waits for the admitted executor of this exact run to return.

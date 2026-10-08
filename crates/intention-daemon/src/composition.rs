@@ -271,40 +271,6 @@ struct LocalToolCancellationEntry {
 
 impl DaemonApplicationFacade {
     /// Executes one explicit local tool call through the one-transaction path
-    /// without publishing its committed rows.
-    ///
-    /// This API is an internal, caller-admitted single invocation and never
-    /// starts a loop. The daemon host uses
-    /// [`Self::invoke_local_tool_for_daemon_with_publication`] so every
-    /// committed transcript row reaches the live subscribers.
-    #[doc(hidden)]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "The daemon bridge keeps the flat tool-invocation payload in one call."
-    )]
-    pub fn invoke_local_tool_for_daemon(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        call_id: intention_proto::ToolCallId,
-        tool_id: impl Into<String>,
-        input: ToolInput,
-        workspace: WorkspaceRoot,
-        arguments_json: impl Into<String>,
-    ) -> DtoResult<LocalToolInvocationOutcomeDto> {
-        self.invoke_local_tool_for_daemon_with_publication(
-            session_id,
-            run_id,
-            call_id,
-            tool_id,
-            input,
-            workspace,
-            arguments_json,
-            &(),
-        )
-    }
-
-    /// Executes one explicit local tool call through the one-transaction path
     /// and hands every committed transcript row to the publication boundary.
     ///
     /// Publication follows each row's own commit, so every published frame
@@ -1856,7 +1822,7 @@ mod tests {
 
         let mismatched_call = intention_proto::ToolCallId::new();
         let error = facade
-            .invoke_local_tool_for_daemon(
+            .invoke_local_tool_for_daemon_with_publication(
                 session_id,
                 run_id,
                 mismatched_call,
@@ -1864,6 +1830,7 @@ mod tests {
                 read_hello_input(),
                 workspace.clone(),
                 "{}",
+                &(),
             )
             .expect_err("a tool identity that does not match its typed input is rejected");
         assert_eq!(error.code(), "tool_id_mismatch");
@@ -1883,7 +1850,7 @@ mod tests {
                 .expect("fixture path is valid"),
         });
         let error = facade
-            .invoke_local_tool_for_daemon(
+            .invoke_local_tool_for_daemon_with_publication(
                 session_id,
                 run_id,
                 unavailable_call,
@@ -1891,6 +1858,7 @@ mod tests {
                 missing,
                 workspace,
                 "{}",
+                &(),
             )
             .expect_err("a read of an unavailable file is a tool failure");
         let evidence = tool_evidence(&facade, session_id, run_id, unavailable_call);
@@ -1982,7 +1950,7 @@ mod tests {
         let worker_run = run_id;
 
         let worker = std::thread::spawn(move || {
-            worker_facade.invoke_local_tool_for_daemon(
+            worker_facade.invoke_local_tool_for_daemon_with_publication(
                 worker_session,
                 worker_run,
                 intention_proto::ToolCallId::new(),
@@ -2012,6 +1980,7 @@ mod tests {
                 }),
                 workspace,
                 "{}",
+                &(),
             )
         });
 
@@ -2063,7 +2032,7 @@ mod tests {
         ];
         for call_id in call_ids {
             let result = facade
-                .invoke_local_tool_for_daemon(
+                .invoke_local_tool_for_daemon_with_publication(
                     session_id,
                     run_id,
                     call_id,
@@ -2071,6 +2040,7 @@ mod tests {
                     read_hello_input(),
                     workspace.clone(),
                     "{}",
+                    &(),
                 )
                 .expect("reads complete before any interrupt");
             match result {
@@ -2110,7 +2080,7 @@ mod tests {
 
         let first_call = intention_proto::ToolCallId::new();
         let result = facade
-            .invoke_local_tool_for_daemon(
+            .invoke_local_tool_for_daemon_with_publication(
                 session_id,
                 run_id,
                 first_call,
@@ -2118,6 +2088,7 @@ mod tests {
                 read_hello_input(),
                 workspace.clone(),
                 "{}",
+                &(),
             )
             .expect("the first read completes");
         match result {
@@ -2140,7 +2111,7 @@ mod tests {
 
         let second_call = intention_proto::ToolCallId::new();
         facade
-            .invoke_local_tool_for_daemon(
+            .invoke_local_tool_for_daemon_with_publication(
                 session_id,
                 run_id,
                 second_call,
@@ -2148,6 +2119,7 @@ mod tests {
                 read_hello_input(),
                 workspace,
                 "{}",
+                &(),
             )
             .expect("the second read completes");
         let second_evidence = tool_evidence(&facade, session_id, run_id, second_call);
