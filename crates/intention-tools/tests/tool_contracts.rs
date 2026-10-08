@@ -195,7 +195,7 @@ fn execute_cancellation_is_classified_as_a_stopped_interruption() {
         .dispatch_with_cancellation(
             ToolCallId::new(),
             ToolInput::Execute(ExecuteInput {
-                program: BoundedText::new(if cfg!(windows) { "ping" } else { "sh" })
+                program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" })
                     .expect("program"),
                 args: if cfg!(windows) {
                     vec![
