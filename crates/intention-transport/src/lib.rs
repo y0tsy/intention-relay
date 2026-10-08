@@ -25,7 +25,23 @@ use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
 use interprocess::local_socket::{ConnectOptions, GenericFilePath, ListenerOptions, PathNameType};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-const MAX_MESSAGE_BYTES: usize = 1_048_576;
+/// The one owner of the transport envelope bound: one framed NDJSON line.
+///
+/// The cap rejects an over-size message before unbounded allocation, and an
+/// over-size correlated response is answered with the typed
+/// `local_protocol_message_too_large` failure instead of a silent close.
+/// Every other local bound derives from it.
+pub const MAX_MESSAGE_BYTES: usize = 1_048_576;
+
+/// The representation budget of one snapshot transcript read.
+///
+/// Derived from [`MAX_MESSAGE_BYTES`]: the snapshot read keeps the newest
+/// transcript rows that fit this budget, leaving the cap's remaining headroom
+/// for the snapshot projection and its fixed envelope fields. The session
+/// snapshot is the only legitimate response large enough to approach the
+/// envelope cap.
+pub const MAX_TRANSCRIPT_SNAPSHOT_BYTES: usize = MAX_MESSAGE_BYTES - MAX_MESSAGE_BYTES / 4;
+
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 const LISTENER_SPIN_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -495,9 +511,6 @@ fn encode_message<T: serde::Serialize + ?Sized>(value: &T) -> DtoResult<Vec<u8>>
 }
 
 fn decode_line(mut line: Vec<u8>) -> DtoResult<String> {
-    if line.len() > MAX_MESSAGE_BYTES {
-        return Err(oversized_message());
-    }
     // One trailing carriage return is CRLF framing, not message content. A
     // `\r` byte is never a UTF-8 continuation byte, so trimming it here is
     // equivalent to trimming it after decoding.

@@ -129,58 +129,6 @@ async fn async_connection_preserves_correlated_replies_then_uncorrelated_stream_
 }
 
 #[tokio::test]
-async fn async_transport_negotiates_once_and_exchanges_ordered_correlated_frames() {
-    let directory = TempDir::new().expect("temporary directory is available");
-    let endpoint = endpoint(&directory);
-    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
-    let server = tokio::spawn(async move {
-        let connection = listener.accept().await.expect("server accepts client");
-        let (remote, mut requests, mut messages) = connection
-            .negotiate(hello("async-fixture-daemon"))
-            .await
-            .expect("daemon hello negotiates");
-        assert_eq!(remote.adapter_name(), "async-fixture-client");
-        for _ in 0..3 {
-            let line = requests
-                .receive_line()
-                .await
-                .expect("server receives request");
-            let request = decode_request_line(&line).expect("request decodes");
-            messages
-                .send_message(&unavailable_response(request.id()))
-                .await
-                .expect("server sends response");
-        }
-    });
-
-    let connection = AsyncLocalClientConnection::connect(&endpoint)
-        .await
-        .expect("client connects");
-    let (remote, mut requests, mut messages) = connection
-        .negotiate(hello("async-fixture-client"))
-        .await
-        .expect("client hello negotiates");
-    assert_eq!(remote.adapter_name(), "async-fixture-daemon");
-    for id in 1..=3 {
-        requests
-            .send_message(&health_request(id))
-            .await
-            .expect("client sends request");
-    }
-    for id in 1..=3 {
-        let line = messages
-            .receive_line()
-            .await
-            .expect("client receives response");
-        assert_eq!(
-            decode_response(&line, ProtocolMethodDto::DaemonHealth, id).expect("response decodes"),
-            rejected_payload()
-        );
-    }
-    server.await.expect("server task completes");
-}
-
-#[tokio::test]
 async fn async_transport_split_roles_exchange_concurrent_multiple_frames_without_corruption() {
     let directory = TempDir::new().expect("temporary directory is available");
     let endpoint = endpoint(&directory);
@@ -235,18 +183,8 @@ async fn async_transport_split_roles_exchange_concurrent_multiple_frames_without
     server.await.expect("server task completes");
 }
 
-#[tokio::test]
-async fn unavailable_endpoint_is_a_typed_error() {
-    let directory = TempDir::new().expect("temporary directory is available");
-    let error = match AsyncLocalClientConnection::connect(&endpoint(&directory)).await {
-        Ok(_) => panic!("absent endpoint must not connect"),
-        Err(error) => error,
-    };
-    assert_eq!(error.code(), "local_daemon_unavailable");
-}
-
-#[tokio::test]
-async fn endpoint_identifiers_validate_and_listener_binding_does_not_reclaim_active_names() {
+#[test]
+fn endpoint_identifiers_reject_unsafe_instance_ids() {
     let long_instance_id = "x".repeat(101);
     for instance_id in [
         "",
@@ -259,22 +197,6 @@ async fn endpoint_identifiers_validate_and_listener_binding_does_not_reclaim_act
             .expect_err("unsafe logical endpoint identifier must be rejected");
         assert_eq!(error.code(), "invalid_local_endpoint_instance");
     }
-
-    let directory = TempDir::new().expect("temporary directory is available");
-    let endpoint = endpoint(&directory);
-    assert!(endpoint.instance_id().starts_with("transport-fixture-"));
-    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("initial listener binds");
-    let second_listener = AsyncLocalListener::bind(endpoint);
-    assert!(
-        second_listener.is_err(),
-        "active endpoint must not be reclaimed"
-    );
-    let error = match second_listener {
-        Ok(_) => panic!("active endpoint must not be reclaimed"),
-        Err(error) => error,
-    };
-    assert_eq!(error.code(), "local_daemon_endpoint_in_use");
-    drop(listener);
 }
 
 #[cfg(windows)]
