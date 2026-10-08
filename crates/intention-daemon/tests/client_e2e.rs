@@ -18,14 +18,13 @@ mod common;
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
-use std::process::{Child, Command};
+use std::process::Child;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{config_path, unique_endpoint};
+use common::{spawn_daemon, unique_endpoint, write_config_document};
 use intention_client::{
     IntentionClient, ProcessDaemonLauncher, RunStreamClient, RunStreamSubscription,
 };
@@ -64,9 +63,10 @@ impl E2eHost {
         }
         let credential = format!("fixture-credential-{}", std::process::id());
         let provider = FakeProvider::start(tool_arguments);
-        write_config(config_home.path(), provider.port(), &credential);
+        let config_document = fixture_config_document(provider.port(), &credential);
+        write_config_document(config_home.path(), &config_document);
         let endpoint = unique_endpoint("e2e");
-        let daemon = spawn_daemon(&endpoint, config_home.path(), state_home.path());
+        let daemon = spawn_daemon(&endpoint, config_home.path(), state_home.path(), None, &[]);
         Self {
             config_home,
             state_home,
@@ -90,6 +90,8 @@ impl E2eHost {
             &self.endpoint,
             self.config_home.path(),
             self.state_home.path(),
+            None,
+            &[],
         ));
     }
 
@@ -122,49 +124,11 @@ impl Drop for E2eHost {
     }
 }
 
-/// Spawns the real daemon binary with only per-process environment overrides.
-fn spawn_daemon(endpoint: &LocalEndpoint, config_home: &Path, state_home: &Path) -> Child {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_intention-daemon"));
-    command.arg(endpoint.instance_id());
-    #[cfg(target_os = "linux")]
-    {
-        command.env("XDG_CONFIG_HOME", config_home);
-        command.env("XDG_STATE_HOME", state_home);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // Both the configuration and the state directory derive from HOME.
-        command.env("HOME", config_home);
-    }
-    #[cfg(windows)]
-    {
-        command.env("APPDATA", config_home);
-        command.env("LOCALAPPDATA", state_home);
-    }
-    command.spawn().expect("daemon binary spawns")
-}
-
-/// Writes the daemon configuration file with owner-only permissions on Unix.
-fn write_config(config_home: &Path, port: u16, credential: &str) {
-    let config_text = format!(
+/// Renders the fixture daemon configuration document for the fake provider.
+fn fixture_config_document(port: u16, credential: &str) -> String {
+    format!(
         "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"fixture-model\"\nendpoint = \"http://127.0.0.1:{port}/v1\"\ncredential = \"{credential}\"\n"
-    );
-    let config_path = config_path(config_home);
-    let parent = config_path.parent().expect("config path has a parent");
-    std::fs::create_dir_all(parent).expect("config directory is created");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut options = std::fs::OpenOptions::new();
-        options.create(true).write(true).truncate(true).mode(0o600);
-        let mut file = options.open(&config_path).expect("config file opens");
-        file.write_all(config_text.as_bytes())
-            .expect("config file writes");
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(&config_path, config_text).expect("config file writes");
-    }
+    )
 }
 
 /// A fake OpenAI-compatible provider serving two scripted SSE rounds.

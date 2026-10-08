@@ -14,6 +14,7 @@
 )]
 
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -243,4 +244,72 @@ pub fn endpoint_socket_path(endpoint: &LocalEndpoint) -> Option<PathBuf> {
         }
     }?;
     Some(base.join(format!("{}.sock", endpoint.instance_id())))
+}
+
+/// Writes one daemon configuration document to the platform config path with
+/// owner-only permissions on Unix.
+pub fn write_config_document(config_home: &Path, document: &str) {
+    let config_path = config_path(config_home);
+    let parent = config_path.parent().expect("config path has a parent");
+    std::fs::create_dir_all(parent).expect("config directory is created");
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).write(true).truncate(true).mode(0o600);
+        let mut file = options.open(&config_path).expect("config file opens");
+        file.write_all(document.as_bytes())
+            .expect("config file writes");
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&config_path, document).expect("config file writes");
+    }
+}
+
+/// Spawns the real daemon binary with only per-process environment overrides.
+///
+/// A supplied `log_path` redirects both output streams into that file; without
+/// one the daemon inherits them. `removed_environment` names variables the
+/// child must never inherit.
+pub fn spawn_daemon(
+    endpoint: &LocalEndpoint,
+    config_home: &Path,
+    state_home: &Path,
+    log_path: Option<&Path>,
+    removed_environment: &[&str],
+) -> Child {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_intention-daemon"));
+    command.arg(endpoint.instance_id());
+    if let Some(log_path) = log_path {
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+            .expect("daemon log file opens");
+        let log_errors = log.try_clone().expect("daemon log file clones");
+        command.stdout(Stdio::from(log));
+        command.stderr(Stdio::from(log_errors));
+    }
+    for variable in removed_environment {
+        command.env_remove(*variable);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        command.env("XDG_CONFIG_HOME", config_home);
+        command.env("XDG_STATE_HOME", state_home);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // Both the configuration and the state directory derive from HOME.
+        command.env("HOME", config_home);
+    }
+    #[cfg(windows)]
+    {
+        command.env("APPDATA", config_home);
+        command.env("LOCALAPPDATA", state_home);
+    }
+    command.spawn().expect("daemon binary spawns")
 }

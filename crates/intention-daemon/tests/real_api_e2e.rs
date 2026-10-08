@@ -53,11 +53,11 @@
 mod common;
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{config_path, unique_endpoint};
+use common::{config_path, spawn_daemon, unique_endpoint, write_config_document};
 use intention_client::{IntentionClient, ProcessDaemonLauncher, RunStreamClient};
 use intention_config::{
     ConfigPathDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto,
@@ -340,73 +340,6 @@ fn preflight_config_document(path: &Path, provider: &LiveProviderConfig, documen
     );
 }
 
-/// Writes the daemon configuration file with owner-only permissions on Unix.
-fn write_config(config_home: &Path, provider: &LiveProviderConfig) {
-    let config_path = config_path(config_home);
-    let document = provider.config_document();
-    preflight_config_document(&config_path, provider, &document);
-    let parent = config_path.parent().expect("config path has a parent");
-    std::fs::create_dir_all(parent).expect("config directory is created");
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-
-        let mut options = std::fs::OpenOptions::new();
-        options.create(true).write(true).truncate(true).mode(0o600);
-        let mut file = options.open(&config_path).expect("config file opens");
-        file.write_all(document.as_bytes())
-            .expect("config file writes");
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(&config_path, document.as_bytes()).expect("config file writes");
-    }
-}
-
-/// Spawns the real daemon binary with per-process environment overrides and
-/// both output streams redirected into the fixture log file.
-///
-/// The daemon never inherits the live-provider variables or the provider SDK
-/// credential fallbacks, and it never inherits stdout/stderr, so the capture
-/// file is the only place its text can land.
-fn spawn_daemon(
-    endpoint: &LocalEndpoint,
-    config_home: &Path,
-    state_home: &Path,
-    log_path: &Path,
-) -> Child {
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-        .expect("daemon log file opens");
-    let log_errors = log.try_clone().expect("daemon log file clones");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_intention-daemon"));
-    command.arg(endpoint.instance_id());
-    command.stdout(Stdio::from(log));
-    command.stderr(Stdio::from(log_errors));
-    for variable in DAEMON_REMOVED_ENVIRONMENT {
-        command.env_remove(variable);
-    }
-    #[cfg(target_os = "linux")]
-    {
-        command.env("XDG_CONFIG_HOME", config_home);
-        command.env("XDG_STATE_HOME", state_home);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // Both the configuration and the state directory derive from HOME.
-        command.env("HOME", config_home);
-    }
-    #[cfg(windows)]
-    {
-        command.env("APPDATA", config_home);
-        command.env("LOCALAPPDATA", state_home);
-    }
-    command.spawn().expect("daemon binary spawns")
-}
-
 /// One live-provider fixture: isolated config/state/workspace directories, one
 /// spawned daemon process, and its private capture log.
 ///
@@ -434,10 +367,19 @@ impl LiveE2eHost {
         for (name, content) in workspace_files {
             std::fs::write(workspace.path().join(name), content).expect("workspace fixture writes");
         }
-        write_config(config_home.path(), provider);
+        let config_path = config_path(config_home.path());
+        let config_document = provider.config_document();
+        preflight_config_document(&config_path, provider, &config_document);
+        write_config_document(config_home.path(), &config_document);
         let endpoint = unique_endpoint("real-api-e2e");
         let log_path = config_home.path().join("daemon-live-e2e.log");
-        let daemon = spawn_daemon(&endpoint, config_home.path(), state_home.path(), &log_path);
+        let daemon = spawn_daemon(
+            &endpoint,
+            config_home.path(),
+            state_home.path(),
+            Some(&log_path),
+            &DAEMON_REMOVED_ENVIRONMENT,
+        );
         Self {
             config_home,
             state_home,
@@ -465,7 +407,8 @@ impl LiveE2eHost {
             &self.endpoint,
             self.config_home.path(),
             self.state_home.path(),
-            &self.log_path,
+            Some(&self.log_path),
+            &DAEMON_REMOVED_ENVIRONMENT,
         ));
     }
 
