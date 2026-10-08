@@ -75,8 +75,6 @@ pub enum ToolResultStatusDto {
     Completed,
     /// The tool reported a safe failure outcome.
     Failed,
-    /// The tool stopped because its run was cancelled.
-    Cancelled,
     /// The tool stopped before a final outcome; its captured output is partial.
     Partial,
 }
@@ -145,21 +143,8 @@ mod tests {
 
     use super::*;
     use intention_proto::{
-        ConfigRevisionId, GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageKindDto,
-        MessageProjectionDto, PendingTurnProjectionDto, ProjectId, RunId, RunModeDto,
-        RunProjectionDto, SessionId, SessionProjectionDto, ToolCallId, TurnId, WorkspaceId,
-        WorkspaceRootDto,
+        GetSessionSnapshotQueryDto, InterruptRunCommandDto, RunId, RunModeDto, SessionId,
     };
-
-    fn fixture_workspace_root() -> WorkspaceRootDto {
-        WorkspaceRootDto::parse(
-            std::env::temp_dir()
-                .join("intention-domain-unit-workspace")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("native fixture workspace is absolute")
-    }
 
     #[test]
     fn run_and_plan_statuses_round_trip_through_wire_values() {
@@ -195,185 +180,5 @@ mod tests {
         assert_eq!(interrupt.run_id(), run_id);
         let query = GetSessionSnapshotQueryDto::new(session_id);
         assert_eq!(query.session_id(), session_id);
-    }
-
-    #[test]
-    fn session_projection_rejects_a_pending_turn_from_another_session() {
-        let session_id = SessionId::new();
-        let projection = SessionProjectionDto::new(
-            ProjectId::new(),
-            session_id,
-            WorkspaceId::new(),
-            fixture_workspace_root(),
-            RunModeDto::Build,
-            None,
-            None,
-            vec![
-                PendingTurnProjectionDto::new(SessionId::new(), TurnId::new(), "hello")
-                    .expect("pending turn is non-empty"),
-            ],
-        );
-        assert!(projection.is_err());
-
-        let projection = SessionProjectionDto::new(
-            ProjectId::new(),
-            session_id,
-            WorkspaceId::new(),
-            fixture_workspace_root(),
-            RunModeDto::Build,
-            None,
-            Some(RunProjectionDto::new(
-                session_id,
-                RunId::new(),
-                TurnId::new(),
-                RunStatusDto::Running,
-                ConfigRevisionId::new(),
-            )),
-            Vec::new(),
-        )
-        .expect("coherent session projection is valid");
-        assert_eq!(projection.session_id(), session_id);
-        assert_eq!(
-            projection.active_run().map(RunProjectionDto::status),
-            Some(RunStatusDto::Running)
-        );
-    }
-
-    #[test]
-    fn run_status_transitions_accept_only_declared_edges() {
-        let statuses = [
-            RunStatusDto::Starting,
-            RunStatusDto::Running,
-            RunStatusDto::Completed,
-            RunStatusDto::Failed,
-            RunStatusDto::Interrupted,
-        ];
-        for from in statuses {
-            for to in statuses {
-                let allowed = matches!(
-                    (from, to),
-                    (RunStatusDto::Starting, RunStatusDto::Running)
-                        | (RunStatusDto::Starting, RunStatusDto::Failed)
-                        | (RunStatusDto::Starting, RunStatusDto::Interrupted)
-                        | (RunStatusDto::Running, RunStatusDto::Completed)
-                        | (RunStatusDto::Running, RunStatusDto::Failed)
-                        | (RunStatusDto::Running, RunStatusDto::Interrupted)
-                );
-                assert_eq!(
-                    validate_run_status_transition(from, to).is_ok(),
-                    allowed,
-                    "unexpected run transition: {from:?} -> {to:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn transcript_rows_validate_their_closed_shapes() {
-        let session_id = SessionId::new();
-        let run_id = RunId::new();
-        let call_id = ToolCallId::new();
-        assert!(
-            MessageProjectionDto::new(
-                session_id,
-                Some(run_id),
-                MessageKindDto::User,
-                "hello",
-                None,
-                None,
-                None,
-            )
-            .is_ok()
-        );
-        assert!(
-            MessageProjectionDto::new(
-                session_id,
-                Some(run_id),
-                MessageKindDto::Assistant,
-                "answer",
-                Some("reasoning".to_owned()),
-                None,
-                None,
-            )
-            .is_ok()
-        );
-        assert!(
-            MessageProjectionDto::new(
-                session_id,
-                Some(run_id),
-                MessageKindDto::ToolCall,
-                "{\"path\":\"src/lib.rs\"}",
-                None,
-                Some(call_id),
-                Some("read".to_owned()),
-            )
-            .is_ok()
-        );
-        assert!(
-            MessageProjectionDto::new(
-                session_id,
-                Some(run_id),
-                MessageKindDto::ToolResult,
-                "contents",
-                Some("reasoning".to_owned()),
-                Some(call_id),
-                Some("read".to_owned()),
-            )
-            .is_err()
-        );
-        assert!(
-            MessageProjectionDto::new(
-                session_id,
-                Some(run_id),
-                MessageKindDto::ToolResult,
-                " ",
-                None,
-                Some(call_id),
-                Some("read".to_owned()),
-            )
-            .is_err()
-        );
-        assert!(
-            MessageProjectionDto::new(
-                session_id,
-                Some(run_id),
-                MessageKindDto::Notice,
-                "notice",
-                None,
-                Some(call_id),
-                Some("read".to_owned()),
-            )
-            .is_err()
-        );
-        assert!(
-            MessageProjectionDto::new(
-                session_id,
-                Some(run_id),
-                MessageKindDto::ToolCall,
-                "{}",
-                None,
-                None,
-                Some("read".to_owned()),
-            )
-            .is_err()
-        );
-        let decoded: MessageProjectionDto = serde_json::from_str(
-            &serde_json::to_string(
-                &MessageProjectionDto::new(
-                    session_id,
-                    None,
-                    MessageKindDto::Notice,
-                    "a notice",
-                    None,
-                    None,
-                    None,
-                )
-                .expect("notice row is valid"),
-            )
-            .expect("notice row serializes"),
-        )
-        .expect("notice row deserializes");
-        assert_eq!(decoded.kind(), MessageKindDto::Notice);
-        assert_eq!(decoded.run_id(), None);
     }
 }

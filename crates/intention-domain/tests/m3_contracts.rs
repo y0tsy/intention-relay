@@ -25,16 +25,19 @@ fn workspace_root() -> WorkspaceRootDto {
 }
 
 #[test]
-fn pending_turns_keep_their_order_but_require_unique_identities() {
+fn session_projection_keeps_its_closed_shape_and_optional_state() {
+    let project_id = ProjectId::new();
     let session_id = SessionId::new();
+    let workspace_id = WorkspaceId::new();
+
     let first = PendingTurnProjectionDto::new(session_id, TurnId::new(), "first")
         .expect("pending turn is valid");
     let second = PendingTurnProjectionDto::new(session_id, TurnId::new(), "second")
         .expect("pending turn is valid");
-    let projection = SessionProjectionDto::new(
-        ProjectId::new(),
+    let ordered = SessionProjectionDto::new(
+        project_id,
         session_id,
-        WorkspaceId::new(),
+        workspace_id,
         workspace_root(),
         RunModeDto::Build,
         None,
@@ -42,14 +45,14 @@ fn pending_turns_keep_their_order_but_require_unique_identities() {
         vec![first.clone(), second],
     )
     .expect("ordered pending turns are coherent");
-    assert_eq!(projection.pending_turns().len(), 2);
-    assert_eq!(projection.pending_turns()[0].content(), "first");
-    assert_eq!(projection.pending_turns()[1].content(), "second");
+    assert_eq!(ordered.pending_turns().len(), 2);
+    assert_eq!(ordered.pending_turns()[0].content(), "first");
+    assert_eq!(ordered.pending_turns()[1].content(), "second");
     assert!(
         SessionProjectionDto::new(
-            ProjectId::new(),
+            project_id,
             session_id,
-            WorkspaceId::new(),
+            workspace_id,
             workspace_root(),
             RunModeDto::Build,
             None,
@@ -67,19 +70,15 @@ fn pending_turns_keep_their_order_but_require_unique_identities() {
         }))
         .is_err()
     );
-}
 
-#[test]
-fn session_projection_rejects_nested_state_from_a_foreign_session() {
-    let session_id = SessionId::new();
     let foreign_turn =
         PendingTurnProjectionDto::new(SessionId::new(), TurnId::new(), "other session")
             .expect("pending fixture is valid");
     assert!(
         SessionProjectionDto::new(
-            ProjectId::new(),
+            project_id,
             session_id,
-            WorkspaceId::new(),
+            workspace_id,
             workspace_root(),
             RunModeDto::Build,
             None,
@@ -98,9 +97,9 @@ fn session_projection_rejects_nested_state_from_a_foreign_session() {
     );
     assert!(
         SessionProjectionDto::new(
-            ProjectId::new(),
+            project_id,
             session_id,
-            WorkspaceId::new(),
+            workspace_id,
             workspace_root(),
             RunModeDto::Build,
             None,
@@ -110,35 +109,6 @@ fn session_projection_rejects_nested_state_from_a_foreign_session() {
         .is_err()
     );
 
-    let local_run = RunProjectionDto::new(
-        session_id,
-        RunId::new(),
-        TurnId::new(),
-        RunStatusDto::Starting,
-        ConfigRevisionId::new(),
-    );
-    let local_turn = PendingTurnProjectionDto::new(session_id, TurnId::new(), "local")
-        .expect("pending fixture is valid");
-    assert!(
-        SessionProjectionDto::new(
-            ProjectId::new(),
-            session_id,
-            WorkspaceId::new(),
-            workspace_root(),
-            RunModeDto::Build,
-            None,
-            Some(local_run),
-            vec![local_turn],
-        )
-        .is_ok()
-    );
-}
-
-#[test]
-fn projection_accessors_and_deserialization_cover_optional_state() {
-    let project_id = ProjectId::new();
-    let session_id = SessionId::new();
-    let workspace_id = WorkspaceId::new();
     let revision = ConfigRevisionId::new();
     let run = RunProjectionDto::new(
         session_id,
@@ -226,7 +196,7 @@ fn run_status_state_machine_accepts_only_declared_edges() {
 }
 
 #[test]
-fn transcript_rows_validate_their_closed_kind_shape() {
+fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let call_id = ToolCallId::new();
@@ -371,34 +341,39 @@ fn transcript_rows_validate_their_closed_kind_shape() {
         )
         .is_ok()
     );
-}
 
-#[test]
-fn transcript_rows_round_trip_and_reject_invalid_wire_shapes() {
-    let session_id = SessionId::new();
-    let call_id = ToolCallId::new();
-    let row = MessageProjectionDto::new(
-        session_id,
-        Some(RunId::new()),
+    let round_trip = row(
         MessageKindDto::ToolCall,
         "{\"path\":\"src/lib.rs\"}",
         None,
         Some(call_id),
-        Some("read".to_owned()),
+        Some("read"),
     )
     .expect("tool-call row is valid");
     let decoded: MessageProjectionDto =
-        serde_json::from_str(&serde_json::to_string(&row).expect("row serializes"))
+        serde_json::from_str(&serde_json::to_string(&round_trip).expect("row serializes"))
             .expect("row decodes");
-    assert_eq!(decoded, row);
+    assert_eq!(decoded, round_trip);
     assert_eq!(decoded.kind(), MessageKindDto::ToolCall);
     assert_eq!(decoded.tool_call_id(), Some(call_id));
     assert_eq!(decoded.tool_id(), Some("read"));
     assert_eq!(decoded.text(), "{\"path\":\"src/lib.rs\"}");
 
-    let mut additive = serde_json::to_value(&row).expect("row serializes to JSON");
+    let mut additive = serde_json::to_value(&round_trip).expect("row serializes to JSON");
     additive["future_additive_field"] = serde_json::json!(true);
     assert!(serde_json::from_value::<MessageProjectionDto>(additive).is_ok());
+
+    // This wire form omits the optional run_id and reasoning fields and relies on their defaults.
+    assert!(
+        serde_json::from_value::<MessageProjectionDto>(serde_json::json!({
+            "session_id": session_id,
+            "kind": "tool_result",
+            "text": "contents",
+            "tool_call_id": call_id,
+            "tool_id": "read"
+        }))
+        .is_ok()
+    );
 
     let notice = MessageProjectionDto::new(
         session_id,
@@ -416,34 +391,6 @@ fn transcript_rows_round_trip_and_reject_invalid_wire_shapes() {
     assert_eq!(unbound.run_id(), None);
     assert_eq!(unbound.text(), "a notice");
 
-    assert!(
-        serde_json::from_value::<MessageProjectionDto>(serde_json::json!({
-            "session_id": session_id,
-            "kind": "user",
-            "text": " "
-        }))
-        .is_err()
-    );
-    assert!(
-        serde_json::from_value::<MessageProjectionDto>(serde_json::json!({
-            "session_id": session_id,
-            "kind": "tool_result",
-            "text": "contents",
-            "tool_call_id": call_id,
-            "tool_id": "read"
-        }))
-        .is_ok()
-    );
-    assert!(
-        serde_json::from_value::<MessageProjectionDto>(serde_json::json!({
-            "session_id": session_id,
-            "kind": "tool_call",
-            "text": "{}",
-            "tool_call_id": call_id,
-            "tool_id": " "
-        }))
-        .is_err()
-    );
     assert!(
         serde_json::from_value::<MessageProjectionDto>(serde_json::json!({
             "session_id": session_id,

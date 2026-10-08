@@ -12,7 +12,6 @@ fn tool_result_status_set_is_closed_to_terminal_outcomes() {
     for status in [
         ToolResultStatusDto::Completed,
         ToolResultStatusDto::Failed,
-        ToolResultStatusDto::Cancelled,
         ToolResultStatusDto::Partial,
     ] {
         let wire = serde_json::to_string(&status).expect("status serializes");
@@ -26,10 +25,6 @@ fn tool_result_status_set_is_closed_to_terminal_outcomes() {
     assert_eq!(
         serde_json::to_value(ToolResultStatusDto::Failed).expect("status serializes to JSON"),
         serde_json::json!("failed")
-    );
-    assert_eq!(
-        serde_json::to_value(ToolResultStatusDto::Cancelled).expect("status serializes to JSON"),
-        serde_json::json!("cancelled")
     );
     assert_eq!(
         serde_json::to_value(ToolResultStatusDto::Partial).expect("status serializes to JSON"),
