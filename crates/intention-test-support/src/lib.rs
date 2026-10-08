@@ -1,9 +1,12 @@
 //! Non-production fixtures for durable integration tests.
 
+mod model_fixtures;
+
 use std::path::Path;
 
 use tempfile::TempDir;
 
+pub use crate::model_fixtures::{ScriptedDriver, run_ready};
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
@@ -16,6 +19,12 @@ use intention_proto::{
 };
 use intention_proto::{ProtocolCommandDto, ProtocolCommandResultDto};
 use intention_transport::{AsyncLocalListener, LocalEndpoint};
+
+/// The provider credential every fixture snapshot carries.
+///
+/// Suites assert against this constant instead of repeating the literal, so a
+/// fixture change can never silently drift away from the assertions.
+pub const FIXTURE_CREDENTIAL: &str = "fixture-secret";
 
 /// Opens a durable facade at an explicit test-only database path.
 ///
@@ -41,6 +50,24 @@ pub fn open_fixture_facade(path: impl AsRef<Path>) -> DtoResult<DaemonApplicatio
 /// Returns a credential-free fixture snapshot with a native absolute source path.
 #[must_use]
 pub fn fixture_snapshot() -> ConfigSnapshotDto {
+    fixture_snapshot_with_model("fixture")
+}
+
+/// Returns a fixture snapshot that explicitly selects one provider model.
+#[must_use]
+pub fn fixture_snapshot_with_model(model: &str) -> ConfigSnapshotDto {
+    fixture_snapshot_with_context_window(model, None)
+}
+
+/// Returns a fixture snapshot with the exact context-window policy the caller requests.
+///
+/// `None` keeps the resolved configuration's default window policy; `Some`
+/// writes the window token pair the sliding-window fixtures drive.
+#[must_use]
+pub fn fixture_snapshot_with_context_window(
+    model: &str,
+    context_window: Option<(u64, u64)>,
+) -> ConfigSnapshotDto {
     let source = ConfigSourceDto::Explicit(
         ConfigPathDto::parse(
             std::env::temp_dir()
@@ -50,8 +77,13 @@ pub fn fixture_snapshot() -> ConfigSnapshotDto {
         )
         .unwrap_or_else(|_| unreachable!("fixture configuration source is absolute")),
     );
+    let context_window = context_window.map_or_else(String::new, |(window, capacity)| {
+        format!("context_window_tokens = {window}\ncontext_capacity_tokens = {capacity}\n")
+    });
     let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-        "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"",
+        format!(
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"{FIXTURE_CREDENTIAL}\"\n{context_window}"
+        ),
         source,
     ))
     .unwrap_or_else(|_| unreachable!("fixture configuration resolves"));

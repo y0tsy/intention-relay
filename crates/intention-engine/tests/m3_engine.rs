@@ -3,36 +3,32 @@
     reason = "Focused application fixtures use expect to provide precise test failures."
 )]
 
+mod common;
+
 use std::cell::RefCell;
 use std::fs;
 use std::sync::{Arc, Mutex};
 
-use intention_config::{
-    ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
-};
+use common::{FakeRepository, RecordingDispatchPort, workspace_root};
+use intention_config::ConfigSnapshotDto;
 use intention_domain::ToolResultStatusDto;
 use intention_engine::{
     ApplicationService, LocalToolInvocationOutcomeDto, ModelCancellationSignal,
-    ModelRunDispatchPort, ModelRunExecutionInputDto, ToolInvocationRequestDto,
-    ToolResultPublicationPort, WorkspaceBoundaryPort,
+    ToolInvocationRequestDto, ToolResultPublicationPort, WorkspaceBoundaryPort,
 };
 use intention_engine::{ModelMessageDto, ModelRoleDto};
-use intention_proto::{
-    ConfigRevisionId, DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SchemaVersionDto,
-    SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
-};
 use intention_proto::{
     CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
     PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
     SendUserTurnCommandDto, SessionProjectionDto, WorkspaceRootDto,
 };
-use intention_proto::{ProtocolAcceptedResultDto, SendUserTurnOutcomeDto};
-use intention_storage::{
-    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,
-    ConsumePendingUserTurnsInputDto, CreateSessionInputDto, FinishRunInputDto,
-    RecoverUnfinishedRunsInputDto, RemoveTurnInputDto, StartingRunModelContextDto,
-    StorageRepositoryDto, ToolResultEvidenceDto, TransitionRunInputDto, WriteToolResultInputDto,
+use intention_proto::{
+    DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, TimestampDto, ToolCallId,
+    TurnId, WorkspaceId,
 };
+use intention_proto::{ProtocolAcceptedResultDto, SendUserTurnOutcomeDto};
+use intention_storage::{AcceptedTurnOutcomeDto, StartingRunModelContextDto};
+use intention_test_support::fixture_snapshot;
 use intention_tools::{
     BoundedText, CancellationSignal, ExecuteInput, Hook, HookRegistry, Outcome as HookOutcome,
     Phase, PhaseContext, ReadInput, TextResult, ToolInput, ToolResult, WorkspaceRoot,
@@ -141,40 +137,6 @@ fn completed_outcome(outcome: LocalToolInvocationOutcomeDto) -> ToolResult {
     }
 }
 
-fn snapshot() -> ConfigSnapshotDto {
-    let source = ConfigSourceDto::Explicit(
-        ConfigPathDto::parse(
-            std::env::temp_dir()
-                .join("intention-application-test.toml")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("fixture path is absolute"),
-    );
-    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-        "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-secret\"",
-        source,
-    ))
-    .expect("fixture config resolves");
-    ConfigSnapshotDto::new(
-        SchemaVersionDto::new(1, 0),
-        ConfigRevisionId::new(),
-        fixture_time(),
-        resolved,
-    )
-    .expect("fixture snapshot is valid")
-}
-
-fn workspace_root() -> WorkspaceRootDto {
-    WorkspaceRootDto::parse(
-        std::env::temp_dir()
-            .join("intention-application-workspace")
-            .to_string_lossy()
-            .into_owned(),
-    )
-    .expect("native fixture workspace is valid")
-}
-
 fn projection(
     session_id: SessionId,
     active_run: Option<RunProjectionDto>,
@@ -191,240 +153,6 @@ fn projection(
         pending_turns,
     )
     .expect("fixture projection is valid")
-}
-
-/// Fixture repository over the current-state transactional repository contract.
-///
-/// It records every committed transcript row and tool result, serves the
-/// command/query fixtures, and can fail selected commit ordinals so ordering
-/// guarantees stay observable.
-struct FakeRepository {
-    created: RefCell<Option<SessionProjectionDto>>,
-    accepted: RefCell<DtoResult<AcceptedTurnOutcomeDto>>,
-    accepted_inputs: RefCell<Vec<AcceptUserTurnInputDto>>,
-    removed: RefCell<Option<PendingTurnProjectionDto>>,
-    loaded_projection: RefCell<Option<SessionProjectionDto>>,
-    recent_messages: RefCell<Vec<MessageProjectionDto>>,
-    starting_context: RefCell<Option<StartingRunModelContextDto>>,
-    run: RefCell<Option<RunProjectionDto>>,
-    finishes: RefCell<Vec<FinishRunInputDto>>,
-    messages: RefCell<Vec<MessageProjectionDto>>,
-    tool_results: RefCell<Vec<ToolResultEvidenceDto>>,
-    commit_calls: RefCell<usize>,
-    commit_failures: RefCell<Vec<usize>>,
-    commit_error: RefCell<Option<ErrorDto>>,
-}
-
-impl FakeRepository {
-    const fn with_accepted(accepted: DtoResult<AcceptedTurnOutcomeDto>) -> Self {
-        Self {
-            created: RefCell::new(None),
-            accepted: RefCell::new(accepted),
-            accepted_inputs: RefCell::new(Vec::new()),
-            removed: RefCell::new(None),
-            loaded_projection: RefCell::new(None),
-            recent_messages: RefCell::new(Vec::new()),
-            starting_context: RefCell::new(None),
-            run: RefCell::new(None),
-            finishes: RefCell::new(Vec::new()),
-            messages: RefCell::new(Vec::new()),
-            tool_results: RefCell::new(Vec::new()),
-            commit_calls: RefCell::new(0),
-            commit_failures: RefCell::new(Vec::new()),
-            commit_error: RefCell::new(None),
-        }
-    }
-
-    /// Returns the next one-based commit ordinal, or the selected injected failure.
-    fn next_commit(&self) -> DtoResult<usize> {
-        if let Some(error) = self.commit_error.borrow().clone() {
-            return Err(error);
-        }
-        let ordinal = {
-            let mut calls = self.commit_calls.borrow_mut();
-            *calls += 1;
-            *calls
-        };
-        if self.commit_failures.borrow().contains(&ordinal) {
-            return Err(ErrorDto::unavailable(
-                "append_unavailable",
-                "append refused at the selected call",
-            ));
-        }
-        Ok(ordinal)
-    }
-
-    fn committed_messages(&self) -> Vec<MessageProjectionDto> {
-        self.messages.borrow().clone()
-    }
-
-    fn committed_results(&self) -> Vec<ToolResultEvidenceDto> {
-        self.tool_results.borrow().clone()
-    }
-
-    fn completed_result_count(&self) -> usize {
-        self.committed_results()
-            .iter()
-            .filter(|row| row.status() == ToolResultStatusDto::Completed)
-            .count()
-    }
-}
-
-impl StorageRepositoryDto for FakeRepository {
-    fn create_session(&self, _input: CreateSessionInputDto) -> DtoResult<SessionProjectionDto> {
-        self.created.borrow().clone().ok_or_else(|| {
-            ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
-        })
-    }
-
-    fn accept_user_turn(&self, input: AcceptUserTurnInputDto) -> DtoResult<AcceptedTurnOutcomeDto> {
-        self.accepted_inputs.borrow_mut().push(input);
-        self.accepted.borrow().clone()
-    }
-
-    fn remove_turn(&self, _input: RemoveTurnInputDto) -> DtoResult<PendingTurnProjectionDto> {
-        self.removed.borrow().clone().ok_or_else(|| {
-            ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
-        })
-    }
-
-    fn consume_pending_user_turns(
-        &self,
-        _input: ConsumePendingUserTurnsInputDto,
-    ) -> DtoResult<Vec<MessageProjectionDto>> {
-        Err(ErrorDto::unavailable(
-            "fixture_unused",
-            "pending joins are not used by this fixture",
-        ))
-    }
-
-    fn transition_run(&self, _input: TransitionRunInputDto) -> DtoResult<RunProjectionDto> {
-        Err(ErrorDto::unavailable(
-            "fixture_unused",
-            "transitions are not used by this fixture",
-        ))
-    }
-
-    fn finish_run(&self, input: FinishRunInputDto) -> DtoResult<RunProjectionDto> {
-        let run = (*self.run.borrow()).ok_or_else(|| {
-            ErrorDto::unavailable("fixture_missing_result", "fixture run missing")
-        })?;
-        let status = input.status();
-        self.finishes.borrow_mut().push(input);
-        Ok(RunProjectionDto::new(
-            run.session_id(),
-            run.run_id(),
-            run.turn_id(),
-            status,
-            run.config_revision_id(),
-        ))
-    }
-
-    fn append_message(&self, input: AppendMessageInputDto) -> DtoResult<MessageProjectionDto> {
-        self.next_commit()?;
-        let message = input.message().clone();
-        self.messages.borrow_mut().push(message.clone());
-        Ok(message)
-    }
-
-    fn write_tool_result(
-        &self,
-        input: WriteToolResultInputDto,
-    ) -> DtoResult<ToolResultEvidenceDto> {
-        self.next_commit()?;
-        let evidence = input.evidence().clone();
-        self.tool_results.borrow_mut().push(evidence.clone());
-        self.messages.borrow_mut().push(input.message().clone());
-        Ok(evidence)
-    }
-
-    fn load_tool_result(
-        &self,
-        _session_id: SessionId,
-        _run_id: RunId,
-        _call_id: ToolCallId,
-    ) -> DtoResult<ToolResultEvidenceDto> {
-        Err(ErrorDto::unavailable(
-            "fixture_unused",
-            "tool result loads are not used by this fixture",
-        ))
-    }
-
-    fn load_run_config_snapshot(
-        &self,
-        _session_id: SessionId,
-        _run_id: RunId,
-    ) -> DtoResult<ConfigSnapshotDto> {
-        Err(ErrorDto::unavailable(
-            "fixture_unused",
-            "run configuration loads are not used by this fixture",
-        ))
-    }
-
-    fn load_starting_run_model_context(
-        &self,
-        _session_id: SessionId,
-        _run_id: RunId,
-    ) -> DtoResult<StartingRunModelContextDto> {
-        self.starting_context.borrow().clone().ok_or_else(|| {
-            ErrorDto::unavailable(
-                "run_model_context_unavailable",
-                "the durable run model context is unavailable",
-            )
-        })
-    }
-
-    fn load_run_projection(
-        &self,
-        _session_id: SessionId,
-        _run_id: RunId,
-    ) -> DtoResult<RunProjectionDto> {
-        (*self.run.borrow())
-            .ok_or_else(|| ErrorDto::unavailable("fixture_missing_result", "fixture run missing"))
-    }
-
-    fn load_session_projection(&self, _session_id: SessionId) -> DtoResult<SessionProjectionDto> {
-        self.loaded_projection.borrow().clone().ok_or_else(|| {
-            ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
-        })
-    }
-
-    fn load_recent_messages(
-        &self,
-        _session_id: SessionId,
-        _limit: u32,
-    ) -> DtoResult<Vec<MessageProjectionDto>> {
-        Ok(self.recent_messages.borrow().clone())
-    }
-
-    fn load_run_messages(
-        &self,
-        _session_id: SessionId,
-        _run_id: RunId,
-        _limit: u32,
-    ) -> DtoResult<Vec<MessageProjectionDto>> {
-        Err(ErrorDto::unavailable(
-            "fixture_unused",
-            "run message loads are not used by this fixture",
-        ))
-    }
-
-    fn recover_unfinished_runs(
-        &self,
-        _input: RecoverUnfinishedRunsInputDto,
-    ) -> DtoResult<Vec<RunProjectionDto>> {
-        Err(ErrorDto::unavailable(
-            "fixture_unused",
-            "recovery is not used by this fixture",
-        ))
-    }
-
-    fn accept_configuration_revision(&self, _snapshot: ConfigSnapshotDto) -> DtoResult<()> {
-        Err(ErrorDto::unavailable(
-            "fixture_unused",
-            "configuration acceptance is not used by this fixture",
-        ))
-    }
 }
 
 fn hello_tool_root(tag: &str) -> std::path::PathBuf {
@@ -659,7 +387,7 @@ fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection
     let command = SendUserTurnCommandDto::new(SessionId::new(), IdempotencyKey::new(), "hello")
         .expect("command is valid");
     let proposed_run_id = RunId::new();
-    let config = snapshot();
+    let config = fixture_snapshot();
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable(
         "turn_admission_unavailable",
         "the durable session refused the turn",
@@ -920,7 +648,7 @@ fn post_execution_result_phases_cover_rejection_and_invalid_input() {
 fn interrupt_run_workflow_maps_durable_results() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot();
+    let config = fixture_snapshot();
     let state = projection(
         session_id,
         Some(RunProjectionDto::new(
@@ -2029,19 +1757,6 @@ fn tool_call_row_commits_the_canonical_arguments_document() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[derive(Default)]
-struct RecordingDispatchPort {
-    inputs: RefCell<Vec<ModelRunExecutionInputDto>>,
-    failure: RefCell<Option<ErrorDto>>,
-}
-
-impl ModelRunDispatchPort for RecordingDispatchPort {
-    fn dispatch_model_run(&self, input: ModelRunExecutionInputDto) -> DtoResult<()> {
-        self.inputs.borrow_mut().push(input);
-        self.failure.borrow_mut().take().map_or(Ok(()), Err)
-    }
-}
-
 struct RejectingWorkspaceBoundary;
 
 impl WorkspaceBoundaryPort for RejectingWorkspaceBoundary {
@@ -2278,7 +1993,7 @@ fn send_user_turn_and_schedule_propagates_admission_failures() {
         .send_user_turn_and_schedule(
             send_command(session_id),
             RunId::new(),
-            snapshot(),
+            fixture_snapshot(),
             fixture_time(),
             &dispatch,
         )
@@ -2306,7 +2021,7 @@ fn send_user_turn_and_schedule_returns_queued_acceptance_without_dispatching() {
         .send_user_turn_and_schedule(
             send_command(session_id),
             RunId::new(),
-            snapshot(),
+            fixture_snapshot(),
             fixture_time(),
             &dispatch,
         )
@@ -2328,7 +2043,7 @@ fn send_user_turn_and_schedule_dispatches_the_committed_starting_run() {
     let session_id = SessionId::new();
     let turn_id = TurnId::new();
     let run_id = RunId::new();
-    let config = snapshot();
+    let config = fixture_snapshot();
     let run = starting_run(session_id, run_id, turn_id, &config);
     let repository = FakeRepository::with_accepted(Ok(AcceptedTurnOutcomeDto::Started {
         run,
@@ -2381,7 +2096,7 @@ fn send_user_turn_and_schedule_preserves_acceptance_when_context_is_unusable() {
         let session_id = SessionId::new();
         let turn_id = TurnId::new();
         let run_id = RunId::new();
-        let config = snapshot();
+        let config = fixture_snapshot();
         let run = starting_run(session_id, run_id, turn_id, &config);
         let repository = FakeRepository::with_accepted(Ok(AcceptedTurnOutcomeDto::Started {
             run,
@@ -2423,7 +2138,7 @@ fn send_user_turn_and_schedule_preserves_acceptance_when_dispatch_fails() {
     let session_id = SessionId::new();
     let turn_id = TurnId::new();
     let run_id = RunId::new();
-    let config = snapshot();
+    let config = fixture_snapshot();
     let run = starting_run(session_id, run_id, turn_id, &config);
     let repository = FakeRepository::with_accepted(Ok(AcceptedTurnOutcomeDto::Started {
         run,
@@ -2463,7 +2178,7 @@ fn send_user_turn_and_schedule_preserves_acceptance_when_dispatch_fails() {
 fn schedule_starting_run_maps_durable_context_into_the_dispatch_dto() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot();
+    let config = fixture_snapshot();
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     *repository.starting_context.borrow_mut() = Some(starting_context(session_id, run_id, &config));
     let scheduled = ApplicationService::new(&repository)

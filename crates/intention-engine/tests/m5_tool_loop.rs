@@ -3,98 +3,31 @@
     reason = "Execution fixtures use expect to provide precise failures."
 )]
 
-use std::{cell::RefCell, collections::VecDeque, future, sync::mpsc, time::Duration};
+mod common;
 
+use std::{collections::VecDeque, future, sync::mpsc, time::Duration};
+
+use common::{
+    FakeRepository, ImmediateTime, RecordingCommitObserver, RecordingTime, ScriptedPort, time,
+};
 use futures_util::{StreamExt, stream};
-use intention_config::{
-    ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
-};
+use intention_config::ConfigSnapshotDto;
 use intention_engine::{
-    ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,
-    ModelRunExecutionOutcomeDto, ModelRunExecutionService, ModelSleepFuture, ModelTimePort,
-    ToolExecutionPort, ToolResultOutcomeDto,
+    ModelRunCommitDto, ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto,
+    ModelRunExecutionService, ModelSleepFuture, ModelTimePort, ToolExecutionPort,
+    ToolResultOutcomeDto,
 };
-use intention_proto::{
-    ConfigRevisionId, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto, SessionId,
-    TimestampDto, ToolCallId, TurnId, WorkspaceId,
-};
-use intention_proto::{
-    MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto, RunStatusDto,
-    SessionProjectionDto, WorkspaceRootDto,
-};
+use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto, ToolCallId};
+use intention_proto::{MessageKindDto, MessageProjectionDto, RunStatusDto};
 use intention_providers::{
     AssistantReasoningDto, FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto,
     ModelDriver, ModelEventDto, ModelEventStream, ModelExecutionDriver, ModelMessageDto,
     ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto,
 };
-use intention_storage::{
-    AppendMessageInputDto, ConsumePendingUserTurnsInputDto, CreateSessionInputDto,
-    FinishRunInputDto, RemoveTurnInputDto, StorageRepositoryDto, TransitionRunInputDto,
-    WriteToolResultInputDto,
+use intention_storage::TransitionRunInputDto;
+use intention_test_support::{
+    ScriptedDriver, fixture_snapshot_with_context_window, fixture_snapshot_with_model, run_ready,
 };
-
-fn time(value: i64) -> TimestampDto {
-    TimestampDto::from_unix_seconds(value).expect("fixture timestamp is valid")
-}
-
-fn snapshot(model: &str) -> ConfigSnapshotDto {
-    snapshot_with_context_window(model, None)
-}
-
-/// Builds one frozen run configuration, optionally overriding the context
-/// window policy so a test can drive the sliding window deterministically.
-fn snapshot_with_context_window(
-    model: &str,
-    context_window: Option<(u64, u64)>,
-) -> ConfigSnapshotDto {
-    let source = ConfigSourceDto::Explicit(
-        ConfigPathDto::parse(
-            std::env::temp_dir()
-                .join("intention-runtime-tool-loop.toml")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("fixture path is absolute"),
-    );
-    let context_window = context_window.map_or_else(String::new, |(window, capacity)| {
-        format!("context_window_tokens = {window}\ncontext_capacity_tokens = {capacity}\n")
-    });
-    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-        format!("schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"fixture-secret\"\n{context_window}"),
-        source,
-    ))
-    .expect("fixture config resolves");
-    ConfigSnapshotDto::new(
-        SchemaVersionDto::new(1, 0),
-        ConfigRevisionId::new(),
-        time(1),
-        resolved,
-    )
-    .expect("fixture snapshot is valid")
-}
-
-struct ImmediateTime {
-    sleeps: RefCell<Vec<Duration>>,
-}
-
-impl ImmediateTime {
-    const fn new() -> Self {
-        Self {
-            sleeps: RefCell::new(Vec::new()),
-        }
-    }
-}
-
-impl ModelTimePort for ImmediateTime {
-    fn now(&self) -> TimestampDto {
-        time(2)
-    }
-
-    fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
-        self.sleeps.borrow_mut().push(duration);
-        Box::pin(future::ready(()))
-    }
-}
 
 fn tool_definition() -> ModelToolDefinitionDto {
     ModelToolDefinitionDto::new(
@@ -123,298 +56,6 @@ fn request(run_id: RunId, model: &str) -> ModelRequestDto {
 const fn cache_breakpoint(mut message: ModelMessageDto) -> ModelMessageDto {
     message.set_cache_control(true);
     message
-}
-
-/// Records every committed transcript row, terminal outcome, and transition.
-struct FakeRepository {
-    session_id: SessionId,
-    run_id: RunId,
-    turn_id: TurnId,
-    config: ConfigSnapshotDto,
-    status: RefCell<RunStatusDto>,
-    messages: RefCell<Vec<MessageProjectionDto>>,
-    finishes: RefCell<Vec<FinishRunInputDto>>,
-    transitions: RefCell<Vec<TransitionRunInputDto>>,
-    tool_results: RefCell<Vec<WriteToolResultInputDto>>,
-    config_error: RefCell<Option<ErrorDto>>,
-    append_failure: RefCell<Option<ErrorDto>>,
-    fail_append_at: RefCell<Option<usize>>,
-    append_count: RefCell<usize>,
-    cancel_after_append: RefCell<Option<(usize, ModelCancellationSignal)>>,
-    transition_failure: RefCell<Option<(RunStatusDto, ErrorDto)>>,
-    /// Pending user messages committed by the next context boundary.
-    pending: RefCell<VecDeque<MessageProjectionDto>>,
-    pending_consumes: RefCell<usize>,
-}
-
-impl FakeRepository {
-    fn new(session_id: SessionId, run_id: RunId, config: ConfigSnapshotDto) -> Self {
-        Self {
-            session_id,
-            run_id,
-            turn_id: TurnId::new(),
-            config,
-            status: RefCell::new(RunStatusDto::Starting),
-            messages: RefCell::new(Vec::new()),
-            finishes: RefCell::new(Vec::new()),
-            transitions: RefCell::new(Vec::new()),
-            tool_results: RefCell::new(Vec::new()),
-            config_error: RefCell::new(None),
-            append_failure: RefCell::new(None),
-            fail_append_at: RefCell::new(None),
-            append_count: RefCell::new(0),
-            cancel_after_append: RefCell::new(None),
-            transition_failure: RefCell::new(None),
-            pending: RefCell::new(VecDeque::new()),
-            pending_consumes: RefCell::new(0),
-        }
-    }
-
-    fn projection(&self) -> RunProjectionDto {
-        RunProjectionDto::new(
-            self.session_id,
-            self.run_id,
-            self.turn_id,
-            *self.status.borrow(),
-            self.config.revision_id(),
-        )
-    }
-}
-
-impl StorageRepositoryDto for FakeRepository {
-    fn create_session(&self, _input: CreateSessionInputDto) -> DtoResult<SessionProjectionDto> {
-        Err(ErrorDto::unavailable("fixture_unused", "unused"))
-    }
-
-    fn accept_user_turn(
-        &self,
-        _input: intention_storage::AcceptUserTurnInputDto,
-    ) -> DtoResult<intention_storage::AcceptedTurnOutcomeDto> {
-        Err(ErrorDto::unavailable("fixture_unused", "unused"))
-    }
-
-    fn remove_turn(
-        &self,
-        _input: RemoveTurnInputDto,
-    ) -> DtoResult<intention_proto::PendingTurnProjectionDto> {
-        Err(ErrorDto::unavailable("fixture_unused", "unused"))
-    }
-
-    fn consume_pending_user_turns(
-        &self,
-        input: ConsumePendingUserTurnsInputDto,
-    ) -> DtoResult<Vec<MessageProjectionDto>> {
-        assert_eq!(input.session_id(), self.session_id);
-        assert_eq!(input.run_id(), self.run_id);
-        *self.pending_consumes.borrow_mut() += 1;
-        Ok(self.pending.borrow_mut().drain(..).collect())
-    }
-
-    fn transition_run(&self, input: TransitionRunInputDto) -> DtoResult<RunProjectionDto> {
-        assert_eq!(input.session_id(), self.session_id);
-        assert_eq!(input.run_id(), self.run_id);
-        if self
-            .transition_failure
-            .borrow()
-            .as_ref()
-            .is_some_and(|(status, _)| *status == input.status())
-        {
-            return Err(self
-                .transition_failure
-                .borrow_mut()
-                .take()
-                .expect("configured transition failure exists")
-                .1);
-        }
-        *self.status.borrow_mut() = input.status();
-        self.transitions.borrow_mut().push(input);
-        Ok(self.projection())
-    }
-
-    fn finish_run(&self, input: FinishRunInputDto) -> DtoResult<RunProjectionDto> {
-        assert_eq!(input.session_id(), self.session_id);
-        assert_eq!(input.run_id(), self.run_id);
-        *self.status.borrow_mut() = input.status();
-        self.finishes.borrow_mut().push(input);
-        Ok(self.projection())
-    }
-
-    fn append_message(&self, input: AppendMessageInputDto) -> DtoResult<MessageProjectionDto> {
-        let index = {
-            *self.append_count.borrow_mut() += 1;
-            *self.append_count.borrow()
-        };
-        if let Some(error) = self.append_failure.borrow_mut().take() {
-            return Err(error);
-        }
-        if self.fail_append_at.borrow().as_ref() == Some(&index) {
-            return Err(ErrorDto::unavailable(
-                "fixture_append_failure",
-                "the scripted append failed",
-            ));
-        }
-        if let Some((cancel_at, signal)) = self.cancel_after_append.borrow().as_ref()
-            && cancel_at == &index
-        {
-            signal.cancel();
-        }
-        assert_eq!(input.message().session_id(), self.session_id);
-        assert_eq!(input.message().run_id(), Some(self.run_id));
-        let message = input.message().clone();
-        self.messages.borrow_mut().push(message.clone());
-        Ok(message)
-    }
-
-    fn write_tool_result(
-        &self,
-        input: WriteToolResultInputDto,
-    ) -> DtoResult<intention_storage::ToolResultEvidenceDto> {
-        assert_eq!(input.evidence().session_id(), self.session_id);
-        assert_eq!(input.evidence().run_id(), self.run_id);
-        let evidence = input.evidence().clone();
-        self.tool_results.borrow_mut().push(input);
-        Ok(evidence)
-    }
-
-    fn load_tool_result(
-        &self,
-        _session_id: SessionId,
-        _run_id: RunId,
-        _call_id: ToolCallId,
-    ) -> DtoResult<intention_storage::ToolResultEvidenceDto> {
-        Err(ErrorDto::unavailable("fixture_unused", "unused"))
-    }
-
-    fn load_run_config_snapshot(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-    ) -> DtoResult<ConfigSnapshotDto> {
-        assert_eq!((session_id, run_id), (self.session_id, self.run_id));
-        if let Some(error) = self.config_error.borrow_mut().take() {
-            return Err(error);
-        }
-        Ok(self.config.clone())
-    }
-
-    fn load_starting_run_model_context(
-        &self,
-        _session_id: SessionId,
-        _run_id: RunId,
-    ) -> DtoResult<intention_storage::StartingRunModelContextDto> {
-        Err(ErrorDto::unavailable("fixture_unused", "unused"))
-    }
-
-    fn load_run_projection(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-    ) -> DtoResult<RunProjectionDto> {
-        assert_eq!((session_id, run_id), (self.session_id, self.run_id));
-        Ok(self.projection())
-    }
-
-    fn load_session_projection(&self, session_id: SessionId) -> DtoResult<SessionProjectionDto> {
-        assert_eq!(session_id, self.session_id);
-        SessionProjectionDto::new(
-            ProjectId::new(),
-            self.session_id,
-            WorkspaceId::new(),
-            WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
-                .expect("workspace is valid"),
-            RunModeDto::Build,
-            Some(self.config.revision_id()),
-            Some(self.projection()),
-            Vec::new(),
-        )
-    }
-
-    fn load_recent_messages(
-        &self,
-        _session_id: SessionId,
-        _limit: u32,
-    ) -> DtoResult<Vec<MessageProjectionDto>> {
-        Err(ErrorDto::unavailable("fixture_unused", "unused"))
-    }
-
-    fn load_run_messages(
-        &self,
-        _session_id: SessionId,
-        _run_id: RunId,
-        _limit: u32,
-    ) -> DtoResult<Vec<MessageProjectionDto>> {
-        Err(ErrorDto::unavailable("fixture_unused", "unused"))
-    }
-
-    fn recover_unfinished_runs(
-        &self,
-        _input: intention_storage::RecoverUnfinishedRunsInputDto,
-    ) -> DtoResult<Vec<RunProjectionDto>> {
-        Err(ErrorDto::unavailable("fixture_unused", "unused"))
-    }
-
-    fn accept_configuration_revision(&self, _snapshot: ConfigSnapshotDto) -> DtoResult<()> {
-        Err(ErrorDto::unavailable("fixture_unused", "unused"))
-    }
-}
-
-struct ScriptedDriver {
-    events: RefCell<Vec<Vec<Result<ModelEventDto, ProviderErrorDto>>>>,
-    executions: RefCell<usize>,
-    requests: RefCell<Vec<ModelRequestDto>>,
-    /// Cancels the shared signal after the given event index of the first round.
-    cancel_during_stream: RefCell<Option<(usize, ModelCancellationSignal)>>,
-}
-
-impl ScriptedDriver {
-    fn new(events: Vec<Result<ModelEventDto, ProviderErrorDto>>) -> Self {
-        Self::with_rounds(vec![events])
-    }
-
-    const fn with_rounds(rounds: Vec<Vec<Result<ModelEventDto, ProviderErrorDto>>>) -> Self {
-        Self {
-            events: RefCell::new(rounds),
-            executions: RefCell::new(0),
-            requests: RefCell::new(Vec::new()),
-            cancel_during_stream: RefCell::new(None),
-        }
-    }
-}
-
-impl ModelDriver for ScriptedDriver {
-    fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
-    }
-}
-
-impl ModelExecutionDriver for ScriptedDriver {
-    fn execute(
-        &self,
-        request: ModelRequestDto,
-        _cancellation: ModelCancellationSignal,
-    ) -> ModelEventStream {
-        let execution = {
-            let mut executions = self.executions.borrow_mut();
-            *executions += 1;
-            *executions
-        };
-        self.requests.borrow_mut().push(request);
-        let events = self.events.borrow_mut().remove(0);
-        if execution == 1
-            && let Some((index, signal)) = self.cancel_during_stream.borrow().as_ref()
-        {
-            let signal = signal.clone();
-            let index = *index;
-            let mut seen = 0usize;
-            return Box::pin(stream::iter(events).inspect(move |_| {
-                if seen == index {
-                    signal.cancel();
-                }
-                seen += 1;
-            }));
-        }
-        Box::pin(stream::iter(events))
-    }
 }
 
 /// Emits one started event, signals the test, then blocks; later rounds finish.
@@ -567,114 +208,6 @@ impl ModelTimePort for RoundSelectTime {
     }
 }
 
-/// A time port that answers immediately and records every requested delay.
-struct RecordingTime {
-    sleeps: std::sync::Mutex<Vec<Duration>>,
-}
-
-impl RecordingTime {
-    const fn new() -> Self {
-        Self {
-            sleeps: std::sync::Mutex::new(Vec::new()),
-        }
-    }
-
-    fn sleeps(&self) -> Vec<Duration> {
-        self.sleeps
-            .lock()
-            .expect("sleep recorder is available")
-            .clone()
-    }
-}
-
-impl ModelTimePort for RecordingTime {
-    fn now(&self) -> TimestampDto {
-        time(2)
-    }
-
-    fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
-        self.sleeps
-            .lock()
-            .expect("sleep recorder is available")
-            .push(duration);
-        Box::pin(future::ready(()))
-    }
-}
-
-/// Records every committed transcript row and run status.
-struct RecordingCommitObserver {
-    commits: std::sync::Mutex<Vec<ModelRunCommitDto>>,
-}
-
-impl RecordingCommitObserver {
-    const fn new() -> Self {
-        Self {
-            commits: std::sync::Mutex::new(Vec::new()),
-        }
-    }
-
-    fn commits(&self) -> Vec<ModelRunCommitDto> {
-        self.commits
-            .lock()
-            .expect("observer recorder is available")
-            .clone()
-    }
-}
-
-impl ModelRunCommitObserver for RecordingCommitObserver {
-    fn observe_model_run_commit(&self, committed: &ModelRunCommitDto) {
-        self.commits
-            .lock()
-            .expect("observer recorder is available")
-            .push(committed.clone());
-    }
-}
-
-/// Executes scripted tool outcomes and records every port invocation.
-struct ScriptedPort {
-    calls: std::sync::Mutex<Vec<(SessionId, RunId, ToolCallDto)>>,
-    outcomes: std::sync::Mutex<VecDeque<DtoResult<ToolResultOutcomeDto>>>,
-}
-
-impl ScriptedPort {
-    fn new(outcomes: Vec<DtoResult<ToolResultOutcomeDto>>) -> Self {
-        Self {
-            calls: std::sync::Mutex::new(Vec::new()),
-            outcomes: std::sync::Mutex::new(outcomes.into()),
-        }
-    }
-
-    fn calls(&self) -> Vec<(SessionId, RunId, ToolCallDto)> {
-        self.calls
-            .lock()
-            .expect("port call recorder is available")
-            .clone()
-    }
-}
-
-impl ToolExecutionPort for ScriptedPort {
-    fn execute_tool(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        call: ToolCallDto,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = DtoResult<ToolResultOutcomeDto>> + Send + '_>,
-    > {
-        self.calls
-            .lock()
-            .expect("port call recorder is available")
-            .push((session_id, run_id, call));
-        let outcome = self
-            .outcomes
-            .lock()
-            .expect("scripted outcomes are available")
-            .pop_front()
-            .expect("scripted tool outcome exists");
-        Box::pin(future::ready(outcome))
-    }
-}
-
 /// Blocks each port invocation until the test observes it and releases it.
 struct GatedPort {
     calls: std::sync::Mutex<Vec<(SessionId, RunId, ToolCallDto)>>,
@@ -791,7 +324,7 @@ fn execute(
     signal: ModelCancellationSignal,
 ) -> DtoResult<ModelRunExecutionOutcomeDto> {
     let clock = ImmediateTime::new();
-    futures_executor::block_on(
+    run_ready(
         ModelRunExecutionService::new(repository, driver, &clock, port).execute(
             ModelRunExecutionInputDto::new(
                 repository.session_id,
@@ -808,7 +341,7 @@ fn execute(
 fn tool_call_executes_tool_and_completes() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
@@ -841,7 +374,7 @@ fn tool_call_executes_tool_and_completes() {
         unreachable!("a stop reason completes the run");
     };
     assert_eq!(run.status(), RunStatusDto::Completed);
-    assert_eq!(*driver.executions.borrow(), 2);
+    assert_eq!(driver.executions(), 2);
     assert_eq!(
         port.calls().as_slice(),
         &[(session_id, run_id, call.clone())]
@@ -875,7 +408,7 @@ fn tool_call_executes_tool_and_completes() {
             .collect::<Vec<_>>(),
         vec![RunStatusDto::Running]
     );
-    let requests = driver.requests.borrow();
+    let requests = driver.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].tools(),
@@ -900,7 +433,7 @@ fn tool_call_executes_tool_and_completes() {
 fn the_window_pass_compresses_a_large_tool_result_before_the_continuation_request() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot_with_context_window("fixture", Some((60, 1_000_000)));
+    let config = fixture_snapshot_with_context_window("fixture", Some((60, 1_000_000)));
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
@@ -932,7 +465,7 @@ fn the_window_pass_compresses_a_large_tool_result_before_the_continuation_reques
         outcome,
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
-    let requests = driver.requests.borrow();
+    let requests = driver.requests();
     let messages = requests[1].messages();
     assert_eq!(messages.len(), 3, "no message is ever removed");
     assert_eq!(messages[1].role(), ModelRoleDto::Assistant);
@@ -968,7 +501,7 @@ fn the_window_pass_compresses_a_large_tool_result_before_the_continuation_reques
 fn partial_tool_result_continues_the_loop_without_terminalizing() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "execute", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
@@ -1001,7 +534,7 @@ fn partial_tool_result_continues_the_loop_without_terminalizing() {
         outcome,
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
-    assert_eq!(*driver.executions.borrow(), 2);
+    assert_eq!(driver.executions(), 2);
     let finishes = repository.finishes.borrow();
     assert_eq!(finishes.len(), 1);
     assert_eq!(
@@ -1010,7 +543,7 @@ fn partial_tool_result_continues_the_loop_without_terminalizing() {
         "a partial tool result never terminalizes the run"
     );
     drop(finishes);
-    let requests = driver.requests.borrow();
+    let requests = driver.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].messages(),
@@ -1030,7 +563,7 @@ fn partial_tool_result_continues_the_loop_without_terminalizing() {
 fn multiple_tool_calls_execute_sequentially_in_provider_order() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let first = ToolCallDto::new(ToolCallId::new(), "first", "{}").expect("call is valid");
     let second = ToolCallDto::new(ToolCallId::new(), "second", "{}").expect("call is valid");
@@ -1071,7 +604,7 @@ fn multiple_tool_calls_execute_sequentially_in_provider_order() {
             (session_id, run_id, second.clone()),
         ]
     );
-    let requests = driver.requests.borrow();
+    let requests = driver.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].messages(),
@@ -1091,7 +624,7 @@ fn multiple_tool_calls_execute_sequentially_in_provider_order() {
 fn repeated_tool_rounds_continue_until_finished() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let first = ToolCallDto::new(ToolCallId::new(), "first", "{}").expect("call is valid");
     let second = ToolCallDto::new(ToolCallId::new(), "second", "{}").expect("call is valid");
@@ -1129,7 +662,7 @@ fn repeated_tool_rounds_continue_until_finished() {
         outcome,
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
-    assert_eq!(*driver.executions.borrow(), 3);
+    assert_eq!(driver.executions(), 3);
     assert_eq!(
         port.calls().as_slice(),
         &[
@@ -1137,7 +670,7 @@ fn repeated_tool_rounds_continue_until_finished() {
             (session_id, run_id, second.clone()),
         ]
     );
-    let requests = driver.requests.borrow();
+    let requests = driver.requests();
     assert_eq!(requests.len(), 3);
     assert_eq!(
         requests[2].messages(),
@@ -1159,7 +692,7 @@ fn repeated_tool_rounds_continue_until_finished() {
 fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let first = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let second = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
@@ -1203,7 +736,7 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
         .expect("fixture reasoning is valid");
     let second_reasoning = AssistantReasoningDto::new(vec![second.call_id()], "second round")
         .expect("fixture reasoning is valid");
-    let requests = driver.requests.borrow();
+    let requests = driver.requests();
     assert_eq!(requests.len(), 3);
     assert!(requests[0].assistant_reasoning().is_empty());
     assert_eq!(
@@ -1231,7 +764,7 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
 fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
@@ -1263,7 +796,7 @@ fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
 
-    let requests = driver.requests.borrow();
+    let requests = driver.requests();
     assert_eq!(requests.len(), 2);
     assert!(requests[0].assistant_reasoning().is_empty());
     assert_eq!(requests[1].assistant_reasoning().len(), 1);
@@ -1284,7 +817,7 @@ fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
 fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     // Each fragment stays inside the transient per-round bound; only the
@@ -1314,7 +847,7 @@ fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
     };
     assert_eq!(run.status(), RunStatusDto::Failed);
     assert_eq!(error.code(), "reasoning_attachment_unrepresentable");
-    assert_eq!(*driver.executions.borrow(), 1);
+    assert_eq!(driver.executions(), 1);
     assert!(
         port.calls().is_empty(),
         "the failed round never executes its tool call"
@@ -1332,7 +865,7 @@ fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
 fn control_character_reasoning_echo_terminalizes_as_typed_failed_run() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     // The transient attachment DTO rejects the control character.
@@ -1359,7 +892,7 @@ fn control_character_reasoning_echo_terminalizes_as_typed_failed_run() {
     };
     assert_eq!(run.status(), RunStatusDto::Failed);
     assert_eq!(error.code(), "reasoning_attachment_unrepresentable");
-    assert_eq!(*driver.executions.borrow(), 1);
+    assert_eq!(driver.executions(), 1);
     assert!(
         port.calls().is_empty(),
         "the failed round never executes its tool call"
@@ -1372,7 +905,7 @@ fn control_character_reasoning_echo_terminalizes_as_typed_failed_run() {
 fn tool_failure_terminalizes_without_retry() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::new(vec![
@@ -1398,7 +931,7 @@ fn tool_failure_terminalizes_without_retry() {
     };
     assert_eq!(run.status(), RunStatusDto::Failed);
     assert_eq!(error.code(), "tool_denied");
-    assert_eq!(*driver.executions.borrow(), 1);
+    assert_eq!(driver.executions(), 1);
     assert_eq!(port.calls().len(), 1);
     let finishes = repository.finishes.borrow();
     assert_eq!(finishes.len(), 1, "a tool failure never retries");
@@ -1413,7 +946,7 @@ fn tool_failure_terminalizes_without_retry() {
 fn port_infrastructure_error_terminalizes_with_the_safe_error() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::new(vec![
@@ -1459,7 +992,7 @@ fn port_infrastructure_error_terminalizes_with_the_safe_error() {
 fn interruption_during_tool_execution_records_the_notice_and_continues() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
@@ -1480,7 +1013,7 @@ fn interruption_during_tool_execution_records_the_notice_and_continues() {
     let execution_signal = signal.clone();
 
     let execution = std::thread::spawn(move || {
-        let outcome = futures_executor::block_on(
+        let outcome = run_ready(
             ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
                 ModelRunExecutionInputDto::new(
                     session_id,
@@ -1505,7 +1038,7 @@ fn interruption_during_tool_execution_records_the_notice_and_continues() {
         outcome,
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
-    assert_eq!(*driver.executions.borrow(), 2);
+    assert_eq!(driver.executions(), 2);
     assert_eq!(
         port.calls
             .lock()
@@ -1524,7 +1057,7 @@ fn interruption_during_tool_execution_records_the_notice_and_continues() {
         "the interruption commits its durable notice"
     );
     drop(messages);
-    let requests = driver.requests.borrow();
+    let requests = driver.requests();
     assert!(requests[1].messages().iter().any(|message| {
         message.role() == ModelRoleDto::Notice
             && message.content() == intention_engine::INTERRUPT_NOTICE
@@ -1535,7 +1068,7 @@ fn interruption_during_tool_execution_records_the_notice_and_continues() {
 fn provider_failure_after_tool_round_is_terminal_without_retry() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
@@ -1569,7 +1102,7 @@ fn provider_failure_after_tool_round_is_terminal_without_retry() {
     };
     assert_eq!(run.status(), RunStatusDto::Failed);
     assert_eq!(error.code(), "provider_broken");
-    assert_eq!(*driver.executions.borrow(), 2);
+    assert_eq!(driver.executions(), 2);
     assert_eq!(
         port.calls().len(),
         1,
@@ -1584,7 +1117,7 @@ fn provider_failure_after_tool_round_is_terminal_without_retry() {
 fn interruption_during_a_provider_round_records_a_notice_and_continues() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let signal = ModelCancellationSignal::new();
     let driver = ScriptedDriver::with_rounds(vec![
@@ -1597,14 +1130,11 @@ fn interruption_during_a_provider_round_records_a_notice_and_continues() {
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
         ],
     ]);
-    driver
-        .cancel_during_stream
-        .borrow_mut()
-        .replace((1, signal.clone()));
+    driver.cancel_during_stream(1, signal.clone());
     let port = ScriptedPort::new(Vec::new());
     let clock = ImmediateTime::new();
 
-    let outcome = futures_executor::block_on(
+    let outcome = run_ready(
         ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
             ModelRunExecutionInputDto::new(
                 session_id,
@@ -1621,7 +1151,7 @@ fn interruption_during_a_provider_round_records_a_notice_and_continues() {
         matches!(outcome, ModelRunExecutionOutcomeDto::Completed { .. }),
         "the interruption continues the run instead of terminalizing it, got {outcome:?}"
     );
-    assert_eq!(*driver.executions.borrow(), 2);
+    assert_eq!(driver.executions(), 2);
     let messages = repository.messages.borrow();
     assert_eq!(
         messages
@@ -1643,7 +1173,7 @@ fn interruption_during_a_provider_round_records_a_notice_and_continues() {
 fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
@@ -1669,7 +1199,7 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
         .replace((1, signal.clone()));
     let clock = ImmediateTime::new();
 
-    let outcome = futures_executor::block_on(
+    let outcome = run_ready(
         ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
             ModelRunExecutionInputDto::new(
                 session_id,
@@ -1690,7 +1220,7 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
         port.calls().is_empty(),
         "the interrupt never starts the tool effect"
     );
-    let requests = driver.requests.borrow();
+    let requests = driver.requests();
     let answered = requests[1].messages().iter().any(|message| {
         message.role() == ModelRoleDto::Tool
             && message.tool_call_id() == Some(call.call_id())
@@ -1706,7 +1236,7 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
 fn tool_loop_with_commit_observer_executes_and_observes() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
@@ -1727,7 +1257,7 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
     let observer = RecordingCommitObserver::new();
     let clock = ImmediateTime::new();
 
-    let outcome = futures_executor::block_on(
+    let outcome = run_ready(
         ModelRunExecutionService::with_commit_observer(
             &repository,
             &driver,
@@ -1780,7 +1310,7 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
 fn interruption_while_the_round_is_waiting_records_a_notice_and_continues() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let signal = ModelCancellationSignal::new();
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -1794,7 +1324,7 @@ fn interruption_while_the_round_is_waiting_records_a_notice_and_continues() {
     let execution_signal = signal.clone();
 
     let execution = std::thread::spawn(move || {
-        let outcome = futures_executor::block_on(
+        let outcome = run_ready(
             ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
                 ModelRunExecutionInputDto::new(
                     session_id,
@@ -1834,7 +1364,7 @@ fn invalid_tool_input_json_terminalizes_without_retry() {
     // scheduling any retry or re-invoking the call.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::new(vec![
@@ -1860,7 +1390,7 @@ fn invalid_tool_input_json_terminalizes_without_retry() {
     };
     assert_eq!(run.status(), RunStatusDto::Failed);
     assert_eq!(error.code(), "invalid_tool_input_json");
-    assert_eq!(*driver.executions.borrow(), 1);
+    assert_eq!(driver.executions(), 1);
     assert_eq!(
         port.calls().len(),
         1,
@@ -1879,7 +1409,7 @@ fn second_tool_call_does_not_start_until_first_finishes() {
     // context in call order and the run completes.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let first = ToolCallDto::new(ToolCallId::new(), "first", "{}").expect("call is valid");
     let second = ToolCallDto::new(ToolCallId::new(), "second", "{}").expect("call is valid");
@@ -1908,7 +1438,7 @@ fn second_tool_call_does_not_start_until_first_finishes() {
     let execution_port = std::sync::Arc::clone(&port);
 
     let execution = std::thread::spawn(move || {
-        let outcome = futures_executor::block_on(
+        let outcome = run_ready(
             ModelRunExecutionService::new(&repository, &driver, &clock, execution_port.as_ref())
                 .execute(ModelRunExecutionInputDto::new(
                     session_id,
@@ -1939,7 +1469,7 @@ fn second_tool_call_does_not_start_until_first_finishes() {
         outcome,
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
-    assert_eq!(*driver.executions.borrow(), 2);
+    assert_eq!(driver.executions(), 2);
     assert_eq!(
         port.calls
             .lock()
@@ -1961,7 +1491,7 @@ fn provider_failure_before_first_tool_round_is_retryable_within_attempt_budget()
     // `provider_failure_after_tool_round_is_terminal_without_retry`.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let driver = ScriptedDriver::with_rounds(vec![
         vec![Err(ProviderErrorDto::unavailable(
@@ -1978,7 +1508,7 @@ fn provider_failure_before_first_tool_round_is_retryable_within_attempt_budget()
     let port = ScriptedPort::new(Vec::new());
     let clock = ImmediateTime::new();
 
-    let outcome = futures_executor::block_on(
+    let outcome = run_ready(
         ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
             ModelRunExecutionInputDto::new(
                 session_id,
@@ -1995,7 +1525,7 @@ fn provider_failure_before_first_tool_round_is_retryable_within_attempt_budget()
         outcome,
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
-    assert_eq!(*driver.executions.borrow(), 2);
+    assert_eq!(driver.executions(), 2);
     assert!(
         port.calls().is_empty(),
         "no tool round occurs before the retry"
@@ -2026,7 +1556,7 @@ fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
     // than by a later pre-stream check, and the run continues.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let signal = ModelCancellationSignal::new();
     let (started_tx, _started_rx) = mpsc::channel();
@@ -2042,7 +1572,7 @@ fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
     let execution_signal = signal.clone();
 
     let execution = std::thread::spawn(move || {
-        let outcome = futures_executor::block_on(
+        let outcome = run_ready(
             ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
                 ModelRunExecutionInputDto::new(
                     session_id,
@@ -2091,7 +1621,7 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
     // notice, clears the signal, and starts the second attempt immediately.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let driver = ScriptedDriver::with_rounds(vec![
         vec![Err(ProviderErrorDto::unavailable(
@@ -2114,7 +1644,7 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
     let execution_signal = signal.clone();
 
     let execution = std::thread::spawn(move || {
-        let outcome = futures_executor::block_on(
+        let outcome = run_ready(
             ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
                 ModelRunExecutionInputDto::new(
                     session_id,
@@ -2139,7 +1669,7 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
     assert_eq!(
-        *driver.executions.borrow(),
+        driver.executions(),
         2,
         "the interrupted wait starts the second attempt"
     );
@@ -2161,7 +1691,7 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
     // its notice without arming the sub-second retry delay at all.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let driver = ScriptedDriver::with_rounds(vec![
         vec![Err(ProviderErrorDto::unavailable(
@@ -2177,13 +1707,10 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
     ]);
     let port = ScriptedPort::new(Vec::new());
     let signal = ModelCancellationSignal::new();
-    driver
-        .cancel_during_stream
-        .borrow_mut()
-        .replace((0, signal.clone()));
+    driver.cancel_during_stream(0, signal.clone());
     let clock = RecordingTime::new();
 
-    let outcome = futures_executor::block_on(
+    let outcome = run_ready(
         ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
             ModelRunExecutionInputDto::new(
                 session_id,
@@ -2201,7 +1728,7 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
     assert_eq!(
-        *driver.executions.borrow(),
+        driver.executions(),
         2,
         "the interrupted retry still starts the second attempt"
     );
@@ -2230,7 +1757,7 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
     // without a finish event.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
@@ -2264,7 +1791,7 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
     assert_eq!(
-        *driver.executions.borrow(),
+        driver.executions(),
         2,
         "the finished-with-calls round drives the continuation round"
     );
@@ -2274,7 +1801,7 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
     );
     let reasoning = AssistantReasoningDto::new(vec![call.call_id()], "plan ")
         .expect("fixture reasoning is valid");
-    let requests = driver.requests.borrow();
+    let requests = driver.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].assistant_reasoning(),
@@ -2302,7 +1829,7 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
 fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     repository
@@ -2338,11 +1865,11 @@ fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
     assert_eq!(
-        *driver.executions.borrow(),
+        driver.executions(),
         2,
         "the pending message continues the same run"
     );
-    let requests = driver.requests.borrow();
+    let requests = driver.requests();
     assert!(requests[1].messages().iter().any(|message| {
         message.role() == ModelRoleDto::User && message.content() == "pending message"
     }));
@@ -2355,7 +1882,7 @@ fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
 fn a_pending_message_at_the_finish_boundary_continues_instead_of_completing() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = snapshot("fixture");
+    let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     repository
         .pending
@@ -2392,11 +1919,11 @@ fn a_pending_message_at_the_finish_boundary_continues_instead_of_completing() {
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
     assert_eq!(
-        *driver.executions.borrow(),
+        driver.executions(),
         2,
         "the finished round is followed by another model step"
     );
-    let requests = driver.requests.borrow();
+    let requests = driver.requests();
     assert!(requests[1].messages().iter().any(|message| {
         message.role() == ModelRoleDto::User && message.content() == "arrived before completion"
     }));

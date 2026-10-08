@@ -813,13 +813,13 @@ dependencies = [
 name = "intention-engine"
 version = "0.0.0"
 dependencies = [
- "futures-executor",
  "futures-util",
  "intention-config",
  "intention-domain",
  "intention-proto",
  "intention-providers",
  "intention-storage",
+ "intention-test-support",
  "intention-tools",
 ]
 
@@ -876,9 +876,12 @@ version = "0.0.0"
 name = "intention-test-support"
 version = "0.0.0"
 dependencies = [
+ "futures-executor",
+ "futures-util",
  "intention-config",
  "intention-daemon",
  "intention-proto",
+ "intention-providers",
  "intention-transport",
  "serde_json",
  "tempfile",

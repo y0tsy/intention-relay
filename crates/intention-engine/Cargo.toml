@@ -19,4 +19,4 @@ intention-proto = { path = "../intention-proto", version = "=0.0.0" }
 intention-tools = { path = "../intention-tools", version = "=0.0.0" }
 
 [dev-dependencies]
-futures-executor = "0.3.31"
+intention-test-support = { path = "../intention-test-support", version = "=0.0.0" }

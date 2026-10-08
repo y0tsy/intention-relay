@@ -25,12 +25,13 @@ skeleton_crates = [
 "intention-test-support" = [
   "intention-config",
   "intention-daemon",
-  "intention-transport",
+  "intention-providers",
   "intention-proto",
+  "intention-transport",
 ]
 
 [non_production_test_external_dependencies]
-"intention-test-support" = ["serde_json", "tempfile", "tokio"]
+"intention-test-support" = ["futures-executor", "futures-util", "serde_json", "tempfile", "tokio"]
 
 [forbidden]
 source_patterns = [
@@ -53,7 +54,7 @@ test_only_source_patterns = [
 "intention-transport" = ["intention-proto"]
 "intention-client" = ["intention-transport", "intention-proto"]
 "intention-daemon" = ["intention-client", "intention-config", "intention-domain", "intention-engine", "intention-proto", "intention-providers", "intention-storage", "intention-tools", "intention-transport"]
-"intention-engine" = ["intention-config", "intention-domain", "intention-providers", "intention-proto", "intention-storage", "intention-tools"]
+"intention-engine" = ["intention-config", "intention-domain", "intention-providers", "intention-proto", "intention-storage", "intention-test-support", "intention-tools"]
 "intention-providers" = ["intention-config", "intention-proto"]
 "intention-tools" = ["intention-proto"]
 
@@ -64,7 +65,7 @@ test_only_source_patterns = [
 "intention-transport" = ["interprocess", "serde", "serde_json", "tempfile", "tokio"]
 "intention-client" = ["fs4", "tokio"]
 "intention-daemon" = ["futures-util", "serde_json", "tempfile", "tokio"]
-"intention-engine" = ["futures-executor", "futures-util"]
+"intention-engine" = ["futures-util"]
 "intention-storage" = ["rusqlite", "serde_json", "tempfile"]
 "intention-providers" = ["async-openai", "futures-core", "futures-executor", "futures-util", "http", "openrouter-rs", "serde", "serde_json"]
 "intention-tools" = ["glob", "rustix", "serde", "serde_json", "tempfile"]
