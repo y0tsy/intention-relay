@@ -11,7 +11,7 @@ pub use composition::DaemonApplicationFacade;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use intention_domain::run_status_is_terminal;
@@ -25,9 +25,9 @@ use intention_proto::{
 };
 use intention_proto::{
     JsonRpcResponseDto, ProtocolAcceptedDto, ProtocolCommandDto, ProtocolCommandResultDto,
-    ProtocolDaemonMessageDto, ProtocolHelloDto, ProtocolRequestPayloadDto,
+    ProtocolDaemonMessageDto, ProtocolHelloDto, ProtocolQueryDto, ProtocolRequestPayloadDto,
     ProtocolResponsePayloadDto, RunStatusFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
-    decode_request_line, encode_response, is_notification_line,
+    SessionSubscriptionResponseDto, decode_request_line, encode_response, is_notification_line,
 };
 use intention_providers::ModelCancellationSignal;
 use intention_tools::{GrepResult, PathsResult, ToolInput, ToolProjectedContent, ToolResult};
@@ -44,7 +44,7 @@ struct TokioTime;
 
 impl ModelTimePort for TokioTime {
     fn now(&self) -> TimestampDto {
-        unix_timestamp().unwrap_or_else(|_| {
+        composition::now().unwrap_or_else(|_| {
             TimestampDto::from_unix_seconds(0)
                 .unwrap_or_else(|_| unreachable!("zero timestamp is valid"))
         })
@@ -98,15 +98,6 @@ struct HostState {
     publication_gate: Mutex<()>,
 }
 
-#[cfg(test)]
-fn host_for_test(facade: DaemonApplicationFacade) -> Arc<HostState> {
-    Arc::new(HostState {
-        facade,
-        data: Mutex::new(HostData::default()),
-        publication_gate: Mutex::new(()),
-    })
-}
-
 impl HostState {
     fn schedule_if_starting(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
         let key = (session_id, run_id);
@@ -150,13 +141,10 @@ impl HostState {
             let observer = HostCommitObserver {
                 host: Arc::clone(&host),
             };
-            let executor = DaemonToolExecutor::with_publication(
-                host.facade.clone(),
-                HostTranscriptPublisher {
-                    facade: host.facade.clone(),
-                    host: Arc::clone(&host),
-                },
-            );
+            // The model-run executor and the tool-invocation path share this
+            // one commit sink.
+            let executor =
+                DaemonToolExecutor::with_publication(host.facade.clone(), observer.clone());
             let result = host
                 .facade
                 .execute_scheduled_model_run_for_daemon_with_tool_executor(
@@ -300,17 +288,14 @@ impl HostState {
     }
 
     /// Publishes the current durable run status to live subscribers when it
-    /// differs from the last published status, returning whether the read
-    /// succeeded.
-    fn publish_current(&self, session_id: SessionId, run_id: RunId) -> bool {
-        let Ok(run) = self
+    /// differs from the last published status.
+    fn publish_current(&self, session_id: SessionId, run_id: RunId) {
+        if let Ok(run) = self
             .facade
             .load_run_projection_for_daemon(session_id, run_id)
-        else {
-            return false;
-        };
-        self.publish_status(session_id, run_id, run.status());
-        true
+        {
+            self.publish_status(session_id, run_id, run.status());
+        }
     }
 
     /// Publishes one committed run status to live subscribers.
@@ -497,6 +482,12 @@ fn run_subscription_response(
     ))
 }
 
+/// Publishes committed transcript rows and run statuses to live subscribers.
+///
+/// The one commit sink serves both the model-run executor and the
+/// tool-invocation path: every frame carries the committed value of its own
+/// transaction, so publication never re-reads durable state.
+#[derive(Clone)]
 struct HostCommitObserver {
     host: Arc<HostState>,
 }
@@ -516,43 +507,6 @@ impl ModelRunCommitObserver for HostCommitObserver {
                 }
             }
         }
-    }
-}
-
-/// Publishes committed tool transcript rows to the host's live subscribers.
-#[derive(Clone)]
-struct HostTranscriptPublisher {
-    facade: DaemonApplicationFacade,
-    host: Arc<HostState>,
-}
-
-impl intention_engine::ToolResultPublicationPort for HostTranscriptPublisher {
-    fn publish_committed_message(
-        &self,
-        message: &intention_proto::MessageProjectionDto,
-    ) -> DtoResult<()> {
-        // A committed tool-result row is verified against the durable structured
-        // evidence of its own call before its frame is broadcast; a tool-call
-        // row has no structured result yet and is published as committed.
-        if message.kind() == intention_proto::MessageKindDto::ToolResult {
-            let (Some(run_id), Some(call_id)) = (message.run_id(), message.tool_call_id()) else {
-                return Err(ErrorDto::unavailable(
-                    "tool_result_evidence_unavailable",
-                    "committed tool result evidence is unavailable",
-                ));
-            };
-            let evidence =
-                self.facade
-                    .load_tool_result_for_daemon(message.session_id(), run_id, call_id)?;
-            if evidence.call_id() != call_id || evidence.run_id() != run_id {
-                return Err(ErrorDto::unavailable(
-                    "tool_result_evidence_unavailable",
-                    "committed tool result evidence is unavailable",
-                ));
-            }
-        }
-        self.host.publish_content(message);
-        Ok(())
     }
 }
 
@@ -581,9 +535,7 @@ impl DaemonToolExecutor<()> {
     }
 }
 
-impl<P: intention_engine::ToolResultPublicationPort + Clone + Send + Sync + 'static>
-    DaemonToolExecutor<P>
-{
+impl<P: ModelRunCommitObserver + Clone + Send + Sync + 'static> DaemonToolExecutor<P> {
     /// Binds one durable facade and the host publication boundary, so every
     /// committed transcript row of a tool call reaches the live subscribers.
     #[must_use]
@@ -592,8 +544,8 @@ impl<P: intention_engine::ToolResultPublicationPort + Clone + Send + Sync + 'sta
     }
 }
 
-impl<P: intention_engine::ToolResultPublicationPort + Clone + Send + Sync + 'static>
-    intention_engine::ToolExecutionPort for DaemonToolExecutor<P>
+impl<P: ModelRunCommitObserver + Clone + Send + Sync + 'static> intention_engine::ToolExecutionPort
+    for DaemonToolExecutor<P>
 {
     fn execute_tool(
         &self,
@@ -837,18 +789,24 @@ async fn serve_async_connection(
                             ));
                         }
                     }
-                    payload => {
+                    ProtocolRequestPayloadDto::Command(command) => {
                         let response = ProtocolDaemonMessageDto::Response(encode_response(
                             request_id,
-                            dispatch_request(&host, payload),
+                            dispatch_command(&host, command),
                         ));
-                        if write_message_with_deadline(&mut messages, response)
-                            .await
-                            .is_err()
-                        {
-                            // A queued response is best effort: a timed-out OS
-                            // write cannot be recovered, but it is never allowed
-                            // to stall persistence or any other subscriber.
+                        if !write_message_or_rejection(&mut messages, response).await {
+                            if let Some((key, id)) = registered {
+                                host.remove_subscriber(key, id);
+                            }
+                            return;
+                        }
+                    }
+                    ProtocolRequestPayloadDto::Query(query) => {
+                        let response = ProtocolDaemonMessageDto::Response(encode_response(
+                            request_id,
+                            dispatch_query(&host, query),
+                        ));
+                        if !write_message_or_rejection(&mut messages, response).await {
                             if let Some((key, id)) = registered {
                                 host.remove_subscriber(key, id);
                             }
@@ -859,10 +817,7 @@ async fn serve_async_connection(
             }
             message = receiver.recv() => {
                 let Some(message) = message else { return; };
-                if write_message_with_deadline(&mut messages, message).await.is_err() {
-                    // A queued frame is best effort: a timed-out OS write cannot
-                    // be recovered, but it is never allowed to stall persistence
-                    // or any other subscriber.
+                if !write_message_or_rejection(&mut messages, message).await {
                     if let Some((key, id)) = registered {
                         host.remove_subscriber(key, id);
                     }
@@ -873,16 +828,16 @@ async fn serve_async_connection(
     }
 }
 
-/// Dispatches one decoded request against the shared facade and host registry.
-fn dispatch_request(
+/// Dispatches one decoded command against the shared facade and host registry.
+fn dispatch_command(
     host: &Arc<HostState>,
-    payload: &ProtocolRequestPayloadDto,
+    command: &ProtocolCommandDto,
 ) -> ProtocolResponsePayloadDto {
-    match payload {
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(subscription)) => {
+    match command {
+        ProtocolCommandDto::SubscribeSession(subscription) => {
             ProtocolResponsePayloadDto::Subscription(host.facade.subscribe(*subscription))
         }
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::InterruptRun(command)) => {
+        ProtocolCommandDto::InterruptRun(command) => {
             let result = host
                 .interrupt_run(command.session_id(), command.run_id())
                 .map(|result| {
@@ -894,7 +849,7 @@ fn dispatch_request(
                 .unwrap_or_else(ProtocolCommandResultDto::Rejected);
             ProtocolResponsePayloadDto::CommandResult(result)
         }
-        ProtocolRequestPayloadDto::Command(command) => {
+        command => {
             let result = host.facade.command(command.clone());
             if let ProtocolCommandDto::SendUserTurn(_) = command
                 && let ProtocolCommandResultDto::Accepted(accepted) = &result
@@ -907,21 +862,12 @@ fn dispatch_request(
             }
             ProtocolResponsePayloadDto::CommandResult(result)
         }
-        ProtocolRequestPayloadDto::Query(query) => {
-            ProtocolResponsePayloadDto::QueryResult(host.facade.query(*query))
-        }
-        ProtocolRequestPayloadDto::RunSubscription(_) => run_subscription_unsupported(),
     }
 }
 
-/// Answers a run subscription that arrived where no subscription can be served.
-fn run_subscription_unsupported() -> ProtocolResponsePayloadDto {
-    ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Error(
-        ErrorDto::validation(
-            "run_subscription_unavailable",
-            "run subscriptions require an asynchronous daemon connection",
-        ),
-    ))
+/// Dispatches one decoded query against the shared facade.
+fn dispatch_query(host: &Arc<HostState>, query: &ProtocolQueryDto) -> ProtocolResponsePayloadDto {
+    ProtocolResponsePayloadDto::QueryResult(host.facade.query(*query))
 }
 
 async fn write_message_with_deadline(
@@ -944,35 +890,80 @@ async fn write_with_deadline<T>(
         })?
 }
 
-#[cfg(test)]
-mod deadline_tests {
-    #![allow(
-        clippy::expect_used,
-        clippy::panic,
-        reason = "The paused-clock deadline fixture uses direct assertions for exact diagnostics."
-    )]
+/// The reply family one daemon response belongs to.
+///
+/// The client awaits the exact reply shape of its request, so an undeliverable
+/// response is replaced by a rejection of the same family.
+enum ResponseShape {
+    CommandResult,
+    QueryResult,
+    Subscription,
+    RunSubscription,
+}
 
-    use super::*;
-
-    #[tokio::test(start_paused = true)]
-    async fn subscriber_write_deadline_is_exactly_ten_seconds() {
-        let write = write_with_deadline(std::future::pending::<DtoResult<()>>());
-        tokio::pin!(write);
-        tokio::select! {
-            result = &mut write => panic!("pending write completed: {result:?}"),
-            () = tokio::task::yield_now() => {}
+impl ResponseShape {
+    const fn of(response: &ProtocolResponsePayloadDto) -> Self {
+        match response {
+            ProtocolResponsePayloadDto::CommandResult(_) => Self::CommandResult,
+            ProtocolResponsePayloadDto::QueryResult(_) => Self::QueryResult,
+            ProtocolResponsePayloadDto::Subscription(_) => Self::Subscription,
+            ProtocolResponsePayloadDto::RunSubscription(_) => Self::RunSubscription,
         }
-        tokio::time::advance(Duration::from_secs(9)).await;
-        assert!(
-            tokio::time::timeout(Duration::from_millis(1), &mut write)
+    }
+
+    const fn rejected(self, error: ErrorDto) -> ProtocolResponsePayloadDto {
+        match self {
+            Self::CommandResult => {
+                ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Rejected(error))
+            }
+            Self::QueryResult => ProtocolResponsePayloadDto::QueryResult(
+                intention_proto::ProtocolQueryResultDto::Rejected(error),
+            ),
+            Self::Subscription => ProtocolResponsePayloadDto::Subscription(
+                SessionSubscriptionResponseDto::Error(error),
+            ),
+            Self::RunSubscription => ProtocolResponsePayloadDto::RunSubscription(
+                RunSubscriptionResponseDto::Error(error),
+            ),
+        }
+    }
+}
+
+/// Writes one daemon message, answering an over-size correlated response with
+/// its shape-matched typed rejection.
+///
+/// An over-size response fails to encode before any byte is written, so the
+/// connection still carries the request correlation: the client receives the
+/// typed `local_protocol_message_too_large` failure instead of an unexplained
+/// close. Any other write failure leaves the stream in an unknown state and
+/// still ends the connection, because a queued frame is best effort and can
+/// never stall persistence or another subscriber.
+///
+/// Returns whether the connection can continue serving.
+async fn write_message_or_rejection(
+    messages: &mut AsyncMessageSender,
+    message: ProtocolDaemonMessageDto,
+) -> bool {
+    let correlated = match &message {
+        ProtocolDaemonMessageDto::Response(response) => response
+            .id()
+            .zip(response.result_value())
+            .map(|(id, payload)| (id, ResponseShape::of(payload))),
+        ProtocolDaemonMessageDto::Notification(_) => None,
+    };
+    match write_message_with_deadline(messages, message).await {
+        Ok(()) => true,
+        Err(failure) if failure.code() == "local_protocol_message_too_large" => {
+            let Some((id, shape)) = correlated else {
+                return false;
+            };
+            let rejection =
+                ProtocolDaemonMessageDto::Response(encode_response(id, shape.rejected(failure)));
+            write_message_with_deadline(messages, rejection)
                 .await
-                .is_err()
-        );
-        tokio::time::advance(Duration::from_secs(1)).await;
-        assert_eq!(
-            write.await.expect_err("ten-second deadline expires").code(),
-            "subscriber_write_timed_out"
-        );
+                .is_ok()
+        }
+        Err(_) => false,
     }
 }
 
@@ -1091,24 +1082,6 @@ impl TestHostLifecycle {
     }
 }
 
-fn unix_timestamp() -> DtoResult<TimestampDto> {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| {
-            ErrorDto::unavailable(
-                "daemon_clock_unavailable",
-                "the daemon clock is unavailable",
-            )
-        })?
-        .as_secs();
-    TimestampDto::from_unix_seconds(i64::try_from(seconds).map_err(|_| {
-        ErrorDto::unavailable(
-            "daemon_clock_unavailable",
-            "the daemon clock is unavailable",
-        )
-    })?)
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -1127,8 +1100,8 @@ mod tests {
         ConfigRevisionId, IdempotencyKey, ProjectId, SchemaVersionDto, TimestampDto, WorkspaceId,
     };
     use intention_proto::{
-        CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto,
-        SendUserTurnCommandDto, WorkspaceRootDto,
+        CreateSessionCommandDto, GetSessionSnapshotQueryDto, MessageKindDto, MessageProjectionDto,
+        RunModeDto, SendUserTurnCommandDto, WorkspaceRootDto,
     };
     use intention_proto::{
         ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolHelloDto,
@@ -1347,6 +1320,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_over_size_response_answers_with_a_typed_error_instead_of_closing() {
+        let (_directory, facade) = fixture_facade();
+        let (session_id, _run_id) = create_and_start(&facade);
+        // Queued user input stays user input, so a snapshot projection can
+        // legitimately grow past the envelope cap: that response must carry the
+        // typed transport failure instead of closing the connection silently.
+        for index in 0..6 {
+            let accepted = facade.command(ProtocolCommandDto::SendUserTurn(
+                SendUserTurnCommandDto::new(
+                    session_id,
+                    IdempotencyKey::new(),
+                    format!("pending {index} {}", "x".repeat(256 * 1024)),
+                )
+                .expect("fixture pending turn is valid"),
+            ));
+            assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
+        }
+        let snapshot = facade
+            .session_snapshot(session_id, None)
+            .expect("the over-size snapshot reads in process");
+        assert!(
+            serde_json::to_vec(&snapshot)
+                .expect("the over-size snapshot serializes")
+                .len()
+                > intention_transport::MAX_MESSAGE_BYTES,
+            "the fixture must force one over-size response"
+        );
+
+        let endpoint = endpoint();
+        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+        let server = tokio::spawn(serve_test_async_listener(listener, facade, 1));
+        let connection = AsyncLocalClientConnection::connect(&endpoint)
+            .await
+            .expect("client connects");
+        let (_remote, mut requests, mut messages) = connection
+            .negotiate(fixture_hello())
+            .await
+            .expect("client negotiates");
+        requests
+            .send_message(&encode_request(
+                1,
+                ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetSessionSnapshot(
+                    GetSessionSnapshotQueryDto::new(session_id),
+                )),
+            ))
+            .await
+            .expect("snapshot query sends");
+        let line = messages
+            .receive_line()
+            .await
+            .expect("the correlated typed reply still arrives");
+        let response = decode_response(&line, ProtocolMethodDto::SessionSnapshot, 1)
+            .expect("the correlated typed reply decodes");
+        assert!(matches!(
+            response,
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error))
+                if error.code() == "local_protocol_message_too_large"
+        ));
+        server.await.expect("host serves the refused peer");
+    }
+
+    #[tokio::test]
     async fn async_host_answers_a_stale_hello_with_a_typed_version_mismatch() {
         let (_directory, facade) = fixture_facade();
         let endpoint = endpoint();
@@ -1377,7 +1412,7 @@ mod tests {
     fn duplicate_or_unknown_admission_never_creates_an_extra_task() {
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
         let (session_id, run_id) = create_and_start(&facade);
-        let host = host_for_test(facade);
+        let host = new_host(facade);
         host.schedule_if_starting(session_id, RunId::new());
         assert!(
             host.data
@@ -1406,7 +1441,7 @@ mod tests {
         // stays starting and untouched.
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
         let (session_id, run_id) = create_and_start(&facade);
-        let host = host_for_test(facade);
+        let host = new_host(facade);
         assert!(matches!(
             host.interrupt_run(session_id, run_id),
             Ok(ProtocolAcceptedResultDto::InterruptRun(value))
@@ -1432,7 +1467,7 @@ mod tests {
     async fn host_interrupt_signals_the_registered_task_and_the_run_stays_active() {
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(PendingDriver));
         let (session_id, run_id) = create_and_start(&facade);
-        let host = host_for_test(facade.clone());
+        let host = new_host(facade.clone());
         host.schedule_if_starting(session_id, run_id);
         for _ in 0..20 {
             if host
@@ -1506,7 +1541,7 @@ mod tests {
     async fn subscriber_admission_scope_errors_and_capacity_are_isolated() {
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
         let (session_id, run_id) = create_and_start(&facade);
-        let host = host_for_test(facade);
+        let host = new_host(facade);
 
         let (unknown_sender, mut unknown_receiver) =
             tokio::sync::mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
@@ -1597,7 +1632,7 @@ mod tests {
         // waits for a reply that cannot arrive.
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
         let (session_id, run_id) = create_and_start(&facade);
-        let host = host_for_test(facade);
+        let host = new_host(facade);
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
         let (close, mut closed) = tokio::sync::watch::channel(false);
         let queued = ProtocolDaemonMessageDto::run_frame(RunStreamFrameDto::Status(
@@ -1641,7 +1676,7 @@ mod tests {
         // registration therefore share the same publication gate.
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
         let (session_id, run_id) = create_and_start(&facade);
-        let host = host_for_test(facade);
+        let host = new_host(facade);
         let message = MessageProjectionDto::new(
             session_id,
             Some(run_id),
@@ -1787,25 +1822,5 @@ mod tests {
                 "the daemon decodes the unadvertised tool {name}"
             );
         }
-    }
-
-    #[test]
-    fn run_rejects_an_endpoint_already_owned_by_another_host() {
-        let endpoint = endpoint();
-        // The fixture listener binds inside a runtime because interprocess
-        // requires a Tokio reactor context when it wraps the Unix socket.
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("fixture runtime builds");
-        let _listener = runtime
-            .block_on(async { AsyncLocalListener::bind(endpoint.clone()) })
-            .expect("fixture listener binds");
-        assert_eq!(
-            run(endpoint)
-                .expect_err("daemon must not reclaim an owned endpoint")
-                .code(),
-            "local_daemon_endpoint_in_use"
-        );
     }
 }

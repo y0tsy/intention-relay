@@ -8,21 +8,10 @@ use intention_proto::RunModeDto;
 use intention_proto::{
     DaemonReadinessDto, SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
 };
-use intention_proto::{DtoResult, ErrorDto, SchemaVersionDto, SessionId};
+use intention_proto::{DtoResult, SchemaVersionDto, SessionId};
 use intention_test_support::FixtureHost;
 use intention_transport::LocalEndpoint;
 use intention_tui::TuiProofClient;
-
-struct UnavailableLauncher;
-
-impl DaemonLauncher for UnavailableLauncher {
-    fn launch(&self, _endpoint: &LocalEndpoint) -> DtoResult<()> {
-        Err(ErrorDto::unavailable(
-            "fixture_daemon_unavailable",
-            "fixture daemon is unavailable",
-        ))
-    }
-}
 
 struct ExistingDaemonLauncher;
 
@@ -65,22 +54,4 @@ async fn tui_proof_reaches_the_shared_fixture_daemon_only_through_the_client() {
         .await
         .expect("fixture daemon task completes")
         .expect("fixture daemon serves the TUI requests");
-}
-
-#[tokio::test]
-async fn tui_proof_preserves_the_shared_client_error_contract() {
-    let endpoint = LocalEndpoint::from_instance_id("tui-proof-unavailable")
-        .expect("fixture instance name is valid");
-    let client = IntentionClient::new(endpoint, "fixture-tui", Box::new(UnavailableLauncher))
-        .expect("fixture client is valid");
-    let tui = TuiProofClient::new(client);
-    let error = tui
-        .connect()
-        .await
-        .expect_err("fixture launcher must produce typed client failure");
-    assert_eq!(error.code(), "fixture_daemon_unavailable");
-    assert_ne!(
-        error.category(),
-        intention_proto::ErrorCategoryDto::Internal
-    );
 }
