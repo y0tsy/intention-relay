@@ -8,7 +8,6 @@
 //! the in-flight step text.
 
 use intention_config::ConfigSnapshotDto;
-use intention_domain::ToolResultMetadataEntryDto;
 use intention_proto::{
     DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, ProviderErrorDto, RunId,
     SessionId, TimestampDto, ToolCallDto, UsageDto,
@@ -112,23 +111,17 @@ pub enum ToolResultOutcomeDto {
     Completed {
         /// The bounded, credential-free result content.
         content: String,
-        /// Approved credential-free structured metadata entries.
-        metadata: Vec<ToolResultMetadataEntryDto>,
     },
     /// The call stopped before a final result; content carries the captured
     /// output with its interruption notice.
     Partial {
         /// The bounded captured output with its interruption notice.
         content: String,
-        /// Approved credential-free structured metadata entries.
-        metadata: Vec<ToolResultMetadataEntryDto>,
     },
     /// The call was cancelled before it produced a final result.
     Cancelled {
         /// The bounded, credential-free content answering the call.
         content: String,
-        /// Approved credential-free structured metadata entries.
-        metadata: Vec<ToolResultMetadataEntryDto>,
     },
     /// The call failed safely; the error terminalizes the run.
     Failed {
@@ -146,7 +139,6 @@ impl ToolResultOutcomeDto {
     pub fn completed(content: impl Into<String>) -> DtoResult<Self> {
         Ok(Self::Completed {
             content: tool_result_content(content.into())?,
-            metadata: Vec::new(),
         })
     }
 
@@ -158,7 +150,6 @@ impl ToolResultOutcomeDto {
     pub fn partial(content: impl Into<String>) -> DtoResult<Self> {
         Ok(Self::Partial {
             content: tool_result_content(content.into())?,
-            metadata: Vec::new(),
         })
     }
 
@@ -170,7 +161,6 @@ impl ToolResultOutcomeDto {
     pub fn cancelled(content: impl Into<String>) -> DtoResult<Self> {
         Ok(Self::Cancelled {
             content: tool_result_content(content.into())?,
-            metadata: Vec::new(),
         })
     }
 
@@ -306,10 +296,12 @@ pub enum ModelRunCommitDto {
     },
 }
 
-/// Receives only durable model-execution commit evidence after a successful write.
+/// Receives only durable commit evidence after a successful write.
 ///
 /// A daemon publisher uses this provider-neutral seam to deliver live updates
-/// from the committed values the repository returned.
+/// from the committed values the repository returned. The model-run executor
+/// and the tool-invocation path both hand their committed rows to this one
+/// sink, so publication observes only durable values and never fails a commit.
 pub trait ModelRunCommitObserver: Send + Sync {
     /// Observes one committed transcript row or run status.
     fn observe_model_run_commit(&self, commit: &ModelRunCommitDto);
@@ -437,10 +429,7 @@ where
                 .drive_attempt(
                     &input,
                     policy.attempt_timeout_seconds(),
-                    ContextWindowState::new(
-                        context_window.window_tokens(),
-                        context_window.capacity_tokens(),
-                    ),
+                    ContextWindowState::new(context_window.window_tokens()),
                     AttemptState {
                         pending_text: &mut pending_text,
                         usage: &mut usage,

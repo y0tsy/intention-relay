@@ -64,21 +64,8 @@ pub(crate) trait HookObservationPort {
     fn observe_hook_failure(&self, observation: HookObservability);
 }
 
-/// Publication seam invoked with each transcript row after it has committed.
-pub trait ToolResultPublicationPort {
-    /// Publishes one committed transcript row to the live subscribers.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed error reported by the composition-owned publication
-    /// boundary when the committed row cannot be published.
-    fn publish_committed_message(&self, message: &MessageProjectionDto) -> DtoResult<()>;
-}
-
-impl ToolResultPublicationPort for () {
-    fn publish_committed_message(&self, _: &MessageProjectionDto) -> DtoResult<()> {
-        Ok(())
-    }
+impl ModelRunCommitObserver for () {
+    fn observe_model_run_commit(&self, _: &ModelRunCommitDto) {}
 }
 
 impl HookObservationPort for () {
@@ -203,13 +190,14 @@ where
         self.invoke_local_tool_with_publication(input, &())
     }
 
-    /// Executes, durably commits, publishes, then dispatches the after-publish hook.
+    /// Executes, durably commits, hands each committed row to the commit sink,
+    /// then dispatches the after-publish hook.
     ///
     /// # Errors
     ///
-    /// Returns the typed validation, storage, tool execution, publication, or
-    /// post-publish hook error.
-    pub fn invoke_local_tool_with_publication<P: ToolResultPublicationPort>(
+    /// Returns the typed validation, storage, tool execution, or post-publish
+    /// hook error.
+    pub fn invoke_local_tool_with_publication<P: ModelRunCommitObserver>(
         &self,
         input: ToolInvocationRequestDto,
         publisher: &P,
@@ -217,7 +205,7 @@ where
         self.invoke_local_tool_through_ports(input, publisher, &())
     }
 
-    fn invoke_local_tool_through_ports<P: ToolResultPublicationPort, O: HookObservationPort>(
+    fn invoke_local_tool_through_ports<P: ModelRunCommitObserver, O: HookObservationPort>(
         &self,
         input: ToolInvocationRequestDto,
         publisher: &P,
@@ -276,7 +264,7 @@ where
         }
         // The input identity is validated after the entry phase, so its owner
         // can rewrite the input the application admits.
-        if tool_id != expected_tool_id(&input) {
+        if tool_id != input.tool_id().as_str() {
             return Err(ErrorDto::validation(
                 "tool_id_mismatch",
                 "tool identifier does not match typed tool input",
@@ -547,7 +535,7 @@ where
                 tool_result_metadata(value)?,
             ),
             Err(error) => (
-                terminal_status_for_error(error),
+                ToolResultStatusDto::Failed,
                 error.code().to_owned(),
                 Vec::new(),
             ),
@@ -594,7 +582,7 @@ where
         clippy::too_many_arguments,
         reason = "One flat rejection payload keeps the ordered pair of commits at one call site."
     )]
-    fn append_rejected_invocation<P: ToolResultPublicationPort>(
+    fn append_rejected_invocation<P: ModelRunCommitObserver>(
         &self,
         session_id: SessionId,
         run_id: RunId,
@@ -625,8 +613,8 @@ where
         )
     }
 
-    /// Commits one tool-call row before the call is dispatched, then publishes
-    /// the committed row.
+    /// Commits one tool-call row before the call is dispatched, then hands the
+    /// committed row to the commit sink.
     ///
     /// # Errors
     ///
@@ -635,7 +623,7 @@ where
         clippy::too_many_arguments,
         reason = "One flat call payload keeps the single call-row commit at one call site."
     )]
-    fn append_tool_call<P: ToolResultPublicationPort>(
+    fn append_tool_call<P: ModelRunCommitObserver>(
         &self,
         session_id: SessionId,
         run_id: RunId,
@@ -657,7 +645,7 @@ where
         let committed = self
             .repository
             .append_message(AppendMessageInputDto::new(message, occurred_at))?;
-        publisher.publish_committed_message(&committed)?;
+        publisher.observe_model_run_commit(&ModelRunCommitDto::Content(committed.clone()));
         Ok(committed)
     }
 
@@ -670,7 +658,7 @@ where
         clippy::too_many_arguments,
         reason = "One flat failure payload keeps the single failure commit at one call site."
     )]
-    fn append_tool_failure<P: ToolResultPublicationPort>(
+    fn append_tool_failure<P: ModelRunCommitObserver>(
         &self,
         session_id: SessionId,
         run_id: RunId,
@@ -685,7 +673,7 @@ where
             run_id,
             call_id,
             tool_id,
-            terminal_status_for_error(error),
+            ToolResultStatusDto::Failed,
             error.code().to_owned(),
             Vec::new(),
             occurred_at,
@@ -695,7 +683,7 @@ where
     }
 
     /// Commits one terminal tool result with its answering transcript row, then
-    /// publishes that committed row.
+    /// hands that committed row to the commit sink.
     ///
     /// Exactly one transaction writes the `tool_results` row and the
     /// `tool_result` message the model reads.
@@ -707,7 +695,7 @@ where
         clippy::too_many_arguments,
         reason = "One flat terminal-result payload keeps the single transaction at one call site."
     )]
-    fn commit_tool_result<P: ToolResultPublicationPort>(
+    fn commit_tool_result<P: ModelRunCommitObserver>(
         &self,
         session_id: SessionId,
         run_id: RunId,
@@ -741,7 +729,7 @@ where
         let committed = self
             .repository
             .write_tool_result(WriteToolResultInputDto::new(evidence, message.clone())?)?;
-        publisher.publish_committed_message(&message)?;
+        publisher.observe_model_run_commit(&ModelRunCommitDto::Content(message));
         Ok(committed)
     }
 
@@ -969,25 +957,6 @@ const fn accepted_user_turn(
     Ok(ProtocolAcceptedResultDto::SendUserTurn(
         SendUserTurnAcceptedDto::new(command.session_id(), turn_id, outcome),
     ))
-}
-
-const fn expected_tool_id(input: &ToolInput) -> &'static str {
-    match input {
-        ToolInput::Read(_) => "read",
-        ToolInput::Glob(_) => "glob",
-        ToolInput::Grep(_) => "grep",
-        ToolInput::Write(_) => "write",
-        ToolInput::Edit(_) => "edit",
-        ToolInput::Execute(_) => "execute",
-    }
-}
-
-/// Maps one terminal error to its closed durable tool-result status.
-fn terminal_status_for_error(error: &ErrorDto) -> ToolResultStatusDto {
-    match error.code() {
-        "tool_execution_interrupted" | "tool_cancelled" => ToolResultStatusDto::Cancelled,
-        _ => ToolResultStatusDto::Failed,
-    }
 }
 
 /// Renders one typed tool result into its bounded model-visible content.

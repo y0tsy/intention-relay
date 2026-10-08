@@ -4,9 +4,8 @@
 //! The executor owns one [`ContextWindowState`] per provider attempt. The state
 //! estimates the input size of the message list it is about to send, compresses
 //! the largest tool results when that estimate crosses the configured sliding
-//! window, requests the (still unimplemented) full compression pass when it
-//! crosses the model's capacity, and recomputes the prompt-cache breakpoints of
-//! the request that follows.
+//! window, and recomputes the prompt-cache breakpoints of the request that
+//! follows.
 //!
 //! Messages are never removed and never reordered: a compression replaces one
 //! message's content in place, so the assistant `tool_calls` message and its
@@ -34,23 +33,17 @@ const COMPRESSED_TOOL_RESULT_PLACEHOLDER: &str = "[tool result compressed]";
 /// Dynamic input-size accounting for one provider attempt.
 pub struct ContextWindowState {
     window_tokens: u64,
-    capacity_tokens: u64,
     calibrated_input_tokens: Option<u64>,
     calibrated_characters: usize,
-    /// Capacity-compression stub invocations, kept observable until the
-    /// compression pass and a logging facade exist.
-    compression_requests: u32,
 }
 
 impl ContextWindowState {
     /// Creates the accounting state for one attempt from its frozen configuration.
-    pub const fn new(window_tokens: u64, capacity_tokens: u64) -> Self {
+    pub const fn new(window_tokens: u64) -> Self {
         Self {
             window_tokens,
-            capacity_tokens,
             calibrated_input_tokens: None,
             calibrated_characters: 0,
-            compression_requests: 0,
         }
     }
 
@@ -96,20 +89,15 @@ impl ContextWindowState {
     /// Applies one accounting pass to the message list about to be sent.
     ///
     /// The largest tool results are compressed first whenever the estimate
-    /// crosses the sliding window, an over-capacity estimate requests the
-    /// still-unimplemented compression pass, and the prompt-cache breakpoints
-    /// are recomputed for the trimmed list.
+    /// crosses the sliding window, and the prompt-cache breakpoints are
+    /// recomputed for the trimmed list.
     ///
     /// # Errors
     ///
     /// Returns a validation error only when a compressed result cannot form a
     /// valid tool-role message, which the placeholder construction prevents.
-    pub fn apply(&mut self, messages: &mut [ModelMessageDto]) -> DtoResult<()> {
+    pub fn apply(&self, messages: &mut [ModelMessageDto]) -> DtoResult<()> {
         self.trim_to_window(messages)?;
-        if self.estimate_tokens(messages) > self.capacity_tokens {
-            self.compression_requests = self.compression_requests.saturating_add(1);
-            compress_context(messages);
-        }
         mark_cache_breakpoints(messages);
         Ok(())
     }
@@ -205,17 +193,6 @@ fn leading_system_block_end(messages: &[ModelMessageDto]) -> Option<usize> {
         .checked_sub(1)
 }
 
-/// Requests full context compression for an over-capacity estimate.
-///
-/// The compression pass is not implemented: this stub never changes the
-/// message list and exists so the capacity decision has a named owner. The
-/// workspace carries no logging facade, so the warning that belongs here is
-/// deferred with the implementation.
-const fn compress_context(_messages: &mut [ModelMessageDto]) {
-    // TODO(compression): implement context compression
-    // TODO(observability): warn once the workspace exposes a logging facade
-}
-
 #[cfg(test)]
 #[allow(
     clippy::expect_used,
@@ -233,9 +210,9 @@ mod tests {
         ModelMessageDto::tool_result(ToolCallId::new(), content).expect("tool result is valid")
     }
 
-    /// A generous window and capacity that never trigger a pass by themselves.
+    /// A generous window that never triggers a pass by itself.
     fn roomy_state() -> ContextWindowState {
-        ContextWindowState::new(1_000_000, 2_000_000)
+        ContextWindowState::new(1_000_000)
     }
 
     #[test]
@@ -243,7 +220,7 @@ mod tests {
         let smaller = "a".repeat(120);
         let larger = "b".repeat(240);
         let mut messages = vec![user("context"), tool(&smaller), tool(&larger)];
-        let mut state = ContextWindowState::new(50, 1_000_000);
+        let state = ContextWindowState::new(50);
 
         state.apply(&mut messages).expect("pass applies");
 
@@ -264,7 +241,7 @@ mod tests {
         let first = "a".repeat(120);
         let second = "b".repeat(240);
         let mut messages = vec![user("context"), tool(&first), tool(&second)];
-        let mut state = ContextWindowState::new(20, 1_000_000);
+        let state = ContextWindowState::new(20);
 
         state.apply(&mut messages).expect("pass applies");
 
@@ -289,7 +266,7 @@ mod tests {
             ModelMessageDto::tool_result(id, "x".repeat(400)).expect("tool result is valid"),
         ];
         let count = messages.len();
-        let mut state = ContextWindowState::new(10, 1_000_000);
+        let state = ContextWindowState::new(10);
 
         state.apply(&mut messages).expect("pass applies");
 
@@ -347,7 +324,7 @@ mod tests {
             user("first"),
             tool("result"),
         ];
-        let mut state = roomy_state();
+        let state = roomy_state();
 
         state.apply(&mut messages).expect("pass applies");
 
@@ -364,26 +341,5 @@ mod tests {
             "recomputing clears the previous stable-prefix breakpoint"
         );
         assert!(messages[3].cache_control());
-    }
-
-    #[test]
-    fn an_over_capacity_estimate_requests_the_compression_stub() {
-        let mut messages = vec![user(&"a".repeat(400))];
-        let unchanged = messages.clone();
-        let mut state = ContextWindowState::new(10, 20);
-
-        state.apply(&mut messages).expect("pass applies");
-
-        assert_eq!(state.compression_requests, 1);
-        assert_eq!(messages.len(), unchanged.len());
-        for (message, original) in messages.iter().zip(unchanged.iter()) {
-            assert_eq!(message.role(), original.role());
-            assert_eq!(
-                message.content(),
-                original.content(),
-                "the compression stub never changes message content"
-            );
-        }
-        assert!(state.estimate_tokens(&messages) > 20);
     }
 }
