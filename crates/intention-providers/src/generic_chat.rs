@@ -6,10 +6,12 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
+use crate::mapping;
+use crate::mapping::WireRole;
 use crate::model::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
-    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
-    ProviderErrorDto, ToolCallDto, UsageDto,
+    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ProviderErrorDto,
+    ToolCallDto,
 };
 use async_openai::{
     Client,
@@ -36,7 +38,6 @@ use wire::{WireCacheControl, WireChunk, WireDelta, WireMessage, WireRequest};
 pub struct GenericChatDriver {
     resolved: ResolvedConfigDto,
     client: Client<OpenAIConfig>,
-    outbound_calls_for_test: u32,
 }
 
 impl std::fmt::Debug for GenericChatDriver {
@@ -77,11 +78,7 @@ impl GenericChatDriver {
                 .with_api_base(endpoint)
                 .with_api_key(credential),
         );
-        Ok(Self {
-            resolved,
-            client,
-            outbound_calls_for_test: 0,
-        })
+        Ok(Self { resolved, client })
     }
 
     /// Returns the non-network preflight validation result.
@@ -91,75 +88,6 @@ impl GenericChatDriver {
     /// Returns a policy error for unsupported request capabilities.
     pub fn preflight(&self, request: &ModelRequestDto) -> DtoResult<()> {
         ModelDriver::preflight(self, request)
-    }
-
-    /// Prepares the private Chat Completions request after capability validation.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe policy or translation error before outbound work.
-    pub fn prepare_request(&mut self, request: &ModelRequestDto) -> DtoResult<()> {
-        self.preflight(request)?;
-        let _native_request = translate_request(request)?;
-        let _client = &self.client;
-        self.outbound_calls_for_test = self.outbound_calls_for_test.saturating_add(1);
-        Ok(())
-    }
-
-    /// Returns the number of SDK request preparations completed in this process.
-    #[must_use]
-    pub const fn prepared_request_count(&self) -> u32 {
-        self.outbound_calls_for_test
-    }
-
-    /// Maps a text delta fixture into the canonical stream contract.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error for an empty text delta.
-    pub fn map_fixture_text(content: &str) -> DtoResult<ModelEventDto> {
-        ModelEventDto::text_delta(content)
-    }
-
-    /// Maps reported token counts into canonical usage.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error for inconsistent token totals.
-    pub fn map_fixture_usage(
-        input_tokens: u64,
-        output_tokens: u64,
-        total_tokens: u64,
-    ) -> DtoResult<UsageDto> {
-        UsageDto::reported(input_tokens, output_tokens, total_tokens)
-    }
-
-    /// Maps a Chat Completions finish reason string without exposing SDK types.
-    #[must_use]
-    pub fn map_fixture_finish(reason: &str) -> FinishReasonDto {
-        map_finish_reason(reason)
-    }
-
-    /// Maps a complete function call fixture into the canonical tool-call contract.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error for an invalid function-call shape.
-    pub fn map_fixture_tool_call(
-        _provider_call_id: &str,
-        name: &str,
-        arguments_json: &str,
-    ) -> DtoResult<ToolCallDto> {
-        ToolCallDto::new(ToolCallId::new(), name, arguments_json)
-    }
-
-    /// Maps a native status category to a safe provider error without native text.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error only if the fixed normalized error is malformed.
-    pub fn map_fixture_error(status: u16, _native_message: &str) -> DtoResult<ProviderErrorDto> {
-        provider_error(status == 429 || status >= 500)
     }
 }
 
@@ -308,10 +236,10 @@ where
                 self.fail("generic_chat_duplicate_usage");
                 return;
             }
-            match UsageDto::reported(
-                u64::from(usage.prompt_tokens),
-                u64::from(usage.completion_tokens),
-                u64::from(usage.total_tokens),
+            match mapping::reported_usage(
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                usage.total_tokens,
             ) {
                 Ok(usage) => {
                     self.usage_reported = true;
@@ -333,7 +261,7 @@ where
             if let Some(reason) = choice.finish_reason
                 && self
                     .terminal_reason
-                    .replace(map_finish_reason(&reason))
+                    .replace(mapping::finish_reason(&reason))
                     .is_some()
             {
                 self.fail("generic_chat_duplicate_finish");
@@ -469,7 +397,7 @@ impl FunctionToolFragments {
     fn finish(self) -> Result<ToolCallDto, ()> {
         let _id = self.id.ok_or(())?;
         let name = self.name.ok_or(())?;
-        ToolCallDto::new(ToolCallId::new(), name, self.arguments).map_err(|_| ())
+        mapping::complete_tool_call(&name, &self.arguments).map_err(|_| ())
     }
 }
 
@@ -483,31 +411,11 @@ fn merge_constant(slot: &mut Option<String>, next: Option<String>) -> Result<(),
     Ok(())
 }
 
-/// Maps one provider finish reason onto the closed reason set.
-///
-/// The provider value stays an open string, so every unlisted reason (a
-/// vendor-specific value or an extension such as `stop_sequence`) degrades to
-/// `FinishReasonDto::Unknown` instead of aborting the response.
-fn map_finish_reason(reason: &str) -> FinishReasonDto {
-    match reason {
-        "stop" => FinishReasonDto::Stop,
-        "length" => FinishReasonDto::Length,
-        "tool_calls" => FinishReasonDto::ToolCalls,
-        "content_filter" => FinishReasonDto::ContentFilter,
-        "error" => FinishReasonDto::Error,
-        _ => FinishReasonDto::Unknown,
-    }
-}
-
 fn provider_error(retryable: bool) -> DtoResult<ProviderErrorDto> {
-    ProviderErrorDto::unavailable(
-        if retryable {
-            "generic_chat_provider_unavailable"
-        } else {
-            "generic_chat_provider_request_rejected"
-        },
+    mapping::provider_error(
+        "generic_chat_provider_unavailable",
+        "generic_chat_provider_request_rejected",
         retryable,
-        None,
     )
 }
 
@@ -543,13 +451,9 @@ fn api_error_retryable(error: &async_openai::error::ApiErrorResponse) -> bool {
     }
 }
 
-#[allow(
-    clippy::expect_used,
-    reason = "The fixed non-blank normalized error code is validated by ProviderErrorDto."
-)]
+/// Builds one fixed non-retryable generic-chat failure that carries no native text.
 fn non_retryable_error(code: &'static str) -> ProviderErrorDto {
-    ProviderErrorDto::unavailable(code, false, None)
-        .expect("fixed normalized provider error code is valid")
+    mapping::fixed_error(code, "generic_chat_provider_failure")
 }
 
 /// Translates one provider-neutral request into the exact wire request.
@@ -586,7 +490,11 @@ fn translate_request(request: &ModelRequestDto) -> DtoResult<WireRequest> {
                 function: FunctionObject {
                     name: tool.name().to_owned(),
                     description: Some(tool.description().to_owned()),
-                    parameters: Some(parse_parameters(tool.parameters_json())?),
+                    parameters: Some(mapping::decode_parameters(
+                        tool.parameters_json(),
+                        "invalid_generic_chat_request",
+                        "generic chat tool parameters could not be decoded",
+                    )?),
                     strict: None,
                 },
             }))
@@ -619,54 +527,24 @@ fn reasoning_attachments(request: &ModelRequestDto) -> BTreeMap<ToolCallId, &str
     attachments
 }
 
-/// Decodes one validated tool-parameter schema into the SDK-declared type.
-///
-/// The decode target is inferred at the call site from the SDK request field,
-/// so the provider boundary never names the native JSON value type.
-///
-/// # Errors
-///
-/// Returns a validation error when the schema text cannot be decoded.
-fn parse_parameters<T>(raw: &str) -> DtoResult<T>
-where
-    T: std::str::FromStr,
-{
-    raw.parse::<T>().map_err(|_| {
-        ErrorDto::validation(
-            "invalid_generic_chat_request",
-            "generic chat tool parameters could not be decoded",
-        )
-    })
-}
-
 fn translate_message(
     message: &ModelMessageDto,
     attachments: &BTreeMap<ToolCallId, &str>,
 ) -> DtoResult<WireMessage> {
     let cache_control = message.cache_control().then(WireCacheControl::ephemeral);
-    match message.role() {
-        ModelRoleDto::System => Ok(WireMessage::System {
+    match mapping::wire_role(message.role()) {
+        WireRole::System => Ok(WireMessage::System {
             content: message.content().to_owned(),
             cache_control,
         }),
-        ModelRoleDto::User => Ok(WireMessage::User {
+        WireRole::User => Ok(WireMessage::User {
             content: message.content().to_owned(),
             cache_control,
         }),
-        ModelRoleDto::Assistant => translate_assistant_message(message, attachments),
-        // A notice is daemon-synthesized context for the model: the wire
-        // carries it as a user-role message with its text unchanged.
-        ModelRoleDto::Notice => Ok(WireMessage::User {
-            content: message.content().to_owned(),
-            cache_control,
-        }),
-        ModelRoleDto::Tool => {
-            let tool_call_id = message.tool_call_id().ok_or_else(|| {
-                ErrorDto::validation(
-                    "invalid_generic_chat_request",
-                    "tool-role messages must carry one tool call identity",
-                )
-            })?;
+        WireRole::Assistant => translate_assistant_message(message, attachments),
+        WireRole::Tool => {
+            let tool_call_id =
+                mapping::tool_result_identity(message, "invalid_generic_chat_request")?;
             Ok(WireMessage::Tool {
                 content: message.content().to_owned(),
                 tool_call_id: tool_call_id.to_string(),
@@ -727,6 +605,7 @@ fn translate_assistant_message(
 )]
 mod tests {
     use super::*;
+    use crate::model::{ModelRoleDto, UsageDto};
     use intention_proto::{ErrorRetryDto, RunId};
 
     #[test]

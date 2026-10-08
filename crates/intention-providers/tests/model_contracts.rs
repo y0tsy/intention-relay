@@ -3,26 +3,18 @@
     reason = "Contract fixtures use expect to provide precise test failure messages."
 )]
 
+mod support;
+
 use intention_proto::{CorrelationIdDto, RunId, ToolCallId};
 use intention_providers::{
     AssistantReasoningDto, FinishReasonDto, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
     ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
     ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto, UsageDto,
 };
+use support::plain_request;
 
 fn message(role: ModelRoleDto, content: &str) -> ModelMessageDto {
     ModelMessageDto::new(role, content).expect("fixture message is valid")
-}
-
-fn request() -> ModelRequestDto {
-    ModelRequestDto::new(
-        RunId::new(),
-        "fixture-model",
-        vec![message(ModelRoleDto::User, "hello")],
-        None,
-        None,
-    )
-    .expect("request is valid")
 }
 
 fn tool_definition(name: &str) -> ModelToolDefinitionDto {
@@ -40,7 +32,7 @@ fn model_request_and_capabilities_validate_provider_neutral_contracts() {
     assert!(!capabilities.supports_vendor_extensions());
     assert!(capabilities.supports_streaming());
 
-    let valid = request();
+    let valid = plain_request();
     assert_eq!(valid.model(), "fixture-model");
     assert!(ModelRequestDto::new(RunId::new(), " ", vec![], None, None).is_err());
     assert!(ModelMessageDto::new(ModelRoleDto::User, " ").is_err());
@@ -445,7 +437,7 @@ fn model_request_with_messages_preserves_fields() {
 
 #[test]
 fn model_request_tools_round_trip_and_omit_the_empty_field() {
-    let without_tools = request();
+    let without_tools = plain_request();
     assert!(without_tools.tools().is_empty());
     let encoded = serde_json::to_string(&without_tools).expect("request serializes");
     assert!(!encoded.contains("\"tools\""));
@@ -471,7 +463,7 @@ fn model_request_tools_round_trip_and_omit_the_empty_field() {
 
 #[test]
 fn model_request_with_tools_forces_tool_call_capability() {
-    let request = request();
+    let request = plain_request();
     assert!(!request.requested_capabilities().tool_calls());
     let with_tools = request
         .with_tools(vec![tool_definition("inspect_path")])
@@ -490,7 +482,7 @@ fn model_request_with_tools_forces_tool_call_capability() {
 
 #[test]
 fn model_request_with_messages_preserves_advertised_tools() {
-    let request = request()
+    let request = plain_request()
         .with_tools(vec![tool_definition("inspect_path")])
         .expect("request with tools is valid");
     let updated = request
@@ -609,7 +601,7 @@ fn assistant_reasoning_round_trips_and_rejects_invalid_wire_values() {
 
 #[test]
 fn model_request_assistant_reasoning_round_trips_and_survives_rebuilds() {
-    let without_reasoning = request();
+    let without_reasoning = plain_request();
     assert!(without_reasoning.assistant_reasoning().is_empty());
     let encoded = serde_json::to_string(&without_reasoning).expect("request serializes");
     assert!(!encoded.contains("\"assistant_reasoning\""));
@@ -733,7 +725,7 @@ fn model_driver_default_preflight_uses_declared_capabilities() {
     let driver = FixtureDriver(ModelCapabilitiesDto::new(
         true, false, false, false, false, true,
     ));
-    assert!(driver.preflight(&request()).is_ok());
+    assert!(driver.preflight(&plain_request()).is_ok());
     let tool_request = ModelRequestDto::new(
         RunId::new(),
         "fixture-model",

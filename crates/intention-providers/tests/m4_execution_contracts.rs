@@ -3,29 +3,19 @@
     reason = "Execution contract fixtures use expect to provide precise test failure messages."
 )]
 
+mod support;
+
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
 
 use futures_util::{StreamExt, stream};
-use intention_proto::RunId;
 use intention_providers::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
-    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
-    ProviderErrorDto,
+    ModelEventStream, ModelExecutionDriver, ModelRequestDto, ProviderErrorDto,
 };
-
-fn request() -> ModelRequestDto {
-    ModelRequestDto::new(
-        RunId::new(),
-        "fixture-model",
-        vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
-        None,
-        None,
-    )
-    .expect("request is valid")
-}
+use support::plain_request;
 
 #[test]
 fn cancellation_signal_notifies_each_fresh_waiter_and_remains_cancelled() {
@@ -118,7 +108,7 @@ fn execution_driver_yields_ordered_normalized_events_and_drops_resources() {
     };
     let events = futures_executor::block_on(
         driver
-            .execute(request(), ModelCancellationSignal::new())
+            .execute(plain_request(), ModelCancellationSignal::new())
             .collect::<Vec<_>>(),
     );
     assert_eq!(events.len(), 5);

@@ -89,7 +89,7 @@ requested feature is valid.
 `intention-providers` uses the pinned `openrouter-rs` 0.18.0 privately. It owns:
 
 - OpenRouter configuration translation;
--  private SDK request construction and fixture normalization for text, reasoning, usage, finish, tool-call, and error
+-  private SDK request construction and normalization for text, reasoning, usage, finish, tool-call, and error
 events;
 - provider-specific model discovery/capability metadata where available; and
 - safe diagnostics and correlation identifiers.
@@ -103,10 +103,18 @@ request and chunk structs, so the SDK still owns HTTP, SSE, TLS, and error mappi
 typed wire. It owns:
 
 - generic endpoint/auth/config translation;
--  private SDK request construction and fixture normalization for text, advertised tool definitions, usage, finish,
+-  private SDK request construction and normalization for text, advertised tool definitions, usage, finish,
 `tool_calls` tool-call, `reasoning_content` reasoning, same-run assistant tool-call reasoning echo, and error events;
 - documented capability limitations; and
 - normalized failures.
+
+The adapters single-source every normalization rule that does not depend on their SDK. The crate-private `mapping`
+module owns the wire-role class (a daemon-synthesized notice is user-role context), the finish-reason taxonomy, native
+token counters to validated usage, complete tool-call assembly with the locally allocated canonical identity, the
+tool-result identity requirement, tool-parameter decoding, and the normalized error tail (retry decision to safe code).
+Driver-specific rules stay with their adapter: OpenRouter maps its SDK finish-reason enum and delegates retryability to
+the SDK classifier, the generic adapter classifies HTTP status ranges with a provider `type` fallback, and each adapter
+owns its native wire shapes and error codes.
 
 The completed M4 daemon host starts the selected SDK-backed stream through the private provider composition path.
 Provider crates continue to expose only provider-neutral contracts; runtime-owned execution and persistent delivery do

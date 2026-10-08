@@ -5,11 +5,12 @@
 
 use std::collections::VecDeque;
 
+use crate::mapping;
+use crate::mapping::WireRole;
 use crate::model::ModelToolDefinitionDto;
 use crate::model::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
-    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
-    ProviderErrorDto, ToolCallDto, UsageDto,
+    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ProviderErrorDto,
 };
 use futures_util::{
     Stream, StreamExt,
@@ -17,7 +18,7 @@ use futures_util::{
     stream,
 };
 use intention_config::{ProviderKindDto, ResolvedConfigDto, StartupProviderMaterial};
-use intention_proto::{DtoResult, ErrorDto, ToolCallId};
+use intention_proto::{DtoResult, ErrorDto};
 use openrouter_rs::{
     OpenRouterClient,
     api::chat::{ChatCompletionRequest, ContentPart, Message},
@@ -29,7 +30,6 @@ use openrouter_rs::{
 pub struct OpenRouterDriver {
     resolved: ResolvedConfigDto,
     client: OpenRouterClient,
-    outbound_calls_for_test: u32,
 }
 
 impl std::fmt::Debug for OpenRouterDriver {
@@ -68,11 +68,7 @@ impl OpenRouterDriver {
                     "OpenRouter client could not be configured",
                 )
             })?;
-        Ok(Self {
-            resolved,
-            client,
-            outbound_calls_for_test: 0,
-        })
+        Ok(Self { resolved, client })
     }
 
     /// Returns the non-network preflight validation result.
@@ -82,92 +78,6 @@ impl OpenRouterDriver {
     /// Returns a policy error for unsupported request capabilities.
     pub fn preflight(&self, request: &ModelRequestDto) -> DtoResult<()> {
         ModelDriver::preflight(self, request)
-    }
-
-    /// Prepares a private OpenRouter request after capability validation.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe policy or translation error before outbound work.
-    pub fn prepare_request(&mut self, request: &ModelRequestDto) -> DtoResult<()> {
-        self.preflight(request)?;
-        let _native_request = translate_request(request)?;
-        let _client = &self.client;
-        self.outbound_calls_for_test = self.outbound_calls_for_test.saturating_add(1);
-        Ok(())
-    }
-
-    /// Returns the number of SDK request preparations completed in this process.
-    #[must_use]
-    pub const fn prepared_request_count(&self) -> u32 {
-        self.outbound_calls_for_test
-    }
-
-    /// Maps text output into the canonical stream contract.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error for an empty text delta.
-    pub fn map_fixture_text(content: &str) -> DtoResult<ModelEventDto> {
-        ModelEventDto::text_delta(content)
-    }
-
-    /// Maps a reasoning delta into the canonical stream contract.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error for an empty reasoning delta.
-    pub fn map_fixture_reasoning(content: &str) -> DtoResult<ModelEventDto> {
-        ModelEventDto::reasoning_delta(content)
-    }
-
-    /// Maps reported usage into canonical usage.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error for inconsistent token totals.
-    pub fn map_fixture_usage(
-        input_tokens: u64,
-        output_tokens: u64,
-        total_tokens: u64,
-    ) -> DtoResult<UsageDto> {
-        UsageDto::reported(input_tokens, output_tokens, total_tokens)
-    }
-
-    /// Maps an OpenRouter finish reason string into the canonical reason.
-    #[must_use]
-    pub fn map_fixture_finish(reason: &str) -> FinishReasonDto {
-        map_finish_reason(reason)
-    }
-
-    /// Maps a complete tool call into the canonical tool-call DTO.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error for an invalid function-call shape.
-    pub fn map_fixture_tool_call(
-        _provider_call_id: &str,
-        name: &str,
-        arguments_json: &str,
-    ) -> DtoResult<ToolCallDto> {
-        ToolCallDto::new(ToolCallId::new(), name, arguments_json)
-    }
-
-    /// Maps a native status category into a safe provider error without native text.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error only if the fixed normalized error is malformed.
-    pub fn map_fixture_error(status: u16, _native_message: &str) -> DtoResult<ProviderErrorDto> {
-        ProviderErrorDto::unavailable(
-            if status == 429 || status >= 500 {
-                "openrouter_provider_unavailable"
-            } else {
-                "openrouter_provider_request_rejected"
-            },
-            status == 429 || status >= 500,
-            None,
-        )
     }
 }
 
@@ -290,11 +200,7 @@ where
                 let calls = tool_calls
                     .into_iter()
                     .map(|call| {
-                        ToolCallDto::new(
-                            ToolCallId::new(),
-                            call.function.name,
-                            call.function.arguments,
-                        )
+                        mapping::complete_tool_call(&call.function.name, &call.function.arguments)
                     })
                     .collect::<DtoResult<Vec<_>>>();
                 match calls {
@@ -305,10 +211,10 @@ where
                                 .map(|call| Ok(ModelEventDto::tool_call(call))),
                         );
                         if let Some(usage) = usage {
-                            match UsageDto::reported(
-                                u64::from(usage.prompt_tokens),
-                                u64::from(usage.completion_tokens),
-                                u64::from(usage.total_tokens),
+                            match mapping::reported_usage(
+                                usage.prompt_tokens,
+                                usage.completion_tokens,
+                                usage.total_tokens,
                             ) {
                                 Ok(usage) => {
                                     self.pending.push_back(Ok(ModelEventDto::usage(usage)))
@@ -344,17 +250,6 @@ where
     }
 }
 
-fn map_finish_reason(reason: &str) -> FinishReasonDto {
-    match reason {
-        "stop" => FinishReasonDto::Stop,
-        "length" => FinishReasonDto::Length,
-        "tool_calls" => FinishReasonDto::ToolCalls,
-        "content_filter" => FinishReasonDto::ContentFilter,
-        "error" => FinishReasonDto::Error,
-        _ => FinishReasonDto::Unknown,
-    }
-}
-
 fn map_native_finish_reason(reason: OpenRouterFinishReason) -> FinishReasonDto {
     match reason {
         OpenRouterFinishReason::Stop => FinishReasonDto::Stop,
@@ -378,27 +273,17 @@ fn map_openrouter_error(error: &OpenRouterError) -> ProviderErrorDto {
         | OpenRouterError::UninitializedFieldError(_)
         | OpenRouterError::Serialization(_) => false,
     };
-    ProviderErrorDto::unavailable(
-        if retryable {
-            "openrouter_provider_unavailable"
-        } else {
-            "openrouter_provider_request_rejected"
-        },
+    mapping::provider_error(
+        "openrouter_provider_unavailable",
+        "openrouter_provider_request_rejected",
         retryable,
-        None,
     )
     .unwrap_or_else(|_| safe_error("openrouter_provider_failure"))
 }
 
-#[allow(
-    clippy::expect_used,
-    reason = "The fixed non-blank normalized error code is validated by ProviderErrorDto."
-)]
+/// Builds one fixed non-retryable OpenRouter failure that carries no native text.
 fn safe_error(code: &'static str) -> ProviderErrorDto {
-    ProviderErrorDto::unavailable(code, false, None).unwrap_or_else(|_| {
-        ProviderErrorDto::unavailable("openrouter_provider_failure", false, None)
-            .expect("fixed normalized provider error is valid")
-    })
+    mapping::fixed_error(code, "openrouter_provider_failure")
 }
 
 /// Translates one provider-neutral request into the private native SDK shape.
@@ -458,43 +343,22 @@ fn translate_tool(definition: &ModelToolDefinitionDto) -> DtoResult<openrouter_r
     Ok(openrouter_rs::types::Tool::new(
         definition.name(),
         definition.description(),
-        parse_parameters(definition.parameters_json())?,
+        mapping::decode_parameters(
+            definition.parameters_json(),
+            "invalid_openrouter_request",
+            "OpenRouter request could not be translated",
+        )?,
     ))
 }
 
-/// Decodes validated JSON-object parameter text into the native SDK type.
-///
-/// The decoded type is inferred at the call site from the native constructor
-/// that consumes it, so this adapter never names a JSON value type. The
-/// definition DTO has already validated the text as a bounded JSON object.
-///
-/// # Errors
-///
-/// Returns a safe translation error when the text does not decode.
-fn parse_parameters<T: std::str::FromStr>(raw: &str) -> DtoResult<T> {
-    raw.parse().map_err(|_| {
-        ErrorDto::validation(
-            "invalid_openrouter_request",
-            "OpenRouter request could not be translated",
-        )
-    })
-}
-
 fn translate_message(message: &ModelMessageDto) -> DtoResult<Message> {
-    match message.role() {
-        ModelRoleDto::System => Ok(translate_text_message(Role::System, message)),
-        ModelRoleDto::User => Ok(translate_text_message(Role::User, message)),
-        ModelRoleDto::Assistant => translate_assistant_message(message),
-        // A notice is daemon-synthesized context for the model: the wire
-        // carries it as a user-role message with its text unchanged.
-        ModelRoleDto::Notice => Ok(translate_text_message(Role::User, message)),
-        ModelRoleDto::Tool => {
-            let tool_call_id = message.tool_call_id().ok_or_else(|| {
-                ErrorDto::validation(
-                    "invalid_openrouter_request",
-                    "tool-role messages must carry one tool call identity",
-                )
-            })?;
+    match mapping::wire_role(message.role()) {
+        WireRole::System => Ok(translate_text_message(Role::System, message)),
+        WireRole::User => Ok(translate_text_message(Role::User, message)),
+        WireRole::Assistant => translate_assistant_message(message),
+        WireRole::Tool => {
+            let tool_call_id =
+                mapping::tool_result_identity(message, "invalid_openrouter_request")?;
             Ok(translate_tool_message(&tool_call_id.to_string(), message))
         }
     }
@@ -568,8 +432,9 @@ fn translate_assistant_message(message: &ModelMessageDto) -> DtoResult<Message> 
 )]
 mod tests {
     use super::*;
+    use crate::model::{ModelRoleDto, ToolCallDto, UsageDto};
     use futures_util::FutureExt;
-    use intention_proto::RunId;
+    use intention_proto::{RunId, ToolCallId};
 
     fn api_error(status: http::StatusCode) -> OpenRouterError {
         OpenRouterError::Api(Box::new(openrouter_rs::error::ApiErrorContext {
