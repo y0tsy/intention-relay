@@ -5,10 +5,17 @@
     reason = "Client contract fixtures use direct assertions and controlled fixture launchers; the standard fixture mutex serializes independent fixture servers, and every async test owns its own single-threaded runtime, so holding that guard across awaits cannot deadlock."
 )]
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+#[allow(
+    dead_code,
+    reason = "Shared fixtures serve every integration target in this crate; each target compiles the subset its suite calls."
+)]
+mod common;
+
+use common::{SCHEMA_VERSION, TEST_REPLY_BOUND, endpoint, hello, message};
+
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
-use std::time::Duration;
 
 use intention_client::{DaemonLauncher, IntentionClient, ProcessDaemonLauncher};
 use intention_proto::{
@@ -21,18 +28,11 @@ use intention_proto::{
     SubscribeSessionCommandDto, TurnId, decode_request_line, encode_hello_response,
     encode_response,
 };
-use intention_proto::{
-    DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto, SessionId, WorkspaceId,
-};
-use intention_proto::{MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto};
+use intention_proto::{DtoResult, ErrorDto, ProjectId, RunId, SessionId, WorkspaceId};
+use intention_proto::{MessageKindDto, RunModeDto, SessionProjectionDto};
 use intention_transport::{
     LocalConnection, LocalEndpoint, LocalListener, local_protocol_version, negotiate_daemon,
 };
-use tempfile::TempDir;
-
-const SCHEMA_VERSION: SchemaVersionDto = intention_proto::CURRENT_DTO_SCHEMA_VERSION;
-/// Bound that turns a hanging client call into a visible test failure.
-const TEST_REPLY_BOUND: Duration = Duration::from_secs(5);
 
 fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
     SessionProjectionDto::new(
@@ -52,19 +52,6 @@ fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
         Vec::new(),
     )
     .expect("fixture projection is valid")
-}
-
-fn fixture_message(session_id: SessionId) -> MessageProjectionDto {
-    MessageProjectionDto::new(
-        session_id,
-        None,
-        MessageKindDto::Notice,
-        "fixture notice",
-        None,
-        None,
-        None,
-    )
-    .expect("fixture transcript row is valid")
 }
 
 #[derive(Clone)]
@@ -109,19 +96,12 @@ impl DaemonLauncher for RejectingLauncher {
     }
 }
 
-static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(0);
 static FIXTURE_CONNECTIONS: Mutex<()> = Mutex::new(());
 
 fn fixture_guard() -> MutexGuard<'static, ()> {
     FIXTURE_CONNECTIONS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-fn endpoint(_directory: &TempDir) -> LocalEndpoint {
-    let sequence = NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed);
-    LocalEndpoint::from_instance_id(format!("client-fixture-{}-{sequence}", std::process::id()))
-        .expect("fixture instance name is valid")
 }
 
 fn client(
@@ -135,11 +115,6 @@ fn client(
         Box::new(FixtureLauncher { response, launches }),
     )
     .expect("fixture client is valid")
-}
-
-fn daemon_hello() -> ProtocolHelloDto {
-    ProtocolHelloDto::new(local_protocol_version(), "fixture-daemon")
-        .expect("fixture daemon hello is valid")
 }
 
 fn start_fixture_server(
@@ -192,7 +167,7 @@ fn serve_fixture_connection(
         }
         return;
     }
-    negotiate_daemon(&mut connection, daemon_hello()).expect("fixture hello negotiates");
+    negotiate_daemon(&mut connection, hello("fixture-daemon")).expect("fixture hello negotiates");
     if matches!(response, FixtureResponse::Disconnect) {
         return;
     }
@@ -307,18 +282,16 @@ fn process_launcher_and_client_metadata_reject_invalid_configuration() {
             .code(),
         "invalid_daemon_program"
     );
-    let directory = TempDir::new().expect("temporary directory is available");
     let invalid_program = ProcessDaemonLauncher::new("intention-daemon-does-not-exist")
         .expect("non-empty program is accepted as configuration");
     assert_eq!(
         invalid_program
-            .launch(&endpoint(&directory))
+            .launch(&endpoint())
             .expect_err("missing binary must return a safe launch error")
             .code(),
         "local_daemon_launch_failed"
     );
-    let invalid_adapter =
-        IntentionClient::new(endpoint(&directory), " ", Box::new(RejectingLauncher));
+    let invalid_adapter = IntentionClient::new(endpoint(), " ", Box::new(RejectingLauncher));
     assert!(invalid_adapter.is_err(), "blank adapter name must fail");
     let error = match invalid_adapter {
         Ok(_) => panic!("blank adapter name must fail"),
@@ -330,9 +303,8 @@ fn process_launcher_and_client_metadata_reject_invalid_configuration() {
 #[tokio::test]
 async fn first_ready_connection_skips_launch_and_bootstrap_launches_after_unavailable() {
     let _guard = fixture_guard();
-    let directory = TempDir::new().expect("temporary directory is available");
     let launches = Arc::new(AtomicUsize::new(0));
-    let ready_endpoint = endpoint(&directory);
+    let ready_endpoint = endpoint();
     let server = start_fixture_server(
         ready_endpoint.clone(),
         FixtureResponse::Health(ready_health()),
@@ -351,7 +323,7 @@ async fn first_ready_connection_skips_launch_and_bootstrap_launches_after_unavai
 
     let bootstrap_launches = Arc::new(AtomicUsize::new(0));
     let health = client(
-        endpoint(&directory),
+        endpoint(),
         FixtureResponse::Health(ready_health()),
         Arc::clone(&bootstrap_launches),
     )
@@ -365,23 +337,17 @@ async fn first_ready_connection_skips_launch_and_bootstrap_launches_after_unavai
 #[tokio::test]
 async fn bootstrap_propagates_typed_launch_error() {
     let _guard = fixture_guard();
-    let directory = TempDir::new().expect("temporary directory is available");
-    let error = IntentionClient::new(
-        endpoint(&directory),
-        "fixture-client",
-        Box::new(RejectingLauncher),
-    )
-    .expect("fixture client is valid")
-    .connect_or_bootstrap()
-    .await
-    .expect_err("launch rejection must be visible to the caller");
+    let error = IntentionClient::new(endpoint(), "fixture-client", Box::new(RejectingLauncher))
+        .expect("fixture client is valid")
+        .connect_or_bootstrap()
+        .await
+        .expect_err("launch rejection must be visible to the caller");
     assert_eq!(error.code(), "fixture_launch_rejected");
 }
 
 #[tokio::test]
 async fn health_rejection_invalid_response_correlation_and_protocol_mismatch_are_typed() {
     let _guard = fixture_guard();
-    let directory = TempDir::new().expect("temporary directory is available");
     let scenarios = [
         (
             FixtureResponse::Rejected(ErrorDto::validation("fixture_rejected", "no health")),
@@ -406,7 +372,7 @@ async fn health_rejection_invalid_response_correlation_and_protocol_mismatch_are
         ),
     ];
     for (response, expected_code) in scenarios {
-        let endpoint = endpoint(&directory);
+        let endpoint = endpoint();
         let server = start_fixture_server(endpoint.clone(), response.clone());
         let error = client(endpoint, response, Arc::new(AtomicUsize::new(0)))
             .health()
@@ -420,8 +386,7 @@ async fn health_rejection_invalid_response_correlation_and_protocol_mismatch_are
 #[tokio::test]
 async fn closed_response_channel_is_a_typed_error_instead_of_a_hang() {
     let _guard = fixture_guard();
-    let directory = TempDir::new().expect("temporary directory is available");
-    let endpoint = endpoint(&directory);
+    let endpoint = endpoint();
     let server = start_fixture_server(endpoint.clone(), FixtureResponse::Disconnect);
     let error = tokio::time::timeout(
         TEST_REPLY_BOUND,
@@ -442,16 +407,20 @@ async fn closed_response_channel_is_a_typed_error_instead_of_a_hang() {
 #[tokio::test]
 async fn snapshot_and_subscription_validate_success_rejection_and_response_shape() {
     let _guard = fixture_guard();
-    let directory = TempDir::new().expect("temporary directory is available");
     let session_id = SessionId::new();
     let snapshot = SessionSnapshotDto::with_projection(
         SCHEMA_VERSION,
         session_id,
         fixture_projection(session_id),
-        vec![fixture_message(session_id)],
+        vec![message(
+            session_id,
+            None,
+            MessageKindDto::Notice,
+            "fixture notice",
+        )],
     )
     .expect("fixture snapshot is valid");
-    let valid_snapshot_endpoint = endpoint(&directory);
+    let valid_snapshot_endpoint = endpoint();
     let server = start_fixture_server(
         valid_snapshot_endpoint.clone(),
         FixtureResponse::Snapshot(snapshot.clone()),
@@ -469,7 +438,7 @@ async fn snapshot_and_subscription_validate_success_rejection_and_response_shape
     assert_eq!(received.messages(), snapshot.messages());
     server.join().expect("snapshot fixture server completes");
 
-    let rejected_endpoint = endpoint(&directory);
+    let rejected_endpoint = endpoint();
     let rejection = ErrorDto::validation("session_rejected", "fixture session rejected");
     let server = start_fixture_server(
         rejected_endpoint.clone(),
@@ -489,7 +458,7 @@ async fn snapshot_and_subscription_validate_success_rejection_and_response_shape
     );
     server.join().expect("rejection fixture server completes");
 
-    let invalid_snapshot_endpoint = endpoint(&directory);
+    let invalid_snapshot_endpoint = endpoint();
     let server = start_fixture_server(invalid_snapshot_endpoint.clone(), FixtureResponse::Invalid);
     assert_eq!(
         client(
@@ -508,7 +477,7 @@ async fn snapshot_and_subscription_validate_success_rejection_and_response_shape
         .expect("invalid snapshot fixture server completes");
 
     let response = SessionSubscriptionResponseDto::snapshot(snapshot.clone());
-    let valid_subscription_endpoint = endpoint(&directory);
+    let valid_subscription_endpoint = endpoint();
     let server = start_fixture_server(
         valid_subscription_endpoint.clone(),
         FixtureResponse::Subscription(response.clone()),
@@ -526,7 +495,7 @@ async fn snapshot_and_subscription_validate_success_rejection_and_response_shape
         .join()
         .expect("subscription fixture server completes");
 
-    let invalid_subscription_endpoint = endpoint(&directory);
+    let invalid_subscription_endpoint = endpoint();
     let server = start_fixture_server(
         invalid_subscription_endpoint.clone(),
         FixtureResponse::Invalid,
@@ -551,13 +520,12 @@ async fn snapshot_and_subscription_validate_success_rejection_and_response_shape
 #[tokio::test]
 async fn non_ready_health_is_not_returned_as_a_successful_connection() {
     let _guard = fixture_guard();
-    let directory = TempDir::new().expect("temporary directory is available");
     for readiness in [
         DaemonReadinessDto::Starting,
         DaemonReadinessDto::Draining,
         DaemonReadinessDto::Unavailable,
     ] {
-        let endpoint = endpoint(&directory);
+        let endpoint = endpoint();
         let server = start_fixture_server(
             endpoint.clone(),
             FixtureResponse::Health(DaemonHealthDto::new(
@@ -587,11 +555,10 @@ async fn non_ready_health_is_not_returned_as_a_successful_connection() {
 #[tokio::test]
 async fn command_and_conveniences_round_trip_typed_acceptances() {
     let _guard = fixture_guard();
-    let directory = TempDir::new().expect("temporary directory is available");
     let session_id = SessionId::new();
     let created = CreateSessionAcceptedDto::new(ProjectId::new(), WorkspaceId::new(), session_id);
 
-    let command_endpoint = endpoint(&directory);
+    let command_endpoint = endpoint();
     let accepted = accepted_command(ProtocolAcceptedResultDto::CreateSession(created));
     let server = start_fixture_server(
         command_endpoint.clone(),
@@ -610,7 +577,7 @@ async fn command_and_conveniences_round_trip_typed_acceptances() {
     assert_eq!(received, accepted);
     server.join().expect("command fixture server completes");
 
-    let create_endpoint = endpoint(&directory);
+    let create_endpoint = endpoint();
     let accepted = accepted_command(ProtocolAcceptedResultDto::CreateSession(created));
     let server = start_fixture_server(
         create_endpoint.clone(),
@@ -637,7 +604,7 @@ async fn command_and_conveniences_round_trip_typed_acceptances() {
     let accepted = accepted_command(ProtocolAcceptedResultDto::SendUserTurn(
         SendUserTurnAcceptedDto::new(session_id, TurnId::new(), outcome),
     ));
-    let turn_endpoint = endpoint(&directory);
+    let turn_endpoint = endpoint();
     let server = start_fixture_server(
         turn_endpoint.clone(),
         FixtureResponse::Command(accepted.clone()),
@@ -663,11 +630,10 @@ async fn command_and_conveniences_round_trip_typed_acceptances() {
 #[tokio::test]
 async fn command_rejection_and_unexpected_acceptance_payloads_are_typed() {
     let _guard = fixture_guard();
-    let directory = TempDir::new().expect("temporary directory is available");
     let session_id = SessionId::new();
 
     let rejection = ErrorDto::validation("fixture_command_rejected", "fixture command rejected");
-    let rejected_endpoint = endpoint(&directory);
+    let rejected_endpoint = endpoint();
     let rejected = ProtocolCommandResultDto::Rejected(rejection.clone());
     let server = start_fixture_server(
         rejected_endpoint.clone(),
@@ -690,7 +656,7 @@ async fn command_rejection_and_unexpected_acceptance_payloads_are_typed() {
     let wrong_turn = accepted_command(ProtocolAcceptedResultDto::SendUserTurn(
         SendUserTurnAcceptedDto::new(session_id, TurnId::new(), SendUserTurnOutcomeDto::Pending),
     ));
-    let create_shape_endpoint = endpoint(&directory);
+    let create_shape_endpoint = endpoint();
     let server = start_fixture_server(
         create_shape_endpoint.clone(),
         FixtureResponse::Command(wrong_turn.clone()),
@@ -714,7 +680,7 @@ async fn command_rejection_and_unexpected_acceptance_payloads_are_typed() {
     let wrong_create = accepted_command(ProtocolAcceptedResultDto::CreateSession(
         CreateSessionAcceptedDto::new(ProjectId::new(), WorkspaceId::new(), session_id),
     ));
-    let turn_shape_endpoint = endpoint(&directory);
+    let turn_shape_endpoint = endpoint();
     let server = start_fixture_server(
         turn_shape_endpoint.clone(),
         FixtureResponse::Command(wrong_create.clone()),
@@ -743,9 +709,8 @@ async fn command_rejection_and_unexpected_acceptance_payloads_are_typed() {
 #[tokio::test]
 async fn await_ready_returns_ready_health_and_reports_starting() {
     let _guard = fixture_guard();
-    let directory = TempDir::new().expect("temporary directory is available");
 
-    let ready_endpoint = endpoint(&directory);
+    let ready_endpoint = endpoint();
     let server = start_fixture_server(
         ready_endpoint.clone(),
         FixtureResponse::Health(ready_health()),
@@ -761,7 +726,7 @@ async fn await_ready_returns_ready_health_and_reports_starting() {
     assert_eq!(health.readiness(), DaemonReadinessDto::Ready);
     server.join().expect("ready fixture server completes");
 
-    let starting_endpoint = endpoint(&directory);
+    let starting_endpoint = endpoint();
     let stop = Arc::new(AtomicBool::new(false));
     let server = start_starting_health_server(starting_endpoint.clone(), Arc::clone(&stop));
     let error = client(

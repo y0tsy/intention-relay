@@ -3,19 +3,21 @@
     reason = "M4 SQLite safe configuration fixtures use expect for precise diagnostics."
 )]
 
+#[allow(
+    dead_code,
+    reason = "Shared fixtures serve every integration target in this crate; each target compiles the subset its suite calls."
+)]
+mod common;
+
+use common::{create_session, repository, time};
+
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_proto::{
-    ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, IdempotencyKey, ProjectId, RunId, SessionId,
-    TimestampDto, WorkspaceId,
+    ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, IdempotencyKey, RunId, SessionId,
 };
-use intention_proto::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
-use intention_storage::{
-    AcceptUserTurnInputDto, CreateSessionInputDto, SqliteDatabaseLocationDto,
-    SqliteStorageRepository, StorageRepositoryDto,
-};
-use tempfile::TempDir;
+use intention_storage::{AcceptUserTurnInputDto, StorageRepositoryDto};
 
 #[test]
 fn matching_run_loads_its_immutable_safe_configuration_selection() {
@@ -151,116 +153,49 @@ fn corrupted_run_configuration_snapshot_is_a_decode_failure_and_a_missing_row_st
 }
 
 #[test]
-fn backend_failure_on_the_run_identity_lookup_is_unavailable_not_not_found() {
-    // Only a genuinely missing run row is a permanent not-found; a
-    // backend read failure during the run-identity lookup stays transient
-    // unavailability.
-    let (directory, repository) = repository();
-    let session_id = create_session(&repository, "backend-failure");
-    let run_id = RunId::new();
-    repository
-        .accept_user_turn(
-            AcceptUserTurnInputDto::new(
-                session_id,
-                IdempotencyKey::new(),
-                "turn",
-                run_id,
-                snapshot("safe-model", None, 30, 2),
-                time(2),
-            )
-            .expect("turn input is valid"),
-        )
-        .expect("turn starts");
-    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
-        .expect("database reopens for the backend failure");
-    connection
-        .execute_batch("PRAGMA foreign_keys = OFF;")
-        .expect("foreign keys disable for the backend-failure fixture");
-    connection
-        .execute("DROP TABLE runs", [])
-        .expect("run table drops for the backend-failure fixture");
-    drop(connection);
-    let error = repository
-        .load_run_config_snapshot(session_id, run_id)
-        .expect_err("a backend read failure is unavailable");
-    assert_eq!(error.code(), "storage_unavailable");
-    assert_eq!(error.category(), ErrorCategoryDto::Unavailable);
-    assert_ne!(error.retry(), ErrorRetryDto::Never);
-}
-
-#[test]
-fn backend_failure_on_the_snapshot_lookup_is_unavailable_not_not_found() {
-    // Only a genuinely missing snapshot row is the typed
-    // `run_configuration_unavailable`; a backend read failure while loading
-    // the persisted safe selection stays transient `storage_unavailable`.
-    let (directory, repository) = repository();
-    let session_id = create_session(&repository, "snapshot-backend-failure");
-    let run_id = RunId::new();
-    repository
-        .accept_user_turn(
-            AcceptUserTurnInputDto::new(
-                session_id,
-                IdempotencyKey::new(),
-                "turn",
-                run_id,
-                snapshot("safe-model", None, 30, 2),
-                time(2),
-            )
-            .expect("turn input is valid"),
-        )
-        .expect("turn starts");
-    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
-        .expect("database reopens for the backend failure");
-    connection
-        .execute("DROP TABLE configuration_revisions", [])
-        .expect("configuration revisions drop for the backend-failure fixture");
-    drop(connection);
-    let error = repository
-        .load_run_config_snapshot(session_id, run_id)
-        .expect_err("a backend read failure is unavailable");
-    assert_eq!(error.code(), "storage_unavailable");
-    assert_eq!(error.category(), ErrorCategoryDto::Unavailable);
-    assert_ne!(error.retry(), ErrorRetryDto::Never);
-}
-
-fn repository() -> (TempDir, SqliteStorageRepository) {
-    let directory = TempDir::new().expect("temporary directory exists");
-    let repository = SqliteStorageRepository::open(
-        SqliteDatabaseLocationDto::new(
-            directory
-                .path()
-                .join("storage.sqlite")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("database path is absolute"),
-    )
-    .expect("database opens");
-    (directory, repository)
-}
-
-fn create_session(repository: &SqliteStorageRepository, label: &str) -> SessionId {
-    let session_id = SessionId::new();
-    repository
-        .create_session(CreateSessionInputDto::new(
-            CreateSessionCommandDto::new(
-                ProjectId::new(),
-                session_id,
-                WorkspaceId::new(),
-                WorkspaceRootDto::parse(
-                    std::env::temp_dir()
-                        .join("intention-m4-run-safe-config")
-                        .join(label)
-                        .to_string_lossy()
-                        .into_owned(),
+fn backend_failure_on_a_run_config_lookup_is_unavailable_not_not_found() {
+    // Only a genuinely missing row is a permanent not-found; a backend read
+    // failure on the run-identity or the persisted-snapshot lookup stays
+    // transient `storage_unavailable`.
+    for (label, mutation) in [
+        (
+            "backend-failure",
+            "PRAGMA foreign_keys = OFF;\nDROP TABLE runs;",
+        ),
+        (
+            "snapshot-backend-failure",
+            "DROP TABLE configuration_revisions;",
+        ),
+    ] {
+        let (directory, repository) = repository();
+        let session_id = create_session(&repository, label);
+        let run_id = RunId::new();
+        repository
+            .accept_user_turn(
+                AcceptUserTurnInputDto::new(
+                    session_id,
+                    IdempotencyKey::new(),
+                    "turn",
+                    run_id,
+                    snapshot("safe-model", None, 30, 2),
+                    time(2),
                 )
-                .expect("workspace root is absolute"),
-                RunModeDto::Build,
-            ),
-            time(1),
-        ))
-        .expect("session creates");
-    session_id
+                .expect("turn input is valid"),
+            )
+            .expect("turn starts");
+        let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+            .expect("database reopens for the backend failure");
+        connection
+            .execute_batch(mutation)
+            .expect("the backend-failure fixture mutation applies");
+        drop(connection);
+        let error = repository
+            .load_run_config_snapshot(session_id, run_id)
+            .expect_err("a backend read failure is unavailable");
+        assert_eq!(error.code(), "storage_unavailable");
+        assert_eq!(error.category(), ErrorCategoryDto::Unavailable);
+        assert_ne!(error.retry(), ErrorRetryDto::Never);
+    }
 }
 
 fn snapshot(
@@ -292,8 +227,4 @@ fn snapshot(
         resolved,
     )
     .expect("safe snapshot is valid")
-}
-
-fn time(value: i64) -> TimestampDto {
-    TimestampDto::from_unix_seconds(value).expect("fixture time is valid")
 }

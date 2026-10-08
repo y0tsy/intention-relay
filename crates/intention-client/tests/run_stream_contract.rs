@@ -4,39 +4,23 @@
     reason = "Run-stream client fixtures use direct assertions for diagnostics."
 )]
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[allow(
+    dead_code,
+    reason = "Shared fixtures serve every integration target in this crate; each target compiles the subset its suite calls."
+)]
+mod common;
+
+use common::{SCHEMA_VERSION, TEST_REPLY_BOUND, endpoint, hello, message};
 
 use intention_client::{RunStreamClient, RunSubscriptionReducer};
-use intention_proto::{ConfigRevisionId, ErrorDto, RunId, SchemaVersionDto, SessionId, TurnId};
+use intention_proto::{ConfigRevisionId, ErrorDto, RunId, SessionId, TurnId};
 use intention_proto::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
 use intention_proto::{
-    ProtocolDaemonMessageDto, ProtocolHelloDto, ProtocolRequestPayloadDto,
-    ProtocolResponsePayloadDto, RunStatusFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
-    RunSubscriptionSnapshotDto, SubscribeRunCommandDto, decode_request_line, encode_response,
+    ProtocolDaemonMessageDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
+    RunStatusFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto, RunSubscriptionSnapshotDto,
+    SubscribeRunCommandDto, decode_request_line, encode_response,
 };
-use intention_transport::{
-    AsyncLocalListener, AsyncRequestReceiver, LocalEndpoint, local_protocol_version,
-};
-
-const SCHEMA: SchemaVersionDto = intention_proto::CURRENT_DTO_SCHEMA_VERSION;
-/// Bound that turns a hanging subscription call into a visible test failure.
-const TEST_REPLY_BOUND: Duration = Duration::from_secs(5);
-static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(0);
-
-fn endpoint() -> LocalEndpoint {
-    let sequence = NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time follows epoch")
-        .as_nanos();
-    LocalEndpoint::from_instance_id(format!("run-stream-fixture-{nanos}-{sequence}"))
-        .expect("fixture endpoint is valid")
-}
-
-fn hello(name: &str) -> ProtocolHelloDto {
-    ProtocolHelloDto::new(local_protocol_version(), name).expect("fixture hello is valid")
-}
+use intention_transport::{AsyncLocalListener, AsyncRequestReceiver};
 
 async fn receive_run_subscription(
     requests: &mut AsyncRequestReceiver,
@@ -48,16 +32,6 @@ async fn receive_run_subscription(
         ProtocolRequestPayloadDto::RunSubscription(subscription) => (id, subscription),
         other => panic!("expected a run subscription request, got {other:?}"),
     }
-}
-
-fn message(
-    session_id: SessionId,
-    run_id: Option<RunId>,
-    kind: MessageKindDto,
-    text: &str,
-) -> MessageProjectionDto {
-    MessageProjectionDto::new(session_id, run_id, kind, text, None, None, None)
-        .expect("fixture transcript row is valid")
 }
 
 fn run(session_id: SessionId, run_id: RunId, status: RunStatusDto) -> RunProjectionDto {
@@ -239,7 +213,7 @@ async fn subscribe_delivers_current_state_then_live_content_and_status_frames() 
             .await
             .expect("peer negotiates");
         let (request_id, request) = receive_run_subscription(&mut requests).await;
-        assert_eq!(request.schema_version(), SCHEMA);
+        assert_eq!(request.schema_version(), SCHEMA_VERSION);
         assert_eq!(request.session_id(), session_id);
         assert_eq!(request.run_id(), run_id);
         messages
@@ -284,7 +258,11 @@ async fn subscribe_delivers_current_state_then_live_content_and_status_frames() 
 
     let client = RunStreamClient::new(endpoint, "run-stream-client").expect("client is valid");
     let mut subscription = client
-        .subscribe(SubscribeRunCommandDto::new(SCHEMA, session_id, run_id))
+        .subscribe(SubscribeRunCommandDto::new(
+            SCHEMA_VERSION,
+            session_id,
+            run_id,
+        ))
         .await
         .expect("current-state snapshot reply arrives");
     assert_eq!(subscription.reducer().session_id(), session_id);
@@ -376,7 +354,11 @@ async fn receive_rejects_a_live_frame_from_another_run_scope() {
 
     let client = RunStreamClient::new(endpoint, "run-stream-client").expect("client is valid");
     let mut subscription = client
-        .subscribe(SubscribeRunCommandDto::new(SCHEMA, session_id, run_id))
+        .subscribe(SubscribeRunCommandDto::new(
+            SCHEMA_VERSION,
+            session_id,
+            run_id,
+        ))
         .await
         .expect("current-state snapshot reply arrives");
     let error = subscription
@@ -407,7 +389,11 @@ async fn subscribe_returns_a_typed_error_when_the_channel_closes_before_the_repl
     let client = RunStreamClient::new(endpoint, "run-stream-client").expect("client is valid");
     let error = tokio::time::timeout(
         TEST_REPLY_BOUND,
-        client.subscribe(SubscribeRunCommandDto::new(SCHEMA, session_id, run_id)),
+        client.subscribe(SubscribeRunCommandDto::new(
+            SCHEMA_VERSION,
+            session_id,
+            run_id,
+        )),
     )
     .await
     .expect("a closed channel must not hang the subscriber")

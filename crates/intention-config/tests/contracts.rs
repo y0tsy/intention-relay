@@ -5,26 +5,18 @@
 
 //! Test-first configuration parsing, resolution, and redaction evidence.
 
+#[allow(
+    dead_code,
+    reason = "Shared fixtures serve every integration target in this crate; each target compiles the subset its suite calls."
+)]
+mod common;
+
+use common::{FAKE_CREDENTIAL, explicit_source, fixture_path};
+
 use intention_config::{
     ConfigPathDto, ConfigPathResolver, ConfigSourceDto, ConfigSourceKindDto, RawConfigInputDto,
     ResolvedConfigDto,
 };
-
-const FAKE_CREDENTIAL: &str = "fixture-credential-not-real-12345";
-
-fn fixture_path(filename: &str) -> String {
-    std::env::temp_dir()
-        .join(filename)
-        .to_string_lossy()
-        .into_owned()
-}
-
-fn explicit_source() -> ConfigSourceDto {
-    ConfigSourceDto::Explicit(
-        ConfigPathDto::parse(fixture_path("intention.toml"))
-            .expect("fixture config path is absolute"),
-    )
-}
 
 #[test]
 fn valid_v1_toml_resolves_to_a_redacted_public_dto() {

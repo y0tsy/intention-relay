@@ -3,28 +3,22 @@
     reason = "M4 contract fixtures use expect to provide precise test failure messages."
 )]
 
-use intention_config::{ConfigPathDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto};
+#[allow(
+    dead_code,
+    reason = "Shared fixtures serve every integration target in this crate; each target compiles the subset its suite calls."
+)]
+mod common;
 
-const FAKE_CREDENTIAL: &str = "fixture-credential-not-real-12345";
+use common::{FAKE_CREDENTIAL, explicit_source};
 
-fn source() -> ConfigSourceDto {
-    ConfigSourceDto::Explicit(
-        ConfigPathDto::parse(
-            std::env::temp_dir()
-                .join("intention-relay-m4-config.toml")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("fixture path is absolute"),
-    )
-}
+use intention_config::{RawConfigInputDto, ResolvedConfigDto};
 
 fn resolve(execution: &str) -> ResolvedConfigDto {
     ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
         format!(
             "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\"\n{execution}"
         ),
-        source(),
+        explicit_source(),
     ))
     .expect("fixture configuration resolves")
 }
@@ -48,7 +42,7 @@ fn execution_policy_defaults_and_overrides_are_safe_snapshot_data() {
 }
 
 #[test]
-fn execution_policy_rejects_out_of_range_values_without_redacting_errors() {
+fn provider_policy_rejects_out_of_range_values_without_redacting_errors() {
     for (text, code) in [
         (
             "[provider.execution]\nattempt_timeout_seconds = 0\n",
@@ -66,37 +60,6 @@ fn execution_policy_rejects_out_of_range_values_without_redacting_errors() {
             "[provider.execution]\nmax_attempts = 3\n",
             "invalid_provider_max_attempts",
         ),
-    ] {
-        let error = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            format!(
-                "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\"\n{text}"
-            ),
-            source(),
-        ))
-        .expect_err("out-of-range execution policy must fail");
-        assert_eq!(error.code(), code);
-        assert!(!error.to_string().contains(FAKE_CREDENTIAL));
-    }
-}
-
-#[test]
-fn context_window_policy_defaults_and_overrides_are_safe_snapshot_data() {
-    let defaulted = resolve("");
-    assert_eq!(defaulted.context_window().window_tokens(), 250_000);
-    assert_eq!(defaulted.context_window().capacity_tokens(), 1_000_000);
-
-    let overridden = resolve("context_window_tokens = 1000\ncontext_capacity_tokens = 4000\n");
-    assert_eq!(overridden.context_window().window_tokens(), 1_000);
-    assert_eq!(overridden.context_window().capacity_tokens(), 4_000);
-
-    let encoded = serde_json::to_string(&overridden).expect("safe projection serializes");
-    assert!(encoded.contains("\"context_window\""));
-    assert!(!encoded.contains(FAKE_CREDENTIAL));
-}
-
-#[test]
-fn context_window_policy_rejects_out_of_range_values_without_redacting_errors() {
-    for (text, code) in [
         (
             "context_window_tokens = 0\n",
             "invalid_provider_context_window_tokens",
@@ -118,12 +81,27 @@ fn context_window_policy_rejects_out_of_range_values_without_redacting_errors() 
             format!(
                 "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\"\n{text}"
             ),
-            source(),
+            explicit_source(),
         ))
-        .expect_err("out-of-range context window policy must fail");
+        .expect_err("out-of-range provider policy must fail");
         assert_eq!(error.code(), code);
         assert!(!error.to_string().contains(FAKE_CREDENTIAL));
     }
+}
+
+#[test]
+fn context_window_policy_defaults_and_overrides_are_safe_snapshot_data() {
+    let defaulted = resolve("");
+    assert_eq!(defaulted.context_window().window_tokens(), 250_000);
+    assert_eq!(defaulted.context_window().capacity_tokens(), 1_000_000);
+
+    let overridden = resolve("context_window_tokens = 1000\ncontext_capacity_tokens = 4000\n");
+    assert_eq!(overridden.context_window().window_tokens(), 1_000);
+    assert_eq!(overridden.context_window().capacity_tokens(), 4_000);
+
+    let encoded = serde_json::to_string(&overridden).expect("safe projection serializes");
+    assert!(encoded.contains("\"context_window\""));
+    assert!(!encoded.contains(FAKE_CREDENTIAL));
 }
 
 #[test]
@@ -132,7 +110,7 @@ fn startup_material_is_opaque_and_safe_projection_excludes_credential() {
         format!(
             "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\"\n"
         ),
-        source(),
+        explicit_source(),
     ))
     .expect("startup material resolves");
     let resolved = material.safe_resolved();
@@ -146,7 +124,7 @@ fn startup_material_preserves_current_selection_only_for_provider_construction()
         format!(
             "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\"\n"
         ),
-        source(),
+        explicit_source(),
     ))
     .expect("current-shape startup material resolves");
 
@@ -173,8 +151,10 @@ fn startup_material_returns_safe_errors_before_provider_construction() {
             "missing_provider_credential",
         ),
     ] {
-        let result =
-            ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(text, source()));
+        let result = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
+            text,
+            explicit_source(),
+        ));
         assert!(result.is_err());
         let error = result
             .err()

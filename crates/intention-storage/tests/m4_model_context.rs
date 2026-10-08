@@ -3,23 +3,26 @@
     reason = "M4 SQLite model-context fixtures use expect for precise diagnostics."
 )]
 
+#[allow(
+    dead_code,
+    reason = "Shared fixtures serve every integration target in this crate; each target compiles the subset its suite calls."
+)]
+mod common;
+
+use common::{create_session, repository, time};
+
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_proto::{
-    ConfigRevisionId, FinishReasonDto, IdempotencyKey, ProjectId, RunId, SchemaVersionDto,
-    SessionId, TimestampDto, ToolCallId, UsageDto, WorkspaceId,
+    ConfigRevisionId, FinishReasonDto, IdempotencyKey, RunId, SchemaVersionDto, SessionId,
+    ToolCallId, UsageDto,
 };
-use intention_proto::{
-    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunStatusDto,
-    WorkspaceRootDto,
-};
+use intention_proto::{MessageKindDto, MessageProjectionDto, RunStatusDto};
 use intention_storage::{
-    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto, CreateSessionInputDto,
-    FinishRunInputDto, SqliteDatabaseLocationDto, SqliteStorageRepository, StorageRepositoryDto,
-    TransitionRunInputDto,
+    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto, FinishRunInputDto,
+    SqliteStorageRepository, StorageRepositoryDto, TransitionRunInputDto,
 };
-use tempfile::TempDir;
 
 #[test]
 fn starting_run_model_context_rebuilds_the_committed_transcript_in_insertion_order() {
@@ -210,46 +213,6 @@ fn model_context_rejects_unknown_cross_session_and_non_starting_runs_safely() {
     }
 }
 
-fn repository() -> (TempDir, SqliteStorageRepository) {
-    let directory = TempDir::new().expect("temporary directory exists");
-    let repository = SqliteStorageRepository::open(
-        SqliteDatabaseLocationDto::new(
-            directory
-                .path()
-                .join("storage.sqlite")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("database path is absolute"),
-    )
-    .expect("database opens");
-    (directory, repository)
-}
-
-fn create_session(repository: &SqliteStorageRepository, label: &str) -> SessionId {
-    let session_id = SessionId::new();
-    repository
-        .create_session(CreateSessionInputDto::new(
-            CreateSessionCommandDto::new(
-                ProjectId::new(),
-                session_id,
-                WorkspaceId::new(),
-                WorkspaceRootDto::parse(
-                    std::env::temp_dir()
-                        .join("intention-m4-model-context")
-                        .join(label)
-                        .to_string_lossy()
-                        .into_owned(),
-                )
-                .expect("workspace root is absolute"),
-                RunModeDto::Build,
-            ),
-            time(1),
-        ))
-        .expect("session creates");
-    session_id
-}
-
 fn start_run(
     repository: &SqliteStorageRepository,
     session_id: SessionId,
@@ -334,8 +297,4 @@ fn snapshot(model: &str) -> ConfigSnapshotDto {
         resolved,
     )
     .expect("safe snapshot is valid")
-}
-
-fn time(value: i64) -> TimestampDto {
-    TimestampDto::from_unix_seconds(value).expect("fixture time is valid")
 }

@@ -3,30 +3,33 @@
     reason = "SQLite contract fixtures use expect for precise test diagnostics."
 )]
 
+#[allow(
+    dead_code,
+    reason = "Shared fixtures serve every integration target in this crate; each target compiles the subset its suite calls."
+)]
+mod common;
+
+use common::{create_session, open, reopen, repository, time, workspace_root};
+
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::{ToolResultMetadataEntryDto, ToolResultStatusDto};
 use intention_proto::{
     ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId,
-    RunId, SchemaVersionDto, SessionId, TimestampDto, ToolCallId, UsageDto, WorkspaceId,
+    RunId, SchemaVersionDto, SessionId, ToolCallId, UsageDto, WorkspaceId,
 };
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
-    RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto, WorkspaceRootDto,
+    RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
 };
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,
     ConsumePendingUserTurnsInputDto, CreateSessionInputDto, FinishRunInputDto,
-    RecoverUnfinishedRunsInputDto, RemoveTurnInputDto, SqliteDatabaseLocationDto,
-    SqliteStorageRepository, StorageRepositoryDto, ToolResultEvidenceDto, TransitionRunInputDto,
-    WriteToolResultInputDto,
+    RecoverUnfinishedRunsInputDto, RemoveTurnInputDto, SqliteStorageRepository,
+    StorageRepositoryDto, ToolResultEvidenceDto, TransitionRunInputDto, WriteToolResultInputDto,
 };
 use tempfile::TempDir;
-
-fn time(value: i64) -> TimestampDto {
-    TimestampDto::from_unix_seconds(value).expect("fixture timestamp is valid")
-}
 
 fn snapshot() -> ConfigSnapshotDto {
     serde_json::from_str(include_str!(
@@ -59,56 +62,8 @@ fn snapshot_with_revision_and_model(
         .expect("fixture snapshot is valid")
 }
 
-fn workspace_root(label: &str) -> WorkspaceRootDto {
-    WorkspaceRootDto::parse(
-        std::env::temp_dir()
-            .join("intention-storage-contracts")
-            .join(label)
-            .to_string_lossy()
-            .into_owned(),
-    )
-    .expect("native fixture workspace is valid")
-}
-
-fn repository() -> (TempDir, SqliteStorageRepository) {
-    let directory = TempDir::new().expect("temporary directory exists");
-    let store = open(&directory);
-    (directory, store)
-}
-
-fn open(directory: &TempDir) -> SqliteStorageRepository {
-    SqliteStorageRepository::open(
-        SqliteDatabaseLocationDto::new(
-            directory
-                .path()
-                .join("storage.sqlite")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("temp location is absolute"),
-    )
-    .expect("database opens")
-}
-
-fn reopen(directory: &TempDir) -> SqliteStorageRepository {
-    open(directory)
-}
-
 fn create(store: &SqliteStorageRepository) -> SessionId {
-    let session = SessionId::new();
-    store
-        .create_session(CreateSessionInputDto::new(
-            CreateSessionCommandDto::new(
-                ProjectId::new(),
-                session,
-                WorkspaceId::new(),
-                workspace_root(&session.to_string()),
-                RunModeDto::Build,
-            ),
-            time(1),
-        ))
-        .expect("session creates");
-    session
+    create_session(store, &SessionId::new().to_string())
 }
 
 fn accept(
@@ -407,62 +362,45 @@ fn a_legacy_shaped_database_is_recreated_without_its_old_objects() {
 }
 
 #[test]
-fn a_missing_current_table_recreates_the_database() {
-    let directory = TempDir::new().expect("temporary directory exists");
-    let store = open(&directory);
-    let session = create(&store);
-    drop(store);
-    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
-        .expect("database reopens for mutation");
-    connection
-        .execute_batch("DROP TABLE messages;")
-        .expect("a current table drops");
-    drop(connection);
+fn an_incomplete_or_legacy_shaped_current_table_recreates_the_database() {
+    for (mutation, expected_session_columns) in [
+        ("DROP TABLE messages;", None),
+        (
+            "ALTER TABLE sessions ADD COLUMN last_sequence INTEGER;",
+            Some([
+                "id",
+                "project_id",
+                "workspace_id",
+                "mode",
+                "created_at",
+                "updated_at",
+            ]),
+        ),
+    ] {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let store = open(&directory);
+        let session = create(&store);
+        drop(store);
+        let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+            .expect("database reopens for mutation");
+        connection
+            .execute_batch(mutation)
+            .expect("a current table mutation applies");
+        drop(connection);
 
-    let recreated = open(&directory);
-    assert_eq!(table_names(&directory), CURRENT_TABLE_NAMES);
-    assert_eq!(
-        recreated
-            .load_session_projection(session)
-            .expect_err("the incomplete database was recreated empty")
-            .code(),
-        "storage_record_not_found"
-    );
-}
-
-#[test]
-fn an_extra_column_on_a_current_table_recreates_the_database() {
-    let directory = TempDir::new().expect("temporary directory exists");
-    let store = open(&directory);
-    let session = create(&store);
-    drop(store);
-    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
-        .expect("database reopens for mutation");
-    connection
-        .execute_batch("ALTER TABLE sessions ADD COLUMN last_sequence INTEGER;")
-        .expect("a legacy column adds");
-    drop(connection);
-
-    let recreated = open(&directory);
-    assert_eq!(table_names(&directory), CURRENT_TABLE_NAMES);
-    assert_eq!(
-        column_names(&directory, "sessions"),
-        [
-            "id",
-            "project_id",
-            "workspace_id",
-            "mode",
-            "created_at",
-            "updated_at",
-        ]
-    );
-    assert_eq!(
-        recreated
-            .load_session_projection(session)
-            .expect_err("the extra column forced a recreation")
-            .code(),
-        "storage_record_not_found"
-    );
+        let recreated = open(&directory);
+        assert_eq!(table_names(&directory), CURRENT_TABLE_NAMES);
+        if let Some(columns) = expected_session_columns {
+            assert_eq!(column_names(&directory, "sessions"), columns);
+        }
+        assert_eq!(
+            recreated
+                .load_session_projection(session)
+                .expect_err("the recreated database is empty")
+                .code(),
+            "storage_record_not_found"
+        );
+    }
 }
 
 #[test]

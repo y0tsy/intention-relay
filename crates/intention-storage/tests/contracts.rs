@@ -3,15 +3,23 @@
     reason = "Storage contract fixtures use expect for precise test diagnostics."
 )]
 
+#[allow(
+    dead_code,
+    reason = "Shared fixtures serve every integration target in this crate; each target compiles the subset its suite calls."
+)]
+mod common;
+
+use common::{time, workspace_root};
+
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{ToolResultMetadataEntryDto, ToolResultStatusDto};
 use intention_proto::{
     ConfigRevisionId, ErrorCategoryDto, FinishReasonDto, IdempotencyKey, ProjectId, RunId,
-    SessionId, TimestampDto, ToolCallId, TurnId, UsageDto, WorkspaceId,
+    SessionId, ToolCallId, TurnId, UsageDto, WorkspaceId,
 };
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
-    RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto, WorkspaceRootDto,
+    RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
 };
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendMessageInputDto,
@@ -20,25 +28,11 @@ use intention_storage::{
     ToolResultEvidenceDto, TransitionRunInputDto, WriteToolResultInputDto,
 };
 
-fn time(value: i64) -> TimestampDto {
-    TimestampDto::from_unix_seconds(value).expect("fixture time is valid")
-}
-
 fn snapshot() -> ConfigSnapshotDto {
     serde_json::from_str(include_str!(
         "../../intention-config/tests/fixtures/config-snapshot-v1.json"
     ))
     .expect("safe config snapshot decodes")
-}
-
-fn workspace_root() -> WorkspaceRootDto {
-    WorkspaceRootDto::parse(
-        std::env::temp_dir()
-            .join("intention-storage-contracts-workspace")
-            .to_string_lossy()
-            .into_owned(),
-    )
-    .expect("native fixture workspace is valid")
 }
 
 fn user_message(session_id: SessionId, run_id: RunId, text: &str) -> MessageProjectionDto {
@@ -78,13 +72,16 @@ fn create_and_turn_inputs_expose_their_typed_fields() {
         project_id,
         session_id,
         workspace_id,
-        workspace_root(),
+        workspace_root("contracts-workspace"),
         RunModeDto::Build,
     );
     assert_eq!(command.project_id(), project_id);
     assert_eq!(command.session_id(), session_id);
     assert_eq!(command.workspace_id(), workspace_id);
-    assert_eq!(command.workspace_root(), &workspace_root());
+    assert_eq!(
+        command.workspace_root(),
+        &workspace_root("contracts-workspace")
+    );
     assert_eq!(command.mode(), RunModeDto::Build);
     let create = CreateSessionInputDto::new(command, created_at);
     assert_eq!(create.command().session_id(), session_id);

@@ -5,6 +5,14 @@
 
 //! Test-first protocol contract and current-version wire evidence.
 
+#[allow(
+    dead_code,
+    reason = "Shared fixtures serve every integration target in this crate; each target compiles the subset its suite calls."
+)]
+mod common;
+
+use common::{fixture_message, fixture_projection, fixture_workspace_root};
+
 use intention_proto::{
     CURRENT_DTO_SCHEMA_VERSION, CURRENT_PROTOCOL_VERSION, DaemonHealthDto, DaemonReadinessDto,
     InterruptRunAcceptedDto, JsonRpcErrorDto, JsonRpcRequestDto, JsonRpcResponseDto,
@@ -22,46 +30,9 @@ use intention_proto::{
     SchemaVersionDto, SessionId, TurnId, WorkspaceId,
 };
 use intention_proto::{
-    GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
-    RunModeDto, RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto,
+    GetSessionSnapshotQueryDto, InterruptRunCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
+    SendUserTurnCommandDto,
 };
-
-fn fixture_workspace_root() -> intention_proto::WorkspaceRootDto {
-    intention_proto::WorkspaceRootDto::parse(
-        std::env::temp_dir()
-            .join("intention-proto-contracts-workspace")
-            .to_string_lossy()
-            .into_owned(),
-    )
-    .expect("fixture workspace root is valid")
-}
-
-fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
-    SessionProjectionDto::new(
-        ProjectId::new(),
-        session_id,
-        WorkspaceId::new(),
-        fixture_workspace_root(),
-        RunModeDto::Build,
-        None,
-        None,
-        Vec::new(),
-    )
-    .expect("fixture projection is valid")
-}
-
-fn fixture_message(session_id: SessionId, run_id: RunId) -> MessageProjectionDto {
-    MessageProjectionDto::new(
-        session_id,
-        Some(run_id),
-        MessageKindDto::Notice,
-        "fixture notice",
-        None,
-        None,
-        None,
-    )
-    .expect("fixture message is valid")
-}
 
 fn fixture_run(session_id: SessionId, run_id: RunId) -> RunProjectionDto {
     RunProjectionDto::new(

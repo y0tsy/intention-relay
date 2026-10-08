@@ -3,6 +3,14 @@
     reason = "M3 contract fixtures use expect for precise test diagnostics."
 )]
 
+#[allow(
+    dead_code,
+    reason = "Shared fixtures serve every integration target in this crate; each target compiles the subset its suite calls."
+)]
+mod common;
+
+use common::{fixture_message, fixture_projection};
+
 use intention_proto::{
     CURRENT_PROTOCOL_VERSION, CreateSessionAcceptedDto, InterruptRunAcceptedDto,
     ProtocolAcceptedDto, ProtocolAcceptedResultDto, ProtocolVersionDto, RemoveTurnAcceptedDto,
@@ -13,46 +21,6 @@ use intention_proto::{
     ConfigRevisionId, CorrelationIdDto, ProjectId, RunId, SchemaVersionDto, SessionId, TurnId,
     WorkspaceId,
 };
-use intention_proto::{
-    MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto, WorkspaceRootDto,
-};
-
-fn workspace_root() -> WorkspaceRootDto {
-    WorkspaceRootDto::parse(
-        std::env::temp_dir()
-            .join("intention-proto-m3-workspace")
-            .to_string_lossy()
-            .into_owned(),
-    )
-    .expect("native fixture workspace is valid")
-}
-
-fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
-    SessionProjectionDto::new(
-        ProjectId::new(),
-        session_id,
-        WorkspaceId::new(),
-        workspace_root(),
-        RunModeDto::Build,
-        None,
-        None,
-        Vec::new(),
-    )
-    .expect("fixture projection is coherent")
-}
-
-fn fixture_message(session_id: SessionId, run_id: RunId) -> MessageProjectionDto {
-    MessageProjectionDto::new(
-        session_id,
-        Some(run_id),
-        MessageKindDto::Notice,
-        "fixture notice",
-        None,
-        None,
-        None,
-    )
-    .expect("fixture message is coherent")
-}
 
 #[test]
 fn typed_acceptance_results_carry_required_durable_evidence() {
