@@ -15,81 +15,19 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use intention_config::ConfigSnapshotDto;
 use intention_daemon::DaemonApplicationFacade;
-use intention_engine::{
-    ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto, ModelSleepFuture,
-    ModelTimePort, RunCancellation,
-};
 use intention_proto::{
-    CreateSessionCommandDto, IdempotencyKey, ProjectId, ProtocolResultDto, RunId, RunModeDto,
-    RunStatusDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId, TimestampDto,
-    WorkspaceId, WorkspaceRootDto,
+    CreateSessionCommandDto, ProjectId, ProtocolResultDto, RunModeDto, SessionId, WorkspaceId,
+    WorkspaceRootDto,
 };
-use intention_providers::{
-    ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto,
-};
+use intention_providers::ModelExecutionDriver;
 use intention_test_support::fixture_snapshot;
 use intention_transport::LocalEndpoint;
 use tempfile::TempDir;
-
-/// Wall-clock time port backed by the Tokio timer.
-pub struct TokioTime;
-
-impl ModelTimePort for TokioTime {
-    fn now(&self) -> TimestampDto {
-        TimestampDto::from_unix_seconds(2).expect("fixture timestamp is valid")
-    }
-
-    fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
-        Box::pin(tokio::time::sleep(duration))
-    }
-}
-
-/// Records every committed value the daemon dispatch path publishes.
-///
-/// The daemon's suites observe committed values only through the facade's
-/// execution bridge, so no shared crate fixture can replace this recorder.
-#[derive(Default)]
-pub struct RecordingObserver {
-    commits: Mutex<Vec<ModelRunCommitDto>>,
-}
-
-impl RecordingObserver {
-    /// Returns every committed transcript row and status, in publication order.
-    pub fn commits(&self) -> Vec<ModelRunCommitDto> {
-        self.commits
-            .lock()
-            .expect("observer recorder remains available")
-            .clone()
-    }
-
-    /// Returns every committed status the runtime published, in order.
-    pub fn observed_statuses(&self) -> Vec<RunStatusDto> {
-        self.commits
-            .lock()
-            .expect("observer recorder remains available")
-            .iter()
-            .filter_map(|committed| match committed {
-                ModelRunCommitDto::Status { status, .. } => Some(*status),
-                ModelRunCommitDto::Content(_) => None,
-            })
-            .collect()
-    }
-}
-
-impl ModelRunCommitObserver for RecordingObserver {
-    fn observe_model_run_commit(&self, committed: &ModelRunCommitDto) {
-        self.commits
-            .lock()
-            .expect("observer recorder remains available")
-            .push(committed.clone());
-    }
-}
 
 /// Opens a durable fixture facade at one labelled test-only database path.
 pub fn fixture_facade(
@@ -120,55 +58,6 @@ pub fn create_session(facade: &DaemonApplicationFacade, session_id: SessionId, w
         ))
         .expect("fixture session creates");
     assert!(matches!(created, ProtocolResultDto::SessionCreated(_)));
-}
-
-/// Starts one fixture turn and returns the run it admitted.
-pub fn started_run(facade: &DaemonApplicationFacade, session_id: SessionId) -> RunId {
-    let accepted = facade
-        .send_user_turn(
-            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "turn")
-                .expect("turn is valid"),
-        )
-        .expect("fixture turn starts");
-    let ProtocolResultDto::TurnAccepted(turn) = accepted else {
-        panic!("fixture result is a turn")
-    };
-    let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
-        panic!("first turn starts")
-    };
-    run_id
-}
-
-/// Builds one scheduled model-run input over the shared fixture request.
-///
-/// `tools` carries the model-visible definitions for suites that exercise the
-/// tool loop; `None` keeps the provider request tool-free.
-pub fn schedule(
-    session_id: SessionId,
-    run_id: RunId,
-    snapshot: ConfigSnapshotDto,
-    tools: Option<Vec<ModelToolDefinitionDto>>,
-) -> ModelRunExecutionInputDto {
-    let request = ModelRequestDto::new(
-        run_id,
-        "fixture",
-        vec![ModelMessageDto::new(ModelRoleDto::User, "turn").expect("message is valid")],
-        None,
-    )
-    .expect("request is valid");
-    let request = match tools {
-        Some(tools) => request
-            .with_tools(tools)
-            .expect("tool advertisement is valid"),
-        None => request,
-    };
-    ModelRunExecutionInputDto::new(
-        session_id,
-        run_id,
-        request,
-        snapshot,
-        RunCancellation::new(),
-    )
 }
 
 /// Returns the platform config path the daemon resolves from its environment.

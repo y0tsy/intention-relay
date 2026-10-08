@@ -99,13 +99,13 @@ const KILL_DEADLINE: Duration = Duration::from_secs(5);
 /// The bounded attempts one live tool turn may consume before it fails.
 const TOOL_TURN_ATTEMPTS: u8 = 3;
 
-// Worst-case live-channel budget: 4882 seconds (about 81 minutes), recomputed
-// from the constants above, the bounded transport calls, and the harness
+// Worst-case live-channel budget: 4462 seconds (about 74 minutes), recomputed
+// from the constants above, the bounded client calls, and the harness
 // structure:
 // - 7 tool runs (the six positive tool turns plus the negative credential
 //   run) x `TOOL_TURN_ATTEMPTS` 3 attempts x `TURN_DEADLINE` 180 s = 3780 s;
 // - the bounded `create_session` and `send_user_turn` of every attempt:
-//   21 attempts x 2 calls x 20.5 s = 861 s;
+//   21 attempts x 2 calls x 10.5 s = 441 s;
 // - three `READINESS_DEADLINE` daemon starts (3 x 30 s = 90 s);
 // - three `KILL_DEADLINE` windows (3 x 5 s = 15 s);
 // - the bounded post-restart subscription (15 s), the quiet window (1 s), the
@@ -113,18 +113,17 @@ const TOOL_TURN_ATTEMPTS: u8 = 3;
 //   bounded session snapshots (7 x 15 s = 105 s).
 //
 // Every command (`client.health`, `create_session`, and `send_user_turn`) is
-// additionally bounded by the transport I/O timeout: one call spends at most
-// `CONNECT_TIMEOUT` 500 ms plus two `SYNC_IO_TIMEOUT` reads (one for the
-// hello, one for the response) of 10 s each, which is at most 20.5 s. A daemon
-// that accepts connections and never answers therefore fails the readiness
-// deadline plus one bounded health call per `wait_until_ready` and then the
-// first bounded `create_session` or `send_user_turn`: the harness reports its
-// own diagnostic within about two minutes instead of hanging until the CI
-// timeout. The session reads carry the harness `SESSION_READ_DEADLINE` on top
-// of the same transport bound.
+// additionally bounded by the client: one call spends at most `CONNECT_TIMEOUT`
+// 500 ms on the connect plus one `REQUEST_TIMEOUT` 10 s request-and-reply
+// round trip, which is at most 10.5 s. A daemon that accepts connections and
+// never answers therefore fails the readiness deadline plus one bounded health
+// call per `wait_until_ready` and then the first bounded `create_session` or
+// `send_user_turn`: the harness reports its own diagnostic within about two
+// minutes instead of hanging until the CI timeout. The session reads carry the
+// harness `SESSION_READ_DEADLINE` on top of the same client bound.
 //
 // `.github/workflows/real-api-e2e.yml` gives the run step 120 minutes and the
-// job 150 minutes: the 81-minute worst case leaves a 39-minute step margin for
+// job 150 minutes: the 74-minute worst case leaves a 46-minute step margin for
 // the build, and the job keeps a 30-minute overhead above the step. A degraded
 // live run reports the harness diagnostic ("did not record a succeeded <tool>
 // call within 3 turns") instead of an opaque GitHub timeout; a change to any
@@ -503,11 +502,11 @@ async fn wait_until_ready(host: &mut LiveE2eHost, deadline: Instant) -> Intentio
 
 /// Reads one session snapshot with a harness-side deadline.
 ///
-/// The transport bounds every read and write with its own I/O timeout, so the
-/// request itself cannot block forever; this helper adds the tighter harness
-/// deadline on top of it. The deadline is enforced by the runtime timer, so a
-/// daemon that accepts the connection and never answers fails with this
-/// harness diagnostic instead of hanging the run until the CI step timeout.
+/// The client bounds every request with its own timeout, so the read itself
+/// cannot block forever; this helper keeps the harness deadline as an outer
+/// bound. The deadline is enforced by the runtime timer, so a daemon that
+/// accepts the connection and never answers fails with a bounded harness panic
+/// instead of hanging the run until the CI step timeout.
 async fn bounded_session_snapshot(
     endpoint: &LocalEndpoint,
     session_id: SessionId,
