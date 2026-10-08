@@ -984,12 +984,6 @@ impl ModelStreamLifecycleDto {
             | ModelEventDto::ToolCall { .. } => Err(stream_order_error()),
         }
     }
-
-    /// Returns whether a terminal fact was accepted.
-    #[must_use]
-    pub const fn is_terminal(self) -> bool {
-        self.terminal
-    }
 }
 
 fn stream_order_error() -> ErrorDto {

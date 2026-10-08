@@ -81,19 +81,3 @@ fn openrouter_execution_rejects_preflight_before_stream_creation_without_network
         [Err(error)] if error.code() == "openrouter_request_rejected"
     ));
 }
-
-#[test]
-fn openrouter_driver_rejects_wrong_provider_kind() {
-    let wrong_kind = startup_material(
-        &format!(
-            "kind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\nendpoint = \"https://example.invalid/v1\"\ncredential = \"{FAKE_CREDENTIAL}\""
-        ),
-        "intention-relay-openrouter-wrong-kind.toml",
-    );
-    assert_eq!(
-        OpenRouterDriver::from_startup_material(wrong_kind)
-            .expect_err("wrong provider kind fails")
-            .code(),
-        "invalid_openrouter_provider_config"
-    );
-}

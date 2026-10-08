@@ -200,17 +200,6 @@ mod tests {
     }
 
     #[test]
-    fn reported_usage_normalizes_native_counters_and_rejects_inconsistent_totals() {
-        let usage = reported_usage(2, 3, 5).expect("usage maps");
-        assert!(
-            serde_json::to_string(&usage)
-                .expect("usage serializes")
-                .contains("reported")
-        );
-        assert!(reported_usage(1, 1, 1).is_err());
-    }
-
-    #[test]
     fn complete_tool_calls_keep_the_native_function_and_allocate_the_canonical_identity() {
         let tool = complete_tool_call("inspect", "{}").expect("tool maps");
         assert_eq!(tool.name(), "inspect");

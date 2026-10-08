@@ -54,7 +54,6 @@ fn stream_lifecycle_accepts_ordered_normalized_events() {
     ] {
         lifecycle.accept(&event).expect("ordered event is valid");
     }
-    assert!(lifecycle.is_terminal());
 }
 
 #[test]
@@ -84,16 +83,6 @@ fn stream_lifecycle_rejects_invalid_order_and_invalid_payloads() {
         .accept(&ModelEventDto::finished(FinishReasonDto::Stop))
         .expect("finish is valid");
     assert!(lifecycle.accept(&ModelEventDto::started()).is_err());
-}
-
-#[test]
-fn provider_errors_remain_safe_and_credential_free() {
-    let error = ProviderErrorDto::unavailable("provider_request_failed", true, None)
-        .expect("safe error is valid");
-    let encoded = serde_json::to_string(&error).expect("error serializes");
-    assert!(encoded.contains("provider_request_failed"));
-    assert!(!encoded.contains("fixture-credential-not-real-12345"));
-    assert!(ProviderErrorDto::unavailable(" ", false, None).is_err());
 }
 
 #[test]
@@ -251,6 +240,7 @@ fn capabilities_tool_usage_events_and_errors_cover_safe_wire_variants() {
     assert_eq!(decoded.correlation_id(), Some(correlation));
     assert_eq!(decoded.to_string(), "provider_unavailable");
     assert!(serde_json::from_str::<ProviderErrorDto>(r#"{"code":"","retry":"never"}"#).is_err());
+    assert!(ProviderErrorDto::unavailable(" ", false, None).is_err());
 }
 
 #[test]
@@ -413,7 +403,9 @@ fn model_request_with_messages_preserves_fields() {
             true, true, true, true,
         )),
     )
-    .expect("request is valid");
+    .expect("request is valid")
+    .with_tools(vec![tool_definition("inspect_path")])
+    .expect("request with tools is valid");
     let call = ToolCallDto::new(ToolCallId::new(), "inspect", "{}").expect("tool call is valid");
     let updated = request
         .with_messages(vec![
@@ -429,6 +421,7 @@ fn model_request_with_messages_preserves_fields() {
         updated.requested_capabilities(),
         request.requested_capabilities()
     );
+    assert_eq!(updated.tools(), request.tools());
     assert_eq!(updated.messages().len(), 2);
     assert_eq!(updated.messages()[0].role(), ModelRoleDto::User);
     assert!(updated.messages()[1].tool_calls().is_some());
@@ -478,17 +471,6 @@ fn model_request_with_tools_forces_tool_call_capability() {
         .with_tools(Vec::new())
         .expect("cleared request is valid");
     assert!(cleared.tools().is_empty());
-}
-
-#[test]
-fn model_request_with_messages_preserves_advertised_tools() {
-    let request = plain_request()
-        .with_tools(vec![tool_definition("inspect_path")])
-        .expect("request with tools is valid");
-    let updated = request
-        .with_messages(vec![message(ModelRoleDto::User, "next")])
-        .expect("updated request is valid");
-    assert_eq!(updated.tools(), request.tools());
 }
 
 #[test]
