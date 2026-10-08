@@ -1,10 +1,10 @@
-//! Thin daemon process host for the local protocol facade.
+//! Thin daemon process host for the typed local wire.
 //!
 //! The daemon owns the local listener, typed connection hosting, and the one
 //! scheduling path: an accepted turn is admitted by the composition root and
 //! executed here, where the per-run registry, the single run cancellation
-//! handle, and the one commit observer live. Health, query, command, and
-//! current-state subscription meaning stay in the durable composition root.
+//! handle, and the one commit observer live. Health, session reads, and command
+//! meaning stay in the durable composition root.
 
 mod composition;
 
@@ -24,20 +24,16 @@ use intention_engine::{
 };
 use intention_proto::RunStatusDto;
 use intention_proto::{
-    CorrelationIdDto, DtoResult, ErrorDto, InterruptRunCommandDto, RunId,
-    RunSubscriptionSnapshotDto, SessionId, TimestampDto, ToolCallDto,
+    ClientRequestDto, DtoResult, ErrorDto, InterruptRunCommandDto, RunId,
+    RunSubscriptionSnapshotDto, SendUserTurnOutcomeDto, SessionId, SubscribeRunCommandDto,
+    TimestampDto, ToolCallDto,
 };
 use intention_proto::{
-    JsonRpcResponseDto, ProtocolAcceptedDto, ProtocolCommandDto, ProtocolCommandResultDto,
-    ProtocolDaemonMessageDto, ProtocolHelloDto, ProtocolQueryDto, ProtocolRequestPayloadDto,
-    ProtocolResponsePayloadDto, RunStatusFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
-    SessionSubscriptionResponseDto, decode_request_line, encode_response, is_notification_line,
+    ProtocolDaemonMessageDto, ProtocolResultDto, RunStreamFrameDto, decode_request_line,
 };
 use intention_storage::{FinishRunInputDto, StorageRepositoryDto};
 use intention_tools::{ToolInput, WorkspaceRoot};
-use intention_transport::{
-    AsyncLocalListener, AsyncMessageSender, LocalEndpoint, local_protocol_version,
-};
+use intention_transport::{AsyncLocalListener, AsyncMessageSender, LocalEndpoint};
 
 const SUBSCRIBER_QUEUE_CAPACITY: usize = 64;
 const SUBSCRIBER_WRITE_DEADLINE: Duration = Duration::from_secs(10);
@@ -59,17 +55,18 @@ impl ModelTimePort for TokioTime {
     }
 }
 
+/// One live subscription of one connection.
+///
+/// The bounded sender and the close signal identify the subscriber; a
+/// connection holds at most one subscription, and the host data lock is the
+/// one critical section covering registration, the correlated reply, and
+/// publication, so no separate identity or gate is needed.
 struct Subscriber {
-    id: u64,
     sender: tokio::sync::mpsc::Sender<ProtocolDaemonMessageDto>,
     close: tokio::sync::watch::Sender<bool>,
 }
 
-#[derive(Clone, Copy)]
-struct PublishedRun {
-    status: RunStatusDto,
-}
-
+#[derive(Default)]
 struct HostData {
     tasks: HashMap<RunKey, RunCancellation>,
     #[cfg(any(test, feature = "test-support"))]
@@ -77,29 +74,11 @@ struct HostData {
     #[cfg(any(test, feature = "test-support"))]
     execution_completion: HashMap<RunKey, tokio::sync::watch::Sender<bool>>,
     subscribers: HashMap<RunKey, Vec<Subscriber>>,
-    published: HashMap<RunKey, PublishedRun>,
-    next_subscriber_id: u64,
-}
-
-impl Default for HostData {
-    fn default() -> Self {
-        Self {
-            tasks: HashMap::new(),
-            #[cfg(any(test, feature = "test-support"))]
-            execution_tasks: Vec::new(),
-            #[cfg(any(test, feature = "test-support"))]
-            execution_completion: HashMap::new(),
-            subscribers: HashMap::new(),
-            published: HashMap::new(),
-            next_subscriber_id: 1,
-        }
-    }
 }
 
 struct HostState {
     facade: DaemonApplicationFacade,
     data: Mutex<HostData>,
-    publication_gate: Mutex<()>,
 }
 
 impl HostState {
@@ -199,16 +178,10 @@ impl HostState {
         self: &Arc<Self>,
         session_id: SessionId,
         run_id: RunId,
-    ) -> DtoResult<intention_proto::ProtocolAcceptedResultDto> {
-        let gate = self.facade.command_gate().lock().map_err(|_| {
-            ErrorDto::unavailable(
-                "daemon_command_unavailable",
-                "daemon command is unavailable",
-            )
-        })?;
-        let accepted = ApplicationService::new(self.facade.repository())
+    ) -> DtoResult<ProtocolResultDto> {
+        let accepted = self
+            .facade
             .interrupt_run(InterruptRunCommandDto::new(session_id, run_id))?;
-        drop(gate);
         let data = self.data.lock().map_err(|_| {
             ErrorDto::unavailable(
                 "daemon_task_registry_unavailable",
@@ -355,8 +328,8 @@ impl HostState {
     /// Runs the terminal side effect for one run that just reached a durable
     /// terminal state: schedule a current `Starting` successor exactly once.
     ///
-    /// The terminal status frame is published directly from the committed
-    /// transition value, so no publication retry is required.
+    /// The terminal status frame was already published from the committed
+    /// projection, so no publication retry is required.
     fn on_terminal(self: &Arc<Self>, session_id: SessionId) {
         if let Ok(Some(promoted)) = self.current_starting_run(session_id) {
             self.schedule_if_starting(session_id, promoted);
@@ -394,40 +367,22 @@ impl HostState {
         RunSubscriptionSnapshotDto::new(run, messages)
     }
 
-    /// Publishes the current durable run status to live subscribers when it
-    /// differs from the last published status.
+    /// Publishes the current committed run projection to live subscribers.
+    ///
+    /// A status commit carries only the status value, so the frame is built
+    /// from the committed projection the transition just wrote. A repeated
+    /// publication is a harmless duplicate: the subscriber replaces its state
+    /// with the same committed value.
     fn publish_current(&self, session_id: SessionId, run_id: RunId) {
         if let Ok(run) = self
             .facade
             .repository()
             .load_run_projection(session_id, run_id)
         {
-            self.publish_status(session_id, run_id, run.status());
-        }
-    }
-
-    /// Publishes one committed run status to live subscribers.
-    ///
-    /// The frame carries the committed value; a repeated status is not
-    /// re-published.
-    fn publish_status(&self, session_id: SessionId, run_id: RunId, status: RunStatusDto) {
-        let key = (session_id, run_id);
-        let previous = self
-            .data
-            .lock()
-            .ok()
-            .and_then(|data| data.published.get(&key).copied());
-        if previous.is_some_and(|value| value.status == status) {
-            return;
-        }
-        self.broadcast(
-            key,
-            ProtocolDaemonMessageDto::run_frame(RunStreamFrameDto::Status(RunStatusFrameDto::new(
-                session_id, run_id, status,
-            ))),
-        );
-        if let Ok(mut data) = self.data.lock() {
-            data.published.insert(key, PublishedRun { status });
+            self.broadcast(
+                (session_id, run_id),
+                ProtocolDaemonMessageDto::frame(RunStreamFrameDto::Status(run)),
+            );
         }
     }
 
@@ -438,164 +393,132 @@ impl HostState {
         };
         self.broadcast(
             (message.session_id(), run_id),
-            ProtocolDaemonMessageDto::run_frame(RunStreamFrameDto::Content(message.clone())),
+            ProtocolDaemonMessageDto::frame(RunStreamFrameDto::Content(message.clone())),
         );
     }
 
+    /// Queues one committed value for every subscriber of one run.
+    ///
+    /// Registration and publication share the host data lock, so a live frame
+    /// can never enter a subscriber's queue before that subscription's
+    /// correlated reply. A subscriber whose bounded queue overflowed is closed
+    /// by position under the same lock instead of being resynchronized: it
+    /// re-reads current state on reconnect.
     fn broadcast(&self, key: RunKey, message: ProtocolDaemonMessageDto) {
-        // Publication shares the registration gate, so a live frame can never
-        // enter a subscriber's queue before that subscription's correlated
-        // snapshot reply, which registration queues while holding this gate.
-        let Ok(_publication_gate) = self.publication_gate.lock() else {
+        let Ok(mut data) = self.data.lock() else {
             return;
         };
-        let mut slow = Vec::new();
-        if let Ok(data) = self.data.lock()
-            && let Some(subscribers) = data.subscribers.get(&key)
-        {
-            for subscriber in subscribers {
-                if subscriber.sender.try_send(message.clone()).is_err() {
-                    slow.push(subscriber.id);
-                }
+        let Some(subscribers) = data.subscribers.get_mut(&key) else {
+            return;
+        };
+        subscribers.retain(|subscriber| {
+            if subscriber.sender.try_send(message.clone()).is_err() {
+                subscriber.close.send_replace(true);
+                return false;
             }
-        }
-        for id in slow {
-            // A subscriber whose queue overflowed is closed instead of
-            // resynchronized: it re-reads current state on reconnect.
-            self.close_subscriber(key, id);
-        }
-    }
-
-    fn close_subscriber(&self, key: RunKey, id: u64) {
-        if let Ok(data) = self.data.lock()
-            && let Some(subscribers) = data.subscribers.get(&key)
-            && let Some(subscriber) = subscribers.iter().find(|subscriber| subscriber.id == id)
-        {
-            subscriber.close.send_replace(true);
-        }
-        self.remove_subscriber(key, id);
-    }
-
-    fn remove_subscriber(&self, key: RunKey, id: u64) {
-        if let Ok(mut data) = self.data.lock()
-            && let Some(subscribers) = data.subscribers.get_mut(&key)
-        {
-            subscribers.retain(|subscriber| subscriber.id != id);
+            true
+        });
+        let empty = subscribers.is_empty();
+        if empty {
+            data.subscribers.remove(&key);
         }
     }
 
+    /// Removes one connection's subscription from one run.
+    fn remove_subscriber(
+        &self,
+        key: RunKey,
+        sender: &tokio::sync::mpsc::Sender<ProtocolDaemonMessageDto>,
+    ) {
+        let Ok(mut data) = self.data.lock() else {
+            return;
+        };
+        let empty = data.subscribers.get_mut(&key).is_some_and(|subscribers| {
+            subscribers.retain(|subscriber| !subscriber.sender.same_channel(sender));
+            subscribers.is_empty()
+        });
+        if empty {
+            data.subscribers.remove(&key);
+        }
+    }
+
+    /// Registers one connection's run subscription and queues its correlated reply.
+    ///
+    /// Registration, the reply, and every later publication share the host data
+    /// lock, so a live frame can never enter the queue before the reply. The
+    /// reply is queued first and the subscriber is registered after it under
+    /// the same lock; when the bounded queue rejects the reply, the connection
+    /// is told to end instead of being left to wait silently. A run whose
+    /// current snapshot cannot be read is refused with its correlated typed
+    /// rejection and registers nothing.
+    ///
+    /// Returns whether the connection is registered for the run.
     fn register_subscriber(
         self: &Arc<Self>,
-        session_id: SessionId,
-        run_id: RunId,
+        subscription: SubscribeRunCommandDto,
         sender: tokio::sync::mpsc::Sender<ProtocolDaemonMessageDto>,
         close: tokio::sync::watch::Sender<bool>,
         request_id: u64,
-    ) -> Option<u64> {
+    ) -> bool {
+        let session_id = subscription.session_id();
+        let run_id = subscription.run_id();
         let key = (session_id, run_id);
-        let Ok(_publication_gate) = self.publication_gate.lock() else {
-            let _ = sender.try_send(run_subscription_response(
-                request_id,
-                RunSubscriptionResponseDto::Error(ErrorDto::unavailable(
-                    "daemon_subscriber_unavailable",
-                    "the daemon subscriber is unavailable",
-                )),
-            ));
-            return None;
+        let Ok(mut data) = self.data.lock() else {
+            let _ = sender.try_send(subscriber_unavailable(request_id));
+            return false;
         };
-        let mut data = match self.data.lock() {
-            Ok(data) => data,
-            Err(_) => {
-                let _ = sender.try_send(run_subscription_response(
-                    request_id,
-                    RunSubscriptionResponseDto::Error(ErrorDto::unavailable(
-                        "daemon_subscriber_unavailable",
-                        "the daemon subscriber is unavailable",
-                    )),
-                ));
-                return None;
-            }
-        };
-        if let Err(error) = self
-            .facade
-            .repository()
-            .load_run_projection(session_id, run_id)
-        {
-            let _ = sender.try_send(run_subscription_response(
+        let reply = match self.load_run_snapshot(session_id, run_id) {
+            Ok(snapshot) => ProtocolDaemonMessageDto::reply(
                 request_id,
-                RunSubscriptionResponseDto::Error(error),
-            ));
-            return None;
-        }
-        let id = data.next_subscriber_id;
-        data.next_subscriber_id = data.next_subscriber_id.saturating_add(1);
-        data.subscribers.entry(key).or_default().push(Subscriber {
-            id,
-            sender: sender.clone(),
-            close: close.clone(),
-        });
-        drop(data);
-        // The subscriber is registered before this second durable read, and
-        // publication shares the registration gate: no later live frame can
-        // place itself in this subscriber's FIFO queue before this response
-        // enters it.
-        let response = match self.load_run_snapshot(session_id, run_id) {
-            Ok(snapshot) => RunSubscriptionResponseDto::Snapshot(snapshot),
+                ProtocolResultDto::RunSubscribed(snapshot),
+            ),
             Err(error) => {
-                // The run became unreadable between the admission read and this
-                // snapshot read, so the registration is withdrawn before the
-                // typed error is reported.
-                self.remove_subscriber(key, id);
-                RunSubscriptionResponseDto::Error(error)
+                // An unknown or unreadable run is refused with its correlated
+                // typed error and registers nothing: a subscription that can
+                // never receive a frame must not occupy the registry. A queue
+                // that rejects even the typed rejection still ends the
+                // connection instead of leaving the peer waiting silently.
+                if sender
+                    .try_send(ProtocolDaemonMessageDto::rejection(Some(request_id), error))
+                    .is_err()
+                {
+                    close.send_replace(true);
+                }
+                return false;
             }
         };
-        if sender
-            .try_send(run_subscription_response(request_id, response))
-            .is_err()
-        {
-            // The per-connection queue is full, so the correlated reply cannot
-            // be delivered. The subscriber is removed and the failure is
-            // reported through the same typed error every other registration
-            // failure uses.
-            self.remove_subscriber(key, id);
-            if sender
-                .try_send(run_subscription_response(
-                    request_id,
-                    RunSubscriptionResponseDto::Error(ErrorDto::unavailable(
-                        "daemon_subscriber_unavailable",
-                        "the daemon subscriber is unavailable",
-                    )),
-                ))
-                .is_err()
-            {
-                // The queue that rejected the reply rejected the typed error
-                // too, so the peer must not be left waiting silently: trip the
-                // per-connection close signal exactly as the slow-subscriber
-                // path does, so the serve loop ends and the peer observes a
-                // closed stream instead of hanging.
-                close.send_replace(true);
-            }
-            return None;
+        if sender.try_send(reply).is_err() {
+            // The per-connection queue cannot deliver the correlated reply, so
+            // the peer must not be left waiting silently: trip the close signal
+            // exactly as the slow-subscriber path does and register nothing.
+            close.send_replace(true);
+            return false;
         }
-        Some(id)
+        data.subscribers
+            .entry(key)
+            .or_default()
+            .push(Subscriber { sender, close });
+        true
     }
 }
 
-fn run_subscription_response(
-    request_id: u64,
-    response: RunSubscriptionResponseDto,
-) -> ProtocolDaemonMessageDto {
-    ProtocolDaemonMessageDto::Response(encode_response(
-        request_id,
-        ProtocolResponsePayloadDto::RunSubscription(response),
-    ))
+/// The typed rejection one connection receives when it cannot be registered.
+fn subscriber_unavailable(request_id: u64) -> ProtocolDaemonMessageDto {
+    ProtocolDaemonMessageDto::rejection(
+        Some(request_id),
+        ErrorDto::unavailable(
+            "daemon_subscriber_unavailable",
+            "the daemon subscriber is unavailable",
+        ),
+    )
 }
 
 /// Publishes committed transcript rows and run statuses to live subscribers.
 ///
 /// The one commit sink serves both the model-run executor and the
-/// tool-invocation path: every frame carries the committed value of its own
-/// transaction, so publication never re-reads durable state.
+/// tool-invocation path: a content frame carries the row the commit returned,
+/// and a status frame carries the committed run projection the transition just
+/// wrote, so no frame ever carries an uncommitted value.
 #[derive(Clone)]
 struct HostCommitObserver {
     host: Arc<HostState>,
@@ -610,7 +533,7 @@ impl ModelRunCommitObserver for HostCommitObserver {
                 run_id,
                 status,
             } => {
-                self.host.publish_status(*session_id, *run_id, *status);
+                self.host.publish_current(*session_id, *run_id);
                 if run_status_is_terminal(*status) {
                     self.host.on_terminal(*session_id);
                 }
@@ -735,7 +658,6 @@ fn new_host(facade: DaemonApplicationFacade) -> Arc<HostState> {
     Arc::new(HostState {
         facade,
         data: Mutex::new(HostData::default()),
-        publication_gate: Mutex::new(()),
     })
 }
 
@@ -757,56 +679,41 @@ async fn serve_async_connection(
     connection: intention_transport::AsyncLocalDaemonConnection,
     host: Arc<HostState>,
 ) {
-    let hello = match daemon_hello() {
-        Ok(hello) => hello,
-        Err(_) => return,
-    };
-    let (_, mut requests, mut messages) = match connection.negotiate(hello).await {
-        Ok(roles) => roles,
-        Err(_) => return,
-    };
-    // One connection carries one role: requests arrive on the same NDJSON
-    // stream that carries responses and `run.frame` notifications back. The
-    // per-connection queue carries every subscriber message, so a registration
-    // response keeps its ordering ahead of live frames (PR24-014).
+    let (mut requests, mut messages) = connection.split();
+    // One connection carries one role: typed requests arrive on the same NDJSON
+    // stream that carries replies, rejections, and `run.frame` messages back.
+    // The per-connection queue carries every subscriber message, so a
+    // registration reply keeps its ordering ahead of live frames (PR24-014).
     let (sender, mut receiver) = tokio::sync::mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
     let (close_sender, mut close_receiver) = tokio::sync::watch::channel(false);
-    let mut registered: Option<(RunKey, u64)> = None;
+    let mut registered: Option<RunKey> = None;
     loop {
         tokio::select! {
             changed = close_receiver.changed() => {
                 if changed.is_err() || *close_receiver.borrow() {
-                    if let Some((key, id)) = registered {
-                        host.remove_subscriber(key, id);
+                    if let Some(key) = registered {
+                        host.remove_subscriber(key, &sender);
                     }
                     return;
                 }
             }
             line = requests.receive_line() => {
                 let Ok(line) = line else {
-                    if let Some((key, id)) = registered {
-                        host.remove_subscriber(key, id);
+                    if let Some(key) = registered {
+                        host.remove_subscriber(key, &sender);
                     }
                     return;
                 };
                 let request = match decode_request_line(&line) {
                     Ok(request) => request,
-                    Err(failure) => {
-                        if is_notification_line(&line) {
-                            // A request line without an `id` member is a
-                            // JSON-RPC notification, and the server must not
-                            // answer one (W-06). An explicit `"id": null` is a
-                            // request, so it still receives the correlated
-                            // error reply.
-                            continue;
-                        }
-                        let (id, error) = failure.into_parts();
-                        let reply = ProtocolDaemonMessageDto::Response(
-                            JsonRpcResponseDto::error(id, error),
-                        );
-                        if write_message_with_deadline(&mut messages, reply).await.is_err() {
-                            if let Some((key, id)) = registered {
-                                host.remove_subscriber(key, id);
+                    Err(error) => {
+                        // A malformed or unsupported request is answered with a
+                        // typed identity-less rejection, and the connection
+                        // keeps serving.
+                        let rejection = ProtocolDaemonMessageDto::rejection(None, error);
+                        if !write_message_or_rejection(&mut messages, rejection).await {
+                            if let Some(key) = registered {
+                                host.remove_subscriber(key, &sender);
                             }
                             return;
                         }
@@ -814,56 +721,44 @@ async fn serve_async_connection(
                     }
                 };
                 let request_id = request.id();
-                match request.payload() {
-                    ProtocolRequestPayloadDto::RunSubscription(subscription) => {
-                        if let Some((key, id)) = registered.take() {
-                            host.remove_subscriber(key, id);
+                let message = match request.into_request() {
+                    ClientRequestDto::SubscribeRun(subscription) => {
+                        if let Some(key) = registered.take() {
+                            host.remove_subscriber(key, &sender);
                         }
-                        let subscriber_id = host.register_subscriber(
-                            subscription.session_id(),
-                            subscription.run_id(),
+                        if host.register_subscriber(
+                            subscription,
                             sender.clone(),
                             close_sender.clone(),
                             request_id,
-                        );
-                        if let Some(subscriber_id) = subscriber_id {
-                            registered = Some((
-                                (subscription.session_id(), subscription.run_id()),
-                                subscriber_id,
-                            ));
+                        ) {
+                            registered =
+                                Some((subscription.session_id(), subscription.run_id()));
                         }
+                        continue;
                     }
-                    ProtocolRequestPayloadDto::Command(command) => {
-                        let response = ProtocolDaemonMessageDto::Response(encode_response(
-                            request_id,
-                            dispatch_command(&host, command),
-                        ));
-                        if !write_message_or_rejection(&mut messages, response).await {
-                            if let Some((key, id)) = registered {
-                                host.remove_subscriber(key, id);
-                            }
-                            return;
-                        }
+                    request => match dispatch_request(&host, request) {
+                        Ok(result) => ProtocolDaemonMessageDto::reply(request_id, result),
+                        Err(error) => ProtocolDaemonMessageDto::rejection(Some(request_id), error),
+                    },
+                };
+                if !write_message_or_rejection(&mut messages, message).await {
+                    if let Some(key) = registered {
+                        host.remove_subscriber(key, &sender);
                     }
-                    ProtocolRequestPayloadDto::Query(query) => {
-                        let response = ProtocolDaemonMessageDto::Response(encode_response(
-                            request_id,
-                            dispatch_query(&host, query),
-                        ));
-                        if !write_message_or_rejection(&mut messages, response).await {
-                            if let Some((key, id)) = registered {
-                                host.remove_subscriber(key, id);
-                            }
-                            return;
-                        }
-                    }
+                    return;
                 }
             }
             message = receiver.recv() => {
-                let Some(message) = message else { return; };
+                let Some(message) = message else {
+                    if let Some(key) = registered {
+                        host.remove_subscriber(key, &sender);
+                    }
+                    return;
+                };
                 if !write_message_or_rejection(&mut messages, message).await {
-                    if let Some((key, id)) = registered {
-                        host.remove_subscriber(key, id);
+                    if let Some(key) = registered {
+                        host.remove_subscriber(key, &sender);
                     }
                     return;
                 }
@@ -872,46 +767,40 @@ async fn serve_async_connection(
     }
 }
 
-/// Dispatches one decoded command against the shared composition and host registry.
-fn dispatch_command(
+/// Dispatches one decoded request against the shared composition and host registry.
+fn dispatch_request(
     host: &Arc<HostState>,
-    command: &ProtocolCommandDto,
-) -> ProtocolResponsePayloadDto {
-    match command {
-        ProtocolCommandDto::SubscribeSession(subscription) => {
-            ProtocolResponsePayloadDto::Subscription(host.facade.subscribe(*subscription))
+    request: ClientRequestDto,
+) -> DtoResult<ProtocolResultDto> {
+    match request {
+        ClientRequestDto::GetDaemonHealth => {
+            Ok(ProtocolResultDto::DaemonHealth(host.facade.health()))
         }
-        ProtocolCommandDto::InterruptRun(command) => {
-            let result = host
-                .interrupt_run(command.session_id(), command.run_id())
-                .map(|result| {
-                    ProtocolCommandResultDto::Accepted(ProtocolAcceptedDto::with_result(
-                        CorrelationIdDto::new(),
-                        result,
-                    ))
-                })
-                .unwrap_or_else(ProtocolCommandResultDto::Rejected);
-            ProtocolResponsePayloadDto::CommandResult(result)
-        }
-        command => {
-            let result = host.facade.command(command.clone());
-            if let ProtocolCommandDto::SendUserTurn(_) = command
-                && let ProtocolCommandResultDto::Accepted(accepted) = &result
-                && let intention_proto::ProtocolAcceptedResultDto::SendUserTurn(turn) =
-                    accepted.result()
-                && let intention_proto::SendUserTurnOutcomeDto::Started { run_id, .. } =
-                    turn.outcome()
+        ClientRequestDto::GetSessionSnapshot(query) => host
+            .facade
+            .session_snapshot(query.session_id())
+            .map(ProtocolResultDto::SessionSnapshot),
+        ClientRequestDto::CreateSession(command) => host.facade.create_session(command),
+        ClientRequestDto::SendUserTurn(command) => {
+            let result = host.facade.send_user_turn(command)?;
+            if let ProtocolResultDto::TurnAccepted(accepted) = &result
+                && let SendUserTurnOutcomeDto::Started { run_id, .. } = accepted.outcome()
             {
-                host.schedule_if_starting(turn.session_id(), run_id);
+                host.schedule_if_starting(accepted.session_id(), run_id);
             }
-            ProtocolResponsePayloadDto::CommandResult(result)
+            Ok(result)
         }
+        ClientRequestDto::RemoveTurn(command) => host.facade.remove_turn(command),
+        ClientRequestDto::InterruptRun(command) => {
+            host.interrupt_run(command.session_id(), command.run_id())
+        }
+        // A subscription is answered by the connection registration path, which
+        // queues the correlated reply under the same lock that publishes.
+        ClientRequestDto::SubscribeRun(_) => Err(ErrorDto::validation(
+            "daemon_subscription_route_unavailable",
+            "run subscriptions are answered by the connection registration path",
+        )),
     }
-}
-
-/// Dispatches one decoded query against the shared facade.
-fn dispatch_query(host: &Arc<HostState>, query: &ProtocolQueryDto) -> ProtocolResponsePayloadDto {
-    ProtocolResponsePayloadDto::QueryResult(host.facade.query(*query))
 }
 
 async fn write_message_with_deadline(
@@ -934,50 +823,11 @@ async fn write_with_deadline<T>(
         })?
 }
 
-/// The reply family one daemon response belongs to.
+/// Writes one daemon message, answering an over-size correlated reply with a
+/// typed rejection.
 ///
-/// The client awaits the exact reply shape of its request, so an undeliverable
-/// response is replaced by a rejection of the same family.
-enum ResponseShape {
-    CommandResult,
-    QueryResult,
-    Subscription,
-    RunSubscription,
-}
-
-impl ResponseShape {
-    const fn of(response: &ProtocolResponsePayloadDto) -> Self {
-        match response {
-            ProtocolResponsePayloadDto::CommandResult(_) => Self::CommandResult,
-            ProtocolResponsePayloadDto::QueryResult(_) => Self::QueryResult,
-            ProtocolResponsePayloadDto::Subscription(_) => Self::Subscription,
-            ProtocolResponsePayloadDto::RunSubscription(_) => Self::RunSubscription,
-        }
-    }
-
-    const fn rejected(self, error: ErrorDto) -> ProtocolResponsePayloadDto {
-        match self {
-            Self::CommandResult => {
-                ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Rejected(error))
-            }
-            Self::QueryResult => ProtocolResponsePayloadDto::QueryResult(
-                intention_proto::ProtocolQueryResultDto::Rejected(error),
-            ),
-            Self::Subscription => ProtocolResponsePayloadDto::Subscription(
-                SessionSubscriptionResponseDto::Error(error),
-            ),
-            Self::RunSubscription => ProtocolResponsePayloadDto::RunSubscription(
-                RunSubscriptionResponseDto::Error(error),
-            ),
-        }
-    }
-}
-
-/// Writes one daemon message, answering an over-size correlated response with
-/// its shape-matched typed rejection.
-///
-/// An over-size response fails to encode before any byte is written, so the
-/// connection still carries the request correlation: the client receives the
+/// An over-size reply fails to encode before any byte is written, so the
+/// connection still carries the request correlation: the peer receives the
 /// typed `local_protocol_message_too_large` failure instead of an unexplained
 /// close. Any other write failure leaves the stream in an unknown state and
 /// still ends the connection, because a queued frame is best effort and can
@@ -989,30 +839,24 @@ async fn write_message_or_rejection(
     message: ProtocolDaemonMessageDto,
 ) -> bool {
     let correlated = match &message {
-        ProtocolDaemonMessageDto::Response(response) => response
-            .id()
-            .zip(response.result_value())
-            .map(|(id, payload)| (id, ResponseShape::of(payload))),
-        ProtocolDaemonMessageDto::Notification(_) => None,
+        ProtocolDaemonMessageDto::Reply(reply) => Some(reply.id()),
+        ProtocolDaemonMessageDto::Rejection(_) | ProtocolDaemonMessageDto::Frame(_) => None,
     };
     match write_message_with_deadline(messages, message).await {
         Ok(()) => true,
         Err(failure) if failure.code() == "local_protocol_message_too_large" => {
-            let Some((id, shape)) = correlated else {
+            let Some(id) = correlated else {
                 return false;
             };
-            let rejection =
-                ProtocolDaemonMessageDto::Response(encode_response(id, shape.rejected(failure)));
-            write_message_with_deadline(messages, rejection)
-                .await
-                .is_ok()
+            write_message_with_deadline(
+                messages,
+                ProtocolDaemonMessageDto::rejection(Some(id), failure),
+            )
+            .await
+            .is_ok()
         }
         Err(_) => false,
     }
-}
-
-fn daemon_hello() -> DtoResult<ProtocolHelloDto> {
-    ProtocolHelloDto::new(local_protocol_version(), "intention-daemon")
 }
 
 /// The one fixture host seam: owns a bounded host and every task it creates.
@@ -1118,23 +962,20 @@ mod tests {
         ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
     };
     use intention_proto::{
-        ConfigRevisionId, IdempotencyKey, ProjectId, SchemaVersionDto, TimestampDto, WorkspaceId,
-    };
-    use intention_proto::{
-        CreateSessionCommandDto, GetSessionSnapshotQueryDto, MessageKindDto, MessageProjectionDto,
-        RunModeDto, SendUserTurnCommandDto, WorkspaceRootDto,
-    };
-    use intention_proto::{
-        ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolHelloDto,
-        ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestPayloadDto,
-        ProtocolResponsePayloadDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto,
+        ClientRequestDto, ConfigRevisionId, CreateSessionCommandDto, DaemonReadinessDto,
+        GetSessionSnapshotQueryDto, IdempotencyKey, MessageKindDto, MessageProjectionDto,
+        ProtocolDaemonMessageDto, ProtocolResultDto, RunModeDto, SendUserTurnCommandDto,
+        SendUserTurnOutcomeDto, SessionId, SubscribeRunCommandDto, WorkspaceId, WorkspaceRootDto,
         decode_response, encode_request,
     };
+    use intention_proto::{ProjectId, RunId, SchemaVersionDto, TimestampDto};
     use intention_providers::{
         FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
         ModelEventStream, ModelExecutionDriver,
     };
-    use intention_transport::{AsyncLocalClientConnection, AsyncLocalListener};
+    use intention_transport::{
+        AsyncLocalClientConnection, AsyncLocalListener, AsyncMessageReceiver, AsyncMessageSender,
+    };
     use tempfile::TempDir;
 
     fn endpoint() -> LocalEndpoint {
@@ -1241,38 +1082,30 @@ mod tests {
 
     fn create_and_start(facade: &DaemonApplicationFacade) -> (SessionId, RunId) {
         let session_id = SessionId::new();
-        assert!(matches!(
-            facade.command(ProtocolCommandDto::CreateSession(
-                CreateSessionCommandDto::new(
-                    ProjectId::new(),
-                    session_id,
-                    WorkspaceId::new(),
-                    WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
-                        .expect("fixture workspace is absolute"),
-                    RunModeDto::Build,
-                )
-            )),
-            ProtocolCommandResultDto::Accepted(_)
-        ));
-        let accepted = facade.command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "fixture turn")
-                .expect("fixture turn is valid"),
-        ));
-        let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
-            unreachable!("fixture turn starts")
-        };
-        let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
+        let created = facade
+            .create_session(CreateSessionCommandDto::new(
+                ProjectId::new(),
+                session_id,
+                WorkspaceId::new(),
+                WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
+                    .expect("fixture workspace is absolute"),
+                RunModeDto::Build,
+            ))
+            .expect("fixture session creates");
+        assert!(matches!(created, ProtocolResultDto::SessionCreated(_)));
+        let accepted = facade
+            .send_user_turn(
+                SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "fixture turn")
+                    .expect("fixture turn is valid"),
+            )
+            .expect("fixture turn is accepted");
+        let ProtocolResultDto::TurnAccepted(turn) = accepted else {
             unreachable!("fixture result is a turn")
         };
         let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
             unreachable!("fixture first turn starts")
         };
         (session_id, run_id)
-    }
-
-    fn fixture_hello() -> ProtocolHelloDto {
-        ProtocolHelloDto::new(local_protocol_version(), "daemon-host-test")
-            .expect("fixture hello is valid")
     }
 
     /// Serves exactly one fixture peer through a host-owned connection task.
@@ -1287,6 +1120,16 @@ mod tests {
         serve_async_connection(connection, host).await;
     }
 
+    /// Connects one scripted client link and returns its two typed directions.
+    async fn connect_fixture(
+        endpoint: &LocalEndpoint,
+    ) -> (AsyncMessageSender, AsyncMessageReceiver) {
+        let connection = AsyncLocalClientConnection::connect(endpoint)
+            .await
+            .expect("fixture client connects");
+        connection.split()
+    }
+
     #[tokio::test]
     async fn one_connection_serves_requests_and_run_frames_together() {
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(CompletedDriver));
@@ -1295,21 +1138,11 @@ mod tests {
         let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
         let server = tokio::spawn(serve_one_test_connection(listener, facade));
 
-        let connection = AsyncLocalClientConnection::connect(&endpoint)
-            .await
-            .expect("merged client connects");
-        let (_remote, mut requests, mut messages) = connection
-            .negotiate(fixture_hello())
-            .await
-            .expect("merged client negotiates");
+        let (mut requests, mut messages) = connect_fixture(&endpoint).await;
         requests
             .send_message(&encode_request(
                 1,
-                ProtocolRequestPayloadDto::RunSubscription(SubscribeRunCommandDto::new(
-                    intention_proto::CURRENT_DTO_SCHEMA_VERSION,
-                    session_id,
-                    run_id,
-                )),
+                ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, run_id)),
             ))
             .await
             .expect("subscription sends");
@@ -1318,10 +1151,8 @@ mod tests {
             .await
             .expect("subscription reply arrives");
         // The correlated reply is the current durable state of this run.
-        let ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Snapshot(
-            snapshot,
-        )) = decode_response(&line, ProtocolMethodDto::RunSubscribe, 1)
-            .expect("subscription reply decodes")
+        let ProtocolResultDto::RunSubscribed(snapshot) =
+            decode_response(&line, 1).expect("subscription reply decodes")
         else {
             panic!("a run subscription answers with the current run snapshot")
         };
@@ -1331,17 +1162,14 @@ mod tests {
         // The same connection still serves an ordinary request while the
         // subscription is registered.
         requests
-            .send_message(&encode_request(
-                2,
-                ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
-            ))
+            .send_message(&encode_request(2, ClientRequestDto::GetDaemonHealth))
             .await
             .expect("health request sends");
         let line = messages.receive_line().await.expect("health reply arrives");
         assert!(matches!(
-            decode_response(&line, ProtocolMethodDto::DaemonHealth, 2),
-            Ok(ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(health)))
-                if health.readiness() == intention_proto::DaemonReadinessDto::Ready
+            decode_response(&line, 2),
+            Ok(ProtocolResultDto::DaemonHealth(health))
+                if health.readiness() == DaemonReadinessDto::Ready
         ));
         // The peer releases its socket so the host's serving loop observes
         // end-of-stream; only then does the awaited connection task finish.
@@ -1357,18 +1185,23 @@ mod tests {
         // legitimately grow past the envelope cap: that response must carry the
         // typed transport failure instead of closing the connection silently.
         for index in 0..6 {
-            let accepted = facade.command(ProtocolCommandDto::SendUserTurn(
-                SendUserTurnCommandDto::new(
-                    session_id,
-                    IdempotencyKey::new(),
-                    format!("pending {index} {}", "x".repeat(256 * 1024)),
+            let accepted = facade
+                .send_user_turn(
+                    SendUserTurnCommandDto::new(
+                        session_id,
+                        IdempotencyKey::new(),
+                        format!("pending {index} {}", "x".repeat(256 * 1024)),
+                    )
+                    .expect("fixture pending turn is valid"),
                 )
-                .expect("fixture pending turn is valid"),
-            ));
-            assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
+                .expect("fixture pending turn is accepted");
+            assert!(
+                matches!(accepted, ProtocolResultDto::TurnAccepted(_)),
+                "the fixture turn is durably accepted"
+            );
         }
         let snapshot = facade
-            .session_snapshot(session_id, None)
+            .session_snapshot(session_id)
             .expect("the over-size snapshot reads in process");
         assert!(
             serde_json::to_vec(&snapshot)
@@ -1381,63 +1214,76 @@ mod tests {
         let endpoint = endpoint();
         let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
         let server = tokio::spawn(serve_one_test_connection(listener, facade));
-        let connection = AsyncLocalClientConnection::connect(&endpoint)
-            .await
-            .expect("client connects");
-        let (_remote, mut requests, mut messages) = connection
-            .negotiate(fixture_hello())
-            .await
-            .expect("client negotiates");
+        let (mut requests, mut messages) = connect_fixture(&endpoint).await;
         requests
             .send_message(&encode_request(
                 1,
-                ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetSessionSnapshot(
-                    GetSessionSnapshotQueryDto::new(session_id),
-                )),
+                ClientRequestDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id)),
             ))
             .await
             .expect("snapshot query sends");
         let line = messages
             .receive_line()
             .await
-            .expect("the correlated typed reply still arrives");
-        let response = decode_response(&line, ProtocolMethodDto::SessionSnapshot, 1)
-            .expect("the correlated typed reply decodes");
-        assert!(matches!(
-            response,
-            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error))
-                if error.code() == "local_protocol_message_too_large"
-        ));
+            .expect("the correlated typed rejection still arrives");
+        assert_eq!(
+            decode_response(&line, 1)
+                .expect_err("the over-size reply is a typed rejection")
+                .code(),
+            "local_protocol_message_too_large"
+        );
         // The refused peer releases its socket before the host task is awaited.
         drop((requests, messages));
         server.await.expect("host serves the refused peer");
     }
 
     #[tokio::test]
-    async fn async_host_answers_a_stale_hello_with_a_typed_version_mismatch() {
+    async fn a_malformed_request_is_answered_with_a_typed_rejection_and_the_connection_continues() {
+        // The typed wire keeps the one error contract: a request line that is
+        // not a current typed request is answered with a typed rejection, and
+        // the connection keeps serving instead of closing.
         let (_directory, facade) = fixture_facade();
         let endpoint = endpoint();
         let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
         let server = tokio::spawn(serve_one_test_connection(listener, facade));
+        let (mut requests, mut messages) = connect_fixture(&endpoint).await;
 
-        let connection = AsyncLocalClientConnection::connect(&endpoint)
+        requests
+            .send_message(&"{\"id\":9,\"request\":{\"kind\":\"bogus\",\"data\":{}}}")
             .await
-            .expect("stale client connects");
-        let error = match connection
-            .negotiate(
-                ProtocolHelloDto::new(
-                    intention_proto::ProtocolVersionDto::new(1, 1),
-                    "stale-daemon-test",
-                )
-                .expect("stale hello is valid"),
-            )
+            .expect("unsupported request sends");
+        let line = messages.receive_line().await.expect("rejection arrives");
+        assert_eq!(
+            decode_response(&line, 9)
+                .expect_err("an unsupported request is rejected")
+                .code(),
+            "invalid_local_protocol_message"
+        );
+
+        requests
+            .send_message(&"not a typed request".to_owned())
             .await
-        {
-            Ok(_) => panic!("a stale protocol version is refused with a typed error"),
-            Err(error) => error,
-        };
-        assert_eq!(error.code(), "incompatible_protocol_version");
-        server.await.expect("host serves the refused peer");
+            .expect("malformed request sends");
+        let line = messages.receive_line().await.expect("rejection arrives");
+        assert_eq!(
+            decode_response(&line, 10)
+                .expect_err("a malformed request is rejected")
+                .code(),
+            "invalid_local_protocol_message"
+        );
+
+        // The same connection still serves the next valid request.
+        requests
+            .send_message(&encode_request(11, ClientRequestDto::GetDaemonHealth))
+            .await
+            .expect("health request sends");
+        let line = messages.receive_line().await.expect("health reply arrives");
+        assert!(matches!(
+            decode_response(&line, 11),
+            Ok(ProtocolResultDto::DaemonHealth(_))
+        ));
+        drop((requests, messages));
+        server.await.expect("host serves the rejected peer");
     }
 
     #[test]
@@ -1476,7 +1322,7 @@ mod tests {
         let host = new_host(facade);
         assert!(matches!(
             host.interrupt_run(session_id, run_id),
-            Ok(ProtocolAcceptedResultDto::InterruptRun(value))
+            Ok(ProtocolResultDto::RunInterrupted(value))
                 if value.session_id() == session_id && value.run_id() == run_id
         ));
         assert!(
@@ -1579,40 +1425,47 @@ mod tests {
         let (session_id, run_id) = create_and_start(&facade);
         let host = new_host(facade);
 
+        // An unknown run is refused with its typed error and is never registered.
         let (unknown_sender, mut unknown_receiver) =
             tokio::sync::mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
         let (unknown_close, _unknown_closed) = tokio::sync::watch::channel(false);
-        assert!(
-            host.register_subscriber(session_id, RunId::new(), unknown_sender, unknown_close, 1)
-                .is_none()
-        );
+        assert!(!host.register_subscriber(
+            SubscribeRunCommandDto::new(session_id, RunId::new()),
+            unknown_sender,
+            unknown_close,
+            1,
+        ));
         assert!(matches!(
             unknown_receiver.recv().await,
-            Some(ProtocolDaemonMessageDto::Response(response))
-                if matches!(
-                    response.result_value(),
-                    Some(ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Error(error)))
-                        if error.code() == "storage_record_not_found"
-                )
+            Some(ProtocolDaemonMessageDto::Rejection(rejection))
+                if rejection.id() == Some(1)
+                    && rejection.error().code() == "storage_record_not_found"
         ));
 
+        // A current run admits one subscriber and answers with its snapshot.
         let (scoped_sender, mut scoped_receiver) =
             tokio::sync::mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
         let (scoped_close, _scoped_closed) = tokio::sync::watch::channel(false);
-        let registered = host
-            .register_subscriber(session_id, run_id, scoped_sender, scoped_close, 2)
-            .expect("a current run admits one subscriber");
+        assert!(host.register_subscriber(
+            SubscribeRunCommandDto::new(session_id, run_id),
+            scoped_sender.clone(),
+            scoped_close,
+            2,
+        ));
         assert!(matches!(
             scoped_receiver.recv().await,
-            Some(ProtocolDaemonMessageDto::Response(response))
-                if matches!(
-                    response.result_value(),
-                    Some(ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Snapshot(snapshot)))
-                        if snapshot.run().run_id() == run_id
-                )
+            Some(ProtocolDaemonMessageDto::Reply(reply))
+                if reply.id() == 2
+                    && matches!(
+                        reply.result(),
+                        ProtocolResultDto::RunSubscribed(snapshot)
+                            if snapshot.run().run_id() == run_id
+                    )
         ));
-        host.remove_subscriber((session_id, run_id), registered);
+        host.remove_subscriber((session_id, run_id), &scoped_sender);
 
+        // A slow subscriber is closed on overflow while a healthy sibling keeps
+        // receiving frames and the run keeps exactly one registration.
         let (slow_sender, mut slow_receiver) =
             tokio::sync::mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
         let (slow_close, mut slow_closed) = tokio::sync::watch::channel(false);
@@ -1625,21 +1478,22 @@ mod tests {
                 (session_id, run_id),
                 vec![
                     Subscriber {
-                        id: 1,
                         sender: slow_sender,
                         close: slow_close,
                     },
                     Subscriber {
-                        id: 2,
                         sender: healthy_sender,
                         close: healthy_close,
                     },
                 ],
             );
         }
-        let frame = ProtocolDaemonMessageDto::run_frame(RunStreamFrameDto::Status(
-            RunStatusFrameDto::new(session_id, run_id, RunStatusDto::Running),
-        ));
+        let run = host
+            .facade
+            .repository()
+            .load_run_projection(session_id, run_id)
+            .expect("fixture run reads");
+        let frame = ProtocolDaemonMessageDto::frame(RunStreamFrameDto::Status(run));
         for _ in 0..SUBSCRIBER_QUEUE_CAPACITY {
             host.broadcast((session_id, run_id), frame.clone());
             let _ = healthy_receiver.recv().await;
@@ -1671,16 +1525,24 @@ mod tests {
         let host = new_host(facade);
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
         let (close, mut closed) = tokio::sync::watch::channel(false);
-        let queued = ProtocolDaemonMessageDto::run_frame(RunStreamFrameDto::Status(
-            RunStatusFrameDto::new(session_id, run_id, RunStatusDto::Running),
-        ));
+        let run = host
+            .facade
+            .repository()
+            .load_run_projection(session_id, run_id)
+            .expect("fixture run reads");
         sender
-            .try_send(queued)
+            .try_send(ProtocolDaemonMessageDto::frame(RunStreamFrameDto::Status(
+                run,
+            )))
             .expect("the single-slot queue accepts one frame");
 
         assert!(
-            host.register_subscriber(session_id, run_id, sender, close, 7)
-                .is_none(),
+            !host.register_subscriber(
+                SubscribeRunCommandDto::new(session_id, run_id),
+                sender,
+                close,
+                7,
+            ),
             "a full queue cannot accept the correlated reply"
         );
         assert!(closed.changed().await.is_ok());
@@ -1694,13 +1556,13 @@ mod tests {
                 .expect("host data remains available")
                 .subscribers
                 .get(&(session_id, run_id))
-                .map(Vec::len),
-            Some(0),
+                .map_or(0, Vec::len),
+            0,
             "the failed registration leaves no subscriber registered"
         );
         assert!(matches!(
             receiver.recv().await,
-            Some(ProtocolDaemonMessageDto::Notification(_))
+            Some(ProtocolDaemonMessageDto::Frame(_))
         ));
     }
 
@@ -1708,8 +1570,8 @@ mod tests {
     async fn a_correlated_subscription_reply_precedes_every_live_frame() {
         // The subscription reply is the correlated current-state snapshot, so
         // it is the first message a new subscriber receives even while the run
-        // is publishing committed frames concurrently. Publication and
-        // registration therefore share the same publication gate.
+        // is publishing committed frames concurrently. Registration and
+        // publication therefore share the one host data lock.
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
         let (session_id, run_id) = create_and_start(&facade);
         let host = new_host(facade);
@@ -1736,9 +1598,12 @@ mod tests {
         for request_id in 1..=32 {
             let (sender, mut receiver) = tokio::sync::mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
             let (close, _closed) = tokio::sync::watch::channel(false);
-            let id = host
-                .register_subscriber(session_id, run_id, sender, close, request_id)
-                .expect("a current run admits one subscriber");
+            assert!(host.register_subscriber(
+                SubscribeRunCommandDto::new(session_id, run_id),
+                sender.clone(),
+                close,
+                request_id,
+            ));
             let first = receiver
                 .recv()
                 .await
@@ -1746,18 +1611,13 @@ mod tests {
             assert!(
                 matches!(
                     first,
-                    ProtocolDaemonMessageDto::Response(response)
-                        if response.id() == Some(request_id)
-                            && matches!(
-                                response.result_value(),
-                                Some(ProtocolResponsePayloadDto::RunSubscription(
-                                    RunSubscriptionResponseDto::Snapshot(_)
-                                ))
-                            )
+                    ProtocolDaemonMessageDto::Reply(reply)
+                        if reply.id() == request_id
+                            && matches!(reply.result(), ProtocolResultDto::RunSubscribed(_))
                 ),
                 "the correlated snapshot reply must precede every live frame"
             );
-            host.remove_subscriber((session_id, run_id), id);
+            host.remove_subscriber((session_id, run_id), &sender);
         }
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         publisher.join().expect("the publisher thread joins");

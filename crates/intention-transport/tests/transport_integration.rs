@@ -7,16 +7,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use intention_proto::ErrorDto;
 use intention_proto::{
-    JsonRpcRequestDto, JsonRpcResponseDto, ProtocolDaemonMessageDto, ProtocolHelloDto,
-    ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestPayloadDto,
-    ProtocolResponsePayloadDto, ProtocolVersionDto, RunStreamFrameDto, decode_request_line,
-    decode_response, encode_request, encode_response, parse_run_frame_notification,
+    ClientRequestDto, ErrorDto, ProtocolDaemonMessageDto, RunStreamFrameDto, decode_request_line,
+    decode_response, encode_request, parse_run_frame,
 };
-use intention_transport::{
-    AsyncLocalClientConnection, AsyncLocalListener, LocalEndpoint, local_protocol_version,
-};
+use intention_transport::{AsyncLocalClientConnection, AsyncLocalListener, LocalEndpoint};
 use tempfile::TempDir;
 
 static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(0);
@@ -31,42 +26,29 @@ fn endpoint(_directory: &TempDir) -> LocalEndpoint {
         .expect("fixture instance name must be valid")
 }
 
-fn hello(name: &str) -> ProtocolHelloDto {
-    ProtocolHelloDto::new(local_protocol_version(), name).expect("fixture hello must be valid")
+const fn health_request(id: u64) -> intention_proto::ProtocolRequestDto {
+    encode_request(id, ClientRequestDto::GetDaemonHealth)
 }
 
-fn hello_at(version: ProtocolVersionDto, name: &str) -> ProtocolHelloDto {
-    ProtocolHelloDto::new(version, name).expect("fixture hello must be valid")
-}
-
-fn health_request(id: u64) -> JsonRpcRequestDto<ProtocolRequestPayloadDto> {
-    encode_request(
-        id,
-        ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
+fn unavailable_message(id: u64) -> ProtocolDaemonMessageDto {
+    ProtocolDaemonMessageDto::rejection(
+        Some(id),
+        ErrorDto::unavailable("fixture", "fixture unavailable"),
     )
 }
 
-fn rejected_payload() -> ProtocolResponsePayloadDto {
-    ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(
-        ErrorDto::unavailable("fixture", "fixture unavailable"),
-    ))
-}
-
-fn unavailable_response(id: u64) -> JsonRpcResponseDto<ProtocolResponsePayloadDto> {
-    encode_response(id, rejected_payload())
-}
-
-/// Builds one current-state status frame from its wire shape so this crate
-/// keeps exercising framing without depending on the domain vocabulary.
-fn running_status_frame(
+/// Builds one committed status frame carrying a full run projection.
+fn status_frame(
     session_id: intention_proto::SessionId,
     run_id: intention_proto::RunId,
 ) -> RunStreamFrameDto {
-    serde_json::from_value(serde_json::json!({
-        "kind": "status",
-        "data": { "session_id": session_id, "run_id": run_id, "status": "running" },
-    }))
-    .expect("current-state status frame decodes")
+    RunStreamFrameDto::Status(intention_proto::RunProjectionDto::new(
+        session_id,
+        run_id,
+        intention_proto::TurnId::new(),
+        intention_proto::RunStatusDto::Running,
+        intention_proto::ConfigRevisionId::new(),
+    ))
 }
 
 #[tokio::test]
@@ -78,26 +60,19 @@ async fn async_connection_preserves_correlated_replies_then_uncorrelated_stream_
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
     let server = tokio::spawn(async move {
         let connection = listener.accept().await.expect("server accepts client");
-        let (remote, mut requests, mut messages) = connection
-            .negotiate(hello("daemon-frame-daemon"))
-            .await
-            .expect("daemon hello negotiates");
-        assert_eq!(remote.adapter_name(), "daemon-frame-client");
+        let (mut requests, mut messages) = connection.split();
         let line = requests
             .receive_line()
             .await
             .expect("server receives request");
         let request = decode_request_line(&line).expect("request decodes");
-        assert!(matches!(
-            request.payload(),
-            ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth)
-        ));
+        assert_eq!(request.request(), &ClientRequestDto::GetDaemonHealth);
         messages
-            .send_message(&unavailable_response(request.id()))
+            .send_message(&unavailable_message(request.id()))
             .await
-            .expect("server sends correlated response");
+            .expect("server sends correlated rejection");
         messages
-            .send_message(&ProtocolDaemonMessageDto::run_frame(running_status_frame(
+            .send_message(&ProtocolDaemonMessageDto::frame(status_frame(
                 session_id, run_id,
             )))
             .await
@@ -106,39 +81,35 @@ async fn async_connection_preserves_correlated_replies_then_uncorrelated_stream_
     let connection = AsyncLocalClientConnection::connect(&endpoint)
         .await
         .expect("client connects");
-    let (remote, mut requests, mut messages) = connection
-        .negotiate(hello("daemon-frame-client"))
-        .await
-        .expect("client hello negotiates");
-    assert_eq!(remote.adapter_name(), "daemon-frame-daemon");
+    let (mut requests, mut messages) = connection.split();
     requests
         .send_message(&health_request(1))
         .await
         .expect("request sends");
-    let line = messages.receive_line().await.expect("response arrives");
-    let response = decode_response(&line, ProtocolMethodDto::DaemonHealth, 1)
-        .expect("correlated response decodes");
-    assert_eq!(response, rejected_payload());
+    let line = messages.receive_line().await.expect("rejection arrives");
+    assert_eq!(
+        decode_response(&line, 1)
+            .expect_err("the correlated rejection surfaces its error")
+            .code(),
+        "fixture"
+    );
     let line = messages.receive_line().await.expect("stream frame arrives");
     assert!(matches!(
-        parse_run_frame_notification(&line).expect("stream frame parses"),
-        RunStreamFrameDto::Status(status)
-            if status.session_id() == session_id && status.run_id() == run_id
+        parse_run_frame(&line).expect("stream frame parses"),
+        RunStreamFrameDto::Status(run)
+            if run.session_id() == session_id && run.run_id() == run_id
     ));
     server.await.expect("server task completes");
 }
 
 #[tokio::test]
-async fn async_transport_split_roles_exchange_concurrent_multiple_frames_without_corruption() {
+async fn async_link_exchanges_concurrent_multiple_messages_without_corruption() {
     let directory = TempDir::new().expect("temporary directory is available");
     let endpoint = endpoint(&directory);
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
     let server = tokio::spawn(async move {
         let connection = listener.accept().await.expect("server accepts client");
-        let (_, mut requests, mut messages) = connection
-            .negotiate(hello("async-fixture-daemon"))
-            .await
-            .expect("daemon hello negotiates");
+        let (mut requests, mut messages) = connection.split();
         for _ in 0..32 {
             let line = requests
                 .receive_line()
@@ -146,19 +117,16 @@ async fn async_transport_split_roles_exchange_concurrent_multiple_frames_without
                 .expect("server receives request");
             let request = decode_request_line(&line).expect("request decodes");
             messages
-                .send_message(&unavailable_response(request.id()))
+                .send_message(&unavailable_message(request.id()))
                 .await
-                .expect("server sends response");
+                .expect("server sends rejection");
         }
     });
 
     let connection = AsyncLocalClientConnection::connect(&endpoint)
         .await
         .expect("client connects");
-    let (_, mut requests, mut messages) = connection
-        .negotiate(hello("async-fixture-client"))
-        .await
-        .expect("client hello negotiates");
+    let (mut requests, mut messages) = connection.split();
     let (_, received) = tokio::join!(
         async {
             for id in 1..=32 {
@@ -172,9 +140,12 @@ async fn async_transport_split_roles_exchange_concurrent_multiple_frames_without
             let mut ids = Vec::new();
             for _ in 0..32 {
                 let line = messages.receive_line().await.expect("client receives line");
-                let response: JsonRpcResponseDto<ProtocolResponsePayloadDto> =
-                    JsonRpcResponseDto::parse(&line).expect("response parses");
-                ids.push(response.id().expect("responses echo an identity"));
+                let message = intention_proto::parse_daemon_message(&line)
+                    .expect("daemon message is current");
+                let ProtocolDaemonMessageDto::Rejection(rejection) = message else {
+                    panic!("the fixture daemon answers with a rejection")
+                };
+                ids.push(rejection.id().expect("rejections echo an identity"));
             }
             ids
         }
@@ -201,16 +172,13 @@ fn endpoint_identifiers_reject_unsafe_instance_ids() {
 
 #[cfg(windows)]
 #[tokio::test]
-async fn windows_async_named_pipe_fixture_negotiates_multiple_frames_and_cleans_up() {
+async fn windows_async_named_pipe_fixture_exchanges_multiple_messages_and_cleans_up() {
     let directory = TempDir::new().expect("temporary directory is available");
     let endpoint = endpoint(&directory);
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("named-pipe listener binds");
     let server = tokio::spawn(async move {
         let connection = listener.accept().await.expect("named-pipe server accepts");
-        let (_, mut requests, mut messages) = connection
-            .negotiate(hello("windows-async-daemon"))
-            .await
-            .expect("named-pipe daemon hello negotiates");
+        let (mut requests, mut messages) = connection.split();
         for _ in 0..2 {
             let line = requests
                 .receive_line()
@@ -218,18 +186,15 @@ async fn windows_async_named_pipe_fixture_negotiates_multiple_frames_and_cleans_
                 .expect("named-pipe request arrives");
             let request = decode_request_line(&line).expect("named-pipe request decodes");
             messages
-                .send_message(&unavailable_response(request.id()))
+                .send_message(&unavailable_message(request.id()))
                 .await
-                .expect("named-pipe response sends");
+                .expect("named-pipe rejection sends");
         }
     });
     let connection = AsyncLocalClientConnection::connect(&endpoint)
         .await
         .expect("named-pipe client connects");
-    let (_, mut requests, mut messages) = connection
-        .negotiate(hello("windows-async-client"))
-        .await
-        .expect("named-pipe client hello negotiates");
+    let (mut requests, mut messages) = connection.split();
     for id in 1..=2 {
         requests
             .send_message(&health_request(id))
@@ -238,11 +203,12 @@ async fn windows_async_named_pipe_fixture_negotiates_multiple_frames_and_cleans_
         let line = messages
             .receive_line()
             .await
-            .expect("named-pipe response arrives");
+            .expect("named-pipe rejection arrives");
         assert_eq!(
-            decode_response(&line, ProtocolMethodDto::DaemonHealth, id)
-                .expect("named-pipe response decodes"),
-            rejected_payload()
+            decode_response(&line, id)
+                .expect_err("named-pipe rejection decodes")
+                .code(),
+            "fixture"
         );
     }
     server.await.expect("named-pipe server completes");
@@ -252,71 +218,4 @@ async fn windows_async_named_pipe_fixture_negotiates_multiple_frames_and_cleans_
             .is_err(),
         "dropping the named-pipe listener removes its endpoint"
     );
-}
-
-// Exact-version negotiation must reject a same-major minor mismatch exactly
-// like a major mismatch, on every path: the wire carries one protocol version.
-
-#[tokio::test]
-async fn async_negotiation_rejects_minor_mismatch_on_the_daemon_side() {
-    let directory = TempDir::new().expect("temporary directory is available");
-    let endpoint = endpoint(&directory);
-    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
-    let server = tokio::spawn(async move {
-        let connection = listener.accept().await.expect("server accepts client");
-        let error = connection
-            .negotiate(hello("async-fixture-daemon"))
-            .await
-            .err()
-            .expect("async daemon must reject a minor mismatch");
-        assert_eq!(error.code(), "incompatible_protocol_version");
-    });
-    let connection = AsyncLocalClientConnection::connect(&endpoint)
-        .await
-        .expect("client connects");
-    let client_result = connection
-        .negotiate(hello_at(
-            ProtocolVersionDto::new(2, 1),
-            "async-fixture-client",
-        ))
-        .await;
-    assert!(
-        client_result.is_err(),
-        "the mismatched client must fail closed without hanging"
-    );
-    let error = match client_result {
-        Ok(_) => panic!("a minor mismatch must not negotiate"),
-        Err(error) => error,
-    };
-    assert_eq!(error.code(), "incompatible_protocol_version");
-    server.await.expect("server task completes");
-}
-
-#[tokio::test]
-async fn async_negotiation_rejects_minor_mismatch_on_the_client_side() {
-    // The daemon gate checks the client's exact version before replying, so the
-    // fixture daemon offers a future minor version in its own handshake to
-    // exercise the client-side exact-version gate.
-    let directory = TempDir::new().expect("temporary directory is available");
-    let endpoint = endpoint(&directory);
-    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
-    let server = tokio::spawn(async move {
-        let connection = listener.accept().await.expect("scripted daemon accepts");
-        connection
-            .negotiate(hello_at(
-                ProtocolVersionDto::new(2, 1),
-                "scripted-future-daemon",
-            ))
-            .await
-            .expect("scripted future hello sends");
-    });
-    let connection = AsyncLocalClientConnection::connect(&endpoint)
-        .await
-        .expect("client connects");
-    let error = match connection.negotiate(hello("async-fixture-client")).await {
-        Ok(_) => panic!("a client of the current version must reject a 2.1 daemon"),
-        Err(error) => error,
-    };
-    assert_eq!(error.code(), "incompatible_protocol_version");
-    server.await.expect("scripted daemon completes");
 }

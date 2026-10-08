@@ -4,10 +4,7 @@
 //! a daemon implementation, access domain services, or retain business state.
 
 use intention_client::IntentionClient;
-use intention_proto::DtoResult;
-use intention_proto::{
-    DaemonHealthDto, SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
-};
+use intention_proto::{DaemonHealthDto, DtoResult, SessionId, SessionSnapshotDto};
 
 /// A minimal proof adapter that reaches daemon state only through `IntentionClient`.
 pub struct TuiProofClient {
@@ -31,19 +28,16 @@ impl TuiProofClient {
         self.client.connect_or_bootstrap().await
     }
 
-    /// Subscribes to one session using the shared client protocol mapping.
+    /// Reads the current durable session snapshot through the shared client.
     ///
-    /// The request returns the current session snapshot; there is no cursor and
-    /// no resume state.
+    /// This is the single session read: it returns current durable state, there
+    /// is no cursor and no resume state, and a re-read re-reads current state.
     ///
     /// # Errors
     ///
     /// Returns a typed client/transport/protocol error. The returned DTO is the
     /// same one available to all other presentation adapters.
-    pub async fn subscribe(
-        &self,
-        subscription: SubscribeSessionCommandDto,
-    ) -> DtoResult<SessionSubscriptionResponseDto> {
-        self.client.subscribe(subscription).await
+    pub async fn session_snapshot(&self, session_id: SessionId) -> DtoResult<SessionSnapshotDto> {
+        self.client.session_snapshot(session_id).await
     }
 }

@@ -154,8 +154,8 @@ A redaction failure is a security defect and must have regression coverage.
 
 Daemon-owned observability must expose typed, safe operational data:
 
-- daemon health/readiness with the current DTO schema version;
-- protocol compatibility status;
+- daemon health and readiness;
+- the live wire version and stale-peer detection;
 - connection/subscription health;
 - session/run states and durations;
 - pending turns and their count;

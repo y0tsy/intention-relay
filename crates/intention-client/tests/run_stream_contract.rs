@@ -10,25 +10,24 @@
 )]
 mod common;
 
-use common::{SCHEMA_VERSION, TEST_REPLY_BOUND, endpoint, hello, message};
+use common::{TEST_REPLY_BOUND, endpoint, message};
 
-use intention_client::{RunStreamClient, RunSubscriptionReducer};
-use intention_proto::{ConfigRevisionId, ErrorDto, RunId, SessionId, TurnId};
-use intention_proto::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
+use intention_client::{RunStreamClient, RunStreamState};
 use intention_proto::{
-    ProtocolDaemonMessageDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
-    RunStatusFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto, RunSubscriptionSnapshotDto,
-    SubscribeRunCommandDto, decode_request_line, encode_response,
+    ClientRequestDto, ProtocolDaemonMessageDto, ProtocolResultDto, RunStreamFrameDto,
+    RunSubscriptionSnapshotDto, SubscribeRunCommandDto, decode_request_line, encode_reply,
 };
-use intention_transport::{AsyncLocalListener, AsyncRequestReceiver};
+use intention_proto::{ConfigRevisionId, RunId, SessionId, TurnId};
+use intention_proto::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
+use intention_transport::{AsyncLocalListener, AsyncMessageReceiver};
 
 async fn receive_run_subscription(
-    requests: &mut AsyncRequestReceiver,
+    requests: &mut AsyncMessageReceiver,
 ) -> (u64, SubscribeRunCommandDto) {
     let line = requests.receive_line().await.expect("request arrives");
     let request = decode_request_line(&line).expect("request decodes");
-    match request.payload() {
-        ProtocolRequestPayloadDto::RunSubscription(subscription) => (request.id(), *subscription),
+    match request.request() {
+        ClientRequestDto::SubscribeRun(subscription) => (request.id(), *subscription),
         other => panic!("expected a run subscription request, got {other:?}"),
     }
 }
@@ -48,22 +47,20 @@ fn snapshot(
     run_id: RunId,
     status: RunStatusDto,
     messages: Vec<MessageProjectionDto>,
-) -> RunSubscriptionResponseDto {
-    RunSubscriptionResponseDto::snapshot(
-        RunSubscriptionSnapshotDto::new(run(session_id, run_id, status), messages)
-            .expect("fixture run snapshot is valid"),
-    )
+) -> RunSubscriptionSnapshotDto {
+    RunSubscriptionSnapshotDto::new(run(session_id, run_id, status), messages)
+        .expect("fixture run snapshot is valid")
 }
 
 #[test]
-fn reducer_applies_snapshot_content_and_status_frames_without_positions() {
+fn state_applies_the_subscription_snapshot_then_committed_frames() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let mut reducer = RunSubscriptionReducer::new(session_id, run_id);
-    assert!(reducer.run().is_none());
+    let mut state = RunStreamState::new(session_id, run_id);
+    assert!(state.run().is_none());
     assert_eq!(
-        reducer
-            .apply_frame(RunStreamFrameDto::Status(RunStatusFrameDto::new(
+        state
+            .apply_frame(RunStreamFrameDto::Status(run(
                 session_id,
                 run_id,
                 RunStatusDto::Running,
@@ -73,7 +70,7 @@ fn reducer_applies_snapshot_content_and_status_frames_without_positions() {
         "invalid_local_protocol_response"
     );
 
-    reducer
+    state
         .apply_initial(snapshot(
             session_id,
             run_id,
@@ -86,11 +83,11 @@ fn reducer_applies_snapshot_content_and_status_frames_without_positions() {
             )],
         ))
         .expect("current-state snapshot applies");
-    assert_eq!(reducer.status(), Some(RunStatusDto::Running));
-    assert_eq!(reducer.run().expect("snapshot run exists").run_id(), run_id);
-    assert_eq!(reducer.messages().len(), 1);
+    assert_eq!(state.status(), Some(RunStatusDto::Running));
+    assert_eq!(state.run().expect("snapshot run exists").run_id(), run_id);
+    assert_eq!(state.messages().len(), 1);
 
-    reducer
+    state
         .apply_frame(RunStreamFrameDto::Content(message(
             session_id,
             Some(run_id),
@@ -98,25 +95,25 @@ fn reducer_applies_snapshot_content_and_status_frames_without_positions() {
             "working",
         )))
         .expect("content frame applies");
-    reducer
-        .apply_frame(RunStreamFrameDto::Status(RunStatusFrameDto::new(
+    state
+        .apply_frame(RunStreamFrameDto::Status(run(
             session_id,
             run_id,
             RunStatusDto::Completed,
         )))
         .expect("status frame applies");
-    assert_eq!(reducer.status(), Some(RunStatusDto::Completed));
-    assert_eq!(reducer.messages().len(), 2);
-    assert_eq!(reducer.messages()[1].text(), "working");
+    assert_eq!(state.status(), Some(RunStatusDto::Completed));
+    assert_eq!(state.messages().len(), 2);
+    assert_eq!(state.messages()[1].text(), "working");
 }
 
 #[test]
-fn reducer_rejects_frames_from_another_scope_without_mutation() {
+fn state_rejects_frames_from_another_scope_without_mutation() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let other_run = RunId::new();
-    let mut reducer = RunSubscriptionReducer::new(session_id, run_id);
-    reducer
+    let mut state = RunStreamState::new(session_id, run_id);
+    state
         .apply_initial(snapshot(
             session_id,
             run_id,
@@ -126,8 +123,8 @@ fn reducer_rejects_frames_from_another_scope_without_mutation() {
         .expect("fixture snapshot applies");
 
     assert_eq!(
-        reducer
-            .apply_frame(RunStreamFrameDto::Status(RunStatusFrameDto::new(
+        state
+            .apply_frame(RunStreamFrameDto::Status(run(
                 session_id,
                 other_run,
                 RunStatusDto::Completed,
@@ -137,7 +134,7 @@ fn reducer_rejects_frames_from_another_scope_without_mutation() {
         "invalid_run_subscription"
     );
     assert_eq!(
-        reducer
+        state
             .apply_frame(RunStreamFrameDto::Content(message(
                 session_id,
                 Some(other_run),
@@ -149,7 +146,7 @@ fn reducer_rejects_frames_from_another_scope_without_mutation() {
         "invalid_run_subscription"
     );
     assert_eq!(
-        reducer
+        state
             .apply_frame(RunStreamFrameDto::Content(message(
                 SessionId::new(),
                 Some(run_id),
@@ -160,10 +157,10 @@ fn reducer_rejects_frames_from_another_scope_without_mutation() {
             .code(),
         "invalid_run_subscription"
     );
-    assert_eq!(reducer.status(), Some(RunStatusDto::Running));
-    assert!(reducer.messages().is_empty());
+    assert_eq!(state.status(), Some(RunStatusDto::Running));
+    assert!(state.messages().is_empty());
 
-    reducer
+    state
         .apply_frame(RunStreamFrameDto::Content(message(
             session_id,
             None,
@@ -171,9 +168,9 @@ fn reducer_rejects_frames_from_another_scope_without_mutation() {
             "session notice",
         )))
         .expect("a session-level row without a run identity applies");
-    assert_eq!(reducer.messages().len(), 1);
+    assert_eq!(state.messages().len(), 1);
 
-    let mut fresh = RunSubscriptionReducer::new(session_id, run_id);
+    let mut fresh = RunStreamState::new(session_id, run_id);
     assert_eq!(
         fresh
             .apply_initial(snapshot(
@@ -187,16 +184,6 @@ fn reducer_rejects_frames_from_another_scope_without_mutation() {
         "invalid_run_subscription"
     );
     assert!(fresh.run().is_none());
-    assert_eq!(
-        fresh
-            .apply_initial(RunSubscriptionResponseDto::Error(ErrorDto::validation(
-                "run_subscribe_rejected",
-                "fixture rejected",
-            )))
-            .expect_err("a carried subscription error is returned")
-            .code(),
-        "run_subscribe_rejected"
-    );
 }
 
 #[tokio::test]
@@ -207,18 +194,14 @@ async fn subscribe_delivers_current_state_then_live_content_and_status_frames() 
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
     let server = tokio::spawn(async move {
         let connection = listener.accept().await.expect("peer accepts");
-        let (_, mut requests, mut messages) = connection
-            .negotiate(hello("scripted-daemon"))
-            .await
-            .expect("peer negotiates");
+        let (mut requests, mut messages) = connection.split();
         let (request_id, request) = receive_run_subscription(&mut requests).await;
-        assert_eq!(request.schema_version(), SCHEMA_VERSION);
         assert_eq!(request.session_id(), session_id);
         assert_eq!(request.run_id(), run_id);
         messages
-            .send_message(&encode_response(
+            .send_message(&encode_reply(
                 request_id,
-                ProtocolResponsePayloadDto::RunSubscription(snapshot(
+                ProtocolResultDto::RunSubscribed(snapshot(
                     session_id,
                     run_id,
                     RunStatusDto::Running,
@@ -233,7 +216,7 @@ async fn subscribe_delivers_current_state_then_live_content_and_status_frames() 
             .await
             .expect("snapshot reply sends");
         messages
-            .send_message(&ProtocolDaemonMessageDto::run_frame(
+            .send_message(&ProtocolDaemonMessageDto::frame(
                 RunStreamFrameDto::Content(message(
                     session_id,
                     Some(run_id),
@@ -244,32 +227,24 @@ async fn subscribe_delivers_current_state_then_live_content_and_status_frames() 
             .await
             .expect("content frame sends");
         messages
-            .send_message(&ProtocolDaemonMessageDto::run_frame(
-                RunStreamFrameDto::Status(RunStatusFrameDto::new(
-                    session_id,
-                    run_id,
-                    RunStatusDto::Completed,
-                )),
-            ))
+            .send_message(&ProtocolDaemonMessageDto::frame(RunStreamFrameDto::Status(
+                run(session_id, run_id, RunStatusDto::Completed),
+            )))
             .await
             .expect("status frame sends");
     });
 
-    let client = RunStreamClient::new(endpoint, "run-stream-client").expect("client is valid");
+    let client = RunStreamClient::new(endpoint);
     let mut subscription = client
-        .subscribe(SubscribeRunCommandDto::new(
-            SCHEMA_VERSION,
-            session_id,
-            run_id,
-        ))
+        .subscribe(SubscribeRunCommandDto::new(session_id, run_id))
         .await
         .expect("current-state snapshot reply arrives");
-    assert_eq!(subscription.reducer().session_id(), session_id);
-    assert_eq!(subscription.reducer().run_id(), run_id);
-    assert_eq!(subscription.reducer().status(), Some(RunStatusDto::Running));
-    assert_eq!(subscription.reducer().messages().len(), 1);
+    assert_eq!(subscription.state().session_id(), session_id);
+    assert_eq!(subscription.state().run_id(), run_id);
+    assert_eq!(subscription.state().status(), Some(RunStatusDto::Running));
+    assert_eq!(subscription.state().messages().len(), 1);
     assert_eq!(
-        subscription.reducer().messages()[0].kind(),
+        subscription.state().messages()[0].kind(),
         MessageKindDto::User
     );
 
@@ -282,25 +257,23 @@ async fn subscribe_delivers_current_state_then_live_content_and_status_frames() 
         content,
         RunStreamFrameDto::Content(ref row) if row.text() == "working"
     ));
-    assert_eq!(subscription.reducer().messages().len(), 2);
+    assert_eq!(subscription.state().messages().len(), 2);
 
     let status = subscription
         .receive()
         .await
         .expect("status frame reads")
         .expect("status frame is not a stream close");
-    assert_eq!(
-        status,
-        RunStreamFrameDto::Status(RunStatusFrameDto::new(
-            session_id,
-            run_id,
-            RunStatusDto::Completed,
-        ))
-    );
-    assert_eq!(
-        subscription.reducer().status(),
-        Some(RunStatusDto::Completed)
-    );
+    // The frame carries the committed projection itself; the fixture builds
+    // each projection with fresh turn and config identities, so the assertion
+    // checks the run scope and terminal status instead of object identity.
+    let RunStreamFrameDto::Status(projection) = status else {
+        unreachable!("a status frame carries the committed run projection")
+    };
+    assert_eq!(projection.session_id(), session_id);
+    assert_eq!(projection.run_id(), run_id);
+    assert_eq!(projection.status(), RunStatusDto::Completed);
+    assert_eq!(subscription.state().status(), Some(RunStatusDto::Completed));
 
     assert!(
         subscription
@@ -322,15 +295,12 @@ async fn receive_rejects_a_live_frame_from_another_run_scope() {
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
     let server = tokio::spawn(async move {
         let connection = listener.accept().await.expect("peer accepts");
-        let (_, mut requests, mut messages) = connection
-            .negotiate(hello("scripted-daemon"))
-            .await
-            .expect("peer negotiates");
+        let (mut requests, mut messages) = connection.split();
         let (request_id, _) = receive_run_subscription(&mut requests).await;
         messages
-            .send_message(&encode_response(
+            .send_message(&encode_reply(
                 request_id,
-                ProtocolResponsePayloadDto::RunSubscription(snapshot(
+                ProtocolResultDto::RunSubscribed(snapshot(
                     session_id,
                     run_id,
                     RunStatusDto::Running,
@@ -340,24 +310,16 @@ async fn receive_rejects_a_live_frame_from_another_run_scope() {
             .await
             .expect("snapshot reply sends");
         messages
-            .send_message(&ProtocolDaemonMessageDto::run_frame(
-                RunStreamFrameDto::Status(RunStatusFrameDto::new(
-                    session_id,
-                    other_run,
-                    RunStatusDto::Completed,
-                )),
-            ))
+            .send_message(&ProtocolDaemonMessageDto::frame(RunStreamFrameDto::Status(
+                run(session_id, other_run, RunStatusDto::Completed),
+            )))
             .await
             .expect("foreign status frame sends");
     });
 
-    let client = RunStreamClient::new(endpoint, "run-stream-client").expect("client is valid");
+    let client = RunStreamClient::new(endpoint);
     let mut subscription = client
-        .subscribe(SubscribeRunCommandDto::new(
-            SCHEMA_VERSION,
-            session_id,
-            run_id,
-        ))
+        .subscribe(SubscribeRunCommandDto::new(session_id, run_id))
         .await
         .expect("current-state snapshot reply arrives");
     let error = subscription
@@ -365,8 +327,8 @@ async fn receive_rejects_a_live_frame_from_another_run_scope() {
         .await
         .expect_err("a frame from another run scope is rejected");
     assert_eq!(error.code(), "invalid_run_subscription");
-    assert_eq!(subscription.reducer().status(), Some(RunStatusDto::Running));
-    assert!(subscription.reducer().messages().is_empty());
+    assert_eq!(subscription.state().status(), Some(RunStatusDto::Running));
+    assert!(subscription.state().messages().is_empty());
     server.await.expect("scripted peer completes");
 }
 
@@ -378,21 +340,14 @@ async fn subscribe_returns_a_typed_error_when_the_channel_closes_before_the_repl
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
     let server = tokio::spawn(async move {
         let connection = listener.accept().await.expect("peer accepts");
-        let (_, mut requests, _messages) = connection
-            .negotiate(hello("scripted-daemon"))
-            .await
-            .expect("peer negotiates");
+        let (mut requests, _messages) = connection.split();
         let _ = receive_run_subscription(&mut requests).await;
     });
 
-    let client = RunStreamClient::new(endpoint, "run-stream-client").expect("client is valid");
+    let client = RunStreamClient::new(endpoint);
     let error = tokio::time::timeout(
         TEST_REPLY_BOUND,
-        client.subscribe(SubscribeRunCommandDto::new(
-            SCHEMA_VERSION,
-            session_id,
-            run_id,
-        )),
+        client.subscribe(SubscribeRunCommandDto::new(session_id, run_id)),
     )
     .await
     .expect("a closed channel must not hang the subscriber")

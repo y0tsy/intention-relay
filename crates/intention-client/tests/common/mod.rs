@@ -6,13 +6,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use intention_proto::{
-    MessageKindDto, MessageProjectionDto, ProtocolHelloDto, RunId, SchemaVersionDto, SessionId,
-};
-use intention_transport::{LocalEndpoint, local_protocol_version};
-
-/// The current DTO schema version every fixture DTO carries.
-pub const SCHEMA_VERSION: SchemaVersionDto = intention_proto::CURRENT_DTO_SCHEMA_VERSION;
+use intention_proto::{MessageKindDto, MessageProjectionDto, RunId, SessionId};
+use intention_transport::LocalEndpoint;
 
 /// Bound that turns a hanging client call into a visible test failure.
 pub const TEST_REPLY_BOUND: Duration = Duration::from_secs(5);
@@ -31,11 +26,6 @@ pub fn endpoint() -> LocalEndpoint {
         std::process::id()
     ))
     .expect("fixture instance name is valid")
-}
-
-/// Returns one compatible fixture hello naming `name`.
-pub fn hello(name: &str) -> ProtocolHelloDto {
-    ProtocolHelloDto::new(local_protocol_version(), name).expect("fixture hello is valid")
 }
 
 /// Returns one transcript row with no reasoning and no tool identity.

@@ -12,12 +12,12 @@ use intention_config::{
 };
 use intention_daemon::{DaemonApplicationFacade, TestHostLifecycle};
 use intention_proto::{
-    ConfigRevisionId, DtoResult, ProjectId, SchemaVersionDto, SessionId, TimestampDto, WorkspaceId,
+    ConfigRevisionId, DtoResult, ProjectId, ProtocolResultDto, SchemaVersionDto, SessionId,
+    TimestampDto, WorkspaceId,
 };
 use intention_proto::{
     CreateSessionCommandDto, MessageProjectionDto, RunModeDto, WorkspaceRootDto,
 };
-use intention_proto::{ProtocolCommandDto, ProtocolCommandResultDto};
 use intention_transport::{AsyncLocalListener, LocalEndpoint};
 
 /// The provider credential every fixture snapshot carries.
@@ -122,20 +122,18 @@ pub fn fixture_session_command(session_id: SessionId) -> CreateSessionCommandDto
     )
 }
 
-/// Creates a durable fixture session through the public protocol facade.
+/// Creates a durable fixture session through the public facade.
 ///
 /// # Errors
 ///
-/// Returns the typed protocol rejection.
+/// Returns the typed facade rejection.
 pub fn create_fixture_session(
     facade: &DaemonApplicationFacade,
     session_id: SessionId,
 ) -> DtoResult<()> {
-    match facade.command(ProtocolCommandDto::CreateSession(fixture_session_command(
-        session_id,
-    ))) {
-        ProtocolCommandResultDto::Accepted(_) => Ok(()),
-        ProtocolCommandResultDto::Rejected(error) => Err(error),
+    match facade.create_session(fixture_session_command(session_id))? {
+        ProtocolResultDto::SessionCreated(_) => Ok(()),
+        _ => unreachable!("fixture session creation answers with a session creation"),
     }
 }
 
@@ -148,7 +146,7 @@ pub fn session_messages(
     facade: &DaemonApplicationFacade,
     session_id: SessionId,
 ) -> DtoResult<Vec<MessageProjectionDto>> {
-    let snapshot = facade.session_snapshot(session_id, None)?;
+    let snapshot = facade.session_snapshot(session_id)?;
     Ok(snapshot.messages().to_vec())
 }
 

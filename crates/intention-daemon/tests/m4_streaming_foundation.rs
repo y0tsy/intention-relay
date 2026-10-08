@@ -29,19 +29,16 @@ use futures_util::stream;
 use intention_daemon::DaemonApplicationFacade;
 #[cfg(feature = "test-support")]
 use intention_engine::INTERRUPT_NOTICE;
+use intention_proto::SendUserTurnOutcomeDto;
 #[cfg(feature = "test-support")]
 use intention_proto::TurnId;
-use intention_proto::{IdempotencyKey, RunId, SessionId};
-use intention_proto::{MessageKindDto, RunStatusDto, SendUserTurnCommandDto};
-use intention_proto::{
-    ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, SendUserTurnOutcomeDto,
-};
 #[cfg(feature = "test-support")]
 use intention_proto::{
-    ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto,
-    ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, RunSubscriptionResponseDto,
-    RunSubscriptionSnapshotDto, SubscribeRunCommandDto, decode_response, encode_request,
+    ClientRequestDto, InterruptRunCommandDto, ProtocolResultDto, RunSubscriptionSnapshotDto,
+    SubscribeRunCommandDto, decode_response, encode_request,
 };
+use intention_proto::{IdempotencyKey, RunId, SessionId};
+use intention_proto::{MessageKindDto, RunStatusDto, SendUserTurnCommandDto};
 use intention_providers::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelRequestDto, ModelRoleDto,
@@ -130,32 +127,21 @@ impl ModelExecutionDriver for BlockingDriver {
 #[cfg(feature = "test-support")]
 async fn send_request_through_host(
     endpoint: &LocalEndpoint,
-    adapter_name: &str,
     request_id: u64,
-    payload: ProtocolRequestPayloadDto,
-) -> ProtocolResponsePayloadDto {
-    use intention_transport::{AsyncLocalClientConnection, local_protocol_version};
+    request: ClientRequestDto,
+) -> ProtocolResultDto {
+    use intention_transport::AsyncLocalClientConnection;
 
     let connection = AsyncLocalClientConnection::connect(endpoint)
         .await
         .expect("host client connects");
-    let (_remote, mut requests, mut messages) = connection
-        .negotiate(
-            ProtocolHelloDto::new(local_protocol_version(), adapter_name)
-                .expect("host hello is valid"),
-        )
-        .await
-        .expect("host client negotiates");
-    let method = ProtocolMethodDto::for_payload(&payload);
-    requests
-        .send_message(&encode_request(request_id, payload))
+    let (mut sender, mut receiver) = connection.split();
+    sender
+        .send_message(&encode_request(request_id, request))
         .await
         .expect("host request sends");
-    let line = messages
-        .receive_line()
-        .await
-        .expect("host response arrives");
-    decode_response(&line, method, request_id).expect("host response decodes")
+    let line = receiver.receive_line().await.expect("host reply arrives");
+    decode_response(&line, request_id).expect("host reply decodes")
 }
 
 /// Reads one run's current snapshot from the host over the protocol.
@@ -171,18 +157,11 @@ async fn run_snapshot_through_host(
 ) -> RunSubscriptionSnapshotDto {
     let response = send_request_through_host(
         endpoint,
-        "m4-run-snapshot-test",
         1,
-        ProtocolRequestPayloadDto::RunSubscription(SubscribeRunCommandDto::new(
-            intention_proto::CURRENT_DTO_SCHEMA_VERSION,
-            session_id,
-            run_id,
-        )),
+        ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, run_id)),
     )
     .await;
-    let ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Snapshot(snapshot)) =
-        response
-    else {
+    let ProtocolResultDto::RunSubscribed(snapshot) = response else {
         panic!("the host answers a run subscription with the current snapshot")
     };
     snapshot
@@ -192,21 +171,15 @@ async fn run_snapshot_through_host(
 async fn send_user_turn_through_host(endpoint: &LocalEndpoint, session_id: SessionId) -> RunId {
     let response = send_request_through_host(
         endpoint,
-        "m4-host-command-test",
         1,
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
+        ClientRequestDto::SendUserTurn(
             SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "host turn")
                 .expect("turn is valid"),
-        )),
+        ),
     )
     .await;
-    let ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(accepted)) =
-        response
-    else {
+    let ProtocolResultDto::TurnAccepted(turn) = response else {
         panic!("host accepts the turn")
-    };
-    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
-        panic!("host response contains a run")
     };
     let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
         panic!("host turn starts a run")
@@ -222,39 +195,26 @@ async fn interrupt_run_through_host(
 ) {
     let response = send_request_through_host(
         endpoint,
-        "m4-host-interrupt-test",
         1,
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::InterruptRun(
-            intention_proto::InterruptRunCommandDto::new(session_id, run_id),
-        )),
+        ClientRequestDto::InterruptRun(InterruptRunCommandDto::new(session_id, run_id)),
     )
     .await;
-    assert!(matches!(
-        response,
-        ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(accepted))
-            if matches!(accepted.result(), ProtocolAcceptedResultDto::InterruptRun(_))
-    ));
+    assert!(matches!(response, ProtocolResultDto::RunInterrupted(_)));
 }
 
 #[cfg(feature = "test-support")]
 async fn send_pending_turn_through_host(endpoint: &LocalEndpoint, session_id: SessionId) -> TurnId {
     let response = send_request_through_host(
         endpoint,
-        "m4-host-pending-test",
         1,
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
+        ClientRequestDto::SendUserTurn(
             SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "pending host turn")
                 .expect("pending turn is valid"),
-        )),
+        ),
     )
     .await;
-    let ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(accepted)) =
-        response
-    else {
+    let ProtocolResultDto::TurnAccepted(turn) = response else {
         panic!("host accepts the pending turn")
-    };
-    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
-        panic!("host response contains a pending turn")
     };
     assert!(
         matches!(turn.outcome(), SendUserTurnOutcomeDto::Pending),
@@ -291,7 +251,7 @@ async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
         .expect("the same run continues after the interruption notice");
     assert_eq!(driver.executions(), 2);
     let continuing = facade
-        .session_snapshot(session_id, Some(run_id))
+        .session_snapshot(session_id)
         .expect("continuing run state reads");
     assert_eq!(
         continuing
@@ -370,7 +330,7 @@ async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
         "a pending message never admits a second execution"
     );
     let pending = facade
-        .session_snapshot(session_id, None)
+        .session_snapshot(session_id)
         .expect("session projection reads");
     assert!(
         pending
@@ -399,7 +359,7 @@ async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
         "the joined message is part of the live context"
     );
     let joined = facade
-        .session_snapshot(session_id, None)
+        .session_snapshot(session_id)
         .expect("joined session projection reads");
     assert!(
         joined.projection().pending_turns().is_empty(),
@@ -411,7 +371,7 @@ async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
         "the pending message never becomes its own run"
     );
     let continuing = facade
-        .session_snapshot(session_id, Some(run_id))
+        .session_snapshot(session_id)
         .expect("continuing run state reads");
     assert_eq!(
         continuing
@@ -496,7 +456,7 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
     )
     .expect("restart recovery opens the existing durable host state");
     let recovered = restarted
-        .session_snapshot(session_id, None)
+        .session_snapshot(session_id)
         .expect("recovered session projection reads");
     assert!(
         recovered.projection().active_run().is_none(),
@@ -529,25 +489,15 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
             .serve_connections(restart_listener, 1)
             .await;
     });
-    use intention_transport::{AsyncLocalClientConnection, local_protocol_version};
+    use intention_transport::AsyncLocalClientConnection;
     let connection = AsyncLocalClientConnection::connect(&restart_endpoint)
         .await
         .expect("restart stream client connects");
-    let (_remote, mut requests, mut messages) = connection
-        .negotiate(
-            ProtocolHelloDto::new(local_protocol_version(), "m4-restart-redaction-test")
-                .expect("restart stream hello is valid"),
-        )
-        .await
-        .expect("restart stream client negotiates");
+    let (mut requests, mut messages) = connection.split();
     requests
         .send_message(&encode_request(
             1,
-            ProtocolRequestPayloadDto::RunSubscription(SubscribeRunCommandDto::new(
-                intention_proto::CURRENT_DTO_SCHEMA_VERSION,
-                session_id,
-                first_run,
-            )),
+            ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, first_run)),
         ))
         .await
         .expect("restart snapshot request sends");
@@ -555,16 +505,12 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
         .receive_line()
         .await
         .expect("restart initial response arrives");
-    let initial_frame = decode_response(&initial_line, ProtocolMethodDto::RunSubscribe, 1)
-        .expect("restart initial response decodes");
+    let initial_frame =
+        decode_response(&initial_line, 1).expect("restart initial response decodes");
     requests
         .send_message(&encode_request(
             2,
-            ProtocolRequestPayloadDto::RunSubscription(SubscribeRunCommandDto::new(
-                intention_proto::CURRENT_DTO_SCHEMA_VERSION,
-                session_id,
-                RunId::new(),
-            )),
+            ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, RunId::new())),
         ))
         .await
         .expect("unknown-run request sends");
@@ -572,15 +518,12 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
         .receive_line()
         .await
         .expect("restart error response arrives");
-    let transport_error_frame = decode_response(&error_line, ProtocolMethodDto::RunSubscribe, 2)
-        .expect("restart error response decodes");
+    let transport_error =
+        decode_response(&error_line, 2).expect_err("an unknown run is refused with a typed error");
     let initial_frame_json =
         serde_json::to_string(&initial_frame).expect("initial frame serializes");
-    let transport_error_json =
-        serde_json::to_string(&transport_error_frame).expect("error frame serializes");
-    let ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Snapshot(snapshot)) =
-        &initial_frame
-    else {
+    let transport_error_json = serde_json::to_string(&transport_error).expect("error serializes");
+    let ProtocolResultDto::RunSubscribed(snapshot) = &initial_frame else {
         panic!("restart subscription answers with the current snapshot")
     };
     assert_eq!(
@@ -595,11 +538,7 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
             .any(|message| message.text() == "pending host turn"),
         "a pending message is durable input, never part of the interrupted run"
     );
-    assert!(matches!(
-        transport_error_frame,
-        ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Error(ref error))
-            if error.code() == "storage_record_not_found"
-    ));
+    assert_eq!(transport_error.code(), "storage_record_not_found");
     restart_server
         .await
         .expect("restart host accepts stream peer");
@@ -619,211 +558,4 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
             "actual durable projection/transcript/error fixture output never contains the credential"
         );
     }
-}
-
-#[cfg(feature = "test-support")]
-#[tokio::test]
-async fn host_answers_socket_level_method_not_found_and_invalid_params_errors() {
-    use intention_proto::{
-        JSONRPC_INVALID_PARAMS, JSONRPC_METHOD_NOT_FOUND, JsonRpcRequestDto, JsonRpcResponseDto,
-    };
-    use intention_transport::{AsyncLocalClientConnection, local_protocol_version};
-
-    // W-14: the daemon loop answers a bogus method and a wrong-params request
-    // with the spec-mandated codes, correlated by request id.
-    let driver = Arc::new(ScriptedDriver::completed_text());
-    let (_directory, facade, _snapshot) = fixture_facade("foundation", driver);
-    let endpoint =
-        LocalEndpoint::from_instance_id(format!("m4-host-jsonrpc-errors-{}", RunId::new()))
-            .expect("fixture endpoint is valid");
-    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
-    let host = intention_daemon::test_host_lifecycle(facade);
-    let host_server = host.clone();
-    let server = tokio::spawn(async move {
-        host_server.serve_connections(listener, 1).await;
-    });
-
-    let connection = AsyncLocalClientConnection::connect(&endpoint)
-        .await
-        .expect("jsonrpc error client connects");
-    let (_remote, mut requests, mut messages) = connection
-        .negotiate(
-            ProtocolHelloDto::new(local_protocol_version(), "m4-jsonrpc-error-test")
-                .expect("jsonrpc error hello is valid"),
-        )
-        .await
-        .expect("jsonrpc error client negotiates");
-
-    let health = ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth);
-    for (request_id, method, expected_code, expected_data_code) in [
-        (
-            11_u64,
-            "workspace.bogus",
-            JSONRPC_METHOD_NOT_FOUND,
-            "jsonrpc_method_not_found",
-        ),
-        (
-            12,
-            "turn.send",
-            JSONRPC_INVALID_PARAMS,
-            "jsonrpc_invalid_params",
-        ),
-    ] {
-        requests
-            .send_message(&JsonRpcRequestDto::new(request_id, method, health.clone()))
-            .await
-            .expect("typed error request sends");
-        let line = messages.receive_line().await.expect("error reply arrives");
-        let response: JsonRpcResponseDto<ProtocolResponsePayloadDto> =
-            JsonRpcResponseDto::parse(&line).expect("the reply is a JSON-RPC response");
-        assert_eq!(
-            response.id(),
-            Some(request_id),
-            "the error reply for {method} echoes its request id"
-        );
-        assert!(
-            response.result_value().is_none(),
-            "the error reply for {method} carries no result"
-        );
-        let error = response
-            .error_value()
-            .expect("an error reply carries the error object");
-        assert_eq!(error.code(), expected_code, "method {method}");
-        assert_eq!(
-            error.to_error().code(),
-            expected_data_code,
-            "method {method}"
-        );
-    }
-    server
-        .await
-        .expect("host serves the rejected jsonrpc peers");
-    host.shutdown().await;
-}
-
-#[cfg(feature = "test-support")]
-#[tokio::test]
-async fn host_does_not_answer_an_id_less_jsonrpc_notification() {
-    use intention_proto::{JsonRpcNotificationDto, JsonRpcRequestDto, JsonRpcResponseDto};
-    use intention_transport::{AsyncLocalClientConnection, local_protocol_version};
-
-    // W-06: a request line without an id is a JSON-RPC notification, so the
-    // daemon must not answer it. The next line the client reads must be the
-    // reply to the correlated request that follows it.
-    let driver = Arc::new(ScriptedDriver::completed_text());
-    let (_directory, facade, _snapshot) = fixture_facade("foundation", driver);
-    let endpoint =
-        LocalEndpoint::from_instance_id(format!("m4-host-jsonrpc-notification-{}", RunId::new()))
-            .expect("fixture endpoint is valid");
-    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
-    let host = intention_daemon::test_host_lifecycle(facade);
-    let host_server = host.clone();
-    let server = tokio::spawn(async move {
-        host_server.serve_connections(listener, 1).await;
-    });
-
-    let connection = AsyncLocalClientConnection::connect(&endpoint)
-        .await
-        .expect("notification client connects");
-    let (_remote, mut requests, mut messages) = connection
-        .negotiate(
-            ProtocolHelloDto::new(local_protocol_version(), "m4-jsonrpc-notification-test")
-                .expect("notification hello is valid"),
-        )
-        .await
-        .expect("notification client negotiates");
-
-    requests
-        .send_message(&JsonRpcNotificationDto::new(
-            "workspace.bogus",
-            ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
-        ))
-        .await
-        .expect("id-less notification sends");
-    requests
-        .send_message(&JsonRpcRequestDto::new(
-            13_u64,
-            "daemon.health",
-            ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
-        ))
-        .await
-        .expect("correlated health request sends");
-    let line = messages.receive_line().await.expect("health reply arrives");
-    let response: JsonRpcResponseDto<ProtocolResponsePayloadDto> =
-        JsonRpcResponseDto::parse(&line).expect("the reply is a JSON-RPC response");
-    assert_eq!(
-        response.id(),
-        Some(13),
-        "the notification must not be answered, and must not consume the correlated reply"
-    );
-    assert!(matches!(
-        decode_response(&line, ProtocolMethodDto::DaemonHealth, 13),
-        Ok(ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(health)))
-            if health.readiness() == intention_proto::DaemonReadinessDto::Ready
-    ));
-    server.await.expect("host serves the notification peer");
-    host.shutdown().await;
-}
-
-#[cfg(feature = "test-support")]
-#[tokio::test]
-async fn host_answers_an_explicit_null_id_request_with_the_correlated_error() {
-    use intention_proto::{JSONRPC_INVALID_REQUEST, JsonRpcResponseDto};
-    use intention_transport::{AsyncLocalClientConnection, local_protocol_version};
-
-    // W-06 boundary: an explicit `"id": null` member is a request rather than
-    // a notification, so the daemon answers it with a null-id error reply.
-    let driver = Arc::new(ScriptedDriver::completed_text());
-    let (_directory, facade, _snapshot) = fixture_facade("foundation", driver);
-    let endpoint =
-        LocalEndpoint::from_instance_id(format!("m4-host-jsonrpc-null-id-{}", RunId::new()))
-            .expect("fixture endpoint is valid");
-    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
-    let host = intention_daemon::test_host_lifecycle(facade);
-    let host_server = host.clone();
-    let server = tokio::spawn(async move {
-        host_server.serve_connections(listener, 1).await;
-    });
-
-    let connection = AsyncLocalClientConnection::connect(&endpoint)
-        .await
-        .expect("null-id client connects");
-    let (_remote, mut requests, mut messages) = connection
-        .negotiate(
-            ProtocolHelloDto::new(local_protocol_version(), "m4-jsonrpc-null-id-test")
-                .expect("null-id hello is valid"),
-        )
-        .await
-        .expect("null-id client negotiates");
-
-    requests
-        .send_message(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": null,
-            "method": "daemon.health",
-            "params": {"kind": "query", "data": {"kind": "get_daemon_health"}},
-        }))
-        .await
-        .expect("null-id request sends");
-    let line = messages
-        .receive_line()
-        .await
-        .expect("null-id reply arrives");
-    let response: JsonRpcResponseDto<ProtocolResponsePayloadDto> =
-        JsonRpcResponseDto::parse(&line).expect("the reply is a JSON-RPC response");
-    assert_eq!(
-        response.id(),
-        None,
-        "an explicit null id is answered with a null id instead of silence"
-    );
-    assert!(response.result_value().is_none());
-    assert_eq!(
-        response
-            .error_value()
-            .expect("a null-id request receives an error object")
-            .code(),
-        JSONRPC_INVALID_REQUEST
-    );
-    server.await.expect("host serves the null-id peer");
-    host.shutdown().await;
 }

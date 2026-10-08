@@ -1,9 +1,9 @@
 //! NDJSON-framed, local-only IPC for Intention Relay.
 //!
-//! The public surface carries serialized JSON-RPC 2.0 envelopes defined by
-//! `intention-proto`; one envelope is written per NDJSON line. Framing stays
-//! private to this crate, and the underlying Unix-domain socket or Windows
-//! named pipe never crosses its crate boundary.
+//! The public surface carries the typed `intention-proto` wire messages; one
+//! message is written per NDJSON line. Framing stays private to this crate, and
+//! the underlying Unix-domain socket or Windows named pipe never crosses its
+//! crate boundary.
 
 #[cfg(unix)]
 use std::fs;
@@ -12,10 +12,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto};
-use intention_proto::{
-    JsonRpcRequestDto, JsonRpcResponseDto, ProtocolHelloDto, ProtocolVersionDto,
-    decode_hello_request, decode_hello_response, encode_hello_request, encode_hello_response,
-};
 use interprocess::ConnectWaitMode;
 use interprocess::local_socket::tokio::{
     Listener as TokioLocalSocketListener, RecvHalf as TokioRecvHalf, SendHalf as TokioSendHalf,
@@ -42,11 +38,16 @@ pub const MAX_MESSAGE_BYTES: usize = 1_048_576;
 /// envelope cap.
 pub const MAX_TRANSCRIPT_SNAPSHOT_BYTES: usize = MAX_MESSAGE_BYTES - MAX_MESSAGE_BYTES / 4;
 
+/// The single live local wire version.
+///
+/// The byte is part of the platform-default endpoint name, so a daemon left
+/// over from an earlier build owns a different endpoint and a current client
+/// never reaches it; a peer that answers on the current endpoint with foreign
+/// bytes fails closed with the typed `stale_daemon_protocol` error instead.
+pub const WIRE_VERSION: u8 = 1;
+
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 const LISTENER_SPIN_TIMEOUT: Duration = Duration::from_millis(500);
-
-/// The client hello request identity; the daemon reply must echo exactly this.
-const HELLO_REQUEST_ID: u64 = 1;
 
 /// The upper bound for the liveness probe that decides whether an endpoint is
 /// a stale socket or belongs to a live listener.
@@ -96,14 +97,14 @@ impl LocalEndpoint {
         })
     }
 
-    /// Derives the standard per-user daemon endpoint.
+    /// Derives the standard per-user daemon endpoint for the live wire version.
     ///
     /// # Errors
     ///
     /// Returns a safe unavailable error when a usable platform runtime directory
     /// cannot be determined.
     pub fn platform_default() -> DtoResult<Self> {
-        Self::from_instance_id("intention-relay")
+        Self::from_instance_id(format!("intention-relay-v{WIRE_VERSION}"))
     }
 
     /// Returns the safe logical endpoint instance identifier.
@@ -209,138 +210,70 @@ impl AsyncLocalListener {
     }
 }
 
-/// An opaque asynchronous client connection before hello negotiation.
+/// An opaque asynchronous connection to a local daemon endpoint.
 pub struct AsyncLocalClientConnection {
     stream: TokioLocalSocketStream,
 }
 
 impl AsyncLocalClientConnection {
-    /// Connects to the existing local endpoint with the fixed bounded wait.
+    /// Connects to the existing local endpoint with the single bounded wait.
+    ///
+    /// The wait is applied once, by the caller-side timeout; the transport
+    /// implementation does not add a second bound of its own.
     ///
     /// # Errors
     ///
     /// Returns a safe unavailable error when no daemon endpoint can be reached.
     pub async fn connect(endpoint: &LocalEndpoint) -> DtoResult<Self> {
-        let options = ConnectOptions::new()
-            .name(endpoint.socket_name()?)
-            .wait_mode(ConnectWaitMode::Timeout(CONNECT_TIMEOUT));
+        let options = ConnectOptions::new().name(endpoint.socket_name()?);
         let stream = timeout_async_connect(CONNECT_TIMEOUT, options.connect_tokio())
             .await
             .map_err(|_| unavailable("local_daemon_unavailable"))?;
         Ok(Self { stream })
     }
 
-    /// Exchanges the client hello and consumes the connection into client roles.
-    ///
-    /// The returned roles retain only the appropriate typed protocol direction:
-    /// requests flow to the daemon, and responses or notifications flow from it.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed incompatibility or safe framing/connection error when the
-    /// hello exchange cannot complete.
-    pub async fn negotiate(
-        mut self,
-        local: ProtocolHelloDto,
-    ) -> DtoResult<(ProtocolHelloDto, AsyncRequestSender, AsyncMessageReceiver)> {
-        let request = encode_hello_request(HELLO_REQUEST_ID, local);
-        write_async_message(&mut self.stream, &request).await?;
-        let mut residual = Vec::new();
-        let line = read_async_line(&mut self.stream, &mut residual).await?;
-        let response: JsonRpcResponseDto<ProtocolHelloDto> =
-            JsonRpcResponseDto::parse(&line).map_err(|error| error.to_error())?;
-        validate_hello_reply_id(&response)?;
-        let remote = decode_hello_response(&response)?;
+    /// Splits the connection into its send and receive directions.
+    #[must_use]
+    pub fn split(self) -> (AsyncMessageSender, AsyncMessageReceiver) {
         let (receiver, sender) = self.stream.split();
-        Ok((
-            remote,
-            AsyncRequestSender { sender },
-            AsyncMessageReceiver { receiver, residual },
-        ))
+        (
+            AsyncMessageSender { sender },
+            AsyncMessageReceiver {
+                receiver,
+                residual: Vec::new(),
+            },
+        )
     }
 }
 
-/// An opaque asynchronous daemon connection before hello negotiation.
+/// An opaque accepted asynchronous daemon connection.
 pub struct AsyncLocalDaemonConnection {
     stream: TokioLocalSocketStream,
 }
 
 impl AsyncLocalDaemonConnection {
-    /// Exchanges the daemon hello and consumes the connection into daemon roles.
-    ///
-    /// The returned roles retain only the appropriate typed protocol direction:
-    /// requests arrive from the client, and responses or notifications flow
-    /// back to it on the same connection.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed incompatibility or safe framing/connection error when the
-    /// hello exchange cannot complete. A malformed hello or a differing version
-    /// is answered with a typed JSON-RPC error before the connection closes.
-    pub async fn negotiate(
-        mut self,
-        local: ProtocolHelloDto,
-    ) -> DtoResult<(ProtocolHelloDto, AsyncRequestReceiver, AsyncMessageSender)> {
-        let mut residual = Vec::new();
-        let line = read_async_line(&mut self.stream, &mut residual).await?;
-        let request: JsonRpcRequestDto<ProtocolHelloDto> = match JsonRpcRequestDto::parse(&line) {
-            Ok(request) => request,
-            Err(failure) => {
-                let (id, error) = failure.into_parts();
-                let reply = JsonRpcResponseDto::<ProtocolHelloDto>::error(id, error.clone());
-                let _ = write_async_message(&mut self.stream, &reply).await;
-                return Err(error.to_error());
-            }
-        };
-        let remote = match decode_hello_request(&request) {
-            Ok(remote) => remote,
-            Err(error) => {
-                let reply = JsonRpcResponseDto::<ProtocolHelloDto>::error(
-                    Some(request.id()),
-                    error.clone(),
-                );
-                let _ = write_async_message(&mut self.stream, &reply).await;
-                return Err(error.to_error());
-            }
-        };
-        let response = encode_hello_response(request.id(), local);
-        write_async_message(&mut self.stream, &response).await?;
+    /// Splits the accepted connection into its receive and send directions.
+    #[must_use]
+    pub fn split(self) -> (AsyncMessageReceiver, AsyncMessageSender) {
         let (receiver, sender) = self.stream.split();
-        Ok((
-            remote,
-            AsyncRequestReceiver { receiver, residual },
+        (
+            AsyncMessageReceiver {
+                receiver,
+                residual: Vec::new(),
+            },
             AsyncMessageSender { sender },
-        ))
+        )
     }
 }
 
-/// The client-to-daemon half of an established asynchronous connection.
-pub struct AsyncRequestSender {
-    sender: TokioSendHalf,
-}
-
-impl AsyncRequestSender {
-    /// Sends one bounded JSON message.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe framing or connection error when the message cannot be sent.
-    pub async fn send_message<T: serde::Serialize + Sync + ?Sized>(
-        &mut self,
-        value: &T,
-    ) -> DtoResult<()> {
-        write_async_message(&mut self.sender, value).await
-    }
-}
-
-/// The daemon-to-client half that receives responses and notifications.
+/// The receive direction of one established local link.
 pub struct AsyncMessageReceiver {
     receiver: TokioRecvHalf,
     residual: Vec<u8>,
 }
 
 impl AsyncMessageReceiver {
-    /// Receives one bounded NDJSON line carrying one JSON-RPC envelope.
+    /// Receives one bounded NDJSON message line.
     ///
     /// # Errors
     ///
@@ -350,24 +283,7 @@ impl AsyncMessageReceiver {
     }
 }
 
-/// The client-to-daemon half that receives established requests.
-pub struct AsyncRequestReceiver {
-    receiver: TokioRecvHalf,
-    residual: Vec<u8>,
-}
-
-impl AsyncRequestReceiver {
-    /// Receives one bounded NDJSON line carrying one JSON-RPC request.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe framing or connection error when the line cannot be read.
-    pub async fn receive_line(&mut self) -> DtoResult<String> {
-        read_async_line(&mut self.receiver, &mut self.residual).await
-    }
-}
-
-/// The daemon-to-client half that sends responses and notifications.
+/// The send direction of one established local link.
 pub struct AsyncMessageSender {
     sender: TokioSendHalf,
 }
@@ -384,12 +300,6 @@ impl AsyncMessageSender {
     ) -> DtoResult<()> {
         write_async_message(&mut self.sender, value).await
     }
-}
-
-/// Returns the currently implemented local protocol version.
-#[must_use]
-pub const fn local_protocol_version() -> ProtocolVersionDto {
-    intention_proto::CURRENT_PROTOCOL_VERSION
 }
 
 fn listener_options(endpoint: &LocalEndpoint) -> DtoResult<ListenerOptions<'_>> {
@@ -470,20 +380,13 @@ async fn read_async_line(
 
 /// Extracts the next complete message line from the buffered residual bytes.
 ///
-/// Returns `None` while no newline has arrived. A line is decoded after a
-/// single trailing carriage return is removed, so CRLF framing carries the
-/// same message as LF framing. A blank line is framing rather than a message
-/// and is skipped, so it is never answered with a parse error.
+/// One framing rule: a message is the bytes before the first newline, and no
+/// other byte is framing. Returns `None` while no newline has arrived.
 fn take_line(residual: &mut Vec<u8>) -> Option<DtoResult<String>> {
-    loop {
-        let position = residual.iter().position(|byte| *byte == b'\n')?;
-        let line: Vec<u8> = residual.drain(..position).collect();
-        residual.drain(..1);
-        if line.is_empty() || line == b"\r" {
-            continue;
-        }
-        return Some(decode_line(line));
-    }
+    let position = residual.iter().position(|byte| *byte == b'\n')?;
+    let line: Vec<u8> = residual.drain(..position).collect();
+    residual.drain(..1);
+    Some(decode_line(line))
 }
 
 /// Buffers one freshly read chunk and enforces the transport message cap.
@@ -510,13 +413,7 @@ fn encode_message<T: serde::Serialize + ?Sized>(value: &T) -> DtoResult<Vec<u8>>
     Ok(payload)
 }
 
-fn decode_line(mut line: Vec<u8>) -> DtoResult<String> {
-    // One trailing carriage return is CRLF framing, not message content. A
-    // `\r` byte is never a UTF-8 continuation byte, so trimming it here is
-    // equivalent to trimming it after decoding.
-    if line.last() == Some(&b'\r') {
-        line.pop();
-    }
+fn decode_line(line: Vec<u8>) -> DtoResult<String> {
     String::from_utf8(line).map_err(|_| {
         ErrorDto::validation(
             "invalid_local_protocol_message",
@@ -543,21 +440,6 @@ async fn timeout_async_connect<T>(
 
 fn unavailable(code: &'static str) -> ErrorDto {
     ErrorDto::unavailable(code, "the local daemon connection is unavailable")
-}
-
-/// Validates that one hello reply echoes the hello request identity.
-///
-/// This mirrors the correlation every ordinary reply is held to: a reply for
-/// another identity is never accepted as the handshake answer.
-fn validate_hello_reply_id(response: &JsonRpcResponseDto<ProtocolHelloDto>) -> DtoResult<()> {
-    if response.id() == Some(HELLO_REQUEST_ID) {
-        Ok(())
-    } else {
-        Err(ErrorDto::validation(
-            "invalid_local_protocol_response",
-            "the local daemon returned an uncorrelated hello reply",
-        ))
-    }
 }
 
 fn endpoint_in_use() -> ErrorDto {
@@ -678,7 +560,11 @@ mod tests {
     #[test]
     fn platform_default_uses_a_safe_logical_instance_identifier() {
         let endpoint = LocalEndpoint::platform_default().expect("platform default is available");
-        assert_eq!(endpoint.instance_id(), "intention-relay");
+        assert_eq!(endpoint.instance_id(), "intention-relay-v1");
+        assert!(
+            endpoint.instance_id().ends_with(&WIRE_VERSION.to_string()),
+            "the endpoint name carries the live wire version byte"
+        );
         assert!(endpoint.path.is_absolute());
     }
 
@@ -879,29 +765,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn daemon_negotiation_rejects_oversized_malformed_and_truncated_lines() {
+    async fn daemon_link_rejects_an_oversized_line_and_a_truncated_stream() {
+        // The transport owns the envelope cap: an over-size line is rejected
+        // before unbounded allocation, and a stream that ends before a newline
+        // is a typed connection failure instead of a silent hang.
         for (line, expected_code) in [
             (
                 vec![b'x'; MAX_MESSAGE_BYTES + 1],
                 "local_protocol_message_too_large",
             ),
-            (b"not json\n".to_vec(), "jsonrpc_parse_error"),
-            (b"{}\n".to_vec(), "jsonrpc_invalid_request"),
+            (b"{\"id\":1".to_vec(), "local_daemon_connection_unavailable"),
         ] {
             let endpoint = endpoint();
             let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
             let server = tokio::spawn(async move {
                 let connection = listener.accept().await.expect("server accepts");
-                match connection
-                    .negotiate(
-                        ProtocolHelloDto::new(local_protocol_version(), "async-server")
-                            .expect("fixture hello is valid"),
-                    )
+                let (mut messages, _sender) = connection.split();
+                messages
+                    .receive_line()
                     .await
-                {
-                    Ok(_) => panic!("an invalid hello line is rejected"),
-                    Err(error) => error,
-                }
+                    .expect_err("the fixture line is refused")
             });
             let mut client = ConnectOptions::new()
                 .name(
@@ -921,338 +804,32 @@ mod tests {
             let error = server.await.expect("server completes");
             assert_eq!(error.code(), expected_code);
         }
+    }
 
+    #[tokio::test]
+    async fn client_link_enforces_the_outbound_message_cap_before_writing() {
         let endpoint = endpoint();
         let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
         let server = tokio::spawn(async move {
             let connection = listener.accept().await.expect("server accepts");
-            match connection
-                .negotiate(
-                    ProtocolHelloDto::new(local_protocol_version(), "async-server")
-                        .expect("fixture hello is valid"),
-                )
+            let (mut messages, _sender) = connection.split();
+            messages
+                .receive_line()
                 .await
-            {
-                Ok(_) => panic!("a truncated hello line is rejected"),
-                Err(error) => error,
-            }
-        });
-        let mut client = ConnectOptions::new()
-            .name(
-                endpoint
-                    .socket_name()
-                    .expect("fixture socket name is valid"),
-            )
-            .wait_mode(ConnectWaitMode::Timeout(CONNECT_TIMEOUT))
-            .connect_tokio()
-            .await
-            .expect("raw client connects");
-        client
-            .write_all(b"{\"jsonrpc\":\"2.0\"")
-            .await
-            .expect("raw partial line writes");
-        drop(client);
-        let error = server.await.expect("server completes");
-        assert_eq!(error.code(), "local_daemon_connection_unavailable");
-    }
-
-    #[tokio::test]
-    async fn daemon_hello_answers_a_version_mismatch_with_a_typed_error() {
-        let endpoint = endpoint();
-        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
-        let server = tokio::spawn(async move {
-            let connection = listener.accept().await.expect("server accepts");
-            match connection
-                .negotiate(
-                    ProtocolHelloDto::new(local_protocol_version(), "async-server")
-                        .expect("fixture hello is valid"),
-                )
-                .await
-            {
-                Ok(_) => panic!("a future-version peer is rejected"),
-                Err(error) => error,
-            }
-        });
-        let mut client = ConnectOptions::new()
-            .name(
-                endpoint
-                    .socket_name()
-                    .expect("fixture socket name is valid"),
-            )
-            .wait_mode(ConnectWaitMode::Timeout(CONNECT_TIMEOUT))
-            .connect_tokio()
-            .await
-            .expect("raw client connects");
-        client
-            .write_all(
-                b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"hello\",\"params\":{\"version\":{\"major\":1,\"minor\":1},\"adapter_name\":\"future\"}}\n",
-            )
-            .await
-            .expect("raw future hello writes");
-        let mut reply = Vec::new();
-        let mut byte = [0_u8; 1];
-        loop {
-            client.read_exact(&mut byte).await.expect("reply reads");
-            if byte[0] == b'\n' {
-                break;
-            }
-            reply.push(byte[0]);
-        }
-        let line = String::from_utf8(reply).expect("reply is UTF-8");
-        let response: JsonRpcResponseDto<ProtocolHelloDto> =
-            JsonRpcResponseDto::parse(&line).expect("error response parses");
-        let error = response.error_value().expect("an error object is present");
-        assert_eq!(error.code(), intention_proto::JSONRPC_VERSION_MISMATCH);
-        assert_eq!(
-            error.data().map(intention_proto::ErrorDto::code),
-            Some("incompatible_protocol_version")
-        );
-        assert_eq!(
-            server.await.expect("server completes").code(),
-            "incompatible_protocol_version"
-        );
-    }
-
-    #[tokio::test]
-    async fn daemon_hello_replies_to_malformed_lines_with_standard_error_codes() {
-        for (line, expected_code, expected_data_code) in [
-            (
-                b"{\n".to_vec(),
-                intention_proto::JSONRPC_PARSE_ERROR,
-                "jsonrpc_parse_error",
-            ),
-            (
-                b"{}\n".to_vec(),
-                intention_proto::JSONRPC_INVALID_REQUEST,
-                "jsonrpc_invalid_request",
-            ),
-        ] {
-            let endpoint = endpoint();
-            let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
-            let server = tokio::spawn(async move {
-                let connection = listener.accept().await.expect("server accepts");
-                match connection
-                    .negotiate(
-                        ProtocolHelloDto::new(local_protocol_version(), "async-server")
-                            .expect("fixture hello is valid"),
-                    )
-                    .await
-                {
-                    Ok(_) => panic!("a malformed first line never negotiates"),
-                    Err(error) => error,
-                }
-            });
-            let mut client = ConnectOptions::new()
-                .name(
-                    endpoint
-                        .socket_name()
-                        .expect("fixture socket name is valid"),
-                )
-                .wait_mode(ConnectWaitMode::Timeout(CONNECT_TIMEOUT))
-                .connect_tokio()
-                .await
-                .expect("raw client connects");
-            client
-                .write_all(&line)
-                .await
-                .expect("raw malformed line writes");
-            let mut reply = Vec::new();
-            let mut byte = [0_u8; 1];
-            loop {
-                client.read_exact(&mut byte).await.expect("reply reads");
-                if byte[0] == b'\n' {
-                    break;
-                }
-                reply.push(byte[0]);
-            }
-            let reply = String::from_utf8(reply).expect("reply is UTF-8");
-            let response: JsonRpcResponseDto<ProtocolHelloDto> =
-                JsonRpcResponseDto::parse(&reply).expect("the error reply parses");
-            assert!(response.result_value().is_none());
-            assert_eq!(response.id(), None, "an unparseable line has no identity");
-            let error = response.error_value().expect("an error object is present");
-            assert_eq!(error.code(), expected_code);
-            assert_eq!(
-                error.data().map(intention_proto::ErrorDto::code),
-                Some(expected_data_code)
-            );
-            assert_eq!(
-                server.await.expect("server completes").code(),
-                expected_data_code
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn daemon_hello_answers_a_non_hello_first_request_with_the_invalid_request_code() {
-        let endpoint = endpoint();
-        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
-        let server = tokio::spawn(async move {
-            let connection = listener.accept().await.expect("server accepts");
-            match connection
-                .negotiate(
-                    ProtocolHelloDto::new(local_protocol_version(), "async-server")
-                        .expect("fixture hello is valid"),
-                )
-                .await
-            {
-                Ok(_) => panic!("a first request that is not hello never negotiates"),
-                Err(error) => error,
-            }
-        });
-        let mut client = ConnectOptions::new()
-            .name(
-                endpoint
-                    .socket_name()
-                    .expect("fixture socket name is valid"),
-            )
-            .wait_mode(ConnectWaitMode::Timeout(CONNECT_TIMEOUT))
-            .connect_tokio()
-            .await
-            .expect("raw client connects");
-        let request = JsonRpcRequestDto::new(
-            1,
-            intention_proto::ProtocolMethodDto::DaemonHealth.as_str(),
-            ProtocolHelloDto::new(local_protocol_version(), "fixture-client")
-                .expect("fixture hello is valid"),
-        );
-        let mut payload = serde_json::to_vec(&request).expect("non-hello request serializes");
-        payload.push(b'\n');
-        client
-            .write_all(&payload)
-            .await
-            .expect("raw non-hello request writes");
-        let mut reply = Vec::new();
-        let mut byte = [0_u8; 1];
-        loop {
-            client.read_exact(&mut byte).await.expect("reply reads");
-            if byte[0] == b'\n' {
-                break;
-            }
-            reply.push(byte[0]);
-        }
-        let line = String::from_utf8(reply).expect("reply is UTF-8");
-        let response: JsonRpcResponseDto<ProtocolHelloDto> =
-            JsonRpcResponseDto::parse(&line).expect("the error response parses");
-        assert!(response.result_value().is_none());
-        assert_eq!(response.id(), Some(1), "the recovered identity is echoed");
-        let error = response.error_value().expect("an error object is present");
-        assert_eq!(error.code(), intention_proto::JSONRPC_INVALID_REQUEST);
-        assert_eq!(
-            error.data().map(intention_proto::ErrorDto::code),
-            Some("jsonrpc_hello_required")
-        );
-        assert_eq!(
-            server.await.expect("server completes").code(),
-            "jsonrpc_hello_required"
-        );
-    }
-
-    #[tokio::test]
-    async fn async_client_negotiation_rejects_an_uncorrelated_hello_reply() {
-        let endpoint = endpoint();
-        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
-        let server = tokio::spawn(async move {
-            let mut connection = listener.accept().await.expect("server accepts");
-            let line = read_async_line(&mut connection.stream, &mut Vec::new())
-                .await
-                .expect("scripted server receives hello");
-            let request: JsonRpcRequestDto<ProtocolHelloDto> =
-                JsonRpcRequestDto::parse(&line).expect("scripted hello parses");
-            let reply = encode_hello_response(
-                request.id() + 1,
-                ProtocolHelloDto::new(local_protocol_version(), "uncorrelated-async-daemon")
-                    .expect("fixture hello is valid"),
-            );
-            write_async_message(&mut connection.stream, &reply)
-                .await
-                .expect("uncorrelated async hello reply sends");
+                .expect_err("a peer that receives nothing reads a closed stream")
         });
         let connection = AsyncLocalClientConnection::connect(&endpoint)
             .await
             .expect("client connects");
-        let error = match connection
-            .negotiate(
-                ProtocolHelloDto::new(local_protocol_version(), "async-fixture-client")
-                    .expect("fixture hello is valid"),
-            )
+        let (mut sender, _receiver) = connection.split();
+        let error = sender
+            .send_message(&"x".repeat(MAX_MESSAGE_BYTES + 1))
             .await
-        {
-            Ok(_) => panic!("an uncorrelated hello reply is rejected"),
-            Err(error) => error,
-        };
-        assert_eq!(error.code(), "invalid_local_protocol_response");
-        server.await.expect("scripted server completes");
-    }
-
-    #[tokio::test]
-    async fn async_negotiation_accepts_crlf_framing_after_blank_lines() {
-        let endpoint = endpoint();
-        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
-        let server = tokio::spawn(async move {
-            let connection = listener.accept().await.expect("server accepts");
-            connection
-                .negotiate(
-                    ProtocolHelloDto::new(local_protocol_version(), "crlf-async-server")
-                        .expect("fixture hello is valid"),
-                )
-                .await
-                .expect("a CRLF hello after blank lines negotiates")
-        });
-        let mut client = ConnectOptions::new()
-            .name(
-                endpoint
-                    .socket_name()
-                    .expect("fixture socket name is valid"),
-            )
-            .wait_mode(ConnectWaitMode::Timeout(CONNECT_TIMEOUT))
-            .connect_tokio()
-            .await
-            .expect("raw client connects");
-        let hello = encode_hello_request(
-            HELLO_REQUEST_ID,
-            ProtocolHelloDto::new(local_protocol_version(), "crlf-async-client")
-                .expect("fixture hello is valid"),
-        );
-        let mut framed = b"\n\r\n".to_vec();
-        framed.extend_from_slice(&serde_json::to_vec(&hello).expect("hello serializes"));
-        framed.extend_from_slice(b"\r\n");
-        client
-            .write_all(&framed)
-            .await
-            .expect("raw CRLF hello writes");
-        let (remote, _requests, _messages) = server.await.expect("server completes");
-        assert_eq!(remote.adapter_name(), "crlf-async-client");
-    }
-
-    #[tokio::test]
-    async fn async_negotiation_rejects_an_oversized_outbound_hello_before_framing() {
-        let endpoint = endpoint();
-        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
-        let server = tokio::spawn(async move {
-            let connection = listener.accept().await.expect("server accepts");
-            match connection
-                .negotiate(
-                    ProtocolHelloDto::new(local_protocol_version(), "async-server")
-                        .expect("fixture hello is valid"),
-                )
-                .await
-            {
-                Ok(_) => panic!("closed peer is typed"),
-                Err(error) => error,
-            }
-        });
-        let connection = AsyncLocalClientConnection::connect(&endpoint)
-            .await
-            .expect("client connects");
-        let oversized =
-            ProtocolHelloDto::new(local_protocol_version(), "x".repeat(MAX_MESSAGE_BYTES + 1))
-                .expect("non-empty fixture hello is valid");
-        let error = match connection.negotiate(oversized).await {
-            Ok(_) => panic!("oversized outbound hello is rejected"),
-            Err(error) => error,
-        };
+            .expect_err("an over-size message is rejected before it is written");
         assert_eq!(error.code(), "local_protocol_message_too_large");
+        // The peer releases its socket so the server's read observes the closed
+        // stream; only then does the awaited server task finish.
+        drop((sender, _receiver));
         assert_eq!(
             server.await.expect("server completes").code(),
             "local_daemon_connection_unavailable"

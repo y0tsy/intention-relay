@@ -20,21 +20,15 @@ use intention_config::{
 use intention_engine::ApplicationService;
 #[cfg(test)]
 use intention_engine::{ModelRunCommitObserver, ToolInvocationRequestDto};
-#[cfg(test)]
-use intention_proto::SendUserTurnOutcomeDto;
+use intention_proto::DaemonHealthDto;
 use intention_proto::{
-    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, RunId, SchemaVersionDto, SessionId,
-    TimestampDto,
+    ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto, DtoResult, ErrorDto,
+    InterruptRunAcceptedDto, InterruptRunCommandDto, ProtocolResultDto, RemoveTurnAcceptedDto,
+    RemoveTurnCommandDto, RunId, SchemaVersionDto, SendUserTurnAcceptedDto, SendUserTurnCommandDto,
+    SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto, TimestampDto,
 };
 #[cfg(test)]
-use intention_proto::{
-    CreateSessionCommandDto, ProjectId, RunModeDto, WorkspaceId, WorkspaceRootDto,
-};
-use intention_proto::{
-    DaemonHealthDto, DaemonReadinessDto, ProtocolAcceptedDto, ProtocolAcceptedResultDto,
-    ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto, ProtocolQueryResultDto,
-    SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
-};
+use intention_proto::{ProjectId, RunModeDto, WorkspaceId, WorkspaceRootDto};
 use intention_providers::GenericChatDriver;
 use intention_providers::ModelExecutionDriver;
 use intention_providers::OpenRouterDriver;
@@ -43,14 +37,13 @@ use intention_providers::{ModelCancellationSignal, ModelCapabilitiesDto, ModelEv
 #[cfg(test)]
 use intention_storage::ToolResultEvidenceDto;
 use intention_storage::{
-    RecoverUnfinishedRunsInputDto, SqliteDatabaseLocationDto, SqliteStorageRepository,
-    StorageRepositoryDto,
+    AcceptedTurnOutcomeDto, RecoverUnfinishedRunsInputDto, SqliteDatabaseLocationDto,
+    SqliteStorageRepository, StorageRepositoryDto,
 };
 #[cfg(test)]
 use intention_tools::{ToolInput, WorkspaceRoot};
 use intention_transport::MAX_TRANSCRIPT_SNAPSHOT_BYTES;
 
-const SCHEMA_VERSION: SchemaVersionDto = intention_proto::CURRENT_DTO_SCHEMA_VERSION;
 /// The single live configuration snapshot schema (intention-config current schema).
 const CONFIG_SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 0);
 const DATABASE_FILENAME: &str = "intention-relay.sqlite";
@@ -229,121 +222,101 @@ impl DaemonApplicationFacade {
     /// Returns a credential-free ready health projection.
     #[must_use]
     pub const fn health(&self) -> DaemonHealthDto {
-        DaemonHealthDto::new(SCHEMA_VERSION, DaemonReadinessDto::Ready)
-    }
-
-    /// Dispatches a typed durable M3 query.
-    #[must_use]
-    pub fn query(&self, query: ProtocolQueryDto) -> ProtocolQueryResultDto {
-        match query {
-            ProtocolQueryDto::GetDaemonHealth => {
-                ProtocolQueryResultDto::DaemonHealth(self.health())
-            }
-            ProtocolQueryDto::GetSessionSnapshot(query) => {
-                self.session_snapshot(query.session_id(), None).map_or_else(
-                    ProtocolQueryResultDto::Rejected,
-                    ProtocolQueryResultDto::SessionSnapshot,
-                )
-            }
-        }
-    }
-
-    /// Returns the current durable session snapshot; a re-subscribing client
-    /// re-reads current state and continues live.
-    #[must_use]
-    pub fn subscribe(&self, command: SubscribeSessionCommandDto) -> SessionSubscriptionResponseDto {
-        match self.session_snapshot(command.session_id(), command.run_id()) {
-            Ok(snapshot) => SessionSubscriptionResponseDto::Snapshot(snapshot),
-            Err(error) => SessionSubscriptionResponseDto::Error(error),
-        }
+        DaemonHealthDto::ready()
     }
 
     /// Loads one coherent current-state session snapshot.
     ///
-    /// Recent transcript rows are bounded by the retained delivery bound and
-    /// the byte budget derived from the transport envelope cap; a run-scoped
-    /// request returns that run's rows instead of the session tail.
+    /// This is the single session read: recent transcript rows are bounded by
+    /// the retained delivery bound and the byte budget derived from the
+    /// transport envelope cap. The run-scoped read is the dedicated run
+    /// subscription, which the daemon host answers from the same repository.
     ///
     /// # Errors
     ///
     /// Returns a typed storage error when the session projection or its
-    /// transcript rows cannot be read, or when a run-scoped request names a run
-    /// that is unknown or belongs to another session.
-    pub fn session_snapshot(
-        &self,
-        session_id: SessionId,
-        run_id: Option<RunId>,
-    ) -> DtoResult<intention_proto::SessionSnapshotDto> {
+    /// transcript rows cannot be read.
+    pub fn session_snapshot(&self, session_id: SessionId) -> DtoResult<SessionSnapshotDto> {
         let projection = self.inner.repository.load_session_projection(session_id)?;
-        let messages = match run_id {
-            Some(run_id) => bounded_snapshot_messages(self.inner.repository.load_run_messages(
-                session_id,
-                run_id,
-                SESSION_SNAPSHOT_MESSAGES,
-            )?)?,
-            None => bounded_snapshot_messages(
-                self.inner
-                    .repository
-                    .load_recent_messages(session_id, SESSION_SNAPSHOT_MESSAGES)?,
-            )?,
-        };
-        intention_proto::SessionSnapshotDto::with_projection(
-            SCHEMA_VERSION,
-            session_id,
-            projection,
-            messages,
-        )
+        let messages = bounded_snapshot_messages(
+            self.inner
+                .repository
+                .load_recent_messages(session_id, SESSION_SNAPSHOT_MESSAGES)?,
+        )?;
+        SessionSnapshotDto::with_projection(session_id, projection, messages)
     }
 
-    /// Dispatches a durable M3 command.
-    #[must_use]
-    pub fn command(&self, command: ProtocolCommandDto) -> ProtocolCommandResultDto {
-        let result = self.command_result(command);
-        match result {
-            Ok(result) => ProtocolCommandResultDto::Accepted(ProtocolAcceptedDto::with_result(
-                CorrelationIdDto::new(),
-                result,
-            )),
-            Err(error) => ProtocolCommandResultDto::Rejected(error),
-        }
+    /// Creates one durable session and assembles its typed reply evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed durable failure when session creation is rejected.
+    pub fn create_session(&self, command: CreateSessionCommandDto) -> DtoResult<ProtocolResultDto> {
+        let _gate = self.lock_command_gate()?;
+        let projection =
+            ApplicationService::new(&self.inner.repository).create_session(command, now()?)?;
+        Ok(ProtocolResultDto::SessionCreated(
+            CreateSessionAcceptedDto::new(
+                projection.project_id(),
+                projection.workspace_id(),
+                projection.session_id(),
+            ),
+        ))
     }
 
-    fn command_result(&self, command: ProtocolCommandDto) -> DtoResult<ProtocolAcceptedResultDto> {
-        let _gate = self.inner.command_gate.lock().map_err(|_| {
+    /// Accepts one user turn and assembles its typed reply evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed admission failure when the turn is rejected.
+    pub fn send_user_turn(&self, command: SendUserTurnCommandDto) -> DtoResult<ProtocolResultDto> {
+        let _gate = self.lock_command_gate()?;
+        let outcome = ApplicationService::new(&self.inner.repository).send_user_turn(
+            command,
+            RunId::new(),
+            self.inner.config_snapshot.clone(),
+            now()?,
+        )?;
+        Ok(turn_accepted(&outcome))
+    }
+
+    /// Removes one not-yet-seen pending user turn and assembles its typed reply evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed durable failure when no pending turn can be removed.
+    pub fn remove_turn(&self, command: RemoveTurnCommandDto) -> DtoResult<ProtocolResultDto> {
+        let _gate = self.lock_command_gate()?;
+        let turn = ApplicationService::new(&self.inner.repository).remove_turn(command, now()?)?;
+        Ok(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
+            turn.session_id(),
+            turn.turn_id(),
+        )))
+    }
+
+    /// Validates one interruption request and assembles its typed reply evidence.
+    ///
+    /// Interruption is not a durable run state: the validation commits nothing
+    /// and the daemon host signals the registered execution afterwards.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error when the exact run is not active.
+    pub fn interrupt_run(&self, command: InterruptRunCommandDto) -> DtoResult<ProtocolResultDto> {
+        let _gate = self.lock_command_gate()?;
+        let run = ApplicationService::new(&self.inner.repository).interrupt_run(command)?;
+        Ok(ProtocolResultDto::RunInterrupted(
+            InterruptRunAcceptedDto::new(run.session_id(), run.run_id()),
+        ))
+    }
+
+    fn lock_command_gate(&self) -> DtoResult<std::sync::MutexGuard<'_, ()>> {
+        self.inner.command_gate.lock().map_err(|_| {
             ErrorDto::unavailable(
                 "daemon_command_unavailable",
                 "daemon command is unavailable",
             )
-        })?;
-        let timestamp = now()?;
-        let result = match command {
-            ProtocolCommandDto::CreateSession(command) => {
-                ApplicationService::new(&self.inner.repository)
-                    .create_session(command, timestamp)?
-            }
-            ProtocolCommandDto::SendUserTurn(command) => {
-                let proposed_run_id = RunId::new();
-                ApplicationService::new(&self.inner.repository).send_user_turn(
-                    command,
-                    proposed_run_id,
-                    self.inner.config_snapshot.clone(),
-                    timestamp,
-                )?
-            }
-            ProtocolCommandDto::RemoveTurn(command) => {
-                ApplicationService::new(&self.inner.repository).remove_turn(command, timestamp)?
-            }
-            // Interrupts and subscriptions are routed by the daemon host: an
-            // interrupt signals the registered run and a subscription answers
-            // with its own dedicated protocol response.
-            ProtocolCommandDto::InterruptRun(_) | ProtocolCommandDto::SubscribeSession(_) => {
-                return Err(ErrorDto::validation(
-                    "daemon_command_route_unavailable",
-                    "this command is routed by the daemon host",
-                ));
-            }
-        };
-        Ok(result)
+        })
     }
 
     fn recover_before_ready(&self) -> DtoResult<()> {
@@ -352,6 +325,32 @@ impl DaemonApplicationFacade {
             .repository
             .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(now()?))?;
         Ok(())
+    }
+}
+
+/// Assembles the wire acceptance evidence of one committed user-turn outcome.
+///
+/// The engine returns the committed durable outcome; the boundary that owns the
+/// typed wire vocabulary converts it once here.
+const fn turn_accepted(outcome: &AcceptedTurnOutcomeDto) -> ProtocolResultDto {
+    match outcome {
+        AcceptedTurnOutcomeDto::Started { run, .. } => {
+            ProtocolResultDto::TurnAccepted(SendUserTurnAcceptedDto::new(
+                run.session_id(),
+                run.turn_id(),
+                SendUserTurnOutcomeDto::Started {
+                    run_id: run.run_id(),
+                    config_revision_id: run.config_revision_id(),
+                },
+            ))
+        }
+        AcceptedTurnOutcomeDto::Pending(turn) => {
+            ProtocolResultDto::TurnAccepted(SendUserTurnAcceptedDto::new(
+                turn.session_id(),
+                turn.turn_id(),
+                SendUserTurnOutcomeDto::Pending,
+            ))
+        }
     }
 }
 
@@ -536,16 +535,16 @@ mod tests {
     }
 
     fn create(facade: &DaemonApplicationFacade, session_id: SessionId) {
-        let accepted = facade.command(ProtocolCommandDto::CreateSession(
-            CreateSessionCommandDto::new(
+        let accepted = facade
+            .create_session(CreateSessionCommandDto::new(
                 ProjectId::new(),
                 session_id,
                 WorkspaceId::new(),
                 fixture_workspace_root(),
                 RunModeDto::Build,
-            ),
-        ));
-        assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
+            ))
+            .expect("fixture session creates");
+        assert!(matches!(accepted, ProtocolResultDto::SessionCreated(_)));
     }
 
     /// Creates a workspace directory containing one named file.
@@ -570,11 +569,8 @@ mod tests {
 
     /// Starts one durable run through a direct user turn and returns its identity.
     fn started_run(facade: &DaemonApplicationFacade, session_id: SessionId, label: &str) -> RunId {
-        let accepted = send_user_turn(facade, session_id, label);
-        let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
-            unreachable!("fixture turn is accepted, got {accepted:?}")
-        };
-        let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
+        let accepted = send_user_turn(facade, session_id, label).expect("fixture turn is accepted");
+        let ProtocolResultDto::TurnAccepted(turn) = accepted else {
             unreachable!("fixture turn has user-turn evidence")
         };
         let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
@@ -587,28 +583,29 @@ mod tests {
         facade: &DaemonApplicationFacade,
         session_id: SessionId,
         content: &str,
-    ) -> ProtocolCommandResultDto {
-        facade.command(ProtocolCommandDto::SendUserTurn(
+    ) -> DtoResult<ProtocolResultDto> {
+        facade.send_user_turn(
             SendUserTurnCommandDto::new(
                 session_id,
                 intention_proto::IdempotencyKey::new(),
                 content,
             )
             .expect("fixture user turn is valid"),
-        ))
+        )
     }
 
-    /// Reads the committed transcript rows of one run through the current-state read.
+    /// Reads the committed transcript rows of one run from the same repository
+    /// read the run subscription snapshot uses.
     fn run_messages(
         facade: &DaemonApplicationFacade,
         session_id: SessionId,
         run_id: RunId,
     ) -> Vec<intention_proto::MessageProjectionDto> {
         facade
-            .session_snapshot(session_id, Some(run_id))
+            .inner
+            .repository
+            .load_run_messages(session_id, run_id, SESSION_SNAPSHOT_MESSAGES)
             .expect("committed run transcript reads")
-            .messages()
-            .to_vec()
     }
 
     /// Reads the durable tool-result evidence of one exact invocation.
@@ -642,11 +639,10 @@ mod tests {
         )
         .expect("fixture user turn is valid");
 
-        let initial = facade.command(ProtocolCommandDto::SendUserTurn(command.clone()));
-        let ProtocolCommandResultDto::Accepted(initial) = initial else {
-            unreachable!("the first user turn is accepted")
-        };
-        let ProtocolAcceptedResultDto::SendUserTurn(initial_turn) = initial.result() else {
+        let initial = facade
+            .send_user_turn(command.clone())
+            .expect("the first user turn is accepted");
+        let ProtocolResultDto::TurnAccepted(initial_turn) = initial else {
             unreachable!("the first user turn returns user-turn evidence")
         };
         let SendUserTurnOutcomeDto::Started { run_id, .. } = initial_turn.outcome() else {
@@ -656,10 +652,9 @@ mod tests {
 
         // The facade proposes a fresh run identity for every command, so a
         // repeated command conflicts durably instead of starting a second run.
-        let replay = facade.command(ProtocolCommandDto::SendUserTurn(command));
-        let ProtocolCommandResultDto::Rejected(error) = replay else {
-            unreachable!("a repeated command cannot start a second run")
-        };
+        let error = facade
+            .send_user_turn(command)
+            .expect_err("a repeated command cannot start a second run");
         assert_eq!(error.code(), "turn_idempotency_conflict");
         assert_eq!(
             run_messages(&facade, session_id, run_id),
@@ -811,7 +806,7 @@ mod tests {
         );
         assert_eq!(
             facade
-                .session_snapshot(session_id, Some(run_id))
+                .session_snapshot(session_id)
                 .expect("interrupted run reads")
                 .projection()
                 .active_run()
@@ -858,7 +853,7 @@ mod tests {
         cancellation.cancel();
         assert_eq!(
             facade
-                .session_snapshot(session_id, Some(run_id))
+                .session_snapshot(session_id)
                 .expect("the interrupted run stays readable")
                 .projection()
                 .active_run()
@@ -965,7 +960,7 @@ mod tests {
             );
         }
         let servable = facade
-            .session_snapshot(session_id, None)
+            .session_snapshot(session_id)
             .expect("the bounded snapshot reads");
         assert_eq!(
             servable.messages().len(),
@@ -989,7 +984,7 @@ mod tests {
             );
         }
         let bounded = facade
-            .session_snapshot(session_id, None)
+            .session_snapshot(session_id)
             .expect("the byte-bounded snapshot reads");
         assert!(
             serde_json::to_vec(&bounded)

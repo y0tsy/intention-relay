@@ -26,10 +26,9 @@ use intention_engine::{
     ModelTimePort, RunCancellation,
 };
 use intention_proto::{
-    CreateSessionCommandDto, IdempotencyKey, ProjectId, ProtocolAcceptedResultDto,
-    ProtocolCommandDto, ProtocolCommandResultDto, RunId, RunModeDto, RunStatusDto,
-    SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId, TimestampDto, WorkspaceId,
-    WorkspaceRootDto,
+    CreateSessionCommandDto, IdempotencyKey, ProjectId, ProtocolResultDto, RunId, RunModeDto,
+    RunStatusDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId, TimestampDto,
+    WorkspaceId, WorkspaceRootDto,
 };
 use intention_providers::{
     ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto,
@@ -110,30 +109,28 @@ pub fn fixture_facade(
 
 /// Creates one fixture session rooted at the supplied workspace directory.
 pub fn create_session(facade: &DaemonApplicationFacade, session_id: SessionId, workspace: &Path) {
-    let create = ProtocolCommandDto::CreateSession(CreateSessionCommandDto::new(
-        ProjectId::new(),
-        session_id,
-        WorkspaceId::new(),
-        WorkspaceRootDto::parse(workspace.to_string_lossy().into_owned())
-            .expect("fixture workspace is absolute"),
-        RunModeDto::Build,
-    ));
-    assert!(matches!(
-        facade.command(create),
-        ProtocolCommandResultDto::Accepted(_)
-    ));
+    let created = facade
+        .create_session(CreateSessionCommandDto::new(
+            ProjectId::new(),
+            session_id,
+            WorkspaceId::new(),
+            WorkspaceRootDto::parse(workspace.to_string_lossy().into_owned())
+                .expect("fixture workspace is absolute"),
+            RunModeDto::Build,
+        ))
+        .expect("fixture session creates");
+    assert!(matches!(created, ProtocolResultDto::SessionCreated(_)));
 }
 
 /// Starts one fixture turn and returns the run it admitted.
 pub fn started_run(facade: &DaemonApplicationFacade, session_id: SessionId) -> RunId {
-    let result = facade.command(ProtocolCommandDto::SendUserTurn(
-        SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "turn")
-            .expect("turn is valid"),
-    ));
-    let ProtocolCommandResultDto::Accepted(accepted) = result else {
-        panic!("fixture turn starts")
-    };
-    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
+    let accepted = facade
+        .send_user_turn(
+            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "turn")
+                .expect("turn is valid"),
+        )
+        .expect("fixture turn starts");
+    let ProtocolResultDto::TurnAccepted(turn) = accepted else {
         panic!("fixture result is a turn")
     };
     let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {

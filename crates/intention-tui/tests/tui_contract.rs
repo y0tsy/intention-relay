@@ -4,11 +4,7 @@
 )]
 
 use intention_client::{DaemonLauncher, IntentionClient};
-use intention_proto::RunModeDto;
-use intention_proto::{
-    DaemonReadinessDto, SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
-};
-use intention_proto::{DtoResult, SchemaVersionDto, SessionId};
+use intention_proto::{DaemonReadinessDto, DtoResult, SessionId};
 use intention_test_support::FixtureHost;
 use intention_transport::LocalEndpoint;
 use intention_tui::TuiProofClient;
@@ -29,27 +25,22 @@ async fn tui_proof_reaches_the_shared_fixture_daemon_only_through_the_client() {
     let daemon_endpoint = endpoint.clone();
     let fixture = FixtureHost::open(session_id).expect("fixture host opens");
     let daemon = tokio::spawn(fixture.serve(daemon_endpoint, 2));
-    let client = IntentionClient::new(endpoint, "fixture-tui", Box::new(ExistingDaemonLauncher))
-        .expect("fixture client is valid");
+    let client = IntentionClient::new(endpoint, Box::new(ExistingDaemonLauncher));
     let tui = TuiProofClient::new(client);
     let health = tui
         .connect()
         .await
         .expect("TUI reaches ready daemon health");
     assert_eq!(health.readiness(), DaemonReadinessDto::Ready);
-    let session = tui
-        .subscribe(SubscribeSessionCommandDto::new(
-            SchemaVersionDto::new(1, 1),
-            session_id,
-            RunModeDto::Build,
-        ))
+    let snapshot = tui
+        .session_snapshot(session_id)
         .await
-        .expect("TUI receives the daemon fixture subscription");
-    assert!(matches!(
-        session,
-        SessionSubscriptionResponseDto::Snapshot(snapshot)
-            if snapshot.session_id() == session_id
-    ));
+        .expect("TUI receives the daemon fixture session snapshot");
+    assert_eq!(
+        snapshot.session_id(),
+        session_id,
+        "the TUI reads current fixture session state"
+    );
     daemon
         .await
         .expect("fixture daemon task completes")

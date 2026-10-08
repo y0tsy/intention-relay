@@ -14,12 +14,9 @@ use intention_config::ConfigSnapshotDto;
 use intention_domain::{ToolResultMetadataEntryDto, ToolResultStatusDto};
 use intention_proto::ToolCallId;
 use intention_proto::{
-    CreateSessionAcceptedDto, InterruptRunAcceptedDto, ProtocolAcceptedResultDto,
-    RemoveTurnAcceptedDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
-};
-use intention_proto::{
     CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
-    RemoveTurnCommandDto, SendUserTurnCommandDto,
+    PendingTurnProjectionDto, RemoveTurnCommandDto, RunProjectionDto, SendUserTurnCommandDto,
+    SessionProjectionDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
 use intention_storage::{
@@ -336,7 +333,7 @@ where
         Self { repository }
     }
 
-    /// Creates a durable session and maps its committed evidence for protocol use.
+    /// Creates a durable session and returns its committed projection.
     ///
     /// # Errors
     ///
@@ -345,20 +342,12 @@ where
         &self,
         command: CreateSessionCommandDto,
         occurred_at: TimestampDto,
-    ) -> DtoResult<ProtocolAcceptedResultDto> {
-        let projection = self
-            .repository
-            .create_session(CreateSessionInputDto::new(command, occurred_at))?;
-        Ok(ProtocolAcceptedResultDto::CreateSession(
-            CreateSessionAcceptedDto::new(
-                projection.project_id(),
-                projection.workspace_id(),
-                projection.session_id(),
-            ),
-        ))
+    ) -> DtoResult<SessionProjectionDto> {
+        self.repository
+            .create_session(CreateSessionInputDto::new(command, occurred_at))
     }
 
-    /// Accepts a user turn and maps its committed acceptance for protocol use.
+    /// Accepts a user turn and returns its committed durable outcome.
     ///
     /// A pending outcome returns immediately, and a started outcome returns
     /// once the exact `Starting` run is durably accepted. The daemon host owns
@@ -376,9 +365,8 @@ where
         proposed_run_id: RunId,
         config_snapshot: ConfigSnapshotDto,
         occurred_at: TimestampDto,
-    ) -> DtoResult<ProtocolAcceptedResultDto> {
-        let outcome = self
-            .repository
+    ) -> DtoResult<AcceptedTurnOutcomeDto> {
+        self.repository
             .accept_user_turn(AcceptUserTurnInputDto::new(
                 command.session_id(),
                 command.idempotency_key(),
@@ -386,11 +374,10 @@ where
                 proposed_run_id,
                 config_snapshot,
                 occurred_at,
-            )?)?;
-        accepted_user_turn(&command, &outcome)
+            )?)
     }
 
-    /// Removes one not-yet-seen pending turn and maps its committed evidence.
+    /// Removes one not-yet-seen pending turn and returns its committed projection.
     ///
     /// # Errors
     ///
@@ -399,13 +386,9 @@ where
         &self,
         command: RemoveTurnCommandDto,
         occurred_at: TimestampDto,
-    ) -> DtoResult<ProtocolAcceptedResultDto> {
-        let turn = self
-            .repository
-            .remove_turn(RemoveTurnInputDto::new(command, occurred_at))?;
-        Ok(ProtocolAcceptedResultDto::RemoveTurn(
-            RemoveTurnAcceptedDto::new(turn.session_id(), turn.turn_id()),
-        ))
+    ) -> DtoResult<PendingTurnProjectionDto> {
+        self.repository
+            .remove_turn(RemoveTurnInputDto::new(command, occurred_at))
     }
 
     /// Accepts an interruption request for one exact active run.
@@ -417,14 +400,9 @@ where
     ///
     /// Returns a typed validation error when the exact run is not active, or a
     /// repository error when the session projection cannot be read.
-    pub fn interrupt_run(
-        &self,
-        command: InterruptRunCommandDto,
-    ) -> DtoResult<ProtocolAcceptedResultDto> {
-        let projection = self
-            .repository
-            .load_session_projection(command.session_id())?;
-        let active = projection
+    pub fn interrupt_run(&self, command: InterruptRunCommandDto) -> DtoResult<RunProjectionDto> {
+        self.repository
+            .load_session_projection(command.session_id())?
             .active_run()
             .filter(|run| run.run_id() == command.run_id())
             .ok_or_else(|| {
@@ -432,10 +410,7 @@ where
                     "active_run_not_found",
                     "the requested run is not active in the session",
                 )
-            })?;
-        Ok(ProtocolAcceptedResultDto::InterruptRun(
-            InterruptRunAcceptedDto::new(command.session_id(), active.run_id()),
-        ))
+            })
     }
 
     /// Reconstructs the exact durable context for one current `Starting` run.
@@ -462,25 +437,6 @@ where
             cancellation,
         )
     }
-}
-
-const fn accepted_user_turn(
-    command: &SendUserTurnCommandDto,
-    outcome: &AcceptedTurnOutcomeDto,
-) -> DtoResult<ProtocolAcceptedResultDto> {
-    let (turn_id, outcome) = match outcome {
-        AcceptedTurnOutcomeDto::Started { run, .. } => (
-            run.turn_id(),
-            SendUserTurnOutcomeDto::Started {
-                run_id: run.run_id(),
-                config_revision_id: run.config_revision_id(),
-            },
-        ),
-        AcceptedTurnOutcomeDto::Pending(turn) => (turn.turn_id(), SendUserTurnOutcomeDto::Pending),
-    };
-    Ok(ProtocolAcceptedResultDto::SendUserTurn(
-        SendUserTurnAcceptedDto::new(command.session_id(), turn_id, outcome),
-    ))
 }
 
 /// Builds the approved credential-free metadata entries of one tool result.

@@ -469,18 +469,16 @@ impl Drop for LiveE2eHost {
 fn live_client(endpoint: &LocalEndpoint) -> IntentionClient {
     IntentionClient::new(
         endpoint.clone(),
-        "real-api-e2e",
         Box::new(
             ProcessDaemonLauncher::new(env!("CARGO_BIN_EXE_intention-daemon"))
                 .expect("daemon program is valid"),
         ),
     )
-    .expect("live e2e client is valid")
 }
 
 /// Waits out the client's readiness wait until the daemon reports `Ready`.
 ///
-/// `await_ready()` only negotiates and queries; it never launches the daemon.
+/// `await_ready()` only connects and queries; it never launches the daemon.
 /// Its own bounded wait is looped under the fixture deadline, so a daemon that
 /// needs longer than one client budget still becomes ready in time. A child
 /// that exits before readiness fails with its exit status instead of a
@@ -691,32 +689,26 @@ async fn collect_run_frames(
     session_id: SessionId,
     run_id: RunId,
 ) -> RunObservation {
-    let Ok(client) = RunStreamClient::new(endpoint.clone(), "real-api-e2e") else {
-        return RunObservation::Lost("the run stream client is unavailable".to_owned());
-    };
+    let client = RunStreamClient::new(endpoint.clone());
     let Ok(mut subscription) = client
-        .subscribe(SubscribeRunCommandDto::new(
-            intention_proto::CURRENT_DTO_SCHEMA_VERSION,
-            session_id,
-            run_id,
-        ))
+        .subscribe(SubscribeRunCommandDto::new(session_id, run_id))
         .await
     else {
         return RunObservation::Lost("the run subscription failed".to_owned());
     };
     loop {
         if subscription
-            .reducer()
+            .state()
             .status()
             .is_some_and(run_status_is_terminal)
         {
             let run = *subscription
-                .reducer()
+                .state()
                 .run()
                 .expect("an accepted subscription snapshot carries the run projection");
             return RunObservation::Terminal(Box::new(ObservedRun {
                 run,
-                messages: subscription.reducer().messages().to_vec(),
+                messages: subscription.state().messages().to_vec(),
             }));
         }
         match subscription.receive().await {
@@ -724,7 +716,7 @@ async fn collect_run_frames(
             Ok(None) => {
                 return RunObservation::Lost(format!(
                     "the daemon closed the run stream after {} committed rows",
-                    subscription.reducer().messages().len()
+                    subscription.state().messages().len()
                 ));
             }
             Err(_) => {
@@ -1079,26 +1071,21 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_survives_resta
 
     host.restart_daemon();
     let _client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE).await;
-    let stream_client = RunStreamClient::new(host.endpoint.clone(), "real-api-e2e")
-        .expect("stream client is valid");
+    let stream_client = RunStreamClient::new(host.endpoint.clone());
     let subscription = tokio::time::timeout_at(
         tokio::time::Instant::from_std(Instant::now() + RESUBSCRIBE_DEADLINE),
-        stream_client.subscribe(SubscribeRunCommandDto::new(
-            intention_proto::CURRENT_DTO_SCHEMA_VERSION,
-            read_session,
-            run_id,
-        )),
+        stream_client.subscribe(SubscribeRunCommandDto::new(read_session, run_id)),
     )
     .await
     .unwrap_or_else(|_| panic!("the post-restart subscription reply arrives before the deadline"))
     .expect("the post-restart subscription reply is valid");
     assert_eq!(
-        subscription.reducer().status(),
+        subscription.state().status(),
         Some(RunStatusDto::Completed),
         "the restarted daemon serves the completed run"
     );
     assert_eq!(
-        subscription.reducer().messages(),
+        subscription.state().messages(),
         read_run.messages.as_slice(),
         "the restarted daemon serves the recorded transcript unchanged"
     );

@@ -348,19 +348,17 @@ fn excess_response() -> String {
 
 /// Waits for the spawned daemon to report `Ready` through the shared client.
 ///
-/// `await_ready()` only negotiates and queries; it never launches the daemon.
+/// `await_ready()` only connects and queries; it never launches the daemon.
 /// Its own bounded wait is looped under the fixture deadline, so a daemon that
 /// needs longer than one client budget still becomes ready in time.
 async fn wait_until_ready(endpoint: &LocalEndpoint, deadline: Instant) -> IntentionClient {
     let client = IntentionClient::new(
         endpoint.clone(),
-        "client-e2e",
         Box::new(
             ProcessDaemonLauncher::new(env!("CARGO_BIN_EXE_intention-daemon"))
                 .expect("daemon program is valid"),
         ),
-    )
-    .expect("client e2e client is valid");
+    );
     while Instant::now() < deadline {
         if client.await_ready().await.is_ok() {
             return client;
@@ -406,19 +404,15 @@ async fn observe_run_until_terminal(
     deadline: Instant,
 ) -> LiveRunObservation {
     let mut subscription = client
-        .subscribe(SubscribeRunCommandDto::new(
-            intention_proto::CURRENT_DTO_SCHEMA_VERSION,
-            session_id,
-            run_id,
-        ))
+        .subscribe(SubscribeRunCommandDto::new(session_id, run_id))
         .await
         .expect("run subscription arrives");
-    let snapshot_status = subscription.reducer().status();
-    let snapshot_messages = subscription.reducer().messages().to_vec();
+    let snapshot_status = subscription.state().status();
+    let snapshot_messages = subscription.state().messages().to_vec();
     let mut frames = Vec::new();
     loop {
         if subscription
-            .reducer()
+            .state()
             .status()
             .is_some_and(run_status_is_terminal)
         {
@@ -485,21 +479,20 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
         panic!("first turn starts a run, got: {outcome:?}")
     };
 
-    let stream_client =
-        RunStreamClient::new(host.endpoint.clone(), "client-e2e").expect("stream client is valid");
+    let stream_client = RunStreamClient::new(host.endpoint.clone());
     let live_deadline = Instant::now() + Duration::from_secs(30);
     // Subscribe immediately after acceptance: the subscription snapshot is the
     // current run state, and every later commit arrives as a live frame.
     let observation =
         observe_run_until_terminal(&stream_client, session_id, run_id, live_deadline).await;
-    let reducer = observation.subscription.reducer();
+    let state = observation.subscription.state();
     assert_eq!(
-        reducer.status(),
+        state.status(),
         Some(RunStatusDto::Completed),
         "the real daemon completes the tool round"
     );
     assert_eq!(
-        reducer
+        state
             .run()
             .expect("the subscription carries the run scope")
             .run_id(),
@@ -528,7 +521,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
     // The committed tool round is current state for the subscriber: the tool
     // call and its one result row are carried by the snapshot or published as
     // live content frames after their own commits.
-    let subscriber_messages = reducer.messages();
+    let subscriber_messages = state.messages();
     assert!(
         subscriber_messages
             .iter()
@@ -556,7 +549,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
         );
     }
     assert!(
-        has_assistant_step(reducer.messages()),
+        has_assistant_step(state.messages()),
         "the subscriber's current transcript holds the committed assistant step"
     );
 
@@ -645,7 +638,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
         Some(RunStatusDto::Completed),
         "the restarted daemon replays the completed run as its current state"
     );
-    let replayed_messages = replayed.subscription.reducer().messages();
+    let replayed_messages = replayed.subscription.state().messages();
     assert_eq!(
         replayed_messages.len(),
         4,
@@ -715,13 +708,12 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
         panic!("first turn starts a run, got: {outcome:?}")
     };
 
-    let stream_client =
-        RunStreamClient::new(host.endpoint.clone(), "client-e2e").expect("stream client is valid");
+    let stream_client = RunStreamClient::new(host.endpoint.clone());
     let deadline = Instant::now() + Duration::from_secs(30);
     let observation =
         observe_run_until_terminal(&stream_client, session_id, run_id, deadline).await;
     assert_eq!(
-        observation.subscription.reducer().status(),
+        observation.subscription.state().status(),
         Some(RunStatusDto::Failed),
         "the real daemon terminalizes the missing-file tool round as Failed"
     );

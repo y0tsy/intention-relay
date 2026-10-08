@@ -16,7 +16,6 @@ use intention_engine::{
     ApplicationService, ModelRunCommitDto, ModelRunCommitObserver, RunCancellation,
     ToolInvocationRequestDto, ToolResultOutcomeDto,
 };
-use intention_proto::ProtocolAcceptedResultDto;
 use intention_proto::{
     CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
     PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
@@ -313,17 +312,14 @@ fn interrupt_run_workflow_maps_durable_results() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = fixture_snapshot();
-    let state = projection(
+    let expected = RunProjectionDto::new(
         session_id,
-        Some(RunProjectionDto::new(
-            session_id,
-            run_id,
-            TurnId::new(),
-            RunStatusDto::Starting,
-            config.revision_id(),
-        )),
-        Vec::new(),
+        run_id,
+        TurnId::new(),
+        RunStatusDto::Starting,
+        config.revision_id(),
     );
+    let state = projection(session_id, Some(expected), Vec::new());
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable(
         "fixture_unused",
         "accept is not used by this fixture",
@@ -334,11 +330,10 @@ fn interrupt_run_workflow_maps_durable_results() {
     let interrupted = application
         .interrupt_run(InterruptRunCommandDto::new(session_id, run_id))
         .expect("interrupt maps");
-    assert!(matches!(
-        interrupted,
-        ProtocolAcceptedResultDto::InterruptRun(value)
-            if value.session_id() == session_id && value.run_id() == run_id
-    ));
+    assert_eq!(
+        interrupted, expected,
+        "the engine returns the exact active run projection"
+    );
 }
 
 #[test]
@@ -380,21 +375,15 @@ fn create_and_remove_workflows_map_committed_results() {
     let created = application
         .create_session(create, fixture_time())
         .expect("create maps");
-    assert!(matches!(
-        created,
-        ProtocolAcceptedResultDto::CreateSession(value) if value.session_id() == session_id
-    ));
+    assert_eq!(created.session_id(), session_id);
     let removed = application
         .remove_turn(
             RemoveTurnCommandDto::new(session_id, pending_turn),
             fixture_time(),
         )
         .expect("removal maps");
-    assert!(matches!(
-        removed,
-        ProtocolAcceptedResultDto::RemoveTurn(value)
-            if value.session_id() == session_id && value.turn_id() == pending_turn
-    ));
+    assert_eq!(removed.session_id(), session_id);
+    assert_eq!(removed.turn_id(), pending_turn);
 }
 
 #[test]

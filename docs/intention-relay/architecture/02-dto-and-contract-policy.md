@@ -60,8 +60,9 @@ newtypes; provider-native tool-call identifiers remain private implementation st
 
 ### Envelopes
 
-Transport envelopes are JSON-RPC messages (architecture 03). Persisted state is stored as plain typed rows; there is no
-durable event envelope, event identity, or event sequence.
+Transport messages are the typed `intention-proto` wire DTOs: one typed request enum and one typed result enum, a
+correlated rejection carrying `ErrorDto`, and uncorrelated committed frames (architecture 03). Persisted state is stored
+as plain typed rows; there is no durable event envelope, event identity, or event sequence.
 
 A DTO field may be optional only when its absence has an explicit domain meaning. Optional must not conceal an
 unimplemented relationship.
@@ -114,10 +115,10 @@ message text, or cross-turn transfer. `intention-proto` owns the shared safe usa
 provider-error values; `intention-providers` re-exports them for its consumers. Native SDK decoding and JSON values
 may exist only inside the owning provider implementation before being normalized to those DTOs.
 
-Run-scoped delivery is a current-state stream: `SubscribeRunCommandDto` receives a correlated snapshot of the current
-run state, and subsequent uncorrelated `RunStreamFrameDto` values carry `kind` `content` or `status` with no positions
-or cursors. A re-subscribing client re-reads current state and continues live; there is no event tail, resync, or
-catch-up position.
+Run-scoped delivery is a current-state stream: `SubscribeRunCommandDto` receives its correlated result as the current
+run state, and subsequent uncorrelated `RunStreamFrameDto` values carry `kind` `content` (one committed transcript row)
+or `kind` `status` (the committed `RunProjectionDto`, never a delta) with no positions or cursors. A re-subscribing
+client re-reads current state and continues live; there is no event tail, resync, or catch-up position.
 
 ## Validation ownership
 
@@ -136,10 +137,10 @@ equality is typed structural equality, and record identity is a typed revision i
 
 Validation occurs at the boundary that has the necessary context.
 
-The error category follows the boundary that detected a version mismatch: the JSON-RPC 2.0 handshake fails an
-incompatible protocol version as the typed `-32001` error with `ErrorDto { category: unavailable }` (architecture 03,
-"Protocol lifecycle"), while an `incompatible_protocol_version` decode rejection at a public DTO boundary is a
-`validation` failure. The difference is intentional.
+The error category follows the boundary that detected the mismatch: a peer that does not speak the live local wire
+fails as the typed `stale_daemon_protocol` error with `ErrorDto { category: unavailable }` (architecture 03, "Protocol
+lifecycle"), while a malformed request line is a `validation` failure answered with a typed identity-less rejection. The
+difference is intentional.
 
 Validation cannot be delegated only to UI. Tauri and TUI may provide ergonomic pre-validation, but daemon validation is
 authoritative.
@@ -154,13 +155,13 @@ sequenceDiagram
   participant U as Use case
   participant S as Storage
 
-  A->>C: Command DTO
-  C->>D: JSON-RPC request
+  A->>C: Typed operation
+  C->>D: Typed request
   D->>U: Application DTO
   U->>S: State-change DTO
   S-->>U: Committed values
-  U-->>D: Command result DTO
-  D-->>C: Result and live frame DTOs
+  U-->>D: Domain result
+  D-->>C: Typed result and committed frames
   C-->>A: Typed result and frames
 ```
 
@@ -169,16 +170,15 @@ typed identity for an adapter to reconcile state.
 
 ## Versioning and compatibility
 
-- Every transport schema and persisted row schema has an explicit version.
+- Every transport schema and persisted row schema has exactly one live version.
 - Changes are additive by default. Current payloads may omit additive fields
 such as `ErrorDto.correlation_id`; omitted fields decode as `None`.
 - Public DTOs tolerate unknown additive JSON fields unless a closed
 configuration schema explicitly documents `deny_unknown_fields`. Required fields, invalid types, invalid IDs, unknown
-closed variants, and any schema/protocol version other than the current one always fail safely.
-- The daemon/client JSON-RPC 2.0 handshake accepts only the exact current
-protocol version (1.0) and rejects any other version with the typed `-32001` version error before closing the connection
-([architecture 03](03-daemon-transport-and-adapters.md)); the public DTO schema compares by exact equality (no
-same-major tolerance).
+closed variants, and any stored schema other than the current one always fail safely.
+- The typed local wire has exactly one live version, carried by the platform-default endpoint name byte
+([architecture 03](03-daemon-transport-and-adapters.md)): there is no negotiated protocol version, no handshake, and no
+per-payload `schema_version`. Configuration and storage keep their own explicit schema versions.
 - SQLite storage is the single live schema (logical version 1) created
 directly on open under one integer schema stamp; a database that does not carry the current stamp is discarded and
 recreated from scratch, that discard is the only version gate, and no migration chain or older-schema open exists, while
@@ -187,8 +187,7 @@ persisted rows keep their recorded meaning.
 
 ## Contract tests required before implementation
 
--  versioned JSON fixtures for every public DTO family, including valid current fixtures and malformed/compatibility
-cases;
+-  typed wire fixtures for every request and result family, including malformed and foreign-byte cases;
 - invalid-shape and invalid-ID tests at every input boundary;
 - explicit wire-validation tests for non-blank, path, timestamp, and schema invariants;
 - schema compatibility fixtures for transport and persisted records;
