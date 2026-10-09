@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Condvar, Mutex, MutexGuard, PoisonError,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -245,6 +245,101 @@ fn bounded_output(
 /// thirty-second execute deadline instead of failing the command.
 const READER_DRAIN_GRACE: Duration = Duration::from_secs(5);
 
+/// Shared progress state between the pipe readers and the drain loop.
+///
+/// The readers publish every consumed byte and record their own exit, and the
+/// drain waits on the paired condvar for the remaining stall window, so an
+/// idle drain blocks until the window runs out and a busy one wakes on the
+/// progress signal instead of on a timer.
+#[derive(Default)]
+struct ReaderProgress {
+    state: Mutex<ReaderState>,
+    wake: Condvar,
+}
+
+/// The counter state guarded by the [`ReaderProgress`] mutex.
+#[derive(Default)]
+struct ReaderState {
+    /// Total bytes every reader has consumed.
+    consumed: u64,
+    /// Readers that stopped, whether they returned or panicked.
+    stopped: usize,
+}
+
+impl ReaderProgress {
+    /// Locks the shared state, ignoring poisoning: the state is a plain
+    /// counter, so a panicking thread cannot leave it inconsistent.
+    fn lock(&self) -> MutexGuard<'_, ReaderState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Total bytes consumed so far.
+    fn consumed(&self) -> u64 {
+        self.lock().consumed
+    }
+
+    /// Number of readers that stopped.
+    fn stopped(&self) -> usize {
+        self.lock().stopped
+    }
+
+    /// Publishes consumed bytes and wakes a waiting drain, saturating on the
+    /// platforms where one read can exceed the counter's range.
+    ///
+    /// The counter is updated under the lock and the notification follows the
+    /// release: a drain that checked the counter before the update is already
+    /// registered as a waiter, so the wakeup cannot be lost.
+    fn publish(&self, count: usize) {
+        let mut state = self.lock();
+        state.consumed = state
+            .consumed
+            .saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
+        drop(state);
+        self.wake.notify_all();
+    }
+
+    /// Records that one reader stopped and wakes a waiting drain.
+    fn record_stop(&self) {
+        let mut state = self.lock();
+        state.stopped += 1;
+        drop(state);
+        self.wake.notify_all();
+    }
+
+    /// Blocks until progress is published, a reader stops, or `window`
+    /// elapses, and returns the consumed total observed on return.
+    ///
+    /// The progress check and the wait hold the same lock, so progress
+    /// published since `observed` returns immediately instead of after the
+    /// window; the window bounds the wait, so an idle drain blocks for exactly
+    /// the remaining stall window rather than waking on a timer.
+    fn wait_for_activity(&self, observed: u64, window: Duration) -> u64 {
+        let mut state = self.lock();
+        if state.consumed <= observed {
+            let (waited, _) = self
+                .wake
+                .wait_timeout(state, window)
+                .unwrap_or_else(PoisonError::into_inner);
+            state = waited;
+        }
+        state.consumed
+    }
+}
+
+/// Wakes the drain when its reader thread stops.
+///
+/// The drain may collect a reader only once that reader stopped, and the OS
+/// reports the stop through [`thread::JoinHandle::is_finished`] only after the
+/// closure returned, so this guard publishes the exit from inside the reader
+/// (a panic unwind included) and closes that window.
+struct ReaderStop(Arc<ReaderProgress>);
+
+impl Drop for ReaderStop {
+    fn drop(&mut self) {
+        self.0.record_stop();
+    }
+}
+
 /// Counts the bytes a pipe reader has consumed.
 ///
 /// The drain loop compares consecutive readings to separate a slow reader from
@@ -252,21 +347,15 @@ const READER_DRAIN_GRACE: Duration = Duration::from_secs(5);
 /// produces no progress, while a reader on a loaded machine keeps advancing.
 struct ProgressReader<R> {
     inner: R,
-    progress: Arc<AtomicU64>,
+    progress: Arc<ReaderProgress>,
 }
 
 impl<R: std::io::Read> std::io::Read for ProgressReader<R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         let count = self.inner.read(buffer)?;
-        progress_add(&self.progress, count);
+        self.progress.publish(count);
         Ok(count)
     }
-}
-
-/// Records consumed bytes, saturating on the platforms where a single read can
-/// exceed the counter's range.
-fn progress_add(progress: &AtomicU64, count: usize) {
-    let _ = progress.fetch_add(u64::try_from(count).unwrap_or(u64::MAX), Ordering::Relaxed);
 }
 
 /// Raw output captured before a program was stopped, with its truncation flag.
@@ -339,11 +428,11 @@ fn bounded_output_with_timeout(
     timeout: Duration,
 ) -> Result<BoundedOutput, ExecuteFailure> {
     let child_id = child.id();
-    let stdout_progress = Arc::new(AtomicU64::new(0));
-    let stderr_progress = Arc::new(AtomicU64::new(0));
+    let progress = Arc::new(ReaderProgress::default());
     let stdout = child.stdout.take().map(|pipe| {
-        let progress = Arc::clone(&stdout_progress);
+        let progress = Arc::clone(&progress);
         thread::spawn(move || {
+            let _stop = ReaderStop(Arc::clone(&progress));
             let mut output = Vec::new();
             let mut reader = std::io::BufReader::new(ProgressReader {
                 inner: pipe,
@@ -353,8 +442,9 @@ fn bounded_output_with_timeout(
         })
     });
     let stderr = child.stderr.take().map(|pipe| {
-        let progress = Arc::clone(&stderr_progress);
+        let progress = Arc::clone(&progress);
         thread::spawn(move || {
+            let _stop = ReaderStop(Arc::clone(&progress));
             let mut output = Vec::new();
             let mut reader = std::io::BufReader::new(ProgressReader {
                 inner: pipe,
@@ -363,7 +453,6 @@ fn bounded_output_with_timeout(
             read_bounded(&mut reader, &mut output).map(|truncated| (output, truncated))
         })
     });
-    let progress = [&*stdout_progress, &*stderr_progress];
     let deadline = Instant::now() + timeout;
     loop {
         if cancellation.is_cancelled() || Instant::now() >= deadline {
@@ -487,15 +576,16 @@ enum PipeDrain {
 /// A reader that keeps consuming bytes is descheduled rather than stalled, so
 /// observed progress re-arms the stall window up to `deadline`; a reader that
 /// stops making progress for the whole window is treated as a descendant
-/// holding the pipes open. The success path passes the invocation's signal so
-/// a cancellation ends the drain early; an interrupted collection passes
-/// `None`, because the interruption is already observed and the readers killed
-/// with their process tree must be joined so their captured output survives as
-/// the partial result.
+/// holding the pipes open. The wait is woken by the readers' progress signal
+/// instead of a timer, and the remaining stall window bounds it. The success
+/// path passes the invocation's signal so a cancellation ends the drain early;
+/// an interrupted collection passes `None`, because the interruption is
+/// already observed and the readers killed with their process tree must be
+/// joined so their captured output survives as the partial result.
 fn drain_pipes(
     mut stdout: Option<ReaderHandle>,
     mut stderr: Option<ReaderHandle>,
-    progress: &[&AtomicU64],
+    progress: &ReaderProgress,
     stall: Duration,
     deadline: Instant,
     cancellation: Option<&CancellationSignal>,
@@ -504,18 +594,23 @@ fn drain_pipes(
     // when a caller pipes only one of the two streams.
     let mut stdout_result = stdout.is_none().then_some(Ok((Vec::new(), false)));
     let mut stderr_result = stderr.is_none().then_some(Ok((Vec::new(), false)));
-    let mut observed = total_progress(progress);
+    // Every spawned reader records its own stop, so the drain can collect the
+    // handles the moment the last reader stopped rather than when the OS
+    // observes the thread as finished.
+    let readers = usize::from(stdout.is_some()) + usize::from(stderr.is_some());
+    let mut observed = progress.consumed();
     let mut until = (Instant::now() + stall).min(deadline);
     loop {
+        let stopped = progress.stopped() >= readers;
         if let Some(handle) = stdout.take() {
-            if handle.is_finished() {
+            if stopped || handle.is_finished() {
                 stdout_result = Some(join_reader(Some(handle)));
             } else {
                 stdout = Some(handle);
             }
         }
         if let Some(handle) = stderr.take() {
-            if handle.is_finished() {
+            if stopped || handle.is_finished() {
                 stderr_result = Some(join_reader(Some(handle)));
             } else {
                 stderr = Some(handle);
@@ -532,21 +627,15 @@ fn drain_pipes(
         if cancellation.is_some_and(CancellationSignal::is_cancelled) || Instant::now() >= until {
             return PipeDrain::Stalled;
         }
-        thread::sleep(Duration::from_millis(5));
-        let current = total_progress(progress);
+        // Progress or a reader stop wakes the wait at once; with neither, the
+        // drain blocks for the remaining stall window instead of polling.
+        let current =
+            progress.wait_for_activity(observed, until.saturating_duration_since(Instant::now()));
         if current > observed {
             observed = current;
             until = (Instant::now() + stall).min(deadline);
         }
     }
-}
-
-/// Sums the bytes the pipe readers have consumed so far.
-fn total_progress(progress: &[&AtomicU64]) -> u64 {
-    progress
-        .iter()
-        .map(|counter| counter.load(Ordering::Relaxed))
-        .sum()
 }
 
 #[cfg(test)]
@@ -555,21 +644,22 @@ mod drain_progress_tests {
 
     #[test]
     fn reader_progress_extends_the_drain_beyond_the_stall_window() {
-        let progress = Arc::new(AtomicU64::new(0));
+        let progress = Arc::new(ReaderProgress::default());
         let writer = Arc::clone(&progress);
         let handle = thread::spawn(move || -> Result<(Vec<u8>, bool), &'static str> {
+            let _stop = ReaderStop(Arc::clone(&writer));
             // Bytes keep arriving well past the stall window: the loaded-machine
             // descheduling case that must not be classified as a stalled drain.
             for _ in 0..8 {
                 thread::sleep(Duration::from_millis(20));
-                progress_add(&writer, 64);
+                writer.publish(64);
             }
             Ok((vec![b'x'; 64], false))
         });
         let drain = drain_pipes(
             Some(handle),
             None,
-            &[&*progress],
+            &progress,
             Duration::from_millis(50),
             Instant::now() + Duration::from_secs(5),
             None,
@@ -578,8 +668,32 @@ mod drain_progress_tests {
     }
 
     #[test]
+    fn reader_stop_wakes_the_drain_before_the_stall_window() {
+        let progress = Arc::new(ReaderProgress::default());
+        let reader = Arc::clone(&progress);
+        let handle = thread::spawn(move || -> Result<(Vec<u8>, bool), &'static str> {
+            let _stop = ReaderStop(reader);
+            // The reader stops long before the stall window expires: the drain
+            // must collect it on the wakeup, not by outwaiting the window.
+            thread::sleep(Duration::from_millis(50));
+            Ok((Vec::new(), false))
+        });
+        let started = Instant::now();
+        let drain = drain_pipes(
+            Some(handle),
+            None,
+            &progress,
+            Duration::from_secs(5),
+            started + Duration::from_secs(30),
+            None,
+        );
+        assert!(matches!(drain, PipeDrain::Complete { .. }));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
     fn reader_without_progress_stalls_at_the_window() {
-        let progress = Arc::new(AtomicU64::new(0));
+        let progress = Arc::new(ReaderProgress::default());
         let handle = thread::spawn(move || -> Result<(Vec<u8>, bool), &'static str> {
             // Alive and silent, like a descendant that inherited the pipes.
             thread::sleep(Duration::from_secs(30));
@@ -589,7 +703,7 @@ mod drain_progress_tests {
         let drain = drain_pipes(
             Some(handle),
             None,
-            &[&*progress],
+            &progress,
             Duration::from_millis(50),
             started + Duration::from_secs(30),
             None,
