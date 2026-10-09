@@ -2,25 +2,23 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.** Architecture 28 owns the
 future Goal aggregate domain: Goal identity, scope, and tree; Goal lifecycle, readiness, and user decision; leading-goal
-run selection; delegated Verification Mandates; verification gates and evidence; working memory, roles, and templates;
+run selection; verification gates and evidence; working memory, roles, and templates;
 model proposals and user confirmation; the conversation-compaction working form; and Goal-domain bounds and closed safe
 failures.
 
-Owner: architecture 28. Decisions: ADR 0023, ADR 0033. Research: `m4plus_concept.md`.
+Owner: architecture 28.
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle and fresh admission. Architecture 14 owns run-execution meaning and historical
-compatibility; its canonical codec was removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md).
-Architecture 15 owns the registry and tool loop, architecture 17 the child graph and verifier authority, architecture 18
+The removed run-execution meaning layer (its canonical codec was removed under [architecture
+02](02-dto-and-contract-policy.md)) leaves no live path. Architecture 15 owns tool identity and the tool loop, architecture 18
 MCP lifecycle, architecture 21 context selection and projection (Goal context selection, Skills, memory/compaction
-selection), and architecture 24 activity/UI projections. Architecture 27 owns programmatic-caller policy.
+selection), and architecture 03 activity-journal and notification projections.
 
 This document owns the Goal aggregate domain and its verification semantics. A Goal, revision, link, gate, memory
-record, role, template, proposal, or summary creates no `RunId` except through the ordinary admission path, Mandate
-reason, lifecycle transition, scheduler candidate, tool permission, registry slot, child edge, verifier authority, MCP
-capability, bridge grant, kernel epoch, branch, or reconciliation result, and is not a second runtime, registry,
-scheduler, persistence authority, or sandbox.
+record, role, template, proposal, or summary creates no `RunId` except through the ordinary admission path, lifecycle
+transition, tool permission, tool selection, child, MCP capability, bridge grant, kernel epoch, branch, or reconciliation
+result, and is not a second runtime, registry, persistence authority, or sandbox.
 
 ## Goal identity, scope, and tree
 
@@ -116,117 +114,26 @@ admission. A verification run has that one Goal with kind `VerificationOnly`; it
 alter Goal, memory, Skill, role, template, or connection state.
 
 A run's immutable selections are typed serde JSON records rather than one canonical execution-meaning envelope; the
-former `run-execution-meaning-v4` carrier was removed with the canonical codec by [ADR
-0046](../decisions/0046-typed-serde-json-contracts.md). The applicable records are `GoalRunSelectionV1`,
-`McpMethodCatalogSelectionV1`, `ProgrammaticCallerPolicySelectionV1`, and `AgentActivitySelectionV1`; an absent record
-means the feature does not apply, and historical M4 records gain nothing.
+former `run-execution-meaning-v4` carrier was removed with the canonical codec under [architecture
+02](02-dto-and-contract-policy.md). The applicable records are `GoalRunSelectionV1` and
+`McpMethodCatalogSelectionV1`; an absent record means the feature does not apply, and historical M4 records gain
+nothing.
 
 `GoalRunSelectionV1` contains the leading `GoalId`, exact revision, scope/session-link provenance, ordered parent
 revision chain, effective obligatory-component references, selected gate/template revisions and valid evidence
-references, selected memory/Skill/role cards and revisions, already-revealed full-record references, the selected
-effective programmatic-caller policy snapshot reference, an `AgentActivitySelectionV1` reference, run kind, the
-target-snapshot reference, and immutable bounds. It holds no full memory/Skill/role/summary, credential, provider value,
-current machine state, raw transcript, grant, process resource, or handle. Factory Skills use the exact
-`SkillSelectionV1` under the frozen snapshot.
+references, selected memory/Skill/role cards and revisions, already-revealed full-record references, run kind, the
+target-snapshot reference, and immutable bounds. It holds no full
+memory/Skill/role/summary, credential, provider value, current machine state, raw transcript, grant, process resource,
+or handle. Factory Skills use the exact `SkillSelectionV1` under the frozen snapshot.
 
 The admission transaction validates the Goal and session link, the complete target snapshot, all references and bounds,
-provider selection, registry revision, and applicable policy, then atomically writes the run, selection, audit evidence,
-projections, and snapshots, or none; no external action occurs inside that transaction. An active run retains its frozen
+provider selection, tool-selection revision, and applicable policy, then commits the run, selection, and audit evidence in one
+transaction; no external action occurs inside it. An active run retains its frozen
 selection, and edits create newer revisions for future admission only. Unknown, corrupt, unavailable, incompatible, or
-over-limit selected records block dependent operations before external work; replay, retry, child
+over-limit selected records block dependent operations before external work; retry, child
 admission, fork, and recovery never substitute current state. `McpMethodCatalogSelectionV1` is `Disabled` when `mcp` is
 absent from the frozen model-tool selection; each `mcp` call records the exact one method reference and typed input
 identity before external action.
-
-## Delegated Verification Mandates
-
-A Verification Mandate is an ordinary Mandate whose purpose is audit, with its own revisioned prompt/objective, tools,
-provider, runs, activity identity, checkpoints, child work, evidence, and recovery. Its prompt is independent and never
-a security boundary; it has no inherited authority.
-
-```text
-VerificationMandateAuthorityDto
-  authority_id
-  verifier_mandate_id
-  authority_revision
-  target_set_reference
-  allowed_operations
-  audit_contract_reference
-  authority_identity
-
-VerificationTargetSetDto
-  target_set_id
-  immutable_targets
-  target_set_identity
-
-VerificationTargetDto
-  target_mandate_id
-  frozen_target_revision
-  baseline_lifecycle_state
-  frozen_goal_references
-  frozen_gate_and_evidence_contract_references
-  baseline_partial_effect_reference_when_present
-
-VerificationAuditContractDto
-  contract_id
-  revision
-  required_evidence_kinds
-  completion_standard
-  contract_identity
-
-VerificationAuditEvidenceDto
-  evidence_id
-  authority_reference
-  target_reference
-  frozen_target_revision
-  frozen_goal_references
-  frozen_gate_and_evidence_contract_references
-  evidence_kind
-  retained_content_reference
-  evidence_identity
-
-VerificationTargetOperationDto
-  MarkCompleted
-  MarkNeedsRework
-  Pause
-  Resume
-  Stop
-  ReviseFull
-
-VerificationTargetMutationDto
-  mutation_id
-  authority_reference
-  audit_contract_reference
-  target_reference
-  operation
-  audit_evidence_references
-  expected_target_revision
-  idempotency_key
-  mutation_identity
-
-VerificationAuditVerdictDto
-  Pass
-  Fail
-  Inconclusive
-  TargetRevisionStale
-  TargetUnavailable
-  VerifierUnavailable
-  VerifierPartialEffect
-```
-
-Authority is usable only while its revision is active, unrevoked, unexpired, and unconsumed where required, and is owned
-by the named verifier Mandate; it cannot target itself. The target set is immutable and explicitly enumerated, never
-expands, and child work cannot inherit, relay, or amplify mutation authority. `ReviseFull` may create a complete new
-target revision but never rewrites history or alters a live old run. A baseline change, missing baseline, or
-incompatibility before a verdict or mutation is `TargetRevisionStale` and fails closed; user mutations win via ordinary
-optimistic concurrency; a verdict is durable evidence, never an implicit trigger. A mutation commits atomically or not
-at all; a duplicate equal mutation returns the saved result; changed key reuse fails. The verifier's own partial result
-pauses nothing: the verifier's next model step proceeds with the bounded captured output and its notice, and it never
-mutates the target. Activity records: `VerificationAuthorityIssued`,
-`VerificationAuditStarted`, `VerificationAuditVerdictRecorded`, `VerificationTargetMutationApplied`,
-`VerificationTargetMutationRejected`.
-Recovery never resumes verifier/target work, repeats tools, or reapplies mutations; historical M4 and v1--v4 records
-never acquire synthetic verifier authority.
 
 ## Verification gates and evidence
 
@@ -288,9 +195,7 @@ child/Skill/role/gate/MCP method, and grants no execution authority. A later equ
 one pending draft rather than producing an unbounded queue. The daemon records the proposal durably before asking the
 user; via the normal `ask_user` path the user may accept, edit-and-accept, or reject, and the draft remains pending
 until an explicit decision. Acceptance validates the exact base revision and creates a new immutable record revision; a
-stale base is a typed conflict, and rejection changes no active record. Programmatic-caller policy uses the same
-user-confirmed flow for its separate inactive policy drafts under [architecture
-27](27-programmatic-caller-policy-and-admission.md).
+stale base is a typed conflict, and rejection changes no active record.
 
 ## Conversation compaction and progressive context disclosure
 
@@ -313,19 +218,15 @@ VFR, and `retrieve` retain their own semantics and never turn source content int
 A new session fork receives a frozen copy of applicable project-Goal links, session memory/Skill/role/template cards,
 exact revisions, and the selected current summary reference in an independent fork snapshot. It does not receive a new
 session Goal, active Goal run, grant, kernel namespace, current ancestor record, local MCP process, external connection
-resource, or future source change; the user explicitly creates any new session Goal in the branch. Programmatic-caller
-policy uses a separate immutable session-policy inheritance record: a fork refers to the same source-session policies
-and the same durable counters rather than copying a fresh allowance, and a branch may add only a new policy that narrows
-the inherited effective policy.
+resource, or future source change; the user explicitly creates any new session Goal in the branch.
 
-An admitted child agent receives `GoalDelegationSnapshotV1` inside the existing bounded `SubAgentDelegationSnapshotDto`:
-parent task, leading-Goal identity and revision, effective required constraints, applicable cards, selected role when
-any, selected effective programmatic-caller-policy snapshot reference, selected `AgentActivitySelectionV1` reference,
-and only the required safe references; not a full parent transcript or live target context. Later
-parent/Goal/memory/Skill/role/policy/activity edits do not change the child snapshot, though live suspension or
-revocation can impose a stricter present-time denial. A child uses independently assigned
-session/run/class/tool/provider selections and its own interruption and no-resume rules. An interruption stops only the
-in-flight call: it commits a bounded `Partial` result with its notice and the child continues with its next model step.
+An admitted child agent receives a frozen Goal context: parent task, leading-Goal identity and revision, effective
+required constraints, applicable cards, selected role when any, and only the required safe references; not a full parent
+transcript or live target context. Later
+parent/Goal/memory/Skill/role/activity edits do not change the child snapshot. A child uses independently assigned
+session/run/class/tool/provider selections and its own interruption and no-resume rules. An interruption stops
+only the in-flight call: it commits a bounded `Partial` result with its notice and the child continues with its next
+model step.
 On failure or daemon restart, no provider request, gate, tool, MCP request, process, kernel action, child, or external
 effect is retried, reattached, resumed, or rerun; unfinished work becomes `Interrupted` with already selected known
 pre-effect evidence or a bounded partial result. Goals, records, summaries, proposals, and readable history survive
@@ -389,22 +290,18 @@ memory/Skill/role/template content, model proposal text, provider resource, or i
 
 ## Compatibility and historical preservation
 
-M3/M4 bytes, sessions, runs, events, snapshots, replay, recovery, and `ToolCallRecorded ->
-tool_execution_unavailable` remain authoritative and unchanged, and no historical record gains synthetic Goal, gate,
-memory, proposal, or compaction state. For new Mandate work, Goals are acceptance/evidence records, not the
-work-authorization plane; leading-goal, policy, confirmation, and bound semantics are historical-only where they
-conflict with architectures 13--27. All directions affect fresh runs only.
+No historical record gains synthetic Goal, gate, memory, proposal, or compaction state. Goals are acceptance/evidence
+records, not a work-authorization plane. All directions affect fresh runs only.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 13, 14, 15, 17, 18, 21, 24, and 27 plus decisions 0001, 0006, 0007, 0009, 0010,
-0013, 0022, and 0023. Non-goals: Goal persistence, search/index/vector retrieval, prompt assembly, SQL/wire tags,
-migrations, retention/deletion/encryption, source-page sizes, resource values, provider evolution, session branching,
-activity/UI, Plan artifacts, MCP administration, Python/Jupyter process behavior, Cargo, Makefile/CI, production
-activation, autonomous continuation, attachments/images/binary/ rich-MIME input, dynamic extensions and installation,
-dynamic tool registration, physical deletion, and long-lived-worker administration (leases, attach/detach, force-kill,
-supervisor recovery). Work/continuation/requeue after client disconnection is an accepted post-M5 future direction under
-[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md): an explicit durable contract that never silently
-resumes old external work.
+This document depends on architectures 03, 15, 18, and 21. Non-goals: Goal persistence,
+search/index/vector retrieval, prompt assembly, SQL/wire tags, migrations, retention/deletion/encryption, source-page
+sizes, resource values, provider evolution, session branching, activity-journal and UI delivery, Plan artifacts, MCP
+administration, Python/Jupyter process behavior, Cargo, Makefile/CI, production activation, attachments/images/binary/
+rich-MIME input, dynamic extensions and installation, dynamic tool registration, physical deletion, and
+long-lived-worker administration (leases, attach/detach, force-kill, supervisor recovery). Work/continuation/requeue
+after client disconnection is an accepted post-M5 future direction under an explicit durable contract that never
+silently resumes old external work.
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).

@@ -1,8 +1,11 @@
 # VFR and Headroom
 
-**Approved future design. Not implemented; activation requires an activating specification.** Virtual File
-Representation (VFR) and Headroom/CCR are required v1 capabilities: separate extension crates attached through the typed
-tool hook system, not hard-coded dependencies of base tools.
+**Approved future design. Not implemented; the `intention-vfr` and `intention-headroom` crates are created at their
+milestone (M8), and activation requires an activating specification.** Virtual File
+Representation (VFR) and Headroom/CCR are required v1 capabilities: separate extension crates attached as ordinary calls
+in the direct tool sequence, not hard-coded dependencies of base tools. The typed hook plane was removed in Slice 1.5 and
+is not part of this design: the stages below describe that call order, not a hook framework ([architecture
+05](05-tools-and-workspace.md)).
 
 ## Design principle
 
@@ -12,10 +15,10 @@ Base tools perform their primitive work. Extensions transform the result at cont
 flowchart LR
   RD[Read tool] --> WS[Workspace policy]
   WS --> PH[Physical result]
-  PH --> VF[VFR hook]
+  PH --> VF[VFR transform]
   VF --> NR[Normalized result]
   NR --> PS[Persist]
-  PS --> HR[Headroom hook]
+  PS --> HR[Headroom transform]
   HR --> MC[Model context]
   NR --> UI[UI event]
   EX[Expand or raw tool] --> WS
@@ -27,10 +30,10 @@ conflated.
 
 ## Ownership and non-authorities
 
-Architecture 05 owns the tool pipeline, hook phases, and workspace policy, so VFR and Headroom attach only through
-declared hook APIs and base tools never import or link either extension implementation crate. Architecture 30 owns the
-effective instruction projection and its assembly; this document contributes the `Vfr` contribution contract and no
-assembly order ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)).
+Architecture 05 owns the tool pipeline and workspace policy, so VFR and Headroom attach only as declared ordinary calls
+in the direct tool sequence, and base tools never import or link either extension implementation crate. Architecture 30
+owns the effective instruction projection and its assembly; this document contributes the `Vfr` contribution contract
+and no assembly order.
 
 ## `intention-vfr`
 
@@ -44,8 +47,7 @@ assembly order ([ADR 0043](../decisions/0043-instruction-sources-and-system-cont
 - expansion and raw-read tool contracts;
 - a VFR-specific typed instruction contribution with its own revision
 identity, assembled into the effective instruction projection by [architecture
-30](30-instruction-sources-and-system-context.md) ([ADR
-0043](../decisions/0043-instruction-sources-and-system-context.md));
+30](30-instruction-sources-and-system-context.md);
 - tests proving loss-aware, deterministic transformations.
 
 ### Required behavior
@@ -88,11 +90,11 @@ The final user-facing tool names and DTO fields may differ, but they must retain
 - Headroom does not erase the audit trail of the pre-compression result.
 - Expiry, capacity, and storage failures are explicit policy outcomes.
 
-## Deterministic hook ordering
+## Deterministic extension ordering
 
 | Order | Stage | Owner | Result |
 | ---: | --- | --- | --- |
-| 1 | Path/CWD policy | `intention-workspace` | Safe resolved invocation. |
+| 1 | Path/CWD policy | `intention-tools` | Safe resolved invocation. |
 | 2 | Primitive execution | Base tool | Physical result. |
 | 3 | Virtual source transform | `intention-vfr` | Normalized VFR or original result. |
 | 4 | Persist normalized result | Application/storage | Durable audit/query value. |
@@ -119,7 +121,7 @@ original/retrieved content.
   policy; it never emits an unresolvable placeholder.
 - Failure to retain required CCR content prevents an unsafe compressed reference from reaching the model.
 - An expired CCR reference returns a typed, observable result; it does not fabricate recovered content.
-- A hook failure records which extension phase failed without exposing source content or secrets in normal diagnostics.
+- An extension failure records which stage failed without exposing source content or secrets in normal diagnostics.
 
 ## Required tests and outcomes
 
@@ -136,15 +138,15 @@ original/retrieved content.
 
 ## Quality-gate integration
 
-Both crates are subject to the coverage tier declared when they are activated ([ADR
-0051](../decisions/0051-per-crate-coverage-tiers.md)); their transform, retrieval, expiry, ordering, and adapter/model
-distinction tests are blocking `make verify` inputs under every relevant feature profile. Architecture checks must prove
+Both crates are subject to the coverage tier declared when they are activated; their transform, retrieval, expiry,
+ordering, and adapter/model
+distinction tests are blocking `make verify` inputs in the single feature configuration. Architecture checks must prove
 base tools do not import either extension implementation crate. See [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md).
 
 ## Dependencies and non-goals
 
-Depends on [Tools, Workspace, and Hooks](05-tools-workspace-and-hooks.md) and [architecture
+Depends on [Tools and Workspace](05-tools-and-workspace.md) and [architecture
 30](30-instruction-sources-and-system-context.md). Non-goals: conflating VFR with Headroom, and any base-tool linkage to
 an extension implementation crate.
 

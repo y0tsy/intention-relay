@@ -7,8 +7,7 @@ frontmatter, and plan lifecycle behavior.
 ## Mode model
 
 Plan and Build are separate modes, not separate applications or persistence models. Plan is a planning focus policy;
-Build may run as the single user-authorized Autopilot policy described in [ADR
-0017](../decisions/0017-build-autopilot-and-plan-focus-continuity.md).
+Build may run as the single user-authorized Autopilot policy.
 
 ```mermaid
 flowchart LR
@@ -28,15 +27,15 @@ transition workflow is introduced. The Autopilot policy is immutable for the act
 
 Build mode:
 
-- exposes the full configured tool registry;
+- exposes the full configured tool surface;
 - operates autonomously by default;
 - applies WorkspaceRoot to every filesystem/process tool;
 - uses Build Autopilot when explicitly started by the user, in which case the
 configured active tool surface is admitted without per-action confirmation;
-- records tool decisions, tool results, and any confirmation outcome durably.
+- records tool decisions and tool results durably.
 
 Build Autopilot is trusted-local and unrestricted by per-action confirmation, but it does not bypass typed validation,
-hooks, persistence, the daemon-owned capability path, cancellation, or recovery. It may execute destructive and external
+persistence, the daemon-owned capability path, cancellation, or recovery. It may execute destructive and external
 actions when those capabilities are configured. The system does not provide OS-level sandboxing.
 
 ## Plan mode
@@ -70,7 +69,7 @@ not implicitly to the project workspace.
 
 ### Plan allocation
 
-- `CreatePlanCommandDto` creates a `PlanId` and atomically allocates the next plan number for its `SessionId`.
+- `CreatePlanCommandDto` creates the plan artifact and atomically allocates the next plan number for its `SessionId`.
 - The number is never reused, including after plan deletion/archival if those features are later introduced.
 -  Allocation and initial physical artifact creation must be transactionally reconciled. A file-system failure must not
   leave a falsely usable persisted plan record.
@@ -84,7 +83,6 @@ Every `plan.md` begins with controlled YAML frontmatter:
 ---
 schema_version: 1
 session_id: "..."
-plan_id: "..."
 plan_number: 0
 created_at: "..."
 updated_at: "..."
@@ -102,7 +100,7 @@ The model never receives this frontmatter. `intention-plans` owns it:
 - hides frontmatter on model-visible reads;
 - preserves controlled metadata when the agent edits plan body content;
 - rejects edits that would corrupt the frontmatter boundary;
-- persists a matching typed plan revision/event.
+- persists a matching committed plan revision record.
 
 The model receives only:
 
@@ -128,8 +126,9 @@ denied. This is deliberately different from `execute`, which is available for co
 state beyond tool-level path policy. Plan therefore has a product focus, not a shell containment guarantee.
 
 Mode does not currently filter the tool definitions advertised in model requests: both Plan and Build requests advertise
-all six active registered tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`). Mode-based advertisement filtering
-is future Mandate work and is not part of the ordinary request path (ADR 0039); runtime tool policy, including Plan-mode
+all six active tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`). Mode-based advertisement filtering
+is not part of the ordinary request path ([architecture 08](08-model-protocol-and-providers.md)); runtime tool policy,
+including Plan-mode
 `write` and `edit` denial, remains enforced at execution and is unchanged.
 
 ### Plan focus instruction
@@ -144,10 +143,30 @@ This instruction is advisory. It cannot authorize, prevent, or prove the absence
 or external effects.
 
 It is the `Mode` contribution of the effective instruction projection ([architecture
-30](30-instruction-sources-and-system-context.md), [ADR
-0043](../decisions/0043-instruction-sources-and-system-context.md)): architecture 30 owns the assembly order and the
+30](30-instruction-sources-and-system-context.md)): architecture 30 owns the assembly order and the
 materialization of the projection, while this document keeps the instruction text and its advisory meaning. The
 contribution cannot widen or narrow tool policy, and a Build run's projection never inherits the Plan contribution.
+
+## Mode invariants
+
+1. Plan `execute` is available and audited but is never described as sandboxed or guaranteed read-only.
+2. Plan project `write`/`edit` remain incompatible through ordinary typed tools.
+3. Plan prompt guidance cannot create authority, change mode, or prevent side effects.
+4. Build Autopilot has no per-action confirmation barrier for configured active capabilities.
+5. Build Autopilot authority originates only from an explicit user Plan approval or Build start transition.
+6. Plan approval records the exact session-scoped plan number, its revision, and the digest.
+7. Same-Session continuation preserves `SessionId` but creates a new `RunId`.
+8. The old Plan run, provider request, tool call, process, kernel, MCP, and bridge state are never resumed or reattached.
+9. The Build run binds an immutable mode, Autopilot policy, plan reference, and safe context projection.
+10. Optional handoff uses a bounded immutable safe projection and creates an independent Session; it transfers no
+authority or live resources.
+11. All effects remain behind the single daemon-owned typed capability path.
+12. No external effect occurs inside a durable transaction.
+13. A started operation interrupted or lost before a final result commits a bounded partial result and permits the next
+model step; it is never automatically retried, resumed, or treated as rolled back.
+14. Recovery always uses a new `RunId`.
+15. Audit is evidence, not proof of rollback or the absence of external effects.
+16. No secret, raw provider resource, live handle, or hidden plan frontmatter crosses a public or durable projection.
 
 ## Plan lifecycle
 
@@ -168,12 +187,16 @@ stateDiagram
   Abandoned --> [*]
 ```
 
-Plan approval is a durable event for one exact plan revision. By default, the approval operation immediately creates and
-starts a fresh Build Autopilot run in the same Session, after the Plan run is terminalized safely. The new run gets a
-new `RunId`, immutable Build/Autopilot policy snapshot, exact approved plan reference, and safe context projection. It
-does not resume the Plan stream or provider request. An optional implementation-handoff operation may instead create a
-new Session from a frozen full safe context snapshot; it is separate from run continuation and does not transfer live
-resources or authority.
+The plan vocabulary is not defined today; it arrives with the plan milestone (M7). The durable transition rules above
+are enforced by the plan lifecycle owner when plan mode is implemented, so no pre-emptive domain transition validator
+is kept for them.
+
+Plan approval is a committed record for one exact plan revision. By default, the approval operation immediately
+creates and starts a fresh Build Autopilot run in the same Session, after the Plan run is terminalized safely. The new
+run gets a new `RunId`, immutable Build/Autopilot policy snapshot, exact approved plan reference, and safe context
+projection. It does not resume the Plan stream or provider request. An optional implementation-handoff operation may
+instead create a new Session from a frozen full safe context snapshot; it is separate from run continuation and does
+not transfer live resources or authority.
 
 ## Required tests and outcomes
 
@@ -184,7 +207,7 @@ resources or authority.
 | Hidden metadata | Model-request capture test. | Model receives body and never YAML frontmatter. |
 | Metadata integrity | Agent-edit test with attempted frontmatter mutation. | Controlled metadata remains valid and revision increments. |
 | Plan write restriction | Tool-policy integration test. | Project write/edit is denied with typed policy error. |
-| Plan artifact edit | Tool-policy test. | Current plan body is updated and a revision event is stored. |
+| Plan artifact edit | Tool-policy test. | Current plan body is updated and the revision is committed as a durable record. |
 | Execute focus/audit | Command fixture/audit test. | Plan-mode execution is available, marked with Plan policy, advisory-guided and auditable; docs/tests do not claim shell containment. |
 | Approval flow | State-machine integration test. | Submission, approval/rejection, and feedback transitions are durable and ordered. |
 | Approval continuation | Application/runtime outcome test. | Approval pins the plan revision and starts a new Build Autopilot run in the same Session with a new `RunId`. |
@@ -192,24 +215,15 @@ resources or authority.
 
 ## Quality-gate integration
 
-Plan policy and artifact crates are subject to the coverage tier declared when they are activated ([ADR
-0051](../decisions/0051-per-crate-coverage-tiers.md)). Frontmatter hiding, plan-number allocation, ordinary mutation
+Plan policy and artifact crates are subject to the coverage tier declared when they are activated. Frontmatter
+hiding, plan-number allocation, ordinary mutation
 denial, Plan `execute` audit, revision integrity, and same-Session Autopilot continuation are blocking `make verify`
 inputs. Coverage cannot replace captured model-context assertions or policy-denial tests. See [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md).
 
-## Mandate boundary
-
-The accepted Autopilot direction supersedes the future ordinary Build policy: Build Autopilot does not use per-action
-confirmation. Plan-mode project `write` and `edit` remain incompatible, while `execute` remains advisory-guided
-trusted-local execution. A future Mandate's direct tool admission likewise excludes confirmation and risk authorization,
-subject to its own frozen selection and lifecycle rules. `ask_user` is a future ordinary tool rather than confirmation
-transport. Existing M3/M4 ordinary confirmation behavior remains historical. See [Tool registry and direct Mandate tool
-loop](15-tool-registry-and-mandate-tool-loop.md).
-
 ## Dependencies and non-goals
 
-Depends on [Tools, Workspace, and Hooks](05-tools-workspace-and-hooks.md), [Sessions, Runs, Events, and
+Depends on [Tools and Workspace](05-tools-and-workspace.md), [Sessions, Runs, Events, and
 Storage](04-sessions-runs-events-and-storage.md), and [architecture 30](30-instruction-sources-and-system-context.md).
 Non-goals: an in-memory-only plan, model-visible frontmatter, Plan project writes through normal write/edit tools, and
 any claim that prompt instructions turn `execute` into a technical sandbox.

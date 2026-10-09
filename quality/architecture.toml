@@ -1,47 +1,78 @@
 [policy]
-phase = "m5"
-active_milestone = "m5"
-quality_harness = "quality-harness"
+phase = "slice15"
+active_milestone = "slice15"
 non_production_test_crates = ["intention-test-support"]
 active_production_crates = [
-  "intention-types",
-  "intention-domain",
-  "intention-protocol",
+  "intention-proto",
   "intention-config",
   "intention-transport",
   "intention-client",
-  "intention",
   "intention-daemon",
-  "intention-application",
-  "intention-runtime",
+  "intention-engine",
   "intention-storage",
-  "intention-storage-sqlite",
-  "intention-model",
-  "intention-provider-openrouter",
-  "intention-provider-generic-chat",
+  "intention-providers",
   "intention-tools",
-  "intention-workspace",
-  "intention-hooks",
 ]
-skeleton_crates = [
-  "intention-headroom",
-  "intention-plans",
-  "intention-vfr",
-]
+skeleton_crates = []
 
-[non_production_test_dependencies]
-"intention-test-support" = [
-  "intention",
-  "intention-config",
-  "intention-daemon",
-  "intention-domain",
-  "intention-protocol",
-  "intention-transport",
-  "intention-types",
-]
+# Per-crate declaration: the role pins the crate's classification above and the
+# named integration test targets are compared for equality against Cargo
+# metadata, so demoting a production crate or dropping a contract test target
+# is a policy edit that fails the gate.
+[crate_declarations."intention-proto"]
+role = "active"
+responsibility = "Shared, dependency-light DTOs plus the typed public local-protocol surface."
+test_targets = ["contracts", "m3_contracts", "protocol_contracts"]
 
-[non_production_test_external_dependencies]
-"intention-test-support" = ["serde_json", "tempfile"]
+[crate_declarations."intention-config"]
+role = "active"
+responsibility = "Versioned TOML parsing, validation, path selection, and credential-free public configuration projections."
+test_targets = ["contracts", "m4_contracts"]
+
+[crate_declarations."intention-storage"]
+role = "active"
+responsibility = "DTO-only repository contract plus the bundled SQLite implementation behind it."
+test_targets = ["contracts", "m4_model_context", "m4_run_safe_config", "opaque_json_guard", "sqlite_contracts"]
+
+[crate_declarations."intention-transport"]
+role = "active"
+responsibility = "Private per-user IPC: Unix sockets or Windows named pipes, NDJSON framing, and the live wire version."
+test_targets = ["transport_integration"]
+
+[crate_declarations."intention-client"]
+role = "active"
+responsibility = "Shared bootstrap, dispatch, subscription, and reconnect client for adapters."
+test_targets = ["client_contract", "run_stream_contract"]
+
+[crate_declarations."intention-daemon"]
+role = "active"
+responsibility = "Composition root, daemon host library, and the thin daemon binary."
+test_targets = ["client_e2e", "daemon_bootstrap", "m4_streaming_foundation", "real_api_e2e"]
+
+[crate_declarations."intention-engine"]
+role = "active"
+responsibility = "Commands, queries, and semantic use-case workflows plus deterministic run execution, interruption handling, context-window accounting, and recovery-before-ready, over DTO-only storage."
+test_targets = ["m3_engine", "m3_runtime", "m4_model_execution", "m5_tool_loop"]
+
+[crate_declarations."intention-providers"]
+role = "active"
+responsibility = "Provider-neutral model contracts plus the OpenRouter and generic Chat Completions translation adapters."
+test_targets = ["adapter_contracts", "m4_execution_contracts", "model_contracts"]
+
+[crate_declarations."intention-tools"]
+role = "active"
+responsibility = "Tool contracts with JSON Schema descriptors, the static six-tool spec match, and the WorkspaceRoot addressing anchor."
+test_targets = ["bounded_contracts", "tool_contracts", "tool_coverage", "workspace_contract"]
+
+[crate_declarations."intention-tui"]
+role = "adapter"
+responsibility = "Minimal terminal-facing proof adapter over the shared client."
+test_targets = ["tui_contract"]
+
+[crate_declarations."intention-test-support"]
+role = "test-support"
+responsibility = "Shared fixtures for daemon-host and engine integration tests."
+test_targets = ["fixture_host"]
 
 [forbidden]
 source_patterns = [
@@ -55,107 +86,90 @@ test_only_source_patterns = [
   "std::env::current_dir",
   "std::env::set_current_dir",
 ]
-reason_required_attributes = ["allow", "expect"]
-secret_assignment_patterns = ["api_key", "api-key", "secret", "token", "password"]
-public_resource_patterns = [
-  "std::fs::File",
-  "std::path::PathBuf",
-  "std::process::Command",
-  "tokio::",
-  "interprocess::",
-  "rusqlite::",
-  "tauri::",
-  "serde_json::Value",
-]
 
+# Allowed cross-crate edges and external dependencies. Cargo metadata is the
+# authority for the workspace graph, the external dependencies, and the
+# executable test targets; every declared set below is compared for equality
+# against it, so an added or removed cross-crate edge, external dependency, or
+# named integration test target needs exactly one reviewable declaration and a
+# stale declaration fails the gate.
 [dependencies]
-"intention-types" = []
-"intention-domain" = ["intention-types"]
-"intention-config" = ["intention-types"]
-"intention-protocol" = ["intention-types", "intention-domain"]
-"intention-storage" = ["intention-config", "intention-domain", "intention-types"]
-"intention-transport" = ["intention-protocol", "intention-types"]
-"intention-client" = ["intention-domain", "intention-protocol", "intention-transport", "intention-types"]
-"intention" = ["intention-application", "intention-config", "intention-domain", "intention-hooks", "intention-model", "intention-protocol", "intention-provider-generic-chat", "intention-provider-openrouter", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-tools", "intention-types", "intention-workspace"]
-"intention-daemon" = ["intention", "intention-application", "intention-client", "intention-config", "intention-domain", "intention-model", "intention-protocol", "intention-runtime", "intention-tools", "intention-transport", "intention-types"]
-"intention-application" = ["intention-config", "intention-domain", "intention-hooks", "intention-protocol", "intention-runtime", "intention-storage", "intention-tools", "intention-types", "intention-workspace"]
-"intention-runtime" = ["intention-config", "intention-domain", "intention-model", "intention-storage", "intention-types"]
-"intention-storage-sqlite" = ["intention-config", "intention-domain", "intention-storage", "intention-types"]
-"intention-model" = ["intention-types"]
-"intention-provider-openrouter" = ["intention-config", "intention-model", "intention-types"]
-"intention-provider-generic-chat" = ["intention-config", "intention-model", "intention-types"]
-"intention-tools" = ["intention-domain", "intention-types", "intention-workspace"]
-"intention-workspace" = ["intention-domain", "intention-types"]
-"intention-hooks" = ["intention-tools", "intention-types"]
+"intention-proto" = []
+"intention-config" = ["intention-proto"]
+"intention-storage" = ["intention-config", "intention-proto"]
+"intention-transport" = ["intention-proto"]
+"intention-client" = ["intention-transport", "intention-proto"]
+"intention-daemon" = ["intention-client", "intention-config", "intention-engine", "intention-proto", "intention-providers", "intention-storage", "intention-test-support", "intention-tools", "intention-transport"]
+"intention-engine" = ["intention-config", "intention-providers", "intention-proto", "intention-storage", "intention-test-support", "intention-tools"]
+"intention-providers" = ["intention-config", "intention-proto"]
+"intention-tools" = ["intention-proto"]
 
-[future_dependencies]
-"intention-runtime" = ["intention-model"]
-
+# External dependencies per active production crate, including
+# development-dependency edges. A renamed dependency is declared by the
+# manifest key its source uses: `intention-storage` declares `sqlite`, not the
+# `rusqlite` package behind it.
 [external_dependencies]
-"intention-types" = ["serde", "serde_json", "uuid"]
-"intention-domain" = ["serde", "serde_json"]
+"intention-proto" = ["serde", "serde_json", "uuid"]
 "intention-config" = ["serde", "serde_json", "toml"]
-"intention-protocol" = ["serde", "serde_json"]
+"intention-storage" = ["serde", "serde_json", "sqlite", "tempfile"]
 "intention-transport" = ["interprocess", "serde", "serde_json", "tempfile", "tokio"]
-"intention-client" = ["fs4", "tempfile", "tokio"]
-"intention" = ["futures-util", "tempfile"]
+"intention-client" = ["fs4", "tokio"]
 "intention-daemon" = ["futures-util", "serde_json", "tempfile", "tokio"]
-"intention-application" = []
-"intention-runtime" = ["futures-executor", "futures-util"]
-"intention-storage" = ["serde_json"]
-"intention-storage-sqlite" = ["rusqlite", "serde_json", "tempfile"]
-"intention-model" = ["futures-core", "futures-executor", "futures-util", "serde", "serde_json"]
-"intention-provider-openrouter" = ["futures-util", "http", "openrouter-rs", "serde_json"]
-"intention-provider-generic-chat" = ["async-openai", "futures-util", "http", "serde", "serde_json"]
+"intention-engine" = ["futures-util"]
+"intention-providers" = ["async-openai", "futures-core", "futures-executor", "futures-util", "http", "openrouter-rs", "serde", "serde_json"]
 "intention-tools" = ["glob", "rustix", "serde", "serde_json", "tempfile"]
-"intention-workspace" = []
-"intention-hooks" = []
+
+# Dependency edges of the non-production test crates, compared for equality
+# like the active production edges above.
+[non_production_test_dependencies]
+"intention-test-support" = ["intention-config", "intention-daemon", "intention-proto", "intention-providers", "intention-transport"]
+
+[non_production_test_external_dependencies]
+"intention-test-support" = ["futures-executor", "futures-util", "tempfile", "tokio"]
 
 [adapter_boundaries]
-packages = ["intention-tauri", "intention-tui"]
-allowed_workspace_dependencies = ["intention-client", "intention-protocol", "intention-transport", "intention-types"]
-allowed_test_workspace_dependencies = ["intention-daemon", "intention-domain", "intention-test-support"]
-allowed_external_dependencies = ["serde_json"]
+packages = ["intention-tui"]
+allowed_workspace_dependencies = ["intention-client", "intention-transport", "intention-proto"]
+allowed_test_workspace_dependencies = ["intention-daemon", "intention-test-support"]
+allowed_external_dependencies = ["serde_json", "tokio"]
 forbidden_source_patterns = [
-  "intention_application::",
-  "intention_runtime::",
+  "intention_engine::",
   "intention_storage::",
-  "intention_storage_sqlite::",
   "intention_tools::",
-  "intention_provider_",
+  "intention_providers::",
   "rusqlite::",
   "tauri::",
 ]
 
 [protocol_boundary]
-package = "intention-protocol"
-allowed_workspace_dependencies = ["intention-types", "intention-domain"]
-allowed_external_dependencies = ["serde", "serde_json"]
+package = "intention-proto"
+allowed_workspace_dependencies = []
+allowed_external_dependencies = ["serde", "serde_json", "uuid"]
 forbidden_source_patterns = [
   "tauri::",
   "rusqlite::",
-  "intention_tauri::",
   "intention_tui::",
-  "intention_provider_",
+  "intention_providers::",
   "async_openai::",
   "openrouter_sdk::",
 ]
 
 [composition]
-root_package = "intention"
-concrete_implementation_crates = [
-  "intention-storage-sqlite",
-  "intention-provider-openrouter",
-  "intention-provider-generic-chat",
-  "intention-vfr",
-  "intention-headroom",
-  "intention-plans",
-]
+root_package = "intention-daemon"
+# Concrete implementation crates only the composition root may select; a
+# workspace dependency on one from any other package fails the gate.
+concrete_implementation_crates = ["intention-engine"]
 owned_selection_patterns = [
-  "SqliteStorageRepository",
-  "OpenRouterDriver",
-  "GenericChatDriver",
+  "SelectedProvider",
 ]
+
+[composition.owned_type_names]
+# Concrete implementation types may be named only inside their defining crate and
+# the declared composition root.
+"SqliteStorageRepository" = "intention-storage"
+"SqliteDatabaseLocationDto" = "intention-storage"
+"OpenRouterDriver" = "intention-providers"
+"GenericChatDriver" = "intention-providers"
 
 [public_contracts]
 # Provider SDK namespaces are restricted to their owner crate's private
@@ -168,14 +182,12 @@ provider_sdk_resource_patterns = [
 ]
 
 [ordering_authorities]
-# The closed set of durable ordering authorities (ADR 0050). A record family
-# either orders by the session event sequence, belongs to exactly one container
-# and orders by that container's journal, or has no durable order; there is no
-# fourth option.
-declared = [
-  "SessionEventSequenceDto",
-  "RunEventCursorDto",
-]
+# The closed set of durable ordering-authority type names. Every record family
+# orders by SQLite row insertion order, so the declared set is empty: no
+# production type may name itself a durable ordering authority, and the suffix
+# guard rejects a reintroduced sequence, cursor, position, ticket, watermark,
+# order, epoch, or journal family.
+declared = []
 name_suffixes = [
   "SequenceDto",
   "CursorDto",
@@ -186,148 +198,3 @@ name_suffixes = [
   "EpochDto",
   "JournalDto",
 ]
-
-[[future_crates]]
-name = "intention-types"
-responsibility = "Identifiers, schema versions, common errors, time, and envelopes."
-test_target = "dto and validation tests"
-test_targets = ["contracts", "error_contracts", "m3_contracts", "m4_model_values"]
-
-[[future_crates]]
-name = "intention-domain"
-responsibility = "Domain DTOs, value validation, domain events, and invariants."
-test_target = "domain state and invariant tests"
-test_targets = ["contracts", "event_fixtures", "m3_contracts", "m4_durable_facts", "m4_durable_fact_wires", "m5_tool_results"]
-
-# Active M3 application lifecycle targets are checked against Cargo metadata.
-[[future_crates]]
-name = "intention-application"
-responsibility = "Commands, queries, use cases, and transaction orchestration."
-test_target = "use-case and architecture tests"
-test_targets = ["m3_application"]
-
-[[future_crates]]
-name = "intention-runtime"
-responsibility = "Session and run actors, model-loop coordination, cancellation, and lifecycle."
-test_target = "deterministic actor integration tests"
-test_targets = ["m3_runtime", "m4_model_execution", "m4_runtime_failure_helpers", "m5_tool_loop"]
-
-[[future_crates]]
-name = "intention-storage"
-responsibility = "Repository, unit-of-work, snapshot, and event-log contracts."
-test_target = "repository contract tests"
-test_targets = ["contracts", "m4_run_replay_contracts", "opaque_json_guard"]
-
-[[future_crates]]
-name = "intention-storage-sqlite"
-responsibility = "SQLite current-schema creation, projections, and repository implementation."
-test_target = "current-schema and transaction fault-injection tests"
-test_targets = ["m4_durable_facts", "m4_model_context", "m4_run_safe_config", "sqlite_contracts"]
-
-[[future_crates]]
-name = "intention-config"
-responsibility = "TOML parsing, validation, and resolved configuration DTOs."
-test_target = "configuration fixture tests"
-test_targets = ["contracts", "snapshot_fixtures", "m4_contracts"]
-
-[[future_crates]]
-name = "intention-model"
-responsibility = "Provider-neutral model DTOs and driver contract."
-test_target = "model contract and stream tests"
-test_targets = ["model_contracts", "m4_execution_contracts"]
-
-[[future_crates]]
-name = "intention-provider-openrouter"
-responsibility = "OpenRouter SDK translation."
-test_target = "provider stream and error fixtures"
-test_targets = ["openrouter_contracts"]
-
-[[future_crates]]
-name = "intention-provider-generic-chat"
-responsibility = "Generic Chat Completion translation."
-test_target = "provider stream and capability fixtures"
-test_targets = ["generic_chat_contracts"]
-
-[[future_crates]]
-name = "intention-tools"
-responsibility = "Typed tool registry and core tool contracts."
-test_target = "tool invocation and policy tests"
-test_targets = ["bounded_contracts", "tool_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]
-
-[[future_crates]]
-name = "intention-workspace"
-responsibility = "WorkspaceRoot addressing anchor and process CWD."
-test_target = "workspace addressing and CWD tests"
-test_targets = ["workspace_contract"]
-
-[[future_crates]]
-name = "intention-hooks"
-responsibility = "Typed hook phases, ordering, contexts, and dispatch."
-test_target = "hook ordering and rejection tests"
-test_targets = ["hook_contracts"]
-
-[[future_crates]]
-name = "intention-vfr"
-responsibility = "VFR transformation, mapping, expansion, and raw-read tools."
-test_target = "transform and expansion outcome tests"
-test_targets = []
-
-[[future_crates]]
-name = "intention-headroom"
-responsibility = "Headroom transform, CCR retention, and retrieve tool."
-test_target = "compression, retrieval, and expiry tests"
-test_targets = []
-
-[[future_crates]]
-name = "intention-plans"
-responsibility = "Plan artifacts, hidden frontmatter, and Plan/Build policy."
-test_target = "plan integrity, focus, approval, and mode-policy tests"
-test_targets = []
-
-[[future_crates]]
-name = "intention-protocol"
-responsibility = "Versioned transport commands, queries, and events."
-test_target = "current-version wire contract fixtures"
-test_targets = ["contracts", "m3_contracts", "m4_run_stream_contracts"]
-
-[[future_crates]]
-name = "intention-transport"
-responsibility = "Socket framing, server/client protocol, and subscriptions."
-test_target = "transport integration tests"
-test_targets = ["transport_integration"]
-
-[[future_crates]]
-name = "intention-client"
-responsibility = "Bootstrap, command dispatch, subscription, and reconnect."
-test_target = "client contract and reconnect tests"
-test_targets = ["client_contract", "run_stream_contract"]
-
-[[future_crates]]
-name = "intention"
-responsibility = "Composition root, factories, and daemon application facade."
-test_target = "composition wiring smoke tests"
-test_targets = []
-
-[[future_crates]]
-name = "intention-test-support"
-responsibility = "Non-production durable integration fixtures and contract scenarios."
-test_target = "fixture and composition contract tests"
-test_targets = ["composition_contract", "fixture_host"]
-
-[[future_crates]]
-name = "intention-daemon"
-responsibility = "Daemon host binary, lifecycle, and typed connection hosting."
-test_target = "bootstrap, recovery, and model-execution bridge integration tests"
-test_targets = ["daemon_bootstrap", "m4_streaming_foundation", "m5_tool_loop_wiring", "facade_e2e", "real_api_e2e"]
-
-[[future_crates]]
-name = "intention-tauri"
-responsibility = "Tauri bootstrap and native bridge."
-test_target = "mapping contract and fixture-daemon smoke tests"
-test_targets = []
-
-[[future_crates]]
-name = "intention-tui"
-responsibility = "TUI and REPL presentation adapters."
-test_target = "mapping contract and fixture-daemon smoke tests"
-test_targets = ["tui_contract"]

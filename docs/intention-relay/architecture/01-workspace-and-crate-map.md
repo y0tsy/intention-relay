@@ -14,63 +14,65 @@ Contract Policy](02-dto-and-contract-policy.md).
 implementation, tools, or provider implementations.
 - Concrete drivers are selected only by the composition root.
 - Feature flags may choose implementations, but may not make the public contract type-unstable.
--  M1 establishes the `ConfigRevisionId` and credential-free `ConfigSnapshotDto` contract foundation. M3 makes
+-  M1 establishes the `ConfigRevisionId` and credential-free configuration-snapshot contract foundation. M3 makes
 `ConfigSnapshotDto` the canonical credential-free persisted configuration selection: the composition root supplies one
-startup snapshot, storage records it by revision, and each accepted run retains its immutable revision. TOML
+startup snapshot, storage records it by `ConfigRevisionId`, and each accepted run retains its immutable revision. TOML
 is applied only at daemon startup; live reload remains deferred.
--  M3 activates `intention-application`, `intention-runtime`, `intention-storage`, and `intention-storage-sqlite`. The
+-  M3 activates the engine and storage layers, merged since Slice 1.5 into `intention-engine` and `intention-storage`. The
 active graph adds the intentional `storage -> config`, `storage-sqlite -> config`, `application -> config`, and `runtime
--> config` edges required to persist and attach canonical snapshots without exposing credentials or filesystem paths.
--  M4 activates `intention-model`, `intention-provider-openrouter`, and `intention-provider-generic-chat`. The model
-crate remains provider-neutral and depends only on `intention-types`; provider crates depend only on model/config/types
-plus their private SDK. `intention-types` owns the provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and
-`ProviderErrorDto` shared by model and durable domain facts; `intention-model` retains compatibility re-exports. Only
-`intention` may select either concrete provider.
--  M4 durable model facts remain domain-owned: domain, storage, and protocol never depend on `intention-model`; SQLite
-stores typed domain-event envelopes and indexes them by dedicated per-run cursor. `intention-runtime` depends on the
-provider-neutral `intention-model` contract only for its injected base execution service; it neither selects a concrete
+-> config` edges required to persist and attach canonical configuration revisions without exposing credentials or
+filesystem paths.
+-  M4 activates the provider layer, carried since the Slice 1.5 collapse by `intention-providers`. The model
+crate remains provider-neutral and depends only on `intention-proto`; provider crates depend only on model/config/types
+plus their private SDK. `intention-proto` owns the provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and
+`ProviderErrorDto` shared by model and durable domain facts; `intention-providers` re-exports them for its consumers. Only
+`intention-daemon` may select either concrete provider.
+-  M4 model and provider evidence is domain-owned and current-state: domain, storage, and protocol never depend on
+`intention-providers`, and SQLite stores assistant content, reasoning text, tool calls, and tool results on the transcript
+and tool-result rows rather than in typed envelopes or per-run cursors. `intention-engine` depends on the
+provider-neutral `intention-providers` contract only for its injected base execution service; it neither selects a concrete
 provider nor exposes an async runtime resource.
 -  M4 activates the daemon host as a private composition consumer. `intention-daemon` may depend on the composition
-facade plus the DTO/application/runtime/model/protocol/transport/type crates needed to host selected execution and
+root plus the DTO/application/runtime/model/protocol/transport/type crates needed to host selected execution and
 streaming, and on private Tokio/future support. It never depends directly on a concrete provider or storage
 implementation, selects no provider, and exposes no provider SDK, credential, Tokio, or storage resource in its public
 contract.
--  M5 activates the typed tool/workspace/hook path. The composition root (`intention`) owns assembly of the six active
-tools (`read`, `write`, `edit`, `execute`, `glob`, and `grep`) and the workspace/hook services; `intention-daemon` hosts
-the application path but does not select implementations. The remaining registry slots are reserved and unavailable.
+-  M5 activates the typed tool/workspace path. The composition root (`intention-daemon`) owns assembly of the six active
+tools (`read`, `write`, `edit`, `execute`, `glob`, and `grep`) and the workspace service; `intention-daemon` hosts
+the application path but does not select implementations. No registry or reserved slot exists: the tool set is the
+closed six-variant `ToolId`, and any other tool name is rejected as `unknown_tool` before effect.
 
 The M1-M5 activation notes are historical records: the coverage policy is now the per-crate tiers declared in
-`quality/coverage.toml` ([ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)).
+`quality/coverage.toml` ([12 Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
-## Planned crates
+## Pre-collapse crate map (historical)
+
+This table and the diagram below record the pre-collapse crate plan. They are superseded by the
+[Slice 1.5 crate map (activated)](#slice-15-crate-map-activated) further down, which is the live map; several crates
+named here (`intention-domain`, `intention-protocol`, `intention-application`, `intention-runtime`,
+`intention-model`, the provider crates, `intention-workspace`, and `intention-hooks`) are not workspace members.
 
 | Crate | Owns | May depend on |
 | --- | --- | --- |
-| `intention-types` | ID newtypes, schema versions, common errors, time, envelopes. | Minimal shared dependencies only. |
-| `intention-domain` | Domain DTOs, value validation, domain events, invariants. | `intention-types`. |
-| `intention-application` | Commands, queries, semantic use-case workflows, and protocol-result mapping over DTO-only storage. | Domain, storage contracts, runtime contracts, config snapshots, protocol, types. |
-| `intention-runtime` | Deterministic session/run lifecycle decisions, interruption handling, pending-turn context joins, and recovery-before-ready. | Domain, storage contracts, config snapshots, types. |
-| `intention-storage` | DTO-only semantic repository methods, atomic committed-change evidence, snapshots, event-log contracts, and persisted config-snapshot inputs. | Config, domain, types. |
-| `intention-storage-sqlite` | Bundled SQLite single current schema (created directly on open), semantic repository implementation, projections, per-state snapshots, and append-only event persistence. | Storage, config, domain, types. |
-| `intention-config` | TOML parsing, validation, migrations, resolved config/snapshot DTOs. | Types, domain as needed. |
-| `intention-model` | Provider-neutral model DTOs and driver trait. | Types, domain DTOs where required. |
-| `intention-provider-openrouter` | OpenRouter SDK translation. | Model, config, types. |
-| `intention-provider-generic-chat` | Generic Chat Completion translation. | Model, config, types. |
-| `intention-tools` | Registry, core tool contracts, tool DTOs, execution interfaces. | Domain, types. |
-| `intention-workspace` | WorkspaceRoot policy, paths, process CWD preparation. | Tools, hooks, domain, types. |
-| `intention-hooks` | Typed hook phases, ordering, contexts, dispatcher. | Tools, domain, types. |
-| `intention-vfr` | VFR hook, mapping, expansion/raw-read tools. | Hooks, tools, domain, types. |
-| `intention-headroom` | Headroom hook, CCR contracts, retrieve tool. | Hooks, tools, storage contracts, domain, types. |
-| `intention-plans` | Plan artifacts, hidden frontmatter, Plan/Build policy hooks. | Hooks, tools, storage contracts, domain, types. |
-| `intention-protocol` | Versioned public transport commands, queries, events. | Domain, types. |
+| `intention-proto` | ID newtypes, schema versions, common errors, and time. | Minimal shared dependencies only. |
+| `intention-engine` | Commands, queries, semantic use-case workflows, and protocol-result mapping plus deterministic run execution, interruption handling, context-window accounting, and recovery-before-ready, over DTO-only storage. | Domain, storage, tools, providers, configuration revisions, proto. |
+| `intention-storage` | DTO-only semantic repository methods, committed-change evidence, transcript and tool-result reads, and persisted configuration-revision inputs. | Config, domain, types. |
+| `intention-config` | TOML parsing, validation, resolved configuration and revision DTOs. | Types, domain as needed. |
+| `intention-providers` | Provider-neutral model DTOs and driver trait plus both SDK translation adapters. | Config, proto, and shared value types. |
+| `intention-tools` | Tool identity and core tool contracts with JSON Schema argument text, the static six-tool spec match, and the WorkspaceRoot addressing anchor. | Proto. |
+| `intention-vfr` (created at M8) | VFR transform, mapping, expansion/raw-read tools. | Tools, domain, types. |
+| `intention-headroom` (created at M8) | Headroom compression, CCR contracts, retrieve tool. | Tools, storage contracts, domain, types. |
+| `intention-plans` (created at M7) | Plan artifacts, hidden frontmatter, Plan/Build policy. | Tools, storage contracts, domain, types. |
 | `intention-transport` | Socket/pipe framing, server/client protocol, subscriptions. | Protocol, types. |
 | `intention-client` | Bootstrap, connection, dispatch, subscription, reconnect. | Protocol, transport, types. |
-| `intention-daemon` | Daemon host binary: process lifecycle, private model-task registry, and typed connection/stream hosting. | Composition facade; application/runtime/model/domain/protocol/transport/type DTO contracts; private Tokio/future support. Never concrete provider or storage implementations. |
-| `intention` | Composition root library: factories, dependency wiring, and daemon application facade. | All selected concrete implementations. |
-| `intention-tauri` | Tauri bootstrap and native bridge. | Client, protocol, presentation DTO mapping. |
+| `intention-daemon` | One durable composition holder (`DaemonApplicationFacade`) that selects and connects the configuration snapshot, SQLite storage, and the provider driver, plus the daemon host and binary. | All selected concrete implementations. |
+| `intention-tauri` (created at M6) | Tauri bootstrap and native bridge. | Client, protocol, presentation DTO mapping. |
 | `intention-tui` | TUI and REPL presentation adapters. | Client, protocol, presentation crates. |
 
-## Dependency direction
+## Pre-collapse dependency direction (historical)
+
+This diagram records the pre-collapse dependency direction. The live edges are the ones declared in
+`quality/architecture.toml` and shown by the activated crate map below.
 
 ```mermaid
 flowchart BT
@@ -107,47 +109,103 @@ flowchart BT
 
 <!-- Arrows show permitted lower-level dependencies toward a consumer. Composition is the sole wiring location. -->
 
+## Slice 1.5 crate map (activated)
+
+Slice 1.5 collapsed the workspace to nine production crates, shown below together with what each absorbed. The table
+below is the live crate map, and the exact permitted edges and coverage tiers are declared
+by `quality/architecture.toml` under phase `slice15`.
+
+| Target crate | Absorbs | Owns |
+| --- | --- | --- |
+| `intention-proto` | `intention-proto`, `intention-protocol`, `intention-domain` | Identity newtypes, shared value types, schema versions, run lifecycle and projection values, the typed public protocol DTOs, and their typed serde payloads. |
+| `intention-config` | `intention-config` | TOML parsing, validation, resolved configuration, and credential-free snapshots. |
+| `intention-engine` | `intention-application`, `intention-runtime` | Commands, queries, semantic use-case workflows, deterministic lifecycle decisions, interruption handling, and recovery. |
+| `intention-tools` | `intention-tools`, `intention-workspace`, `intention-hooks` | Tool identity and contracts, WorkspaceRoot policy, and the cancellation-aware dispatch surface. |
+| `intention-providers` | `intention-model`, `intention-provider-openrouter`, `intention-provider-generic-chat` | The provider-neutral model contract and both concrete SDK translation adapters. |
+| `intention-storage` | `intention-storage`, `intention-storage-sqlite` | Repository contracts and the bundled SQLite single-schema implementation. |
+| `intention-transport` | `intention-transport` | Socket/pipe framing, the typed server/client wire, and subscriptions. |
+| `intention-client` | `intention-client` | Bootstrap, connection, dispatch, subscriptions, and reconnect, fully asynchronous and covering every protocol command and query. |
+| `intention-daemon` | `intention` (the composition facade library) | One composition holder that selects and connects configuration, SQLite storage, and the provider driver, plus the daemon host and binary. |
+
+Retained outside the nine production crates: the `intention-tui` proof adapter and the non-production
+`intention-test-support` fixture crate. The future crates are created at their milestones: `intention-tauri` (M6),
+`intention-plans` (M7), and `intention-vfr` and `intention-headroom` (M8).
+
+Rules the target map fixes:
+
+- One composition location. The composition facade library is gone; `intention-daemon` is the only crate that selects
+  concrete implementations and the only place that wires them, and the daemon host calls the engine directly.
+- Boundaries own serialization. Only types crossing the three physical boundaries carry wire attributes: the IPC wire
+  (`intention-proto` payloads served by `intention-transport`), SQLite rows (`intention-storage`), and provider SDK
+  calls (`intention-providers`). Every other cross-crate call passes domain types.
+- Tools exchange JSON only with the model. Tool inputs and outputs are schema-validated JSON; nothing else in the system
+  carries an untyped JSON payload.
+- Acyclic direction. Protocol and domain types are the lowest layer; configuration, storage, tools, and providers
+  build on them; the engine builds on all of those; the daemon composes them; and no lower crate depends on
+  `intention-engine`, `intention-daemon`, or `intention-client`.
+
+```mermaid
+flowchart BT
+  PR[intention-proto] --> CF[intention-config]
+  PR --> ST[intention-storage]
+  CF --> ST
+  PR --> TL[intention-tools]
+  PR --> PV[intention-providers]
+  CF --> PV
+  PR --> EN[intention-engine]
+  CF --> EN
+  ST --> EN
+  TL --> EN
+  PV --> EN
+  EN --> DH[intention-daemon]
+  ST --> DH
+  TR --> DH
+  PR --> TR[intention-transport]
+  TR --> CL[intention-client]
+  PR --> CL
+  CL --> AD[adapter crates]
+  DH --> BIN[daemon binary]
+```
+
 ## M3 ownership decisions
 
 -  `intention-storage` defines semantic, DTO-only operations such as create session, accept a user turn as started or
 pending, remove a not-yet-seen pending turn, append pending turns to a run context, transition a run, recover
-unfinished runs, snapshot and durable event-tail reads, and
-configuration-snapshot acceptance. It does not expose a transaction closure, SQL connection, filesystem path, or backend
-resource.
--  `intention-storage-sqlite` owns bundled SQLite opening and direct creation of the single current storage schema,
-transactional projection/event/snapshot writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId
+unfinished runs, read the transcript and tool results, and accept configuration revisions. It does not expose a
+transaction closure, SQL connection, filesystem path, or backend resource.
+-  `intention-storage` owns bundled SQLite opening and direct creation of the single current storage schema,
+single-transaction state writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId
 -> WorkspaceRootDto` association; the workspace addressing policy — the root as an anchor, not a containment boundary
-(ADR 0047) — remains M5 policy ownership.
--  `intention-runtime` decides valid run state edges and owns interruption handling: a stopped provider stream or tool
+([architecture 05](05-tools-and-workspace.md)) — remains M5 policy ownership.
+-  `intention-engine` decides valid run state edges and owns interruption handling: a stopped provider stream or tool
 call records a notice, resets its signal, and the run continues with its next model step. The repository owns run
-creation, pending-turn context joins, and recovery. It has no provider, tool, timer, stream, or scheduler dependency in
+creation, pending-turn context joins, and recovery. It has no provider, tool, timer, or stream dependency in
 M3.
 -  `intention-test-support` is a non-production workspace crate. It owns credential-free fixture configuration, native
 temporary roots under `std::env::temp_dir()`, `TempDir`-backed durable databases, deterministic sessions, and bounded
-fixture listener orchestration. `intention` exposes only hidden `test-support` facade seams for an injected
-database/snapshot and durable-event inspection; `intention-daemon` exposes only a hidden one-connection dispatch seam.
+fixture listener orchestration. `intention-daemon` exposes only hidden `test-support` seams for an injected
+database and current-state inspection; `intention-daemon` exposes only a hidden one-connection dispatch seam.
 Release production APIs and the daemon binary expose no fixture mode.
 
 ## Composition rules
 
-`intention` creates and connects:
+`intention-daemon` is one crate with one composition holder plus the host. It creates and connects:
 
 - resolved TOML configuration;
-- SQLite storage implementation;
-- selected provider drivers;
-- core tool registry;
-- workspace, plan, VFR, and Headroom hook registrations;
-- application facade and runtime actor factories;
-- a daemon application facade that `intention-daemon` hosts over transport.
+- SQLite storage, opened and recovered before ready;
+- the one selected provider driver;
+- command admission serialization;
+- the host-owned per-run registry, single cancellation handle, and injected tool-execution port through which the
+engine runs its typed tool sequence over the six core tool contracts.
 
-For M5, this is the ownership boundary for the active six-tool registry, `WorkspaceRoot`, and the typed hook dispatcher.
-Base tools remain primitive implementations; application owns lifecycle/result persistence and publication, while hooks
-transform or reject typed context without committing storage or publishing independently.
+The composition holder (`composition.rs`) selects and connects every concrete implementation, and the host (`lib.rs`)
+owns the listener, typed connection hosting, and the streaming run loop; no per-purpose `*_for_daemon` bridge surface
+exists, and the host reaches the composition holder through crate-private accessors. Composition selects concrete
+implementations; the binary owns process lifecycle.
 
-`intention-daemon` depends on this composition facade, never the reverse. Its M4 private host may consume
-DTO/application/runtime/model contracts to own the task registry, cancellation, and streaming transport loop, but it
-never imports or selects concrete provider/storage implementations. Composition selects concrete implementations; the
-binary owns process lifecycle and typed connection hosting.
+For M5, this is the ownership boundary for the six active tools, `WorkspaceRoot`, and the direct tool sequence.
+Base tools remain primitive implementations; the engine owns lifecycle/result persistence and publication, and the
+future plan, VFR, and Headroom owners attach as ordinary calls when activated, not as extension points.
 
 No other crate chooses a concrete SQLite driver, OpenRouter client, or adapter implementation by global construction.
 
@@ -159,7 +217,8 @@ Planned binaries are thin:
 - `intention-tui`: starts a terminal client and invokes shared bootstrap.
 - a future administrative CLI may use `intention-client`, not daemon internals.
 
-`intention-tauri` is a desktop integration crate/binary host, not a second daemon implementation.
+The future `intention-tauri` crate (created at M6) is a desktop integration crate/binary host, not a second daemon
+implementation.
 
 ## Architectural test requirements
 
@@ -168,72 +227,17 @@ The workspace must have tests that fail when these rules are broken:
 1. no cyclic crate dependencies;
 2. the required v1 crate set exists, and every crate has a single declared responsibility;
 3. adapters do not import forbidden implementation crates or declare forbidden workspace/external dependencies;
-4. only `intention` selects concrete storage/provider/tool extension implementations;
-5. `intention-protocol` has no dependency on Tauri, SQLite, provider SDKs, or UI crates;
+4. only `intention-daemon` selects concrete storage/provider/tool extension implementations;
+5. `intention-proto` has no dependency on Tauri, SQLite, provider SDKs, or UI crates;
 6. public cross-crate methods accept/return DTOs, not implementation resources or provider SDK types;
 7. every planned crate has a stated test target before implementation begins;
 8. every declared boundary is enforced by the architecture checker against the machine-readable policy.
 
 The exact test strategy and minimum test portfolio are defined in [10 Test-Driven Delivery and
-Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (per-crate tiers,
-[ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)), feature profiles, lint policy, and
-Makefile/CI contract in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (per-crate tiers),
+lint policy, and Makefile/CI contract in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Non-goals
 
 This map does not freeze individual module names, file names, Cargo feature syntax, or exact trait method signatures;
 those are implementation choices that must preserve these ownership and dependency rules.
-
-## Post-M4 prospective ownership boundary
-
-This section records future layer ownership only; it creates no crate, table, or dependency edge.
-`quality/architecture.toml` remains the sole machine-readable future-crate placeholder registry, and coverage and
-feature policy remain activation-time projections.
-
-| Concern | Future layer owner | Required boundary |
-| --- | --- | --- |
-| Mandate IDs, revisions, lifecycle values, trigger/disposition values | Domain/types | Typed, credential-free values and invariants. |
-| Admission workflows, user/daemon conflict handling, recovery decisions | Application/runtime | DTO-only storage and capability contracts. |
-| Atomic lifecycle/attempt persistence and recovery facts | Storage | No transaction/resource leaks. |
-| Public commands, queries, events, and future versioned typed replay | Protocol | No runtime, SDK, storage, or adapter resources. |
-| Registry and one capability invocation path | Tools/gateway | Composition-only concrete assembly. |
-| Scheduler readiness/candidate values | Domain/types | Typed, credential-free operational evidence. |
-| Scheduler reevaluation and admission orchestration | Application/runtime | Lifecycle-owned admission only; no second runtime. |
-| Scheduler observations and decision evidence | Storage | Atomic persistence without resource leaks. |
-| Child edges, delegation, verifier authority, and audit values | Domain/types | Typed, credential-free values and invariants. |
-| Child/verifier orchestration and target mutation | Application/runtime | Lifecycle-owned transitions and DTO-only storage. |
-| MCP source, capability, selection, and invocation values | Domain/types | Typed, credential-free values and invariants. |
-| MCP discovery/invocation orchestration and recovery | Application/runtime | One registry path and DTO-only storage. |
-| Kernel IDs, selections, checkpoint metadata, and safe projections | Domain/types | Typed, credential-free values and no Python/Jupyter resources. |
-| Kernel epoch/cell/checkpoint lifecycle and recovery | Application/runtime | Bridge/tool-loop consumption only; no lifecycle or registry authority. |
-| Private Python/Jupyter sidecar translation | Private daemon adapter | No public resource types, no second listener, and no direct primitive path. |
-| Process/task ownership, identity assignment, publication | Daemon | No product-decision authority. |
-| Concrete provider/tool/storage selection | Composition | The only concrete assembler. |
-| Presentation and typed user input | Adapters | No local business authority or bypass. |
-
-Architectures 17, 18, and 20 own future child/verifier, MCP, and kernel semantics. Kernel work must split typed
-contracts, lifecycle orchestration, and private Python/Jupyter translation without exposing implementation resources;
-Skill, provider-profile, and fork boundaries remain separate delivery decisions. Any split must preserve this acyclic
-direction, DTO-first contracts, a declared test target, the declared coverage tier ([ADR
-0051](../decisions/0051-per-crate-coverage-tiers.md)), and isolated architecture fixtures before
-production activation. Architecture 16 owns no scheduler crate; exact crate allocation remains activation-time work.
-
-See [decision 0004](../decisions/0004-rust-owned-capability-plane-and-fixed-tool-registry.md) and the ownership map.
-
-## Post-M4 provider evolution ownership
-
-Architecture 22 owns future typed provider/profile/catalog/revision/capability values, private provider translation,
-driver compatibility, and composition-only private driver assembly. A later activation must split typed contracts,
-orchestration, storage, and private SDK or decoder translation without exposing credentials, native payloads, SDK/client
-resources, or another capability authority.
-
-## Post-M4 session branching ownership
-
-Architecture 23 owns future typed conversation-tree, parent, boundary, fork operation, snapshot, lineage-audit, and safe
-branch-projection values. Domain owns validation; storage owns atomic lineage persistence; protocol owns a later typed
-DTO family; application/runtime owns fork orchestration; adapters own presentation only.
-
-## Post-M4 activity and adapter ownership
-
-Architecture 24 owns future typed activity, notification, acknowledgement, and safe presentation projection contracts.
-Domain/storage/protocol/application/runtime roles remain DTO-first; adapters consume only `intention-client`.

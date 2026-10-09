@@ -1,20 +1,20 @@
-//! Typed, bounded contracts for workspace tools.
+//! Typed, bounded contracts for workspace tools and the workspace addressing
+//! anchor.
 
-use intention_types::{DtoResult, RunId, SessionId, ToolCallId, WorkspaceRelativePathDto};
-use intention_workspace::WorkspaceRoot;
+use intention_proto::{DtoResult, WorkspaceRelativePathDto};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Condvar, Mutex, MutexGuard, PoisonError,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread;
 use std::time::{Duration, Instant};
 
-mod execute;
-mod file;
-mod search;
+mod workspace;
+
+pub use workspace::WorkspaceRoot;
 
 #[cfg(test)]
 #[allow(clippy::expect_used, reason = "deterministic timeout fixture setup")]
@@ -115,39 +115,6 @@ mod timeout_tests {
     }
 }
 
-#[cfg(test)]
-mod spawn_observation_tests {
-    use super::*;
-
-    #[test]
-    fn spawn_observation_is_shared_across_clones_and_wait_returns_on_observe() {
-        let signal = CancellationSignal::new();
-        let observer = signal.clone();
-        std::thread::spawn(move || {
-            thread::sleep(Duration::from_millis(20));
-            observer.observe_spawn();
-        });
-        assert!(
-            signal.wait_until_spawn_observed(Duration::from_secs(5)),
-            "spawn observation must be visible once the executor records it"
-        );
-        assert!(
-            signal.wait_until_spawn_observed(Duration::from_millis(1)),
-            "an already-observed spawn must return immediately"
-        );
-    }
-
-    #[test]
-    fn spawn_observation_wait_times_out_when_no_spawn_is_recorded() {
-        let signal = CancellationSignal::new();
-        assert!(
-            !signal.wait_until_spawn_observed(Duration::from_millis(10)),
-            "the wait must time out when no spawn is ever recorded"
-        );
-        assert!(!signal.is_cancelled(), "observation must not cancel");
-    }
-}
-
 const MAX_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 const EXECUTE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Upper bound on the serialized bytes of one search result, shared by glob
@@ -161,20 +128,10 @@ const MAX_GREP_AGGREGATE_BYTES: usize = 128 * 1024;
 /// which keeps edit reads and write preflights bounded (PR24-022).
 const MAX_EDIT_TARGET_BYTES: usize = 1024 * 1024;
 
-/// Redacted working-directory identity recorded in durable tool metadata. It
-/// marks the authorized workspace root as the effective CWD without disclosing
-/// its absolute location.
-pub const REDACTED_WORKSPACE_CWD: &str = "workspace_root";
-
 /// Typed cancellation signal for one tool invocation.
-///
-/// Besides cancellation state, the signal records whether the process executor
-/// has spawned the invocation's child, so deterministic fixtures can wait for
-/// a confirmed spawn instead of blind sleeps before requesting cancellation.
 #[derive(Clone, Debug, Default)]
 pub struct CancellationSignal {
     cancelled: Arc<AtomicBool>,
-    spawn_observed: Arc<AtomicBool>,
 }
 
 impl CancellationSignal {
@@ -182,14 +139,12 @@ impl CancellationSignal {
     pub fn new() -> Self {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
-            spawn_observed: Arc::new(AtomicBool::new(false)),
         }
     }
     #[must_use]
     pub fn cancelled() -> Self {
         Self {
             cancelled: Arc::new(AtomicBool::new(true)),
-            spawn_observed: Arc::new(AtomicBool::new(false)),
         }
     }
     #[must_use]
@@ -200,68 +155,14 @@ impl CancellationSignal {
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
     }
-    /// Records that the process executor spawned the invocation's child.
-    ///
-    /// Internal synchronization point for process-lifecycle fixtures; the
-    /// flag is never read by production behavior.
-    pub(crate) fn observe_spawn(&self) {
-        self.spawn_observed.store(true, Ordering::Release);
-    }
-    /// Waits until the invocation's child has been spawned, or until `timeout`
-    /// elapses.
-    ///
-    /// Returns whether the spawn was observed. This is a test-only
-    /// synchronization point for deterministic cancellation fixtures: waiting
-    /// on a confirmed spawn replaces blind sleeps while keeping the
-    /// platform-independent interruption classification intact. It
-    /// is hidden from the public documentation because no production caller
-    /// should depend on it.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn wait_until_spawn_observed(&self, timeout: Duration) -> bool {
-        let Some(deadline) = Instant::now().checked_add(timeout) else {
-            return false;
-        };
-        while !self.spawn_observed.load(Ordering::Acquire) {
-            if Instant::now() >= deadline {
-                return false;
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-        true
+    /// Clears the request so the same run-scoped signal observes the next
+    /// interruption with fresh state.
+    pub fn reset(&self) {
+        self.cancelled.store(false, Ordering::Release);
     }
 }
 
 pub const TOOL_SCHEMA_VERSION: u16 = 1;
-pub const TOOL_DESCRIPTOR_REVISION: u16 = 1;
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MutationKind {
-    ReadOnly,
-    Mutating,
-    Process,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolCapability {
-    Read,
-    Search,
-    Write,
-    Edit,
-    Execute,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolOutcome {
-    Succeeded,
-    Failed,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolPolicy {
-    Allowed,
-    Denied,
-}
 
 /// Typed terminal classification for one executed program.
 ///
@@ -297,72 +198,6 @@ impl ToolProcessStatus {
             // one); a status with neither cannot occur.
             None => unreachable!("child status has neither signal nor exit code"),
         }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolRegistrationStatus {
-    Active,
-    Reserved,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ToolObservability {
-    pub outcome: ToolOutcome,
-    pub policy: ToolPolicy,
-    pub elapsed_ms: u64,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ToolContext {
-    pub session_id: SessionId,
-    pub run_id: RunId,
-    pub call_id: ToolCallId,
-}
-
-/// Redacted execution metadata for the durable result boundary.
-///
-/// `cwd` is the stable [`REDACTED_WORKSPACE_CWD`] identity marker and never an
-/// absolute path; `path` is the logical workspace-relative target of the
-/// invocation.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ToolExecutionMetadata {
-    pub cwd: String,
-    #[serde(default)]
-    pub path: Option<WorkspaceRelativePathDto>,
-    pub policy: ToolPolicy,
-    pub elapsed_ms: u64,
-    /// Typed terminal program status; populated only by Execute invocations.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub process_status: Option<ToolProcessStatus>,
-}
-
-impl ToolExecutionMetadata {
-    /// Builds redacted metadata for one workspace execution.
-    ///
-    /// The working-directory identity is the stable [`REDACTED_WORKSPACE_CWD`]
-    /// marker: durable records identify the authorized workspace root without
-    /// ever storing its absolute location.
-    #[must_use]
-    pub fn for_workspace(policy: ToolPolicy, elapsed_ms: u64) -> Self {
-        Self {
-            cwd: REDACTED_WORKSPACE_CWD.to_owned(),
-            path: None,
-            policy,
-            elapsed_ms,
-            process_status: None,
-        }
-    }
-    /// Attaches the logical workspace-relative path targeted by the invocation.
-    #[must_use]
-    pub fn with_path(mut self, path: Option<WorkspaceRelativePathDto>) -> Self {
-        self.path = path;
-        self
-    }
-    /// Attaches the typed terminal program status to this metadata.
-    #[must_use]
-    pub const fn with_process_status(mut self, process_status: Option<ToolProcessStatus>) -> Self {
-        self.process_status = process_status;
-        self
     }
 }
 
@@ -410,6 +245,101 @@ fn bounded_output(
 /// thirty-second execute deadline instead of failing the command.
 const READER_DRAIN_GRACE: Duration = Duration::from_secs(5);
 
+/// Shared progress state between the pipe readers and the drain loop.
+///
+/// The readers publish every consumed byte and record their own exit, and the
+/// drain waits on the paired condvar for the remaining stall window, so an
+/// idle drain blocks until the window runs out and a busy one wakes on the
+/// progress signal instead of on a timer.
+#[derive(Default)]
+struct ReaderProgress {
+    state: Mutex<ReaderState>,
+    wake: Condvar,
+}
+
+/// The counter state guarded by the [`ReaderProgress`] mutex.
+#[derive(Default)]
+struct ReaderState {
+    /// Total bytes every reader has consumed.
+    consumed: u64,
+    /// Readers that stopped, whether they returned or panicked.
+    stopped: usize,
+}
+
+impl ReaderProgress {
+    /// Locks the shared state, ignoring poisoning: the state is a plain
+    /// counter, so a panicking thread cannot leave it inconsistent.
+    fn lock(&self) -> MutexGuard<'_, ReaderState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Total bytes consumed so far.
+    fn consumed(&self) -> u64 {
+        self.lock().consumed
+    }
+
+    /// Number of readers that stopped.
+    fn stopped(&self) -> usize {
+        self.lock().stopped
+    }
+
+    /// Publishes consumed bytes and wakes a waiting drain, saturating on the
+    /// platforms where one read can exceed the counter's range.
+    ///
+    /// The counter is updated under the lock and the notification follows the
+    /// release: a drain that checked the counter before the update is already
+    /// registered as a waiter, so the wakeup cannot be lost.
+    fn publish(&self, count: usize) {
+        let mut state = self.lock();
+        state.consumed = state
+            .consumed
+            .saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
+        drop(state);
+        self.wake.notify_all();
+    }
+
+    /// Records that one reader stopped and wakes a waiting drain.
+    fn record_stop(&self) {
+        let mut state = self.lock();
+        state.stopped += 1;
+        drop(state);
+        self.wake.notify_all();
+    }
+
+    /// Blocks until progress is published, a reader stops, or `window`
+    /// elapses, and returns the consumed total observed on return.
+    ///
+    /// The progress check and the wait hold the same lock, so progress
+    /// published since `observed` returns immediately instead of after the
+    /// window; the window bounds the wait, so an idle drain blocks for exactly
+    /// the remaining stall window rather than waking on a timer.
+    fn wait_for_activity(&self, observed: u64, window: Duration) -> u64 {
+        let mut state = self.lock();
+        if state.consumed <= observed {
+            let (waited, _) = self
+                .wake
+                .wait_timeout(state, window)
+                .unwrap_or_else(PoisonError::into_inner);
+            state = waited;
+        }
+        state.consumed
+    }
+}
+
+/// Wakes the drain when its reader thread stops.
+///
+/// The drain may collect a reader only once that reader stopped, and the OS
+/// reports the stop through [`thread::JoinHandle::is_finished`] only after the
+/// closure returned, so this guard publishes the exit from inside the reader
+/// (a panic unwind included) and closes that window.
+struct ReaderStop(Arc<ReaderProgress>);
+
+impl Drop for ReaderStop {
+    fn drop(&mut self) {
+        self.0.record_stop();
+    }
+}
+
 /// Counts the bytes a pipe reader has consumed.
 ///
 /// The drain loop compares consecutive readings to separate a slow reader from
@@ -417,21 +347,15 @@ const READER_DRAIN_GRACE: Duration = Duration::from_secs(5);
 /// produces no progress, while a reader on a loaded machine keeps advancing.
 struct ProgressReader<R> {
     inner: R,
-    progress: Arc<AtomicU64>,
+    progress: Arc<ReaderProgress>,
 }
 
 impl<R: std::io::Read> std::io::Read for ProgressReader<R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         let count = self.inner.read(buffer)?;
-        progress_add(&self.progress, count);
+        self.progress.publish(count);
         Ok(count)
     }
-}
-
-/// Records consumed bytes, saturating on the platforms where a single read can
-/// exceed the counter's range.
-fn progress_add(progress: &AtomicU64, count: usize) {
-    let _ = progress.fetch_add(u64::try_from(count).unwrap_or(u64::MAX), Ordering::Relaxed);
 }
 
 /// Raw output captured before a program was stopped, with its truncation flag.
@@ -498,26 +422,17 @@ fn interruption_cause(cancellation: &CancellationSignal) -> InterruptCause {
     }
 }
 
-/// Stable error code for one interrupted execution surfaced through the
-/// envelope boundary.
-const fn interruption_code(cause: InterruptCause) -> &'static str {
-    match cause {
-        InterruptCause::Stopped => "tool_cancelled",
-        InterruptCause::Lost => "tool_execution_interrupted",
-    }
-}
-
 fn bounded_output_with_timeout(
     mut child: Child,
     cancellation: CancellationSignal,
     timeout: Duration,
 ) -> Result<BoundedOutput, ExecuteFailure> {
     let child_id = child.id();
-    let stdout_progress = Arc::new(AtomicU64::new(0));
-    let stderr_progress = Arc::new(AtomicU64::new(0));
+    let progress = Arc::new(ReaderProgress::default());
     let stdout = child.stdout.take().map(|pipe| {
-        let progress = Arc::clone(&stdout_progress);
+        let progress = Arc::clone(&progress);
         thread::spawn(move || {
+            let _stop = ReaderStop(Arc::clone(&progress));
             let mut output = Vec::new();
             let mut reader = std::io::BufReader::new(ProgressReader {
                 inner: pipe,
@@ -527,8 +442,9 @@ fn bounded_output_with_timeout(
         })
     });
     let stderr = child.stderr.take().map(|pipe| {
-        let progress = Arc::clone(&stderr_progress);
+        let progress = Arc::clone(&progress);
         thread::spawn(move || {
+            let _stop = ReaderStop(Arc::clone(&progress));
             let mut output = Vec::new();
             let mut reader = std::io::BufReader::new(ProgressReader {
                 inner: pipe,
@@ -537,7 +453,6 @@ fn bounded_output_with_timeout(
             read_bounded(&mut reader, &mut output).map(|truncated| (output, truncated))
         })
     });
-    let progress = [&*stdout_progress, &*stderr_progress];
     let deadline = Instant::now() + timeout;
     loop {
         if cancellation.is_cancelled() || Instant::now() >= deadline {
@@ -661,15 +576,16 @@ enum PipeDrain {
 /// A reader that keeps consuming bytes is descheduled rather than stalled, so
 /// observed progress re-arms the stall window up to `deadline`; a reader that
 /// stops making progress for the whole window is treated as a descendant
-/// holding the pipes open. The success path passes the invocation's signal so
-/// a cancellation ends the drain early; an interrupted collection passes
-/// `None`, because the interruption is already observed and the readers killed
-/// with their process tree must be joined so their captured output survives as
-/// the partial result.
+/// holding the pipes open. The wait is woken by the readers' progress signal
+/// instead of a timer, and the remaining stall window bounds it. The success
+/// path passes the invocation's signal so a cancellation ends the drain early;
+/// an interrupted collection passes `None`, because the interruption is
+/// already observed and the readers killed with their process tree must be
+/// joined so their captured output survives as the partial result.
 fn drain_pipes(
     mut stdout: Option<ReaderHandle>,
     mut stderr: Option<ReaderHandle>,
-    progress: &[&AtomicU64],
+    progress: &ReaderProgress,
     stall: Duration,
     deadline: Instant,
     cancellation: Option<&CancellationSignal>,
@@ -678,18 +594,23 @@ fn drain_pipes(
     // when a caller pipes only one of the two streams.
     let mut stdout_result = stdout.is_none().then_some(Ok((Vec::new(), false)));
     let mut stderr_result = stderr.is_none().then_some(Ok((Vec::new(), false)));
-    let mut observed = total_progress(progress);
+    // Every spawned reader records its own stop, so the drain can collect the
+    // handles the moment the last reader stopped rather than when the OS
+    // observes the thread as finished.
+    let readers = usize::from(stdout.is_some()) + usize::from(stderr.is_some());
+    let mut observed = progress.consumed();
     let mut until = (Instant::now() + stall).min(deadline);
     loop {
+        let stopped = progress.stopped() >= readers;
         if let Some(handle) = stdout.take() {
-            if handle.is_finished() {
+            if stopped || handle.is_finished() {
                 stdout_result = Some(join_reader(Some(handle)));
             } else {
                 stdout = Some(handle);
             }
         }
         if let Some(handle) = stderr.take() {
-            if handle.is_finished() {
+            if stopped || handle.is_finished() {
                 stderr_result = Some(join_reader(Some(handle)));
             } else {
                 stderr = Some(handle);
@@ -706,21 +627,15 @@ fn drain_pipes(
         if cancellation.is_some_and(CancellationSignal::is_cancelled) || Instant::now() >= until {
             return PipeDrain::Stalled;
         }
-        thread::sleep(Duration::from_millis(5));
-        let current = total_progress(progress);
+        // Progress or a reader stop wakes the wait at once; with neither, the
+        // drain blocks for the remaining stall window instead of polling.
+        let current =
+            progress.wait_for_activity(observed, until.saturating_duration_since(Instant::now()));
         if current > observed {
             observed = current;
             until = (Instant::now() + stall).min(deadline);
         }
     }
-}
-
-/// Sums the bytes the pipe readers have consumed so far.
-fn total_progress(progress: &[&AtomicU64]) -> u64 {
-    progress
-        .iter()
-        .map(|counter| counter.load(Ordering::Relaxed))
-        .sum()
 }
 
 #[cfg(test)]
@@ -729,21 +644,22 @@ mod drain_progress_tests {
 
     #[test]
     fn reader_progress_extends_the_drain_beyond_the_stall_window() {
-        let progress = Arc::new(AtomicU64::new(0));
+        let progress = Arc::new(ReaderProgress::default());
         let writer = Arc::clone(&progress);
         let handle = thread::spawn(move || -> Result<(Vec<u8>, bool), &'static str> {
+            let _stop = ReaderStop(Arc::clone(&writer));
             // Bytes keep arriving well past the stall window: the loaded-machine
             // descheduling case that must not be classified as a stalled drain.
             for _ in 0..8 {
                 thread::sleep(Duration::from_millis(20));
-                progress_add(&writer, 64);
+                writer.publish(64);
             }
             Ok((vec![b'x'; 64], false))
         });
         let drain = drain_pipes(
             Some(handle),
             None,
-            &[&*progress],
+            &progress,
             Duration::from_millis(50),
             Instant::now() + Duration::from_secs(5),
             None,
@@ -752,8 +668,32 @@ mod drain_progress_tests {
     }
 
     #[test]
+    fn reader_stop_wakes_the_drain_before_the_stall_window() {
+        let progress = Arc::new(ReaderProgress::default());
+        let reader = Arc::clone(&progress);
+        let handle = thread::spawn(move || -> Result<(Vec<u8>, bool), &'static str> {
+            let _stop = ReaderStop(reader);
+            // The reader stops long before the stall window expires: the drain
+            // must collect it on the wakeup, not by outwaiting the window.
+            thread::sleep(Duration::from_millis(50));
+            Ok((Vec::new(), false))
+        });
+        let started = Instant::now();
+        let drain = drain_pipes(
+            Some(handle),
+            None,
+            &progress,
+            Duration::from_secs(5),
+            started + Duration::from_secs(30),
+            None,
+        );
+        assert!(matches!(drain, PipeDrain::Complete { .. }));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
     fn reader_without_progress_stalls_at_the_window() {
-        let progress = Arc::new(AtomicU64::new(0));
+        let progress = Arc::new(ReaderProgress::default());
         let handle = thread::spawn(move || -> Result<(Vec<u8>, bool), &'static str> {
             // Alive and silent, like a descendant that inherited the pipes.
             thread::sleep(Duration::from_secs(30));
@@ -763,7 +703,7 @@ mod drain_progress_tests {
         let drain = drain_pipes(
             Some(handle),
             None,
-            &[&*progress],
+            &progress,
             Duration::from_millis(50),
             started + Duration::from_secs(30),
             None,
@@ -900,14 +840,6 @@ pub enum ToolId {
     Execute,
     Glob,
     Grep,
-    FetchUrl,
-    AskUser,
-    Todo,
-    Retrieve,
-    PlanSubmit,
-    SubAgent,
-    Expand,
-    Mcp,
 }
 
 impl ToolId {
@@ -918,30 +850,10 @@ impl ToolId {
             Self::Read => "read",
             Self::Glob => "glob",
             Self::Grep => "grep",
-            Self::FetchUrl => "fetch_url",
-            Self::AskUser => "ask_user",
-            Self::Todo => "todo",
-            Self::Retrieve => "retrieve",
-            Self::PlanSubmit => "plan_submit",
-            Self::SubAgent => "sub_agent",
-            Self::Expand => "expand",
-            Self::Mcp => "mcp",
             Self::Write => "write",
             Self::Edit => "edit",
             Self::Execute => "execute",
         }
-    }
-
-    /// Parses one stable wire name back into its registered identifier.
-    ///
-    /// The lookup matches `as_str` over the built-in registry, so no second
-    /// name list can disagree with the names the product advertises.
-    #[must_use]
-    pub fn from_wire_name(name: &str) -> Option<Self> {
-        registry()
-            .into_iter()
-            .map(ToolDescriptor::id)
-            .find(|id| id.as_str() == name)
     }
 }
 impl Display for ToolId {
@@ -950,23 +862,20 @@ impl Display for ToolId {
     }
 }
 
-/// Metadata describing one registered tool.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-pub struct ToolDescriptor {
+/// Static specification of one tool.
+///
+/// The specification carries the three strings the model boundary consumes:
+/// the tool identity, its description, and the JSON Schema document text for
+/// its typed model arguments. The typed input DTO is the decode authority and
+/// the typed result DTO is the result contract, so no result schema is kept.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ToolSpec {
     id: ToolId,
-    display_name: &'static str,
     description: &'static str,
-    input_schema: Option<&'static str>,
-    output_schema: Option<&'static str>,
-    model_parameters_schema: Option<&'static str>,
-    descriptor_revision: u16,
-    schema_version: u16,
-    mutation: MutationKind,
-    capabilities: &'static [ToolCapability],
-    observability_policy: ToolPolicy,
-    status: ToolRegistrationStatus,
+    input_schema: &'static str,
 }
-impl ToolDescriptor {
+impl ToolSpec {
+    /// Returns the tool this specification describes.
     #[must_use]
     pub const fn id(self) -> ToolId {
         self.id
@@ -975,52 +884,16 @@ impl ToolDescriptor {
     pub const fn description(self) -> &'static str {
         self.description
     }
+    /// Returns the JSON Schema document text for this tool's typed model
+    /// arguments.
     #[must_use]
-    pub const fn display_name(self) -> &'static str {
-        self.display_name
-    }
-    #[must_use]
-    pub const fn input_schema(self) -> Option<&'static str> {
+    pub const fn input_schema(self) -> &'static str {
         self.input_schema
-    }
-    #[must_use]
-    pub const fn output_schema(self) -> Option<&'static str> {
-        self.output_schema
-    }
-    /// Returns the JSON Schema describing this tool's typed model parameters,
-    /// when the tool exposes one.
-    #[must_use]
-    pub const fn model_parameters_schema(self) -> Option<&'static str> {
-        self.model_parameters_schema
-    }
-    #[must_use]
-    pub const fn descriptor_revision(self) -> u16 {
-        self.descriptor_revision
-    }
-    #[must_use]
-    pub const fn schema_version(self) -> u16 {
-        self.schema_version
-    }
-    #[must_use]
-    pub const fn mutation(self) -> MutationKind {
-        self.mutation
-    }
-    #[must_use]
-    pub const fn capabilities(self) -> &'static [ToolCapability] {
-        self.capabilities
-    }
-    #[must_use]
-    pub const fn observability_policy(self) -> ToolPolicy {
-        self.observability_policy
-    }
-    #[must_use]
-    pub const fn status(self) -> ToolRegistrationStatus {
-        self.status
     }
 }
 
-/// JSON Schema for the `read` tool's typed model parameters.
-pub const READ_MODEL_PARAMETERS_SCHEMA: &str = r#"{
+/// JSON Schema for the `read` tool's typed model arguments.
+pub const READ_INPUT_SCHEMA: &str = r#"{
   "type": "object",
   "properties": {
     "path": {
@@ -1031,8 +904,8 @@ pub const READ_MODEL_PARAMETERS_SCHEMA: &str = r#"{
   "required": ["path"]
 }"#;
 
-/// JSON Schema for the `write` tool's typed model parameters.
-pub const WRITE_MODEL_PARAMETERS_SCHEMA: &str = r#"{
+/// JSON Schema for the `write` tool's typed model arguments.
+pub const WRITE_INPUT_SCHEMA: &str = r#"{
   "type": "object",
   "properties": {
     "path": {
@@ -1051,8 +924,8 @@ pub const WRITE_MODEL_PARAMETERS_SCHEMA: &str = r#"{
   "required": ["path", "content"]
 }"#;
 
-/// JSON Schema for the `edit` tool's typed model parameters.
-pub const EDIT_MODEL_PARAMETERS_SCHEMA: &str = r#"{
+/// JSON Schema for the `edit` tool's typed model arguments.
+pub const EDIT_INPUT_SCHEMA: &str = r#"{
   "type": "object",
   "properties": {
     "path": {
@@ -1075,8 +948,8 @@ pub const EDIT_MODEL_PARAMETERS_SCHEMA: &str = r#"{
   "required": ["path", "old", "new"]
 }"#;
 
-/// JSON Schema for the `execute` tool's typed model parameters.
-pub const EXECUTE_MODEL_PARAMETERS_SCHEMA: &str = r#"{
+/// JSON Schema for the `execute` tool's typed model arguments.
+pub const EXECUTE_INPUT_SCHEMA: &str = r#"{
   "type": "object",
   "properties": {
     "program": {
@@ -1094,8 +967,8 @@ pub const EXECUTE_MODEL_PARAMETERS_SCHEMA: &str = r#"{
   "required": ["program", "args"]
 }"#;
 
-/// JSON Schema for the `glob` tool's typed model parameters.
-pub const GLOB_MODEL_PARAMETERS_SCHEMA: &str = r#"{
+/// JSON Schema for the `glob` tool's typed model arguments.
+pub const GLOB_INPUT_SCHEMA: &str = r#"{
   "type": "object",
   "properties": {
     "pattern": {
@@ -1106,8 +979,8 @@ pub const GLOB_MODEL_PARAMETERS_SCHEMA: &str = r#"{
   "required": ["pattern"]
 }"#;
 
-/// JSON Schema for the `grep` tool's typed model parameters.
-pub const GREP_MODEL_PARAMETERS_SCHEMA: &str = r#"{
+/// JSON Schema for the `grep` tool's typed model arguments.
+pub const GREP_INPUT_SCHEMA: &str = r#"{
   "type": "object",
   "properties": {
     "pattern": {
@@ -1137,220 +1010,54 @@ pub const GREP_MODEL_PARAMETERS_SCHEMA: &str = r#"{
   "required": ["pattern"]
 }"#;
 
-/// The immutable built-in registry.
+/// Returns the static specification of one tool.
 #[must_use]
-pub const fn registry() -> [ToolDescriptor; 14] {
-    [
-        ToolDescriptor {
-            id: ToolId::Read,
-            display_name: "Read",
-            input_schema: Some("ReadInput"),
-            output_schema: Some("TextResult"),
-            model_parameters_schema: Some(READ_MODEL_PARAMETERS_SCHEMA),
-            descriptor_revision: TOOL_DESCRIPTOR_REVISION,
+pub const fn spec(id: ToolId) -> ToolSpec {
+    match id {
+        ToolId::Read => ToolSpec {
+            id,
             description: "Read bounded text from a workspace file.",
-            schema_version: TOOL_SCHEMA_VERSION,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[ToolCapability::Read],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Active,
+            input_schema: READ_INPUT_SCHEMA,
         },
-        ToolDescriptor {
-            id: ToolId::Write,
-            display_name: "Write",
-            input_schema: Some("WriteInput"),
-            output_schema: Some("WriteResult"),
-            model_parameters_schema: Some(WRITE_MODEL_PARAMETERS_SCHEMA),
-            descriptor_revision: TOOL_DESCRIPTOR_REVISION,
+        ToolId::Write => ToolSpec {
+            id,
             description: "Write bounded text to a workspace file.",
-            schema_version: TOOL_SCHEMA_VERSION,
-            mutation: MutationKind::Mutating,
-            capabilities: &[ToolCapability::Write],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Active,
+            input_schema: WRITE_INPUT_SCHEMA,
         },
-        ToolDescriptor {
-            id: ToolId::Edit,
-            display_name: "Edit",
-            input_schema: Some("EditInput"),
-            output_schema: Some("WriteResult"),
-            model_parameters_schema: Some(EDIT_MODEL_PARAMETERS_SCHEMA),
-            descriptor_revision: TOOL_DESCRIPTOR_REVISION,
+        ToolId::Edit => ToolSpec {
+            id,
             description: "Apply a bounded text replacement.",
-            schema_version: TOOL_SCHEMA_VERSION,
-            mutation: MutationKind::Mutating,
-            capabilities: &[ToolCapability::Edit],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Active,
+            input_schema: EDIT_INPUT_SCHEMA,
         },
-        ToolDescriptor {
-            id: ToolId::Execute,
-            display_name: "Execute",
-            input_schema: Some("ExecuteInput"),
-            output_schema: Some("TextResult"),
-            model_parameters_schema: Some(EXECUTE_MODEL_PARAMETERS_SCHEMA),
-            descriptor_revision: TOOL_DESCRIPTOR_REVISION,
+        ToolId::Execute => ToolSpec {
+            id,
             description: "Execute an explicitly bounded command.",
-            schema_version: TOOL_SCHEMA_VERSION,
-            mutation: MutationKind::Process,
-            capabilities: &[ToolCapability::Execute],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Active,
+            input_schema: EXECUTE_INPUT_SCHEMA,
         },
-        ToolDescriptor {
-            id: ToolId::Glob,
-            display_name: "Glob",
-            input_schema: Some("GlobInput"),
-            output_schema: Some("PathsResult"),
-            model_parameters_schema: Some(GLOB_MODEL_PARAMETERS_SCHEMA),
-            descriptor_revision: TOOL_DESCRIPTOR_REVISION,
+        ToolId::Glob => ToolSpec {
+            id,
             description: "List workspace paths matching a pattern.",
-            schema_version: TOOL_SCHEMA_VERSION,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[ToolCapability::Search],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Active,
+            input_schema: GLOB_INPUT_SCHEMA,
         },
-        ToolDescriptor {
-            id: ToolId::Grep,
-            display_name: "Grep",
-            input_schema: Some("GrepInput"),
-            output_schema: Some("GrepResult"),
-            model_parameters_schema: Some(GREP_MODEL_PARAMETERS_SCHEMA),
-            descriptor_revision: TOOL_DESCRIPTOR_REVISION,
+        ToolId::Grep => ToolSpec {
+            id,
             description: "Search bounded workspace text.",
-            schema_version: TOOL_SCHEMA_VERSION,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[ToolCapability::Search],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Active,
+            input_schema: GREP_INPUT_SCHEMA,
         },
-        ToolDescriptor {
-            id: ToolId::FetchUrl,
-            display_name: "Fetch URL",
-            input_schema: None,
-            output_schema: None,
-            model_parameters_schema: None,
-            descriptor_revision: 0,
-            description: "Reserved tool slot.",
-            schema_version: 0,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Reserved,
-        },
-        ToolDescriptor {
-            id: ToolId::AskUser,
-            display_name: "Ask User",
-            input_schema: None,
-            output_schema: None,
-            model_parameters_schema: None,
-            descriptor_revision: 0,
-            description: "Reserved tool slot.",
-            schema_version: 0,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Reserved,
-        },
-        ToolDescriptor {
-            id: ToolId::Todo,
-            display_name: "Todo",
-            input_schema: None,
-            output_schema: None,
-            model_parameters_schema: None,
-            descriptor_revision: 0,
-            description: "Reserved tool slot.",
-            schema_version: 0,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Reserved,
-        },
-        ToolDescriptor {
-            id: ToolId::Retrieve,
-            display_name: "Retrieve",
-            input_schema: None,
-            output_schema: None,
-            model_parameters_schema: None,
-            descriptor_revision: 0,
-            description: "Reserved tool slot.",
-            schema_version: 0,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Reserved,
-        },
-        ToolDescriptor {
-            id: ToolId::PlanSubmit,
-            display_name: "Plan Submit",
-            input_schema: None,
-            output_schema: None,
-            model_parameters_schema: None,
-            descriptor_revision: 0,
-            description: "Reserved tool slot.",
-            schema_version: 0,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Reserved,
-        },
-        ToolDescriptor {
-            id: ToolId::SubAgent,
-            display_name: "Sub-Agent",
-            input_schema: None,
-            output_schema: None,
-            model_parameters_schema: None,
-            descriptor_revision: 0,
-            description: "Reserved tool slot.",
-            schema_version: 0,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Reserved,
-        },
-        ToolDescriptor {
-            id: ToolId::Expand,
-            display_name: "Expand",
-            input_schema: None,
-            output_schema: None,
-            model_parameters_schema: None,
-            descriptor_revision: 0,
-            description: "Reserved tool slot.",
-            schema_version: 0,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Reserved,
-        },
-        ToolDescriptor {
-            id: ToolId::Mcp,
-            display_name: "MCP",
-            input_schema: None,
-            output_schema: None,
-            model_parameters_schema: None,
-            descriptor_revision: 0,
-            description: "Reserved tool slot.",
-            schema_version: 0,
-            mutation: MutationKind::ReadOnly,
-            capabilities: &[],
-            observability_policy: ToolPolicy::Allowed,
-            status: ToolRegistrationStatus::Reserved,
-        },
-    ]
+    }
 }
 
-/// Returns the active descriptors that advertise a model-facing parameter
-/// schema, in registry order.
+/// Returns the model-visible tool specifications in advertisement order.
 #[must_use]
-pub fn model_visible_descriptors() -> Vec<ToolDescriptor> {
-    registry()
-        .into_iter()
-        .filter(|descriptor| {
-            descriptor.status() == ToolRegistrationStatus::Active
-                && descriptor.model_parameters_schema().is_some()
-        })
-        .collect()
+pub fn model_visible_descriptors() -> Vec<ToolSpec> {
+    vec![
+        spec(ToolId::Read),
+        spec(ToolId::Write),
+        spec(ToolId::Edit),
+        spec(ToolId::Execute),
+        spec(ToolId::Glob),
+        spec(ToolId::Grep),
+    ]
 }
 
 /// Bounded text accepted by tool contracts.
@@ -1367,7 +1074,7 @@ impl BoundedText {
     pub fn new(value: impl Into<String>) -> DtoResult<Self> {
         let value = value.into();
         if value.contains('\0') {
-            Err(intention_types::ErrorDto::validation(
+            Err(intention_proto::ErrorDto::validation(
                 "invalid_tool_text",
                 "tool text contains NUL",
             ))
@@ -1405,68 +1112,6 @@ pub enum ToolInput {
     Execute(ExecuteInput),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ToolInvocation {
-    pub schema_version: u16,
-    pub context: ToolContext,
-    pub input: ToolInput,
-}
-
-impl ToolInvocation {
-    /// Constructs an invocation with an explicit expected call identity.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the call identity does not match.
-    pub fn new(
-        schema_version: u16,
-        context: ToolContext,
-        input: ToolInput,
-        expected_call: ToolCallId,
-    ) -> DtoResult<Self> {
-        let invocation = Self {
-            schema_version,
-            context,
-            input,
-        };
-        invocation.validate_call_id(expected_call)?;
-        Ok(invocation)
-    }
-
-    /// Validates the invocation schema against the active tool contract.
-    /// # Errors
-    ///
-    /// Returns a validation error when the invocation schema version differs
-    /// from the active tool schema.
-    pub fn validate_schema_version(&self) -> DtoResult<()> {
-        if self.schema_version == TOOL_SCHEMA_VERSION {
-            Ok(())
-        } else {
-            Err(intention_types::ErrorDto::validation(
-                "tool_schema_mismatch",
-                "tool invocation schema version does not match the active schema",
-            ))
-        }
-    }
-}
-
-impl ToolInvocation {
-    /// Validates the invocation against the expected call identity.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the call identity does not match.
-    pub fn validate_call_id(&self, expected: ToolCallId) -> DtoResult<()> {
-        if self.context.call_id == expected {
-            Ok(())
-        } else {
-            Err(intention_types::ErrorDto::validation(
-                "tool_call_id_mismatch",
-                "tool call identity does not match invocation context",
-            ))
-        }
-    }
-}
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReadInput {
     pub path: WorkspaceRelativePathDto,
@@ -1513,19 +1158,56 @@ pub struct ExecuteInput {
 }
 
 impl ToolInput {
-    /// Returns the logical workspace-relative path targeted by this input, when
-    /// the tool operates on a single one. Glob matches by pattern and Execute
-    /// runs a program, so neither targets one workspace path.
+    /// Decodes raw model arguments into the typed input of one exposed tool.
+    ///
+    /// The wire name is the decoding authority: only the six exposed tools
+    /// decode, each through its own typed input DTO; every other name is
+    /// rejected as unknown, so a tool the product does not expose is never
+    /// reachable through raw model arguments.
+    ///
+    /// # Errors
+    ///
+    /// Returns `unknown_tool` when the name is not an exposed tool, and
+    /// `invalid_tool_input_json` when the arguments are malformed or do not
+    /// match the tool's typed input.
+    pub fn from_arguments_json(tool_id: &str, arguments_json: &str) -> DtoResult<Self> {
+        let input = match tool_id {
+            "read" => serde_json::from_str::<ReadInput>(arguments_json).map(Self::Read),
+            "write" => serde_json::from_str::<WriteInput>(arguments_json).map(Self::Write),
+            "edit" => serde_json::from_str::<EditInput>(arguments_json).map(Self::Edit),
+            "execute" => serde_json::from_str::<ExecuteInput>(arguments_json).map(Self::Execute),
+            "glob" => serde_json::from_str::<GlobInput>(arguments_json).map(Self::Glob),
+            "grep" => serde_json::from_str::<GrepInput>(arguments_json).map(Self::Grep),
+            _ => return Err(unknown_tool()),
+        };
+        input.map_err(|_| {
+            intention_proto::ErrorDto::validation(
+                "invalid_tool_input_json",
+                "tool arguments are not valid typed input",
+            )
+        })
+    }
+
+    /// Returns the concrete tool this input belongs to.
     #[must_use]
-    pub const fn logical_path(&self) -> Option<&WorkspaceRelativePathDto> {
+    pub const fn tool_id(&self) -> ToolId {
         match self {
-            Self::Read(input) => Some(&input.path),
-            Self::Write(input) => Some(&input.path),
-            Self::Edit(input) => Some(&input.path),
-            Self::Grep(input) => input.path.as_ref(),
-            Self::Glob(_) | Self::Execute(_) => None,
+            Self::Read(_) => ToolId::Read,
+            Self::Glob(_) => ToolId::Glob,
+            Self::Grep(_) => ToolId::Grep,
+            Self::Write(_) => ToolId::Write,
+            Self::Edit(_) => ToolId::Edit,
+            Self::Execute(_) => ToolId::Execute,
         }
     }
+}
+
+/// Returns the stable error for a name the product does not expose as a tool.
+fn unknown_tool() -> intention_proto::ErrorDto {
+    intention_proto::ErrorDto::validation(
+        "unknown_tool",
+        "tool is not registered for model invocation",
+    )
 }
 
 /// Typed tool result family.
@@ -1540,15 +1222,6 @@ pub enum ToolResult {
     Execute(TextResult),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ToolResultEnvelope {
-    pub schema_version: u16,
-    pub context: ToolContext,
-    pub result: ToolResult,
-    pub observability: ToolObservability,
-    #[serde(default)]
-    pub execution: Option<ToolExecutionMetadata>,
-}
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TextResult {
     pub text: BoundedText,
@@ -1586,131 +1259,267 @@ pub struct WriteResult {
     pub bytes: u64,
 }
 
-/// Normalized content shape of one projected concrete tool result.
+/// Canonical model-visible content of an empty path list.
+const NO_PATHS_PLACEHOLDER: &str = "[no paths]";
+/// Canonical model-visible content of an empty match list.
+const NO_MATCHES_PLACEHOLDER: &str = "[no matches]";
+/// Canonical model-visible content of an empty text result.
+const EMPTY_TEXT_PLACEHOLDER: &str = "[empty]";
+
+/// Renders one typed tool result into its bounded model-visible content.
 ///
-/// The projection keeps the typed payload bounded and workspace-relative: text
-/// stays in [`BoundedText`], grep matches and glob path lists carry the
-/// byte-window truncation flag, and mutations carry only a byte count.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ToolProjectedContent {
-    /// Bounded text produced by Read or Execute.
-    Text { text: BoundedText, truncated: bool },
-    /// Byte-windowed workspace-relative path list produced by Glob.
-    Paths {
-        paths: Vec<WorkspaceRelativePathDto>,
-        truncated: bool,
-    },
-    /// Byte-windowed workspace-relative matches produced by Grep.
-    Matches {
-        matches: Vec<GrepMatch>,
-        truncated: bool,
-    },
-    /// Byte-count summary produced by Write or Edit.
-    Mutation { bytes: u64 },
+/// The typed result is redacted and workspace-relative by construction: text
+/// and search payloads keep their own bounds, truncated content keeps its
+/// explicit marker, and mutations report their byte count.
+///
+/// An empty projection is a successful outcome, so it renders its canonical
+/// placeholder (`[no paths]`, `[no matches]`, or `[empty]`) instead of blank
+/// content: every call always gets one readable answering result.
+///
+/// # Errors
+///
+/// Returns a validation error when the rendered content is blank, which the
+/// per-projection placeholders leave unreachable; the guard stays as the
+/// invariant backstop of "a tool result must always answer its call with
+/// readable content".
+pub fn render_tool_result_content(result: &ToolResult) -> DtoResult<String> {
+    let content = match result {
+        ToolResult::Read(value) | ToolResult::Execute(value) => {
+            let mut content = if value.text.as_str().trim().is_empty() {
+                EMPTY_TEXT_PLACEHOLDER.to_owned()
+            } else {
+                value.text.as_str().to_owned()
+            };
+            append_truncation_marker(&mut content, value.truncated);
+            content
+        }
+        ToolResult::Glob(value) => {
+            let mut content = if value.paths.is_empty() {
+                NO_PATHS_PLACEHOLDER.to_owned()
+            } else {
+                value
+                    .paths
+                    .iter()
+                    .map(WorkspaceRelativePathDto::as_str)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            append_truncation_marker(&mut content, value.truncated);
+            content
+        }
+        ToolResult::Grep(value) => {
+            let mut content = if value.matches.is_empty() {
+                NO_MATCHES_PLACEHOLDER.to_owned()
+            } else {
+                value
+                    .matches
+                    .iter()
+                    .map(|matched| {
+                        format!(
+                            "{}:{}:{}: {}",
+                            matched.path.as_str(),
+                            matched.line,
+                            matched.column,
+                            matched.fragment.as_str()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            append_truncation_marker(&mut content, value.truncated);
+            content
+        }
+        ToolResult::Write(value) | ToolResult::Edit(value) => format!("{} bytes", value.bytes),
+    };
+    if content.trim().is_empty() {
+        return Err(intention_proto::ErrorDto::validation(
+            "invalid_tool_result_content",
+            "tool result content must not be empty",
+        ));
+    }
+    Ok(content)
 }
 
-/// Bounded, redacted, normalized projection of one tool result envelope,
-/// suitable for durable persistence and safe rendering.
-///
-/// The projection never carries an absolute path, OS resource detail, command
-/// line, or environment value: the working-directory identity is redacted to
-/// [`REDACTED_WORKSPACE_CWD`], paths stay workspace-relative, and grep content
-/// is clamped to its retained byte window.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ToolResultProjection {
-    pub schema_version: u16,
-    pub tool: ToolId,
-    pub content: ToolProjectedContent,
-    pub execution: ToolExecutionMetadata,
+/// Appends the honest truncation marker to one bounded list projection.
+fn append_truncation_marker(content: &mut String, truncated: bool) {
+    if truncated {
+        if !content.is_empty() {
+            content.push('\n');
+        }
+        content.push_str("[truncated]");
+    }
 }
 
-fn projected_content(result: &ToolResult) -> ToolProjectedContent {
+/// Renders the durable partial result of one interrupted dispatch.
+///
+/// The captured output precedes the exact interruption notice selected by doc
+/// 15 for the stopped/lost and captured/uncaptured cases.
+///
+/// # Errors
+///
+/// Returns a validation error when the captured output cannot render.
+pub fn partial_tool_result_content(
+    stopped: bool,
+    result: Option<&ToolResult>,
+) -> DtoResult<String> {
+    let notice = match (stopped, result.is_some()) {
+        (true, true) => {
+            "[The tool call was stopped before a final result; the output above is partial.]"
+        }
+        (false, true) => {
+            "[The tool call did not receive a final result; the output above is partial.]"
+        }
+        (true, false) => "[The tool call was stopped before a final result.]",
+        (false, false) => "[The tool call did not receive a final result.]",
+    };
     match result {
-        ToolResult::Read(value) | ToolResult::Execute(value) => ToolProjectedContent::Text {
-            text: value.text.clone(),
-            truncated: value.truncated,
-        },
-        ToolResult::Glob(value) => ToolProjectedContent::Paths {
-            paths: value.paths.clone(),
-            truncated: value.truncated,
-        },
-        ToolResult::Grep(value) => ToolProjectedContent::Matches {
-            truncated: value.truncated,
-            matches: value.matches.clone(),
-        },
-        ToolResult::Write(value) | ToolResult::Edit(value) => {
-            ToolProjectedContent::Mutation { bytes: value.bytes }
-        }
+        Some(result) => Ok(format!("{}\n{notice}", render_tool_result_content(result)?)),
+        None => Ok(notice.to_owned()),
     }
 }
 
-impl ToolResult {
-    /// Returns the concrete registered tool this result belongs to.
-    #[must_use]
-    pub const fn tool_id(&self) -> ToolId {
-        match self {
-            Self::Read(_) => ToolId::Read,
-            Self::Glob(_) => ToolId::Glob,
-            Self::Grep(_) => ToolId::Grep,
-            Self::Write(_) => ToolId::Write,
-            Self::Edit(_) => ToolId::Edit,
-            Self::Execute(_) => ToolId::Execute,
-        }
+#[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    reason = "Renderer fixtures use expect to provide precise failures."
+)]
+mod tool_result_renderer_tests {
+    use super::*;
+
+    fn bounded(value: &str) -> BoundedText {
+        BoundedText::new(value).unwrap_or_else(|_| unreachable!("fixture tool text is bounded"))
     }
 
-    /// Projects this result into the bounded, redacted, normalized form.
-    ///
-    /// A bare result carries no invocation timing, so the execution metadata
-    /// defaults to zero elapsed time; prefer
-    /// [`ToolResultEnvelope::projection`] when durable records need real
-    /// timing and invocation metadata.
-    #[must_use]
-    pub fn projection(&self) -> ToolResultProjection {
-        ToolResultProjection {
-            schema_version: TOOL_SCHEMA_VERSION,
-            tool: self.tool_id(),
-            content: projected_content(self),
-            execution: ToolExecutionMetadata::for_workspace(ToolPolicy::Allowed, 0),
-        }
+    fn relative(value: &str) -> WorkspaceRelativePathDto {
+        WorkspaceRelativePathDto::parse(value)
+            .unwrap_or_else(|_| unreachable!("fixture relative path is valid"))
     }
-}
 
-impl ToolResultEnvelope {
-    /// Projects the envelope into the bounded, redacted, normalized form
-    /// suitable for durable persistence.
-    ///
-    /// Timing and policy come from the recorded execution metadata, falling
-    /// back to the envelope observability when metadata is absent.
-    #[must_use]
-    pub fn projection(&self) -> ToolResultProjection {
-        ToolResultProjection {
-            schema_version: self.schema_version,
-            tool: self.result.tool_id(),
-            content: projected_content(&self.result),
-            execution: self.execution.clone().unwrap_or_else(|| {
-                ToolExecutionMetadata::for_workspace(
-                    self.observability.policy,
-                    self.observability.elapsed_ms,
-                )
-            }),
-        }
+    #[test]
+    fn tool_result_content_covers_each_typed_result_family() {
+        let read = ToolResult::Read(TextResult {
+            text: bounded("hello"),
+            truncated: false,
+        });
+        assert_eq!(
+            render_tool_result_content(&read).expect("read content renders"),
+            "hello"
+        );
+        let truncated = ToolResult::Execute(TextResult {
+            text: bounded("done"),
+            truncated: true,
+        });
+        assert_eq!(
+            render_tool_result_content(&truncated).expect("execute content renders"),
+            "done\n[truncated]"
+        );
+        let glob = ToolResult::Glob(PathsResult {
+            paths: vec![relative("src/a.rs"), relative("src/b.rs")],
+            truncated: true,
+        });
+        assert_eq!(
+            render_tool_result_content(&glob).expect("glob content renders"),
+            "src/a.rs\nsrc/b.rs\n[truncated]"
+        );
+        let grep = ToolResult::Grep(GrepResult {
+            matches: vec![GrepMatch {
+                path: relative("src/a.rs"),
+                line: 3,
+                column: 5,
+                fragment: bounded("needle"),
+            }],
+            truncated: false,
+        });
+        assert_eq!(
+            render_tool_result_content(&grep).expect("grep content renders"),
+            "src/a.rs:3:5: needle"
+        );
+        let write = ToolResult::Write(WriteResult { bytes: 17 });
+        assert_eq!(
+            render_tool_result_content(&write).expect("write content renders"),
+            "17 bytes"
+        );
+        let edit = ToolResult::Edit(WriteResult { bytes: 2 });
+        assert_eq!(
+            render_tool_result_content(&edit).expect("edit content renders"),
+            "2 bytes"
+        );
     }
-}
 
-/// Outcome of one admitted tool execution together with the typed terminal
-/// status of the executed program, when the tool ran one.
-pub(crate) struct ExecutedTool {
-    pub(crate) result: ToolResult,
-    pub(crate) process_status: Option<ToolProcessStatus>,
-}
+    #[test]
+    fn empty_projections_render_a_canonical_placeholder() {
+        let blank_read = ToolResult::Read(TextResult {
+            text: bounded(""),
+            truncated: false,
+        });
+        assert_eq!(
+            render_tool_result_content(&blank_read).expect("an empty read renders"),
+            "[empty]"
+        );
+        let whitespace_read = ToolResult::Read(TextResult {
+            text: bounded("  \n "),
+            truncated: false,
+        });
+        assert_eq!(
+            render_tool_result_content(&whitespace_read).expect("a whitespace read renders"),
+            "[empty]"
+        );
+        let empty_glob = ToolResult::Glob(PathsResult {
+            paths: Vec::new(),
+            truncated: false,
+        });
+        assert_eq!(
+            render_tool_result_content(&empty_glob).expect("an empty glob renders"),
+            "[no paths]"
+        );
+        let truncated_empty_glob = ToolResult::Glob(PathsResult {
+            paths: Vec::new(),
+            truncated: true,
+        });
+        assert_eq!(
+            render_tool_result_content(&truncated_empty_glob)
+                .expect("an empty truncated glob renders"),
+            "[no paths]\n[truncated]"
+        );
+        let no_match_grep = ToolResult::Grep(GrepResult {
+            matches: Vec::new(),
+            truncated: false,
+        });
+        assert_eq!(
+            render_tool_result_content(&no_match_grep).expect("a no-match grep renders"),
+            "[no matches]"
+        );
+        // The interrupted path renders through the same projection, so a
+        // pre-empted empty search still answers its call with content.
+        assert_eq!(
+            partial_tool_result_content(true, Some(&empty_glob))
+                .expect("a stopped empty search renders"),
+            "[no paths]\n[The tool call was stopped before a final result; the output above is partial.]"
+        );
+    }
 
-impl ExecutedTool {
-    pub(crate) const fn bare(result: ToolResult) -> Self {
-        Self {
-            result,
-            process_status: None,
-        }
+    #[test]
+    fn partial_content_carries_the_exact_interruption_notice() {
+        let captured = ToolResult::Read(TextResult {
+            text: bounded("half a line"),
+            truncated: false,
+        });
+        assert_eq!(
+            partial_tool_result_content(true, Some(&captured)).expect("partial content renders"),
+            "half a line\n[The tool call was stopped before a final result; the output above is partial.]"
+        );
+        assert_eq!(
+            partial_tool_result_content(false, Some(&captured)).expect("partial content renders"),
+            "half a line\n[The tool call did not receive a final result; the output above is partial.]"
+        );
+        assert_eq!(
+            partial_tool_result_content(true, None).expect("partial content renders"),
+            "[The tool call was stopped before a final result.]"
+        );
+        assert_eq!(
+            partial_tool_result_content(false, None).expect("partial content renders"),
+            "[The tool call did not receive a final result.]"
+        );
     }
 }
 
@@ -1737,24 +1546,13 @@ pub enum ToolDispatchOutcome {
     },
 }
 
-/// Outcome of one admitted execution before the result-boundary projection.
-pub(crate) enum ExecutedOutcome {
-    /// The tool produced its final typed result.
-    Completed(ExecutedTool),
-    /// The tool stopped before a final result.
-    Interrupted {
-        cause: InterruptCause,
-        partial: Option<ToolResult>,
-    },
-}
-
 /// Returns the interrupted outcome for one cooperatively observed stop.
 ///
 /// Every workspace tool checks its invocation signal between I/O steps, so a
 /// stop that arrives while the tool runs produces a partial result instead of
 /// an unbounded effect or a lost observation.
-const fn stopped_outcome(partial: Option<ToolResult>) -> ExecutedOutcome {
-    ExecutedOutcome::Interrupted {
+const fn stopped_outcome(partial: Option<ToolResult>) -> ToolDispatchOutcome {
+    ToolDispatchOutcome::Interrupted {
         cause: InterruptCause::Stopped,
         partial,
     }
@@ -1777,101 +1575,19 @@ impl ToolService {
     /// Returns a safe typed error when validation, workspace resolution, or execution fails.
     pub fn dispatch_with_cancellation(
         &self,
-        call: ToolCallId,
         input: ToolInput,
         cancellation: CancellationSignal,
     ) -> DtoResult<ToolDispatchOutcome> {
-        Ok(match self.execute_checked(call, input, cancellation)? {
-            ExecutedOutcome::Completed(executed) => ToolDispatchOutcome::Completed(executed.result),
-            ExecutedOutcome::Interrupted { cause, partial } => {
-                ToolDispatchOutcome::Interrupted { cause, partial }
-            }
-        })
-    }
-
-    /// Validates admission, executes one tool effect, and reports the typed
-    /// terminal program status when the tool executed a program.
-    fn execute_checked(
-        &self,
-        call: ToolCallId,
-        input: ToolInput,
-        cancellation: CancellationSignal,
-    ) -> DtoResult<ExecutedOutcome> {
-        let _ = call;
-        // Keep the identity on the real dispatch path: adapters cannot execute
-        // a call while silently substituting another call id.
         if cancellation.is_cancelled() {
-            return Ok(ExecutedOutcome::Interrupted {
-                cause: InterruptCause::Stopped,
-                partial: None,
-            });
+            return Ok(stopped_outcome(None));
         }
         Ok(match input {
-            ToolInput::Read(i) => file::read(&self.root, i, &cancellation)?,
-            ToolInput::Write(i) => file::write(&self.root, i, &cancellation)?,
-            ToolInput::Edit(i) => file::edit(&self.root, i, &cancellation)?,
-            ToolInput::Glob(i) => search::glob(&self.root, i, &cancellation)?,
-            ToolInput::Grep(i) => search::grep(&self.root, i, &cancellation)?,
-            ToolInput::Execute(i) => execute::run(&self.root, i, cancellation)?,
-        })
-    }
-
-    /// Invokes a tool and returns the result-boundary envelope.
-    ///
-    /// The invocation context is validated before any tool effect occurs.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed error produced while validating and dispatching.
-    pub fn invoke_enveloped(&self, invocation: ToolInvocation) -> DtoResult<ToolResultEnvelope> {
-        self.invoke_enveloped_with_cancellation(invocation, CancellationSignal::new())
-    }
-
-    /// Invokes a tool with cancellation and records result-boundary metadata.
-    ///
-    /// An interrupted execution has no result-boundary envelope: the envelope
-    /// carries only a completed typed result, so the interruption surfaces as
-    /// its stable typed error code through this boundary.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed error produced while validating and dispatching.
-    pub fn invoke_enveloped_with_cancellation(
-        &self,
-        invocation: ToolInvocation,
-        cancellation: CancellationSignal,
-    ) -> DtoResult<ToolResultEnvelope> {
-        invocation.validate_schema_version()?;
-        let call_id = invocation.context.call_id;
-        invocation.validate_call_id(call_id)?;
-        let logical_path = invocation.input.logical_path().cloned();
-        let started = Instant::now();
-        let executed =
-            self.execute_checked(invocation.context.call_id, invocation.input, cancellation);
-        let elapsed_ms = started.elapsed().as_millis() as u64;
-        let executed = match executed? {
-            ExecutedOutcome::Completed(executed) => executed,
-            ExecutedOutcome::Interrupted { cause, .. } => {
-                return Err(intention_types::ErrorDto::validation(
-                    interruption_code(cause),
-                    "workspace command execution was interrupted",
-                ));
-            }
-        };
-        Ok(ToolResultEnvelope {
-            schema_version: invocation.schema_version,
-            context: invocation.context,
-            result: executed.result,
-            observability: ToolObservability {
-                outcome: ToolOutcome::Succeeded,
-                policy: ToolPolicy::Allowed,
-                elapsed_ms,
-            },
-            execution: Some(
-                ToolExecutionMetadata::for_workspace(ToolPolicy::Allowed, elapsed_ms)
-                    .with_path(logical_path)
-                    .with_process_status(executed.process_status),
-            ),
+            ToolInput::Read(i) => read_tool(&self.root, i, &cancellation)?,
+            ToolInput::Write(i) => write_tool(&self.root, i, &cancellation)?,
+            ToolInput::Edit(i) => edit_tool(&self.root, i, &cancellation)?,
+            ToolInput::Glob(i) => glob_tool(&self.root, i, &cancellation)?,
+            ToolInput::Grep(i) => grep_tool(&self.root, i, &cancellation)?,
+            ToolInput::Execute(i) => execute_tool(&self.root, i, cancellation)?,
         })
     }
 }
@@ -1880,35 +1596,38 @@ fn read_tool(
     root: &WorkspaceRoot,
     input: ReadInput,
     cancellation: &CancellationSignal,
-) -> DtoResult<ExecutedOutcome> {
+) -> DtoResult<ToolDispatchOutcome> {
     if cancellation.is_cancelled() {
         return Ok(stopped_outcome(None));
     }
     let mut file = std::fs::File::open(root.resolve_path(&input.path)).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
+        intention_proto::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
     })?;
     let mut bytes = Vec::new();
     let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
+        intention_proto::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
     })?;
     let (text, truncated) = bounded_lossy(&bytes);
+    // A read that rewrote invalid UTF-8 reports it the way grep does, so the
+    // replacement text is honest: the model can tell content was rewritten.
+    let lossy = std::str::from_utf8(&bytes).is_err();
     let result = ToolResult::Read(TextResult {
         text: bounded_text(text)?,
-        truncated: truncated || source_truncated,
+        truncated: truncated || source_truncated || lossy,
     });
     // A stop observed after the bounded read keeps the captured bytes as the
     // call's partial output instead of discarding them.
     if cancellation.is_cancelled() {
         return Ok(stopped_outcome(Some(result)));
     }
-    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(result)))
+    Ok(ToolDispatchOutcome::Completed(result))
 }
 
 fn execute_tool(
     root: &WorkspaceRoot,
     input: ExecuteInput,
     cancellation: CancellationSignal,
-) -> DtoResult<ExecutedOutcome> {
+) -> DtoResult<ToolDispatchOutcome> {
     let mut command = Command::new(input.program.as_str());
     command.args(input.args.iter().map(BoundedText::as_str));
     command.current_dir(root.execute_cwd());
@@ -1925,23 +1644,22 @@ fn execute_tool(
         command.process_group(0);
     }
     let child = command.spawn().map_err(|_| {
-        intention_types::ErrorDto::validation(
+        intention_proto::ErrorDto::validation(
             "tool_execute_spawn_failed",
             "unable to spawn workspace command",
         )
     })?;
-    cancellation.observe_spawn();
     let output = match bounded_output(child, cancellation) {
         Ok(output) => output,
         Err(ExecuteFailure::ReadFailed) => {
-            return Err(intention_types::ErrorDto::validation(
+            return Err(intention_proto::ErrorDto::validation(
                 "tool_execute_read_failed",
                 "workspace command execution failed",
             ));
         }
         Err(ExecuteFailure::Interrupted { cause, partial }) => {
             let partial = partial.map(PartialOutput::into_result).transpose()?;
-            return Ok(ExecutedOutcome::Interrupted { cause, partial });
+            return Ok(ToolDispatchOutcome::Interrupted { cause, partial });
         }
     };
     let process_status = ToolProcessStatus::classify(output.status);
@@ -1959,51 +1677,50 @@ fn execute_tool(
         "stdout:\n{stdout}\nstderr:\n{stderr}\n{status_text}{}",
         if truncated { "\n[truncated]" } else { "" }
     );
-    Ok(ExecutedOutcome::Completed(ExecutedTool {
-        result: ToolResult::Execute(TextResult {
+    Ok(ToolDispatchOutcome::Completed(ToolResult::Execute(
+        TextResult {
             text: BoundedText::new(text)?,
             truncated,
-        }),
-        process_status: Some(process_status),
-    }))
+        },
+    )))
 }
 
 fn write_tool(
     root: &WorkspaceRoot,
     input: WriteInput,
     cancellation: &CancellationSignal,
-) -> DtoResult<ExecutedOutcome> {
+) -> DtoResult<ToolDispatchOutcome> {
     if cancellation.is_cancelled() {
         return Ok(stopped_outcome(None));
     }
     let bytes = input.content.as_str().len() as u64;
-    let path = root.resolve_new_file_path(&input.path);
+    let path = root.resolve_path(&input.path);
     if let Some(expected) = input.expected_content.as_ref() {
         // Expected-content equality is checked against a bounded read: a
         // larger file can never equal the bounded expected content and is
         // reported as changed instead of being slurped (PR24-022).
         let current = match read_limited(&path, MAX_EDIT_TARGET_BYTES) {
             LimitedReadOutcome::Content(bytes) => String::from_utf8(bytes).map_err(|_| {
-                intention_types::ErrorDto::validation(
+                intention_proto::ErrorDto::validation(
                     "tool_write_conflict",
                     "workspace file changed before write",
                 )
             })?,
             LimitedReadOutcome::TooLarge => {
-                return Err(intention_types::ErrorDto::validation(
+                return Err(intention_proto::ErrorDto::validation(
                     "tool_write_conflict",
                     "workspace file changed before write",
                 ));
             }
             LimitedReadOutcome::Unreadable => {
-                return Err(intention_types::ErrorDto::validation(
+                return Err(intention_proto::ErrorDto::validation(
                     "tool_write_conflict",
                     "workspace file changed before write",
                 ));
             }
         };
         if current != expected.as_str() {
-            return Err(intention_types::ErrorDto::validation(
+            return Err(intention_proto::ErrorDto::validation(
                 "tool_write_conflict",
                 "workspace file changed before write",
             ));
@@ -2014,10 +1731,10 @@ fn write_tool(
         }
     }
     std::fs::write(path, input.content.as_str()).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
+        intention_proto::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
     })?;
-    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
-        ToolResult::Write(WriteResult { bytes }),
+    Ok(ToolDispatchOutcome::Completed(ToolResult::Write(
+        WriteResult { bytes },
     )))
 }
 
@@ -2025,7 +1742,7 @@ fn edit_tool(
     root: &WorkspaceRoot,
     input: EditInput,
     cancellation: &CancellationSignal,
-) -> DtoResult<ExecutedOutcome> {
+) -> DtoResult<ToolDispatchOutcome> {
     if cancellation.is_cancelled() {
         return Ok(stopped_outcome(None));
     }
@@ -2035,26 +1752,26 @@ fn edit_tool(
     // (PR24-022).
     let text = match read_limited(&path, MAX_EDIT_TARGET_BYTES) {
         LimitedReadOutcome::Content(bytes) => String::from_utf8(bytes).map_err(|_| {
-            intention_types::ErrorDto::validation(
+            intention_proto::ErrorDto::validation(
                 "tool_read_failed",
                 "unable to read workspace file",
             )
         })?,
         LimitedReadOutcome::TooLarge => {
-            return Err(intention_types::ErrorDto::validation(
+            return Err(intention_proto::ErrorDto::validation(
                 "tool_edit_target_too_large",
                 "edit target exceeds the workspace file size bound",
             ));
         }
         LimitedReadOutcome::Unreadable => {
-            return Err(intention_types::ErrorDto::validation(
+            return Err(intention_proto::ErrorDto::validation(
                 "tool_read_failed",
                 "unable to read workspace file",
             ));
         }
     };
     if !text.contains(input.old.as_str()) {
-        return Err(intention_types::ErrorDto::validation(
+        return Err(intention_proto::ErrorDto::validation(
             "edit_target_missing",
             "edit target was not found",
         ));
@@ -2062,7 +1779,7 @@ fn edit_tool(
     if let Some(expected) = input.expected_content.as_ref()
         && text != expected.as_str()
     {
-        return Err(intention_types::ErrorDto::validation(
+        return Err(intention_proto::ErrorDto::validation(
             "tool_edit_conflict",
             "workspace file changed before edit",
         ));
@@ -2073,12 +1790,12 @@ fn edit_tool(
     }
     let replacement = text.replacen(input.old.as_str(), input.new.as_str(), 1);
     std::fs::write(path, &replacement).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
+        intention_proto::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
     })?;
-    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
-        ToolResult::Edit(WriteResult {
+    Ok(ToolDispatchOutcome::Completed(ToolResult::Edit(
+        WriteResult {
             bytes: replacement.len() as u64,
-        }),
+        },
     )))
 }
 
@@ -2086,7 +1803,7 @@ fn glob_tool(
     root: &WorkspaceRoot,
     input: GlobInput,
     cancellation: &CancellationSignal,
-) -> DtoResult<ExecutedOutcome> {
+) -> DtoResult<ToolDispatchOutcome> {
     validate_search_pattern(input.pattern.as_str())?;
     if cancellation.is_cancelled() {
         return Ok(stopped_outcome(None));
@@ -2096,12 +1813,12 @@ fn glob_tool(
         .join(input.pattern.as_str())
         .to_str()
         .ok_or_else(|| {
-            intention_types::ErrorDto::validation("invalid_tool_pattern", "tool pattern is invalid")
+            intention_proto::ErrorDto::validation("invalid_tool_pattern", "tool pattern is invalid")
         })?
         .to_owned();
     let mut paths = Vec::new();
     for entry in glob::glob(&pattern).map_err(|_| {
-        intention_types::ErrorDto::validation("invalid_tool_pattern", "tool pattern is invalid")
+        intention_proto::ErrorDto::validation("invalid_tool_pattern", "tool pattern is invalid")
     })? {
         // The traversal is the tool's I/O step: a stop ends it and the entries
         // collected so far are returned as an honestly truncated partial list.
@@ -2129,11 +1846,11 @@ fn glob_tool(
             truncated: true,
         }))));
     }
-    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
-        ToolResult::Glob(PathsResult {
+    Ok(ToolDispatchOutcome::Completed(ToolResult::Glob(
+        PathsResult {
             paths: retained,
             truncated: window_truncated,
-        }),
+        },
     )))
 }
 
@@ -2163,7 +1880,7 @@ fn grep_tool(
     root: &WorkspaceRoot,
     input: GrepInput,
     cancellation: &CancellationSignal,
-) -> DtoResult<ExecutedOutcome> {
+) -> DtoResult<ToolDispatchOutcome> {
     validate_search_pattern(input.pattern.as_str())?;
     if cancellation.is_cancelled() {
         return Ok(stopped_outcome(None));
@@ -2176,7 +1893,7 @@ fn grep_tool(
         .as_ref()
         .map(|path| root.resolve_path(path))
         .ok_or_else(|| {
-            intention_types::ErrorDto::validation(
+            intention_proto::ErrorDto::validation(
                 "invalid_tool_path",
                 "grep requires a workspace path",
             )
@@ -2185,20 +1902,20 @@ fn grep_tool(
     // symbolic link like any other filesystem path, and only the type
     // decision happens here.
     let metadata = std::fs::metadata(&path).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
+        intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
     })?;
     if !metadata.is_file() {
-        return Err(intention_types::ErrorDto::validation(
+        return Err(intention_proto::ErrorDto::validation(
             "tool_search_failed",
             "workspace search failed",
         ));
     }
     let mut file = std::fs::File::open(path).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
+        intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
     })?;
     let mut bytes = Vec::new();
     let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
+        intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
     })?;
     let text = String::from_utf8_lossy(&bytes);
     let lossy_truncated = std::str::from_utf8(&bytes).is_err();
@@ -2206,7 +1923,7 @@ fn grep_tool(
         .path
         .as_ref()
         .ok_or_else(|| {
-            intention_types::ErrorDto::validation(
+            intention_proto::ErrorDto::validation(
                 "invalid_tool_path",
                 "grep requires a workspace path",
             )
@@ -2257,8 +1974,8 @@ fn grep_tool(
             truncated: true,
         }))));
     }
-    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
-        ToolResult::Grep(GrepResult { matches, truncated }),
+    Ok(ToolDispatchOutcome::Completed(ToolResult::Grep(
+        GrepResult { matches, truncated },
     )))
 }
 
@@ -2266,9 +1983,9 @@ fn grep_scoped(
     root: &WorkspaceRoot,
     input: GrepInput,
     cancellation: &CancellationSignal,
-) -> DtoResult<ExecutedOutcome> {
+) -> DtoResult<ToolDispatchOutcome> {
     let scope = input.scope.ok_or_else(|| {
-        intention_types::ErrorDto::validation("invalid_tool_path", "grep requires a workspace path")
+        intention_proto::ErrorDto::validation("invalid_tool_path", "grep requires a workspace path")
     })?;
     let (base, single) = match scope {
         GrepScope::File { path } => (root.resolve_path(&path), Some(path)),
@@ -2279,10 +1996,10 @@ fn grep_scoped(
     // link like any other filesystem path, and only the type decision happens
     // here.
     let metadata = std::fs::metadata(&base).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
+        intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
     })?;
     if single.is_some() && !metadata.is_file() {
-        return Err(intention_types::ErrorDto::validation(
+        return Err(intention_proto::ErrorDto::validation(
             "tool_search_failed",
             "workspace search failed",
         ));
@@ -2328,7 +2045,7 @@ fn grep_scoped(
             }
         }
     } else {
-        return Err(intention_types::ErrorDto::validation(
+        return Err(intention_proto::ErrorDto::validation(
             "tool_search_failed",
             "workspace search failed",
         ));
@@ -2347,14 +2064,14 @@ fn grep_scoped(
             }))));
         }
         let mut file = std::fs::File::open(&path).map_err(|_| {
-            intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
+            intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
         })?;
         let mut bytes = Vec::new();
         // Every file is read through the bounded reader, so an oversized file
         // cannot allocate unbounded memory during a directory search; the
         // truncation flag reports the dropped tail (PR24-022).
         let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|_| {
-            intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
+            intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
         })?;
         let text = String::from_utf8_lossy(&bytes);
         let lossy_truncated = std::str::from_utf8(&bytes).is_err();
@@ -2400,8 +2117,8 @@ fn grep_scoped(
                 line[..column].chars().count() as u64 + 1,
                 fragment,
             )? {
-                return Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
-                    ToolResult::Grep(GrepResult { matches, truncated }),
+                return Ok(ToolDispatchOutcome::Completed(ToolResult::Grep(
+                    GrepResult { matches, truncated },
                 )));
             }
         }
@@ -2412,8 +2129,8 @@ fn grep_scoped(
             truncated: true,
         }))));
     }
-    Ok(ExecutedOutcome::Completed(ExecutedTool::bare(
-        ToolResult::Grep(GrepResult { matches, truncated }),
+    Ok(ToolDispatchOutcome::Completed(ToolResult::Grep(
+        GrepResult { matches, truncated },
     )))
 }
 
@@ -2446,7 +2163,7 @@ fn record_grep_match(
     };
     let cost = serde_json::to_string(&matched)
         .map_err(|_| {
-            intention_types::ErrorDto::validation(
+            intention_proto::ErrorDto::validation(
                 "invalid_tool_result_content",
                 "tool result content could not be normalized",
             )
@@ -2478,7 +2195,7 @@ fn validate_search_pattern(pattern: &str) -> DtoResult<()> {
         || windows_rooted
         || pattern.split(['/', '\\']).any(|part| part == "..")
     {
-        return Err(intention_types::ErrorDto::validation(
+        return Err(intention_proto::ErrorDto::validation(
             "invalid_tool_pattern",
             "tool pattern must be relative and stay within the workspace",
         ));
@@ -2499,13 +2216,4 @@ mod coverage_helpers {
         assert!(text.ends_with("\n[truncated]"));
         assert!(!text.contains('\u{fffd}'));
     }
-}
-
-/// Private execution boundary; adapters implement this without leaking erased values.
-#[expect(
-    dead_code,
-    reason = "The private executor boundary is activated by the composition slice."
-)]
-trait ToolExecutor {
-    fn execute(&self, call: ToolCallId, input: ToolInput) -> DtoResult<ToolResult>;
 }

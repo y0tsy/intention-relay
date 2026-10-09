@@ -1,49 +1,59 @@
-//! Non-production fixtures for durable M3 integration tests.
+//! Non-production fixtures for durable integration tests.
+
+mod model_fixtures;
 
 use std::path::Path;
-use std::thread;
 
 use tempfile::TempDir;
 
-use intention::DaemonApplicationFacade;
+pub use crate::model_fixtures::{ScriptedDriver, run_ready};
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
-use intention_daemon::serve_test_connection;
-use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
-use intention_protocol::{
-    DaemonReadinessDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto,
-    ProtocolQueryResultDto,
+use intention_daemon::{DaemonApplicationFacade, TestHostLifecycle};
+use intention_proto::{
+    ConfigRevisionId, DtoResult, ProjectId, ProtocolResultDto, SchemaVersionDto, SessionId,
+    TimestampDto, WorkspaceId,
 };
-use intention_transport::{LocalEndpoint, LocalListener};
-use intention_types::{
-    ConfigRevisionId, DtoResult, ProjectId, SchemaVersionDto, SessionId, TimestampDto, WorkspaceId,
-};
+use intention_proto::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
+use intention_transport::{AsyncLocalListener, LocalEndpoint};
 
-/// Opens a durable facade at an explicit test-only database path.
+/// The provider credential every fixture snapshot carries.
 ///
-/// # Errors
-///
-/// Returns the typed facade startup failure.
-pub fn open_facade(
-    path: impl AsRef<Path>,
-    snapshot: ConfigSnapshotDto,
-) -> DtoResult<DaemonApplicationFacade> {
-    DaemonApplicationFacade::open_for_test_support(path, snapshot)
-}
+/// Suites assert against this constant instead of repeating the literal, so a
+/// fixture change can never silently drift away from the assertions.
+pub const FIXTURE_CREDENTIAL: &str = "fixture-secret";
 
 /// Creates a durable facade with a controlled credential-free fixture snapshot.
 ///
 /// # Errors
 ///
 /// Returns the typed facade startup failure.
-pub fn open_fixture_facade(path: impl AsRef<Path>) -> DtoResult<DaemonApplicationFacade> {
-    open_facade(path, fixture_snapshot())
+fn open_fixture_facade(path: impl AsRef<Path>) -> DtoResult<DaemonApplicationFacade> {
+    DaemonApplicationFacade::open_for_test_support(path, fixture_snapshot())
 }
 
 /// Returns a credential-free fixture snapshot with a native absolute source path.
 #[must_use]
 pub fn fixture_snapshot() -> ConfigSnapshotDto {
+    fixture_snapshot_with_model("fixture")
+}
+
+/// Returns a fixture snapshot that explicitly selects one provider model.
+#[must_use]
+pub fn fixture_snapshot_with_model(model: &str) -> ConfigSnapshotDto {
+    fixture_snapshot_with_context_window(model, None)
+}
+
+/// Returns a fixture snapshot with the exact context-window policy the caller requests.
+///
+/// `None` keeps the resolved configuration's default window policy; `Some`
+/// writes the window token count the sliding-window fixtures drive.
+#[must_use]
+pub fn fixture_snapshot_with_context_window(
+    model: &str,
+    window_tokens: Option<u64>,
+) -> ConfigSnapshotDto {
     let source = ConfigSourceDto::Explicit(
         ConfigPathDto::parse(
             std::env::temp_dir()
@@ -53,8 +63,13 @@ pub fn fixture_snapshot() -> ConfigSnapshotDto {
         )
         .unwrap_or_else(|_| unreachable!("fixture configuration source is absolute")),
     );
+    let context_window = window_tokens.map_or_else(String::new, |window| {
+        format!("context_window_tokens = {window}\n")
+    });
     let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-        "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"",
+        format!(
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"{FIXTURE_CREDENTIAL}\"\n{context_window}"
+        ),
         source,
     ))
     .unwrap_or_else(|_| unreachable!("fixture configuration resolves"));
@@ -81,9 +96,9 @@ pub fn fixture_workspace_root(label: &str) -> WorkspaceRootDto {
     .unwrap_or_else(|_| unreachable!("native temporary fixture root is absolute"))
 }
 
-/// Returns a controlled session-creation command for integration scenarios.
+/// Returns a controlled session-creation command for the fixture session.
 #[must_use]
-pub fn fixture_session_command(session_id: SessionId) -> CreateSessionCommandDto {
+fn fixture_session_command(session_id: SessionId) -> CreateSessionCommandDto {
     CreateSessionCommandDto::new(
         ProjectId::new(),
         session_id,
@@ -93,48 +108,25 @@ pub fn fixture_session_command(session_id: SessionId) -> CreateSessionCommandDto
     )
 }
 
-/// Creates a durable fixture session through the public protocol facade.
+/// Creates a durable fixture session through the public facade.
 ///
 /// # Errors
 ///
-/// Returns the typed protocol rejection.
-pub fn create_fixture_session(
+/// Returns the typed facade rejection.
+fn create_fixture_session(
     facade: &DaemonApplicationFacade,
     session_id: SessionId,
 ) -> DtoResult<()> {
-    match facade.command(ProtocolCommandDto::CreateSession(fixture_session_command(
-        session_id,
-    ))) {
-        ProtocolCommandResultDto::Accepted(_) => Ok(()),
-        ProtocolCommandResultDto::Rejected(error) => Err(error),
+    match facade.create_session(fixture_session_command(session_id))? {
+        ProtocolResultDto::SessionCreated(_) => Ok(()),
+        _ => unreachable!("fixture session creation answers with a session creation"),
     }
 }
 
-/// Returns whether the fixture facade reports ready through the protocol boundary.
-#[must_use]
-pub fn fixture_ready(facade: &DaemonApplicationFacade) -> bool {
-    matches!(
-        facade.query(ProtocolQueryDto::GetDaemonHealth),
-        ProtocolQueryResultDto::DaemonHealth(health) if health.readiness() == DaemonReadinessDto::Ready
-    )
-}
-
-/// Loads the fixture session's durable event history through the test-only facade seam.
-///
-/// # Errors
-///
-/// Returns the typed durable-history failure.
-pub fn durable_events(
-    facade: &DaemonApplicationFacade,
-    session_id: SessionId,
-) -> DtoResult<Vec<intention_types::EventEnvelopeDto<intention_domain::DomainEventDto>>> {
-    facade.durable_events_for_test_support(session_id)
-}
-
-/// Owns a durable fixture database and its configured session lifetime.
+/// Owns a durable fixture database, one configured session, and its fixture host.
 pub struct FixtureHost {
     directory: TempDir,
-    facade: DaemonApplicationFacade,
+    lifecycle: TestHostLifecycle,
 }
 
 impl FixtureHost {
@@ -145,44 +137,38 @@ impl FixtureHost {
     /// Returns a typed storage or session-creation failure.
     pub fn open(session_id: SessionId) -> DtoResult<Self> {
         let directory = TempDir::new().map_err(|_| {
-            intention_types::ErrorDto::unavailable(
+            intention_proto::ErrorDto::unavailable(
                 "fixture_storage_unavailable",
                 "fixture durable storage is unavailable",
             )
         })?;
         let facade = open_fixture_facade(directory.path().join("fixture.sqlite"))?;
         create_fixture_session(&facade, session_id)?;
-        Ok(Self { directory, facade })
-    }
-
-    /// Starts a bounded local fixture host and transfers database ownership to the serving thread.
-    #[must_use]
-    pub fn spawn(
-        self,
-        endpoint: LocalEndpoint,
-        connection_count: usize,
-    ) -> thread::JoinHandle<DtoResult<()>> {
-        thread::spawn(move || {
-            let Self { directory, facade } = self;
-            let _directory = directory;
-            serve_fixture_connections(endpoint, facade, connection_count)
+        let lifecycle = intention_daemon::test_host_lifecycle(facade);
+        Ok(Self {
+            directory,
+            lifecycle,
         })
     }
-}
 
-/// Serves a bounded fixture connection count through the real daemon dispatch path.
-///
-/// # Errors
-///
-/// Returns a typed listener or connection failure.
-fn serve_fixture_connections(
-    endpoint: LocalEndpoint,
-    facade: DaemonApplicationFacade,
-    connection_count: usize,
-) -> DtoResult<()> {
-    let listener = LocalListener::bind(endpoint)?;
-    for _ in 0..connection_count {
-        serve_test_connection(listener.accept()?, facade.clone());
+    /// Serves a bounded fixture connection count through the real daemon dispatch path.
+    ///
+    /// The database directory stays owned by this call, so a fixture that serves
+    /// for the whole scenario keeps its durable storage alive.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed listener failure.
+    pub async fn serve(self, endpoint: LocalEndpoint, connection_count: usize) -> DtoResult<()> {
+        let listener = AsyncLocalListener::bind(endpoint)?;
+        let Self {
+            directory,
+            lifecycle,
+        } = self;
+        let _directory = directory;
+        lifecycle
+            .serve_connections(listener, connection_count)
+            .await;
+        Ok(())
     }
-    Ok(())
 }

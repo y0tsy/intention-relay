@@ -1,21 +1,19 @@
 //! TOML configuration parsing, validation, resolution, and safe projection.
 //!
-//! M1 parses a versioned TOML file into a validated public projection. Raw
-//! credentials remain inside this crate and are never serialized, displayed, or
-//! included in errors. M1 establishes the credential-free snapshot DTO shape;
-//! configuration persistence, daemon reload, and per-run application remain
-//! deferred to M3 and M4.
+//! One TOML document is parsed and validated exactly once into one resolved,
+//! credential-free shape; the same parse also yields the private credential for
+//! startup. Raw credentials remain inside this crate and are never serialized,
+//! displayed, or included in errors.
 
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
-use intention_types::{ConfigRevisionId, DtoResult, ErrorDto, SchemaVersionDto, TimestampDto};
+use intention_proto::{ConfigRevisionId, DtoResult, ErrorDto, SchemaVersionDto, TimestampDto};
 use serde::{Deserialize, Serialize};
 
 const CURRENT_SCHEMA_MAJOR: u16 = 1;
 const CURRENT_SCHEMA_MINOR: u16 = 0;
 const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = 250_000;
-const DEFAULT_CONTEXT_CAPACITY_TOKENS: u64 = 1_000_000;
 
 /// Requires a schema version exactly equal to the current configuration schema.
 ///
@@ -31,6 +29,16 @@ fn require_current_schema_version(schema_version: SchemaVersionDto) -> DtoResult
         ));
     }
     Ok(())
+}
+
+/// Decodes one snapshot schema version and requires it to be the current one.
+fn deserialize_current_schema_version<'de, D>(deserializer: D) -> Result<SchemaVersionDto, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let schema_version = SchemaVersionDto::deserialize(deserializer)?;
+    require_current_schema_version(schema_version).map_err(serde::de::Error::custom)?;
+    Ok(schema_version)
 }
 
 /// A validated, absolute configuration path with semantic configuration intent.
@@ -208,7 +216,7 @@ impl RawConfigInputDto {
 }
 
 /// The provider API contract selected by validated configuration.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ProviderKindDto {
     /// The OpenRouter provider adapter.
     #[serde(rename = "openrouter")]
@@ -236,6 +244,9 @@ impl Display for ProviderKindDto {
 }
 
 /// A public, credential-free provider selection projection.
+///
+/// Decoding re-validates the model and endpoint through the same constructor
+/// the TOML path uses, so a decoded snapshot cannot carry a blank selection.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderSelectionDto {
     kind: ProviderKindDto,
@@ -319,40 +330,13 @@ impl ProviderSelectionDto {
 }
 
 /// A public, credential-free resolved configuration DTO.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResolvedConfigDto {
-    schema_version: SchemaVersionDto,
     provider: ProviderSelectionDto,
     provider_execution: ProviderExecutionPolicyDto,
     context_window: ContextWindowPolicyDto,
     source_kind: ConfigSourceKindDto,
-}
-
-impl<'de> Deserialize<'de> for ResolvedConfigDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawResolvedConfigDto {
-            schema_version: SchemaVersionDto,
-            provider: ProviderSelectionDto,
-            provider_execution: ProviderExecutionPolicyDto,
-            context_window: ContextWindowPolicyDto,
-            source_kind: ConfigSourceKindDto,
-        }
-
-        let raw = RawResolvedConfigDto::deserialize(deserializer)?;
-        Self::from_public_parts(
-            raw.schema_version,
-            raw.provider,
-            raw.provider_execution,
-            raw.context_window,
-            raw.source_kind,
-        )
-        .map_err(serde::de::Error::custom)
-    }
 }
 
 impl ResolvedConfigDto {
@@ -363,16 +347,41 @@ impl ResolvedConfigDto {
     /// Returns only safe typed validation errors. The input TOML and any
     /// credential it contains are deliberately omitted from errors.
     pub fn parse_resolve(input: RawConfigInputDto) -> DtoResult<Self> {
-        let document: toml::Value = toml::from_str(&input.text).map_err(|_| {
+        Self::parse_document(&input.text, input.source.kind())
+            .map(|(resolved, _credential)| resolved)
+    }
+
+    /// Parses configuration into opaque startup-only material and its safe projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns only safe typed validation errors and never exposes the raw credential.
+    pub fn parse_startup_material(input: RawConfigInputDto) -> DtoResult<StartupProviderMaterial> {
+        let (resolved, credential) = Self::parse_document(&input.text, input.source.kind())?;
+        Ok(StartupProviderMaterial {
+            resolved,
+            opaque: credential,
+        })
+    }
+
+    /// Parses, validates, and resolves one TOML document exactly once.
+    ///
+    /// The returned credential is the private `provider.credential` value; it
+    /// never enters a public value, error, or log.
+    ///
+    /// # Errors
+    ///
+    /// Returns only safe typed validation errors. The input TOML and any
+    /// credential it contains are deliberately omitted from errors.
+    fn parse_document(text: &str, source_kind: ConfigSourceKindDto) -> DtoResult<(Self, String)> {
+        let document: toml::Value = toml::from_str(text).map_err(|_| {
             ErrorDto::validation(
                 "invalid_config_toml",
                 "configuration TOML could not be parsed",
             )
         })?;
-        let normalized = match document.get("schema_version") {
-            Some(toml::Value::Integer(major)) if *major == i64::from(CURRENT_SCHEMA_MAJOR) => {
-                Self::parse_v1(document)?
-            }
+        match document.get("schema_version") {
+            Some(toml::Value::Integer(major)) if *major == i64::from(CURRENT_SCHEMA_MAJOR) => {}
             Some(toml::Value::Integer(_)) => {
                 return Err(ErrorDto::validation(
                     "unsupported_config_schema_version",
@@ -391,85 +400,45 @@ impl ResolvedConfigDto {
                     "configuration does not include a schema version",
                 ));
             }
-        };
-        Self::validate(normalized, input.source.kind())
-    }
-
-    fn parse_v1(document: toml::Value) -> DtoResult<NormalizedConfig> {
+        }
         let raw: RawV1Config = document.try_into().map_err(|_| {
             ErrorDto::validation(
                 "invalid_config_schema",
                 "configuration does not match the supported schema",
             )
         })?;
-        let provider_execution = raw.provider.execution.clone();
-        Ok(NormalizedConfig {
-            provider: raw.provider,
-            provider_execution,
-        })
-    }
-
-    fn validate(config: NormalizedConfig, source_kind: ConfigSourceKindDto) -> DtoResult<Self> {
-        if config.provider.credential.trim().is_empty() {
-            return Err(ErrorDto::validation(
-                "missing_provider_credential",
-                "provider credential must not be empty",
-            ));
-        }
-        let context_window = ContextWindowPolicyDto::from_raw(
-            config.provider.context_window_tokens,
-            config.provider.context_capacity_tokens,
-        )?;
-        let provider = ProviderSelectionDto::new(
-            config.provider.kind,
-            config.provider.model,
-            config.provider.endpoint,
-            true,
-        )?;
-        Self::from_public_parts(
-            SchemaVersionDto::new(CURRENT_SCHEMA_MAJOR, CURRENT_SCHEMA_MINOR),
+        let RawProviderConfig {
+            kind,
+            model,
+            credential,
+            endpoint,
+            execution,
+            context_window_tokens,
+        } = raw.provider;
+        let credential = match credential {
+            Some(credential) if !credential.trim().is_empty() => credential,
+            Some(_) => {
+                return Err(ErrorDto::validation(
+                    "missing_provider_credential",
+                    "provider credential must not be empty",
+                ));
+            }
+            None => {
+                return Err(ErrorDto::validation(
+                    "invalid_config_schema",
+                    "configuration does not match the supported schema",
+                ));
+            }
+        };
+        let context_window = ContextWindowPolicyDto::from_raw(context_window_tokens)?;
+        let provider = ProviderSelectionDto::new(kind, model, endpoint, true)?;
+        let resolved = Self {
             provider,
-            ProviderExecutionPolicyDto::from_raw(config.provider_execution)?,
+            provider_execution: ProviderExecutionPolicyDto::from_raw(execution)?,
             context_window,
             source_kind,
-        )
-    }
-
-    fn from_public_parts(
-        schema_version: SchemaVersionDto,
-        provider: ProviderSelectionDto,
-        provider_execution: ProviderExecutionPolicyDto,
-        context_window: ContextWindowPolicyDto,
-        source_kind: ConfigSourceKindDto,
-    ) -> DtoResult<Self> {
-        require_current_schema_version(schema_version)?;
-        Ok(Self {
-            schema_version,
-            provider,
-            provider_execution,
-            context_window,
-            source_kind,
-        })
-    }
-
-    /// Parses configuration into opaque startup-only material and its safe projection.
-    ///
-    /// # Errors
-    ///
-    /// Returns only safe typed validation errors and never exposes the raw credential.
-    pub fn parse_startup_material(input: RawConfigInputDto) -> DtoResult<StartupProviderMaterial> {
-        let credential = parse_credential(&input.text)?;
-        let resolved = Self::parse_resolve(input)?;
-        Ok(StartupProviderMaterial {
-            resolved,
-            opaque: credential,
-        })
-    }
-
-    /// Returns the normalized current configuration schema version.
-    #[must_use]
-    pub const fn schema_version(&self) -> SchemaVersionDto {
-        self.schema_version
+        };
+        Ok((resolved, credential))
     }
 
     /// Returns the public credential-free provider selection.
@@ -495,58 +464,17 @@ impl ResolvedConfigDto {
     pub const fn source_kind(&self) -> ConfigSourceKindDto {
         self.source_kind
     }
-
-    /// Returns a safe diagnostic projection with no source path or credential.
-    #[must_use]
-    pub fn safe_debug_projection(&self) -> String {
-        format!(
-            "schema_version={}.{} source={} provider={} model={} credential_configured={} attempt_timeout_seconds={} max_attempts={} context_window_tokens={} context_capacity_tokens={}",
-            self.schema_version.major(),
-            self.schema_version.minor(),
-            self.source_kind,
-            self.provider.kind,
-            self.provider.model,
-            self.provider.credential_configured,
-            self.provider_execution.attempt_timeout_seconds,
-            self.provider_execution.max_attempts,
-            self.context_window.window_tokens,
-            self.context_window.capacity_tokens,
-        )
-    }
 }
 
 /// An immutable, credential-free configuration selection captured for a future run.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigSnapshotDto {
+    #[serde(deserialize_with = "deserialize_current_schema_version")]
     schema_version: SchemaVersionDto,
     revision_id: ConfigRevisionId,
     captured_at: TimestampDto,
     resolved: ResolvedConfigDto,
-}
-
-impl<'de> Deserialize<'de> for ConfigSnapshotDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawConfigSnapshotDto {
-            schema_version: SchemaVersionDto,
-            revision_id: ConfigRevisionId,
-            captured_at: TimestampDto,
-            resolved: ResolvedConfigDto,
-        }
-
-        let raw = RawConfigSnapshotDto::deserialize(deserializer)?;
-        require_current_schema_version(raw.schema_version).map_err(serde::de::Error::custom)?;
-        Ok(Self {
-            schema_version: raw.schema_version,
-            revision_id: raw.revision_id,
-            captured_at: raw.captured_at,
-            resolved: raw.resolved,
-        })
-    }
 }
 
 impl ConfigSnapshotDto {
@@ -599,21 +527,17 @@ impl ConfigSnapshotDto {
     ///
     /// # Errors
     ///
-    /// Returns an unavailable error when either nested public schema version
-    /// differs from the current configuration schema.
+    /// Returns an unavailable error when the snapshot schema version differs
+    /// from the current configuration schema.
     pub fn validate_for_persistence(&self) -> DtoResult<()> {
-        require_current_schema_version(self.schema_version)?;
-        require_current_schema_version(self.resolved.schema_version())
-    }
-}
-
-impl Display for ResolvedConfigDto {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.safe_debug_projection())
+        require_current_schema_version(self.schema_version)
     }
 }
 
 /// Safe per-run provider execution policy resolved at startup.
+///
+/// Decoding applies the same defaults and range validation as resolution, so a
+/// decoded policy always carries a supported attempt budget.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderExecutionPolicyDto {
     attempt_timeout_seconds: u8,
@@ -667,10 +591,12 @@ impl ProviderExecutionPolicyDto {
 }
 
 /// Safe per-run provider context-window policy resolved at startup.
+///
+/// Decoding applies the same positive-window validation as resolution, so a
+/// decoded policy can never carry an empty window.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct ContextWindowPolicyDto {
     window_tokens: u64,
-    capacity_tokens: u64,
 }
 
 impl<'de> Deserialize<'de> for ContextWindowPolicyDto {
@@ -682,47 +608,29 @@ impl<'de> Deserialize<'de> for ContextWindowPolicyDto {
         #[serde(deny_unknown_fields)]
         struct RawContextWindowPolicyDto {
             window_tokens: u64,
-            capacity_tokens: u64,
         }
 
         let raw = RawContextWindowPolicyDto::deserialize(deserializer)?;
-        Self::from_raw(Some(raw.window_tokens), Some(raw.capacity_tokens))
-            .map_err(serde::de::Error::custom)
+        Self::from_raw(Some(raw.window_tokens)).map_err(serde::de::Error::custom)
     }
 }
 
 impl ContextWindowPolicyDto {
-    fn from_raw(window_tokens: Option<u64>, capacity_tokens: Option<u64>) -> DtoResult<Self> {
+    fn from_raw(window_tokens: Option<u64>) -> DtoResult<Self> {
         let window_tokens = window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS);
-        let capacity_tokens = capacity_tokens.unwrap_or(DEFAULT_CONTEXT_CAPACITY_TOKENS);
-        if capacity_tokens == 0 {
-            return Err(ErrorDto::validation(
-                "invalid_provider_context_capacity_tokens",
-                "provider context capacity tokens must be greater than zero",
-            ));
-        }
-        if window_tokens == 0 || window_tokens >= capacity_tokens {
+        if window_tokens == 0 {
             return Err(ErrorDto::validation(
                 "invalid_provider_context_window_tokens",
-                "provider context window tokens must be greater than zero and less than the context capacity",
+                "provider context window tokens must be greater than zero",
             ));
         }
-        Ok(Self {
-            window_tokens,
-            capacity_tokens,
-        })
+        Ok(Self { window_tokens })
     }
 
     /// Returns the sliding context window size in tokens.
     #[must_use]
     pub const fn window_tokens(self) -> u64 {
         self.window_tokens
-    }
-
-    /// Returns the full model context capacity in tokens.
-    #[must_use]
-    pub const fn capacity_tokens(self) -> u64 {
-        self.capacity_tokens
     }
 }
 
@@ -765,82 +673,17 @@ struct RawV1Config {
 struct RawProviderConfig {
     kind: ProviderKindDto,
     model: String,
-    credential: String,
+    credential: Option<String>,
     endpoint: Option<String>,
     execution: Option<RawProviderExecutionPolicyDto>,
-    context_capacity_tokens: Option<u64>,
     context_window_tokens: Option<u64>,
 }
 
 #[derive(Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawProviderExecutionPolicyDto {
-    #[serde(default)]
     attempt_timeout_seconds: Option<u8>,
-    #[serde(default)]
     max_attempts: Option<u8>,
-}
-
-struct NormalizedConfig {
-    provider: RawProviderConfig,
-    provider_execution: Option<RawProviderExecutionPolicyDto>,
-}
-
-/// Parses and returns the private `provider.credential` value of one raw
-/// configuration document.
-///
-/// This helper is composition-only: callers must invoke it inside their own
-/// private loading boundary and must never log, serialize, or place the
-/// returned value in a DTO, error, or durable surface. It performs the same
-/// TOML parse and emptiness check as startup parsing, so the returned value
-/// is byte-exact (escaping is the TOML parser's responsibility).
-///
-/// # Errors
-///
-/// Returns `invalid_config_toml` for a document that is not valid TOML and
-/// `missing_provider_credential` when the document carries no non-empty
-/// `provider.credential` value. Errors never include document content.
-pub fn parse_credential(text: &str) -> DtoResult<String> {
-    let document: toml::Value = toml::from_str(text).map_err(|_| {
-        ErrorDto::validation(
-            "invalid_config_toml",
-            "configuration TOML could not be parsed",
-        )
-    })?;
-    let credential = document
-        .get("provider")
-        .and_then(toml::Value::as_table)
-        .and_then(|provider| provider.get("credential"))
-        .and_then(toml::Value::as_str)
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            ErrorDto::validation(
-                "missing_provider_credential",
-                "provider credential must not be empty",
-            )
-        })?;
-    if credential.trim().is_empty() {
-        Err(ErrorDto::validation(
-            "missing_provider_credential",
-            "provider credential must not be empty",
-        ))
-    } else {
-        Ok(credential)
-    }
-}
-
-impl<'de> Deserialize<'de> for ProviderKindDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        match value.as_str() {
-            "openrouter" => Ok(Self::Openrouter),
-            "generic-chat-completion-api" => Ok(Self::GenericChatCompletionApi),
-            _ => Err(serde::de::Error::custom("unsupported provider kind")),
-        }
-    }
 }
 
 #[cfg(unix)]
@@ -864,9 +707,9 @@ pub fn ensure_user_only_permissions(path: &ConfigPathDto) -> DtoResult<()> {
     } else {
         Err(ErrorDto::new(
             "unsafe_config_permissions",
-            intention_types::ErrorCategoryDto::Policy,
+            intention_proto::ErrorCategoryDto::Policy,
             "configuration file must be readable only by its owner",
-            intention_types::ErrorRetryDto::Manual,
+            intention_proto::ErrorRetryDto::Manual,
             None,
         )?)
     }
@@ -950,23 +793,27 @@ credential = \"{credential}\"
             assert_eq!(kind.as_str(), expected);
             assert_eq!(kind.to_string(), expected);
         }
-        for provider in ["openrouter", "openrouter", "generic-chat-completion-api"] {
+        for (provider, model) in [
+            ("openrouter", "fixture-model"),
+            ("generic-chat-completion-api", "example-chat-model"),
+        ] {
             let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
                 v1(
                     provider,
-                    "fixture-model",
+                    model,
                     CREDENTIAL,
                     Some("https://example.invalid/v1"),
                 ),
                 explicit_source(),
             ))
             .expect("supported provider resolves");
+            assert_eq!(resolved.provider().kind().as_str(), provider);
+            assert_eq!(resolved.provider().model(), model);
             assert_eq!(
                 resolved.provider().endpoint(),
                 Some("https://example.invalid/v1")
             );
             assert!(resolved.provider().credential_configured());
-            assert_eq!(resolved.schema_version(), SchemaVersionDto::new(1, 0));
         }
         let unknown = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
             v1("unknown", "fixture-model", CREDENTIAL, None),
@@ -1015,20 +862,6 @@ credential = \"{credential}\"
     }
 
     #[test]
-    fn configuration_projection_is_redacted_and_source_kind_is_safe() {
-        let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            v1("openrouter", "gpt-5.6-terra", CREDENTIAL, None),
-            explicit_source(),
-        ))
-        .expect("fixture resolves");
-        let projection = resolved.safe_debug_projection();
-        assert!(projection.contains("source=explicit"));
-        assert!(projection.contains("credential_configured=true"));
-        assert!(!projection.contains(CREDENTIAL));
-        assert_eq!(resolved.to_string(), projection);
-    }
-
-    #[test]
     fn parse_helpers_reject_schema_and_shape_mismatches() {
         let wrong_major = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
             v1("openrouter", "fixture", CREDENTIAL, None).replacen(
@@ -1053,26 +886,6 @@ credential = \"{credential}\"
         ))
         .expect_err("unversioned configuration must fail closed");
         assert_eq!(unversioned.code(), "invalid_config_schema");
-    }
-
-    #[test]
-    fn generic_provider_preserves_configured_model_identifier() {
-        let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            v1(
-                "generic-chat-completion-api",
-                "example-chat-model",
-                CREDENTIAL,
-                None,
-            ),
-            explicit_source(),
-        ))
-        .expect("generic provider selection must preserve the configured model identifier");
-
-        assert_eq!(
-            resolved.provider().kind(),
-            ProviderKindDto::GenericChatCompletionApi
-        );
-        assert_eq!(resolved.provider().model(), "example-chat-model");
     }
 
     #[cfg(unix)]
@@ -1121,7 +934,7 @@ credential = \"{credential}\"
     }
 
     #[test]
-    fn parse_credential_extracts_the_exact_private_value_without_echoing_it() {
+    fn startup_material_preserves_the_exact_private_credential_without_echoing_it() {
         // Serialize the document so string escaping is the TOML serializer's
         // responsibility, exactly like a raw configuration file.
         fn document_with_credential(credential: &str) -> String {
@@ -1145,27 +958,38 @@ credential = \"{credential}\"
         }
 
         let tricky = "sk-\"quoted\"-and\\backslash";
+        let material = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
+            document_with_credential(tricky),
+            explicit_source(),
+        ))
+        .expect("credential parses from the document");
+        let (resolved, credential) =
+            material.into_parts_for_provider(|resolved, credential| (resolved, credential));
         assert_eq!(
-            parse_credential(&document_with_credential(tricky))
-                .expect("credential parses from the document"),
-            tricky,
+            credential, tricky,
             "escaping is the TOML parser's responsibility"
         );
-        for failure in [
-            document_with_credential(" "),
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\n"
-                .to_owned(),
-            "not a toml document [[".to_owned(),
+        assert_eq!(resolved.provider().kind(), ProviderKindDto::Openrouter);
+
+        // A blank credential is a value failure, an absent one is a shape
+        // failure, and malformed TOML is a document failure: three distinct
+        // typed codes that all stay free of document content.
+        for (failure, expected_code) in [
+            (document_with_credential(" "), "missing_provider_credential"),
+            (
+                "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\n"
+                    .to_owned(),
+                "invalid_config_schema",
+            ),
+            ("not a toml document [[".to_owned(), "invalid_config_toml"),
         ] {
-            let error = parse_credential(&failure).expect_err("invalid document must fail");
-            assert!(
-                matches!(
-                    error.code(),
-                    "missing_provider_credential" | "invalid_config_toml"
-                ),
-                "unexpected failure code {}",
-                error.code()
-            );
+            let error = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
+                failure,
+                explicit_source(),
+            ))
+            .err()
+            .expect("invalid document must fail");
+            assert_eq!(error.code(), expected_code);
             assert!(
                 !error.to_string().contains(CREDENTIAL),
                 "the error never echoes document content"

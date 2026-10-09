@@ -14,12 +14,49 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = ROOT / "quality" / "tools.toml"
+WORKFLOW = ROOT / ".github" / "workflows" / "quality.yml"
 
 # Scoped CI checks: every CI job validates only the toolchains, components,
 # and tools its phase actually uses, while local runs (no scope) still
-# validate the complete pinned set. The union of all scopes equals the
-# unscoped policy, so no pinned tool or version escapes validation.
+# validate the complete pinned set. The union of all CI scopes covers every
+# pinned toolchain and tool, so none escapes CI validation; components are
+# validated by the phase that installs them, and the unscoped local run
+# validates the complete pinned set.
 SCOPES = ("all", "lint-arch", "test", "coverage", "deps")
+
+TOOLCHAIN_LITERAL = re.compile(r"^\s*toolchain:\s*(\S+)\s*$", re.MULTILINE)
+NIGHTLY_SELECTOR = re.compile(r"\+nightly-[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def check_workflow_toolchain_pins(policy: dict[str, object]) -> list[str]:
+    """Return failures for toolchain spellings that drift from the pinned policy.
+
+    The workflow installs toolchains by literal name while the Python runners
+    read `quality/tools.toml`, so the workflow literals and every `+nightly-*`
+    selector inside a pinned tool command are compared against that one source.
+    """
+    toolchains = policy["toolchains"]
+    stable = toolchains["stable"]
+    nightly = toolchains["nightly"]
+    pinned = sorted({stable, nightly})
+    failures: list[str] = []
+    if not WORKFLOW.exists():
+        return [f"the quality workflow is missing: {WORKFLOW}"]
+    for match in TOOLCHAIN_LITERAL.finditer(WORKFLOW.read_text(encoding="utf-8")):
+        literal = match.group(1)
+        if literal not in {stable, nightly}:
+            failures.append(
+                f"{WORKFLOW}: workflow toolchain {literal!r} must be one of the quality/tools.toml pins {pinned}"
+            )
+    for tool in policy["tools"]:
+        for part in tool["command"]:
+            for selector in NIGHTLY_SELECTOR.findall(part):
+                if selector != f"+{nightly}":
+                    failures.append(
+                        f"quality/tools.toml tool {tool['name']} selects {selector!r}, "
+                        f"but [toolchains].nightly is {nightly!r}"
+                    )
+    return failures
 
 
 def scope_toolchains(scope: str, policy: dict[str, object]) -> list[str]:
@@ -166,6 +203,10 @@ def main() -> None:
         if canonical_bin is not None and Path(executable).resolve().parent != canonical_bin:
             fail(f"{tool['name']} must resolve from canonical Cargo bin: {canonical_bin}")
         require_version(tool["name"], tool["command"], tool["version"])
+
+    pin_failures = check_workflow_toolchain_pins(policy)
+    if pin_failures:
+        fail("\n".join(pin_failures))
 
     print(f"tools-check: pinned toolchains, components, and tools are available (scope {arguments.scope})")
 

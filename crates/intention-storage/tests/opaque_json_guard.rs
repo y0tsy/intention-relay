@@ -353,11 +353,14 @@ fn json_shaped_field_declarations_with(source: &str, aliases: &[(String, String)
     declarations
 }
 
-/// Collects every Rust source under `root`, failing closed when any part
-/// of the subtree cannot be read: an unreadable directory, entry, or file
-/// aborts the scan instead of silently shrinking it. A `target` directory
-/// is never part of the source surface.
+/// Collects the Rust sources under one file or directory root, failing
+/// closed when any part of the surface cannot be read: an unreadable
+/// directory, entry, or file aborts the scan instead of silently shrinking
+/// it. A `target` directory is never part of the source surface.
 fn rust_sources(root: &Path) -> Result<Vec<PathBuf>, String> {
+    if root.is_file() {
+        return Ok(vec![root.to_path_buf()]);
+    }
     let mut sources = Vec::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
@@ -390,10 +393,10 @@ fn rust_sources(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(sources)
 }
 
-/// Scans every Rust source under `root` and returns the number of scanned
-/// files plus every JSON-shaped carrier field declaration on the crate's
-/// DTO surface, resolving aliases across the whole tree and failing closed
-/// when a source cannot be read.
+/// Scans the Rust sources under one file or directory root and returns the
+/// number of scanned files plus every JSON-shaped carrier field declaration
+/// on the crate's DTO surface, resolving aliases across the scanned sources
+/// and failing closed when a source cannot be read.
 fn scan_storage_source_tree(root: &Path) -> Result<(usize, Vec<String>), String> {
     let sources = rust_sources(root)?;
     let scanned = sources.len();
@@ -417,10 +420,12 @@ fn scan_storage_source_tree(root: &Path) -> Result<(usize, Vec<String>), String>
 }
 
 /// The storage boundary guard: no storage DTO may declare a JSON-shaped carrier
-/// field. The guard scans every Rust source of this crate, whatever the
-/// directory, parses each struct body whatever the field visibility and
-/// layout, resolves same-crate type aliases, and fails closed when the
-/// source subtree cannot be read.
+/// field. The guard scans the whole storage source tree — the crate-root
+/// contract module and the private backend module that owns the JSON codecs —
+/// parses each struct body whatever the field visibility and layout, resolves
+/// same-crate type aliases, and fails closed when a source cannot be read. The
+/// backend module is inside the scanned surface because it is the module that
+/// encodes and decodes the persisted JSON columns.
 ///
 /// A carrier is a field whose type names the JSON crate (its untyped
 /// value, its map, or any other shape) or a field whose name contains
@@ -431,12 +436,12 @@ fn scan_storage_source_tree(root: &Path) -> Result<(usize, Vec<String>), String>
 /// invisible to the scan.
 #[test]
 fn storage_dto_surface_declares_no_opaque_json_string_field() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source_tree = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let (scanned, offenses) =
-        scan_storage_source_tree(root).expect("the storage source tree is readable");
-    assert!(
-        scanned > 0,
-        "the guard must scan at least one storage source file"
+        scan_storage_source_tree(&source_tree).expect("the storage source tree is readable");
+    assert_eq!(
+        scanned, 2,
+        "the guard must scan the contract module and the backend module that owns the JSON codecs"
     );
     assert!(
         offenses.is_empty(),
@@ -470,7 +475,7 @@ fn opaque_json_guard_flags_every_json_shaped_carrier_field() {
         );
     }
     for clean in [
-        "struct Fixture { pub snapshot: RunSnapshotDto }",
+        "struct Fixture { pub snapshot: SessionSnapshotDto }",
         "struct Fixture { pub revision_id: String }",
         "struct Fixture { pub outcomes: Vec<ToolResultOutcomeDto> }",
         "struct Fixture { pub payload: Box<str> }",

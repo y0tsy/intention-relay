@@ -10,8 +10,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-intention-protocol = { path = "../intention-protocol", version = "=0.0.0" }
-intention-types = { path = "../intention-types", version = "=0.0.0" }
+intention-proto = { path = "../intention-proto", version = "=0.0.0" }
 interprocess = { version = "2.4.3", features = ["tokio"] }
 serde = "1.0.228"
 serde_json = "1.0.149"

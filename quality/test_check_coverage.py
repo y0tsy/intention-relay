@@ -14,7 +14,7 @@ CHECKER = ROOT / "quality" / "check_coverage.py"
 
 POLICY = """\
 [policy]
-phase = "m5"
+phase = "slice15"
 
 [tiers]
 core = 75.0
@@ -70,7 +70,6 @@ def write_report(root: Path, lines: dict[str, tuple[int, int]]) -> Path:
                                 "filename": f"crates/{crate}/src/lib.rs",
                                 "summary": {
                                     "lines": {"count": count, "covered": covered},
-                                    "branches": {"percent": 100.0},
                                 },
                             }
                             for crate, (count, covered) in lines.items()

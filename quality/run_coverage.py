@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Collect branch-aware per-crate and workspace coverage."""
+"""Collect line-only coverage per crate and for the workspace."""
 
 from __future__ import annotations
 
-import argparse
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -11,42 +11,31 @@ import tomllib
 
 try:
     from .timing import run_command
+    from .toolchains import nightly_selector
 except ImportError:
     from timing import run_command
+    from toolchains import nightly_selector
 
 ROOT = Path(__file__).resolve().parents[1]
-POLICY = ROOT / "quality" / "features.toml"
 COVERAGE_POLICY = ROOT / "quality" / "coverage.toml"
 REPORTS = ROOT / "quality" / "reports"
 
+# The workspace declares exactly one feature (`test-support`, non-production on
+# `intention-daemon`), so one configuration collects every executed path.
+FEATURE_FLAGS = ["--all-features"]
 
-def run(
-    command: list[str],
-    *,
-    profile: str = "",
-    crate: str = "",
-    stage: str = "command",
-) -> None:
+
+def run(command: list[str], *, crate: str = "", stage: str = "command") -> None:
     completed = run_command(
         command,
         cwd=ROOT,
         phase="coverage",
         gate="coverage",
-        profile=profile,
         crate=crate,
         stage=stage,
     )
     if completed.returncode != 0:
         raise subprocess.CalledProcessError(completed.returncode, command)
-
-
-def normalized_flags(flags: object) -> tuple[str, ...]:
-    if not isinstance(flags, list) or not all(isinstance(flag, str) for flag in flags):
-        raise ValueError("coverage profile flags must be a string list")
-    return tuple(flags)
-
-
-TEST_MARKERS = ("#[test]", "#[cfg(test)]")
 
 
 def collected_crates(coverage_policy: dict[str, object]) -> list[str]:
@@ -65,16 +54,104 @@ def collected_crates(coverage_policy: dict[str, object]) -> list[str]:
     return sorted(collected)
 
 
-def crate_has_test_code(root: Path, crate: str) -> bool:
-    """Whether a collected crate has any test harness to execute."""
-    return any(
-        marker in path.read_text(encoding="utf-8")
-        for path in (root / "crates" / crate).rglob("*.rs")
-        for marker in TEST_MARKERS
-    )
+def unexecutable_crates(coverage_policy: dict[str, object]) -> list[str]:
+    """Return the collected crates the policy declares as having no test target."""
+    state = coverage_policy.get("policy")
+    declared = state.get("unexecutable_crates") if isinstance(state, dict) else None
+    if not isinstance(declared, list) or not all(isinstance(name, str) for name in declared):
+        raise ValueError("coverage [policy].unexecutable_crates must be a string list")
+    return declared
 
 
-METADATA_COMMAND = ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"]
+def metadata_packages(snapshot: Path) -> dict[str, dict[str, object]]:
+    """Read the runner's locked Cargo metadata snapshot into a package map."""
+    try:
+        with snapshot.open(encoding="utf-8") as metadata_file:
+            metadata = json.load(metadata_file)
+    except FileNotFoundError:
+        raise SystemExit(f"coverage-runner: metadata snapshot is missing: {snapshot}") from None
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"coverage-runner: metadata snapshot is not valid JSON: {snapshot}: {error}") from None
+    packages = metadata.get("packages") if isinstance(metadata, dict) else None
+    if not isinstance(packages, list):
+        raise SystemExit("coverage-runner: metadata snapshot does not expose a packages list")
+    result: dict[str, dict[str, object]] = {}
+    for package in packages:
+        if not isinstance(package, dict) or not isinstance(package.get("name"), str):
+            raise SystemExit("coverage-runner: metadata snapshot packages must name a package")
+        result[package["name"]] = package
+    return result
+
+
+def package_has_test_target(package: dict[str, object]) -> bool:
+    """Whether Cargo declares any target that executes tests for this package.
+
+    Test executability is decided from the Cargo metadata snapshot rather than a
+    source-text marker, so a `#[tokio::test]` integration target counts exactly
+    like a `#[test]` one and a crate whose directory name diverges from its
+    package name cannot hide a test target.
+    """
+    name = package.get("name")
+    targets = package.get("targets")
+    if not isinstance(targets, list):
+        raise SystemExit(f"coverage-runner: package {name} has no target list")
+    for target in targets:
+        if not isinstance(target, dict):
+            raise SystemExit(f"coverage-runner: package {name} has an invalid target")
+        kinds = target.get("kind")
+        if not isinstance(kinds, list) or not all(isinstance(kind, str) for kind in kinds):
+            raise SystemExit(f"coverage-runner: package {name} has an invalid target shape")
+        if target.get("test") is True and set(kinds) & {"test", "lib", "bin"}:
+            return True
+    return False
+
+
+METADATA_COMMAND = ["cargo", nightly_selector(), "metadata", "--no-deps", "--format-version", "1", "--locked"]
+
+
+def coverage_plan(
+    coverage_crates: list[str],
+    packages: dict[str, dict[str, object]],
+    unexecutable: set[str],
+) -> tuple[list[str], list[str], list[str]]:
+    """Return the crates to collect, the legal skips, and the plan failures.
+
+    A collected crate must exist in the locked metadata snapshot and must have a
+    test-executing target unless the policy declares it unexecutable. A
+    declaration for a crate that does have one, or for a crate outside
+    collection, is a failure: the declared floor can never silently retire.
+    """
+    collect: list[str] = []
+    skip: list[str] = []
+    failures: list[str] = []
+    for crate in coverage_crates:
+        package = packages.get(crate)
+        if package is None:
+            failures.append(f"{crate}: collected crate is absent from the locked Cargo metadata snapshot")
+            continue
+        executable = package_has_test_target(package)
+        if crate in unexecutable:
+            if executable:
+                failures.append(
+                    f"{crate}: [policy].unexecutable_crates lists it, but Cargo declares a "
+                    "test-executing target; remove the stale declaration"
+                )
+            else:
+                skip.append(crate)
+            continue
+        if not executable:
+            failures.append(
+                f"{crate}: collected but Cargo declares no test-executing target; add a test target "
+                "or declare the crate in quality/coverage.toml [policy].unexecutable_crates"
+            )
+            continue
+        collect.append(crate)
+    uncollected = sorted(unexecutable - set(coverage_crates))
+    if uncollected:
+        failures.append(
+            "[policy].unexecutable_crates names crates that are not collected: " + ", ".join(uncollected)
+        )
+    return collect, skip, failures
 
 
 def metadata_snapshot_path(root: Path) -> Path:
@@ -103,36 +180,9 @@ def collect_metadata(root: Path) -> Path:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Collect branch-aware coverage.")
-    parser.add_argument(
-        "--profile",
-        choices=["default", "no_default", "all"],
-        help="run only one coverage profile instead of all three",
-    )
-    arguments = parser.parse_args()
-    with POLICY.open("rb") as policy_file:
-        policy = tomllib.load(policy_file)
     with COVERAGE_POLICY.open("rb") as policy_file:
         coverage_policy = tomllib.load(policy_file)
     coverage_crates = collected_crates(coverage_policy)
-    profiles = policy["profiles"]
-    combinations = []
-    for name, flags in profiles.items():
-        if name not in {"default", "no_default", "all"}:
-            raise ValueError(f"unsupported coverage profile name: {name}")
-        normalized = normalized_flags(flags)
-        combinations.append((name, list(normalized)))
-    combinations.extend(
-        (f"critical-{entry['name']}", ["--features", ",".join(entry["features"])])
-        for entry in policy.get("critical_combinations", [])
-        if entry["enabled"]
-    )
-    if arguments.profile is not None:
-        combinations = [
-            (name, flags) for name, flags in combinations if name == arguments.profile
-        ]
-        if not combinations:
-            raise ValueError(f"coverage profile {arguments.profile!r} is not configured")
 
     # `cargo llvm-cov` merges every profile data file left in
     # target/llvm-cov-target, so data from an interrupted run mixes
@@ -146,110 +196,78 @@ def main() -> None:
     # invocation below receives the same snapshot so source-root resolution
     # does not re-run `cargo metadata` per report.
     metadata = collect_metadata(ROOT)
-    for crate in coverage_crates:
-        if not crate_has_test_code(ROOT, crate):
-            # A compile-only package (for example the intention-tauri M6
-            # skeleton) has no test harness, so llvm-cov cannot emit a report
-            # for it. Its declared floor applies as soon as the crate gains
-            # executable test code.
-            print(f"coverage-runner: skipping {crate}: no test code to execute", flush=True)
-            continue
-        seen_effective: set[tuple[str, ...]] = set()
-        for name, flags in combinations:
-            report = (REPORTS / f"coverage-{name}-{crate}.json").resolve()
-            # `cargo llvm-cov nextest --package` instruments the package's
-            # integration binaries, but nextest's workspace execution model
-            # does not reliably merge the package library test harness.  The
-            # latter is especially important for boundary crates whose
-            # implementation lives in lib.rs. Cargo test executes both the
-            # library harness and integration targets in one coverage run.
-            coverage_command = (
-                "test" if crate in {"intention-daemon", "intention-workspace"} else "nextest"
-            )
-            coverage_flags = [*flags]
-            if crate == "intention-daemon" and "--all-features" not in coverage_flags:
-                coverage_flags.append("--all-features")
-            effective = tuple(coverage_flags)
-            if crate == "intention-daemon" and "--all-features" in coverage_flags:
-                # `--all-features` subsumes default/no-default feature
-                # selection for the daemon package: normalize the semantic
-                # feature set (dropping default-toggle and --features
-                # selector tokens) before deduplicating, so equivalent
-                # profiles do not execute the same instrumented daemon set
-                # under different flag tuples. The first profile keeps its
-                # report name; later equivalent profiles are skipped.
-                normalized: list[str] = []
-                index = 0
-                while index < len(coverage_flags):
-                    flag = coverage_flags[index]
-                    if flag == "--no-default-features":
-                        index += 1
-                        continue
-                    if flag == "--features":
-                        index += 2
-                        continue
-                    normalized.append(flag)
-                    index += 1
-                effective = tuple(normalized)
-            if crate == "intention-daemon" and effective in seen_effective:
-                continue
-            seen_effective.add(effective)
-            # Target narrowing is intentionally disabled: explicit target sets
-            # do not reliably reproduce the --all-targets coverage set
-            # (Windows integration-target behavior differs, so the coverage
-            # gate runs on Linux), and the runner always uses --all-targets to
-            # keep per-crate thresholds comparable across coverage runs.
-            # Boundary crates use `cargo test` instead of nextest so the
-            # library test harness is merged into the coverage report.
-            target_flags = ["--all-targets"]
-            command = [
-                "cargo",
-                "+nightly-2026-07-31",
-                "llvm-cov",
-                "--branch",
-                "--json",
-                "--summary-only",
-                "--output-path",
+    packages = metadata_packages(metadata)
+    collect, skip, plan_failures = coverage_plan(
+        coverage_crates, packages, set(unexecutable_crates(coverage_policy))
+    )
+    if plan_failures:
+        raise SystemExit("coverage-runner: " + "\ncoverage-runner: ".join(plan_failures))
+    for crate in skip:
+        print(
+            f"coverage-runner: skipping {crate}: the policy declares no test-executing target",
+            flush=True,
+        )
+    for crate in collect:
+        report = (REPORTS / f"coverage-{crate}.json").resolve()
+        # `cargo llvm-cov nextest --package` instruments the package's
+        # integration binaries, but nextest's workspace execution model does
+        # not reliably merge the package library test harness. The latter is
+        # especially important for boundary crates whose implementation lives
+        # in lib.rs. Cargo test executes both the library harness and
+        # integration targets in one coverage run.
+        coverage_command = (
+            "test" if crate in {"intention-daemon", "intention-tools"} else "nextest"
+        )
+        # Target narrowing is intentionally disabled: explicit target sets do
+        # not reliably reproduce the --all-targets coverage set (Windows
+        # integration-target behavior differs, so the coverage gate runs on
+        # Linux), and the runner always uses --all-targets to keep per-crate
+        # thresholds comparable across coverage runs.
+        command = [
+            "cargo",
+            nightly_selector(),
+            "llvm-cov",
+            "--json",
+            "--summary-only",
+            "--output-path",
+            str(report),
+            coverage_command,
+            "--all-targets",
+            "--locked",
+            *FEATURE_FLAGS,
+            "--package",
+            crate,
+        ]
+        run(command, crate=crate, stage="collect")
+        run(
+            [
+                sys.executable,
+                "quality/check_coverage.py",
+                "--report",
                 str(report),
-                coverage_command,
-                *target_flags,
-                "--locked",
-                *coverage_flags,
-                "--package",
+                "--crate",
                 crate,
-            ]
-            run(command, profile=name, crate=crate, stage="collect")
-            run(
-                [
-                    sys.executable,
-                    "quality/check_coverage.py",
-                    "--report",
-                    str(report),
-                    "--crate",
-                    crate,
-                    "--metadata",
-                    str(metadata),
-                ],
-                profile=name,
-                crate=crate,
-                stage="check",
-            )
+                "--metadata",
+                str(metadata),
+            ],
+            crate=crate,
+            stage="check",
+        )
 
-    for name, flags in combinations:
-        # The package reports enforce each crate's tier floor.  This aggregate
-        # report also exercises dependency code in the same instrumented test
-        # process, preventing package isolation from hiding production paths;
-        # its line metric stays informational over collected crates only.
-        report = REPORTS / f"coverage-{name}-workspace.json"
-        run([
-            "cargo", "+nightly-2026-07-31", "llvm-cov", "--branch", "--json",
-            "--summary-only", "--output-path", str(report), "nextest",
-            "--all-targets", "--workspace", "--locked", *flags,
-        ], profile=name, stage="collect")
-        run([
-            sys.executable, "quality/check_coverage.py", "--report", str(report),
-            "--workspace-aggregate", "--metadata", str(metadata),
-        ], profile=name, stage="check")
+    # The package reports enforce each crate's tier floor. This aggregate
+    # report also exercises dependency code in the same instrumented test
+    # process, preventing package isolation from hiding production paths; its
+    # line metric stays informational over collected crates only.
+    report = REPORTS / "coverage-workspace.json"
+    run([
+        "cargo", nightly_selector(), "llvm-cov", "--json",
+        "--summary-only", "--output-path", str(report), "nextest",
+        "--all-targets", "--workspace", "--locked", *FEATURE_FLAGS,
+    ], stage="collect")
+    run([
+        sys.executable, "quality/check_coverage.py", "--report", str(report),
+        "--workspace-aggregate", "--metadata", str(metadata),
+    ], stage="check")
 
 
 if __name__ == "__main__":

@@ -21,12 +21,35 @@ jobs:
   cleanup:
     name: Delete stale GitHub Actions caches
     runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v7
-
       - name: Delete stale GitHub Actions caches
+        # GitHub Actions caches are scoped to branches and merge refs, and
+        # every push to `main` writes a fresh rust-cache/sccache set under a
+        # new key, so stale entries accumulate until the repository cache
+        # limit (10 GB) is reached and new cache writes start failing
+        # (observed as sccache "Cache write errors" in the coverage jobs).
+        # Every cache whose ref is not the kept branch is deleted, and
+        # kept-branch caches older than the retention window are deleted by
+        # id; the bulk by-ref endpoint needs a `key` query parameter that
+        # `gh api` cannot pass for DELETE. The step is observational with
+        # respect to the quality gate: a transient API failure reports but
+        # never blocks.
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-        # Pull-request and feature-branch caches are deleted in bulk; kept
-        # (main) caches older than the retention window are deleted by id.
-        run: python3 quality/cleanup_gha_caches.py --max-age-days 7
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          kept="refs/heads/main"
+          cutoff="$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          gh api --paginate "repos/$REPOSITORY/actions/caches?per_page=100" \
+            --jq '.actions_caches[] | [.id, .ref, .last_accessed_at] | @tsv' |
+          while IFS=$'\t' read -r id ref accessed; do
+            if [ "$ref" != "$kept" ] || [[ "$accessed" < "$cutoff" ]]; then
+              echo "deleting cache $id ($ref, last accessed $accessed)"
+              gh api -X DELETE "repos/$REPOSITORY/actions/caches/$id"
+            fi
+          done

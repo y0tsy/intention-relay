@@ -762,52 +762,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "intention"
-version = "0.0.0"
-dependencies = [
- "futures-util",
- "intention-application",
- "intention-config",
- "intention-domain",
- "intention-hooks",
- "intention-model",
- "intention-protocol",
- "intention-provider-generic-chat",
- "intention-provider-openrouter",
- "intention-runtime",
- "intention-storage",
- "intention-storage-sqlite",
- "intention-tools",
- "intention-types",
- "intention-workspace",
- "tempfile",
-]
-
-[[package]]
-name = "intention-application"
-version = "0.0.0"
-dependencies = [
- "intention-config",
- "intention-domain",
- "intention-hooks",
- "intention-protocol",
- "intention-runtime",
- "intention-storage",
- "intention-tools",
- "intention-types",
- "intention-workspace",
-]
-
-[[package]]
 name = "intention-client"
 version = "0.0.0"
 dependencies = [
  "fs4",
- "intention-domain",
- "intention-protocol",
+ "intention-proto",
  "intention-transport",
- "intention-types",
- "tempfile",
  "tokio",
 ]
 
@@ -815,7 +775,7 @@ dependencies = [
 name = "intention-config"
 version = "0.0.0"
 dependencies = [
- "intention-types",
+ "intention-proto",
  "serde",
  "serde_json",
  "toml",
@@ -826,107 +786,56 @@ name = "intention-daemon"
 version = "0.0.0"
 dependencies = [
  "futures-util",
- "intention",
- "intention-application",
  "intention-client",
  "intention-config",
- "intention-domain",
- "intention-model",
- "intention-protocol",
- "intention-runtime",
+ "intention-engine",
+ "intention-proto",
+ "intention-providers",
+ "intention-storage",
+ "intention-test-support",
  "intention-tools",
  "intention-transport",
- "intention-types",
  "serde_json",
  "tempfile",
  "tokio",
 ]
 
 [[package]]
-name = "intention-domain"
+name = "intention-engine"
 version = "0.0.0"
 dependencies = [
- "intention-types",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "intention-headroom"
-version = "0.0.0"
-
-[[package]]
-name = "intention-hooks"
-version = "0.0.0"
-dependencies = [
- "intention-tools",
- "intention-types",
-]
-
-[[package]]
-name = "intention-model"
-version = "0.0.0"
-dependencies = [
- "futures-core",
- "futures-executor",
  "futures-util",
- "intention-types",
- "serde",
- "serde_json",
+ "intention-config",
+ "intention-proto",
+ "intention-providers",
+ "intention-storage",
+ "intention-test-support",
+ "intention-tools",
 ]
 
 [[package]]
-name = "intention-plans"
-version = "0.0.0"
-
-[[package]]
-name = "intention-protocol"
+name = "intention-proto"
 version = "0.0.0"
 dependencies = [
- "intention-domain",
- "intention-types",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
-name = "intention-provider-generic-chat"
+name = "intention-providers"
 version = "0.0.0"
 dependencies = [
  "async-openai",
- "futures-util",
- "http",
- "intention-config",
- "intention-model",
- "intention-types",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "intention-provider-openrouter"
-version = "0.0.0"
-dependencies = [
- "futures-util",
- "http",
- "intention-config",
- "intention-model",
- "intention-types",
- "openrouter-rs",
- "serde_json",
-]
-
-[[package]]
-name = "intention-runtime"
-version = "0.0.0"
-dependencies = [
+ "futures-core",
  "futures-executor",
  "futures-util",
+ "http",
  "intention-config",
- "intention-domain",
- "intention-model",
- "intention-storage",
- "intention-types",
+ "intention-proto",
+ "openrouter-rs",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -934,41 +843,26 @@ name = "intention-storage"
 version = "0.0.0"
 dependencies = [
  "intention-config",
- "intention-domain",
- "intention-types",
- "serde_json",
-]
-
-[[package]]
-name = "intention-storage-sqlite"
-version = "0.0.0"
-dependencies = [
- "intention-config",
- "intention-domain",
- "intention-storage",
- "intention-types",
+ "intention-proto",
  "rusqlite",
+ "serde",
  "serde_json",
  "tempfile",
 ]
-
-[[package]]
-name = "intention-tauri"
-version = "0.0.0"
 
 [[package]]
 name = "intention-test-support"
 version = "0.0.0"
 dependencies = [
- "intention",
+ "futures-executor",
+ "futures-util",
  "intention-config",
  "intention-daemon",
- "intention-domain",
- "intention-protocol",
+ "intention-proto",
+ "intention-providers",
  "intention-transport",
- "intention-types",
- "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -976,9 +870,7 @@ name = "intention-tools"
 version = "0.0.0"
 dependencies = [
  "glob",
- "intention-domain",
- "intention-types",
- "intention-workspace",
+ "intention-proto",
  "rustix",
  "serde",
  "serde_json",
@@ -989,8 +881,7 @@ dependencies = [
 name = "intention-transport"
 version = "0.0.0"
 dependencies = [
- "intention-protocol",
- "intention-types",
+ "intention-proto",
  "interprocess",
  "serde",
  "serde_json",
@@ -1003,32 +894,10 @@ name = "intention-tui"
 version = "0.0.0"
 dependencies = [
  "intention-client",
- "intention-domain",
- "intention-protocol",
+ "intention-proto",
  "intention-test-support",
  "intention-transport",
- "intention-types",
-]
-
-[[package]]
-name = "intention-types"
-version = "0.0.0"
-dependencies = [
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "intention-vfr"
-version = "0.0.0"
-
-[[package]]
-name = "intention-workspace"
-version = "0.0.0"
-dependencies = [
- "intention-domain",
- "intention-types",
+ "tokio",
 ]
 
 [[package]]
@@ -1235,9 +1104,9 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "openrouter-rs"
-version = "0.17.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ea2f84d6440f59f83a170a949fd15f9df6c103bbeb7af46c0923599311460da"
+checksum = "57433115a0711e681bc3c17ff3c3621a1b098589f8a79d09e49d1763a7bc0090"
 dependencies = [
  "derive_builder",
  "dotenvy_macro",
@@ -1326,10 +1195,6 @@ checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
 ]
-
-[[package]]
-name = "quality-harness"
-version = "0.0.0"
 
 [[package]]
 name = "quinn"
@@ -1882,9 +1747,9 @@ dependencies = [
 
 [[package]]
 name = "serde_spanned"
-version = "1.1.1"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
+checksum = "4e7523beb55eece201a2356bee0bbca0d1ab466c14c07703b2e0ee6d42cb0c2c"
 dependencies = [
  "serde_core",
 ]
@@ -2172,9 +2037,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.1.6+spec-1.1.0"
+version = "1.1.8+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "920602543f0911ab71da12c50d59701da54c196d1a2bf5cb4b75667f137a406a"
+checksum = "20489e00e4d8741d6be680764cc12e270655e375a20d1011e844a9c3379e678d"
 dependencies = [
  "indexmap",
  "serde_core",
@@ -2187,27 +2052,27 @@ dependencies = [
 
 [[package]]
 name = "toml_datetime"
-version = "1.1.1+spec-1.1.0"
+version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7"
+checksum = "2b86d767906c6c42421dcba507eb9d203e779497710a47782a224bb871653053"
 dependencies = [
  "serde_core",
 ]
 
 [[package]]
 name = "toml_parser"
-version = "1.1.3+spec-1.1.0"
+version = "1.1.5+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
+checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
 dependencies = [
  "winnow",
 ]
 
 [[package]]
 name = "toml_writer"
-version = "1.1.2+spec-1.1.0"
+version = "1.1.3+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
+checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 
 [[package]]
 name = "tower"

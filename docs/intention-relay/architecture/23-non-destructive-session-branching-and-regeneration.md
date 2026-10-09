@@ -2,25 +2,22 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 23. Decisions: ADR 0015, ADR 0026, ADR 0033, ADR 0053. Research: m4plus_concept.md.
+Owner: architecture 23.
 
 This document owns future ordinary Session branching, conversation lineage, frozen fork context, regeneration, lineage
-audit, and branch presentation. It applies to future ordinary Session branching only. M3/M4 Sessions, Runs, turns,
-pending turns, provider selections, retries, event bytes/sequences, cursors, snapshots, replay, recovery, and M4
-`ToolCallRecorded -> tool_execution_unavailable` retain their recorded meaning.
+audit, and branch presentation. It applies to future ordinary Session branching only.
 
 ## Ownership and non-authorities
 
-Architecture 04 owns current Session/Run persistence and recovery. Architecture 13 owns Mandate lifecycle, triggers, and
-fresh admission. Architecture 14 owns run-execution meaning and historical
-compatibility; its canonical framing was removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md).
-Architectures 15--20 own tool, scheduler, child/verifier, MCP, bridge, and kernel semantics. Architecture 21 owns
-Goal/Skill/context source, audience, and disclosure semantics. Architecture 22 owns
-provider/profile/capability/reasoning semantics.
+Architecture 04 owns current Session/Run persistence and recovery. Run-execution meaning and historical compatibility
+left no live path: their canonical framing was removed under [architecture
+02](02-dto-and-contract-policy.md). Architectures 15, 18, 19, and 20 own tool, MCP, bridge, and
+kernel semantics. Architecture 21 owns Goal/Skill/context source, audience, and disclosure semantics. Architecture 22
+owns provider/profile/capability/reasoning semantics.
 
-This document owns only ordinary Session lineage and frozen fork transfer semantics. A conversation branch is not a
-Mandate child edge, verifier target, RLM parent link, activity aggregate, provider continuation, tool permission,
-scheduler reason, bridge grant, kernel epoch, MCP selection, or authority.
+This document owns only ordinary Session lineage and frozen fork transfer semantics. A conversation branch is not an RLM
+parent link, activity aggregate, provider continuation, tool permission, bridge grant, kernel epoch, MCP selection, or
+authority.
 
 ## Branch identity and user workflow
 
@@ -48,8 +45,8 @@ flowchart LR
   S --> X[Source continues]
 ```
 
-`Regenerate response` is a user-turn fork followed by a separate idempotent ordinary `StartForkRunCommandDto`. It is not
-Mandate creation, trigger capture, or fresh admission. A failed start leaves the committed idle child visible.
+`Regenerate response` is a user-turn fork followed by a separate idempotent ordinary `StartForkRunCommandDto`.
+A failed start leaves the committed idle child visible.
 
 ## Closed boundaries and frozen context
 
@@ -60,7 +57,7 @@ user text once through a new child anchor and receives no response fact from tha
 - `CompletedAssistantTurn`: a genuinely completed run with one valid terminal `Finished` fact, no terminal failure,
 pending interaction, or unfinished external action. A valid empty response adds no synthetic assistant message.
 
-Pending turns, arbitrary events/cursors, partial assistant batches, failed, interrupted, incomplete, waiting,
+Pending turns, partial assistant batches, failed, interrupted, incomplete, waiting,
 or unfinished work are ineligible; source activity does not block an eligible fork, but pending input, active runs,
 waiting interaction, admitted work, and external effects never cross it.
 
@@ -69,7 +66,7 @@ boundary. It includes validated user messages and only eligible final nonblank a
 text/summaries, attempts, usage, tool calls/results, questions, permissions, child results, raw provider data, and
 opaque continuation state. Unsupported material rejects rather than truncates, omits, or uses current
 state. A later implementation uses the stored compatible schema unchanged, defines a separately versioned compatible
-projection, or blocks the dependent operation (ADR 0026).
+projection, or blocks the dependent operation.
 
 ## Base snapshot, reasoning references, and workspace state
 
@@ -79,11 +76,11 @@ Missing, corrupt, unknown, or incompatible data blocks dependent work before an 
 source, current catalog, provider, file, index, memory, registry, bridge, kernel, MCP, or UI state.
 
 Fork snapshot, preview, and command records are typed serde JSON shapes; the former `typed-tlv` framing,
-canonicalization-version byte, and SHA-256 digest construction were removed by [ADR
-0046](../decisions/0046-typed-serde-json-contracts.md), and under the single-version policy ([ADR
-0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)) there is one live shape per record, carrying
-the typed, ordered, compatibility-bound inherited reasoning references. References carry source identity, cursor,
-category, and size and never reasoning text. Architecture 22 owns reasoning compatibility; this document owns only the
+canonicalization-version byte, and SHA-256 digest construction were removed under [architecture
+02](02-dto-and-contract-policy.md), and under the single-version policy ([architecture
+00](00-principles-and-scope.md)) there is one live shape per record, carrying
+the typed, ordered, compatibility-bound inherited reasoning references. References carry source identity, category,
+and size and never reasoning text. Architecture 22 owns reasoning compatibility; this document owns only the
 immutable fork-reference transfer.
 
 `WorkspaceStateDto::Unverified` is the only initial workspace-state value. It makes no claim about files, processes,
@@ -91,23 +88,17 @@ repositories, remote systems, or effects. A fork never clones or rolls back mach
 
 ## Atomic lineage and idempotency
 
-Future storage adds fork-owned records for conversation trees, child lineage, base snapshots, and fork operations,
-ordered by a conversation-tree container journal, the container journal of the container "conversation tree", dense
-within that tree, its only gap-detection token, and never the session event sequence or the run container journal. It
-does not alter source Session event sequences, run container journals, or ordinary replay.
+Future storage adds fork-owned records for conversation trees, child lineage, base snapshots, and fork operations under
+the one-transaction state-change law of [architecture 04](04-sessions-runs-events-and-storage.md).
 
-One transaction validates the source head and the accepted preview binding, then atomically creates the child
-projection/snapshots, lineage, base snapshot, optional anchor, child events, conversation-tree container journal
-records, and idempotency result. No provider, scheduler, tool, process, network, kernel, MCP, bridge, or other external
-work occurs in that transaction.
+One transaction validates the source head and the accepted preview binding, then commits the child projection, lineage,
+base snapshot, optional anchor, and idempotency result; no external action occurs inside it.
 
-Child events order as `SessionCreated`, `SessionForked`, then optional `ForkAnchorMaterialized`. The conversation-tree
-container journal records `ConversationTreeCreated` and `ConversationBranchLinked`. No synthetic source `SessionForked`
-event is allowed.
+No synthetic fork provenance record is allowed.
 
 Equal operation identity and command semantics return the same child without new records. Changed reuse, stale source
 state, preview mismatch, ineligible boundary, unavailable history, unsupported snapshot, or unavailable reference fails
-closed before a side effect. A failed transaction leaves no partial child, lineage, event, snapshot, or operation
+closed before a side effect. A failed transaction leaves no partial child, lineage, base snapshot, or operation
 binding.
 
 ## Presentation and protocol
@@ -115,17 +106,17 @@ binding.
 Titles and reversible archive state belong only to their ordinary Session. They never rewrite lineage or base snapshots.
 Archive requires an idle session; archived sources remain readable and forkable.
 
-Session lineage is ordinary-session structure only; it never constrains Mandate admission, scheduler behavior, or
-Mandate-child creation. A fork carries no depth, descendant-count, source-boundary rate, or base-snapshot size limit
-([ADR 0053](../decisions/0053-sub-agent-and-fork-limits-by-precedent.md)). Title and page bounds remain intrinsic
+Session lineage is ordinary-session structure only; it never constrains run admission or child creation. A fork carries
+no depth, descendant-count, source-boundary rate, or base-snapshot size limit
+([architecture 09](09-configuration-security-and-observability.md), [architecture
+15](15-tool-registry-and-model-tool-loop.md)). Title and page bounds remain intrinsic
 representation/protocol constraints where their owning field table requires them.
 
 The typed fork preview, fork, ordinary regeneration, tree page, rename, archive, and restore DTOs are exposed as
-ordinary JSON-RPC methods over the single local connection; the former `session_fork_v1` negotiated family and its
-capability gate were removed by [ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md). Tree reads are bounded
-immediate-child projections with stable continuation order, and lineage facts order by the conversation-tree container
-journal. They are not tree-wide event streams. Existing M3 session replay and M4 run streams remain unchanged; a peer
-that does not speak protocol 2.0 receives the typed version-mismatch error before any method is served.
+ordinary typed requests over the single local connection; the former `session_fork_v1` negotiated family and its
+capability gate were removed under [architecture 03](03-daemon-transport-and-adapters.md). Tree reads are bounded
+immediate-child projections with stable continuation order. They are not tree-wide event streams. A peer that does not
+speak the live wire fails closed with the typed `stale_daemon_protocol` error before any request is served.
 
 ## Detailed protocol DTOs, field tables, and bounds
 
@@ -191,9 +182,9 @@ stored title and uses only the stable presentation fallback until renamed. Renam
 ### Field tables
 
 Fork snapshot, preview, and command records are typed serde JSON shapes; the former `typed-tlv` framing, type tags,
-length encoding, canonicalization-version byte, and SHA-256 digest construction were removed by [ADR
-0046](../decisions/0046-typed-serde-json-contracts.md). Under the single-version policy ([ADR
-0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)) each record keeps exactly one live shape,
+length encoding, canonicalization-version byte, and SHA-256 digest construction were removed under [architecture
+02](02-dto-and-contract-policy.md). Under the single-version policy ([architecture
+00](00-principles-and-scope.md)) each record keeps exactly one live shape,
 which carries the typed, ordered, compatibility-bound inherited reasoning references.
 
 - `fork-base-snapshot`: `1 schema_version`, `2 context_schema_version`, `3 source_session_id`,
@@ -212,16 +203,16 @@ source head observed during the fork operation.
 `5 title_present`, `6 requested_title`, `7 future_profile_override_present`, `8 future_profile_override`.
 
 The former `canonical_snapshot_digest`, `model_context_digest`, and `fork-command` digest construction are removed with
-the codec ([ADR 0046](../decisions/0046-typed-serde-json-contracts.md)). A command binds to the exact source state the
+the codec ([architecture 02](02-dto-and-contract-policy.md)). A command binds to the exact source state the
 client accepted through `expected_source_sequence` and `expected_preview_binding`; a later activating specification may
-define a canonical binding for the preview together with its first real consumer under the RFC 8785 policy (ADR 0046),
-and no canonical digest is part of the current contract.
+define a canonical binding for the preview together with its first real consumer under the RFC 8785 policy
+([architecture 02](02-dto-and-contract-policy.md)), and no canonical digest is part of the current contract.
 
 `effective_instruction_projection` and `materialized_effective_instruction_projection` carry the typed
-`InstructionProjectionV1` of [architecture 30](30-instruction-sources-and-system-context.md) ([ADR
-0043](../decisions/0043-instruction-sources-and-system-context.md)): the exact ordered contributions with their source
-revisions, the declared audience, and the projection revision identity, materialized when the fork is created. A child
-inherits the projection verbatim; no fork, regeneration, replay, or later run re-derives it from current configuration,
+`InstructionProjectionV1` of [architecture 30](30-instruction-sources-and-system-context.md): the exact ordered
+contributions with their source revisions, the declared audience, and the projection revision identity, materialized
+when the fork is created. A child
+inherits the projection verbatim; no fork, regeneration, or later run re-derives it from current configuration,
 current project instructions, or current session state.
 
 ### Fixed bounds and audit taxonomy
@@ -236,14 +227,15 @@ unstructured storage error:
 | Session title | 128 NFC Unicode scalar values | Reject invalid title before the presentation event. |
 
 The conversation tree has no depth, descendant-count, or source-boundary rate limit, and a base snapshot has no
-canonical size limit ([ADR 0053](../decisions/0053-sub-agent-and-fork-limits-by-precedent.md)): a fork is bounded only
-by the page and title representation bounds above. Boundaries, base snapshots, lineage, and idempotency records remain
-indefinitely readable under the initial archive-only retention policy.
+canonical size limit ([architecture 09](09-configuration-security-and-observability.md), [architecture
+15](15-tool-registry-and-model-tool-loop.md)): a fork is bounded
+only by the page and title representation bounds above. Boundaries, base snapshots, lineage, and idempotency records
+remain indefinitely readable under the initial archive-only retention policy.
 
-The ordinary-session taxonomy adds `SessionForked`, `ForkAnchorMaterialized`, `SessionRenamed`, `SessionArchived`, and
-`SessionRestored` to the existing `SessionCreated` and run taxonomy. The conversation-tree container journal carries the
-closed lineage taxonomy `ConversationTreeCreated` and `ConversationBranchLinked`. Generic metadata events, raw snapshot
-blobs, and a synthetic source-session fork event are not acceptable audit boundaries.
+Fork provenance is stored as committed records: fork, anchor materialization, rename, archive, and restore each commit
+a durable record alongside the ordinary session and run records, and the closed conversation-tree lineage commits
+`ConversationTreeCreated` and `ConversationBranchLinked` records. Generic metadata records and a synthetic
+source-session fork record are not acceptable audit boundaries.
 
 Inherited usage is source provenance and is never charged to the child a second time. Child totals count only
 child-owned runs; tree aggregates deduplicate inherited usage by original `RunId`. Presentation must distinguish own and
@@ -272,32 +264,28 @@ They disclose no credential, path, source content, raw provider data, or impleme
 ## Compatibility, dependencies, and non-goals
 
 M3/M4 historical sessions remain linear ordinary records until an additive migration creates deterministic root lineage
-records. Migration preserves IDs, turns, runs, pending turns, configuration revisions, event JSON, sequences, cursors, and
-snapshots byte-for-byte. It creates no synthetic parent, anchor, run, assistant message, or source event.
+records. Migration preserves IDs, turns, runs, pending turns, and configuration revisions. It creates no synthetic
+parent, anchor, run, assistant message, or source event.
 
-A fork begins Mandate-free. It cannot create or transfer a Mandate reason/run, verifier authority, child edge, provider
-request/client/credential, tool action, kernel task, MCP process, bridge grant, or unfinished effect. Later child runs
-select their own immutable provider meaning. A profile override is allowed only for user-turn regeneration as a safe
-future-default proposal, never as a current run selection or continuation.
+A fork begins with no run and no execution authority. It cannot transfer a provider request/client/credential, tool
+action, kernel task, MCP process, bridge grant, or unfinished effect. Later child runs select their own immutable
+provider meaning. A profile override is allowed only for user-turn regeneration as a safe future-default proposal, never
+as a current run selection or continuation.
 
-This document depends on architectures 04 and 13--22 plus the DTO, transport, security, verification, and quality
-policies. It does not define Mandate association, activity/UI implementation, workspace cloning/rebinding, autonomous
+This document depends on architectures 04 and 15--22 plus the DTO, transport, security, verification, and quality
+policies. It does not define activity-journal or UI implementation, workspace cloning/rebinding, autonomous
 model/IPython forking, provider implementation, destructive deletion/GC/export, schema, migrations, crates, Cargo,
 Makefile/CI, or production activation.
 
 Tool-result execution, child-agent execution, export, and cross-workspace clone/rebind are accepted post-M5 future
-directions under [ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be executed in Milestone 5+:
+directions, to be executed in Milestone 5+:
 
 - tool-result execution and child-agent execution are separately admitted ordinary fork actions from frozen references,
-never silent re-execution, never Mandate child edges, and never verifier authority;
+never silent re-execution;
 - export is a bounded, credential-free surface for fork lineage and activity records, never a history rewrite and never
 destructive deletion;
 - cross-workspace clone/rebind is explicit user-authorized only, never implicit, and never transfers live state or
 authority.
 
-## Required evidence before implementation
-
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
-
-Architecture 24 owns activity/UI projections. `AgentActivityTreeId` remains distinct from `ConversationTreeId`; neither
-tree implies the other, authority, or rollback semantics.
+Architecture 03 owns the flat activity journal and notification list. A child run is an ordinary run: it creates no
+second lineage, implies no authority, and proves no rollback.

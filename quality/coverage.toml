@@ -1,10 +1,14 @@
 [policy]
-phase = "m5"
+phase = "slice15"
+# A collected crate Cargo declares with no test-executing target is skipped
+# only when it is listed here; an undeclared skip fails the coverage run, and a
+# declaration whose crate does have a test target fails as stale.
+unexecutable_crates = []
 
 # Line-coverage floors. [crate_tiers] assigns every active production crate and
-# both presentation adapters to exactly one tier; the runner collects every
-# crate whose tier is above zero, with one isolated Cargo package invocation per
-# profile, and exempt crates stay outside collection and every aggregate.
+# every adapter package to exactly one tier; the runner collects every crate
+# whose tier is above zero with one isolated line-only Cargo package
+# invocation, and exempt crates stay outside collection and every aggregate.
 [tiers]
 core = 75.0
 standard = 60.0
@@ -12,26 +16,16 @@ edge = 20.0
 exempt = 0.0
 
 [crate_tiers]
-"intention-storage-sqlite" = "core"
-"intention-runtime" = "core"
 "intention-transport" = "core"
 "intention-storage" = "core"
-"intention-application" = "core"
-"intention-domain" = "core"
-"intention-model" = "standard"
+"intention-engine" = "core"
 "intention-tools" = "standard"
-"intention-workspace" = "standard"
 "intention-config" = "standard"
 "intention-daemon" = "standard"
-"intention-hooks" = "standard"
-"intention-provider-openrouter" = "standard"
-"intention-provider-generic-chat" = "standard"
-"intention-tauri" = "edge"
+"intention-providers" = "standard"
 "intention-tui" = "edge"
-"intention" = "edge"
 "intention-client" = "edge"
-"intention-types" = "exempt"
-"intention-protocol" = "exempt"
+"intention-proto" = "exempt"
 
 [[exclusions]]
 enabled = true

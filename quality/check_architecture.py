@@ -98,36 +98,6 @@ def check_reasoned_lints(path: Path, text: str) -> list[str]:
     return failures
 
 
-def policy_crates(policy: dict[str, object]) -> dict[str, dict[str, object]]:
-    declarations = policy.get("future_crates")
-    if not isinstance(declarations, list) or not declarations:
-        fail("future crate declarations are required")
-    result: dict[str, dict[str, object]] = {}
-    for crate in declarations:
-        if not isinstance(crate, dict):
-            fail("future crate declaration must be a table")
-        name = crate.get("name")
-        if not isinstance(name, str) or not name.startswith("intention"):
-            fail("future crate names must begin with intention")
-        if name in result:
-            fail(f"duplicate future crate declaration {name}")
-        unknown = set(crate) - {"name", "responsibility", "test_target", "test_targets"}
-        if "coverage_tier" in unknown:
-            fail(f"future crate {name} must not declare coverage_tier; tiers live in quality/coverage.toml")
-        if unknown:
-            fail(f"future crate {name} has unknown declaration keys: {sorted(unknown)}")
-        for field in ("responsibility", "test_target"):
-            if not isinstance(crate.get(field), str) or not crate[field]:
-                fail(f"future crate {name} requires {field}")
-        targets = crate.get("test_targets")
-        if not isinstance(targets, list) or not all(isinstance(target, str) and target for target in targets):
-            fail(f"future crate {name} requires test_targets as a string list")
-        if len(targets) != len(set(targets)):
-            fail(f"future crate {name} has duplicate test targets")
-        result[name] = crate
-    return result
-
-
 def package_dependencies(package: dict[str, object]) -> set[str]:
     dependencies = package.get("dependencies")
     if not isinstance(dependencies, list):
@@ -203,16 +173,23 @@ def integration_test_targets(package: dict[str, object]) -> set[str]:
     return result
 
 
-def workspace_dependency_graph(packages: dict[str, dict[str, object]]) -> dict[str, set[str]]:
+def production_dependency_graph(packages: dict[str, dict[str, object]]) -> dict[str, set[str]]:
+    """Builds the production dependency graph used for cycle detection.
+
+    Development-dependency edges are excluded because Cargo permits a
+    dev-dependency cycle and a dev edge never enters another crate's production
+    build, so it cannot close a production cycle. A shared test-fixture crate
+    that depends on the crate under test is exactly that shape.
+    """
     workspace_names = set(packages)
     return {
-        package_name: workspace_dependencies(package, workspace_names)
+        package_name: production_workspace_dependencies(package, workspace_names)
         for package_name, package in packages.items()
     }
 
 
 def check_workspace_dependency_cycles(packages: dict[str, dict[str, object]]) -> list[str]:
-    graph = workspace_dependency_graph(packages)
+    graph = production_dependency_graph(packages)
     states: dict[str, str] = {name: "unvisited" for name in graph}
     stack: list[str] = []
     failures: list[str] = []
@@ -254,6 +231,138 @@ def check_dependency_subset(
         f"{package_name}: {boundary} dependencies must be a subset of {sorted(allowed)}, "
         f"got disallowed {sorted(disallowed)}"
     ]
+
+
+def external_dependency_keys(package: dict[str, object], workspace_names: set[str]) -> set[str]:
+    """Return the manifest dependency keys naming a package outside the workspace.
+
+    A renamed dependency is declared by the key its source uses, so
+    `sqlite = { package = "rusqlite" }` contributes `sqlite`, and no manifest
+    alias can hide an external package from the policy.
+    """
+    dependencies = package.get("dependencies")
+    if not isinstance(dependencies, list):
+        fail(f"package {package.get('name')} has no dependency list")
+    keys: set[str] = set()
+    for dependency in dependencies:
+        if not isinstance(dependency, dict):
+            fail(f"package {package.get('name')} has an invalid dependency")
+        name = dependency.get("name")
+        if not isinstance(name, str):
+            fail(f"package {package.get('name')} has an unnamed dependency")
+        if name in workspace_names:
+            continue
+        rename = dependency.get("rename")
+        if rename is not None and not isinstance(rename, str):
+            fail(f"package {package.get('name')} dependency {name} has an invalid rename")
+        keys.add(rename if isinstance(rename, str) and rename else name)
+    return keys
+
+
+def check_dependency_equality(
+    package_name: str,
+    actual: set[str],
+    declared: set[str],
+    boundary: str,
+) -> list[str]:
+    """Return failures for undeclared and stale declarations of one dependency set."""
+    failures: list[str] = []
+    undeclared = actual - declared
+    if undeclared:
+        failures.append(
+            f"{package_name}: {boundary} dependencies must be declared in "
+            f"quality/architecture.toml, got undeclared {sorted(undeclared)}"
+        )
+    stale = declared - actual
+    if stale:
+        failures.append(
+            f"{package_name}: {boundary} dependency declaration is stale, "
+            f"got declared-but-absent {sorted(stale)}"
+        )
+    return failures
+
+
+def check_target_equality(package_name: str, actual: set[str], declared: set[str]) -> list[str]:
+    """Return failures for undeclared and stale named integration test targets."""
+    failures: list[str] = []
+    undeclared = actual - declared
+    if undeclared:
+        failures.append(
+            f"{package_name}: integration test targets must be declared in "
+            f"quality/architecture.toml, got undeclared {sorted(undeclared)}"
+        )
+    stale = declared - actual
+    if stale:
+        failures.append(
+            f"{package_name}: integration test target declaration is stale, "
+            f"got declared-but-absent {sorted(stale)}"
+        )
+    return failures
+
+
+CRATE_ROLES = ("active", "skeleton", "adapter", "test-support")
+
+
+def crate_declaration_failures(
+    declarations: dict[str, object],
+    actual_names: set[str],
+    classification: dict[str, set[str]],
+) -> list[str]:
+    """Return failures for the per-crate role, responsibility, and classification pins."""
+    failures: list[str] = []
+    if set(declarations) != actual_names:
+        failures.append(
+            "crate declarations must cover every workspace member exactly; "
+            f"undeclared {sorted(actual_names - set(declarations))}, "
+            f"unknown {sorted(set(declarations) - actual_names)}"
+        )
+    for package_name in sorted(actual_names):
+        declaration = declarations.get(package_name)
+        if not isinstance(declaration, dict):
+            failures.append(f"crate declaration {package_name} must be a table")
+            continue
+        role = declaration.get("role")
+        if not isinstance(role, str) or role not in CRATE_ROLES:
+            failures.append(
+                f"crate declaration {package_name} requires a role from {sorted(CRATE_ROLES)}"
+            )
+            continue
+        responsibility = declaration.get("responsibility")
+        if not isinstance(responsibility, str) or not responsibility.strip():
+            failures.append(f"crate declaration {package_name} requires a non-blank responsibility")
+    for role in CRATE_ROLES:
+        declared = {name for name in actual_names if declared_role(declarations, name) == role}
+        expected = classification.get(role, set())
+        if declared != expected:
+            failures.append(
+                f"crate declarations must mark exactly the {role} crates; "
+                f"declared {sorted(declared)}, classified {sorted(expected)}"
+            )
+    return failures
+
+
+def declared_role(declarations: dict[str, object], package_name: str) -> str | None:
+    """Return one crate's declared role, or None when it is absent or invalid."""
+    declaration = declarations.get(package_name)
+    if not isinstance(declaration, dict):
+        return None
+    role = declaration.get("role")
+    return role if isinstance(role, str) else None
+
+
+def declared_test_targets(declarations: dict[str, object], package_name: str) -> set[str] | None:
+    """Return one crate's declared named integration test targets, or None when invalid."""
+    declaration = declarations.get(package_name)
+    if not isinstance(declaration, dict):
+        return None
+    targets = declaration.get("test_targets")
+    if not isinstance(targets, list) or not all(
+        isinstance(target, str) and target for target in targets
+    ):
+        return None
+    if len(targets) != len(set(targets)):
+        return None
+    return set(targets)
 
 
 test_only_patterns: set[str] = set()
@@ -307,178 +416,175 @@ def only_test_code(text: str, pattern: str) -> bool:
 def check_phase_policy(
     policy: dict[str, object],
     packages: dict[str, dict[str, object]],
-    texts: dict[Path, str],
 ) -> list[str]:
     state = policy.get("policy")
     if not isinstance(state, dict):
         fail("missing [policy] table")
     phase = state.get("phase")
-    if phase not in {"m1", "m2", "m3", "m4", "m5"} or state.get("active_milestone") != phase:
-        fail("policy phase and active_milestone must be matching supported milestones")
-
-    declared = policy_crates(policy)
-    expected_names = set(declared)
-    actual_names = set(packages)
-    missing = expected_names - actual_names
-    if missing:
-        fail(f"{phase.upper()} workspace is missing declared crates: {sorted(missing)}")
+    if phase != "slice15" or state.get("active_milestone") != phase:
+        fail("policy phase and active_milestone must name the live slice")
 
     active = string_list(state, "active_production_crates")
     skeletons = string_list(state, "skeleton_crates")
     active_set = set(active)
     skeleton_set = set(skeletons)
-    expected_active = {
-        "m1": {"intention-types", "intention-domain", "intention-protocol", "intention-config"},
-        "m2": {
-            "intention-types", "intention-domain", "intention-protocol", "intention-config",
-            "intention-transport", "intention-client", "intention", "intention-daemon",
-        },
-        "m3": {
-            "intention-types", "intention-domain", "intention-protocol", "intention-config",
-            "intention-transport", "intention-client", "intention", "intention-daemon",
-            "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
-        },
-        "m4": {
-            "intention-types", "intention-domain", "intention-protocol", "intention-config",
-            "intention-transport", "intention-client", "intention", "intention-daemon",
-            "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
-            "intention-model", "intention-provider-openrouter", "intention-provider-generic-chat",
-        },
-        "m5": {
-            "intention-types", "intention-domain", "intention-protocol", "intention-config",
-            "intention-transport", "intention-client", "intention", "intention-daemon",
-            "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
-            "intention-model", "intention-provider-openrouter", "intention-provider-generic-chat",
-            "intention-tools", "intention-workspace", "intention-hooks",
-        },
-    }[phase]
-    if active_set != expected_active:
-        fail(f"{phase.upper()} active production crates must equal the roadmap crate set")
     if len(active) != len(active_set) or len(skeletons) != len(skeleton_set):
         fail("active and skeleton crate lists cannot contain duplicates")
-    if active_set & skeleton_set:
-        fail(f"an {phase.upper()} crate cannot be both active and a skeleton")
 
     adapters = policy.get("adapter_boundaries")
     if not isinstance(adapters, dict):
         fail("adapter boundary table is required")
     adapter_set = set(string_list(adapters, "packages"))
     non_production_test = set(string_list(state, "non_production_test_crates"))
+
+    # The classification is this policy's crate map. Cargo metadata is the
+    # authority for the workspace itself, so a crate change edits one
+    # classification here instead of a mirrored crate list.
+    if active_set & skeleton_set:
+        fail(f"an {phase.upper()} crate cannot be both active and a skeleton")
     if adapter_set & skeleton_set:
         fail(f"an {phase.upper()} adapter cannot be both an adapter and a skeleton")
     if non_production_test & (active_set | skeleton_set | adapter_set):
         fail("non-production test crates cannot be active, skeleton, or adapters")
-    if phase == "m1":
-        if active_set | skeleton_set | non_production_test != expected_names:
-            fail("M1 active, skeleton, and test-support crate sets must partition the declared workspace")
-    else:
-        if active_set & adapter_set:
-            fail(f"{phase.upper()} adapters cannot be active production crates")
-        quality_harness = state.get("quality_harness")
-        if not isinstance(quality_harness, str):
-            fail("quality_harness must be a crate name")
-        if active_set | skeleton_set | adapter_set | non_production_test | {quality_harness} != actual_names:
-            fail(f"{phase.upper()} active, skeleton, adapter, and test-support crates must cover the declared workspace")
-    if state.get("quality_harness") not in actual_names:
-        fail("quality harness must remain a workspace member")
+    if active_set & adapter_set:
+        fail(f"{phase.upper()} adapters cannot be active production crates")
+    classified = active_set | skeleton_set | adapter_set | non_production_test
+    actual_names = set(packages)
+    if classified != actual_names:
+        fail(
+            f"{phase.upper()} crate classification must cover every workspace member exactly; "
+            f"unclassified {sorted(actual_names - classified)}, unknown {sorted(classified - actual_names)}"
+        )
 
-    workspace_policy = policy.get("dependencies")
-    external_policy = policy.get("external_dependencies")
-    if not isinstance(workspace_policy, dict) or not isinstance(external_policy, dict):
-        fail("workspace and external dependency policies are required")
-    if set(workspace_policy) != active_set or set(external_policy) != active_set:
-        fail("dependency policies must declare exactly the active production crates")
+    # These tables declare the allowed cross-crate edges and external
+    # dependencies. Every declared set is compared for equality against Cargo
+    # metadata, which is the authority for the workspace graph, the external
+    # dependencies, and the executable test targets.
+    allowed_edges = policy.get("dependencies")
+    if not isinstance(allowed_edges, dict):
+        fail("the allowed workspace dependency edge table is required")
+    if set(allowed_edges) != active_set:
+        fail("workspace dependency edges must be declared for exactly the active production crates")
+    external_edges = policy.get("external_dependencies")
+    if not isinstance(external_edges, dict):
+        fail("the external dependency table is required")
+    if set(external_edges) != active_set:
+        fail("external dependencies must be declared for exactly the active production crates")
+    declarations = policy.get("crate_declarations")
+    if not isinstance(declarations, dict):
+        fail("the crate declaration table is required")
 
     failures: list[str] = []
+    failures.extend(
+        crate_declaration_failures(
+            declarations,
+            actual_names,
+            {
+                "active": active_set,
+                "skeleton": skeleton_set,
+                "adapter": adapter_set,
+                "test-support": non_production_test,
+            },
+        )
+    )
     for package_name in active:
-        package = packages.get(package_name)
-        if package is None:
-            fail(f"active crate {package_name} is absent from Cargo metadata")
+        package = packages[package_name]
         if not source_files_for_package(package):
             failures.append(f"{package_name}: active production crate must contain Rust production source")
-        declaration = declared.get(package_name)
-        if declaration is None:
-            failures.append(f"{package_name}: active production crate requires a policy declaration")
-            continue
-        allowed_workspace = workspace_policy.get(package_name)
-        allowed_external = external_policy.get(package_name)
-        if not isinstance(allowed_workspace, list) or not all(isinstance(name, str) for name in allowed_workspace):
-            fail(f"active crate {package_name} requires a workspace dependency declaration")
-        if not isinstance(allowed_external, list) or not all(isinstance(name, str) for name in allowed_external):
+        if not integration_test_targets(package):
+            failures.append(
+                f"{package_name}: active production crate must keep at least one integration test target"
+            )
+        allowed = allowed_edges.get(package_name)
+        if not isinstance(allowed, list) or not all(isinstance(name, str) for name in allowed):
+            fail(f"active crate {package_name} requires a workspace dependency edge declaration")
+        failures.extend(
+            check_dependency_equality(
+                package_name,
+                workspace_dependencies(package, actual_names),
+                set(allowed),
+                "allowed workspace edge",
+            )
+        )
+        allowed_external = external_edges.get(package_name)
+        if not isinstance(allowed_external, list) or not all(
+            isinstance(name, str) for name in allowed_external
+        ):
             fail(f"active crate {package_name} requires an external dependency declaration")
-        actual_workspace = workspace_dependencies(package, actual_names)
-        expected_workspace = set(allowed_workspace)
-        if actual_workspace != expected_workspace:
-            failures.append(
-                f"{package_name}: workspace dependencies must equal {sorted(expected_workspace)}, "
-                f"got {sorted(actual_workspace)}"
+        failures.extend(
+            check_dependency_equality(
+                package_name,
+                external_dependency_keys(package, actual_names),
+                set(allowed_external),
+                "external",
             )
-        actual_external = external_dependencies(package, actual_names)
-        expected_external = set(allowed_external)
-        if actual_external != expected_external:
-            failures.append(
-                f"{package_name}: external dependencies must equal {sorted(expected_external)}, "
-                f"got {sorted(actual_external)}"
-            )
-        actual_targets = integration_test_targets(package)
-        declared_targets = set(declaration["test_targets"])
-        if declared_targets != actual_targets:
-            failures.append(
-                f"{package_name}: declared integration test targets must equal Cargo targets "
-                f"{sorted(actual_targets)}, got {sorted(declared_targets)}"
-            )
-    for package_name in skeleton_set:
-        declared_targets = set(declared[package_name]["test_targets"])
-        if declared_targets and phase != "m5":
+        )
+        declared_targets = declared_test_targets(declarations, package_name)
+        if declared_targets is None:
+            fail(f"active crate {package_name} requires a unique named integration test target list")
+        failures.extend(
+            check_target_equality(package_name, integration_test_targets(package), declared_targets)
+        )
+    for package_name in sorted(skeleton_set):
+        actual_targets = integration_test_targets(packages[package_name])
+        if actual_targets:
             failures.append(
                 f"{package_name}: {phase.upper()} skeleton must not declare integration test targets, "
-                f"got {sorted(declared_targets)}"
+                f"got {sorted(actual_targets)}"
             )
+
+    # The non-production test crates are declared and checked exactly like the
+    # active production crates: their workspace edges, external dependencies,
+    # and named integration test targets are all pinned to Cargo metadata.
     non_production_dependencies = policy.get("non_production_test_dependencies")
     if not isinstance(non_production_dependencies, dict):
         fail("non-production test crate dependency policy is required")
     if set(non_production_dependencies) != non_production_test:
         fail("non-production test dependency policy must declare exactly the test-support crates")
-    non_production_external_dependencies = policy.get("non_production_test_external_dependencies")
-    if not isinstance(non_production_external_dependencies, dict):
+    non_production_external = policy.get("non_production_test_external_dependencies")
+    if not isinstance(non_production_external, dict):
         fail("non-production test crate external dependency policy is required")
-    if set(non_production_external_dependencies) != non_production_test:
+    if set(non_production_external) != non_production_test:
         fail("non-production test external dependency policy must declare exactly the test-support crates")
-    for package_name in non_production_test:
-        package = packages.get(package_name)
-        declaration = declared.get(package_name)
-        if package is None or declaration is None:
-            fail(f"non-production test crate {package_name} is missing from metadata or policy")
+    for package_name in sorted(non_production_test):
+        package = packages[package_name]
         allowed_dependencies = non_production_dependencies.get(package_name)
-        allowed_external_dependencies = non_production_external_dependencies.get(package_name)
         if not isinstance(allowed_dependencies, list) or not all(
             isinstance(name, str) for name in allowed_dependencies
         ):
             fail(f"non-production test crate {package_name} requires workspace dependency policy")
-        if not isinstance(allowed_external_dependencies, list) or not all(
-            isinstance(name, str) for name in allowed_external_dependencies
+        allowed_external = non_production_external.get(package_name)
+        if not isinstance(allowed_external, list) or not all(
+            isinstance(name, str) for name in allowed_external
         ):
             fail(f"non-production test crate {package_name} requires external dependency policy")
-        actual_dependencies = workspace_dependencies(package, actual_names)
-        if actual_dependencies != set(allowed_dependencies):
-            failures.append(
-                f"{package_name}: test-support workspace dependencies must equal "
-                f"{sorted(set(allowed_dependencies))}, got {sorted(actual_dependencies)}"
+        failures.extend(
+            check_dependency_equality(
+                package_name,
+                workspace_dependencies(package, actual_names),
+                set(allowed_dependencies),
+                "test-support workspace",
             )
-        actual_external_dependencies = external_dependencies(package, actual_names)
-        if actual_external_dependencies != set(allowed_external_dependencies):
-            failures.append(
-                f"{package_name}: test-support external dependencies must equal "
-                f"{sorted(set(allowed_external_dependencies))}, got {sorted(actual_external_dependencies)}"
+        )
+        failures.extend(
+            check_dependency_equality(
+                package_name,
+                external_dependency_keys(package, actual_names),
+                set(allowed_external),
+                "test-support external",
             )
-        actual_targets = integration_test_targets(package)
-        declared_targets = set(declaration["test_targets"])
-        if actual_targets != declared_targets:
-            failures.append(
-                f"{package_name}: declared integration test targets must equal Cargo targets "
-                f"{sorted(actual_targets)}, got {sorted(declared_targets)}"
+        )
+        declared_targets = declared_test_targets(declarations, package_name)
+        if declared_targets is None:
+            fail(
+                f"non-production test crate {package_name} requires a unique named "
+                "integration test target list"
             )
+        failures.extend(
+            check_target_equality(package_name, integration_test_targets(package), declared_targets)
+        )
     return failures
+
 
 def check_declared_boundaries(
     policy: dict[str, object],
@@ -566,36 +672,22 @@ def check_declared_boundaries(
             failures.append(
                 f"{package_name}: only {root_package} may select concrete implementations, got {sorted(selected)}"
             )
-        for concrete_name in concrete:
-            namespace = concrete_name.replace("-", "_") + "::"
-            failures.extend(check_source_patterns(
-                package_name,
-                package,
-                texts,
-                [namespace],
-                f"composition ownership outside {root_package}",
-            ))
     root_sources = source_files_for_package(packages[root_package])
     root_text = "\n".join(texts[path] for path in root_sources)
     for selection in owned_selection_patterns:
         if selection not in root_text:
             failures.append(f"{root_package}: composition root must own concrete selection {selection!r}")
-
-    sdk_patterns = string_list(public_contracts, "provider_sdk_resource_patterns")
-    active = string_list(policy["policy"], "active_production_crates")
-    provider_owners = {
-        "intention-provider-openrouter": {"openrouter_rs::"},
-        "intention-provider-generic-chat": {"async_openai::"},
+    owned_type_names = composition.get("owned_type_names")
+    if not isinstance(owned_type_names, dict) or not all(
+        isinstance(name, str) and isinstance(owner, str) for name, owner in owned_type_names.items()
+    ):
+        fail("composition boundary requires an owned_type_names table of type-to-crate entries")
+    package_sources = {
+        name: source_files_for_package(package) for name, package in packages.items()
     }
-    for package_name in active:
-        allowed_private_sdk = provider_owners.get(package_name, set())
-        failures.extend(check_source_patterns(
-            package_name,
-            packages[package_name],
-            texts,
-            [pattern for pattern in sdk_patterns if pattern not in allowed_private_sdk],
-            "provider SDK/resource boundary",
-        ))
+    failures.extend(
+        composition_type_ownership_failures(root_package, owned_type_names, package_sources, texts)
+    )
     return failures
 
 
@@ -609,8 +701,9 @@ def check_provider_sdk_ownership(
         fail("public contract boundary table is required")
     sdk_patterns = set(string_list(public_contracts, "provider_sdk_resource_patterns"))
     owners = {
-        "async_openai::": "intention-provider-generic-chat",
-        "openrouter_rs::": "intention-provider-openrouter",
+        "async_openai::": "intention-providers",
+        "openrouter_rs::": "intention-providers",
+        "reqwest::": "intention-providers",
     }
     failures: list[str] = []
     for path, text in texts.items():
@@ -635,9 +728,9 @@ def ordering_authority_failures(
 ) -> list[str]:
     """Returns failures for ordering-authority types outside the declared set.
 
-    The set of durable ordering authorities is closed (ADR 0050): a record
-    family orders by the session event sequence, belongs to exactly one container
-    and orders by that container's journal, or has no durable order.
+    The set of durable ordering authorities is closed. Every record family
+    orders by SQLite row insertion order, so a production type whose name ends
+    in a guarded suffix is a reintroduced ordering family.
 
     This is a name-level guard over production type declarations of every
     visibility, including aliases. It does not inspect fields, SQL columns, or
@@ -666,18 +759,154 @@ def ordering_authority_failures(
     return failures
 
 
+def composition_type_ownership_failures(
+    root_package: str,
+    owned_type_names: dict[str, str],
+    package_sources: dict[str, list[Path]],
+    texts: dict[Path, str],
+) -> list[str]:
+    """Return ownership failures for declared concrete implementation type names.
+
+    A declared name may be mentioned only inside the crate that defines it and the
+    declared composition root, and the declaration must be real: a name that no
+    source of its defining crate mentions is a failure.
+    """
+    failures: list[str] = []
+    for type_name, defining_crate in sorted(owned_type_names.items()):
+        if defining_crate not in package_sources:
+            failures.append(f"owned type {type_name!r} names an unknown crate {defining_crate!r}")
+            continue
+        if not any(type_name in texts[path] for path in package_sources[defining_crate]):
+            failures.append(f"owned type {type_name!r} must be defined in {defining_crate}")
+        for package_name, sources in package_sources.items():
+            if package_name in {defining_crate, root_package}:
+                continue
+            for path in sources:
+                if type_name in texts[path]:
+                    failures.append(
+                        f"{package_name}: {type_name} may only be named inside {defining_crate} "
+                        f"and the composition root {root_package}"
+                    )
+    return failures
+
+
+def self_test_composition_type_ownership() -> None:
+    """Proves the type-name ownership check can fail before it is trusted."""
+    storage = Path("crates/intention-storage/src/lib.rs")
+    daemon = Path("crates/intention-daemon/src/lib.rs")
+    tui = Path("crates/intention-tui/src/lib.rs")
+    package_sources = {
+        "intention-storage": [storage],
+        "intention-daemon": [daemon],
+        "intention-tui": [tui],
+    }
+    owned = {"SqliteStorageRepository": "intention-storage"}
+    clean = {
+        storage: "pub struct SqliteStorageRepository;\n",
+        daemon: "fn open() -> SqliteStorageRepository { todo!() }\n",
+        tui: "fn draw() {}\n",
+    }
+    leaked = dict(clean)
+    leaked[tui] = "fn draw(_: SqliteStorageRepository) {}\n"
+    missing = dict(clean)
+    missing[storage] = "pub struct OtherRepository;\n"
+    if composition_type_ownership_failures("intention-daemon", owned, package_sources, clean):
+        fail("composition ownership self-test: the defining crate and the root must pass")
+    if not composition_type_ownership_failures("intention-daemon", owned, package_sources, leaked):
+        fail("composition ownership self-test: a third crate naming the type must fail")
+    if not composition_type_ownership_failures("intention-daemon", owned, package_sources, missing):
+        fail("composition ownership self-test: a declaration no crate defines must fail")
+
+
+def self_test_dependency_cycle_scope() -> None:
+    """Proves the cycle check follows production edges and tolerates dev edges."""
+
+    def package(name: str, dependencies: list[tuple[str, str | None]]) -> dict[str, object]:
+        return {
+            "name": name,
+            "dependencies": [
+                {"name": dependency, "kind": kind} for dependency, kind in dependencies
+            ],
+        }
+
+    tolerated = {
+        "intention-library": package("intention-library", [("intention-support", None)]),
+        "intention-support": package("intention-support", [("intention-library", "dev")]),
+    }
+    if check_workspace_dependency_cycles(tolerated):
+        fail("dependency cycle self-test: a dev-dependency edge must not close a production cycle")
+    rejected = {
+        "intention-library": package("intention-library", [("intention-support", None)]),
+        "intention-support": package("intention-support", [("intention-library", None)]),
+    }
+    if not check_workspace_dependency_cycles(rejected):
+        fail("dependency cycle self-test: a production dependency cycle must fail")
+
+
+def self_test_dependency_declarations() -> None:
+    """Proves the equality checks can fail before they are trusted."""
+    if check_dependency_equality("fixture", {"a"}, {"a"}, "fixture"):
+        fail("dependency declaration self-test: an equal set must pass")
+    if not check_dependency_equality("fixture", {"a", "b"}, {"a"}, "fixture"):
+        fail("dependency declaration self-test: an undeclared dependency must fail")
+    if not check_dependency_equality("fixture", {"a"}, {"a", "b"}, "fixture"):
+        fail("dependency declaration self-test: a stale declaration must fail")
+    if check_target_equality("fixture", {"t"}, {"t"}):
+        fail("test target self-test: an equal set must pass")
+    if not check_target_equality("fixture", {"t", "u"}, {"t"}):
+        fail("test target self-test: an undeclared test target must fail")
+    if not check_target_equality("fixture", {"t"}, {"t", "u"}):
+        fail("test target self-test: a stale test target must fail")
+    renamed = {"name": "fixture", "dependencies": [{"name": "rusqlite", "rename": "sqlite"}]}
+    if external_dependency_keys(renamed, set()) != {"sqlite"}:
+        fail("dependency declaration self-test: a renamed dependency must be declared by its manifest key")
+    hidden = {"name": "fixture", "dependencies": [{"name": "intention-proto", "rename": "proto"}]}
+    if external_dependency_keys(hidden, {"intention-proto"}):
+        fail("dependency declaration self-test: a workspace member must not count as external")
+
+
+def self_test_crate_declarations() -> None:
+    """Proves the crate role and classification pins can fail before they are trusted."""
+    classification = {"active": {"fixture-active"}, "adapter": {"fixture-adapter"}}
+    clean = {
+        "fixture-active": {"role": "active", "responsibility": "does work"},
+        "fixture-adapter": {"role": "adapter", "responsibility": "renders work"},
+    }
+    if crate_declaration_failures(clean, set(clean), classification):
+        fail("crate declaration self-test: a matching declaration must pass")
+    reclassified = dict(clean)
+    reclassified["fixture-active"] = {"role": "adapter", "responsibility": "does work"}
+    if not crate_declaration_failures(reclassified, set(reclassified), classification):
+        fail("crate declaration self-test: a reclassified crate must fail")
+    blank = dict(clean)
+    blank["fixture-active"] = {"role": "active", "responsibility": "  "}
+    if not crate_declaration_failures(blank, set(blank), classification):
+        fail("crate declaration self-test: a blank responsibility must fail")
+    incomplete = {"fixture-active": clean["fixture-active"]}
+    if not crate_declaration_failures(incomplete, set(clean), classification):
+        fail("crate declaration self-test: an undeclared workspace member must fail")
+    if declared_test_targets({"fixture": {"test_targets": ["a", "a"]}}, "fixture") is not None:
+        fail("crate declaration self-test: duplicate declared test targets must be rejected")
+    if declared_test_targets({"fixture": {"test_targets": "a"}}, "fixture") is not None:
+        fail("crate declaration self-test: a non-list test target declaration must be rejected")
+
+
 def self_test_ordering_authorities() -> None:
     """Proves the ordering-authority check can fail before it is trusted."""
-    declared = ["SessionEventSequenceDto"]
     suffixes = ["SequenceDto"]
-    clean = {Path("crates/fixture/src/lib.rs"): "pub struct SessionEventSequenceDto(u64);\n"}
+    unrelated = {Path("crates/fixture/src/lib.rs"): "pub struct UnrelatedDto(u64);\n"}
     undeclared = {Path("crates/fixture/src/lib.rs"): "pub struct ExtraSequenceDto(u64);\n"}
-    missing = {Path("crates/fixture/src/lib.rs"): "pub struct UnrelatedDto(u64);\n"}
-    if ordering_authority_failures(declared, suffixes, clean):
-        fail("ordering-authority self-test: the declared set must pass")
-    if not ordering_authority_failures(declared, suffixes, undeclared):
+    if ordering_authority_failures([], suffixes, unrelated):
+        fail("ordering-authority self-test: an unrelated type must pass")
+    if not ordering_authority_failures([], suffixes, undeclared):
         fail("ordering-authority self-test: an undeclared authority must fail")
-    if not ordering_authority_failures(declared, suffixes, missing):
+    declared = ["FixtureSequenceDto"]
+    declared_source = {
+        Path("crates/fixture/src/lib.rs"): "pub struct FixtureSequenceDto(u64);\n"
+    }
+    if ordering_authority_failures(declared, suffixes, declared_source):
+        fail("ordering-authority self-test: the declared set must pass")
+    if not ordering_authority_failures(declared, suffixes, unrelated):
         fail("ordering-authority self-test: a missing declared authority must fail")
 
 
@@ -760,13 +989,17 @@ def main() -> None:
     global test_only_patterns
     test_only_patterns = set(string_list(forbidden, "test_only_source_patterns"))
 
-    failures = check_phase_policy(policy, packages, texts)
+    failures = check_phase_policy(policy, packages)
     failures.extend(check_workspace_dependency_cycles(packages))
     failures.extend(check_declared_boundaries(policy, packages, texts))
     failures.extend(check_provider_sdk_ownership(policy, packages, texts))
     failures.extend(check_coverage_policy(root, policy))
 
     self_test_ordering_authorities()
+    self_test_composition_type_ownership()
+    self_test_dependency_cycle_scope()
+    self_test_dependency_declarations()
+    self_test_crate_declarations()
     ordering = policy.get("ordering_authorities")
     if not isinstance(ordering, dict):
         fail("missing [ordering_authorities] table")
@@ -782,7 +1015,6 @@ def main() -> None:
     if not isinstance(forbidden, dict):
         fail("missing [forbidden] table")
     patterns = string_list(forbidden, "source_patterns")
-    string_list(forbidden, "public_resource_patterns")
 
     # Test-only patterns are forbidden everywhere except lexically inside
     # cfg(test)/#[test] code; source patterns stay unconditionally forbidden.
@@ -817,7 +1049,11 @@ def main() -> None:
 
     if failures:
         fail("\n".join(failures))
-    print("architecture-check: phase-aware workspace, dependency, DTO, adapter, protocol, and composition policies are valid")
+    print(
+        "architecture-check: phase-aware workspace roles, declared responsibilities, exact workspace and "
+        "external dependency sets, named integration test targets, DTO, adapter, protocol, and "
+        "composition policies are valid"
+    )
 
 
 if __name__ == "__main__":

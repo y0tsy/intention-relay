@@ -61,12 +61,12 @@ Finish only when all of the following are true:
 
 ## 2. Read authoritative sources and current baseline
 
-Read the common sources and the milestone-specific sources listed in [references.md](references.md). At minimum, read:
+Read the current authoritative sources directly. At minimum, read:
 
 - `AGENTS.md`;
 - `docs/intention-relay/architecture/README.md`;
 - the roadmap, TDD/TTD policy, and quality-gate policy;
-- the applicable prior closeout evidence, when the milestone has a predecessor or may already be closed;
+- the applicable prior accepted state in the roadmap and architecture documents, when the milestone has a predecessor or may already be closed;
 - relevant current code, tests, machine-readable policies, workspace manifests, and call sites.
 
 Confirm that crates, modules, test targets, policies, and prior baseline claims still exist before placing them in a specification. Inspect enough surrounding code and tests to avoid naming stale paths or proposing duplicate mechanisms.
@@ -80,7 +80,7 @@ Determine and report:
 
 ### Closed or corrective milestones
 
-If closeout evidence says the milestone is closed, do not reopen or reimplement it by default. Compare its recorded immutable baseline and acceptance evidence with the user-reported gap. Define a focused **remediation slice** only for confirmed missing behavior, evidence, or documentation. Preserve accepted scope and defer unrelated enhancements.
+If the roadmap and architecture documents record the milestone as closed, do not reopen or reimplement it by default. Compare the recorded accepted scope and acceptance evidence with the user-reported gap. Define a focused **remediation slice** only for confirmed missing behavior, evidence, or documentation. Preserve accepted scope and defer unrelated enhancements.
 
 If the predecessor is not accepted or its evidence is missing, report the dependency blocker. Ask whether the user wants a predecessor remediation specification, a combined sequence with explicit ordering, or to defer the target milestone.
 
@@ -166,7 +166,7 @@ For each implementation step, specify:
 3. **Files and symbols**: existing paths only after verifying them; label genuinely new files as new.
 4. **Tests first**: failing/updated contract, domain, architecture, integration, and outcome tests appropriate to the milestone.
 5. **Validation**: focused commands while iterating, then `make quick` and `make verify` as required by the project policy.
-6. **Acceptance evidence**: observable user or operational outcome, documentation/closeout evidence where relevant.
+6. **Acceptance evidence**: observable user or operational outcome, and documentation evidence where relevant.
 7. **Non-goals and deferrals**: keep later-milestone work out of scope.
 
 Group work into atomic commits only when the user requests commit structure. Each group must remain technically coherent and independently reviewable; do not invent commits merely to create a fixed count.

@@ -5,8 +5,8 @@
 This document makes TTD a delivery requirement for Intention Relay: it defines how architecture rules become executable
 checks and how implementation is judged by observable product outcomes, not only source structure or unit coverage. It
 applies to every crate, vertical slice, and adapter. The mandatory pinned tooling, strict linting, the coverage policy
-(per-crate tiers, [ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)), feature profiles,
-Makefile targets, and supply-chain gates are defined in [Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+(per-crate tiers), Makefile targets, and supply-chain gates are defined in [Quality Gates and
+Makefile](12-quality-gates-and-makefile.md).
 
 ## Delivery principle
 
@@ -14,7 +14,7 @@ A feature is delivered only when all three are true:
 
 1. its typed contract is specified and tested;
 2. its architecture boundaries are protected by executable checks where feasible;
-3. a user-visible or operational outcome is verified through the real command/event/persistence path.
+3. a user-visible or operational outcome is verified through the real command/persistence path.
 
 ```mermaid
 flowchart LR
@@ -32,33 +32,16 @@ Compilation is necessary but never sufficient acceptance evidence.
 
 | Layer | Purpose | Examples |
 | --- | --- | --- |
-| DTO tests | Validate schemas, IDs, serialization, validation, versioning. | Event envelope round trips, invalid command rejects. |
+| DTO tests | Validate schemas, IDs, serialization, validation, versioning. | Typed DTO round trips, invalid command rejects. |
 | Domain tests | Prove invariants and state transitions. | One active run, plan number monotonicity. |
-| Contract tests | Prove crate-to-crate and client-to-daemon contracts. | `intention-client` command/event fixtures. |
+| Contract tests | Prove crate-to-crate and client-to-daemon contracts. | `intention-client` command/frame fixtures. |
 | Architecture tests | Prevent prohibited dependency/import/API shapes. | Adapter cannot depend on SQLite/runtime; SDK types do not escape provider crate. |
-| Storage tests | Prove current-schema creation, transaction, projection, and recovery correctness. | Projection and event atomicity. |
+| Storage tests | Prove current-schema creation, transaction, projection, and recovery correctness. | Single-transaction state changes. |
 | Runtime tests | Prove actor lifecycle, interruption, pending input, stream ordering. | Pending turn joins the live run context at the next boundary. |
-| Tool/policy tests | Prove workspace addressing, hook order, Plan restrictions, VFR/Headroom behavior. | Relative addressing from the root, VFR then Headroom ordering. |
+| Tool/policy tests | Prove workspace addressing, execution order, Plan restrictions, and the six tool contracts. | Relative addressing from the root, one durable row per committed result. |
 | Provider tests | Normalize native streams/errors and protect credentials. | OpenRouter fixture conversion. |
-| Adapter integration tests | Prove Tauri bridge and TUI consume the same daemon contract. | Identical session event observed by both clients. |
+| Adapter integration tests | Prove Tauri bridge and TUI consume the same daemon contract. | Identical session snapshot and frames observed by both clients. |
 | Outcome tests | Prove end-to-end behavior against acceptance scenarios. | Restart marks run interrupted and UI receives it. |
-
-## Test-first workflow
-
-For each implementation slice:
-
-1. reference the owning architecture document, the applicable coverage
-declarations under [ADR 0051](../decisions/0051-per-crate-coverage-tiers.md), and acceptance criteria;
-2. add or update DTO/contract fixtures before implementation;
-3. add failing domain, architecture, and outcome tests appropriate to the slice;
-4. implement the smallest code that makes the intended tests pass;
-5. run `make quick` while iterating, then run the narrowest relevant suite;
-6. run `make verify` before accepting the slice;
-7.  record any deliberately deferred behavior, lint/coverage/dependency exception, or known risk as an explicit open
-   decision, never by omitted test coverage.
-
-A test should expose the observable intent. Avoid tests that only assert private implementation steps when a stable
-contract or result can be asserted instead.
 
 ## Architecture rules to encode
 
@@ -67,60 +50,33 @@ The following are mandatory candidates for automated architecture tests:
 | Rule | Required protection |
 | --- | --- |
 | Small-crate structure | Dependency graph check, deny cycles, and a manifest assertion for the required v1 crate set. |
-| Crate accountability | A manifest-backed test that every required crate has one declared responsibility and a test target. |
-| Composition ownership | Only `intention` selects concrete storage/provider/hook/tool extension implementations. |
-| Adapter isolation | `intention-tauri` and `intention-tui` cannot depend directly on application runtime/storage implementations. |
+| Crate accountability | A Cargo-metadata-backed check that every workspace crate is classified exactly once by its declared role and responsibility, that its named integration test targets match Cargo exactly, and that every active production crate keeps at least one. |
+| Composition ownership | Only `intention-daemon` selects concrete storage/provider/tool implementations. |
+| Adapter isolation | Adapter crates (`intention-tui` today; `intention-tauri` is added at M6) cannot depend directly on application runtime/storage implementations. |
 | DTO-first | Public cross-crate APIs use DTOs; forbidden implementation resources/SDK types cannot escape. |
 | Local protocol | Tauri bridge and TUI use `intention-client`, not direct application services. |
 | Daemon authority | SQLite/runtime actor ownership appears only daemon-side. |
 | Workspace boundary | File-oriented tool invocations require `WorkspaceRootDto`. |
-| Hook boundaries | VFR/Headroom attach through declared hook APIs, not base-tool private coupling. |
+| Extension boundaries | VFR/Headroom attach as ordinary library calls with a declared contract, not base-tool private coupling. |
 | Plan integrity | Model-visible plan reads cannot expose frontmatter; ordinary Plan `write`/`edit` cannot target project paths, while Plan `execute` remains advisory-guided and audited. |
 | Autopilot continuity | Plan approval pins a revision, starts a fresh same-Session Build run, and optional handoff transfers only a safe frozen context. |
 | Secret safety | Secret-bearing config cannot appear in public DTO/log/error/snapshot types. |
 
 The mandatory tooling is fixed by [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md). Architecture tests
-are executed through `make architecture`; the complete reproducible acceptance gate is `make verify` and CI invokes
-`make ci` only. `make architecture` also contains isolated expected-failure fixtures for adapter isolation, protocol
-isolation, composition-only concrete selection, provider-SDK public-contract leakage, policy-aligned workspace cycles,
-and executable Cargo test-target declarations.
+are executed through `make architecture`; the complete reproducible acceptance gate is `make verify`, `make ci` is the
+local single-pass alias, while CI invokes the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default`,
+`ci-deps`) as parallel matrix jobs. `make architecture` also contains isolated expected-failure fixtures for adapter
+isolation, protocol isolation, composition-only concrete selection, provider-SDK public-contract leakage,
+and policy-aligned workspace cycles.
 
 ## Minimum test portfolio by crate
 
-Every planned crate must declare a test target before implementation. Minimum expectations:
-
-| Crate area | Minimum evidence |
-| --- | --- |
-| `types`, `domain`, `protocol` | DTO round trip, validated wire decoding, current-version fixtures with non-current-version rejection, and explicit additive-field policy proof. |
-| `config` | TOML current-shape parsing/validation (unversioned documents fail closed), credential-free resolved/snapshot fixture, invalid provider/schema/path/source fixture, and fake-secret absence. |
-| `application`, `runtime` | State-machine/use-case tests and deterministic actor integration tests. |
-| `storage`, `storage-sqlite` | Repository contract tests, current-schema creation tests, transaction fault injection. |
-| `model`, providers | Stream/error fixtures, capability and redaction tests. |
-| `tools`, workspace, hooks | Invocation policy, path boundary, deterministic hook-order tests. |
-| VFR, Headroom, plans | Transform/retrieval/frontmatter/mode-policy outcome tests. |
-| transport, client, daemon | Bootstrap, mismatch, reconnect, restart/recovery integration tests. |
-| Tauri, TUI | Shared-client contract tests and smoke flows over fixture daemon. |
-| composition root | Wiring smoke tests using explicit test configuration only. |
-
-The goal is not an arbitrary number of tests. The required quantity is the smallest portfolio that proves each stated
-invariant, contract, failure mode, and outcome. The per-crate tier floors are mandatory guardrails defined in [12 Quality
-Gates and Makefile](12-quality-gates-and-makefile.md); they must never replace these semantic requirements.
-
-## Closed-milestone evidence
-
-The closed-milestone delivery records are:
-
-- M0/M1 quality foundation and contracts, including versioned JSON fixtures for `ErrorDto`,
-  `EventEnvelopeDto<DomainEventDto>`, protocol hello and subscription commands, and `ConfigSnapshotDto`:
-  [M0/M1 Closure Evidence](../closeout/m0-m1-closure-evidence.md);
-- M1+ quality hardening: [M1+ Quality Hardening Evidence](../closeout/m1-plus-quality-hardening-evidence.md);
-- M3 storage/runtime activation: [M3 Closure Evidence](../closeout/m3-closure-evidence.md);
--  M4 model/provider and run-stream activation, including the controller-owned `M4 execution charter` and the final
-  Linux/Windows CI results: [M4 Closure Evidence](../closeout/m4-closure-evidence.md);
-- M5 trusted-local execute and model-tool-loop activation: [M5 Closure Evidence](../closeout/m5-closure-evidence.md).
-
-M5's trusted-local `execute` environment, the six active tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`), and
-`WorkspaceRoot` addressing semantics are owned by [Tools, Workspace, and Hooks](05-tools-workspace-and-hooks.md).
+`quality/architecture.toml` classifies every workspace crate and declares each production crate's allowed workspace
+dependency edges, and `quality/coverage.toml` declares the per-crate tier floors ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
+Every production crate's test targets must exist before implementation and prove the contracts, invariants, failure
+modes, and outcomes its owner architecture document states. The smallest portfolio that proves every stated invariant, contract, failure mode, and
+outcome is required; no aggregate coverage number replaces it, and boundary crates prove behavior over fixture daemons
+and current-schema state rather than private implementation steps.
 
 ## Result-oriented acceptance scenarios
 
@@ -151,7 +107,7 @@ The following scenarios must become executable before the corresponding capabili
 2. Connect a Tauri bridge fixture and TUI client fixture.
 3. Create/open the same session through one adapter.
 4. Send a user turn through the other.
-5. Verify both receive the same ordered snapshot/events.
+5. Verify both receive the same correlated subscription snapshot and live frames.
 
 ### B. Workspace addressing
 
@@ -159,7 +115,8 @@ The following scenarios must become executable before the corresponding capabili
 2. Change process CWD to a different directory.
 3. Invoke a filesystem tool with relative paths, and a `glob`/`grep` without an explicit path.
 4.  Verify relative access resolves from the session root, `execute` observes it as CWD, and the pathless search starts
-   at the root; absolute and parent paths are addressed as given, not contained (ADR 0047).
+   at the root; absolute and parent paths are addressed as given, not contained
+   ([architecture 05](05-tools-and-workspace.md)).
 
 ### C. Durable run interruption
 
@@ -175,7 +132,7 @@ The following scenarios must become executable before the corresponding capabili
 3. Edit its body through the plan path.
 4. Verify frontmatter remains valid and invisible in captured model context.
 5. Attempt a project-file write with normal write/edit.
-6. Verify typed denial and durable audit event.
+6. Verify the typed denial and the durable audit record it commits.
 
 ### E. VFR and Headroom pipeline
 
@@ -189,21 +146,21 @@ The following scenarios must become executable before the corresponding capabili
 
 1. Use an intentionally recognizable fake credential in TOML.
 2. Trigger provider config and failure paths.
-3. Enumerate events, snapshots, errors, structured logs, and adapter DTOs.
+3. Enumerate frames, snapshots, errors, structured logs, and adapter DTOs.
 4. Verify the credential is absent from all output.
 
 ### I. Daemon-host tool loop
 
 1. Start the real daemon binary and connect over the local protocol.
 2. Send a user turn against a fake provider that emits a tool call; verify the
-outgoing request advertises the six active registered tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`) and
+outgoing request advertises the six active tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`) and
 requests the `tool_calls` capability.
-3. Verify the daemon executes the call through the real typed registry under `WorkspaceRoot` with typed hooks.
-4.  Verify the durable `ToolCallRecorded` and `ToolResultRecorded` facts commit before publication and are streamed to
-   the client.
+3. Verify the daemon executes the call through the real typed tool service under `WorkspaceRoot`.
+4.  Verify the committed tool-call row, its answering tool-result row, and the `tool_results` row commit before
+   publication, and that the client's `run.frame` notifications carry only those committed values.
 5. Verify the provider exchange continues with assistant-tool-call and tool-role messages and completes.
-6. Restart the daemon and replay the run.
-7. Verify recorded tool calls and results replay and are never re-executed.
+6. Restart the daemon and re-read current state.
+7. Verify the recorded tool call and result re-read from current state and are never re-executed.
 
 ### J. Live provider tool loop (opt-in, manual)
 
@@ -216,166 +173,61 @@ requests the `tool_calls` capability.
 the real daemon binary, drives it through the real local transport, and executes a real model tool loop against the live
 provider API over HTTPS.
 3. Verify the provider returns a real tool call; the outgoing request
-advertises the six active registered tools and requests the `tool_calls` capability (scenario I), the daemon executes
-the call through the real typed registry under `WorkspaceRoot`, the durable `ToolCallRecorded` and `ToolResultRecorded`
-facts commit before publication, and the run completes. When the configured model runs in thinking mode, the
+advertises the six active tools and requests the `tool_calls` capability (scenario I), the daemon executes
+the call through the real typed tool service under `WorkspaceRoot`, the committed tool call and its result commit before
+publication, and the run completes. When the configured model runs in thinking mode, the
 continuation request also carries the same round's accepted reasoning as `reasoning_content` on the assistant tool-call
-message (ADR 0041); no prior-turn reasoning is transferred.
-4. Restart the daemon and replay the run; verify the recorded tool call and
-result replay and are never re-executed.
-5. Verify the credential is absent from durable facts, snapshots, daemon logs,
+message; no prior-turn reasoning is transferred.
+4. Restart the daemon and re-read the run; verify the recorded tool call and
+result re-read from current state and are never re-executed.
+5. Verify the credential is absent from the committed transcript rows, session snapshots, daemon logs,
 and state bytes.
 6. Verify an invalid credential produces a typed failure mapping and never an
 untyped panic or a credential echo.
 
 This scenario is non-hermetic: it needs network access, a live provider, and a real credential. It runs only under the
-explicit opt-in ([ADR 0040](../decisions/0040-opt-in-live-provider-e2e.md)) and never in `make quick`, `make verify`,
-CI, or any required status check.
+explicit opt-in ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)) and never in `make quick`,
+`make verify`, CI, or any required status check.
 
 ## Verification evidence
 
-Each completed implementation slice must report:
+Each completed slice reports the architecture document, acceptance criteria, and tests it implements; the `make quick`,
+narrow, and `make verify` checks it ran; the outcome scenarios it covers; and every lint, coverage, feature,
+dependency, or architecture exception with its recorded rationale. Deliberately deferred behavior is recorded as an
+explicit open decision, never as omitted coverage. A cited live run reports its date, commit, provider, model, and
+workflow run URL and never the credential; the opt-in live channel is additional evidence only and never a substitute
+for the mandatory hermetic gates ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
--  the architecture document, the applicable coverage declarations under [ADR
-  0051](../decisions/0051-per-crate-coverage-tiers.md), and acceptance criteria it implements;
-- tests added before or alongside behavior;
-- `make quick`, narrow, integration, and `make verify` checks run;
-- outcome scenarios covered;
-- lint, coverage, feature, dependency, or architecture exceptions, if any;
-- known non-covered risk, if any;
--  a recorded live run, when one is cited, reports the date, commit, provider, model, and workflow run URL and never the
-  credential; the opt-in live channel ([ADR 0040](../decisions/0040-opt-in-live-provider-e2e.md)) is additional evidence
-  and never a substitute for the mandatory hermetic gates;
-- whether the behavior is proven by automated test, manual smoke test, or intentionally still deferred.
+### Slice 1.5 evidence
+
+Slice 1.5 replaces the event, snapshot, and replay contract blocks with current-state storage tests: schema tests
+create the current-state tables directly on open, and transaction tests prove one SQLite transaction per state change
+with publication from the committed values. The daemon end-to-end tests drive the real asynchronous `intention-client`
+instead of the low-level transport. Tool-call tests cover one transaction per call, the pre-effect identity rejection,
+and the durable terminal row. Protocol contract fixtures cover the reduced
+current-state surface with no resync, cursor, or event DTOs. Tests of deleted surfaces are deleted without replacement,
+and the per-crate coverage tiers in `quality/coverage.toml` are unchanged.
+
+### Future package evidence
+
+Evidence obligations for systems that are not activated are owned by their documents; this document keeps only the
+pointers:
+
+- Slice 1.5 core simplification — [Implementation Roadmap](11-implementation-roadmap.md).
+- Tool registry and model-tool loop — [architecture 15](15-tool-registry-and-model-tool-loop.md).
+- MCP capability lifecycle — [architecture 18](18-mcp-capability-lifecycle.md).
+- Gateway/RLM bridge — [architecture 19](19-gateway-rlm-bridge.md).
+- IPython kernel lifecycle — [architecture 20](20-ipython-kernel-lifecycle.md).
+- Goals, skills, context, memory, and compaction — [architecture 21](21-goals-skills-context-memory-and-compaction.md).
+- Provider evolution, profiles, and reasoning — [architecture 22](22-provider-evolution-profiles-and-reasoning.md).
+- Session branching and regeneration — [architecture 23](23-non-destructive-session-branching-and-regeneration.md).
+- Daemon, transport, and adapter boundary — [architecture 03](03-daemon-transport-and-adapters.md).
+- Configuration and provider control plane — [architecture 25](25-configuration-provider-control-plane.md) (protocol:
+  [architecture 29](29-provider-session-and-profiles-protocol.md)).
+- Post-M4 evidence obligations — activating specification per [architecture 12](12-quality-gates-and-makefile.md).
 
 ## Non-goals
 
 No specific Rust test framework is mandated, and no test count or coverage percentage replaces reviewer judgment.
 Snapshots are not a substitute for semantic assertions, and a unit test reaching a private method never proves that a
 user flow works.
-
-## Post-M4 Foundation evidence obligations
-
-Before any future Mandate-capable production slice, its specification must name contract, architecture, fault/recovery,
-compatibility, redaction, and outcome evidence for the Foundation rules it consumes. At minimum, later packages must
-cover:
-
-- typed contract/version mismatch rejection before external work;
-- M3/M4 byte/meaning preservation and no synthetic future state;
-- user-versus-daemon/verifier conflict precedence where relevant;
-- atomic admission/transition rollback at every persistence stage;
-- no external effect inside a transition transaction and post-commit reread
-publication;
-- crash/cancel behavior before start versus after a potentially interrupted start;
-- no provider/tool/process/kernel/MCP/child/bridge resumption after restart;
-- limit behavior only where a recorded precedent names the failure mode it
-prevents, with no hidden Mandate product quotas; and
-- recognizable fake-secret absence from future records, logs, errors, protocol,
-and diagnostics.
-
-These are obligations for later implementation packages, not claims that the corresponding runtime behavior exists
-today.
-
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
-
-## Execution-meaning compatibility evidence
-
-The binary canonical codec, execution-meaning envelope, tag registry, and digest/identity layer were removed by [ADR
-0046](../decisions/0046-typed-serde-json-contracts.md); no golden bytes, digests, kind/tag mismatch fixtures, or decoder
-retention schedule remain.
-
-Historical-compatibility work that survives the removal (M3/M4 byte preservation, no current-state reconstruction, and
-no resume after an incompatible record) is owned by [Run execution meaning and historical
-compatibility](14-run-execution-meaning-and-historical-compatibility.md) and carries typed serde JSON evidence.
-
-## Future package evidence
-
-Each later package declares its own evidence portfolio through the activating-specification contract in [architecture
-12](12-quality-gates-and-makefile.md).
-
-### Tool-registry and Mandate-loop evidence
-
-Before implementation, future tool-loop work requires fixed-slot and owner fixtures, Reserved/non-bypass fixtures, typed
-registry/descriptor selection, ordinary-versus-Mandate WorkspaceRoot outcomes, direct-Mandate/no-confirmation admission,
-group atomicity/concurrency/order, fragment/result integrity, before-start/started/known/unknown recovery, typed
-protocol replay, historical M4 tool-call compatibility, no-current-state reconstruction, and fake-secret absence. These
-are future obligations, not claims that a runtime or test target exists; the detailed portfolio is owned by [Tool
-registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md).
-
-### Mandate scheduler and readiness evidence
-
-Before implementation, future scheduler work requires durable-reason versus observation/candidate/admission fixtures;
-deterministic ordering; unavailable reason preservation; duplicate wake/readiness idempotency; lifecycle/readiness
-races; transaction fault injection; recovery-before-scheduling; no-resume; ordinary turn input and M4 preservation;
-no-current-state reconstruction; typed protocol replay; and fake-secret/resource absence. These are future obligations,
-not current tests or targets. The detailed portfolio is owned by [Mandate scheduler and readiness-driven
-admission](16-mandate-scheduler-and-readiness-driven-admission.md).
-
-### Mandate child graph and verifier evidence
-
-Before implementation, future child/verifier work requires typed
-edge/delegation/authority/baseline/evidence/verdict/mutation fixtures; idempotent child creation and graph-integrity
-fixtures; direct-edge-only control and non-scheduling messages; terminalization/cascade and child-local partial-result
-matrices; authority revision/revocation/target-set/stale-baseline/operation fixtures; user-precedence races; atomic
-fault injection; recovery/no-resume; typed protocol replay; M3/M4 and retained-RLM preservation; and fake-secret/raw
-resource absence. These are future obligations, not current tests or targets. The detailed portfolio is owned by
-[Mandate child graph and delegated verifier authority](17-mandate-child-graph-and-delegated-verifier-authority.md).
-
-### Mandate MCP capability evidence
-
-Before implementation, future MCP work requires typed source/discovery/ capability/selection/invocation fixtures; closed
-schema-normalization negatives; fixed-slot/no-bypass and server-non-authority fixtures; idempotency, selection freeze,
-schema-drift, and no-current-state reconstruction cases; transaction fault injection; HTTP/local-stdio
-cancellation/recovery/no-resume; private resource redaction; scheduler/child/verifier isolation; typed protocol replay;
-and M3/M4 plus retained bounded-MCP preservation. These are future obligations, not current tests or targets. The
-detailed portfolio is owned by [Mandate MCP capability lifecycle](18-mandate-mcp-capability-lifecycle.md).
-
-### Mandate Gateway/RLM bridge evidence
-
-Before implementation, future bridge work requires typed bridge-selection fixtures; grant scope/expiry and no-bypass
-fixtures; operation idempotency and fault injection; cancellation/crash/late-result/no-resume matrices; child, verifier,
-and MCP isolation; typed protocol replay/resync and zero-effect reconnect; M3/M4 plus retained-RLM preservation; and
-fake-secret/raw resource absence. These are future obligations, not current tests or targets. The detailed portfolio is
-owned by [Mandate Gateway/RLM bridge](19-mandate-gateway-rlm-bridge.md).
-
-### Run-scoped IPython kernel evidence
-
-Before implementation, future kernel work requires typed selection/checkpoint fixtures; run-scoped lazy epoch/no-sharing
-fixtures; required/optional restore and no-current-state reconstruction; cell/host-request/checkpoint fault injection;
-cancellation/crash/late-message/no-resume matrices; bridge-only/no-bypass and stale-grant/task tests; child/verifier/MCP
-isolation; typed protocol replay/resync; historical M3/M4 and retained IPython/RLM preservation; and fake-secret/raw
-Python/Jupyter/resource absence. These are future obligations, not current tests or targets. The detailed portfolio is
-owned by [Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md).
-
-### Goals, Skills, context, memory, and compaction evidence
-
-Before implementation, future context work requires canonical Goal scope and applicability, Skill selection/disclosure,
-source-manifest/projection, memory, and compaction fixtures and negative cases; admission/model-step fault injection;
-no-current-state reconstruction; audience/redaction and non-authority outcomes; recovery/no-resume and replay/resync;
-child/verifier/MCP/bridge/kernel isolation; M3/M4 preservation; and fake-secret/raw-source/private-reference absence.
-These are future obligations, not current tests or targets. The detailed portfolio is owned by [Goals, Skills, context,
-memory, and compaction](21-goals-skills-context-memory-and-compaction.md).
-
-### Provider evolution, profiles, and reasoning evidence
-
-Before implementation, future provider work requires typed descriptor/
-profile/catalog/selection/capability/driver-contract fixtures; M3/M4 preservation; alias normalization and no model-name
-routing; capability/driver preflight before outbound work; Responses `store: false`; normalized reasoning and
-context-owner selection; catalog activation/recovery fault injection; no-resume/retry matrices; typed protocol replay;
-redaction; and Linux/Windows outcomes. These are future obligations, not current tests or targets. The detailed
-portfolio is owned by [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md).
-
-### Session branching evidence
-
-Before implementation, architecture 23 requires typed v1/v2 fixtures and negative cases; boundary/context/anchor tests;
-transaction fault injection; additive migration byte preservation; protocol and bounded tree-page tests;
-authority/no-resume/no-current-state-reconstruction matrices; redaction; and Linux/Windows fork/regeneration outcomes.
-These are future obligations only. The detailed portfolio is owned by [Session branching and
-regeneration](23-non-destructive-session-branching-and-regeneration.md).
-
-### Activity, UI, and adapter evidence
-
-Before implementation, architecture 24 requires activity/message/journal/ notification/acknowledgement fixtures and
-negative cases; transaction and sequence isolation; typed protocol replay/resync; redaction; no-resume; Tauri/TUI/REPL
-parity; and Linux/Windows outcome evidence. These are future obligations only. The detailed portfolio is owned by
-[Activity, UI, and adapters](24-activity-ui-and-adapters.md).

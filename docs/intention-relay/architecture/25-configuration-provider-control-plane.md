@@ -2,42 +2,42 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.** Architecture 25 owns the
 configuration and provider control-plane cluster: controlled configuration live reload, credential rotation, provider
-health checks, provider/model discovery, pricing and budget policy, and the configuration control-plane surface. The M5+
-Slice 2 activation was reverted; re-introduction requires a new activating specification (activation sequence: [ADR
-0035](../decisions/0035-m5plus-complete-foundation-activation.md), [ADR
-0043](../decisions/0043-instruction-sources-and-system-context.md)).
+health checks, provider/model discovery, pricing and budget policy, and the configuration control-plane surface. The
+slice is not activated; activation requires an activating specification (activation sequence: [architecture
+11](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment), [architecture
+30](30-instruction-sources-and-system-context.md)).
 
-Owner: architecture 25. Decisions: ADR 0020, ADR 0033, ADR 0043. Research: `m4plus_concept.md`.
+Owner: architecture 25.
 
 ## Ownership and non-authorities
 
 Architecture 09 owns TOML parsing, schema validation, configuration discovery, redaction, and startup-only application.
-Architecture 22 owns future provider kinds, profiles, catalogs, selections, and driver compatibility. Architecture 14
-owns run-execution meaning and historical compatibility; its canonical codec was removed by [ADR
-0046](../decisions/0046-typed-serde-json-contracts.md). Architecture 13 owns Mandate lifecycle and fresh admission,
-architecture 15 the tool loop, architecture 24 activity/UI projections and adapter behavior.
+Architecture 22 owns future provider kinds, profiles, catalogs, selections, and driver compatibility; the removed
+run-execution meaning layer (its canonical codec was removed under [architecture
+02](02-dto-and-contract-policy.md)) leaves no live path. Architecture 15 owns the tool loop, and architecture 03 owns the
+flat activity journal, the notification list, and adapter behavior.
 
-This document owns only the accepted future directions below: no second runtime, registry, scheduler, persistence
-authority, or sandbox, and no Mandate reason, `RunId`, lifecycle transition, scheduler candidate, tool permission, child
-edge, verifier authority, MCP capability, bridge grant, kernel epoch, context projection, branch, or reconciliation
-result from a reload, rotation, health observation, discovery result, price, or control-plane action. All directions
-apply to future fresh runs only.
+This document owns only the accepted future directions below: no second runtime, registry, persistence authority, or
+sandbox, and no `RunId`, lifecycle transition, tool permission, child, MCP capability, bridge grant, kernel epoch,
+context projection, branch, or reconciliation result from a reload, rotation, health observation, discovery result,
+price, or control-plane action. All directions apply to future fresh runs only.
 
 ## Controlled configuration live reload
 
-M3/M4 apply TOML only at daemon startup; existing runs retain their recorded immutable snapshot/revision. Controlled
-live reload is the accepted direction that applies a validated TOML change to a running daemon:
+M3/M4 apply TOML only at daemon startup; existing runs retain their recorded immutable configuration revision.
+Controlled live reload is the accepted direction that applies a validated TOML change to a running daemon:
 
 - reload is an explicit command, contract, transaction, and outcome test: the
-daemon re-parses and validates a candidate snapshot against the current single configuration shape, atomically commits a
-new accepted revision, and applies it to fresh runs only; configuration has no migration path, unversioned or legacy
-documents fail closed under [ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md), and there is
-no watcher, polling, auto-restart, or automatic re-application;
+daemon re-parses and validates a candidate configuration revision against the current single configuration shape,
+commits the new accepted revision in one transaction, and applies it to fresh runs only; configuration has no migration
+path, unversioned or legacy documents fail closed under [architecture
+00](00-principles-and-scope.md), and there is no watcher, polling,
+auto-restart, or automatic re-application;
 - a candidate that cannot be applied atomically fails closed and leaves the
-daemon on its recorded snapshot; a candidate that changes catalog-affecting configuration is rejected with
+daemon on its recorded configuration revision; a candidate that changes catalog-affecting configuration is rejected with
 `catalog_change_requires_restart`, and the next daemon restart re-derives the active catalog from the startup document
 through the catalog prepare and accept path;
-- existing persisted runs, admitted runs, and recorded snapshots are never
+- existing persisted runs, admitted runs, and recorded configuration revisions are never
 mutated, re-selected, or rewritten by a reload;
 - the reload command is the only activation path for a running daemon; with no
 activation in the tree, daemon restart is again the only configuration activation path.
@@ -61,11 +61,11 @@ The configured private credential source is the daemon's own configuration file.
 credential inside its private loading boundary at open and retains it in a non-serde, non-`Debug` in-memory slot; a
 rotation command re-reads the file through that boundary, replaces the composition's private material only when the
 frozen-meaning checks pass, and rebuilds the provider driver's private client. The rebuild keeps the driver options the
-composition's provider-option seam applied at construction (PR24-057): rotation preflights the active profile's declared
-options through the seam and replaces only the private SDK client, so it never silently drops or ignores declared driver
-options. Facades opened without a file-backed source (test-support hosts) keep the fail-closed
-`credential_rotation_source_unavailable` behavior. No credential handling beyond the M3/M4 startup boundary exists in
-the tree, and no credential, file content, or source path may appear in a DTO, error, log, snapshot, projection, or
+composition's provider-option seam applies at construction: rotation preflights the active profile's declared options
+through the seam and replaces only the private SDK client, so it never silently drops or ignores declared driver
+options. Facades opened without a file-backed source (test-support hosts) fail closed with the same typed error. No
+credential handling beyond the M3/M4 startup boundary may exist in
+the tree, and no credential, file content, or source path may appear in a DTO, error, log, projection, or
 durable surface.
 
 ## Provider health checks
@@ -76,7 +76,7 @@ A provider health-check service produces typed operational readiness evidence:
 or a fallback selector, and health checks never perform provider/model selection, routing, pricing, discovery, or
 credential testing beyond the declared contract;
 - unavailability retains the exact reason and creates no `RunId`, retry
-counter, or quota; restoration only permits architecture-16 reevaluation;
+counter, or quota;
 - the health-evidence DTO carries the provider identity (`provider_id`) and
 reports no profile revision while the catalog is not wired into the health path: `provider_profile_revision_id` stays
 absent, and no synthesized `health-profile-<hex>` identity is fabricated.
@@ -94,10 +94,9 @@ immutable selection.
 
 ## Pricing and budget policy
 
-Pricing and budget policy is product/budget policy, never a Mandate admission ceiling, quota, or entitlement:
+Pricing and budget policy is product/budget policy, never an admission ceiling, quota, or entitlement:
 
-- it cannot gate direct Mandate admission, tool admission, scheduler
-eligibility, or capacity outcomes;
+- it cannot gate tool admission or capacity outcomes;
 - numeric values are classified Intrinsic/Capacity/Product; pricing is never an
 admission ceiling.
 
@@ -114,15 +113,15 @@ affect fresh runs only.
 
 ## Raw-TOML editing and configuration editing
 
-Raw-TOML editing and a validated configuration-editing surface are accepted directions under [ADR
-0033](../decisions/0033-accepted-m5plus-execution-directions.md), awaiting a new activating specification:
+Raw-TOML editing and a validated configuration-editing surface are accepted directions awaiting a new activating
+specification:
 
 - a safe, validated raw-TOML editing surface over the shared typed client
-produces a new candidate snapshot through the same atomic reload contract; it is never adapter authority and never
-in-place mutation of an admitted run or recorded snapshot;
+produces a new candidate revision through the same reload transaction; it is never adapter authority and never
+in-place mutation of an admitted run or recorded configuration revision;
 - editing is accepted server-side only: the daemon validates the candidate,
 credentials are never echoed through any edit response or projection, and a validated edit that fails closed leaves the
-daemon on its recorded snapshot;
+daemon on its recorded configuration revision;
 - typed configuration edits reconstruct a credential-free candidate document
 server-side and restore the composition's retained private credential into it inside the private loading boundary, so
 the candidate validates and commits without the credential ever crossing a wire, DTO, error, log, or durable surface;
@@ -132,7 +131,7 @@ material, SDK objects, or raw provider payloads on durable/public surfaces.
 ## Instruction-fragment editing and preview
 
 The instruction configuration surface of [architecture 30](30-instruction-sources-and-system-context.md) is edited
-through this control plane, per [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md); architecture 30
+through this control plane; architecture 30
 owns the fragment operations and the non-admitting preview, and the surface ships with the fifth Milestone 5+ slice and
 its activating specification. Validate an edit before it commits and reject an invalid, inconsistent, or over-bound edit
 with a typed failure, leaving the running daemon on its recorded profile revision; keep the surface credential-free,
@@ -141,15 +140,13 @@ it.
 
 ## Compatibility and historical preservation
 
-M3/M4 startup-only application, `ConfigSnapshotDto` revisions, persisted run snapshots, provider kinds, retries, model
-facts, cursors, replay, recovery, and `ToolCallRecorded -> tool_execution_unavailable` retain their recorded ordinary
-semantics and stay unchanged; no direction rewrites historical bytes, assigns new meaning to a closed variant, or
-reconstructs missing meaning from current state. All directions affect fresh runs only; the Slice 2 activation was
-reverted and re-introduction requires a new activating specification.
+No direction rewrites historical records, assigns new meaning to a closed variant, or reconstructs missing meaning
+from current state. All directions affect fresh runs only; the slice is not activated and activation requires an
+activating specification.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 09, 14, 16, 22, and 24 plus decisions 0014 and 0020. Non-goals: a reload
+This document depends on architectures 03, 09, and 22. Non-goals: a reload
 watcher/transport, keychain or secret store, standalone health-service or discovery topology, pricing engine, profile
 picker/editor implementation, OS notifications, remote transport, multi-user access, sandbox/container isolation, and
 production activation beyond the accepted directions. The daemon-facade serving surface for reload, rotation, health,

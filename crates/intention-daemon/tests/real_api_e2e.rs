@@ -5,20 +5,19 @@
 //! against a live provider API over HTTPS. The positive test drives every
 //! advertised tool (`read`, `write`, `edit`, `execute`, `glob`, `grep`) as one
 //! live session: it proves that a real model tool call for each of them
-//! executes through the typed tool registry, that every call's
-//! `ToolCallRecorded` and `ToolResultRecorded` facts are durable, that the
-//! observed effects reach the workspace, and that a hard daemon restart
-//! replays a recorded run without re-executing the tool or disclosing the
-//! provider credential.
+//! executes through the typed tool registry, that every call's `tool_call`
+//! transcript row and its paired `tool_result` evidence row are durable, that
+//! the observed effects reach the workspace, and that a hard daemon restart
+//! serves the recorded current state of a completed run without re-executing
+//! the tool or disclosing the provider credential.
 //!
 //! When the configured model runs in thinking mode, the same tool loop also
-//! proves the ADR 0041 reasoning round trip: the gateway rejects a tool-loop
+//! proves the same-run reasoning round trip: the gateway rejects a tool-loop
 //! continuation whose assistant tool-call message does not carry the round's
 //! accepted `reasoning_content`, so a completed live tool loop means the
 //! runtime attached that reasoning and the generic adapter serialized it.
 //!
-//! This file is the single opt-in live channel recorded by ADR 0040
-//! (`docs/intention-relay/decisions/0040-opt-in-live-provider-e2e.md`). It is
+//! This file is the single opt-in live channel recorded by architecture 10. It is
 //! never part of the hermetic gates: both tests carry `#[ignore]` and return
 //! silently unless `INTENTION_REAL_API_E2E=1`, so an ordinary test run,
 //! including `--run-ignored all`, never fails without the operator opt-in.
@@ -51,33 +50,25 @@
     reason = "Opt-in live-provider end-to-end fixtures use assertion conveniences and one stderr diagnostic on the unwind path for precise failures."
 )]
 
+mod common;
+
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::process::Child;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use common::{config_path, spawn_daemon, unique_endpoint, write_config_document};
 use intention_client::{IntentionClient, ProcessDaemonLauncher, RunStreamClient};
 use intention_config::{
     ConfigPathDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto,
 };
-use intention_domain::{
-    CreateSessionCommandDto, ModelRunFactDto, ModelRunFactInputDto, RunFailureDto, RunModeDto,
-    RunSnapshotDto, RunStatusDto, SendUserTurnCommandDto, ToolResultOutcomeDto, WorkspaceRootDto,
+use intention_proto::{
+    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto,
+    RunStatusDto, WorkspaceRootDto, run_status_is_terminal,
 };
-use intention_protocol::{
-    DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto,
-    ProtocolHelloDto, ProtocolMethodDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
-    RunResyncReasonDto, RunStreamFrameDto, RunSubscriptionResponseDto, SendUserTurnOutcomeDto,
-    SessionSnapshotDto, SubscribeRunCommandDto, decode_response, encode_request,
-    parse_run_frame_notification,
-};
-use intention_transport::{
-    AsyncLocalClientConnection, LocalConnection, LocalEndpoint, local_protocol_version,
-    negotiate_client,
-};
-use intention_types::{DtoResult, ErrorDto, ProjectId, RunId, SessionId, TurnId, WorkspaceId};
+use intention_proto::{IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId};
+use intention_proto::{SendUserTurnOutcomeDto, SessionSnapshotDto, SubscribeRunCommandDto};
+use intention_transport::LocalEndpoint;
 use tempfile::TempDir;
 
 /// The generic-chat endpoint used when the operator does not override it.
@@ -90,11 +81,12 @@ const TURN_DEADLINE: Duration = Duration::from_secs(180);
 /// The readiness deadline for one daemon process start.
 const READINESS_DEADLINE: Duration = Duration::from_secs(30);
 
-/// The bounded window that proves a completed durable run commits no new facts.
-const REPLAY_QUIET_WINDOW: Duration = Duration::from_secs(1);
+/// The bounded window that proves a completed durable run commits no new
+/// transcript rows.
+const TERMINAL_QUIET_WINDOW: Duration = Duration::from_secs(1);
 
-/// The bounded window used to observe the post-restart replay.
-const REPLAY_DEADLINE: Duration = Duration::from_secs(15);
+/// The bounded window used to observe current state from a fresh subscription.
+const RESUBSCRIBE_DEADLINE: Duration = Duration::from_secs(15);
 
 /// The bounded deadline for one synchronous session snapshot read.
 const SESSION_READ_DEADLINE: Duration = Duration::from_secs(15);
@@ -106,36 +98,35 @@ const KILL_DEADLINE: Duration = Duration::from_secs(5);
 /// The bounded attempts one live tool turn may consume before it fails.
 const TOOL_TURN_ATTEMPTS: u8 = 3;
 
-// Worst-case live-channel budget: 4912 seconds (about 82 minutes), recomputed
-// from the constants above, the bounded synchronous transport calls, and the
-// harness structure:
+// Worst-case live-channel budget: 4462 seconds (about 74 minutes), recomputed
+// from the constants above, the bounded client calls, and the harness
+// structure:
 // - 7 tool runs (the six positive tool turns plus the negative credential
 //   run) x `TOOL_TURN_ATTEMPTS` 3 attempts x `TURN_DEADLINE` 180 s = 3780 s;
 // - the bounded `create_session` and `send_user_turn` of every attempt:
-//   21 attempts x 2 calls x 20.5 s = 861 s;
+//   21 attempts x 2 calls x 10.5 s = 441 s;
 // - three `READINESS_DEADLINE` daemon starts (3 x 30 s = 90 s);
 // - three `KILL_DEADLINE` windows (3 x 5 s = 15 s);
-// - the bounded post-restart subscribe (15 s), the quiet window (1 s), the
-//   bounded replay observations (3 x 15 s = 45 s), and the seven bounded
-//   session snapshots (7 x 15 s = 105 s).
+// - the bounded post-restart subscription (15 s), the quiet window (1 s), the
+//   bounded re-observation after the quiet window (15 s), and the seven
+//   bounded session snapshots (7 x 15 s = 105 s).
 //
-// Every synchronous command (`client.health`, `create_session`,
-// `send_user_turn`, and the session reads) is additionally bounded by the
-// transport I/O timeout: one call spends at most `CONNECT_TIMEOUT` 500 ms plus
-// two `SYNC_IO_TIMEOUT` reads (one for the hello, one for the response) of
-// 10 s each, which is at most 20.5 s. A daemon that accepts connections and
+// Every command (`client.health`, `create_session`, and `send_user_turn`) is
+// additionally bounded by the client: one call spends at most `CONNECT_TIMEOUT`
+// 500 ms on the connect plus one `REQUEST_TIMEOUT` 10 s request-and-reply
+// round trip, which is at most 10.5 s. A daemon that accepts connections and
 // never answers therefore fails the readiness deadline plus one bounded health
 // call per `wait_until_ready` and then the first bounded `create_session` or
 // `send_user_turn`: the harness reports its own diagnostic within about two
-// minutes instead of hanging until the CI timeout.
+// minutes instead of hanging until the CI timeout. The session reads carry the
+// harness `SESSION_READ_DEADLINE` on top of the same client bound.
 //
 // `.github/workflows/real-api-e2e.yml` gives the run step 120 minutes and the
-// job 150 minutes: the 82-minute worst case leaves a 38-minute step margin for
+// job 150 minutes: the 74-minute worst case leaves a 46-minute step margin for
 // the build, and the job keeps a 30-minute overhead above the step. A degraded
 // live run reports the harness diagnostic ("did not record a succeeded <tool>
 // call within 3 turns") instead of an opaque GitHub timeout; a change to any
-// budget constant must keep that relation, and `quality/self_test.py`
-// (`test_real_api_e2e_budget_matches_workflow_timeouts`) recomputes it.
+// budget constant must keep that relation.
 
 /// Environment variables that must never reach the spawned daemon.
 ///
@@ -273,28 +264,6 @@ fn escape_toml_basic_string(value: &str) -> String {
     escaped
 }
 
-/// Returns the platform config path the daemon resolves from its environment.
-fn config_path(config_home: &Path) -> PathBuf {
-    #[cfg(target_os = "linux")]
-    {
-        config_home.join("intention-relay").join("config.toml")
-    }
-    #[cfg(target_os = "macos")]
-    {
-        config_home
-            .join("Library/Application Support/intention-relay")
-            .join("config.toml")
-    }
-    #[cfg(windows)]
-    {
-        config_home.join("intention-relay").join("config.toml")
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-    {
-        config_home.join("intention-relay").join("config.toml")
-    }
-}
-
 /// Resolves the daemon's durable state directory for the fixture environment.
 ///
 /// `spawn_daemon` overrides the platform state root that the daemon's private
@@ -369,120 +338,6 @@ fn preflight_config_document(path: &Path, provider: &LiveProviderConfig, documen
     );
 }
 
-/// Writes the daemon configuration file with owner-only permissions on Unix.
-fn write_config(config_home: &Path, provider: &LiveProviderConfig) {
-    let config_path = config_path(config_home);
-    let document = provider.config_document();
-    preflight_config_document(&config_path, provider, &document);
-    let parent = config_path.parent().expect("config path has a parent");
-    std::fs::create_dir_all(parent).expect("config directory is created");
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-
-        let mut options = std::fs::OpenOptions::new();
-        options.create(true).write(true).truncate(true).mode(0o600);
-        let mut file = options.open(&config_path).expect("config file opens");
-        file.write_all(document.as_bytes())
-            .expect("config file writes");
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(&config_path, document.as_bytes()).expect("config file writes");
-    }
-}
-
-static NEXT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
-
-/// Builds a unique safe endpoint instance id for this test process.
-fn unique_endpoint() -> LocalEndpoint {
-    let sequence = NEXT_ENDPOINT.fetch_add(1, Ordering::Relaxed);
-    LocalEndpoint::from_instance_id(format!("real-api-e2e-{}-{}", std::process::id(), sequence))
-        .expect("live e2e endpoint is valid")
-}
-
-/// Spawns the real daemon binary with per-process environment overrides and
-/// both output streams redirected into the fixture log file.
-///
-/// The daemon never inherits the live-provider variables or the provider SDK
-/// credential fallbacks, and it never inherits stdout/stderr, so the capture
-/// file is the only place its text can land.
-fn spawn_daemon(
-    endpoint: &LocalEndpoint,
-    config_home: &Path,
-    state_home: &Path,
-    log_path: &Path,
-) -> Child {
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-        .expect("daemon log file opens");
-    let log_errors = log.try_clone().expect("daemon log file clones");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_intention-daemon"));
-    command.arg(endpoint.instance_id());
-    command.stdout(Stdio::from(log));
-    command.stderr(Stdio::from(log_errors));
-    for variable in DAEMON_REMOVED_ENVIRONMENT {
-        command.env_remove(variable);
-    }
-    #[cfg(target_os = "linux")]
-    {
-        command.env("XDG_CONFIG_HOME", config_home);
-        command.env("XDG_STATE_HOME", state_home);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // Both the configuration and the state directory derive from HOME.
-        command.env("HOME", config_home);
-    }
-    #[cfg(windows)]
-    {
-        command.env("APPDATA", config_home);
-        command.env("LOCALAPPDATA", state_home);
-    }
-    command.spawn().expect("daemon binary spawns")
-}
-
-/// Replicates the daemon transport's platform endpoint path resolution so the
-/// fixture can remove exactly the socket file its own daemon created.
-#[cfg(unix)]
-fn endpoint_socket_path(endpoint: &LocalEndpoint) -> Option<PathBuf> {
-    let base = {
-        #[cfg(target_os = "linux")]
-        {
-            std::env::var_os("XDG_RUNTIME_DIR")
-                .map(PathBuf::from)
-                .filter(|candidate| candidate.is_absolute())
-                .or_else(|| {
-                    std::env::var_os("XDG_CONFIG_HOME")
-                        .map(PathBuf::from)
-                        .filter(|candidate| candidate.is_absolute())
-                        .map(|candidate| candidate.join("intention-relay"))
-                })
-                .or_else(|| {
-                    std::env::var_os("HOME")
-                        .map(PathBuf::from)
-                        .filter(|candidate| candidate.is_absolute())
-                        .map(|candidate| candidate.join(".config/intention-relay"))
-                })
-        }
-        #[cfg(target_os = "macos")]
-        {
-            std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .filter(|candidate| candidate.is_absolute())
-                .map(|candidate| candidate.join("Library/Application Support/intention-relay"))
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        {
-            None
-        }
-    }?;
-    Some(base.join(format!("{}.sock", endpoint.instance_id())))
-}
-
 /// One live-provider fixture: isolated config/state/workspace directories, one
 /// spawned daemon process, and its private capture log.
 ///
@@ -510,10 +365,19 @@ impl LiveE2eHost {
         for (name, content) in workspace_files {
             std::fs::write(workspace.path().join(name), content).expect("workspace fixture writes");
         }
-        write_config(config_home.path(), provider);
-        let endpoint = unique_endpoint();
+        let config_path = config_path(config_home.path());
+        let config_document = provider.config_document();
+        preflight_config_document(&config_path, provider, &config_document);
+        write_config_document(config_home.path(), &config_document);
+        let endpoint = unique_endpoint("real-api-e2e");
         let log_path = config_home.path().join("daemon-live-e2e.log");
-        let daemon = spawn_daemon(&endpoint, config_home.path(), state_home.path(), &log_path);
+        let daemon = spawn_daemon(
+            &endpoint,
+            config_home.path(),
+            state_home.path(),
+            Some(&log_path),
+            &DAEMON_REMOVED_ENVIRONMENT,
+        );
         Self {
             config_home,
             state_home,
@@ -532,7 +396,7 @@ impl LiveE2eHost {
     ///
     /// The kill is a hard kill, so the daemon cannot clean up; its Unix socket
     /// file survives, and the transport reclaims the stale socket on the next
-    /// bind, exactly like the hermetic facade fixture. A clean daemon exit
+    /// bind, exactly like the hermetic client fixture. A clean daemon exit
     /// leaves the same file now that a dropped listener never unlinks its
     /// endpoint.
     fn restart_daemon(&mut self) {
@@ -541,7 +405,8 @@ impl LiveE2eHost {
             &self.endpoint,
             self.config_home.path(),
             self.state_home.path(),
-            &self.log_path,
+            Some(&self.log_path),
+            &DAEMON_REMOVED_ENVIRONMENT,
         ));
     }
 
@@ -592,27 +457,32 @@ impl Drop for LiveE2eHost {
     fn drop(&mut self) {
         self.kill_daemon();
         #[cfg(unix)]
-        if let Some(path) = endpoint_socket_path(&self.endpoint) {
+        if let Some(path) = common::endpoint_socket_path(&self.endpoint) {
             let _ = std::fs::remove_file(path);
         }
     }
 }
 
-/// Polls the daemon health projection until it reports `Ready`.
-///
-/// `health()` only negotiates and queries; it never launches the daemon. A
-/// child that exits before readiness fails with its exit status instead of a
-/// readiness timeout.
-fn wait_until_ready(host: &mut LiveE2eHost, deadline: Instant) -> IntentionClient {
-    let client = IntentionClient::new(
-        host.endpoint.clone(),
-        "real-api-e2e",
+/// Builds the shared typed client for one fixture endpoint.
+fn live_client(endpoint: &LocalEndpoint) -> IntentionClient {
+    IntentionClient::new(
+        endpoint.clone(),
         Box::new(
             ProcessDaemonLauncher::new(env!("CARGO_BIN_EXE_intention-daemon"))
                 .expect("daemon program is valid"),
         ),
     )
-    .expect("live e2e client is valid");
+}
+
+/// Waits out the client's readiness wait until the daemon reports `Ready`.
+///
+/// `await_ready()` only connects and queries; it never launches the daemon.
+/// Its own bounded wait is looped under the fixture deadline, so a daemon that
+/// needs longer than one client budget still becomes ready in time. A child
+/// that exits before readiness fails with its exit status instead of a
+/// readiness timeout.
+async fn wait_until_ready(host: &mut LiveE2eHost, deadline: Instant) -> IntentionClient {
+    let client = live_client(&host.endpoint);
     while Instant::now() < deadline {
         let exit_status = host
             .daemon
@@ -622,81 +492,35 @@ fn wait_until_ready(host: &mut LiveE2eHost, deadline: Instant) -> IntentionClien
             exit_status.is_none(),
             "the daemon exits before readiness with status {exit_status:?}"
         );
-        match client.health() {
-            Ok(health) if health.readiness() == DaemonReadinessDto::Ready => return client,
-            Ok(_) | Err(_) => {}
+        if client.await_ready().await.is_ok() {
+            return client;
         }
-        thread::sleep(Duration::from_millis(100));
     }
     panic!("daemon becomes ready before the deadline");
 }
 
 /// Reads one session snapshot with a harness-side deadline.
 ///
-/// The synchronous transport bounds every read and write with its own I/O
-/// timeout, so the call itself cannot block forever; this helper adds the
-/// tighter harness deadline on top of it. The read runs on a worker that owns
-/// its own client and the harness waits only until the deadline, so a daemon
-/// that accepts the connection and never answers fails with this harness
-/// diagnostic instead of hanging the run until the CI step timeout.
-fn bounded_session_snapshot(
+/// The client bounds every request with its own timeout, so the read itself
+/// cannot block forever; this helper keeps the harness deadline as an outer
+/// bound. The deadline is enforced by the runtime timer, so a daemon that
+/// accepts the connection and never answers fails with a bounded harness panic
+/// instead of hanging the run until the CI step timeout.
+async fn bounded_session_snapshot(
     endpoint: &LocalEndpoint,
     session_id: SessionId,
     deadline: Instant,
 ) -> SessionSnapshotDto {
-    let endpoint = endpoint.clone();
-    let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
-        let client = IntentionClient::new(
-            endpoint,
-            "real-api-e2e",
-            Box::new(
-                ProcessDaemonLauncher::new(env!("CARGO_BIN_EXE_intention-daemon"))
-                    .expect("daemon program is valid"),
-            ),
-        )
-        .expect("live e2e client is valid");
-        let _ = sender.send(client.session_snapshot(session_id));
-    });
-    match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+    let client = live_client(endpoint);
+    match tokio::time::timeout_at(
+        tokio::time::Instant::from_std(deadline),
+        client.session_snapshot(session_id),
+    )
+    .await
+    {
         Ok(Ok(snapshot)) => snapshot,
         Ok(Err(error)) => panic!("the daemon serves the session snapshot: {error:?}"),
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            panic!("the session snapshot arrives before the deadline")
-        }
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            panic!("the session snapshot worker completes")
-        }
-    }
-}
-
-/// The exact hello the fixture clients exchange with the daemon.
-fn fixture_hello() -> ProtocolHelloDto {
-    ProtocolHelloDto::new(local_protocol_version(), "real-api-e2e").expect("fixture hello is valid")
-}
-
-fn invalid_response() -> ErrorDto {
-    ErrorDto::validation(
-        "invalid_local_protocol_response",
-        "the local daemon returned an unexpected protocol response",
-    )
-}
-
-/// Sends one typed protocol command over a fresh negotiated connection and
-/// verifies the correlated response, replicating the shared client's private
-/// request path with public transport and protocol APIs only.
-fn send_command(
-    endpoint: &LocalEndpoint,
-    payload: ProtocolRequestPayloadDto,
-) -> DtoResult<ProtocolCommandResultDto> {
-    let method = ProtocolMethodDto::for_payload(&payload);
-    let mut connection = LocalConnection::connect(endpoint)?;
-    negotiate_client(&mut connection, fixture_hello())?;
-    connection.send_message(&encode_request(1, payload))?;
-    let line = connection.receive_line()?;
-    match decode_response(&line, method, 1)? {
-        ProtocolResponsePayloadDto::CommandResult(result) => Ok(result),
-        _ => Err(invalid_response()),
+        Err(_) => panic!("the session snapshot arrives before the deadline"),
     }
 }
 
@@ -705,212 +529,144 @@ fn send_command(
 /// Every session of one fixture shares its project and workspace identity:
 /// the durable workspace root is unique, so a second session over the same
 /// root must reuse the workspace identity instead of minting a new one.
-fn create_session(host: &LiveE2eHost, session_id: SessionId, label: &str) {
-    let created = send_command(
-        &host.endpoint,
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::CreateSession(
-            CreateSessionCommandDto::new(
-                host.project_id,
-                session_id,
-                host.workspace_id,
-                WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
-                    .expect("workspace root is absolute"),
-                RunModeDto::Build,
-            ),
-        )),
-    )
-    .expect("session creation is accepted");
-    assert!(
-        matches!(created, ProtocolCommandResultDto::Accepted(_)),
-        "the daemon accepts session creation for {label}, got: {created:?}"
-    );
+async fn create_session(host: &LiveE2eHost, session_id: SessionId, label: &str) {
+    live_client(&host.endpoint)
+        .create_session(CreateSessionCommandDto::new(
+            host.project_id,
+            session_id,
+            host.workspace_id,
+            WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
+                .expect("workspace root is absolute"),
+            RunModeDto::Build,
+        ))
+        .await
+        .unwrap_or_else(|error| {
+            panic!("the daemon accepts session creation for {label}: {error:?}")
+        });
 }
 
 /// Sends one user turn and returns the run it started.
-fn send_user_turn(endpoint: &LocalEndpoint, session_id: SessionId, content: &str) -> RunId {
-    let result = send_command(
-        endpoint,
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, TurnId::new(), content).expect("turn is valid"),
-        )),
-    )
-    .expect("user turn is accepted");
-    let ProtocolCommandResultDto::Accepted(accepted) = result else {
-        panic!("user turn starts a run, got: {result:?}")
-    };
-    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
-        panic!("user turn result starts a run, got: {accepted:?}")
-    };
-    let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
-        panic!("the user turn starts a run, got: {turn:?}")
+async fn send_user_turn(endpoint: &LocalEndpoint, session_id: SessionId, content: &str) -> RunId {
+    let outcome = live_client(endpoint)
+        .send_user_turn(session_id, IdempotencyKey::new(), content.to_owned())
+        .await
+        .expect("user turn is accepted");
+    let SendUserTurnOutcomeDto::Started { run_id, .. } = outcome else {
+        panic!("the user turn starts a run, got: {outcome:?}")
     };
     run_id
 }
 
-/// One observed terminal run: the delivered durable facts and the
-/// authoritative terminal snapshot.
+/// One observed terminal run: the authoritative current run projection and the
+/// committed transcript rows that carry the run's history.
+///
+/// The transcript is the durable record of user, assistant, tool-call,
+/// tool-result, and notice content. The repository writes each `tool_results`
+/// evidence row and its answering `tool_result` transcript row in one
+/// transaction, so a call row paired with a result row of the same call
+/// identity is the durable evidence of one recorded tool outcome.
 struct ObservedRun {
-    facts: Vec<ModelRunFactDto>,
-    snapshot: RunSnapshotDto,
+    run: RunProjectionDto,
+    messages: Vec<MessageProjectionDto>,
 }
 
 impl ObservedRun {
     /// Returns the authoritative terminal run status.
     const fn status(&self) -> RunStatusDto {
-        self.snapshot.run_projection().status()
+        self.run.status()
     }
 
-    /// Returns the authoritative assistant content accumulated by the run.
-    fn assistant_content(&self) -> &str {
-        self.snapshot.projection().assistant_content()
+    /// Returns whether the run committed any assistant transcript row.
+    fn has_assistant_content(&self) -> bool {
+        self.messages
+            .iter()
+            .any(|message| message.kind() == MessageKindDto::Assistant)
     }
 
-    /// Returns the safe terminal failure code recorded by the run, if failed.
-    fn failure_code(&self) -> Option<&str> {
-        self.snapshot
-            .projection()
-            .failure()
-            .map(|failure| failure.code())
-    }
-
-    /// Reports whether the delivered facts form one non-empty contiguous
-    /// cursor range ending in the terminal fact at the snapshot cursor.
-    fn facts_end_at_snapshot_cursor(&self) -> bool {
-        !self.facts.is_empty()
-            && self
-                .facts
-                .windows(2)
-                .all(|pair| pair[0].cursor().value() + 1 == pair[1].cursor().value())
-            && self.facts.last().is_some_and(|fact| {
-                matches!(
-                    fact.input(),
-                    ModelRunFactInputDto::Finished { .. } | ModelRunFactInputDto::Failed { .. }
-                ) && fact.cursor() == self.snapshot.cursor()
-            })
-    }
-
-    /// Reports whether any durable tool call for the named tool was recorded.
+    /// Reports whether the run committed the named tool call row.
     fn has_tool_call(&self, tool: &str) -> bool {
-        self.facts.iter().any(|fact| {
-            matches!(
-                fact.input(),
-                ModelRunFactInputDto::ToolCallRecorded { call } if call.name() == tool
-            )
+        self.messages.iter().any(|message| {
+            message.kind() == MessageKindDto::ToolCall && message.tool_id() == Some(tool)
         })
     }
 
-    /// Returns the distinct tool names recorded by durable calls, in fact order.
+    /// Returns the distinct tool names recorded by committed call rows, in
+    /// transcript order.
     fn recorded_tool_names(&self) -> Vec<&str> {
         let mut names: Vec<&str> = Vec::new();
-        for fact in &self.facts {
-            if let ModelRunFactInputDto::ToolCallRecorded { call } = fact.input() {
-                let name = call.name();
-                if !names.contains(&name) {
-                    names.push(name);
-                }
+        for message in &self.messages {
+            if message.kind() != MessageKindDto::ToolCall {
+                continue;
+            }
+            if let Some(name) = message.tool_id()
+                && !names.contains(&name)
+            {
+                names.push(name);
             }
         }
         names
     }
 
-    /// Returns the call arguments of every succeeded durable result recorded
-    /// for one tool, matched to its call by identity.
+    /// Returns the canonical arguments of every committed call row of one tool.
     ///
     /// A mutating turn binds its durable effect to these arguments so a
     /// leftover run from an earlier evicted attempt cannot satisfy the turn's
     /// on-disk byte check on its own.
-    fn succeeded_call_arguments(&self, tool: &str) -> Vec<&str> {
-        self.facts
+    fn tool_call_arguments(&self, tool: &str) -> Vec<&str> {
+        self.messages
             .iter()
-            .filter_map(|result| {
-                let ModelRunFactInputDto::ToolResultRecorded {
-                    call_id,
-                    outcome: ToolResultOutcomeDto::Succeeded { .. },
-                } = result.input()
-                else {
-                    return None;
-                };
-                self.facts.iter().find_map(|call| {
-                    let ModelRunFactInputDto::ToolCallRecorded { call } = call.input() else {
-                        return None;
-                    };
-                    (call.name() == tool && call.call_id() == *call_id)
-                        .then_some(call.arguments_json())
-                })
+            .filter(|message| {
+                message.kind() == MessageKindDto::ToolCall && message.tool_id() == Some(tool)
             })
+            .map(MessageProjectionDto::text)
             .collect()
     }
 
-    /// Returns the succeeded durable result content of every recorded call of
-    /// one tool, matched to its call by identity.
-    fn succeeded_contents(&self, tool: &str) -> Vec<&str> {
-        self.facts
+    /// Returns the committed result content of every result row that answers a
+    /// call of one tool, matched to its call by identity.
+    ///
+    /// A failed or interrupted tool outcome terminalizes the run or ends its
+    /// operation with a notice, so a completed run's matched result rows are
+    /// its non-failed durable outcomes.
+    fn tool_result_contents(&self, tool: &str) -> Vec<&str> {
+        self.messages
             .iter()
-            .filter_map(|result| {
-                let ModelRunFactInputDto::ToolResultRecorded {
-                    call_id,
-                    outcome: ToolResultOutcomeDto::Succeeded { content },
-                } = result.input()
-                else {
-                    return None;
-                };
-                self.facts
-                    .iter()
-                    .any(|call| {
-                        matches!(
-                            call.input(),
-                            ModelRunFactInputDto::ToolCallRecorded { call }
-                                if call.name() == tool && call.call_id() == *call_id
-                        )
+            .filter(|result| {
+                result.kind() == MessageKindDto::ToolResult
+                    && result.tool_id() == Some(tool)
+                    && self.messages.iter().any(|call| {
+                        call.kind() == MessageKindDto::ToolCall
+                            && call.tool_id() == Some(tool)
+                            && call.tool_call_id() == result.tool_call_id()
                     })
-                    .then_some(content.as_str())
             })
-            .collect()
-    }
-
-    /// Returns the failure code and the call arguments of every durable failed
-    /// result recorded for one tool, matched to its call by identity.
-    fn failed_results(&self, tool: &str) -> Vec<(&str, &str)> {
-        self.facts
-            .iter()
-            .filter_map(|result| {
-                let ModelRunFactInputDto::ToolResultRecorded {
-                    call_id,
-                    outcome: ToolResultOutcomeDto::Failed { failure },
-                } = result.input()
-                else {
-                    return None;
-                };
-                self.facts.iter().find_map(|call| {
-                    let ModelRunFactInputDto::ToolCallRecorded { call } = call.input() else {
-                        return None;
-                    };
-                    (call.name() == tool && call.call_id() == *call_id)
-                        .then_some((failure.code(), call.arguments_json()))
-                })
-            })
+            .map(MessageProjectionDto::text)
             .collect()
     }
 }
 
 /// The bounded outcome of one run-stream observation.
 enum RunObservation {
-    /// The run delivered its authoritative terminal snapshot.
+    /// The run delivered its authoritative terminal status with its committed
+    /// transcript rows.
     Terminal(Box<ObservedRun>),
-    /// The connection was lost before the terminal snapshot, because the
-    /// daemon evicted this subscriber or the stream closed. The caller may
-    /// observe again.
+    /// The connection was lost before the terminal status, because the daemon
+    /// closed this subscriber or the stream ended. The caller may observe
+    /// again.
     Lost(String),
 }
 
-/// Subscribes to one run and collects the delivered durable facts plus the
-/// authoritative terminal snapshot.
+/// Subscribes to one run and collects its current snapshot plus the committed
+/// frames delivered until the terminal status.
 ///
-/// The daemon replays an empty tail on subscribe and delivers facts only as
-/// live batches while the run commits them, so a subscriber observes a suffix
-/// of the run's facts but never a gap inside that suffix. A real provider can
-/// pause for several seconds inside one attempt, so the whole observation is
-/// bounded by the deadline instead of by per-frame read timeouts.
+/// The daemon answers a subscription with current durable state and then
+/// delivers committed transcript rows and statuses live; there is no replay
+/// tail and no cursor. The daemon bounds every subscriber queue and closes one
+/// that cannot keep up instead of resynchronizing it, so a long provider
+/// reasoning burst can close the subscriber. The caller observes again instead
+/// of failing. A real provider can pause for several seconds inside one
+/// attempt, so the whole observation is bounded by the deadline instead of by
+/// per-frame read timeouts.
 async fn collect_terminal_run(
     endpoint: &LocalEndpoint,
     session_id: SessionId,
@@ -922,86 +678,47 @@ async fn collect_terminal_run(
         collect_run_frames(endpoint, session_id, run_id),
     )
     .await
-    .unwrap_or_else(|_| panic!("run facts arrive before the deadline"))
+    .unwrap_or_else(|_| panic!("the run reaches a terminal status before the deadline"))
 }
 
-/// Reads one run stream until its terminal snapshot or a lost connection.
+/// Reads one run stream until its terminal status or a closed connection.
 async fn collect_run_frames(
     endpoint: &LocalEndpoint,
     session_id: SessionId,
     run_id: RunId,
 ) -> RunObservation {
-    let Ok(connection) = AsyncLocalClientConnection::connect(endpoint).await else {
-        return RunObservation::Lost("the run stream connection is unavailable".to_owned());
-    };
-    let Ok((_remote, mut requests, mut messages)) = connection.negotiate(fixture_hello()).await
-    else {
-        return RunObservation::Lost("the run stream negotiation failed".to_owned());
-    };
-    if requests
-        .send_message(&encode_request(
-            1,
-            ProtocolRequestPayloadDto::RunSubscription(SubscribeRunCommandDto::new(
-                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-                session_id,
-                run_id,
-                None,
-            )),
-        ))
+    let client = RunStreamClient::new(endpoint.clone());
+    let Ok(mut subscription) = client
+        .subscribe(SubscribeRunCommandDto::new(session_id, run_id))
         .await
-        .is_err()
-    {
-        return RunObservation::Lost("the run subscription request failed".to_owned());
-    }
-    let Ok(reply) = messages.receive_line().await else {
-        return RunObservation::Lost("the run subscription reply failed".to_owned());
+    else {
+        return RunObservation::Lost("the run subscription failed".to_owned());
     };
-    let Ok(reply) = decode_response(&reply, ProtocolMethodDto::RunSubscribe, 1) else {
-        return RunObservation::Lost("the run subscription reply is invalid".to_owned());
-    };
-    let mut facts = Vec::new();
-    match reply {
-        ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Replay(replay)) => {
-            let snapshot = replay;
-            if snapshot.run_projection().status().is_terminal() {
-                return RunObservation::Terminal(Box::new(ObservedRun { facts, snapshot }));
-            }
-        }
-        _ => panic!("run subscription reply must be a replay"),
-    }
     loop {
-        let Ok(line) = messages.receive_line().await else {
-            return RunObservation::Lost(format!(
-                "the run stream closed after {} facts",
-                facts.len()
-            ));
-        };
-        let Ok(frame) = parse_run_frame_notification(&line) else {
-            return RunObservation::Lost("the run stream frame is invalid".to_owned());
-        };
-        match frame {
-            RunStreamFrameDto::LiveBatch(batch) => {
-                facts.extend(batch.facts().iter().cloned());
-            }
-            RunStreamFrameDto::Snapshot(frame) => {
-                let snapshot = frame.snapshot().clone();
-                if snapshot.run_projection().status().is_terminal() {
-                    return RunObservation::Terminal(Box::new(ObservedRun { facts, snapshot }));
-                }
-            }
-            RunStreamFrameDto::Resync(resync) => {
-                // The daemon bounds every subscriber queue and evicts one that
-                // cannot keep up; a long provider reasoning burst can exceed
-                // that bound. The caller observes again instead of failing.
-                assert_eq!(
-                    resync.reason(),
-                    RunResyncReasonDto::SubscriberTooSlow,
-                    "only a slow-subscriber eviction is an expected resync"
-                );
+        if subscription
+            .state()
+            .status()
+            .is_some_and(run_status_is_terminal)
+        {
+            let run = *subscription
+                .state()
+                .run()
+                .expect("an accepted subscription snapshot carries the run projection");
+            return RunObservation::Terminal(Box::new(ObservedRun {
+                run,
+                messages: subscription.state().messages().to_vec(),
+            }));
+        }
+        match subscription.receive().await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
                 return RunObservation::Lost(format!(
-                    "the daemon evicted the slow subscriber after {} facts",
-                    facts.len()
+                    "the daemon closed the run stream after {} committed rows",
+                    subscription.state().messages().len()
                 ));
+            }
+            Err(_) => {
+                return RunObservation::Lost("the run stream frame is invalid".to_owned());
             }
         }
     }
@@ -1025,17 +742,17 @@ async fn drive_tool_turn(
 /// The same prompt is retried within the bounded attempt budget, because the
 /// live channel has three acceptably lossy steps: a live model occasionally
 /// answers without calling the tool at all, it occasionally phrases a tool
-/// argument differently from the prompt so the tool rejects the call or the
-/// durable effect does not match, and the daemon drops a subscriber that
-/// cannot keep up with a reasoning burst. Each of those consumes one attempt
-/// in a fresh session, and `prepare` restores the workspace state that an
-/// earlier attempt of a mutating turn may have changed. A run whose subscriber
-/// the daemon evicted is not cancelled, so it can keep modifying the workspace
-/// after the next attempt's reseed; a mutating `effect` therefore binds the
-/// accepted turn to this run's own succeeded call (its target path and byte
-/// count) and never to the on-disk bytes alone, so a leftover run cannot
-/// satisfy a later attempt's check by itself. A completed turn whose durable
-/// facts satisfy `effect` is accepted, and any other failure is still fatal.
+/// argument differently from the prompt so the call is rejected or the durable
+/// effect does not match, and the daemon closes a subscriber that cannot keep
+/// up with a reasoning burst. Each of those consumes one attempt in a fresh
+/// session, and `prepare` restores the workspace state that an earlier attempt
+/// of a mutating turn may have changed. A run whose subscriber the daemon
+/// closed is not cancelled, so it can keep modifying the workspace after the
+/// next attempt's reseed; a mutating `effect` therefore binds the accepted
+/// turn to this run's own committed call (its target path and byte count) and
+/// never to the on-disk bytes alone, so a leftover run cannot satisfy a later
+/// attempt's check by itself. A completed turn whose committed transcript
+/// rows satisfy `effect` is accepted, and any other failure is still fatal.
 async fn drive_tool_turn_with(
     host: &LiveE2eHost,
     tool: &str,
@@ -1047,8 +764,8 @@ async fn drive_tool_turn_with(
     for attempt in 1..=TOOL_TURN_ATTEMPTS {
         prepare();
         let session_id = SessionId::new();
-        create_session(host, session_id, &format!("{tool} turn {attempt}"));
-        let run_id = send_user_turn(&host.endpoint, session_id, prompt);
+        create_session(host, session_id, &format!("{tool} turn {attempt}")).await;
+        let run_id = send_user_turn(&host.endpoint, session_id, prompt).await;
         let observed = match collect_terminal_run(
             &host.endpoint,
             session_id,
@@ -1064,33 +781,28 @@ async fn drive_tool_turn_with(
             }
         };
         if observed.status() != RunStatusDto::Completed {
-            // A durable failed result for the tool proves the run was
-            // terminalized by the tool's own rejection of a live model
-            // argument, which is model noise; a run that fails without one is
-            // a product failure and stays fatal.
-            let rejected = observed.failed_results(tool);
-            assert!(
-                !rejected.is_empty(),
-                "live provider {tool} turn {attempt} terminated without a completed run, failure code {:?}, recorded calls {:?}",
-                observed.failure_code(),
+            // A failed live turn is model noise: the live model can answer
+            // without a usable tool call, and an unparsable call terminalizes
+            // the run as `Failed`. An interrupted run is daemon recovery,
+            // which is never acceptable mid-turn, so it stays fatal.
+            assert_eq!(
+                observed.status(),
+                RunStatusDto::Failed,
+                "live provider {tool} turn {attempt} terminated without a completed run, recorded calls {:?}",
                 observed.recorded_tool_names()
             );
             last_gap = Some(format!(
-                "a {tool} call was rejected with {rejected:?} (run failure {:?})",
-                observed.failure_code()
+                "the live provider {tool} turn terminalized failed (recorded calls {:?})",
+                observed.recorded_tool_names()
             ));
             continue;
         }
-        assert!(
-            observed.facts_end_at_snapshot_cursor(),
-            "the {tool} turn delivers one contiguous fact range ending in its terminal fact at the snapshot cursor"
-        );
-        if observed.has_tool_call(tool) && !observed.succeeded_contents(tool).is_empty() {
+        if observed.has_tool_call(tool) && !observed.tool_result_contents(tool).is_empty() {
             if effect(&observed) {
                 return (session_id, observed);
             }
             last_gap = Some(format!(
-                "a completed run recorded a succeeded {tool} call whose durable effect was not observed"
+                "a completed run recorded a {tool} call whose durable effect was not observed"
             ));
             continue;
         }
@@ -1166,107 +878,26 @@ fn assert_state_directory_excludes_credential(
     );
 }
 
-/// The normalized closed-set provider failure codes the invalid-credential
-/// live run may record, for either selectable provider kind.
-const INVALID_CREDENTIAL_FAILURE_CODES: [&str; 4] = [
-    "generic_chat_provider_request_rejected",
-    "generic_chat_provider_unavailable",
-    "openrouter_provider_request_rejected",
-    "openrouter_provider_unavailable",
-];
-
-/// Asserts the invalid-credential run delivered a non-empty set of durable
-/// facts and that every one of them is a normalized failure fact.
-///
-/// The provider rejects the request before any assistant, reasoning, usage, or
-/// tool output can exist, so every delivered fact must be an attempt-lifecycle
-/// or terminal-failure shape whose failure re-validates through the durable
-/// DTO constructors and carries one of the normalized closed-set provider
-/// failure codes. A content-bearing fact would mean raw provider output
-/// reached durable state, which the containment invariant of ADR 0040
-/// decision 7 forbids; the guard fails rather than silently accepting a new
-/// fact shape. The non-empty requirement keeps the invariant from passing
-/// vacuously when the terminal snapshot carries no delivered facts.
-fn assert_invalid_credential_facts_are_normalized(facts: &[ModelRunFactDto]) {
-    assert!(
-        !facts.is_empty(),
-        "the invalid-credential run delivers at least one durable normalized failure fact"
-    );
-    for fact in facts {
-        match fact.input() {
-            ModelRunFactInputDto::ProviderAttemptStarted { attempt } => {
-                assert!(
-                    ModelRunFactInputDto::provider_attempt_started(*attempt).is_ok(),
-                    "the recorded provider attempt re-validates through its durable DTO"
-                );
-            }
-            ModelRunFactInputDto::ProviderAttemptFailed { attempt, failure } => {
-                assert!(
-                    ModelRunFactInputDto::provider_attempt_failed(*attempt, failure.clone())
-                        .is_ok(),
-                    "the recorded provider attempt failure re-validates through its durable DTO"
-                );
-                assert_normalized_provider_failure(failure);
-            }
-            ModelRunFactInputDto::RetryScheduled {
-                failed_attempt,
-                next_attempt,
-            } => {
-                assert!(
-                    ModelRunFactInputDto::retry_scheduled(*failed_attempt, *next_attempt).is_ok(),
-                    "the recorded retry re-validates through its durable DTO"
-                );
-            }
-            ModelRunFactInputDto::Failed { failure } => {
-                assert!(
-                    RunFailureDto::new(
-                        failure.code().to_owned(),
-                        failure.retry(),
-                        failure.correlation_id(),
-                    )
-                    .is_ok(),
-                    "the recorded terminal failure re-validates through its durable DTO"
-                );
-                assert_normalized_provider_failure(failure);
-            }
-            other => panic!(
-                "the invalid-credential run records only normalized failure facts, got kind {}",
-                other.kind().as_str()
-            ),
-        }
-    }
-}
-
-/// Asserts one recorded provider failure carries a normalized closed-set code.
-fn assert_normalized_provider_failure(failure: &RunFailureDto) {
-    assert!(
-        INVALID_CREDENTIAL_FAILURE_CODES.contains(&failure.code()),
-        "the recorded provider failure code is in the normalized closed set, got: {}",
-        failure.code()
-    );
-}
-
 /// Proves the real production tool loop against a live provider for every
-/// advertised tool, then proves a durable run replays across a hard daemon
-/// restart.
+/// advertised tool, then proves a restarted daemon serves a completed run's
+/// recorded current state.
 ///
 /// One live daemon drives all six active registry tools as separate live
 /// sessions: `read`, `glob`, `grep`, `write`, `edit`, and `execute`. A turn is
-/// accepted only when its run completed, delivered a contiguous fact range
-/// ending in the terminal fact at the snapshot cursor, and recorded a durable
-/// call with a succeeded durable result that reached the turn's required
+/// accepted only when its run completed and recorded a `tool_call` transcript
+/// row with a paired `tool_result` row that reached the turn's required
 /// effect: the note text for `read` and `grep`, the workspace path list for
 /// `glob`, the written bytes for `write` and `edit`, and the real child's
 /// stdout with its typed exit status for `execute`. Every effect check runs
 /// inside the bounded attempt budget, so a valid-but-different provider
 /// argument consumes an attempt instead of failing the completed run. A turn
-/// that misses those conditions, a turn whose tool call the tool itself
-/// rejected, and a turn whose subscriber the daemon evicted each consume one
-/// bounded attempt in a fresh session; any other failed run or a timeout fails
+/// that misses those conditions, a turn that terminalizes `Failed`, and a turn
+/// whose subscriber the daemon closed each consume one bounded attempt in a
+/// fresh session; any other failed run, an interrupted run, or a timeout fails
 /// the test.
 #[tokio::test]
-#[ignore = "opt-in live-provider e2e; see ADR 0040; run via make e2e-real-api"]
-async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_restart() {
+#[ignore = "opt-in live-provider e2e; see architecture 10; run via make e2e-real-api"]
+async fn real_provider_tool_loop_drives_every_advertised_tool_and_survives_restart() {
     let Some(provider) = LiveProviderConfig::from_env() else {
         return;
     };
@@ -1281,7 +912,7 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
         ],
     );
     let credential = host.credential.clone();
-    let _client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE);
+    let _client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE).await;
 
     // `read`: the live model reads the seeded note through the real registry.
     let (read_session, read_run) = drive_tool_turn(
@@ -1291,7 +922,7 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
             "Use the read tool with the arguments {} to read that workspace file.",
             serde_json::json!({"path": "e2e-note.txt"})
         ),
-        &|run| run.succeeded_contents("read").join("\n").contains(&token),
+        &|run| run.tool_result_contents("read").join("\n").contains(&token),
     )
     .await;
 
@@ -1304,7 +935,7 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
             serde_json::json!({"pattern": "*.txt"})
         ),
         &|run| {
-            run.succeeded_contents("glob")
+            run.tool_result_contents("glob")
                 .join("\n")
                 .contains("e2e-note.txt")
         },
@@ -1319,7 +950,11 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
             "Use the grep tool with the arguments {} to find the note token anywhere in the workspace.",
             serde_json::json!({"pattern": token, "scope": {"kind": "workspace"}})
         ),
-        &|run| run.succeeded_contents("grep").join("\n").contains(&token),
+        &|run| {
+            run.tool_result_contents("grep")
+                .join("\n")
+                .contains(&token)
+        },
     )
     .await;
 
@@ -1353,10 +988,10 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
             // running run may touch the file after the reseed, but it cannot
             // record this run's durable call.
             written_bytes == written
-                && run.succeeded_contents("write").join("\n")
+                && run.tool_result_contents("write").join("\n")
                     == format!("{} bytes", written_bytes.len())
                 && run
-                    .succeeded_call_arguments("write")
+                    .tool_call_arguments("write")
                     .iter()
                     .any(|arguments| arguments.contains("e2e-written.txt"))
         },
@@ -1392,10 +1027,10 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
             // succeeded call for the target path, so a leftover run from an
             // evicted attempt cannot satisfy the byte check alone.
             edited_bytes.contains(&edited_source)
-                && run.succeeded_contents("edit").join("\n")
+                && run.tool_result_contents("edit").join("\n")
                     == format!("{} bytes", edited_bytes.len())
                 && run
-                    .succeeded_call_arguments("edit")
+                    .tool_call_arguments("edit")
                     .iter()
                     .any(|arguments| arguments.contains("e2e-edit-source.txt"))
         },
@@ -1416,7 +1051,7 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
             serde_json::json!({"program": program, "args": args})
         ),
         &|run| {
-            let content = run.succeeded_contents("execute").join("\n");
+            let content = run.tool_result_contents("execute").join("\n");
             content.contains(&token) && content.contains("exit_code:0")
         },
     )
@@ -1430,71 +1065,56 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
         &edit_run,
         &execute_run,
     ];
-    let run_id = read_run.snapshot.run_id();
-    let pre_restart_cursor = read_run.snapshot.cursor();
+    let run_id = read_run.run.run_id();
 
     host.restart_daemon();
-    let _client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE);
-    let stream_client = RunStreamClient::new(host.endpoint.clone(), "real-api-e2e")
-        .expect("stream client is valid");
+    let _client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE).await;
+    let stream_client = RunStreamClient::new(host.endpoint.clone());
     let subscription = tokio::time::timeout_at(
-        tokio::time::Instant::from_std(Instant::now() + REPLAY_DEADLINE),
-        stream_client.subscribe(SubscribeRunCommandDto::new(
-            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-            read_session,
-            run_id,
-            None,
-        )),
+        tokio::time::Instant::from_std(Instant::now() + RESUBSCRIBE_DEADLINE),
+        stream_client.subscribe(SubscribeRunCommandDto::new(read_session, run_id)),
     )
     .await
-    .unwrap_or_else(|_| panic!("restart replay arrives before the deadline"))
-    .expect("restart replay arrives");
-    let replay_snapshot = subscription
-        .reducer()
-        .snapshot()
-        .expect("restart replay is authoritative");
+    .unwrap_or_else(|_| panic!("the post-restart subscription reply arrives before the deadline"))
+    .expect("the post-restart subscription reply is valid");
     assert_eq!(
-        replay_snapshot.run_projection().status(),
-        RunStatusDto::Completed,
-        "the restarted daemon replays the completed run"
+        subscription.state().status(),
+        Some(RunStatusDto::Completed),
+        "the restarted daemon serves the completed run"
     );
     assert_eq!(
-        replay_snapshot.cursor(),
-        pre_restart_cursor,
-        "the durable run cursor replays unchanged"
+        subscription.state().messages(),
+        read_run.messages.as_slice(),
+        "the restarted daemon serves the recorded transcript unchanged"
     );
+    drop(subscription);
 
-    // A completed durable run commits no further facts. After a bounded quiet
-    // window a fresh subscription still replays the identical cursor.
-    tokio::time::sleep(REPLAY_QUIET_WINDOW).await;
-    let mut replayed = None;
+    // A completed durable run commits no further transcript rows. After a
+    // bounded quiet window a fresh subscription still serves the same state.
+    tokio::time::sleep(TERMINAL_QUIET_WINDOW).await;
+    let mut reobserved = None;
     for _ in 1..=TOOL_TURN_ATTEMPTS {
         if let RunObservation::Terminal(observed) = collect_terminal_run(
             &host.endpoint,
             read_session,
             run_id,
-            Instant::now() + REPLAY_DEADLINE,
+            Instant::now() + RESUBSCRIBE_DEADLINE,
         )
         .await
         {
-            replayed = Some(*observed);
+            reobserved = Some(*observed);
             break;
         }
     }
-    let replayed = replayed.expect("the completed run stays observable after the quiet window");
-    assert!(
-        replayed.facts.is_empty(),
-        "the run-stream replay tail is empty by design; live batches carry facts"
-    );
-    assert_eq!(replayed.status(), RunStatusDto::Completed);
+    let reobserved = reobserved.expect("the completed run stays observable after the quiet window");
+    assert_eq!(reobserved.status(), RunStatusDto::Completed);
     assert_eq!(
-        replayed.snapshot.cursor(),
-        pre_restart_cursor,
-        "no durable fact commits after the run completed"
+        reobserved.messages, read_run.messages,
+        "no transcript row commits after the run completed"
     );
 
-    // Credential hygiene after the hard kill: no durable fact, session
-    // snapshot, log, or state byte carries the credential value.
+    // Credential hygiene after the hard kill: no committed transcript row,
+    // session snapshot, log, or state byte carries the credential value.
     let sessions = [
         read_session,
         glob_session,
@@ -1505,19 +1125,23 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
     ];
     let log_text = host.captured_log();
     for (index, run) in runs.iter().enumerate() {
-        let facts_json = serde_json::to_string(&run.facts).expect("durable facts serialize");
+        let transcript_json =
+            serde_json::to_string(&run.messages).expect("transcript rows serialize");
         assert_excludes_credential(
-            &facts_json,
+            &transcript_json,
             &credential,
-            &format!("turn {} durable run facts", index + 1),
+            &format!("turn {} committed transcript rows", index + 1),
         );
     }
     for (index, session) in sessions.iter().enumerate() {
-        let session_json = serde_json::to_string(&bounded_session_snapshot(
-            &host.endpoint,
-            *session,
-            Instant::now() + SESSION_READ_DEADLINE,
-        ))
+        let session_json = serde_json::to_string(
+            &bounded_session_snapshot(
+                &host.endpoint,
+                *session,
+                Instant::now() + SESSION_READ_DEADLINE,
+            )
+            .await,
+        )
         .expect("session snapshot serializes");
         assert_excludes_credential(
             &session_json,
@@ -1536,14 +1160,13 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
 /// Proves the live provider channel fails closed on a recognizable invalid
 /// credential and never echoes the credential or raw provider text.
 ///
-/// The run must terminalize `Failed` with one normalized closed-set code, and
-/// neither the durable facts, the session snapshot, nor the daemon log may
-/// carry the literal credential. The run must deliver at least one durable
-/// fact, every delivered durable fact must be a normalized failure fact, and
-/// the terminal projection must carry no assistant text, so raw provider
-/// output cannot have reached durable state.
+/// The run must terminalize `Failed`, the durable transcript must carry its
+/// user turn and no assistant, tool, or notice row, and neither the transcript,
+/// the session snapshot, nor the daemon log may carry the literal credential.
+/// A model-authored row would mean raw provider output reached durable state,
+/// which the containment invariant recorded in architecture 10 forbids.
 #[tokio::test]
-#[ignore = "opt-in live-provider e2e; see ADR 0040; run via make e2e-real-api"]
+#[ignore = "opt-in live-provider e2e; see architecture 10; run via make e2e-real-api"]
 async fn real_provider_rejects_invalid_credential_without_leak() {
     let Some(mut provider) = LiveProviderConfig::from_env() else {
         return;
@@ -1551,15 +1174,11 @@ async fn real_provider_rejects_invalid_credential_without_leak() {
     let credential = "invalid-credential-live-e2e".to_owned();
     provider.credential.clone_from(&credential);
     let mut host = LiveE2eHost::new(&provider, &[]);
-    let _client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE);
+    let _client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE).await;
 
     let session_id = SessionId::new();
-    create_session(&host, session_id, "the invalid-credential run");
-    let run_id = send_user_turn(&host.endpoint, session_id, "Reply with a short greeting.");
-    // A subscriber that attaches after the run terminalized receives the
-    // empty replay tail, and an empty delivered fact set would make the
-    // normalized-fact invariant vacuous. Observe again until the run delivers
-    // its durable failure facts within the bounded budget.
+    create_session(&host, session_id, "the invalid-credential run").await;
+    let run_id = send_user_turn(&host.endpoint, session_id, "Reply with a short greeting.").await;
     let mut observed = None;
     for _ in 1..=TOOL_TURN_ATTEMPTS {
         if let RunObservation::Terminal(terminal) = collect_terminal_run(
@@ -1570,44 +1189,53 @@ async fn real_provider_rejects_invalid_credential_without_leak() {
         )
         .await
         {
-            if terminal.facts.is_empty() {
-                continue;
-            }
             observed = Some(*terminal);
             break;
         }
     }
-    let observed = observed.expect(
-        "the rejected live run delivers its durable normalized failure facts within the bounded budget",
-    );
+    let observed = observed
+        .expect("the rejected live run reaches its terminal status within the bounded budget");
 
     assert_eq!(
         observed.status(),
         RunStatusDto::Failed,
-        "the live provider rejects the invalid credential with {:?}",
-        observed.failure_code()
+        "the live provider rejects the invalid credential with a failed run"
     );
-    let failure_code = observed
-        .failure_code()
-        .expect("a failed live run records a safe failure code");
     assert!(
-        INVALID_CREDENTIAL_FAILURE_CODES.contains(&failure_code),
-        "the live provider failure is one normalized closed-set code, got: {failure_code}"
+        !observed.messages.is_empty(),
+        "the rejected live run commits its durable user turn before the provider is reached"
     );
-    assert_invalid_credential_facts_are_normalized(&observed.facts);
     assert!(
-        observed.assistant_content().is_empty(),
+        observed
+            .messages
+            .iter()
+            .all(|message| message.kind() == MessageKindDto::User),
+        "the rejected credential run records no assistant, tool, or notice row"
+    );
+    assert!(
+        observed
+            .messages
+            .iter()
+            .any(|message| message.text() == "Reply with a short greeting."),
+        "the rejected credential run preserves its durable user turn"
+    );
+    assert!(
+        !observed.has_assistant_content(),
         "the rejected credential run records no assistant text"
     );
 
-    let facts_json = serde_json::to_string(&observed.facts).expect("durable facts serialize");
-    let session_json = serde_json::to_string(&bounded_session_snapshot(
-        &host.endpoint,
-        session_id,
-        Instant::now() + SESSION_READ_DEADLINE,
-    ))
+    let transcript_json =
+        serde_json::to_string(&observed.messages).expect("transcript rows serialize");
+    let session_json = serde_json::to_string(
+        &bounded_session_snapshot(
+            &host.endpoint,
+            session_id,
+            Instant::now() + SESSION_READ_DEADLINE,
+        )
+        .await,
+    )
     .expect("session snapshot serializes");
-    assert_excludes_credential(&facts_json, &credential, "serialized durable run facts");
+    assert_excludes_credential(&transcript_json, &credential, "serialized run transcript");
     assert_excludes_credential(&session_json, &credential, "session snapshot JSON");
     assert_excludes_credential(&host.captured_log(), &credential, "captured daemon log");
 }

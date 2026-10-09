@@ -4,20 +4,14 @@
     reason = "Fixture-host integration uses explicit protocol diagnostics."
 )]
 
-use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use intention_protocol::{
-    ProtocolCommandDto, ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto,
-    ProtocolQueryResultDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
-    SessionResyncReasonDto, SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
-    decode_response, encode_request,
-};
+use intention_proto::{ClientRequestDto, GetSessionSnapshotQueryDto, ProtocolResultDto, RunId};
+use intention_proto::{SessionId, SubscribeRunCommandDto, decode_response, encode_request};
 use intention_test_support::FixtureHost;
 use intention_transport::{
-    LocalConnection, LocalEndpoint, local_protocol_version, negotiate_client,
+    AsyncLocalClientConnection, AsyncMessageReceiver, AsyncMessageSender, LocalEndpoint,
 };
-use intention_types::{RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId};
 
 fn endpoint() -> LocalEndpoint {
     let nanos = SystemTime::now()
@@ -28,84 +22,67 @@ fn endpoint() -> LocalEndpoint {
         .expect("fixture endpoint is valid")
 }
 
-fn connect(endpoint: &LocalEndpoint) -> LocalConnection {
-    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+async fn connect(endpoint: &LocalEndpoint) -> (AsyncMessageSender, AsyncMessageReceiver) {
+    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        match LocalConnection::connect(endpoint) {
-            Ok(connection) => return connection,
-            Err(_) if std::time::Instant::now() < deadline => {
-                thread::sleep(Duration::from_millis(5))
+        match AsyncLocalClientConnection::connect(endpoint).await {
+            Ok(connection) => return connection.split(),
+            Err(error) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "fixture client connects before the deadline: {error}"
+                );
+                tokio::time::sleep(Duration::from_millis(5)).await;
             }
-            Err(error) => panic!("fixture client connects: {error}"),
         }
     }
 }
 
-fn negotiate(connection: &mut LocalConnection) {
-    negotiate_client(
-        connection,
-        ProtocolHelloDto::new(local_protocol_version(), "test-support-client")
-            .expect("fixture hello is valid"),
-    )
-    .expect("fixture hello negotiates");
-}
-
-#[test]
-fn fixture_host_serves_durable_snapshot_and_scoped_resync() {
+#[tokio::test]
+async fn fixture_host_serves_current_session_state_and_typed_scoped_refusals() {
     let session_id = SessionId::new();
     let fixture = FixtureHost::open(session_id).expect("fixture host opens");
     let endpoint = endpoint();
-    let host = fixture.spawn(endpoint.clone(), 2);
+    let host = tokio::spawn(fixture.serve(endpoint.clone(), 2));
 
-    let mut snapshot_connection = connect(&endpoint);
-    negotiate(&mut snapshot_connection);
-    snapshot_connection
+    let (mut requests, mut messages) = connect(&endpoint).await;
+    requests
         .send_message(&encode_request(
             1,
-            ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetSessionSnapshot(
-                intention_domain::GetSessionSnapshotQueryDto::new(session_id),
-            )),
+            ClientRequestDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id)),
         ))
+        .await
         .expect("snapshot request sends");
-    let line = snapshot_connection
+    let line = messages
         .receive_line()
+        .await
         .expect("snapshot response arrives");
-    let response = decode_response(&line, ProtocolMethodDto::SessionSnapshot, 1)
-        .expect("snapshot response decodes");
+    let response = decode_response(&line, 1).expect("snapshot response decodes");
     assert!(matches!(
         response,
-        ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::SessionSnapshot(snapshot))
-            if snapshot.session_id() == session_id
+        ProtocolResultDto::SessionSnapshot(snapshot) if snapshot.session_id() == session_id
     ));
 
-    let mut scoped_connection = connect(&endpoint);
-    negotiate(&mut scoped_connection);
-    scoped_connection
+    let (mut requests, mut messages) = connect(&endpoint).await;
+    requests
         .send_message(&encode_request(
             1,
-            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(
-                SubscribeSessionCommandDto::with_run_id(
-                    SchemaVersionDto::new(1, 1),
-                    session_id,
-                    Some(RunId::new()),
-                    Some(SessionEventSequenceDto::new(u64::MAX)),
-                    intention_domain::RunModeDto::Build,
-                ),
-            )),
+            ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, RunId::new())),
         ))
+        .await
         .expect("scoped request sends");
-    let line = scoped_connection
+    let line = messages
         .receive_line()
+        .await
         .expect("scoped response arrives");
-    let response = decode_response(&line, ProtocolMethodDto::SessionSubscribe, 1)
-        .expect("scoped response decodes");
-    assert!(matches!(
-        response,
-        ProtocolResponsePayloadDto::Subscription(SessionSubscriptionResponseDto::ResyncRequired(
-            resync
-        )) if resync.reason() == SessionResyncReasonDto::HistoryUnavailable
-    ));
-    host.join()
-        .expect("fixture host thread completes")
+    let error = decode_response(&line, 1).expect_err("an unknown run scope is refused");
+    assert_eq!(
+        error.code(),
+        "storage_record_not_found",
+        "an unknown run scope is refused with a typed error instead of a resync"
+    );
+
+    host.await
+        .expect("fixture host task completes")
         .expect("fixture host serves both connections");
 }

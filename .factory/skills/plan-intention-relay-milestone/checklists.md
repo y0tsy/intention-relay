@@ -17,7 +17,7 @@ Use these checklists with `plan-intention-relay-milestone/SKILL.md`. They make p
 - Roadmap:
 - Applicable architecture documents:
 - TDD/TTD and quality requirements:
-- Predecessor/closeout status:
+- Predecessor status:
 - Existing implementation and policy facts:
 
 ### Confirmed decisions
@@ -50,7 +50,7 @@ For each material user choice, record:
 | Considered options | Every option presented to the user, including custom answers. |
 | Trade-offs | Benefits, drawbacks, implementation/test/quality impact, and later-scope effect. |
 | Rationale | User reason or the agreed recommendation. |
-| Affected surfaces | DTOs, crates, policies, tests, docs, adapters, CI, or closeout evidence. |
+| Affected surfaces | DTOs, crates, policies, tests, docs, adapters, CI, or acceptance evidence. |
 | Deferrals | Work explicitly retained by another milestone. |
 
 ## Discovery readiness
@@ -59,7 +59,7 @@ For each material user choice, record:
 - [ ] `AGENTS.md` and documentation index were read.
 - [ ] Roadmap, TDD/TTD, and quality-gate policy were read.
 - [ ] Milestone-specific architecture sources were read.
-- [ ] Relevant closeout evidence was checked for predecessor status, immutable baseline, scope boundaries, and known exceptions.
+- [ ] Relevant accepted baselines were checked for predecessor status, scope boundaries, and known exceptions.
 - [ ] Existing crates, tests, policies, manifests, and call sites were inspected before naming them in the draft.
 - [ ] Working-tree status was inspected and existing changes were treated as user work.
 - [ ] The milestone is classified as unstarted, in progress, closed, or corrective.
@@ -85,7 +85,7 @@ For each material user choice, record:
 - [ ] Tests are named by layer: DTO, domain, contract, architecture, storage/runtime/tool/provider/adapter as applicable, integration, and outcome.
 - [ ] Observable acceptance outcomes are stated separately from implementation details.
 - [ ] Quality tiers, Cargo feature profiles, pinning, and Makefile requirements are included when affected.
-- [ ] Policy, quality, architecture, README, and closeout documentation updates are included where the planned change requires them.
+- [ ] Policy, quality, architecture, and README documentation updates are included where the planned change requires them.
 - [ ] Risks and typed/observable failure behavior are stated.
 - [ ] Deferrals name their owner milestone and are not described as delivered behavior.
 
