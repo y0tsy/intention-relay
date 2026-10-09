@@ -1,15 +1,16 @@
 # Provider Evolution, Profiles, and Reasoning
 
-**Approved future design. Not implemented; activation requires an activating specification.** The catalog, selection,
-capability-taxonomy, reasoning-history, and header contracts are accepted directions awaiting an activating
-specification; none of those surfaces exists in the tree (`responses` driver remains not activated).
+**Activated in Slice 2.** The catalog, selection,
+capability-taxonomy, reasoning-history, and header contracts are delivered by the activated Slice 2; the `responses`
+driver and user-kind parser remain not activated and stay with Milestone 12.
 
 Owner: architecture 22.
 
 This document owns provider kinds, profiles and catalog lifecycle, provider/model-capability selections, endpoint and
 credential-transport semantics, driver-contract compatibility, provider-local availability, and normalized textual
-reasoning. It applies only to future run execution; `openrouter` and `generic-chat-completion-api` remain the only M4
-kinds. Retained provider/profile/reasoning material is research provenance where it conflicts with architectures
+reasoning. It applies to run execution and provider selection; `openrouter` and `generic-chat-completion-api` remain
+the only first-party kinds until the `responses` driver arrives with Milestone 12. Retained provider/profile/reasoning
+material is research provenance where it conflicts with architectures
 15--21. The configuration/provider control-plane cluster (profile
 UI/control plane, live reload, credential rotation, discovery, pricing, health checks) is owned by [architecture
 25](25-configuration-provider-control-plane.md).
@@ -163,9 +164,9 @@ construction, at every catalog activation through the composition driver factory
 a declared option is never silently defaulted or ignored. Its closed declaration vocabulary is the profile's
 credential transport (bearer, or one descriptor-selected safe header whose complete value is the credential) and an
 empty reasoning-effort slot (no declaration surface; RSN-011); a declaration the executing adapter cannot
-apply fails closed at the seam with the adapter's typed error, live `SafeHeader` wire injection is not activated,
-and adapter applicability remains adapter-owned. The option seam and every declaration belong to the not-activated
-Slice 2 and must be implemented under an activating specification.
+apply fails closed at the seam with the adapter's typed error, live `SafeHeader` wire injection remains not activated
+(Milestone 12), and adapter applicability remains adapter-owned. The option seam and every declaration are delivered
+by the activated Slice 2.
 
 The catalog is startup-only, and acceptance is all-or-nothing: the auto-accept path builds and pre-validates the
 replacement registry and its admissions map before durable acceptance, so a build or validation failure leaves the
@@ -179,7 +180,7 @@ flowchart LR
   P -->|No removal| B[Build and pre-validate registry]
   P -->|Removal| W[Pending removal]
   W -->|Accept| A[Accept durable catalog]
-  W -->|Reject or expire| D[Degraded read mode]
+  W -->|Reject| D[Degraded read mode]
   B --> A
   A --> S[Exact private registry swap]
   S --> R[Fresh readiness]
@@ -190,7 +191,7 @@ flowchart LR
 Candidate construction may parse endpoints and create private clients but cannot perform DNS, HTTP, credential
 testing, telemetry, model discovery, or background provider work; a semantically equal safe catalog creates no new
 revision; valid non-removal changes auto-accept at startup; and a removal creates one pending candidate requiring
-explicit accept/reject against exact revisions, where rejection/expiry cannot reconstruct omitted credentials or
+explicit accept/reject against exact revisions, where rejection cannot reconstruct omitted credentials or
 prior readiness.
 
 Acceptance commits the state change in one transaction; no external action occurs inside it, and registry activation
@@ -199,7 +200,8 @@ activation leaves `activation_recovery_required`, a changed current file cannot 
 readiness is unavailable until exact recovery succeeds. Catalog/default/enablement changes affect fresh selection
 only: they neither rewrite stored selection nor revoke an already admitted run, and explicit Run cancellation
 remains the stopping authority. No private binding survives restart. The catalog, its tables, and the
-configuration-audit vocabulary belong to the not-activated Slice 2: the closed audit taxonomy listed below is written
+configuration-audit vocabulary are delivered by the activated Slice 2 into the single live storage schema (logical
+version 1): the closed audit taxonomy listed below is written
 by the storage path and carried by no wire DTO. Numeric catalog/parser/page bounds must be explicitly classified as
 intrinsic representation bounds, protocol bounds, or actual capacity, never admission quotas.
 
@@ -231,10 +233,10 @@ round's own accepted reasoning to the assistant tool-call message of that in-fli
 ([architecture 08](08-model-protocol-and-providers.md)); prior-run, cross-turn, and fork reasoning injection remains
 forbidden.
 
-The future normalized stream carries text, reasoning, summaries, tool calls, usage, and terminal events. The Slice 2
-provider-neutral reasoning DTO surface is owned by `intention-providers`; the
-closed fragment category and the summary delta do not exist yet, and the live
-normalized reasoning event is the M4 `ModelEventDto::ReasoningDelta { content }`. The Slice 2 shape is:
+The normalized stream carries text, reasoning, summaries, tool calls, usage, and terminal events. The Slice 2
+provider-neutral reasoning DTO surface is delivered by `intention-providers`: the
+closed fragment category and the summary delta exist as typed events, and the live
+normalized reasoning event is `ModelEventDto::ReasoningDelta { category, content }`. The shape is:
 
 ```text
 ReasoningFragmentCategoryDto
@@ -398,17 +400,16 @@ boolean or supported closed effort string, or no activation field; and
 - closed `reasoning_effort`, `thinking_budget`, and `thinking_token_budget` request fields only where a descriptor
 declares each field and its allowed values.
 
-Each accepted fragment maps to the future normalized reasoning path. No encrypted/opaque provider payloads, server-side
+Each accepted fragment maps to the normalized reasoning path. No encrypted/opaque provider payloads, server-side
 vLLM/SGLang parser config, raw provider JSON, or generic request templates. Cross-turn policy is limited to the explicit
 typed textual history contract; provider-native `preserve_thinking`, `thinking.keep`, remote continuation identifiers,
-and non-fitting assistant-history requirements are excluded. Arbitrary authentication headers are an accepted post-M5
-direction for M5+ Slice 2:
-a closed code-owned typed header policy (the provider-owned `AuthenticationHeaderPolicyV1` consumed by both
-provider adapters; the protocol-only duplicate was removed by the unconsumed-surface audit (2026-09)). That policy
-belongs to the not-activated Slice 2, so the direction is documentation-only until an activating
-specification. The typed provider-native preservation-control and server-side-parser contracts were removed by the
+and non-fitting assistant-history requirements are excluded. The closed code-owned typed header policy (the
+provider-owned `AuthenticationHeaderPolicyV1` consumed by both
+provider adapters; the protocol-only duplicate was removed by the unconsumed-surface audit (2026-09)) is delivered by
+the activated Slice 2. The typed provider-native preservation-control and server-side-parser contracts were removed by the
 unconsumed-surface audit (2026-09): no preservation-control or parser-configuration surface is activated. Live wire
-header injection (`SafeHeader`) and provider-native live extraction beyond the declared paths remain not activated. The
+header injection (`SafeHeader`) and provider-native live extraction beyond the declared paths remain not activated
+(Milestone 12). The
 current `async-openai` core Chat Completions adapter is not assumed sufficient for every descriptor; a future
 implementation must choose a pinned private SDK or an explicitly specified private typed decoder per closed descriptor.
 The same-run reasoning round trip ([architecture 08](08-model-protocol-and-providers.md)) follows this clause for the
@@ -424,7 +425,7 @@ and page sizes, validation-issue counts, pending-removal lifetime, and its queue
 not part of the direction: the limits-by-precedent rule ([architecture
 09](09-configuration-security-and-observability.md), [architecture 15](15-tool-registry-and-model-tool-loop.md)) removes
 speculative contract limits and requires any future numeric bound to record the failure mode it prevents, its unit, and
-its behavior at the bound. The activating specification must not restore the caps.
+its behavior at the bound. The activating specification did not restore the caps.
 
 `ProviderKindId` is immutable after its first accepted declaration; changing closed
 stream/reasoning/activation/budget-effort/credential-transport parts fails with `provider_kind_immutable_mismatch`; the
@@ -441,7 +442,6 @@ ProviderCatalogCandidatePrepared
 ProviderCatalogRemovalPending
 ProviderCatalogRemovalAccepted
 ProviderCatalogCandidateRejected
-ProviderCatalogCandidateExpired
 ProviderCatalogAccepted
 ProviderCatalogActivated
 ProviderCatalogActivationRecoveryRequired
@@ -450,8 +450,8 @@ ProviderCatalogRecoveryCompleted
 
 Ordering: every successful preparation appends `ProviderCatalogCandidatePrepared`; a removal candidate appends
 `ProviderCatalogRemovalPending`; acceptance orders `ProviderCatalogRemovalAccepted`, `ProviderCatalogAccepted`,
-`ProviderCatalogActivated` (no-removal: `ProviderCatalogAccepted` then `ProviderCatalogActivated`); rejection/expiry
-never emit acceptance/activation; a crash after acceptance orders `ProviderCatalogActivationRecoveryRequired`,
+`ProviderCatalogActivated` (no-removal: `ProviderCatalogAccepted` then `ProviderCatalogActivated`); rejection
+never emits acceptance/activation; a crash after acceptance orders `ProviderCatalogActivationRecoveryRequired`,
 replacement `ProviderCatalogActivated`, and `ProviderCatalogRecoveryCompleted` only when the exact accepted registry is
 active. The gate serializes catalog acceptance, session default changes, turn/fork admission, and registry lookups and
 never blocks active model tasks. Private enabled entries are keyed by the exact `(ProviderProfileId,
@@ -470,8 +470,8 @@ created for historical runs.
 ## Session selection, degraded recovery, and protocol
 
 The provider session-selection layer (session default, per-turn/fork overrides, profile-keyed usage, and pending-removal
-accept/reject) is owned by [architecture 29](29-provider-session-and-profiles-protocol.md); it belongs to the
-not-activated Slice 2.
+accept/reject) is owned by [architecture 29](29-provider-session-and-profiles-protocol.md); it is delivered by the
+activated Slice 2 except the fork override commands, which remain Slice 4.
 
 ## Child, MCP, bridge, kernel, context, and compatibility boundaries
 
@@ -490,21 +490,20 @@ untagged meaning and gains no synthetic category, summary, or history.
 
 This document depends on architectures 15 and 21. It does not define a
 Responses SDK/driver, user-kind parser, profile picker/editor presentation, credential entry/keychain,
-telemetry, multimodal or structured output, plugin drivers, or remote continuation. The catalog database, the single
+telemetry, multimodal or structured output, plugin drivers, or remote continuation. The catalog and its single
 current storage schema (logical version 1), credential rotation, health checks, discovery, pricing, controlled live
-reload, and typed header policy belong to the not-activated Slice 2; the typed preservation-control and
+reload, and typed header policy are delivered by the activated Slice 2 ([architecture
+25](25-configuration-provider-control-plane.md)); the typed preservation-control and
 server-side-parser contracts were removed as unconsumed by the unconsumed-surface audit (2026-09), and no
 parser-configuration surface is activated.
 Semantic content inspection of reasoning or provider content is an accepted post-M5 future direction,
 bound to Milestone 5+; it is not activated here, never substitutes for central redaction, and never rewrites stored
-records. The profile picker/editor, credential rotation, health test, discovery, pricing, telemetry, and live reload
-items are accepted post-M5 directions owned by [architecture 25](25-configuration-provider-control-plane.md) under
-[Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment) and belong to the
-not-activated Slice 2, so they are documentation-only; the profile picker/editor presentation and telemetry remain not
-activated. Architecture 23 owns forks and lineage and architecture 29 owns session defaults/overrides and the profiles
+records. The profile picker/editor presentation and telemetry remain not
+activated; architecture 23 owns forks and lineage and architecture 29 owns session defaults/overrides and the profiles
 protocol. UI, Cargo, Makefile/CI, or production activation beyond the accepted directions remain outside this document.
 
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
+Evidence: recorded [Slice 2 evidence](10-test-driven-delivery-and-verification.md#slice-2-evidence); activating
+specification per [architecture 12](12-quality-gates-and-makefile.md).
 
 Architecture 03 owns the activity journal and notification list; provider and reasoning records may be safely projected
 only through their existing owners and never expose raw native data, select a provider, or create activity authority.

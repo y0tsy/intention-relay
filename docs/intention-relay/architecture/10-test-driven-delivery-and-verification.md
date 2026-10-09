@@ -208,6 +208,31 @@ and the durable terminal row. Protocol contract fixtures cover the reduced
 current-state surface with no resync, cursor, or event DTOs. Tests of deleted surfaces are deleted without replacement,
 and the per-crate coverage tiers in `quality/coverage.toml` are unchanged.
 
+### Slice 2 evidence
+
+Slice 2 activates the provider control plane against the accepted Slice 2 activating specification recorded in the
+[Implementation Roadmap](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment). `make quick` passes
+478/478 tests with 2 skipped on the integrated tree, and every lane's narrow crate checks (proto, config, providers,
+storage, engine, daemon, client) pass before integration. The delivered outcome scenarios are:
+
+- catalog lifecycle: configuration-document parsing and credential-free edits, catalog preparation/acceptance/
+  activation, kind immutability, referenced-kind removal, pending-removal accept/reject, and activation recovery
+  (`activation_recovery_required`, exact re-derivation, changed file stays degraded);
+- selection: session default set/query with the optimistic projection-revision check and same-value `changed = false`
+  no-op, per-turn override precedence, revision-mismatch rejection, and closed unavailability at admitted-run execution;
+- degraded mode: `execution_not_ready` rejection of admission and provider-state changes while only the pending
+  candidate's accept/reject remain available;
+- recovery: durable accepted/activated pointers, exact-match reactivation after a crash, and no adoption of a changed
+  file;
+- reasoning history: the whole-or-reject aggregate bound, the manifest and `ReasoningHistoryBound` committed with the
+  run, and typed unavailable/incompatible/too-large blocks before provider work;
+- control plane: reload, rotation, health, discovery, configuration document/edits, and the typed client surface over
+  the real daemon.
+
+Architectures 22, 25, and 29 record their delivered Slice 2 surfaces; the `responses` driver and user-kind parser
+remain Milestone 12. No lint, coverage, feature, dependency, or architecture exception was added: the per-crate
+coverage tiers in `quality/coverage.toml` are unchanged and every activated crate stays on its declared tier.
+
 ### Future package evidence
 
 Evidence obligations for systems that are not activated are owned by their documents; this document keeps only the
@@ -219,11 +244,8 @@ pointers:
 - Gateway/RLM bridge — [architecture 19](19-gateway-rlm-bridge.md).
 - IPython kernel lifecycle — [architecture 20](20-ipython-kernel-lifecycle.md).
 - Goals, skills, context, memory, and compaction — [architecture 21](21-goals-skills-context-memory-and-compaction.md).
-- Provider evolution, profiles, and reasoning — [architecture 22](22-provider-evolution-profiles-and-reasoning.md).
 - Session branching and regeneration — [architecture 23](23-non-destructive-session-branching-and-regeneration.md).
 - Daemon, transport, and adapter boundary — [architecture 03](03-daemon-transport-and-adapters.md).
-- Configuration and provider control plane — [architecture 25](25-configuration-provider-control-plane.md) (protocol:
-  [architecture 29](29-provider-session-and-profiles-protocol.md)).
 - Post-M4 evidence obligations — activating specification per [architecture 12](12-quality-gates-and-makefile.md).
 
 ## Non-goals

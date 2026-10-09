@@ -143,10 +143,11 @@ execution path carries no capability check. A truncation limitation of that pinn
 
 ## Provider selection
 
-Resolved TOML configuration selects a provider and model. M1 defines a serializable, credential-free `ConfigSnapshotDto`
-foundation containing a `ConfigRevisionId`, capture timestamp, and redacted resolved selection. M1 does not persist
+The catalog document declares provider profiles; the daemon resolves one exact profile revision for a run and persists
+that resolved selection with the turn. M1 defines a serializable, credential-free `ConfigSnapshotDto` foundation
+containing a `ConfigRevisionId`, capture timestamp, and the committed context-window policy. M1 does not persist
 revisions, apply daemon reload, or attach snapshots to runs; M3/M4 own those workflows. A later run receives the
-immutable snapshot selected at startup.
+immutable configuration revision committed at startup.
 
 Provider/model selection changes do not mutate an already-started run. They apply to a later run, except if a future
 explicit, tested runtime transition is introduced.
@@ -191,9 +192,9 @@ provider-neutral message shape carries the transient marker and the in-place con
 driver translates the result into its private request. The optional system context is not part of the window: the instruction projection of architecture 30 stays the stable leading block. It is never compressed and never
 re-derived.
 
-The `[provider]` configuration key `context_window_tokens` (default `250000`) resolves into the credential-free
-`ContextWindowPolicyDto` of every `ConfigSnapshotDto`; resolution requires a positive window, and a value outside that
-range fails closed with a typed validation error
+The global `[provider]` configuration key `context_window_tokens` (default `250000`) resolves into the credential-free
+`ContextWindowPolicyDto` committed with every `ConfigSnapshotDto`; resolution requires a positive window, and a value
+outside that range fails closed with a typed validation error
 ([architecture 09](09-configuration-security-and-observability.md)).
 
 Token accounting estimates one request's input from its character count at four characters per token, rounded up,

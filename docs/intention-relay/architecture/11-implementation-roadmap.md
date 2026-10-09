@@ -10,8 +10,9 @@ architecture checks, and supply-chain gates live in [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md); test-first and outcome-verification rules live in [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md).
 
-The systems of documents 15 and 18-30 and of Slices 2-5 are not activated, and each activation requires an accepted
-activating specification ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
+The systems of documents 15, 18-21, 23, 28, and 30 and of Slices 3-5 are not activated, and each activation requires
+an accepted activating specification ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)). The Slice 2
+control plane was activated by its accepted activating specification, recorded below.
 
 ## Closed milestones (M0-M5)
 
@@ -123,10 +124,14 @@ end-to-end suite drives that client (`client_e2e`) instead of the low-level tran
 sequence of identity check, durable call row, workspace binding, dispatch, and durable terminal row; the nine-production-crate consolidation and the removal of the composition facade landed, so
 the daemon host calls the engine directly; and the single storage schema is created on open under one integer stamp,
 where a stamp bump discards and recreates the database with no migration or compatibility path.
--  **Slice 2 — Control plane — not activated.** The cluster and provider session selection (architectures 25/29/22):
-controlled live reload, credential rotation, provider health checks, model discovery, pricing policy, provider profile
-UI and raw-TOML/configuration editing, arbitrary authentication headers, session defaults and per-turn/fork overrides,
-the provider profiles protocol, pending-removal and degraded recovery, and the provider reasoning/catalog surface. The
+-  **Slice 2 — Control plane — activated.** The cluster and provider session selection (architectures 25/29/22) was
+activated by its accepted activating specification: controlled live reload for non-catalog changes
+(`catalog_change_requires_restart` for catalog-affecting ones), credential rotation, provider health checks, model
+discovery, pricing policy, raw-TOML and typed configuration editing, session defaults and per-turn overrides, the
+provider profiles protocol, pending-removal and degraded recovery, activation recovery, and the provider
+catalog/reasoning surface. The provider profile picker/editor presentation, arbitrary live header injection, and the
+`responses` driver and user-kind parser remain not activated; Milestone 12 owns the driver, live header injection, and
+parser, and the fork override commands remain Slice 4. The
 unconsumed-surface audit (2026-09) removed the unconsumed
 typed preservation-control, server-side-parser, Responses reasoning-mode, reasoning-usage, and model-capability-envelope
 contracts, the protocol-only reasoning/header/parser duplicates, the eight producer-less control-plane event DTOs, and
@@ -159,9 +164,8 @@ SQLite storage is the single live schema created directly on open.
 -  Slice 1.5 preserves durable meaning: the single storage schema is created on open under one integer stamp, where a
 stamp bump discards and recreates the database with no migration or compatibility layer, and tool and lifecycle
 semantics keep their recorded law.
--  The Slice 2 health, discovery, and pricing surfaces are non-authorizing: they create no RunId, tool
-permission, MCP capability, bridge grant, kernel epoch, context projection, or branch, and the activating
-specification must prove that non-authority.
+-  The Slice 2 health, discovery, and pricing surfaces are non-authorizing, and that non-authority is proven evidence:
+they create no RunId, tool permission, MCP capability, bridge grant, kernel epoch, context projection, or branch.
 -  Applicable crates meet their declared tier floors without excluding policy or boundary logic; every activated slice
 passes `make quick`, `make verify`, and Linux/Windows CI.
 -  No slice ships half-ready: every activated contract ships with its version, owner, tests, policy mapping,

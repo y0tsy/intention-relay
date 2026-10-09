@@ -8,8 +8,9 @@ cloud secrets management, or multi-user configuration.
 
 ## TOML-only configuration
 
-`intention-config` owns TOML parsing, schema validation, defaults and resolved configuration, and the M1
-`ConfigRevisionId` and credential-free `ResolvedConfigDto`/`ConfigSnapshotDto` contract foundation.
+`intention-config` owns the one live TOML configuration document (`schema_version = 1`): parsing, schema validation,
+defaults, the credential-free catalog document, and the M1 `ConfigRevisionId` and credential-free `ConfigSnapshotDto`
+contract foundation.
 
 M1/M4 accept only `openrouter` and `generic-chat-completion-api` provider kinds. A future canonical Responses kind is
 `responses`, not `openai`; any `openai` spelling is only a future parse-time alias under architecture 22 and does not
@@ -23,7 +24,7 @@ frontmatter, not application configuration.
 ```mermaid
 flowchart LR
   TF[TOML file] --> PA[Parse validate]
-  PA --> RC[Resolved config]
+  PA --> RC[Catalog document]
   RC --> RV[Config revision]
   RV --> DS[Daemon state]
   DS --> RS[Run records]
@@ -38,11 +39,13 @@ composition receives one validated startup snapshot, records it by `ConfigRevisi
 its own immutable selected snapshot/revision.
 
 M3 applies TOML **only at daemon startup**. It neither watches TOML nor applies an edit to an already-running daemon. A
-changed TOML file therefore takes effect only after a restart; the new startup snapshot applies to new runs, while
-existing persisted runs retain their recorded revision. Controlled live reload is the accepted future direction
-([architecture 25](25-configuration-provider-control-plane.md)) and must be introduced by an explicit contract,
-transaction, and
-outcome test; it affects fresh runs only and never mutates a recorded snapshot.
+changed TOML file therefore takes effect at the next daemon restart unless the explicit Slice 2 reload command is used;
+the new startup snapshot applies to new runs, while
+existing persisted runs retain their recorded revision. Slice 2 delivers controlled live reload
+([architecture 25](25-configuration-provider-control-plane.md)) through its explicit command, contract, transaction, and
+outcome test: a reload re-reads and validates the file, commits a new configuration revision for non-catalog changes
+and applies it to fresh runs only, and rejects catalog-affecting changes with `catalog_change_requires_restart`; it
+never mutates a recorded snapshot.
 
 ### M3 lifecycle rules
 
@@ -52,37 +55,39 @@ not enter committed records, frames, or protocol DTOs.
 - An accepted run receives an immutable copy of its selected snapshot/revision.
 -  Existing runs do not silently change provider, model, tool policy, VFR, Headroom, workspace, or timeout behavior due
 to a configuration edit.
--  TOML application is **daemon-restart-only** in M3: the daemon neither watches TOML nor applies an edit to an
-already-running daemon, and a changed TOML file takes effect only after a restart, where the new startup snapshot
-applies to new runs while existing persisted runs retain their recorded revision. The precise user experience for
-detecting or requesting the restart remains open; controlled live reload is the accepted future direction and must
-never be implied by M3/M4 behavior.
+-  TOML application is **daemon-restart-only** in M3 except for the explicit Slice 2 reload command: the daemon neither
+watches TOML nor applies an edit to an already-running daemon, so a changed TOML file takes effect after a restart
+(the new startup snapshot applies to new runs while existing persisted runs retain their recorded revision) or through
+the reload command for non-catalog changes; catalog-affecting changes fail `catalog_change_requires_restart` until
+restart. The reload contract closes the restart-request user experience and never mutates a recorded snapshot.
 -  Configuration discovery remains platform-standard with a validated explicit absolute-path override; it never falls
 back to process CWD.
 
-### M4 provider execution policy and startup material
+### M4 provider execution policy and private credential material
 
-The optional TOML table `[provider.execution]` resolves into the credential-free `ProviderExecutionPolicyDto` included
-in `ResolvedConfigDto` and therefore in every `ConfigSnapshotDto`. `attempt_timeout_seconds` defaults to `30` and must
-be in `1..=60`; `max_attempts` defaults to `2` and must be in `1..=2`. Missing policy fields in a fresh document decode
-to those defaults; `provider_execution` is a required field on the resolved and snapshot wire shapes, so persisted
-snapshots always carry the effective policy explicitly. Runtime owns the fixed 250 ms retry delay, not TOML.
+The optional TOML table `[providers.profiles.<id>.execution]` resolves into the credential-free
+`ProviderExecutionPolicyDto` of that profile revision. `attempt_timeout_seconds` defaults to `30` and must be in
+`1..=60`; `max_attempts` defaults to `2` and must be in `1..=2`. Missing policy fields in a fresh document resolve to
+those defaults. Runtime owns the fixed 250 ms retry delay, not TOML.
 
-`parse_startup_material` additionally creates opaque `StartupProviderMaterial` for composition. It has no `Debug`,
-`Display`, serde implementation, or credential accessor and may only be consumed by a selected provider constructor.
-Safe resolved/snapshot DTOs, committed records, frames, protocol, diagnostics, logs, and adapter projections remain
-credential-free.
+`CatalogCandidate::parse` additionally creates opaque `CatalogCredentialMaterial` for composition. It has no `Debug`,
+`Display`, `Clone`, serde implementation, or credential accessor and crosses only the catalog-composition or
+controlled rotation boundary. Safe catalog and snapshot DTOs, committed records, frames, protocol, diagnostics, logs,
+and adapter projections remain credential-free.
 
 These M4 configuration and credential-isolation rules are implemented and verified at the M4 closure baseline. They
-remain startup-only behavior; a follow-on milestone must not imply live reload, credential persistence, or rotation
-without new contracts and outcome evidence.
+remain the startup-only behavior; Slice 2 replaces the single-provider startup document with the v1 catalog document
+and adds the explicit reload and rotation commands over the same private boundary, each with its own contract and
+outcome evidence, and still persists no credential.
 
 ### M5+ provider context-window policy
 
-The `[provider]` table carries the dynamic context-window policy as the optional `context_window_tokens` field. It
-defaults to `250000`, and resolution requires a positive window; a value outside that range fails closed with the typed
-`invalid_provider_context_window_tokens` validation error. The policy resolves into the credential-free
-`ContextWindowPolicyDto` included in `ResolvedConfigDto` and therefore in every `ConfigSnapshotDto`. [Architecture
+The global `[provider]` table of the catalog document carries the dynamic context-window policy as the optional
+`context_window_tokens` field. It defaults to `250000`, and resolution requires a positive window; a value outside
+that range fails closed with the typed `invalid_provider_context_window_tokens` validation error. The policy resolves
+into the credential-free `ContextWindowPolicyDto` committed with every `ConfigSnapshotDto`. The snapshot carries the
+committed revision identity, its capture time, and that window policy; a run's exact provider identity comes from its
+persisted resolved selection, never from a configuration snapshot. [Architecture
 08](08-model-protocol-and-providers.md) owns the window mechanics that consume it.
 
 ## Open-text provider credentials
@@ -185,7 +190,7 @@ atomicity.
 | --- | --- | --- |
 | TOML validation | Parser fixture tests. | Invalid config returns typed errors without partial state replacement. |
 | M3 canonical snapshot persistence | Config/storage fixture. | Only a validated credential-free `ConfigSnapshotDto` is accepted and stored by revision. |
-| Startup/restart-only application | Daemon composition lifecycle fixture. | The startup snapshot is recorded before recovery/readiness; an on-disk TOML change requires restart and cannot mutate an active run. |
+| Configuration application | Daemon composition reload lifecycle fixture. | The startup snapshot is recorded before recovery/readiness; a non-catalog change applies through the explicit reload command to fresh runs only, a catalog-affecting change fails `catalog_change_requires_restart` until restart, and neither can mutate an active run. |
 | Run snapshot immutability | Accepted-turn integration fixtures. | Started runs retain their selected immutable config revision. |
 | Path selection | Config and platform-state location fixtures. | Config/storage locations use explicit absolute override or platform locations, never CWD. |
 | Permission safety | Filesystem permission test on Unix. | Created config is user-readable only or fails safely. |
@@ -196,15 +201,19 @@ atomicity.
 
 `intention-config` remains subject to its `standard` tier floor. TOML parsing, M1 revision serialization, permissions,
 redaction,
-and safe observability tests are blocking `make verify` inputs; M3 adds canonical revision persistence, restart-only
-application, and per-run configuration-selection coverage. A recognizable fake secret is a mandatory regression
+and safe observability tests are blocking `make verify` inputs; M3 adds canonical revision persistence and per-run
+configuration-selection coverage, and Slice 2 adds the reload, catalog-classification, editing, and rotation
+contracts. A recognizable fake secret is a mandatory regression
 fixture across logs, errors, persisted state, and adapter DTOs. See [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md).
 
 ## Open decisions
 
 - exact TOML layout and include/import policy, if any;
-- user experience for config edits and daemon-restart-required changes;
-- credential rotation flow;
 - transcript/log retention and diagnostic export policy;
 - platform-specific config permission behavior outside Unix.
+
+The config-edit and daemon-restart-required user experience and the credential-rotation flow are closed by the
+delivered Slice 2 control plane ([architecture 25](25-configuration-provider-control-plane.md)): configuration edits
+are validated server-side, commit an accepted revision, and report whether a restart is required, and rotation
+replaces only the private in-memory material after the frozen-meaning checks pass.

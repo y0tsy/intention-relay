@@ -1,31 +1,33 @@
 # Configuration and Provider Control Plane
 
-**Approved future design. Not implemented; activation requires an activating specification.** Architecture 25 owns the
+**Activated in Slice 2.** Architecture 25 owns the
 configuration and provider control-plane cluster: controlled configuration live reload, credential rotation, provider
 health checks, provider/model discovery, pricing and budget policy, and the configuration control-plane surface. The
-slice is not activated; activation requires an activating specification (activation sequence: [architecture
-11](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment), [architecture
-30](30-instruction-sources-and-system-context.md)).
+slice was activated by its accepted activating specification and its delivered contract is recorded in [architecture
+11](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment) and the [Slice 2
+evidence](10-test-driven-delivery-and-verification.md#slice-2-evidence). The profile picker/editor presentation and the
+instruction-fragment editing surface of [architecture 30](30-instruction-sources-and-system-context.md) remain not
+activated.
 
 Owner: architecture 25.
 
 ## Ownership and non-authorities
 
-Architecture 09 owns TOML parsing, schema validation, configuration discovery, redaction, and startup-only application.
-Architecture 22 owns future provider kinds, profiles, catalogs, selections, and driver compatibility; the removed
+Architecture 09 owns TOML parsing, schema validation, configuration discovery, and redaction.
+Architecture 22 owns provider kinds, profiles, catalogs, selections, and driver compatibility; the removed
 run-execution meaning layer (its canonical codec was removed under [architecture
 02](02-dto-and-contract-policy.md)) leaves no live path. Architecture 15 owns the tool loop, and architecture 03 owns the
 flat activity journal, the notification list, and adapter behavior.
 
-This document owns only the accepted future directions below: no second runtime, registry, persistence authority, or
+This document owns only the delivered directions below: no second runtime, registry, persistence authority, or
 sandbox, and no `RunId`, lifecycle transition, tool permission, child, MCP capability, bridge grant, kernel epoch,
 context projection, branch, or reconciliation result from a reload, rotation, health observation, discovery result,
-price, or control-plane action. All directions apply to future fresh runs only.
+price, or control-plane action. All directions apply to fresh runs only.
 
 ## Controlled configuration live reload
 
-M3/M4 apply TOML only at daemon startup; existing runs retain their recorded immutable configuration revision.
-Controlled live reload is the accepted direction that applies a validated TOML change to a running daemon:
+M3/M4 apply TOML at daemon startup; existing runs retain their recorded immutable configuration revision.
+Controlled live reload is delivered and applies a validated TOML change to a running daemon:
 
 - reload is an explicit command, contract, transaction, and outcome test: the
 daemon re-parses and validates a candidate configuration revision against the current single configuration shape,
@@ -39,8 +41,8 @@ daemon on its recorded configuration revision; a candidate that changes catalog-
 through the catalog prepare and accept path;
 - existing persisted runs, admitted runs, and recorded configuration revisions are never
 mutated, re-selected, or rewritten by a reload;
-- the reload command is the only activation path for a running daemon; with no
-activation in the tree, daemon restart is again the only configuration activation path.
+- the reload command is the only activation path for a running daemon; a catalog-affecting change commits nothing
+and takes effect only at the next daemon restart.
 
 ## Credential rotation
 
@@ -63,9 +65,9 @@ rotation command re-reads the file through that boundary, replaces the compositi
 frozen-meaning checks pass, and rebuilds the provider driver's private client. The rebuild keeps the driver options the
 composition's provider-option seam applies at construction: rotation preflights the active profile's declared options
 through the seam and replaces only the private SDK client, so it never silently drops or ignores declared driver
-options. Facades opened without a file-backed source (test-support hosts) fail closed with the same typed error. No
-credential handling beyond the M3/M4 startup boundary may exist in
-the tree, and no credential, file content, or source path may appear in a DTO, error, log, projection, or
+options. Facades opened without a file-backed source (test-support hosts) fail closed with the same typed error.
+Credential handling stays inside this private loading boundary, and no credential, file content, or source path may
+appear in a DTO, error, log, projection, or
 durable surface.
 
 ## Provider health checks
@@ -78,7 +80,7 @@ credential testing beyond the declared contract;
 - unavailability retains the exact reason and creates no `RunId`, retry
 counter, or quota;
 - the health-evidence DTO carries the provider identity (`provider_id`) and
-reports no profile revision while the catalog is not wired into the health path: `provider_profile_revision_id` stays
+reports no profile revision: `provider_profile_revision_id` stays
 absent, and no synthesized `health-profile-<hex>` identity is fabricated.
 
 ## Provider and model discovery
@@ -113,8 +115,7 @@ affect fresh runs only.
 
 ## Raw-TOML editing and configuration editing
 
-Raw-TOML editing and a validated configuration-editing surface are accepted directions awaiting a new activating
-specification:
+Raw-TOML editing and the validated configuration-editing surface are delivered by the activated Slice 2:
 
 - a safe, validated raw-TOML editing surface over the shared typed client
 produces a new candidate revision through the same reload transaction; it is never adapter authority and never
@@ -141,15 +142,17 @@ it.
 ## Compatibility and historical preservation
 
 No direction rewrites historical records, assigns new meaning to a closed variant, or reconstructs missing meaning
-from current state. All directions affect fresh runs only; the slice is not activated and activation requires an
-activating specification.
+from current state. All directions affect fresh runs only; the slice is activated and its delivered contract carries
+the outcome evidence recorded in the [Slice 2 evidence](10-test-driven-delivery-and-verification.md#slice-2-evidence).
 
 ## Dependencies and non-goals
 
 This document depends on architectures 03, 09, and 22. Non-goals: a reload
 watcher/transport, keychain or secret store, standalone health-service or discovery topology, pricing engine, profile
 picker/editor implementation, OS notifications, remote transport, multi-user access, sandbox/container isolation, and
-production activation beyond the accepted directions. The daemon-facade serving surface for reload, rotation, health,
-discovery, pricing, and raw-TOML/typed editing does not exist in the tree.
+production activation beyond the accepted directions. The daemon serves reload, rotation, health, discovery, pricing,
+and raw-TOML/typed editing through the typed control-plane surface; the profile picker/editor presentation and the
+instruction-fragment editing surface remain not activated.
 
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
+Evidence: recorded [Slice 2 evidence](10-test-driven-delivery-and-verification.md#slice-2-evidence); activating
+specification per [architecture 12](12-quality-gates-and-makefile.md).

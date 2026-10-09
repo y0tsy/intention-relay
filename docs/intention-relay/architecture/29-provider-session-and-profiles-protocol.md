@@ -1,11 +1,12 @@
 # Provider Session Selection and Profiles Protocol
 
-**Approved future design. Not implemented; activation requires an activating specification.** Architecture 29 owns the
+**Activated in Slice 2.** Architecture 29 owns the
 provider session-selection and profiles protocol layer: session default selection, per-turn and fork overrides,
-profile-keyed usage, and safe presentation. The layer is not activated; activation
-requires an activating specification (activation sequence: [architecture
-11](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment), [architecture
-30](30-instruction-sources-and-system-context.md)). The unavailable-queue promotion and reconciliation
+profile-keyed usage, and safe presentation. The layer was activated by its accepted activating specification and its
+delivered contract is recorded in [architecture
+11](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment) and the [Slice 2
+evidence](10-test-driven-delivery-and-verification.md#slice-2-evidence); the fork override commands remain Slice 4.
+The unavailable-queue promotion and reconciliation
 and the held-run admission path are not part of the direction ([architecture
 09](09-configuration-security-and-observability.md), [architecture 15](15-tool-registry-and-model-tool-loop.md)), and the
 negotiated capability plane is removed under [architecture 03](03-daemon-transport-and-adapters.md).
@@ -69,7 +70,7 @@ rerouted to a current default or new revision. Usage is keyed by exact profile i
 profile into one bounded entry per `(revision, model)` identity and separately by revision/model, with no price,
 currency, or estimated cost; different profiles sharing all safe fields remain independent clients, selection
 identities, and usage groups. The fork override fields on `ForkSessionCommandDto` and `StartForkRunCommandDto` and their
-resolution service belong to this not-activated layer; the fork wire commands remain Slice 4.
+resolution service ship with the fork wire commands, which remain Slice 4.
 
 ## Public protocol and presentation
 
@@ -79,8 +80,8 @@ capability plane: the negotiated `provider_profiles_v1` capability mechanism is 
 03](03-daemon-transport-and-adapters.md), so the surface uses plain typed requests with no
 capability or family gate. It does not imply live reload, configuration editing, profile testing, credential entry, or
 model discovery; configuration editing belongs to the [architecture 25](25-configuration-provider-control-plane.md)
-atomic reload contract and is not part of this surface. The daemon advertises and serves no `provider_profiles_v1`
-capability today.
+atomic reload contract and is not part of this surface. The daemon serves the catalog and session-default parts of
+this surface today through plain typed requests, with no `provider_profiles_v1` capability gate.
 
 A catalog list is bounded, paginated by an opaque token, sorted by stable `ProfileId`, carries the active
 `CatalogRevisionId`, and returns `has_more`; a catalog change invalidates the token with a typed conflict. An
@@ -101,8 +102,8 @@ configuration paths.
 Profiles v1 are startup-only: no watcher, polling, auto-restart, or restart protocol command exists. Startup
 auto-accepts additions, new user-kind additions, execution edits, enable/disable, and display changes; an existing user
 kind never accepts an edited composition under an old ID. A semantic-equal catalog writes no new revision but
-reconstructs the private registry, and credential-only changes are invisible durable state (a deferred
-credential-rotation limitation). An omitted profile or unreferenced kind becomes a process-local pending-removal
+reconstructs the private registry, and credential-only changes are invisible durable state; the delivered rotation
+command replaces the private in-memory material when every safe selected field still matches. An omitted profile or unreferenced kind becomes a process-local pending-removal
 candidate (not auto-tombstoned); a profile pointing to an omitted kind is invalid. Degraded mode is admin/read only.
 
 `AcceptProviderCatalogRemovalCommandDto` (idempotent) takes a candidate handle, expected active/candidate revisions, and
@@ -110,8 +111,7 @@ an operation ID; it commits the state change in one transaction and then activat
 occurs inside it.
 `RejectProviderCatalogCandidateCommandDto` drops the private candidate and pending status, records
 `ProviderCatalogCandidateRejected`, and leaves degraded read-only with `removal_candidate_rejected`. At most one
-candidate exists, with a lifetime of **30 minutes** from `ProviderCatalogRemovalPending`; expiry produces
-`ProviderCatalogCandidateExpired` and degraded read-only with `removal_candidate_expired`.
+candidate exists and persists until it is explicitly accepted or rejected.
 
 Startup opens storage first, applies the architecture 04 recovery-before-ready rule, then prepares and activates the
 catalog. A degraded daemon serves health, safe catalog status/validation, and session/run/tree reads; all provider state
@@ -119,7 +119,7 @@ changes, admission, and default changes are rejected with `execution_not_ready`,
 of the one pending candidate. A crash after acceptance produces `ProviderCatalogActivationRecoveryRequired` before
 reconstruction and `ProviderCatalogRecoveryCompleted` only after the exact accepted catalog is active; a mismatch stays
 `activation_recovery_required`. The closed degraded reasons are `removal_candidate_pending`,
-`removal_candidate_rejected`, `removal_candidate_expired`, and `activation_recovery_required`. The layer does not
+`removal_candidate_rejected`, and `activation_recovery_required`. The layer does not
 include the held-run admission path (`AdmitRecoveredRunCommandDto`); the limits-by-precedent rule ([architecture
 09](09-configuration-security-and-observability.md), [architecture 15](15-tool-registry-and-model-tool-loop.md)) keeps
 it out of the direction, and the
@@ -129,17 +129,20 @@ ordinary recovery path is the only one.
 
 No historical selection gains a synthetic profile/catalog/session-default state. A per-turn or fork override affects
 only its run; existing persisted runs retain their recorded immutable selection. All directions affect fresh runs only;
-the layer is not activated and activation requires an activating specification.
+the layer is activated and its delivered contract carries the outcome evidence recorded in the
+[Slice 2 evidence](10-test-driven-delivery-and-verification.md#slice-2-evidence).
 
 ## Dependencies and non-goals
 
 This document depends on architectures 15, 22, 23, and 25.
-Non-goals: a `responses` SDK/driver, user-kind parser, catalog database, profile picker/editor
-presentation, credential entry/keychain, health test, discovery, pricing, telemetry, live reload, multimodal or
-structured output, plugin drivers, remote continuation, and production behavior. The catalog database, the single
+Non-goals: a `responses` SDK/driver, user-kind parser, profile picker/editor
+presentation, credential entry/keychain, telemetry, multimodal or
+structured output, plugin drivers, remote continuation, and production behavior. The catalog and its single
 current storage schema (logical version 1), credential rotation, health checks, discovery, pricing, controlled live
-reload, and typed header policy belong to the not-activated Slice 2; the typed server-side-parser and
+reload, and typed header policy are delivered by the activated Slice 2 ([architecture
+25](25-configuration-provider-control-plane.md)) and stay outside this document's ownership; the typed server-side-parser and
 preservation-control contracts were removed as unconsumed by the unconsumed-surface audit (2026-09), so no
 parser-configuration surface is activated.
 
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
+Evidence: recorded [Slice 2 evidence](10-test-driven-delivery-and-verification.md#slice-2-evidence); activating
+specification per [architecture 12](12-quality-gates-and-makefile.md).

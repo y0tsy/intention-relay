@@ -16,17 +16,19 @@ implementation, tools, or provider implementations.
 - Feature flags may choose implementations, but may not make the public contract type-unstable.
 -  M1 establishes the `ConfigRevisionId` and credential-free configuration-snapshot contract foundation. M3 makes
 `ConfigSnapshotDto` the canonical credential-free persisted configuration selection: the composition root supplies one
-startup snapshot, storage records it by `ConfigRevisionId`, and each accepted run retains its immutable revision. TOML
-is applied only at daemon startup; live reload remains deferred.
+startup snapshot, storage records it by `ConfigRevisionId`, and each accepted run retains its immutable revision.
+Slice 2 delivers controlled live reload: an explicit reload command re-reads and validates the TOML document, applies
+non-catalog changes to fresh runs, and rejects catalog-affecting changes with `catalog_change_requires_restart` until
+restart, with no watcher.
 -  M3 activates the engine and storage layers, merged since Slice 1.5 into `intention-engine` and `intention-storage`. The
 active graph adds the intentional `storage -> config`, `storage-sqlite -> config`, `application -> config`, and `runtime
 -> config` edges required to persist and attach canonical configuration revisions without exposing credentials or
 filesystem paths.
 -  M4 activates the provider layer, carried since the Slice 1.5 collapse by `intention-providers`. The model
-crate remains provider-neutral and depends only on `intention-proto`; provider crates depend only on model/config/types
-plus their private SDK. `intention-proto` owns the provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and
-`ProviderErrorDto` shared by model and durable domain facts; `intention-providers` re-exports them for its consumers. Only
-`intention-daemon` may select either concrete provider.
+crate remains provider-neutral and depends only on `intention-proto`; provider crates depend only on
+`intention-proto` and their private SDK. `intention-proto` owns the provider-neutral `UsageDto`, `FinishReasonDto`,
+`ToolCallDto`, and `ProviderErrorDto` shared by model and durable domain facts; `intention-providers` re-exports them
+for its consumers. Only `intention-daemon` may select either concrete provider.
 -  M4 model and provider evidence is domain-owned and current-state: domain, storage, and protocol never depend on
 `intention-providers`, and SQLite stores assistant content, reasoning text, tool calls, and tool results on the transcript
 and tool-result rows rather than in typed envelopes or per-run cursors. `intention-engine` depends on the
@@ -113,12 +115,12 @@ flowchart BT
 
 Slice 1.5 collapsed the workspace to nine production crates, shown below together with what each absorbed. The table
 below is the live crate map, and the exact permitted edges and coverage tiers are declared
-by `quality/architecture.toml` under phase `slice15`.
+by `quality/architecture.toml` under phase `slice2`.
 
 | Target crate | Absorbs | Owns |
 | --- | --- | --- |
 | `intention-proto` | `intention-proto`, `intention-protocol`, `intention-domain` | Identity newtypes, shared value types, schema versions, run lifecycle and projection values, the typed public protocol DTOs, and their typed serde payloads. |
-| `intention-config` | `intention-config` | TOML parsing, validation, resolved configuration, and credential-free snapshots. |
+| `intention-config` | `intention-config` | TOML catalog-document parsing, validation, defaults, and credential-free configuration snapshots. |
 | `intention-engine` | `intention-application`, `intention-runtime` | Commands, queries, semantic use-case workflows, deterministic lifecycle decisions, interruption handling, and recovery. |
 | `intention-tools` | `intention-tools`, `intention-workspace`, `intention-hooks` | Tool identity and contracts, WorkspaceRoot policy, and the cancellation-aware dispatch surface. |
 | `intention-providers` | `intention-model`, `intention-provider-openrouter`, `intention-provider-generic-chat` | The provider-neutral model contract and both concrete SDK translation adapters. |
@@ -151,7 +153,6 @@ flowchart BT
   CF --> ST
   PR --> TL[intention-tools]
   PR --> PV[intention-providers]
-  CF --> PV
   PR --> EN[intention-engine]
   CF --> EN
   ST --> EN
