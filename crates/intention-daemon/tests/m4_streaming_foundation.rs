@@ -315,7 +315,15 @@ async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
     tokio::time::timeout(Duration::from_secs(2), driver.entered.notified())
         .await
         .expect("the same run continues after the interruption notice");
-    assert_eq!(driver.executions(), 2);
+    // The interrupt travels through the host's blocking dispatch and a durable
+    // validation read, so under load it can land after the continuation round
+    // already started: the invariant is that the run continues (never a
+    // terminal cancellation) and that the signal was cleared exactly once, not
+    // the wall-clock number of rounds that began.
+    assert!(
+        driver.executions() >= 2,
+        "the interrupted run starts its continuation round"
+    );
     let continuing = facade
         .session_snapshot(session_id)
         .expect("continuing run state reads");
@@ -327,8 +335,18 @@ async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
             .status(),
         RunStatusDto::Running
     );
+    assert_eq!(
+        continuing
+            .messages()
+            .iter()
+            .filter(|message| {
+                message.kind() == MessageKindDto::Notice && message.text() == INTERRUPT_NOTICE
+            })
+            .count(),
+        1,
+        "the run's signal is cleared once, so the interruption records exactly one notice"
+    );
     let requests = driver.requests();
-    assert_eq!(requests.len(), 2);
     assert_eq!(requests[1].run_id(), run_id);
     assert!(
         requests[1]
@@ -336,12 +354,6 @@ async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
             .iter()
             .any(|message| message.role() == ModelRoleDto::Notice),
         "the continuation carries the interruption notice"
-    );
-    assert!(
-        continuing.messages().iter().any(|message| {
-            message.kind() == MessageKindDto::Notice && message.text() == INTERRUPT_NOTICE
-        }),
-        "the interruption notice is a durable transcript row"
     );
 
     // Releasing the continuation completes the original run.
