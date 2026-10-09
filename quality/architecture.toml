@@ -1,6 +1,6 @@
 [policy]
-phase = "slice15"
-active_milestone = "slice15"
+phase = "slice2"
+active_milestone = "slice2"
 non_production_test_crates = ["intention-test-support"]
 active_production_crates = [
   "intention-proto",
@@ -22,17 +22,17 @@ skeleton_crates = []
 [crate_declarations."intention-proto"]
 role = "active"
 responsibility = "Shared, dependency-light DTOs plus the typed public local-protocol surface."
-test_targets = ["contracts", "m3_contracts", "protocol_contracts"]
+test_targets = ["contracts", "m3_contracts", "protocol_contracts", "provider_contracts"]
 
 [crate_declarations."intention-config"]
 role = "active"
 responsibility = "Versioned TOML parsing, validation, path selection, and credential-free public configuration projections."
-test_targets = ["contracts", "m4_contracts"]
+test_targets = ["catalog_contracts", "contracts", "m4_contracts"]
 
 [crate_declarations."intention-storage"]
 role = "active"
 responsibility = "DTO-only repository contract plus the bundled SQLite implementation behind it."
-test_targets = ["contracts", "m4_model_context", "m4_run_safe_config", "opaque_json_guard", "sqlite_contracts"]
+test_targets = ["catalog_contracts", "contracts", "m4_model_context", "m4_run_safe_config", "opaque_json_guard", "sqlite_contracts"]
 
 [crate_declarations."intention-transport"]
 role = "active"
@@ -47,17 +47,17 @@ test_targets = ["client_contract", "run_stream_contract"]
 [crate_declarations."intention-daemon"]
 role = "active"
 responsibility = "Composition root, daemon host library, and the thin daemon binary."
-test_targets = ["client_e2e", "daemon_bootstrap", "m4_streaming_foundation", "real_api_e2e"]
+test_targets = ["client_e2e", "control_plane_e2e", "daemon_bootstrap", "m4_streaming_foundation", "real_api_e2e"]
 
 [crate_declarations."intention-engine"]
 role = "active"
 responsibility = "Commands, queries, and semantic use-case workflows plus deterministic run execution, interruption handling, context-window accounting, and recovery-before-ready, over DTO-only storage."
-test_targets = ["m3_engine", "m3_runtime", "m4_model_execution", "m5_tool_loop"]
+test_targets = ["m3_engine", "m3_runtime", "m4_model_execution", "m5_control_plane", "m5_tool_loop"]
 
 [crate_declarations."intention-providers"]
 role = "active"
 responsibility = "Provider-neutral model contracts plus the OpenRouter and generic Chat Completions translation adapters."
-test_targets = ["adapter_contracts", "m4_execution_contracts", "model_contracts"]
+test_targets = ["adapter_contracts", "m4_execution_contracts", "model_contracts", "reasoning_contracts"]
 
 [crate_declarations."intention-tools"]
 role = "active"
@@ -101,7 +101,7 @@ test_only_source_patterns = [
 "intention-client" = ["intention-transport", "intention-proto"]
 "intention-daemon" = ["intention-client", "intention-config", "intention-engine", "intention-proto", "intention-providers", "intention-storage", "intention-test-support", "intention-tools", "intention-transport"]
 "intention-engine" = ["intention-config", "intention-providers", "intention-proto", "intention-storage", "intention-test-support", "intention-tools"]
-"intention-providers" = ["intention-config", "intention-proto"]
+"intention-providers" = ["intention-proto"]
 "intention-tools" = ["intention-proto"]
 
 # External dependencies per active production crate, including
@@ -160,7 +160,7 @@ root_package = "intention-daemon"
 # workspace dependency on one from any other package fails the gate.
 concrete_implementation_crates = ["intention-engine"]
 owned_selection_patterns = [
-  "SelectedProvider",
+  "LiveDriver",
 ]
 
 [composition.owned_type_names]
