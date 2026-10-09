@@ -5,7 +5,7 @@
 
 mod common;
 
-use std::{collections::VecDeque, future, sync::mpsc, time::Duration};
+use std::{collections::VecDeque, future, sync::PoisonError, sync::mpsc, time::Duration};
 
 use common::{
     FakeRepository, ImmediateTime, RecordedTransition, RecordingCommitObserver, ScriptedPort, time,
@@ -347,7 +347,11 @@ fn tool_call_executes_tool_and_completes() {
         port.calls().as_slice(),
         &[(session_id, run_id, call.clone())]
     );
-    let messages = repository.messages.borrow();
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(
         messages
             .iter()
@@ -361,16 +365,25 @@ fn tool_call_executes_tool_and_completes() {
     );
     drop(messages);
     assert!(
-        repository.tool_results.borrow().is_empty(),
+        repository
+            .tool_results
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty(),
         "the dispatched tool path owns the tool-result transaction"
     );
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
     assert_eq!(
         repository
             .transitions
-            .borrow()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .map(RecordedTransition::status)
             .collect::<Vec<_>>(),
@@ -460,7 +473,11 @@ fn the_window_pass_compresses_a_large_tool_result_before_the_continuation_reques
     );
     drop(requests);
     assert!(
-        repository.messages.borrow().is_empty(),
+        repository
+            .messages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty(),
         "a tool round without assistant text commits no transcript row"
     );
 }
@@ -503,7 +520,11 @@ fn partial_tool_result_continues_the_loop_without_terminalizing() {
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
     assert_eq!(driver.executions(), 2);
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(
         finishes[0].status(),
@@ -717,7 +738,11 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
     );
     drop(requests);
 
-    let messages = repository.messages.borrow();
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(
         messages
             .iter()
@@ -776,7 +801,11 @@ fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
     drop(requests);
 
     assert!(
-        repository.messages.borrow().is_empty(),
+        repository
+            .messages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty(),
         "a textless reasoning channel must not become a durable assistant row"
     );
 }
@@ -820,13 +849,23 @@ fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
         port.calls().is_empty(),
         "the failed round never executes its tool call"
     );
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(
         finishes[0].error_code(),
         Some("reasoning_attachment_unrepresentable")
     );
-    assert!(repository.messages.borrow().is_empty());
+    assert!(
+        repository
+            .messages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -865,8 +904,21 @@ fn control_character_reasoning_echo_terminalizes_as_typed_failed_run() {
         port.calls().is_empty(),
         "the failed round never executes its tool call"
     );
-    assert_eq!(repository.finishes.borrow().len(), 1);
-    assert!(repository.messages.borrow().is_empty());
+    assert_eq!(
+        repository
+            .finishes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len(),
+        1
+    );
+    assert!(
+        repository
+            .messages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -912,11 +964,19 @@ fn tool_failure_terminalizes_without_retry() {
             1,
             "{code} executes the tool exactly once, never re-invoking it"
         );
-        let finishes = repository.finishes.borrow();
+        let finishes = repository
+            .finishes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         assert_eq!(finishes.len(), 1, "a tool failure never retries");
         assert_eq!(finishes[0].error_code(), Some(code));
         assert!(
-            repository.tool_results.borrow().is_empty(),
+            repository
+                .tool_results
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_empty(),
             "the tool path committed the failed result row"
         );
     }
@@ -954,7 +1014,11 @@ fn port_infrastructure_error_terminalizes_with_the_safe_error() {
     assert_eq!(run.status(), RunStatusDto::Failed);
     assert_eq!(error.code(), "tool_execution_failed");
     assert_eq!(error.message(), "the local tool executor is unavailable");
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].error_code(), Some("tool_execution_failed"));
     assert_eq!(
@@ -963,7 +1027,11 @@ fn port_infrastructure_error_terminalizes_with_the_safe_error() {
         "the runtime persists the port's safe error verbatim"
     );
     assert!(
-        repository.tool_results.borrow().is_empty(),
+        repository
+            .tool_results
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty(),
         "the port owns the durable failed result row"
     );
 }
@@ -1032,7 +1100,11 @@ fn interruption_during_tool_execution_records_the_notice_and_continues() {
         1,
         "the in-flight tool ran exactly once"
     );
-    let messages = repository.messages.borrow();
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(
         messages
             .iter()
@@ -1093,7 +1165,11 @@ fn provider_failure_after_tool_round_is_terminal_without_retry() {
         1,
         "a provider failure after a tool result never re-executes the tool"
     );
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].error_code(), Some("provider_broken"));
 }
@@ -1124,7 +1200,8 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
     // invocation of the round's call.
     repository
         .cancel_after_append
-        .borrow_mut()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
         .replace((1, signal.clone()));
     let clock = ImmediateTime::new();
 
@@ -1319,7 +1396,11 @@ fn second_tool_call_does_not_start_until_first_finishes() {
             .as_slice(),
         &[(session_id, run_id, first), (session_id, run_id, second)]
     );
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
 }
@@ -1385,7 +1466,11 @@ fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
         2,
         "the run re-enters the provider after the interruption"
     );
-    let messages = repository.messages.borrow();
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(
         messages
             .iter()
@@ -1460,7 +1545,11 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
         "the interrupted wait starts the second attempt"
     );
     assert!(port.calls().is_empty());
-    let messages = repository.messages.borrow();
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(
         messages
             .iter()
@@ -1526,12 +1615,17 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
     assert!(
         clock
             .sleeps
-            .borrow()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .all(|duration| *duration >= Duration::from_secs(1)),
         "an already-interrupted run never arms the sub-second retry delay"
     );
-    let messages = repository.messages.borrow();
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(
         messages
             .iter()
@@ -1612,7 +1706,11 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
         ]
     );
     drop(requests);
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
 }
@@ -1626,7 +1724,8 @@ fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     repository
         .pending
-        .borrow_mut()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
         .push_back(pending_user_message(session_id, run_id, "pending message"));
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
@@ -1666,8 +1765,20 @@ fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
         message.role() == ModelRoleDto::User && message.content() == "pending message"
     }));
     drop(requests);
-    assert_eq!(*repository.pending_consumes.borrow(), 2);
-    assert!(repository.pending.borrow().is_empty());
+    assert_eq!(
+        *repository
+            .pending_consumes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+        2
+    );
+    assert!(
+        repository
+            .pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -1678,7 +1789,8 @@ fn a_pending_message_at_the_finish_boundary_continues_instead_of_completing() {
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     repository
         .pending
-        .borrow_mut()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
         .push_back(pending_user_message(
             session_id,
             run_id,
@@ -1720,7 +1832,11 @@ fn a_pending_message_at_the_finish_boundary_continues_instead_of_completing() {
         message.role() == ModelRoleDto::User && message.content() == "arrived before completion"
     }));
     drop(requests);
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(
         finishes.len(),
         1,

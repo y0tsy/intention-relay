@@ -18,7 +18,7 @@ pub use intention_providers::{
     ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
     ModelToolDefinitionDto,
 };
-use intention_storage::StorageRepositoryDto;
+use intention_storage::{RunOutcomeDto, StorageRepositoryDto};
 use intention_tools::CancellationSignal as ToolCancellationSignal;
 
 use crate::context_window::ContextWindowState;
@@ -64,16 +64,14 @@ where
             "scheduling failure requires the exact run to remain starting",
         ));
     }
-    repository.finish_run(
-        session_id,
-        run_id,
+    let outcome = RunOutcomeDto::new(
         RunStatusDto::Failed,
         None,
         None,
         Some(failure_code.into()),
         Some("the starting run could not be scheduled".to_owned()),
-        occurred_at,
-    )
+    )?;
+    repository.finish_run(session_id, run_id, outcome, occurred_at)
 }
 
 /// Provider-neutral clock and delay boundary for model execution.
@@ -374,6 +372,10 @@ pub trait ModelRunCommitObserver: Send + Sync {
 
 /// DTO-only executor over injected storage, selected driver, time port,
 /// commit observer, and tool executor.
+///
+/// Every collaborator is shared behind a `Sync` reference: the execution
+/// lifecycle hands its futures to a scheduling runtime, so each returned
+/// future is `Send` by construction.
 pub struct ModelRunExecutionService<'a, Repository, Driver: ?Sized, Time> {
     repository: &'a Repository,
     driver: &'a Driver,
@@ -384,9 +386,9 @@ pub struct ModelRunExecutionService<'a, Repository, Driver: ?Sized, Time> {
 
 impl<'a, Repository, Driver, Time> ModelRunExecutionService<'a, Repository, Driver, Time>
 where
-    Repository: StorageRepositoryDto,
-    Driver: ModelExecutionDriver + ?Sized,
-    Time: ModelTimePort,
+    Repository: StorageRepositoryDto + Sync,
+    Driver: ModelExecutionDriver + Sync + ?Sized,
+    Time: ModelTimePort + Sync,
 {
     /// Creates an executor over the injected collaborators.
     ///
@@ -416,10 +418,6 @@ where
     /// # Errors
     ///
     /// Returns typed storage or validation errors without retrying writes.
-    #[expect(
-        clippy::future_not_send,
-        reason = "The DTO-only execution service accepts deterministic non-Sync test repositories; daemon composition owns any Send runtime boundary."
-    )]
     pub async fn execute(
         &self,
         input: ModelRunExecutionInputDto,
@@ -476,12 +474,12 @@ where
                 .drive_attempt(
                     &input,
                     policy.attempt_timeout_seconds(),
-                    ContextWindowState::new(context_window.window_tokens()),
-                    AttemptState {
-                        pending_text: &mut pending_text,
-                        usage: &mut usage,
-                        durable_output: &mut durable_output,
-                    },
+                    RoundState::new(
+                        &mut pending_text,
+                        &mut usage,
+                        &mut durable_output,
+                        ContextWindowState::new(context_window.window_tokens()),
+                    ),
                     &mut extra_messages,
                 )
                 .await?;
@@ -516,46 +514,28 @@ where
         unreachable!("validated provider execution policy supplies at least one attempt")
     }
 
-    #[expect(
-        clippy::future_not_send,
-        reason = "The DTO-only execution service accepts deterministic non-Sync test repositories; daemon composition owns any Send runtime boundary."
-    )]
     async fn drive_attempt(
         &self,
         input: &ModelRunExecutionInputDto,
         timeout_seconds: u8,
-        mut context_window: ContextWindowState,
-        state: AttemptState<'_>,
+        mut state: RoundState<'_>,
         extra_messages: &mut Vec<ModelMessageDto>,
     ) -> DtoResult<AttemptResult> {
-        let AttemptState {
-            pending_text,
-            usage,
-            durable_output,
-        } = state;
         let mut messages: Vec<ModelMessageDto> = input.request.messages().to_vec();
         messages.extend(extra_messages.iter().cloned());
         // The starting context is windowed once, before its first provider
         // request, exactly like every later tool-result round.
-        context_window.apply(&mut messages)?;
+        state.apply_window(&mut messages)?;
         let mut request = input.request.with_messages(messages.clone())?;
         let mut reasoning_attachments: Vec<AssistantReasoningDto> = Vec::new();
         let mut tool_round = 0u8;
         loop {
             let outcome = self
-                .drive_provider_round(
-                    request.clone(),
-                    input,
-                    timeout_seconds,
-                    pending_text,
-                    usage,
-                    durable_output,
-                    &mut context_window,
-                )
+                .drive_provider_round(request.clone(), input, timeout_seconds, &mut state)
                 .await?;
             match outcome {
                 RoundOutcome::Finished { reason, assistant } => {
-                    *durable_output |= assistant.is_some();
+                    state.record_step_commit(assistant.as_ref());
                     // A pending message is the nearest-boundary continuation:
                     // it joins the live context in FIFO order and the run
                     // continues instead of completing. An interruption that
@@ -564,12 +544,12 @@ where
                         self.record_interrupt_notice(input)?;
                         messages.push(interrupt_notice_message()?);
                         extra_messages.push(interrupt_notice_message()?);
-                        context_window.apply(&mut messages)?;
+                        state.apply_window(&mut messages)?;
                         request = continuation_request(input, &messages, &reasoning_attachments)?;
                         continue;
                     }
                     if self.consume_pending_user_turns(input, &mut messages, extra_messages)? {
-                        context_window.apply(&mut messages)?;
+                        state.apply_window(&mut messages)?;
                         request = continuation_request(input, &messages, &reasoning_attachments)?;
                         continue;
                     }
@@ -578,29 +558,29 @@ where
                         RunStatusDto::Completed,
                         Some(reason),
                         None,
-                        usage.as_ref(),
+                        state.reported_usage(),
                     )?;
                     return Ok(AttemptResult::Completed { run });
                 }
                 RoundOutcome::Interrupted { assistant } => {
-                    *durable_output |= assistant.is_some();
+                    state.record_step_commit(assistant.as_ref());
                     self.record_interrupt_notice(input)?;
                     messages.push(interrupt_notice_message()?);
                     extra_messages.push(interrupt_notice_message()?);
-                    context_window.apply(&mut messages)?;
+                    state.apply_window(&mut messages)?;
                     request = continuation_request(input, &messages, &reasoning_attachments)?;
                 }
                 RoundOutcome::Failed { error, retryable } => {
                     if tool_round == 0 {
                         return Ok(AttemptResult::Failed { error, retryable });
                     }
-                    self.commit_step(input, pending_text, None)?;
+                    self.commit_step(input, state.pending_text_mut(), None)?;
                     let run = self.finish_run(
                         input,
                         RunStatusDto::Failed,
                         None,
                         Some(&error),
-                        usage.as_ref(),
+                        state.reported_usage(),
                     )?;
                     return Ok(AttemptResult::FailedTerminal { run, error });
                 }
@@ -609,7 +589,7 @@ where
                     reasoning,
                     assistant,
                 } => {
-                    *durable_output |= assistant.is_some();
+                    state.record_step_commit(assistant.as_ref());
                     tool_round += 1;
                     messages.push(ModelMessageDto::assistant_tool_calls(None, calls.clone())?);
                     // Attachments are per-round and ordered: each assistant
@@ -618,7 +598,6 @@ where
                     if let Some(reasoning) = reasoning {
                         reasoning_attachments.push(reasoning);
                     }
-                    let mut interrupted_tool = false;
                     for call in calls {
                         // An interrupt that arrived before this call started
                         // never begins a new effect: the call is answered with
@@ -637,7 +616,7 @@ where
                                 .await;
                             // The tool path committed this call's evidence, so
                             // the run holds irreversible output from here on.
-                            *durable_output = true;
+                            state.mark_durable_output();
                             match outcome {
                                 Ok(outcome) => outcome,
                                 Err(error) => {
@@ -649,7 +628,7 @@ where
                                         RunStatusDto::Failed,
                                         None,
                                         Some(&error),
-                                        usage.as_ref(),
+                                        state.reported_usage(),
                                     )?;
                                     return Ok(AttemptResult::FailedTerminal { run, error });
                                 }
@@ -662,7 +641,7 @@ where
                                     RunStatusDto::Failed,
                                     None,
                                     Some(&error),
-                                    usage.as_ref(),
+                                    state.reported_usage(),
                                 )?;
                                 return Ok(AttemptResult::FailedTerminal { run, error });
                             }
@@ -671,7 +650,7 @@ where
                                     .push(ModelMessageDto::tool_result(call.call_id(), content)?);
                             }
                             ToolResultOutcomeDto::Partial { content, .. } => {
-                                interrupted_tool = true;
+                                state.mark_interrupted_tool();
                                 messages
                                     .push(ModelMessageDto::tool_result(call.call_id(), content)?);
                             }
@@ -683,7 +662,7 @@ where
                         // Every added tool result re-runs the window pass, so
                         // the continuation request carries a trimmed context
                         // and recomputed breakpoints.
-                        context_window.apply(&mut messages)?;
+                        state.apply_window(&mut messages)?;
                     }
                     // A tool batch is the second bounded interruption
                     // boundary. A partial tool result already carries the
@@ -691,7 +670,7 @@ where
                     // model step; every other in-flight batch position gets
                     // the explicit context notice.
                     if input.cancellation.is_cancelled() {
-                        if interrupted_tool {
+                        if state.interrupted_tool() {
                             input.cancellation.reset();
                         } else {
                             self.record_interrupt_notice(input)?;
@@ -700,7 +679,7 @@ where
                         }
                     }
                     self.consume_pending_user_turns(input, &mut messages, extra_messages)?;
-                    context_window.apply(&mut messages)?;
+                    state.apply_window(&mut messages)?;
                     request = continuation_request(input, &messages, &reasoning_attachments)?;
                 }
             }
@@ -773,28 +752,18 @@ where
     /// execution happen in [`Self::drive_attempt`] against the mandatory tool
     /// executor. The round's accumulated text and reasoning commit once, when
     /// the round closes, as one assistant transcript row.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "The round helper carries the attempt's mutable state explicitly so the caller owns the tool loop."
-    )]
-    #[expect(
-        clippy::future_not_send,
-        reason = "The DTO-only execution service accepts deterministic non-Sync test repositories; daemon composition owns any Send runtime boundary."
-    )]
     async fn drive_provider_round(
         &self,
         request: ModelRequestDto,
         input: &ModelRunExecutionInputDto,
         timeout_seconds: u8,
-        pending_text: &mut String,
-        usage: &mut Option<UsageDto>,
-        durable_output: &mut bool,
-        context_window: &mut ContextWindowState,
+        state: &mut RoundState<'_>,
     ) -> DtoResult<RoundOutcome> {
         use futures_util::{FutureExt, StreamExt, future::Either};
 
         let mut lifecycle = ModelStreamLifecycleDto::new();
         let request_characters = ContextWindowState::request_characters(&request);
+        state.begin_round();
         let mut stream = self
             .driver
             .execute(request, input.cancellation.model_signal());
@@ -805,14 +774,15 @@ where
         futures_util::pin_mut!(timeout);
         let mut calls: Vec<ToolCallDto> = Vec::new();
         let mut reasoning_text = String::new();
-        let mut reasoning_channel_seen = false;
-        let mut reasoning_echo_exceeds_round_bound = false;
         loop {
             if input.cancellation.is_cancelled() {
                 drop(stream);
-                let assistant =
-                    self.commit_step(input, pending_text, step_reasoning(&reasoning_text))?;
-                *durable_output |= assistant.is_some();
+                let assistant = self.commit_step(
+                    input,
+                    state.pending_text_mut(),
+                    step_reasoning(&reasoning_text),
+                )?;
+                state.record_step_commit(assistant.as_ref());
                 return Ok(RoundOutcome::Interrupted { assistant });
             }
             let next = stream.next().fuse();
@@ -826,9 +796,12 @@ where
             {
                 Either::Left(((), _)) => {
                     drop(stream);
-                    let assistant =
-                        self.commit_step(input, pending_text, step_reasoning(&reasoning_text))?;
-                    *durable_output |= assistant.is_some();
+                    let assistant = self.commit_step(
+                        input,
+                        state.pending_text_mut(),
+                        step_reasoning(&reasoning_text),
+                    )?;
+                    state.record_step_commit(assistant.as_ref());
                     return Ok(RoundOutcome::Interrupted { assistant });
                 }
                 Either::Right((Either::Left((item, _)), _)) => item,
@@ -861,18 +834,16 @@ where
                             retryable: false,
                         });
                     }
-                    let reasoning = match round_reasoning_attachment(
-                        reasoning_channel_seen,
-                        &reasoning_text,
-                        &calls,
-                        reasoning_echo_exceeds_round_bound,
-                    ) {
+                    let reasoning = match state.reasoning_attachment(&reasoning_text, &calls) {
                         Ok(reasoning) => reasoning,
                         Err(_) => return Ok(unrepresentable_reasoning_round()),
                     };
-                    let assistant =
-                        self.commit_step(input, pending_text, step_reasoning(&reasoning_text))?;
-                    *durable_output |= assistant.is_some();
+                    let assistant = self.commit_step(
+                        input,
+                        state.pending_text_mut(),
+                        step_reasoning(&reasoning_text),
+                    )?;
+                    state.record_step_commit(assistant.as_ref());
                     return Ok(RoundOutcome::ToolCalls {
                         calls,
                         reasoning,
@@ -889,57 +860,41 @@ where
             match event {
                 ModelEventDto::Started => {}
                 ModelEventDto::TextDelta { content } => {
-                    pending_text.push_str(&content);
+                    state.push_text(&content);
                 }
                 ModelEventDto::ReasoningDelta { content } => {
-                    // The reasoning channel marks a presence even when it
-                    // carries no text: the continuation request must send the
-                    // channel back on the assistant tool-call message. Empty
+                    // The accumulated echo is bounded per round at the
+                    // attachment's representable bound: a round that crosses it
+                    // is marked unrepresentable and never truncated, and empty
                     // fragments never become durable content.
-                    reasoning_channel_seen = true;
-                    if !content.is_empty() {
-                        // The accumulated echo is bounded per round at the
-                        // attachment's representable bound. Once it is crossed
-                        // the round is unrepresentable and terminalizes as a
-                        // typed failed run at round end; the echo is never
-                        // truncated.
-                        if reasoning_echo_exceeds_round_bound
-                            || reasoning_text.len() + content.len() > MAX_ROUND_REASONING_ECHO_BYTES
-                        {
-                            reasoning_echo_exceeds_round_bound = true;
-                        } else {
-                            reasoning_text.push_str(&content);
-                        }
-                    }
+                    state.observe_reasoning(&content, &mut reasoning_text);
                 }
                 ModelEventDto::Usage { usage: reported } => {
-                    context_window.observe_usage(reported, request_characters);
-                    if matches!(reported, UsageDto::Reported { .. }) {
-                        *usage = Some(reported);
-                    }
+                    state.observe_usage(reported, request_characters);
                 }
                 ModelEventDto::ToolCall { call } => {
                     calls.push(call);
                 }
                 ModelEventDto::Finished { reason } => {
                     if calls.is_empty() {
-                        let assistant =
-                            self.commit_step(input, pending_text, step_reasoning(&reasoning_text))?;
-                        *durable_output |= assistant.is_some();
+                        let assistant = self.commit_step(
+                            input,
+                            state.pending_text_mut(),
+                            step_reasoning(&reasoning_text),
+                        )?;
+                        state.record_step_commit(assistant.as_ref());
                         return Ok(RoundOutcome::Finished { reason, assistant });
                     }
-                    let reasoning = match round_reasoning_attachment(
-                        reasoning_channel_seen,
-                        &reasoning_text,
-                        &calls,
-                        reasoning_echo_exceeds_round_bound,
-                    ) {
+                    let reasoning = match state.reasoning_attachment(&reasoning_text, &calls) {
                         Ok(reasoning) => reasoning,
                         Err(_) => return Ok(unrepresentable_reasoning_round()),
                     };
-                    let assistant =
-                        self.commit_step(input, pending_text, step_reasoning(&reasoning_text))?;
-                    *durable_output |= assistant.is_some();
+                    let assistant = self.commit_step(
+                        input,
+                        state.pending_text_mut(),
+                        step_reasoning(&reasoning_text),
+                    )?;
+                    state.record_step_commit(assistant.as_ref());
                     return Ok(RoundOutcome::ToolCalls {
                         calls,
                         reasoning,
@@ -958,10 +913,6 @@ where
     /// # Errors
     ///
     /// Returns a typed storage error when the notice cannot be committed.
-    #[expect(
-        clippy::future_not_send,
-        reason = "The DTO-only execution service accepts deterministic non-Sync test repositories; daemon composition owns any Send runtime boundary."
-    )]
     async fn wait_for_retry(
         &self,
         input: &ModelRunExecutionInputDto,
@@ -1035,16 +986,16 @@ where
         error: Option<&ErrorDto>,
         usage: Option<&UsageDto>,
     ) -> DtoResult<RunProjectionDto> {
-        let run = self.repository.finish_run(
-            input.session_id,
-            input.run_id,
+        let outcome = RunOutcomeDto::new(
             status,
             usage.copied(),
             finish_reason,
             error.map(|error| error.code().to_owned()),
             error.map(|error| error.message().to_owned()),
-            self.time.now(),
         )?;
+        let run =
+            self.repository
+                .finish_run(input.session_id, input.run_id, outcome, self.time.now())?;
         self.publish_status(input.session_id, input.run_id, run.status());
         Ok(run)
     }
@@ -1080,14 +1031,166 @@ where
     }
 }
 
-/// Mutable per-attempt state carried across the provider attempt loop.
-struct AttemptState<'a> {
+/// Mutable state carried across one attempt's provider rounds and tool batches.
+///
+/// The step text, the reported usage, and the durable-output flag borrow the
+/// execution's live run state for the whole attempt; the window accounting and
+/// the loop flags belong to the attempt's current round, and every round
+/// observes them through the transitions below instead of raw fields.
+struct RoundState<'a> {
     /// Accumulated uncommitted assistant text of the current model step.
     pending_text: &'a mut String,
     /// The last reported provider usage of the run.
     usage: &'a mut Option<UsageDto>,
     /// Whether this run committed irreversible content in an earlier step.
     durable_output: &'a mut bool,
+    /// Live context-window accounting of the current attempt.
+    context_window: ContextWindowState,
+    /// Whether the current round observed the provider reasoning channel.
+    reasoning_channel_seen: bool,
+    /// Whether the current round's reasoning echo crossed the attachment bound.
+    reasoning_echo_exceeds_round_bound: bool,
+    /// Whether the current tool batch answered an interrupted call partially.
+    interrupted_tool: bool,
+}
+
+impl<'a> RoundState<'a> {
+    /// Creates one attempt's state over the run's live step state.
+    const fn new(
+        pending_text: &'a mut String,
+        usage: &'a mut Option<UsageDto>,
+        durable_output: &'a mut bool,
+        context_window: ContextWindowState,
+    ) -> Self {
+        Self {
+            pending_text,
+            usage,
+            durable_output,
+            context_window,
+            reasoning_channel_seen: false,
+            reasoning_echo_exceeds_round_bound: false,
+            interrupted_tool: false,
+        }
+    }
+
+    /// Clears the previous round's observations before the next round begins.
+    const fn begin_round(&mut self) {
+        self.reasoning_channel_seen = false;
+        self.reasoning_echo_exceeds_round_bound = false;
+        self.interrupted_tool = false;
+    }
+
+    /// Appends one provider text delta to the uncommitted step text.
+    fn push_text(&mut self, content: &str) {
+        self.pending_text.push_str(content);
+    }
+
+    /// Records one provider usage observation.
+    ///
+    /// The live window always observes the report; a reported usage also
+    /// replaces the run's last reported usage, while a not-reported one leaves
+    /// that usage untouched.
+    const fn observe_usage(&mut self, reported: UsageDto, request_characters: usize) {
+        self.context_window
+            .observe_usage(reported, request_characters);
+        if matches!(reported, UsageDto::Reported { .. }) {
+            *self.usage = Some(reported);
+        }
+    }
+
+    /// Records one reasoning-channel fragment and accumulates its echo.
+    ///
+    /// The channel marks a presence even when it carries no text: the
+    /// continuation request must send the channel back on the assistant
+    /// tool-call message. The echo is bounded per round at the attachment's
+    /// representable bound; once the bound is crossed the round is marked
+    /// unrepresentable and the echo is never truncated.
+    fn observe_reasoning(&mut self, content: &str, echo: &mut String) {
+        self.reasoning_channel_seen = true;
+        if content.is_empty() {
+            return;
+        }
+        if self.reasoning_echo_exceeds_round_bound
+            || echo.len() + content.len() > MAX_ROUND_REASONING_ECHO_BYTES
+        {
+            self.reasoning_echo_exceeds_round_bound = true;
+        } else {
+            echo.push_str(content);
+        }
+    }
+
+    /// Builds the round's transient reasoning attachment for the tool-loop
+    /// continuation.
+    ///
+    /// The attachment is `Some` whenever the round observed the reasoning
+    /// channel, even when that channel carried no text. A round without the
+    /// channel produces `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the round's accumulated echo cannot
+    /// form a valid attachment: it crossed the per-round attachment bound, or
+    /// the attachment DTO rejects its control characters. Callers record the
+    /// dedicated typed failed run instead of propagating the validation error.
+    fn reasoning_attachment(
+        &self,
+        echo: &str,
+        calls: &[ToolCallDto],
+    ) -> DtoResult<Option<AssistantReasoningDto>> {
+        if !self.reasoning_channel_seen {
+            return Ok(None);
+        }
+        if self.reasoning_echo_exceeds_round_bound {
+            return Err(ErrorDto::validation(
+                "invalid_round_reasoning_echo",
+                "the round reasoning echo exceeds the per-round attachment bound",
+            ));
+        }
+        let tool_call_ids = calls.iter().map(ToolCallDto::call_id).collect();
+        AssistantReasoningDto::new(tool_call_ids, echo).map(Some)
+    }
+
+    /// Applies one window accounting pass to the continuation messages.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error only when a compressed result cannot form a
+    /// valid tool-role message, which the placeholder construction prevents.
+    fn apply_window(&self, messages: &mut [ModelMessageDto]) -> DtoResult<()> {
+        self.context_window.apply(messages)
+    }
+
+    /// Records whether the committed step carried a durable assistant row.
+    const fn record_step_commit(&mut self, assistant: Option<&MessageProjectionDto>) {
+        *self.durable_output |= assistant.is_some();
+    }
+
+    /// Marks that a dispatched tool call committed its evidence.
+    const fn mark_durable_output(&mut self) {
+        *self.durable_output = true;
+    }
+
+    /// Returns the accumulated uncommitted step text for one commit.
+    const fn pending_text_mut(&mut self) -> &mut String {
+        self.pending_text
+    }
+
+    /// Returns the last reported provider usage of the run.
+    const fn reported_usage(&self) -> Option<&UsageDto> {
+        self.usage.as_ref()
+    }
+
+    /// Marks that the current tool batch answered an interrupted call
+    /// partially.
+    const fn mark_interrupted_tool(&mut self) {
+        self.interrupted_tool = true;
+    }
+
+    /// Returns whether the current tool batch answered an interrupted call
+    /// partially.
+    const fn interrupted_tool(&self) -> bool {
+        self.interrupted_tool
+    }
 }
 
 /// The outcome of one provider attempt.
@@ -1145,39 +1248,6 @@ fn tool_result_content(content: String) -> DtoResult<String> {
         ));
     }
     Ok(content)
-}
-
-/// Builds one round's transient reasoning attachment for the tool-loop
-/// continuation.
-///
-/// The attachment is `Some` whenever the round observed the provider's
-/// reasoning channel, even when that channel carried no text: the continuation
-/// request must send the channel back on the assistant tool-call message that
-/// continues the same run. A round without the channel produces `None`.
-///
-/// # Errors
-///
-/// Returns a validation error when the round's accumulated echo cannot form a
-/// valid attachment: it crossed the per-round attachment bound, or the
-/// attachment DTO rejects its control characters. Callers record the dedicated
-/// typed failed run instead of propagating the validation error.
-fn round_reasoning_attachment(
-    reasoning_channel_seen: bool,
-    text: &str,
-    calls: &[ToolCallDto],
-    echo_exceeds_round_bound: bool,
-) -> DtoResult<Option<AssistantReasoningDto>> {
-    if !reasoning_channel_seen {
-        return Ok(None);
-    }
-    if echo_exceeds_round_bound {
-        return Err(ErrorDto::validation(
-            "invalid_round_reasoning_echo",
-            "the round reasoning echo exceeds the per-round attachment bound",
-        ));
-    }
-    let tool_call_ids = calls.iter().map(ToolCallDto::call_id).collect();
-    AssistantReasoningDto::new(tool_call_ids, text).map(Some)
 }
 
 /// Terminalizes a round whose accumulated reasoning echo cannot become the

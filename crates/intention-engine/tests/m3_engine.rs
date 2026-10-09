@@ -185,7 +185,10 @@ fn local_tool_success_records_admission_and_completion() {
 fn local_tool_rejects_storage_before_execution() {
     let root = hello_tool_root("storage-reject");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    *repository.commit_error.borrow_mut() =
+    *repository
+        .commit_error
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) =
         Some(ErrorDto::unavailable("storage_down", "storage unavailable"));
     let error = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
@@ -271,7 +274,11 @@ fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection
         .send_user_turn(command, proposed_run_id, config.clone(), fixture_time())
         .expect_err("admission failure is propagated");
     assert_eq!(error.code(), "turn_admission_unavailable");
-    let inputs = repository.accepted_inputs.borrow();
+    let inputs = repository
+        .accepted_inputs
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(inputs[0].proposed_run_id(), proposed_run_id);
     assert_eq!(inputs[0].config_snapshot().resolved(), config.resolved());
     assert_eq!(inputs[0].occurred_at(), fixture_time());
@@ -280,7 +287,10 @@ fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection
     // A durable context for another run cannot become the requested schedule.
     let session_id = SessionId::new();
     let requested_run = RunId::new();
-    *repository.starting_context.borrow_mut() =
+    *repository
+        .starting_context
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) =
         Some(starting_context(session_id, RunId::new(), &config));
     let error = ApplicationService::new(&repository)
         .schedule_starting_run(session_id, requested_run, RunCancellation::new())
@@ -291,7 +301,10 @@ fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection
     // selection, its message list, and its advertised tools into the execution
     // input.
     let matching_run = RunId::new();
-    *repository.starting_context.borrow_mut() =
+    *repository
+        .starting_context
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) =
         Some(starting_context(session_id, matching_run, &config));
     let scheduled = ApplicationService::new(&repository)
         .schedule_starting_run(session_id, matching_run, RunCancellation::new())
@@ -323,7 +336,10 @@ fn interrupt_run_workflow_maps_durable_results() {
         "fixture_unused",
         "accept is not used by this fixture",
     )));
-    *repository.loaded_projection.borrow_mut() = Some(state);
+    *repository
+        .loaded_projection
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(state);
     let application = ApplicationService::new(&repository);
 
     let interrupted = application
@@ -342,7 +358,10 @@ fn interrupt_run_rejects_a_run_that_is_not_active() {
         "fixture_unused",
         "accept is not used by this fixture",
     )));
-    *repository.loaded_projection.borrow_mut() = Some(projection(session_id, None, Vec::new()));
+    *repository
+        .loaded_projection
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
     assert_eq!(
         ApplicationService::new(&repository)
             .interrupt_run(InterruptRunCommandDto::new(session_id, RunId::new()))
@@ -357,8 +376,14 @@ fn create_and_remove_workflows_map_committed_results() {
     let session_id = SessionId::new();
     let pending_turn = TurnId::new();
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    *repository.created.borrow_mut() = Some(projection(session_id, None, Vec::new()));
-    *repository.removed.borrow_mut() = Some(
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+    *repository
+        .removed
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(
         PendingTurnProjectionDto::new(session_id, pending_turn, "later")
             .expect("fixture pending turn is valid"),
     );
@@ -418,7 +443,10 @@ fn selected_commit_failures_propagate_from_each_commit_point() {
         let root = hello_tool_root("commit-failure");
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-        *repository.commit_failures.borrow_mut() = vec![failing_call];
+        *repository
+            .commit_failures
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = vec![failing_call];
         let error = ApplicationService::new(&repository)
             .invoke_local_tool_with_publication(
                 invoke_read_input_in_workspace(&hello_workspace(&root), path),
@@ -823,7 +851,10 @@ fn starting_context(
 #[test]
 fn terminal_commit_failure_propagates_from_the_tool_error_path() {
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    *repository.commit_failures.borrow_mut() = vec![2];
+    *repository
+        .commit_failures
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = vec![2];
     let error = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
             invoke_read_input("missing"),

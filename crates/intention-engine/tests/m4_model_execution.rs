@@ -5,6 +5,7 @@
 
 mod common;
 
+use std::sync::PoisonError;
 use std::time::Duration;
 
 use common::{FakeRepository, ImmediateTime, RecordedTransition, RecordingCommitObserver};
@@ -158,7 +159,14 @@ fn observer_receives_only_committed_transcript_rows_and_statuses() {
             status: RunStatusDto::Completed,
         }
     );
-    assert_eq!(repository.messages.borrow().len(), 1);
+    assert_eq!(
+        repository
+            .messages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -167,7 +175,10 @@ fn observer_receives_no_content_when_a_message_commit_fails() {
     let run_id = RunId::new();
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
-    *repository.append_failure.borrow_mut() = Some(ErrorDto::unavailable(
+    *repository
+        .append_failure
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(ErrorDto::unavailable(
         "append_failed",
         "append fails before commit",
     ));
@@ -205,8 +216,20 @@ fn observer_receives_no_content_when_a_message_commit_fails() {
             .all(|commit| !matches!(commit, ModelRunCommitDto::Content(_))),
         "an uncommitted row is never published"
     );
-    assert!(repository.messages.borrow().is_empty());
-    assert!(repository.finishes.borrow().is_empty());
+    assert!(
+        repository
+            .messages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    );
+    assert!(
+        repository
+            .finishes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -237,7 +260,11 @@ fn streams_commit_one_assistant_step_with_reasoning_and_complete() {
         unreachable!("a stop reason completes the run");
     };
     assert_eq!(run.status(), RunStatusDto::Completed);
-    let messages = repository.messages.borrow();
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(
         messages.as_slice(),
         &[MessageProjectionDto::new(
@@ -253,7 +280,11 @@ fn streams_commit_one_assistant_step_with_reasoning_and_complete() {
         "the whole step commits as one row with its reasoning"
     );
     drop(messages);
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
     assert_eq!(finishes[0].finish_reason(), Some(FinishReasonDto::Stop));
@@ -264,7 +295,8 @@ fn streams_commit_one_assistant_step_with_reasoning_and_complete() {
     assert_eq!(
         repository
             .transitions
-            .borrow()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .map(RecordedTransition::status)
             .collect::<Vec<_>>(),
@@ -310,10 +342,18 @@ fn malformed_provider_and_eof_streams_safely_fail_without_committing_content() {
         assert_eq!(error.code(), expected_code);
         assert_eq!(run.status(), RunStatusDto::Failed);
         assert!(
-            repository.messages.borrow().is_empty(),
+            repository
+                .messages
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_empty(),
             "an invalid stream never commits assistant content"
         );
-        let finishes = repository.finishes.borrow();
+        let finishes = repository
+            .finishes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         assert_eq!(finishes.len(), 1);
         assert_eq!(finishes[0].error_code(), Some(expected_code));
     }
@@ -353,7 +393,11 @@ fn interruption_records_a_notice_and_continues_the_same_run() {
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
     assert_eq!(driver.executions(), 2);
-    let messages = repository.messages.borrow();
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(
         messages
             .iter()
@@ -377,13 +421,18 @@ fn interruption_records_a_notice_and_continues_the_same_run() {
             && message.content() == intention_engine::INTERRUPT_NOTICE
     }));
     drop(requests);
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1, "one terminal outcome commits");
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
     assert_eq!(
         repository
             .transitions
-            .borrow()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .map(RecordedTransition::status)
             .collect::<Vec<_>>(),
@@ -425,7 +474,11 @@ fn an_interrupt_before_the_first_round_still_records_a_notice_and_continues() {
         2,
         "the interrupted round is followed by the next provider step"
     );
-    let messages = repository.messages.borrow();
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(
         messages
             .iter()
@@ -435,7 +488,11 @@ fn an_interrupt_before_the_first_round_still_records_a_notice_and_continues() {
         "an interrupted step without text commits only its notice"
     );
     drop(messages);
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
 }
@@ -449,7 +506,10 @@ fn an_interrupt_whose_notice_cannot_commit_surfaces_the_storage_error() {
     let signal = RunCancellation::new();
     // The stopped step commits its text first; the interruption notice append
     // then fails as the second committed row.
-    *repository.append_failure_at.borrow_mut() = Some((
+    *repository
+        .append_failure_at
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some((
         2,
         ErrorDto::unavailable(
             "fixture_notice_unavailable",
@@ -472,8 +532,21 @@ fn an_interrupt_whose_notice_cannot_commit_surfaces_the_storage_error() {
     .expect_err("an uncommittable notice is a typed error, never a silent stop");
     assert_eq!(error.code(), "fixture_notice_unavailable");
     assert_eq!(driver.executions(), 1);
-    assert_eq!(repository.messages.borrow().len(), 1);
-    assert!(repository.finishes.borrow().is_empty());
+    assert_eq!(
+        repository
+            .messages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len(),
+        1
+    );
+    assert!(
+        repository
+            .finishes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -519,7 +592,8 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
     assert_eq!(
         clock
             .sleeps
-            .borrow()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .filter(|&&duration| duration == Duration::from_millis(250))
             .count(),
@@ -528,17 +602,26 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
     assert_eq!(
         repository
             .transitions
-            .borrow()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .map(RecordedTransition::status)
             .collect::<Vec<_>>(),
         vec![RunStatusDto::Running]
     );
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
     assert!(
-        repository.messages.borrow().is_empty(),
+        repository
+            .messages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty(),
         "an uncommitted reasoning echo never becomes a transcript row"
     );
 }
@@ -566,7 +649,11 @@ fn model_execution_preconditions_fail_without_provider_calls() {
     assert_eq!(run.status(), RunStatusDto::Failed);
     assert_eq!(error.code(), "provider_configuration_unavailable");
     assert_eq!(driver.executions(), 0);
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(
         finishes[0].error_code(),
@@ -580,7 +667,10 @@ fn model_execution_preconditions_fail_without_provider_calls() {
     let run_id = RunId::new();
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
-    *repository.config_error.borrow_mut() = Some(ErrorDto::unavailable(
+    *repository
+        .config_error
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(ErrorDto::unavailable(
         "configuration_not_found",
         "the persisted configuration is unavailable",
     ));
@@ -599,7 +689,11 @@ fn model_execution_preconditions_fail_without_provider_calls() {
     assert_eq!(run.status(), RunStatusDto::Failed);
     assert_eq!(error.code(), "provider_configuration_unavailable");
     assert_eq!(driver.executions(), 0);
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(
         finishes[0].error_code(),
@@ -628,7 +722,11 @@ fn model_execution_preconditions_fail_without_provider_calls() {
     assert_eq!(run.status(), RunStatusDto::Failed);
     assert_eq!(error.code(), "provider_configuration_unavailable");
     assert_eq!(driver.executions(), 0);
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(
         finishes[0].error_code(),
@@ -642,7 +740,10 @@ fn execution_rejects_non_starting_run_before_configuration_or_provider_work() {
     let run_id = RunId::new();
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
-    *repository.status.borrow_mut() = RunStatusDto::Running;
+    *repository
+        .status
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = RunStatusDto::Running;
     let driver = ScriptedDriver::new(Vec::new());
 
     let error = execute(
@@ -656,9 +757,27 @@ fn execution_rejects_non_starting_run_before_configuration_or_provider_work() {
 
     assert_eq!(error.code(), "invalid_model_run_execution_state");
     assert_eq!(driver.executions(), 0);
-    assert!(repository.messages.borrow().is_empty());
-    assert!(repository.finishes.borrow().is_empty());
-    assert!(repository.transitions.borrow().is_empty());
+    assert!(
+        repository
+            .messages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    );
+    assert!(
+        repository
+            .finishes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    );
+    assert!(
+        repository
+            .transitions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -710,15 +829,27 @@ fn retryable_failure_after_a_committed_step_does_not_retry() {
     assert_eq!(
         clock
             .sleeps
-            .borrow()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .filter(|&&duration| duration == Duration::from_millis(250))
             .count(),
         0,
         "no retry delay runs after committed content"
     );
-    assert_eq!(repository.messages.borrow().len(), 2);
-    let finishes = repository.finishes.borrow();
+    assert_eq!(
+        repository
+            .messages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len(),
+        2
+    );
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Failed);
     assert_eq!(finishes[0].error_code(), Some("provider_down"));
@@ -773,14 +904,19 @@ fn exhausted_retryable_failure_stops_after_second_attempt() {
     assert_eq!(
         clock
             .sleeps
-            .borrow()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .filter(|&&duration| duration == Duration::from_millis(250))
             .count(),
         1,
         "exactly one retry delay runs"
     );
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].error_code(), Some("provider_down"));
 }
@@ -820,18 +956,30 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
     assert_eq!(error.code(), "provider_attempt_timed_out");
     assert_eq!(driver.executions(), 2);
     assert_eq!(
-        clock.sleeps.borrow().as_slice(),
+        clock
+            .sleeps
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_slice(),
         &[
             Duration::from_secs(30),
             Duration::from_millis(250),
             Duration::from_secs(30)
         ]
     );
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].error_code(), Some("provider_attempt_timed_out"));
     assert!(
-        repository.messages.borrow().is_empty(),
+        repository
+            .messages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty(),
         "a timed-out attempt commits no transcript row"
     );
 }

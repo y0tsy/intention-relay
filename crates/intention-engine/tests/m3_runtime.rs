@@ -5,6 +5,8 @@
 
 mod common;
 
+use std::sync::PoisonError;
+
 use common::{FakeRepository, time};
 use intention_engine::fail_starting_run;
 use intention_proto::{RunId, RunStatusDto, SessionId};
@@ -26,7 +28,11 @@ fn fail_starting_run_records_a_manual_failure_for_the_exact_starting_run() {
 
     assert_eq!(outcome.run_id(), run_id);
     assert_eq!(outcome.status(), RunStatusDto::Failed);
-    let finishes = repository.finishes.borrow();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].session_id(), session_id);
     assert_eq!(finishes[0].run_id(), run_id);
@@ -56,7 +62,13 @@ fn fail_starting_run_rejects_a_run_that_is_no_longer_starting() {
         .code(),
         "invalid_starting_run_failure_state"
     );
-    assert!(repository.finishes.borrow().is_empty());
+    assert!(
+        repository
+            .finishes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -75,5 +87,11 @@ fn fail_starting_run_propagates_an_absent_run_without_writing() {
         .code(),
         "run_not_found"
     );
-    assert!(repository.finishes.borrow().is_empty());
+    assert!(
+        repository
+            .finishes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    );
 }
