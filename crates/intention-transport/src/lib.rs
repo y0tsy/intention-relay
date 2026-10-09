@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto};
-#[cfg(unix)]
+#[cfg(any(unix, test))]
 use interprocess::ConnectWaitMode;
 use interprocess::local_socket::tokio::{
     Listener as TokioLocalSocketListener, RecvHalf as TokioRecvHalf, SendHalf as TokioSendHalf,
