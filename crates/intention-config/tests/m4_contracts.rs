@@ -18,6 +18,44 @@ use intention_proto::{ConfigRevisionId, SchemaVersionDto, TimestampDto};
 
 const VALID_RESOLVED: &str = r#"{"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000},"source_kind":"explicit"}"#;
 
+const CURRENT_SCHEMA_WIRE: &str = r#"{"major":1,"minor":0}"#;
+const FOREIGN_SCHEMA_WIRE: &str = r#"{"major":2,"minor":0}"#;
+const VALID_REVISION_ID: &str = "44444444-4444-4444-8444-444444444444";
+
+/// Builds one snapshot wire from its schema version, revision identity, and
+/// resolved projection, so each case changes exactly one fragment.
+fn snapshot_wire(schema_version: &str, revision_id: &str, resolved: &str) -> String {
+    format!(
+        r#"{{"schema_version":{schema_version},"revision_id":"{revision_id}","captured_at":1700000000,"resolved":{resolved}}}"#
+    )
+}
+
+/// Builds one resolved projection from its three policy fragments.
+fn resolved_wire(provider: &str, provider_execution: &str, context_window: &str) -> String {
+    format!(
+        r#"{{"provider":{provider},"provider_execution":{provider_execution},"context_window":{context_window},"source_kind":"explicit"}}"#
+    )
+}
+
+/// Builds one credential-free provider selection fragment.
+fn provider_wire(kind: &str, model: &str, endpoint: &str) -> String {
+    format!(
+        r#"{{"kind":"{kind}","model":"{model}","endpoint":{endpoint},"credential_configured":true}}"#
+    )
+}
+
+/// Builds one provider execution policy fragment.
+fn execution_wire(attempt_timeout_seconds: u32, max_attempts: u32) -> String {
+    format!(
+        r#"{{"attempt_timeout_seconds":{attempt_timeout_seconds},"max_attempts":{max_attempts}}}"#
+    )
+}
+
+/// Builds one context-window policy fragment.
+fn context_window_wire(window_tokens: u64) -> String {
+    format!(r#"{{"window_tokens":{window_tokens}}}"#)
+}
+
 fn resolve(execution: &str) -> ResolvedConfigDto {
     ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
         format!(
@@ -176,11 +214,182 @@ fn config_snapshot_fixture_decodes_and_rejects_a_foreign_schema() {
 
 #[test]
 fn malformed_config_snapshot_wire_shapes_are_rejected() {
-    for wire in [
-        r#"{"schema_version":{"major":2,"minor":0},"revision_id":"44444444-4444-4444-8444-444444444444","captured_at":1700000000,"resolved":{"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000},"source_kind":"explicit"}}"#,
-        r#"{"schema_version":{"major":1,"minor":0},"revision_id":"44444444-4444-4444-8444-444444444444","captured_at":1700000000,"resolved":{}}"#,
+    // The baseline must decode, otherwise every case below passes vacuously.
+    assert!(
+        serde_json::from_str::<ConfigSnapshotDto>(&snapshot_wire(
+            CURRENT_SCHEMA_WIRE,
+            VALID_REVISION_ID,
+            VALID_RESOLVED,
+        ))
+        .is_ok()
+    );
+
+    let value_case = |provider: &str, execution: &str, window: &str| {
+        snapshot_wire(
+            CURRENT_SCHEMA_WIRE,
+            VALID_REVISION_ID,
+            &resolved_wire(provider, execution, window),
+        )
+    };
+    let openrouter = provider_wire("openrouter", "fixture", "null");
+
+    for (label, wire) in [
+        (
+            "foreign schema version",
+            snapshot_wire(FOREIGN_SCHEMA_WIRE, VALID_REVISION_ID, VALID_RESOLVED),
+        ),
+        (
+            "non-canonical revision identity",
+            snapshot_wire(CURRENT_SCHEMA_WIRE, "not-an-id", VALID_RESOLVED),
+        ),
+        (
+            "unknown snapshot field",
+            format!(
+                r#"{{"schema_version":{CURRENT_SCHEMA_WIRE},"revision_id":"{VALID_REVISION_ID}","captured_at":1700000000,"resolved":{VALID_RESOLVED},"unexpected":true}}"#
+            ),
+        ),
+        (
+            "empty resolved projection",
+            snapshot_wire(CURRENT_SCHEMA_WIRE, VALID_REVISION_ID, "{}"),
+        ),
+        (
+            "unsupported provider kind",
+            value_case(
+                &provider_wire("openai", "fixture", "null"),
+                &execution_wire(30, 2),
+                &context_window_wire(250_000),
+            ),
+        ),
+        (
+            "blank provider model",
+            value_case(
+                &provider_wire("openrouter", " ", "null"),
+                &execution_wire(30, 2),
+                &context_window_wire(250_000),
+            ),
+        ),
+        (
+            "blank provider endpoint",
+            value_case(
+                &provider_wire("openrouter", "fixture", "\" \""),
+                &execution_wire(30, 2),
+                &context_window_wire(250_000),
+            ),
+        ),
+        (
+            "zero attempt timeout",
+            value_case(
+                &openrouter,
+                &execution_wire(0, 2),
+                &context_window_wire(250_000),
+            ),
+        ),
+        (
+            "over-maximum attempt timeout",
+            value_case(
+                &openrouter,
+                &execution_wire(61, 2),
+                &context_window_wire(250_000),
+            ),
+        ),
+        (
+            "zero attempts",
+            value_case(
+                &openrouter,
+                &execution_wire(30, 0),
+                &context_window_wire(250_000),
+            ),
+        ),
+        (
+            "over-maximum attempts",
+            value_case(
+                &openrouter,
+                &execution_wire(30, 3),
+                &context_window_wire(250_000),
+            ),
+        ),
+        (
+            "zero context window",
+            value_case(&openrouter, &execution_wire(30, 2), &context_window_wire(0)),
+        ),
     ] {
-        assert!(serde_json::from_str::<ConfigSnapshotDto>(wire).is_err());
+        assert!(
+            serde_json::from_str::<ConfigSnapshotDto>(&wire).is_err(),
+            "snapshot wire must be rejected: {label}"
+        );
+    }
+}
+
+#[test]
+fn decoded_resolved_config_rejects_value_violations() {
+    let openrouter = provider_wire("openrouter", "fixture", "null");
+    for (label, resolved, expected_code) in [
+        (
+            "blank provider model",
+            resolved_wire(
+                &provider_wire("openrouter", " ", "null"),
+                &execution_wire(30, 2),
+                &context_window_wire(250_000),
+            ),
+            "invalid_provider_model",
+        ),
+        (
+            "blank provider endpoint",
+            resolved_wire(
+                &provider_wire("openrouter", "fixture", "\" \""),
+                &execution_wire(30, 2),
+                &context_window_wire(250_000),
+            ),
+            "invalid_provider_endpoint",
+        ),
+        (
+            "zero attempt timeout",
+            resolved_wire(
+                &openrouter,
+                &execution_wire(0, 2),
+                &context_window_wire(250_000),
+            ),
+            "invalid_provider_attempt_timeout_seconds",
+        ),
+        (
+            "over-maximum attempt timeout",
+            resolved_wire(
+                &openrouter,
+                &execution_wire(61, 2),
+                &context_window_wire(250_000),
+            ),
+            "invalid_provider_attempt_timeout_seconds",
+        ),
+        (
+            "zero attempts",
+            resolved_wire(
+                &openrouter,
+                &execution_wire(30, 0),
+                &context_window_wire(250_000),
+            ),
+            "invalid_provider_max_attempts",
+        ),
+        (
+            "over-maximum attempts",
+            resolved_wire(
+                &openrouter,
+                &execution_wire(30, 3),
+                &context_window_wire(250_000),
+            ),
+            "invalid_provider_max_attempts",
+        ),
+        (
+            "zero context window",
+            resolved_wire(&openrouter, &execution_wire(30, 2), &context_window_wire(0)),
+            "invalid_provider_context_window_tokens",
+        ),
+    ] {
+        let error = serde_json::from_str::<ResolvedConfigDto>(&resolved)
+            .expect_err("a value violation must fail the decode");
+        assert!(
+            error.to_string().starts_with(&format!("{expected_code}: ")),
+            "unexpected decode failure for {label}: {error}"
+        );
     }
 }
 

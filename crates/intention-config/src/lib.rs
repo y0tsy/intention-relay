@@ -244,13 +244,35 @@ impl Display for ProviderKindDto {
 }
 
 /// A public, credential-free provider selection projection.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+///
+/// Decoding re-validates the model and endpoint through the same constructor
+/// the TOML path uses, so a decoded snapshot cannot carry a blank selection.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderSelectionDto {
     kind: ProviderKindDto,
     model: String,
     endpoint: Option<String>,
     credential_configured: bool,
+}
+
+impl<'de> Deserialize<'de> for ProviderSelectionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawProviderSelectionDto {
+            kind: ProviderKindDto,
+            model: String,
+            endpoint: Option<String>,
+            credential_configured: bool,
+        }
+
+        let raw = RawProviderSelectionDto::deserialize(deserializer)?;
+        Self::new(raw.kind, raw.model, raw.endpoint, raw.credential_configured)
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 impl ProviderSelectionDto {
@@ -393,13 +415,21 @@ impl ResolvedConfigDto {
             execution,
             context_window_tokens,
         } = raw.provider;
-        let credential = credential.unwrap_or_default();
-        if credential.trim().is_empty() {
-            return Err(ErrorDto::validation(
-                "missing_provider_credential",
-                "provider credential must not be empty",
-            ));
-        }
+        let credential = match credential {
+            Some(credential) if !credential.trim().is_empty() => credential,
+            Some(_) => {
+                return Err(ErrorDto::validation(
+                    "missing_provider_credential",
+                    "provider credential must not be empty",
+                ));
+            }
+            None => {
+                return Err(ErrorDto::validation(
+                    "invalid_config_schema",
+                    "configuration does not match the supported schema",
+                ));
+            }
+        };
         let context_window = ContextWindowPolicyDto::from_raw(context_window_tokens)?;
         let provider = ProviderSelectionDto::new(kind, model, endpoint, true)?;
         let resolved = Self {
@@ -505,11 +535,23 @@ impl ConfigSnapshotDto {
 }
 
 /// Safe per-run provider execution policy resolved at startup.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+///
+/// Decoding applies the same defaults and range validation as resolution, so a
+/// decoded policy always carries a supported attempt budget.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderExecutionPolicyDto {
     attempt_timeout_seconds: u8,
     max_attempts: u8,
+}
+
+impl<'de> Deserialize<'de> for ProviderExecutionPolicyDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawProviderExecutionPolicyDto::deserialize(deserializer)?;
+        Self::from_raw(Some(raw)).map_err(serde::de::Error::custom)
+    }
 }
 
 impl ProviderExecutionPolicyDto {
@@ -549,10 +591,28 @@ impl ProviderExecutionPolicyDto {
 }
 
 /// Safe per-run provider context-window policy resolved at startup.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+///
+/// Decoding applies the same positive-window validation as resolution, so a
+/// decoded policy can never carry an empty window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct ContextWindowPolicyDto {
     window_tokens: u64,
+}
+
+impl<'de> Deserialize<'de> for ContextWindowPolicyDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawContextWindowPolicyDto {
+            window_tokens: u64,
+        }
+
+        let raw = RawContextWindowPolicyDto::deserialize(deserializer)?;
+        Self::from_raw(Some(raw.window_tokens)).map_err(serde::de::Error::custom)
+    }
 }
 
 impl ContextWindowPolicyDto {
@@ -911,11 +971,17 @@ credential = \"{credential}\"
         );
         assert_eq!(resolved.provider().kind(), ProviderKindDto::Openrouter);
 
-        for failure in [
-            document_with_credential(" "),
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\n"
-                .to_owned(),
-            "not a toml document [[".to_owned(),
+        // A blank credential is a value failure, an absent one is a shape
+        // failure, and malformed TOML is a document failure: three distinct
+        // typed codes that all stay free of document content.
+        for (failure, expected_code) in [
+            (document_with_credential(" "), "missing_provider_credential"),
+            (
+                "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\n"
+                    .to_owned(),
+                "invalid_config_schema",
+            ),
+            ("not a toml document [[".to_owned(), "invalid_config_toml"),
         ] {
             let error = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
                 failure,
@@ -923,14 +989,7 @@ credential = \"{credential}\"
             ))
             .err()
             .expect("invalid document must fail");
-            assert!(
-                matches!(
-                    error.code(),
-                    "missing_provider_credential" | "invalid_config_toml"
-                ),
-                "unexpected failure code {}",
-                error.code()
-            );
+            assert_eq!(error.code(), expected_code);
             assert!(
                 !error.to_string().contains(CREDENTIAL),
                 "the error never echoes document content"
