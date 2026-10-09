@@ -233,6 +233,138 @@ def check_dependency_subset(
     ]
 
 
+def external_dependency_keys(package: dict[str, object], workspace_names: set[str]) -> set[str]:
+    """Return the manifest dependency keys naming a package outside the workspace.
+
+    A renamed dependency is declared by the key its source uses, so
+    `sqlite = { package = "rusqlite" }` contributes `sqlite`, and no manifest
+    alias can hide an external package from the policy.
+    """
+    dependencies = package.get("dependencies")
+    if not isinstance(dependencies, list):
+        fail(f"package {package.get('name')} has no dependency list")
+    keys: set[str] = set()
+    for dependency in dependencies:
+        if not isinstance(dependency, dict):
+            fail(f"package {package.get('name')} has an invalid dependency")
+        name = dependency.get("name")
+        if not isinstance(name, str):
+            fail(f"package {package.get('name')} has an unnamed dependency")
+        if name in workspace_names:
+            continue
+        rename = dependency.get("rename")
+        if rename is not None and not isinstance(rename, str):
+            fail(f"package {package.get('name')} dependency {name} has an invalid rename")
+        keys.add(rename if isinstance(rename, str) and rename else name)
+    return keys
+
+
+def check_dependency_equality(
+    package_name: str,
+    actual: set[str],
+    declared: set[str],
+    boundary: str,
+) -> list[str]:
+    """Return failures for undeclared and stale declarations of one dependency set."""
+    failures: list[str] = []
+    undeclared = actual - declared
+    if undeclared:
+        failures.append(
+            f"{package_name}: {boundary} dependencies must be declared in "
+            f"quality/architecture.toml, got undeclared {sorted(undeclared)}"
+        )
+    stale = declared - actual
+    if stale:
+        failures.append(
+            f"{package_name}: {boundary} dependency declaration is stale, "
+            f"got declared-but-absent {sorted(stale)}"
+        )
+    return failures
+
+
+def check_target_equality(package_name: str, actual: set[str], declared: set[str]) -> list[str]:
+    """Return failures for undeclared and stale named integration test targets."""
+    failures: list[str] = []
+    undeclared = actual - declared
+    if undeclared:
+        failures.append(
+            f"{package_name}: integration test targets must be declared in "
+            f"quality/architecture.toml, got undeclared {sorted(undeclared)}"
+        )
+    stale = declared - actual
+    if stale:
+        failures.append(
+            f"{package_name}: integration test target declaration is stale, "
+            f"got declared-but-absent {sorted(stale)}"
+        )
+    return failures
+
+
+CRATE_ROLES = ("active", "skeleton", "adapter", "test-support")
+
+
+def crate_declaration_failures(
+    declarations: dict[str, object],
+    actual_names: set[str],
+    classification: dict[str, set[str]],
+) -> list[str]:
+    """Return failures for the per-crate role, responsibility, and classification pins."""
+    failures: list[str] = []
+    if set(declarations) != actual_names:
+        failures.append(
+            "crate declarations must cover every workspace member exactly; "
+            f"undeclared {sorted(actual_names - set(declarations))}, "
+            f"unknown {sorted(set(declarations) - actual_names)}"
+        )
+    for package_name in sorted(actual_names):
+        declaration = declarations.get(package_name)
+        if not isinstance(declaration, dict):
+            failures.append(f"crate declaration {package_name} must be a table")
+            continue
+        role = declaration.get("role")
+        if not isinstance(role, str) or role not in CRATE_ROLES:
+            failures.append(
+                f"crate declaration {package_name} requires a role from {sorted(CRATE_ROLES)}"
+            )
+            continue
+        responsibility = declaration.get("responsibility")
+        if not isinstance(responsibility, str) or not responsibility.strip():
+            failures.append(f"crate declaration {package_name} requires a non-blank responsibility")
+    for role in CRATE_ROLES:
+        declared = {name for name in actual_names if declared_role(declarations, name) == role}
+        expected = classification.get(role, set())
+        if declared != expected:
+            failures.append(
+                f"crate declarations must mark exactly the {role} crates; "
+                f"declared {sorted(declared)}, classified {sorted(expected)}"
+            )
+    return failures
+
+
+def declared_role(declarations: dict[str, object], package_name: str) -> str | None:
+    """Return one crate's declared role, or None when it is absent or invalid."""
+    declaration = declarations.get(package_name)
+    if not isinstance(declaration, dict):
+        return None
+    role = declaration.get("role")
+    return role if isinstance(role, str) else None
+
+
+def declared_test_targets(declarations: dict[str, object], package_name: str) -> set[str] | None:
+    """Return one crate's declared named integration test targets, or None when invalid."""
+    declaration = declarations.get(package_name)
+    if not isinstance(declaration, dict):
+        return None
+    targets = declaration.get("test_targets")
+    if not isinstance(targets, list) or not all(
+        isinstance(target, str) and target for target in targets
+    ):
+        return None
+    if len(targets) != len(set(targets)):
+        return None
+    return set(targets)
+
+
 test_only_patterns: set[str] = set()
 
 
@@ -324,16 +456,37 @@ def check_phase_policy(
             f"unclassified {sorted(actual_names - classified)}, unknown {sorted(classified - actual_names)}"
         )
 
-    # These tables declare the allowed cross-crate edges. A production crate may
-    # use only the edges declared here; its actual workspace edges, external
-    # dependencies, and executable test targets all come from Cargo metadata.
+    # These tables declare the allowed cross-crate edges and external
+    # dependencies. Every declared set is compared for equality against Cargo
+    # metadata, which is the authority for the workspace graph, the external
+    # dependencies, and the executable test targets.
     allowed_edges = policy.get("dependencies")
     if not isinstance(allowed_edges, dict):
         fail("the allowed workspace dependency edge table is required")
     if set(allowed_edges) != active_set:
         fail("workspace dependency edges must be declared for exactly the active production crates")
+    external_edges = policy.get("external_dependencies")
+    if not isinstance(external_edges, dict):
+        fail("the external dependency table is required")
+    if set(external_edges) != active_set:
+        fail("external dependencies must be declared for exactly the active production crates")
+    declarations = policy.get("crate_declarations")
+    if not isinstance(declarations, dict):
+        fail("the crate declaration table is required")
 
     failures: list[str] = []
+    failures.extend(
+        crate_declaration_failures(
+            declarations,
+            actual_names,
+            {
+                "active": active_set,
+                "skeleton": skeleton_set,
+                "adapter": adapter_set,
+                "test-support": non_production_test,
+            },
+        )
+    )
     for package_name in active:
         package = packages[package_name]
         if not source_files_for_package(package):
@@ -346,12 +499,31 @@ def check_phase_policy(
         if not isinstance(allowed, list) or not all(isinstance(name, str) for name in allowed):
             fail(f"active crate {package_name} requires a workspace dependency edge declaration")
         failures.extend(
-            check_dependency_subset(
+            check_dependency_equality(
                 package_name,
                 workspace_dependencies(package, actual_names),
                 set(allowed),
                 "allowed workspace edge",
             )
+        )
+        allowed_external = external_edges.get(package_name)
+        if not isinstance(allowed_external, list) or not all(
+            isinstance(name, str) for name in allowed_external
+        ):
+            fail(f"active crate {package_name} requires an external dependency declaration")
+        failures.extend(
+            check_dependency_equality(
+                package_name,
+                external_dependency_keys(package, actual_names),
+                set(allowed_external),
+                "external",
+            )
+        )
+        declared_targets = declared_test_targets(declarations, package_name)
+        if declared_targets is None:
+            fail(f"active crate {package_name} requires a unique named integration test target list")
+        failures.extend(
+            check_target_equality(package_name, integration_test_targets(package), declared_targets)
         )
     for package_name in sorted(skeleton_set):
         actual_targets = integration_test_targets(packages[package_name])
@@ -360,6 +532,57 @@ def check_phase_policy(
                 f"{package_name}: {phase.upper()} skeleton must not declare integration test targets, "
                 f"got {sorted(actual_targets)}"
             )
+
+    # The non-production test crates are declared and checked exactly like the
+    # active production crates: their workspace edges, external dependencies,
+    # and named integration test targets are all pinned to Cargo metadata.
+    non_production_dependencies = policy.get("non_production_test_dependencies")
+    if not isinstance(non_production_dependencies, dict):
+        fail("non-production test crate dependency policy is required")
+    if set(non_production_dependencies) != non_production_test:
+        fail("non-production test dependency policy must declare exactly the test-support crates")
+    non_production_external = policy.get("non_production_test_external_dependencies")
+    if not isinstance(non_production_external, dict):
+        fail("non-production test crate external dependency policy is required")
+    if set(non_production_external) != non_production_test:
+        fail("non-production test external dependency policy must declare exactly the test-support crates")
+    for package_name in sorted(non_production_test):
+        package = packages[package_name]
+        allowed_dependencies = non_production_dependencies.get(package_name)
+        if not isinstance(allowed_dependencies, list) or not all(
+            isinstance(name, str) for name in allowed_dependencies
+        ):
+            fail(f"non-production test crate {package_name} requires workspace dependency policy")
+        allowed_external = non_production_external.get(package_name)
+        if not isinstance(allowed_external, list) or not all(
+            isinstance(name, str) for name in allowed_external
+        ):
+            fail(f"non-production test crate {package_name} requires external dependency policy")
+        failures.extend(
+            check_dependency_equality(
+                package_name,
+                workspace_dependencies(package, actual_names),
+                set(allowed_dependencies),
+                "test-support workspace",
+            )
+        )
+        failures.extend(
+            check_dependency_equality(
+                package_name,
+                external_dependency_keys(package, actual_names),
+                set(allowed_external),
+                "test-support external",
+            )
+        )
+        declared_targets = declared_test_targets(declarations, package_name)
+        if declared_targets is None:
+            fail(
+                f"non-production test crate {package_name} requires a unique named "
+                "integration test target list"
+            )
+        failures.extend(
+            check_target_equality(package_name, integration_test_targets(package), declared_targets)
+        )
     return failures
 
 
@@ -480,6 +703,7 @@ def check_provider_sdk_ownership(
     owners = {
         "async_openai::": "intention-providers",
         "openrouter_rs::": "intention-providers",
+        "reqwest::": "intention-providers",
     }
     failures: list[str] = []
     for path, text in texts.items():
@@ -619,6 +843,54 @@ def self_test_dependency_cycle_scope() -> None:
         fail("dependency cycle self-test: a production dependency cycle must fail")
 
 
+def self_test_dependency_declarations() -> None:
+    """Proves the equality checks can fail before they are trusted."""
+    if check_dependency_equality("fixture", {"a"}, {"a"}, "fixture"):
+        fail("dependency declaration self-test: an equal set must pass")
+    if not check_dependency_equality("fixture", {"a", "b"}, {"a"}, "fixture"):
+        fail("dependency declaration self-test: an undeclared dependency must fail")
+    if not check_dependency_equality("fixture", {"a"}, {"a", "b"}, "fixture"):
+        fail("dependency declaration self-test: a stale declaration must fail")
+    if check_target_equality("fixture", {"t"}, {"t"}):
+        fail("test target self-test: an equal set must pass")
+    if not check_target_equality("fixture", {"t", "u"}, {"t"}):
+        fail("test target self-test: an undeclared test target must fail")
+    if not check_target_equality("fixture", {"t"}, {"t", "u"}):
+        fail("test target self-test: a stale test target must fail")
+    renamed = {"name": "fixture", "dependencies": [{"name": "rusqlite", "rename": "sqlite"}]}
+    if external_dependency_keys(renamed, set()) != {"sqlite"}:
+        fail("dependency declaration self-test: a renamed dependency must be declared by its manifest key")
+    hidden = {"name": "fixture", "dependencies": [{"name": "intention-proto", "rename": "proto"}]}
+    if external_dependency_keys(hidden, {"intention-proto"}):
+        fail("dependency declaration self-test: a workspace member must not count as external")
+
+
+def self_test_crate_declarations() -> None:
+    """Proves the crate role and classification pins can fail before they are trusted."""
+    classification = {"active": {"fixture-active"}, "adapter": {"fixture-adapter"}}
+    clean = {
+        "fixture-active": {"role": "active", "responsibility": "does work"},
+        "fixture-adapter": {"role": "adapter", "responsibility": "renders work"},
+    }
+    if crate_declaration_failures(clean, set(clean), classification):
+        fail("crate declaration self-test: a matching declaration must pass")
+    reclassified = dict(clean)
+    reclassified["fixture-active"] = {"role": "adapter", "responsibility": "does work"}
+    if not crate_declaration_failures(reclassified, set(reclassified), classification):
+        fail("crate declaration self-test: a reclassified crate must fail")
+    blank = dict(clean)
+    blank["fixture-active"] = {"role": "active", "responsibility": "  "}
+    if not crate_declaration_failures(blank, set(blank), classification):
+        fail("crate declaration self-test: a blank responsibility must fail")
+    incomplete = {"fixture-active": clean["fixture-active"]}
+    if not crate_declaration_failures(incomplete, set(clean), classification):
+        fail("crate declaration self-test: an undeclared workspace member must fail")
+    if declared_test_targets({"fixture": {"test_targets": ["a", "a"]}}, "fixture") is not None:
+        fail("crate declaration self-test: duplicate declared test targets must be rejected")
+    if declared_test_targets({"fixture": {"test_targets": "a"}}, "fixture") is not None:
+        fail("crate declaration self-test: a non-list test target declaration must be rejected")
+
+
 def self_test_ordering_authorities() -> None:
     """Proves the ordering-authority check can fail before it is trusted."""
     suffixes = ["SequenceDto"]
@@ -726,6 +998,8 @@ def main() -> None:
     self_test_ordering_authorities()
     self_test_composition_type_ownership()
     self_test_dependency_cycle_scope()
+    self_test_dependency_declarations()
+    self_test_crate_declarations()
     ordering = policy.get("ordering_authorities")
     if not isinstance(ordering, dict):
         fail("missing [ordering_authorities] table")
@@ -775,7 +1049,11 @@ def main() -> None:
 
     if failures:
         fail("\n".join(failures))
-    print("architecture-check: phase-aware workspace, dependency, DTO, adapter, protocol, and composition policies are valid")
+    print(
+        "architecture-check: phase-aware workspace roles, declared responsibilities, exact workspace and "
+        "external dependency sets, named integration test targets, DTO, adapter, protocol, and "
+        "composition policies are valid"
+    )
 
 
 if __name__ == "__main__":

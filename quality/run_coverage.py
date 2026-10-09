@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -10,8 +11,10 @@ import tomllib
 
 try:
     from .timing import run_command
+    from .toolchains import nightly_selector
 except ImportError:
     from timing import run_command
+    from toolchains import nightly_selector
 
 ROOT = Path(__file__).resolve().parents[1]
 COVERAGE_POLICY = ROOT / "quality" / "coverage.toml"
@@ -35,9 +38,6 @@ def run(command: list[str], *, crate: str = "", stage: str = "command") -> None:
         raise subprocess.CalledProcessError(completed.returncode, command)
 
 
-TEST_MARKERS = ("#[test]", "#[cfg(test)]")
-
-
 def collected_crates(coverage_policy: dict[str, object]) -> list[str]:
     """Return every crate whose coverage tier is above zero."""
     tiers = coverage_policy.get("tiers")
@@ -54,16 +54,104 @@ def collected_crates(coverage_policy: dict[str, object]) -> list[str]:
     return sorted(collected)
 
 
-def crate_has_test_code(root: Path, crate: str) -> bool:
-    """Whether a collected crate has any test harness to execute."""
-    return any(
-        marker in path.read_text(encoding="utf-8")
-        for path in (root / "crates" / crate).rglob("*.rs")
-        for marker in TEST_MARKERS
-    )
+def unexecutable_crates(coverage_policy: dict[str, object]) -> list[str]:
+    """Return the collected crates the policy declares as having no test target."""
+    state = coverage_policy.get("policy")
+    declared = state.get("unexecutable_crates") if isinstance(state, dict) else None
+    if not isinstance(declared, list) or not all(isinstance(name, str) for name in declared):
+        raise ValueError("coverage [policy].unexecutable_crates must be a string list")
+    return declared
 
 
-METADATA_COMMAND = ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"]
+def metadata_packages(snapshot: Path) -> dict[str, dict[str, object]]:
+    """Read the runner's locked Cargo metadata snapshot into a package map."""
+    try:
+        with snapshot.open(encoding="utf-8") as metadata_file:
+            metadata = json.load(metadata_file)
+    except FileNotFoundError:
+        raise SystemExit(f"coverage-runner: metadata snapshot is missing: {snapshot}") from None
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"coverage-runner: metadata snapshot is not valid JSON: {snapshot}: {error}") from None
+    packages = metadata.get("packages") if isinstance(metadata, dict) else None
+    if not isinstance(packages, list):
+        raise SystemExit("coverage-runner: metadata snapshot does not expose a packages list")
+    result: dict[str, dict[str, object]] = {}
+    for package in packages:
+        if not isinstance(package, dict) or not isinstance(package.get("name"), str):
+            raise SystemExit("coverage-runner: metadata snapshot packages must name a package")
+        result[package["name"]] = package
+    return result
+
+
+def package_has_test_target(package: dict[str, object]) -> bool:
+    """Whether Cargo declares any target that executes tests for this package.
+
+    Test executability is decided from the Cargo metadata snapshot rather than a
+    source-text marker, so a `#[tokio::test]` integration target counts exactly
+    like a `#[test]` one and a crate whose directory name diverges from its
+    package name cannot hide a test target.
+    """
+    name = package.get("name")
+    targets = package.get("targets")
+    if not isinstance(targets, list):
+        raise SystemExit(f"coverage-runner: package {name} has no target list")
+    for target in targets:
+        if not isinstance(target, dict):
+            raise SystemExit(f"coverage-runner: package {name} has an invalid target")
+        kinds = target.get("kind")
+        if not isinstance(kinds, list) or not all(isinstance(kind, str) for kind in kinds):
+            raise SystemExit(f"coverage-runner: package {name} has an invalid target shape")
+        if target.get("test") is True and set(kinds) & {"test", "lib", "bin"}:
+            return True
+    return False
+
+
+METADATA_COMMAND = ["cargo", nightly_selector(), "metadata", "--no-deps", "--format-version", "1", "--locked"]
+
+
+def coverage_plan(
+    coverage_crates: list[str],
+    packages: dict[str, dict[str, object]],
+    unexecutable: set[str],
+) -> tuple[list[str], list[str], list[str]]:
+    """Return the crates to collect, the legal skips, and the plan failures.
+
+    A collected crate must exist in the locked metadata snapshot and must have a
+    test-executing target unless the policy declares it unexecutable. A
+    declaration for a crate that does have one, or for a crate outside
+    collection, is a failure: the declared floor can never silently retire.
+    """
+    collect: list[str] = []
+    skip: list[str] = []
+    failures: list[str] = []
+    for crate in coverage_crates:
+        package = packages.get(crate)
+        if package is None:
+            failures.append(f"{crate}: collected crate is absent from the locked Cargo metadata snapshot")
+            continue
+        executable = package_has_test_target(package)
+        if crate in unexecutable:
+            if executable:
+                failures.append(
+                    f"{crate}: [policy].unexecutable_crates lists it, but Cargo declares a "
+                    "test-executing target; remove the stale declaration"
+                )
+            else:
+                skip.append(crate)
+            continue
+        if not executable:
+            failures.append(
+                f"{crate}: collected but Cargo declares no test-executing target; add a test target "
+                "or declare the crate in quality/coverage.toml [policy].unexecutable_crates"
+            )
+            continue
+        collect.append(crate)
+    uncollected = sorted(unexecutable - set(coverage_crates))
+    if uncollected:
+        failures.append(
+            "[policy].unexecutable_crates names crates that are not collected: " + ", ".join(uncollected)
+        )
+    return collect, skip, failures
 
 
 def metadata_snapshot_path(root: Path) -> Path:
@@ -108,14 +196,18 @@ def main() -> None:
     # invocation below receives the same snapshot so source-root resolution
     # does not re-run `cargo metadata` per report.
     metadata = collect_metadata(ROOT)
-    for crate in coverage_crates:
-        if not crate_has_test_code(ROOT, crate):
-            # A compile-only package (for example a newly scaffolded crate
-            # with no test code yet) has no test harness, so llvm-cov cannot
-            # emit a report for it. Its declared floor applies as soon as the
-            # crate gains executable test code.
-            print(f"coverage-runner: skipping {crate}: no test code to execute", flush=True)
-            continue
+    packages = metadata_packages(metadata)
+    collect, skip, plan_failures = coverage_plan(
+        coverage_crates, packages, set(unexecutable_crates(coverage_policy))
+    )
+    if plan_failures:
+        raise SystemExit("coverage-runner: " + "\ncoverage-runner: ".join(plan_failures))
+    for crate in skip:
+        print(
+            f"coverage-runner: skipping {crate}: the policy declares no test-executing target",
+            flush=True,
+        )
+    for crate in collect:
         report = (REPORTS / f"coverage-{crate}.json").resolve()
         # `cargo llvm-cov nextest --package` instruments the package's
         # integration binaries, but nextest's workspace execution model does
@@ -133,7 +225,7 @@ def main() -> None:
         # thresholds comparable across coverage runs.
         command = [
             "cargo",
-            "+nightly-2026-07-31",
+            nightly_selector(),
             "llvm-cov",
             "--json",
             "--summary-only",
@@ -168,7 +260,7 @@ def main() -> None:
     # line metric stays informational over collected crates only.
     report = REPORTS / "coverage-workspace.json"
     run([
-        "cargo", "+nightly-2026-07-31", "llvm-cov", "--json",
+        "cargo", nightly_selector(), "llvm-cov", "--json",
         "--summary-only", "--output-path", str(report), "nextest",
         "--all-targets", "--workspace", "--locked", *FEATURE_FLAGS,
     ], stage="collect")

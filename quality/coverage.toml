@@ -1,9 +1,13 @@
 [policy]
 phase = "slice15"
+# A collected crate Cargo declares with no test-executing target is skipped
+# only when it is listed here; an undeclared skip fails the coverage run, and a
+# declaration whose crate does have a test target fails as stale.
+unexecutable_crates = []
 
 # Line-coverage floors. [crate_tiers] assigns every active production crate and
-# both presentation adapters to exactly one tier; the runner collects every
-# crate whose tier is above zero with one isolated line-only Cargo package
+# every adapter package to exactly one tier; the runner collects every crate
+# whose tier is above zero with one isolated line-only Cargo package
 # invocation, and exempt crates stay outside collection and every aggregate.
 [tiers]
 core = 75.0

@@ -15,6 +15,65 @@ active_production_crates = [
 ]
 skeleton_crates = []
 
+# Per-crate declaration: the role pins the crate's classification above and the
+# named integration test targets are compared for equality against Cargo
+# metadata, so demoting a production crate or dropping a contract test target
+# is a policy edit that fails the gate.
+[crate_declarations."intention-proto"]
+role = "active"
+responsibility = "Shared, dependency-light DTOs plus the typed public local-protocol surface."
+test_targets = ["contracts", "m3_contracts", "protocol_contracts"]
+
+[crate_declarations."intention-config"]
+role = "active"
+responsibility = "Versioned TOML parsing, validation, path selection, and credential-free public configuration projections."
+test_targets = ["contracts", "m4_contracts"]
+
+[crate_declarations."intention-storage"]
+role = "active"
+responsibility = "DTO-only repository contract plus the bundled SQLite implementation behind it."
+test_targets = ["contracts", "m4_model_context", "m4_run_safe_config", "opaque_json_guard", "sqlite_contracts"]
+
+[crate_declarations."intention-transport"]
+role = "active"
+responsibility = "Private per-user IPC: Unix sockets or Windows named pipes, NDJSON framing, and the live wire version."
+test_targets = ["transport_integration"]
+
+[crate_declarations."intention-client"]
+role = "active"
+responsibility = "Shared bootstrap, dispatch, subscription, and reconnect client for adapters."
+test_targets = ["client_contract", "run_stream_contract"]
+
+[crate_declarations."intention-daemon"]
+role = "active"
+responsibility = "Composition root, daemon host library, and the thin daemon binary."
+test_targets = ["client_e2e", "daemon_bootstrap", "m4_streaming_foundation", "real_api_e2e"]
+
+[crate_declarations."intention-engine"]
+role = "active"
+responsibility = "Commands, queries, and semantic use-case workflows plus deterministic run execution, interruption handling, context-window accounting, and recovery-before-ready, over DTO-only storage."
+test_targets = ["m3_engine", "m3_runtime", "m4_model_execution", "m5_tool_loop"]
+
+[crate_declarations."intention-providers"]
+role = "active"
+responsibility = "Provider-neutral model contracts plus the OpenRouter and generic Chat Completions translation adapters."
+test_targets = ["adapter_contracts", "m4_execution_contracts", "model_contracts"]
+
+[crate_declarations."intention-tools"]
+role = "active"
+responsibility = "Tool contracts with JSON Schema descriptors, the static six-tool spec match, and the WorkspaceRoot addressing anchor."
+test_targets = ["bounded_contracts", "tool_contracts", "tool_coverage", "workspace_contract"]
+
+[crate_declarations."intention-tui"]
+role = "adapter"
+responsibility = "Minimal terminal-facing proof adapter over the shared client."
+test_targets = ["tui_contract"]
+
+[crate_declarations."intention-test-support"]
+role = "test-support"
+responsibility = "Shared fixtures for daemon-host and engine integration tests."
+test_targets = ["fixture_host"]
+
 [forbidden]
 source_patterns = [
   "std::env::current_dir",
@@ -28,11 +87,12 @@ test_only_source_patterns = [
   "std::env::set_current_dir",
 ]
 
-# Allowed cross-crate edges. Cargo metadata is the authority for the workspace
-# graph, the external dependencies, and the executable test targets; each
-# production crate's workspace dependencies must stay a subset of the edges
-# declared here, so an added external dependency needs no policy edit and a new
-# cross-crate edge needs exactly one reviewable declaration.
+# Allowed cross-crate edges and external dependencies. Cargo metadata is the
+# authority for the workspace graph, the external dependencies, and the
+# executable test targets; every declared set below is compared for equality
+# against it, so an added or removed cross-crate edge, external dependency, or
+# named integration test target needs exactly one reviewable declaration and a
+# stale declaration fails the gate.
 [dependencies]
 "intention-proto" = []
 "intention-config" = ["intention-proto"]
@@ -43,6 +103,29 @@ test_only_source_patterns = [
 "intention-engine" = ["intention-config", "intention-providers", "intention-proto", "intention-storage", "intention-test-support", "intention-tools"]
 "intention-providers" = ["intention-config", "intention-proto"]
 "intention-tools" = ["intention-proto"]
+
+# External dependencies per active production crate, including
+# development-dependency edges. A renamed dependency is declared by the
+# manifest key its source uses: `intention-storage` declares `sqlite`, not the
+# `rusqlite` package behind it.
+[external_dependencies]
+"intention-proto" = ["serde", "serde_json", "uuid"]
+"intention-config" = ["serde", "serde_json", "toml"]
+"intention-storage" = ["serde", "serde_json", "sqlite", "tempfile"]
+"intention-transport" = ["interprocess", "serde", "serde_json", "tempfile", "tokio"]
+"intention-client" = ["fs4", "tokio"]
+"intention-daemon" = ["futures-util", "serde_json", "tempfile", "tokio"]
+"intention-engine" = ["futures-util"]
+"intention-providers" = ["async-openai", "futures-core", "futures-executor", "futures-util", "http", "openrouter-rs", "serde", "serde_json"]
+"intention-tools" = ["glob", "rustix", "serde", "serde_json", "tempfile"]
+
+# Dependency edges of the non-production test crates, compared for equality
+# like the active production edges above.
+[non_production_test_dependencies]
+"intention-test-support" = ["intention-config", "intention-daemon", "intention-proto", "intention-providers", "intention-transport"]
+
+[non_production_test_external_dependencies]
+"intention-test-support" = ["futures-executor", "futures-util", "tempfile", "tokio"]
 
 [adapter_boundaries]
 packages = ["intention-tui"]
@@ -66,14 +149,16 @@ forbidden_source_patterns = [
   "tauri::",
   "rusqlite::",
   "intention_tui::",
-  "intention_provider_",
+  "intention_providers::",
   "async_openai::",
   "openrouter_sdk::",
 ]
 
 [composition]
 root_package = "intention-daemon"
-concrete_implementation_crates = []
+# Concrete implementation crates only the composition root may select; a
+# workspace dependency on one from any other package fails the gate.
+concrete_implementation_crates = ["intention-engine"]
 owned_selection_patterns = [
   "SelectedProvider",
 ]

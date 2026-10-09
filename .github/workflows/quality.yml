@@ -25,8 +25,10 @@ jobs:
       matrix:
         include:
           # Per-phase toolchain/tool scoping keeps every job lean: each phase
-          # installs and validates only what it runs. The union of all scopes
-          # equals the complete pinned toolset.
+          # installs and validates only what it runs. The union of all CI
+          # scopes covers every pinned toolchain and tool; components are
+          # validated by the phase that installs them, and the unscoped local
+          # run validates the complete pinned set.
           #
           # lint-arch and test run on both Linux and Windows; coverage and deps
           # run on Linux only. Those phases are platform-invariant: coverage
@@ -165,17 +167,24 @@ jobs:
           echo "RUSTUP_HOME=$HOME/.rustup" >> "$GITHUB_ENV"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Report disk space before quality gate
+      - name: Report disk space before the quality gate
         run: df -h . "$HOME"
 
-      - name: Run coverage-checker self-tests
-        # Pure-Python tier decisions over synthetic reports; platform-invariant,
-        # so it runs on the Linux lint-arch entry like the other source gates.
+      - name: Run the quality-checker self-tests
+        # Pure-Python decisions over synthetic reports and metadata;
+        # platform-invariant, so it runs on the Linux lint-arch entry like the
+        # other source gates.
         if: matrix.phase == 'lint-arch' && runner.os == 'Linux'
-        run: python3 quality/test_check_coverage.py
+        run: make quality-tests
 
       - name: Run repository quality gate (${{ matrix.phase }})
         run: make ci-${{ matrix.phase }}
+
+      - name: Report disk space after the quality gate
+        # Paired with the reading before the gate: one measurement alone reports
+        # nothing.
+        if: always()
+        run: df -h . "$HOME"
 
       - name: Upload quality reports
         if: always()
