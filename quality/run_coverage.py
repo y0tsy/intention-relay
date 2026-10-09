@@ -110,10 +110,10 @@ def main() -> None:
     metadata = collect_metadata(ROOT)
     for crate in coverage_crates:
         if not crate_has_test_code(ROOT, crate):
-            # A compile-only package (for example the intention-tauri M6
-            # skeleton) has no test harness, so llvm-cov cannot emit a report
-            # for it. Its declared floor applies as soon as the crate gains
-            # executable test code.
+            # A compile-only package (for example a newly scaffolded crate
+            # with no test code yet) has no test harness, so llvm-cov cannot
+            # emit a report for it. Its declared floor applies as soon as the
+            # crate gains executable test code.
             print(f"coverage-runner: skipping {crate}: no test code to execute", flush=True)
             continue
         report = (REPORTS / f"coverage-{crate}.json").resolve()

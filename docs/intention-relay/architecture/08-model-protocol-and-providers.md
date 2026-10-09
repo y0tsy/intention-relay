@@ -9,8 +9,8 @@ provider capabilities rather than forcing all models into a lowest-common-denomi
 
 `intention-providers` owns typed requests, stream events, capabilities, and the provider-driver trait. `intention-proto`
 owns provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and `ProviderErrorDto`, which `intention-providers`
-re-exports for source compatibility. `intention-domain` owns the durable projections and the transcript-row representation.
-Domain, storage, and protocol retain no dependency on `intention-providers`.
+re-exports for source compatibility. `intention-proto` owns the durable projections and the transcript-row representation.
+Storage and proto retain no dependency on `intention-providers`.
 
 ```text
 ModelExecutionDriver

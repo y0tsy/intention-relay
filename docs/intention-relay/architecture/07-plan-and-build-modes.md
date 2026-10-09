@@ -187,8 +187,9 @@ stateDiagram
   Abandoned --> [*]
 ```
 
-`PlanStatusDto` carries this vocabulary in `intention-domain`. The durable transition rules above are enforced by the
-plan lifecycle owner when plan mode is implemented, so no pre-emptive domain transition validator is kept for them.
+The plan vocabulary is not defined today; it arrives with the plan milestone (M7). The durable transition rules above
+are enforced by the plan lifecycle owner when plan mode is implemented, so no pre-emptive domain transition validator
+is kept for them.
 
 Plan approval is a committed record for one exact plan revision. By default, the approval operation immediately
 creates and starts a fresh Build Autopilot run in the same Session, after the Plan run is terminalized safely. The new

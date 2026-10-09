@@ -52,7 +52,7 @@ The following are mandatory candidates for automated architecture tests:
 | Small-crate structure | Dependency graph check, deny cycles, and a manifest assertion for the required v1 crate set. |
 | Crate accountability | A Cargo-metadata-backed check that every workspace crate is classified exactly once and every active production crate keeps an integration test target. |
 | Composition ownership | Only `intention-daemon` selects concrete storage/provider/tool implementations. |
-| Adapter isolation | `intention-tauri` and `intention-tui` cannot depend directly on application runtime/storage implementations. |
+| Adapter isolation | Adapter crates (`intention-tui` today; `intention-tauri` is added at M6) cannot depend directly on application runtime/storage implementations. |
 | DTO-first | Public cross-crate APIs use DTOs; forbidden implementation resources/SDK types cannot escape. |
 | Local protocol | Tauri bridge and TUI use `intention-client`, not direct application services. |
 | Daemon authority | SQLite/runtime actor ownership appears only daemon-side. |

@@ -51,9 +51,9 @@ is not one of the six `ToolId` values is `unknown_tool` before any effect.
 
 A new tool id is a new `ToolId` variant with its own typed input, its own spec, and a separate approved architecture and
 replanning decision. Until such a decision lands, the owners that are not shipped hold no slot and no partial contract:
-`intention-headroom` (`retrieve`), `intention-plans` (`plan_submit`), and `intention-vfr` (`expand`) have neither
-input/result DTOs nor model visibility, and a request for any of those names is the same pre-effect `unknown_tool`
-rejection.
+`intention-headroom` (`retrieve`), `intention-plans` (`plan_submit`), and `intention-vfr` (`expand`) are future crates
+created at their milestones and have neither input/result DTOs nor model visibility, and a request for any of those
+names is the same pre-effect `unknown_tool` rejection.
 
 A spec carries credential-free fields only: the `ToolId`, its description, and its code-owned input JSON Schema.
 Identity is the enum variant, never a presentation string. Public boundaries reject raw JSON/maps, unvalidated paths,

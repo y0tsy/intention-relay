@@ -1,6 +1,7 @@
 # VFR and Headroom
 
-**Approved future design. Not implemented; activation requires an activating specification.** Virtual File
+**Approved future design. Not implemented; the `intention-vfr` and `intention-headroom` crates are created at their
+milestone (M8), and activation requires an activating specification.** Virtual File
 Representation (VFR) and Headroom/CCR are required v1 capabilities: separate extension crates attached as ordinary calls
 in the direct tool sequence, not hard-coded dependencies of base tools. The typed hook plane was removed in Slice 1.5 and
 is not part of this design: the stages below describe that call order, not a hook framework ([architecture

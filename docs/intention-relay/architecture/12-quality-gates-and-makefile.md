@@ -71,9 +71,9 @@ a threshold authority.
 
 | Tier | Minimum line coverage | Crates |
 | --- | ---: | --- |
-| `core` | 75% | `intention-engine`, `intention-transport`, `intention-storage`, `intention-domain` |
-| `standard` | 60% | `intention-providers`, `intention-tools`, `intention-config`, `intention-daemon` |
-| `edge` | 20% | `intention-tauri`, `intention-tui`, `intention-client` |
+| `core` | 75% | `intention-transport`, `intention-storage`, `intention-engine` |
+| `standard` | 60% | `intention-tools`, `intention-config`, `intention-daemon`, `intention-providers` |
+| `edge` | 20% | `intention-tui`, `intention-client` |
 | `exempt` | 0% (not collected) | `intention-proto` |
 
 - A coverage decrease below a crate's tier floor fails `make coverage` and `make verify`.

@@ -92,12 +92,14 @@ former contract ledger, `run-execution-meaning-v4` field tables, capability fami
 digests were deleted ([architecture 02](02-dto-and-contract-policy.md)): no ledger, tag registry, canonical
 digest, or identity record remains, and every future contract family is typed serde JSON with RFC 8785 canonicalization
 only when a first real consumer appears.
--  **Slice 1.5 — Core simplification — activated.** It adds no product behavior: it collapsed the workspace to ten
+-  **Slice 1.5 — Core simplification — activated.** It adds no product behavior: it collapsed the workspace to nine
 production crates and simplifies the internal interfaces every later slice builds on. The crate set is
-`intention-proto` (types and protocol), `intention-domain`, `intention-config`, `intention-engine` (application and
-runtime), `intention-tools` (tools and workspace), `intention-providers` (provider-neutral model contract and
-both drivers), `intention-storage` (storage contracts and SQLite), `intention-transport`, `intention-daemon`
-(composition, host, and binary), and `intention-client`; the adapter and skeleton crates stay as declared. The target
+`intention-proto` (types, protocol, and run lifecycle, absorbing the former `intention-domain`), `intention-config`,
+`intention-engine` (application and runtime), `intention-tools` (tools and workspace), `intention-providers`
+(provider-neutral model contract and both drivers), `intention-storage` (storage contracts and SQLite),
+`intention-transport`, `intention-daemon` (composition, host, and binary), and `intention-client`; `intention-tui`
+remains the proof adapter and `intention-test-support` the non-production fixture crate, while the future adapter and
+feature crates are created at their milestones. The target
 keeps DTOs only at the three physical boundaries — the IPC wire, SQLite persistence, and provider SDKs — with internal
 crates passing domain types, and makes schema-validated JSON tool inputs and outputs the only JSON payloads in the
 system. The current-state core has already landed on this branch: the event log, snapshots, cursors, and resync are
@@ -112,7 +114,7 @@ cursors, and a re-subscribing client receives current run state and bounded rece
 snapshots, run subscriptions, and the command surface, and whose `intention-tui` proof adapter is migrated
 mechanically; the daemon
 end-to-end suite drives that client (`client_e2e`) instead of the low-level transport; the tool cycle is one direct
-sequence of identity check, durable call row, workspace binding, dispatch, and durable terminal row; the ten-production-crate consolidation and the removal of the composition facade landed, so
+sequence of identity check, durable call row, workspace binding, dispatch, and durable terminal row; the nine-production-crate consolidation and the removal of the composition facade landed, so
 the daemon host calls the engine directly; and the single storage schema is created on open under one integer stamp,
 where a stamp bump discards and recreates the database with no migration or compatibility path.
 -  **Slice 2 — Control plane — not activated.** The cluster and provider session selection (architectures 25/29/22):
@@ -182,7 +184,8 @@ instruction-source slices.
 
 ### Deliver
 
-- `intention-tauri` bootstrap/native bridge using only `intention-client`;
+- the new `intention-tauri` crate (created in this milestone) provides the bootstrap/native bridge using only
+`intention-client`;
 -  minimal Svelte UI to create/open a session, send a turn, render streamed state, reconnect, and render the safe
 activity-journal and notification projections;
 - TUI/REPL remains a contract-equivalent client;

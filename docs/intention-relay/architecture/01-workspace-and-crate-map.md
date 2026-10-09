@@ -50,19 +50,18 @@ The M1-M5 activation notes are historical records: the coverage policy is now th
 | Crate | Owns | May depend on |
 | --- | --- | --- |
 | `intention-proto` | ID newtypes, schema versions, common errors, time, envelopes. | Minimal shared dependencies only. |
-| `intention-domain` | Domain DTOs, value validation, invariants. | `intention-proto`. |
 | `intention-engine` | Commands, queries, semantic use-case workflows, and protocol-result mapping plus deterministic run execution, interruption handling, context-window accounting, and recovery-before-ready, over DTO-only storage. | Domain, storage, tools, providers, configuration revisions, proto. |
 | `intention-storage` | DTO-only semantic repository methods, committed-change evidence, transcript and tool-result reads, and persisted configuration-revision inputs. | Config, domain, types. |
 | `intention-config` | TOML parsing, validation, resolved configuration and revision DTOs. | Types, domain as needed. |
 | `intention-providers` | Provider-neutral model DTOs and driver trait plus both SDK translation adapters. | Config, proto, and shared value types. |
 | `intention-tools` | Tool identity and core tool contracts with JSON Schema argument text, the static six-tool spec match, and the WorkspaceRoot addressing anchor. | Proto. |
-| `intention-vfr` | VFR transform, mapping, expansion/raw-read tools. | Tools, domain, types. |
-| `intention-headroom` | Headroom compression, CCR contracts, retrieve tool. | Tools, storage contracts, domain, types. |
-| `intention-plans` | Plan artifacts, hidden frontmatter, Plan/Build policy. | Tools, storage contracts, domain, types. |
+| `intention-vfr` (created at M8) | VFR transform, mapping, expansion/raw-read tools. | Tools, domain, types. |
+| `intention-headroom` (created at M8) | Headroom compression, CCR contracts, retrieve tool. | Tools, storage contracts, domain, types. |
+| `intention-plans` (created at M7) | Plan artifacts, hidden frontmatter, Plan/Build policy. | Tools, storage contracts, domain, types. |
 | `intention-transport` | Socket/pipe framing, server/client protocol, subscriptions. | Protocol, types. |
 | `intention-client` | Bootstrap, connection, dispatch, subscription, reconnect. | Protocol, transport, types. |
 | `intention-daemon` | One durable composition holder (`DaemonApplicationFacade`) that selects and connects the configuration snapshot, SQLite storage, and the provider driver, plus the daemon host and binary. | All selected concrete implementations. |
-| `intention-tauri` | Tauri bootstrap and native bridge. | Client, protocol, presentation DTO mapping. |
+| `intention-tauri` (created at M6) | Tauri bootstrap and native bridge. | Client, protocol, presentation DTO mapping. |
 | `intention-tui` | TUI and REPL presentation adapters. | Client, protocol, presentation crates. |
 
 ## Dependency direction
@@ -104,14 +103,13 @@ flowchart BT
 
 ## Slice 1.5 crate map (activated)
 
-Slice 1.5 collapsed the workspace to ten production crates, shown below together with what each absorbed. The table
+Slice 1.5 collapsed the workspace to nine production crates, shown below together with what each absorbed. The table
 below is the live crate map, and the exact permitted edges and coverage tiers are declared
 by `quality/architecture.toml` under phase `slice15`.
 
 | Target crate | Absorbs | Owns |
 | --- | --- | --- |
-| `intention-proto` | `intention-proto`, `intention-protocol` | Identity newtypes, shared value types, schema versions, the typed public protocol DTOs, and their typed serde payloads. |
-| `intention-domain` | `intention-domain` | Domain records, value validation, and invariants. |
+| `intention-proto` | `intention-proto`, `intention-protocol`, `intention-domain` | Identity newtypes, shared value types, schema versions, run lifecycle and projection values, the typed public protocol DTOs, and their typed serde payloads. |
 | `intention-config` | `intention-config` | TOML parsing, validation, resolved configuration, and credential-free snapshots. |
 | `intention-engine` | `intention-application`, `intention-runtime` | Commands, queries, semantic use-case workflows, deterministic lifecycle decisions, interruption handling, and recovery. |
 | `intention-tools` | `intention-tools`, `intention-workspace`, `intention-hooks` | Tool identity and contracts, WorkspaceRoot policy, and the cancellation-aware dispatch surface. |
@@ -121,9 +119,9 @@ by `quality/architecture.toml` under phase `slice15`.
 | `intention-client` | `intention-client` | Bootstrap, connection, dispatch, subscriptions, and reconnect, fully asynchronous and covering every protocol command and query. |
 | `intention-daemon` | `intention` (the composition facade library) | One composition holder that selects and connects configuration, SQLite storage, and the provider driver, plus the daemon host and binary. |
 
-Retained outside the ten: the adapter crates `intention-tui` and `intention-tauri`, the future skeleton crates
-`intention-vfr`, `intention-headroom`, and `intention-plans`, the non-production `intention-test-support` crate, and the
-`quality/harness` tooling.
+Retained outside the nine production crates: the `intention-tui` proof adapter and the non-production
+`intention-test-support` fixture crate. The future crates are created at their milestones: `intention-tauri` (M6),
+`intention-plans` (M7), and `intention-vfr` and `intention-headroom` (M8).
 
 Rules the target map fixes:
 
@@ -140,19 +138,13 @@ Rules the target map fixes:
 
 ```mermaid
 flowchart BT
-  PR[intention-proto] --> DO[intention-domain]
-  PR --> CF[intention-config]
-  DO --> CF
+  PR[intention-proto] --> CF[intention-config]
   PR --> ST[intention-storage]
-  DO --> ST
   CF --> ST
   PR --> TL[intention-tools]
-  DO --> TL
   PR --> PV[intention-providers]
-  DO --> PV
   CF --> PV
   PR --> EN[intention-engine]
-  DO --> EN
   CF --> EN
   ST --> EN
   TL --> EN
@@ -217,7 +209,8 @@ Planned binaries are thin:
 - `intention-tui`: starts a terminal client and invokes shared bootstrap.
 - a future administrative CLI may use `intention-client`, not daemon internals.
 
-`intention-tauri` is a desktop integration crate/binary host, not a second daemon implementation.
+The future `intention-tauri` crate (created at M6) is a desktop integration crate/binary host, not a second daemon
+implementation.
 
 ## Architectural test requirements
 
