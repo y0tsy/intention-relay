@@ -192,11 +192,11 @@ impl GenericTranslator {
             }
             return;
         }
-        if let Some(usage) = chunk.usage {
-            if self.usage_reported {
-                events.fail("generic_chat_duplicate_usage");
-                return;
-            }
+        // A gateway may repeat the usage summary across chunks. The first
+        // summary is authoritative and a repeat is dropped instead of failing
+        // the stream, so a live provider that reports usage more than once on
+        // one response still completes.
+        if let Some(usage) = chunk.usage.filter(|_| !self.usage_reported) {
             match mapping::reported_usage(
                 usage.prompt_tokens,
                 usage.completion_tokens,
@@ -1123,15 +1123,31 @@ mod tests {
     }
 
     #[test]
-    fn usage_is_emitted_at_most_once_and_post_finish_content_fails() {
+    fn usage_is_emitted_at_most_once_and_a_repeat_is_dropped() {
+        // A gateway that repeats the usage summary is not a stream defect: the
+        // first summary wins and the repeat is dropped, so the stream still
+        // ends through its own terminal outcome instead of a usage failure.
         let duplicated = collect_chunks(vec![
             Ok(chunk(Vec::new(), Some(usage()))),
             Ok(chunk(Vec::new(), Some(usage()))),
         ]);
-        assert!(matches!(
-            duplicated.last(),
-            Some(Err(error)) if error.code() == "generic_chat_duplicate_usage"
-        ));
+        assert_eq!(
+            duplicated[..2],
+            [
+                Ok(ModelEventDto::started()),
+                Ok(ModelEventDto::usage(
+                    UsageDto::reported(2, 3, 5).expect("usage is valid")
+                )),
+            ],
+            "the first usage summary is emitted once and the repeat is dropped"
+        );
+        assert!(
+            matches!(
+                duplicated.last(),
+                Some(Err(error)) if error.code() == "generic_chat_stream_incomplete"
+            ),
+            "the dropped repeat leaves the stream to end through its own terminal outcome"
+        );
 
         let post_finish = collect_chunks(vec![
             Ok(chunk(vec![choice(None, None, None, Some("stop"))], None)),
