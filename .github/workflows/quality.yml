@@ -116,14 +116,14 @@ jobs:
 
       - name: Install stable Rust toolchain
         if: matrix.stable
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: 1.97.1
           components: ${{ matrix.stable_components }}
 
       - name: Install nightly Rust toolchain
         if: matrix.nightly
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: nightly-2026-07-31
           components: ${{ matrix.nightly_components }}
