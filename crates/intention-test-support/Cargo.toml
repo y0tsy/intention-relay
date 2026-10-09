@@ -17,7 +17,6 @@ intention-daemon = { path = "../intention-daemon", version = "=0.0.0", features 
 intention-proto = { path = "../intention-proto", version = "=0.0.0" }
 intention-providers = { path = "../intention-providers", version = "=0.0.0" }
 intention-transport = { path = "../intention-transport", version = "=0.0.0" }
-serde_json = "1.0.149"
 tempfile = "3.24.0"
 
 [dev-dependencies]

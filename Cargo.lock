@@ -861,7 +861,6 @@ dependencies = [
  "intention-proto",
  "intention-providers",
  "intention-transport",
- "serde_json",
  "tempfile",
  "tokio",
 ]
