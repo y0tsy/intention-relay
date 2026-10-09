@@ -5,7 +5,7 @@
 
 mod support;
 
-use intention_proto::{RunId, ToolCallId};
+use intention_proto::{ReasoningFragmentCategoryDto, RunId, ToolCallId};
 use intention_providers::{
     AssistantReasoningDto, FinishReasonDto, ModelCapabilitiesDto, ModelEventDto, ModelMessageDto,
     ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto, ModelToolDefinitionDto,
@@ -27,10 +27,16 @@ fn model_request_and_capabilities_validate_provider_neutral_contracts() {
     let capabilities = ModelCapabilitiesDto::new(true, false, true, false, false, true);
     assert!(capabilities.supports_text());
     assert!(!capabilities.supports_reasoning());
+    assert!(!capabilities.supports_reasoning_summary());
     assert!(capabilities.supports_tool_calls());
     assert!(!capabilities.supports_multimodal());
     assert!(!capabilities.supports_vendor_extensions());
     assert!(capabilities.supports_streaming());
+    assert!(
+        capabilities
+            .with_reasoning_summary(true)
+            .supports_reasoning_summary()
+    );
 
     let valid = plain_request();
     assert_eq!(valid.model(), "fixture-model");
@@ -47,7 +53,11 @@ fn stream_lifecycle_accepts_ordered_normalized_events() {
     for event in [
         ModelEventDto::started(),
         ModelEventDto::text_delta("hello").expect("text is valid"),
-        ModelEventDto::reasoning_delta("considering context").expect("reasoning is valid"),
+        ModelEventDto::reasoning_delta(
+            ReasoningFragmentCategoryDto::Primary,
+            "considering context",
+        )
+        .expect("reasoning is valid"),
         ModelEventDto::tool_call(tool),
         ModelEventDto::usage(usage),
         ModelEventDto::finished(FinishReasonDto::Stop),
@@ -78,7 +88,8 @@ fn capabilities_cover_the_runtime_requirement_and_safe_provider_codes() {
     // The closed constructors are the validation boundary for these in-process
     // model DTOs; there is no decoder for them (ARCH-5-5, DEC-6).
     assert!(ModelEventDto::text_delta("").is_err());
-    assert!(ModelEventDto::reasoning_delta("").is_err());
+    assert!(ModelEventDto::reasoning_delta(ReasoningFragmentCategoryDto::Primary, "").is_err());
+    assert!(ModelEventDto::reasoning_summary_delta("").is_err());
     assert!(
         ModelRequestDto::new(
             RunId::new(),
@@ -108,10 +119,13 @@ fn stream_lifecycle_rejects_invalid_order_payloads_duplicate_usage_and_terminal_
     );
     assert_eq!(
         before_start
-            .accept(&ModelEventDto::reasoning_delta("first").expect("reasoning is valid"))
+            .accept(
+                &ModelEventDto::reasoning_delta(ReasoningFragmentCategoryDto::Primary, "first")
+                    .expect("reasoning is valid")
+            )
             .expect_err("reasoning before start must fail")
             .code(),
-        "invalid_model_stream_order"
+        "provider_reasoning_stream_invalid"
     );
     assert!(
         before_start
@@ -146,7 +160,9 @@ fn stream_lifecycle_rejects_invalid_order_payloads_duplicate_usage_and_terminal_
     for event in [
         ModelEventDto::started(),
         ModelEventDto::text_delta("after").expect("text is valid"),
-        ModelEventDto::reasoning_delta("after").expect("reasoning is valid"),
+        ModelEventDto::reasoning_delta(ReasoningFragmentCategoryDto::Detail, "after")
+            .expect("reasoning is valid"),
+        ModelEventDto::reasoning_summary_delta("after").expect("summary is valid"),
         ModelEventDto::finished(FinishReasonDto::Unknown),
     ] {
         assert!(
@@ -311,10 +327,11 @@ fn reasoning_presence_marks_a_textless_provider_channel() {
     assert_eq!(
         presence,
         ModelEventDto::ReasoningDelta {
+            category: ReasoningFragmentCategoryDto::Primary,
             content: String::new(),
         }
     );
-    assert!(ModelEventDto::reasoning_delta("").is_err());
+    assert!(ModelEventDto::reasoning_delta(ReasoningFragmentCategoryDto::Primary, "").is_err());
 }
 
 #[test]

@@ -9,11 +9,9 @@
 )]
 mod common;
 
-use common::{create_session, repository, time};
+use common::{create_session, repository, selection, time};
 
-use intention_config::{
-    ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
-};
+use intention_config::{ConfigSnapshotDto, ContextWindowPolicyDto};
 use intention_proto::{
     ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, IdempotencyKey, RunId, SessionId,
 };
@@ -24,7 +22,7 @@ fn matching_run_loads_its_immutable_safe_configuration_selection() {
     let (_directory, repository) = repository();
     let session_id = create_session(&repository, "matching");
     let run_id = RunId::new();
-    let snapshot = snapshot("safe-model", Some("https://models.example.test/v1"), 17, 2);
+    let snapshot = snapshot();
     repository
         .accept_user_turn(
             session_id,
@@ -32,6 +30,8 @@ fn matching_run_loads_its_immutable_safe_configuration_selection() {
             "turn",
             run_id,
             snapshot.clone(),
+            selection("fixture"),
+            None,
             time(2),
         )
         .expect("turn persists its safe selection");
@@ -56,7 +56,9 @@ fn unknown_and_cross_session_run_config_lookups_share_safe_no_leak_error() {
             IdempotencyKey::new(),
             "turn",
             run_id,
-            snapshot("safe-model", None, 30, 2),
+            snapshot(),
+            selection("fixture"),
+            None,
             time(2),
         )
         .expect("turn starts");
@@ -87,7 +89,7 @@ fn corrupted_run_configuration_snapshot_is_a_decode_failure_and_a_missing_row_st
     let (directory, repository) = repository();
     let session_id = create_session(&repository, "corrupted");
     let run_id = RunId::new();
-    let snapshot = snapshot("safe-model", None, 30, 2);
+    let snapshot = snapshot();
     let revision_id = snapshot.revision_id();
     repository
         .accept_user_turn(
@@ -96,6 +98,8 @@ fn corrupted_run_configuration_snapshot_is_a_decode_failure_and_a_missing_row_st
             "turn",
             run_id,
             snapshot,
+            selection("fixture"),
+            None,
             time(2),
         )
         .expect("turn starts");
@@ -151,7 +155,9 @@ fn backend_failure_on_a_run_config_lookup_is_unavailable_not_not_found() {
                 IdempotencyKey::new(),
                 "turn",
                 run_id,
-                snapshot("safe-model", None, 30, 2),
+                snapshot(),
+                selection("fixture"),
+                None,
                 time(2),
             )
             .expect("turn starts");
@@ -175,7 +181,7 @@ fn run_config_read_requires_a_persistable_snapshot() {
     let (directory, repository) = repository();
     let session_id = create_session(&repository, "unpersistable");
     let run_id = RunId::new();
-    let snapshot = snapshot("safe-model", None, 30, 2);
+    let snapshot = snapshot();
     let revision_id = snapshot.revision_id();
     repository
         .accept_user_turn(
@@ -184,6 +190,8 @@ fn run_config_read_requires_a_persistable_snapshot() {
             "turn",
             run_id,
             snapshot.clone(),
+            selection("fixture"),
+            None,
             time(2),
         )
         .expect("turn starts");
@@ -220,33 +228,12 @@ fn run_config_read_requires_a_persistable_snapshot() {
     );
 }
 
-fn snapshot(
-    model: &str,
-    endpoint: Option<&str>,
-    attempt_timeout_seconds: u8,
-    max_attempts: u8,
-) -> ConfigSnapshotDto {
-    let endpoint = endpoint.map_or_else(String::new, |value| format!("endpoint = \"{value}\"\n"));
-    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-        format!(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\n{endpoint}credential = \"recognizable-fixture-credential\"\n[provider.execution]\nattempt_timeout_seconds = {attempt_timeout_seconds}\nmax_attempts = {max_attempts}"
-        ),
-        ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(
-                std::env::temp_dir()
-                    .join("safe-config.toml")
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-            .expect("configuration path is absolute"),
-        ),
-    ))
-    .expect("safe configuration resolves");
+fn snapshot() -> ConfigSnapshotDto {
     ConfigSnapshotDto::new(
         intention_proto::SchemaVersionDto::new(1, 0),
         ConfigRevisionId::new(),
         time(1),
-        resolved,
+        ContextWindowPolicyDto::new(250_000).expect("the fixture window is positive"),
     )
     .expect("safe snapshot is valid")
 }

@@ -15,9 +15,32 @@ use std::{
 };
 
 use futures_core::Stream;
-use intention_proto::{DtoResult, ErrorDto, ErrorRetryDto, RunId, ToolCallId};
-pub use intention_proto::{FinishReasonDto, ProviderErrorDto, ToolCallDto, UsageDto};
+use intention_proto::{
+    DtoResult, ErrorDto, ErrorRetryDto, ReasoningHistoryTransferDto, RunId, ToolCallId,
+};
+pub use intention_proto::{
+    FinishReasonDto, ProviderErrorDto, ProviderHealthEvidenceDto, ProviderHealthReasonDto,
+    ProviderHealthStateDto, ProviderModelRecordDto, ReasoningFragmentCategoryDto, ToolCallDto,
+    UsageDto,
+};
 use serde::Serialize;
+
+/// The closed failure code for a malformed or out-of-order reasoning value.
+pub const PROVIDER_REASONING_STREAM_INVALID: &str = "provider_reasoning_stream_invalid";
+
+/// The closed failure code for one over-bound reasoning fragment.
+pub const PROVIDER_REASONING_FRAGMENT_TOO_LARGE: &str = "provider_reasoning_fragment_too_large";
+
+/// The closed failure code for a driver that cannot probe its provider.
+pub const PROVIDER_PROBE_UNSUPPORTED: &str = "provider_probe_unsupported";
+
+/// Maximum bytes of one normalized reasoning fragment or summary delta.
+///
+/// The bound is a representation bound on provider reasoning text: a larger
+/// fragment fails normalization with `provider_reasoning_fragment_too_large`
+/// and is never truncated. The combined per-run reasoning bound stays the
+/// runtime's `reasoning_output_limit_exceeded`.
+pub const MAX_MODEL_REASONING_FRAGMENT_BYTES: usize = 512 * 1024;
 
 /// The sender role of a model-context message, including tool calls and results.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -44,6 +67,8 @@ pub struct ModelMessageDto {
     tool_calls: Option<Vec<ToolCallDto>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<ToolCallId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_history: Option<AssistantReasoningHistoryDto>,
     #[serde(skip_serializing_if = "is_false")]
     cache_control: bool,
 }
@@ -78,6 +103,7 @@ impl ModelMessageDto {
             content,
             tool_calls: None,
             tool_call_id: None,
+            reasoning_history: None,
             cache_control: false,
         })
     }
@@ -102,8 +128,45 @@ impl ModelMessageDto {
             content: content.unwrap_or_default(),
             tool_calls: Some(tool_calls),
             tool_call_id: None,
+            reasoning_history: None,
             cache_control: false,
         })
+    }
+
+    /// Creates an assistant message carrying cross-turn reasoning history.
+    ///
+    /// The history stays a typed attachment beside the assistant text: message
+    /// content carries the response's own text and never prior reasoning.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the content is blank.
+    pub fn assistant_with_reasoning_history(
+        content: impl Into<String>,
+        history: AssistantReasoningHistoryDto,
+    ) -> DtoResult<Self> {
+        let mut message = Self::new(ModelRoleDto::Assistant, content)?;
+        message.reasoning_history = Some(history);
+        Ok(message)
+    }
+
+    /// Attaches cross-turn reasoning history to this assistant message.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when this message is not an assistant message.
+    pub fn attach_reasoning_history(
+        &mut self,
+        history: AssistantReasoningHistoryDto,
+    ) -> DtoResult<()> {
+        if self.role != ModelRoleDto::Assistant {
+            return Err(ErrorDto::validation(
+                "invalid_model_message_role",
+                "only assistant messages carry reasoning history",
+            ));
+        }
+        self.reasoning_history = Some(history);
+        Ok(())
     }
 
     /// Creates a non-blank tool-role message answering one tool call.
@@ -124,6 +187,7 @@ impl ModelMessageDto {
             content,
             tool_calls: None,
             tool_call_id: Some(tool_call_id),
+            reasoning_history: None,
             cache_control: false,
         })
     }
@@ -167,6 +231,13 @@ impl ModelMessageDto {
     #[must_use]
     pub const fn tool_call_id(&self) -> Option<ToolCallId> {
         self.tool_call_id
+    }
+
+    /// Returns the cross-turn reasoning history attached to this assistant
+    /// message, if any.
+    #[must_use]
+    pub const fn reasoning_history(&self) -> Option<&AssistantReasoningHistoryDto> {
+        self.reasoning_history.as_ref()
     }
 
     /// Returns whether this message marks the end of one cacheable prompt prefix.
@@ -261,11 +332,114 @@ const fn forbidden_reasoning_text_character(character: char) -> bool {
     character.is_control() && !matches!(character, '\n' | '\r' | '\t')
 }
 
+/// Maximum bytes of one attached cross-turn reasoning history.
+///
+/// The bound is the frozen history aggregate bound: a larger attachment fails
+/// validation whole and is never truncated into a partial history.
+const MAX_MODEL_REASONING_HISTORY_BYTES: usize = 4 * 1024 * 1024;
+
+/// Validated cross-turn reasoning history attached to one assistant message.
+///
+/// The attachment is the durable form of one prior response's reasoning under
+/// the descriptor's transfer compatibility identity. Fragments keep the order
+/// they were recorded in and carry their recorded category; summaries follow at
+/// the tail. The history travels beside the assistant text and never inside it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AssistantReasoningHistoryDto {
+    compatibility_id: String,
+    fragments: Vec<(ReasoningFragmentCategoryDto, String)>,
+    summaries: Vec<String>,
+}
+
+impl AssistantReasoningHistoryDto {
+    /// Creates one validated cross-turn reasoning history attachment.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the compatibility identity is not a safe
+    /// token, the attachment carries neither fragment nor summary, one fragment
+    /// or summary exceeds 512 KiB or carries an invalid control character, or
+    /// the aggregate exceeds the frozen 4 MiB history bound.
+    pub fn new(
+        compatibility_id: impl Into<String>,
+        fragments: Vec<(ReasoningFragmentCategoryDto, String)>,
+        summaries: Vec<String>,
+    ) -> DtoResult<Self> {
+        let compatibility_id = compatibility_id.into();
+        // The compatibility identity is the transfer contract's own token, so
+        // the frozen transfer validator owns that rule instead of a duplicate.
+        ReasoningHistoryTransferDto::textual_history_v1(compatibility_id.clone())?;
+        if fragments.is_empty() && summaries.is_empty() {
+            return Err(ErrorDto::validation(
+                "invalid_model_assistant_reasoning_history",
+                "attached reasoning history requires at least one fragment or summary",
+            ));
+        }
+        let mut aggregate = 0_usize;
+        for (_, content) in &fragments {
+            check_reasoning_history_text(content, &mut aggregate)?;
+        }
+        for summary in &summaries {
+            check_reasoning_history_text(summary, &mut aggregate)?;
+        }
+        Ok(Self {
+            compatibility_id,
+            fragments,
+            summaries,
+        })
+    }
+
+    /// Returns the descriptor transfer compatibility identity of this history.
+    #[must_use]
+    pub fn compatibility_id(&self) -> &str {
+        &self.compatibility_id
+    }
+
+    /// Returns the ordered reasoning fragments with their recorded categories.
+    #[must_use]
+    pub fn fragments(&self) -> &[(ReasoningFragmentCategoryDto, String)] {
+        &self.fragments
+    }
+
+    /// Returns the ordered reasoning summaries that follow the fragments.
+    #[must_use]
+    pub fn summaries(&self) -> &[String] {
+        &self.summaries
+    }
+}
+
+/// Validates one history text against the per-fragment and aggregate bounds.
+///
+/// # Errors
+///
+/// Returns a validation error when one text exceeds its per-fragment bound or
+/// carries an invalid control character, or when the aggregate exceeds the
+/// frozen history bound.
+fn check_reasoning_history_text(text: &str, aggregate: &mut usize) -> DtoResult<()> {
+    if text.len() > MAX_MODEL_REASONING_FRAGMENT_BYTES
+        || text.chars().any(forbidden_reasoning_text_character)
+    {
+        return Err(ErrorDto::validation(
+            "invalid_model_assistant_reasoning_history_text",
+            "reasoning history text must be at most 512 KiB without invalid control characters",
+        ));
+    }
+    *aggregate += text.len();
+    if *aggregate > MAX_MODEL_REASONING_HISTORY_BYTES {
+        return Err(ErrorDto::validation(
+            "invalid_model_assistant_reasoning_history_size",
+            "attached reasoning history must not exceed the 4 MiB history bound",
+        ));
+    }
+    Ok(())
+}
+
 /// The explicit capabilities declared by a selected provider driver.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct ModelCapabilitiesDto {
     text: bool,
     reasoning: bool,
+    reasoning_summary: bool,
     tool_calls: bool,
     multimodal: bool,
     vendor_extensions: bool,
@@ -274,6 +448,10 @@ pub struct ModelCapabilitiesDto {
 
 impl ModelCapabilitiesDto {
     /// Creates an explicit capability declaration.
+    ///
+    /// The declaration grants no reasoning-summary support: summary output is
+    /// opt-in through [`Self::with_reasoning_summary`], so a driver that does
+    /// not name it never claims it.
     #[must_use]
     pub const fn new(
         text: bool,
@@ -286,11 +464,19 @@ impl ModelCapabilitiesDto {
         Self {
             text,
             reasoning,
+            reasoning_summary: false,
             tool_calls,
             multimodal,
             vendor_extensions,
             streaming,
         }
+    }
+
+    /// Declares or denies reasoning-summary output support.
+    #[must_use]
+    pub const fn with_reasoning_summary(mut self, reasoning_summary: bool) -> Self {
+        self.reasoning_summary = reasoning_summary;
+        self
     }
 
     /// Returns whether text input/output is supported.
@@ -303,6 +489,12 @@ impl ModelCapabilitiesDto {
     #[must_use]
     pub const fn supports_reasoning(self) -> bool {
         self.reasoning
+    }
+
+    /// Returns whether reasoning-summary output is supported.
+    #[must_use]
+    pub const fn supports_reasoning_summary(self) -> bool {
+        self.reasoning_summary
     }
 
     /// Returns whether tool calls are supported.
@@ -616,8 +808,13 @@ pub enum ModelEventDto {
     Started,
     /// A non-empty text content delta arrived.
     TextDelta { content: String },
-    /// A non-empty reasoning delta arrived.
-    ReasoningDelta { content: String },
+    /// A non-empty categorized reasoning fragment arrived.
+    ReasoningDelta {
+        category: ReasoningFragmentCategoryDto,
+        content: String,
+    },
+    /// A non-empty reasoning summary delta arrived.
+    ReasoningSummaryDelta { content: String },
     /// A complete provider-normalized tool call arrived.
     ToolCall { call: ToolCallDto },
     /// Final usage became available.
@@ -650,24 +847,48 @@ impl ModelEventDto {
         }
     }
 
-    /// Creates a non-empty reasoning delta.
+    /// Creates a non-empty categorized reasoning fragment.
     ///
     /// # Errors
     ///
-    /// Returns a validation error when the delta is empty.
-    pub fn reasoning_delta(content: impl Into<String>) -> DtoResult<Self> {
+    /// Returns a validation error when the fragment is empty, and the closed
+    /// `provider_reasoning_fragment_too_large` failure when it exceeds
+    /// [`MAX_MODEL_REASONING_FRAGMENT_BYTES`].
+    pub fn reasoning_delta(
+        category: ReasoningFragmentCategoryDto,
+        content: impl Into<String>,
+    ) -> DtoResult<Self> {
         let content = content.into();
         if content.is_empty() {
-            Err(ErrorDto::validation(
+            return Err(ErrorDto::validation(
                 "invalid_model_reasoning_delta",
                 "model reasoning delta must not be empty",
-            ))
-        } else {
-            Ok(Self::ReasoningDelta { content })
+            ));
         }
+        ensure_reasoning_fragment_bound(&content)?;
+        Ok(Self::ReasoningDelta { category, content })
     }
 
-    /// Creates the textless reasoning-channel presence marker.
+    /// Creates a non-empty reasoning summary delta.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the summary is empty, and the closed
+    /// `provider_reasoning_fragment_too_large` failure when it exceeds
+    /// [`MAX_MODEL_REASONING_FRAGMENT_BYTES`].
+    pub fn reasoning_summary_delta(content: impl Into<String>) -> DtoResult<Self> {
+        let content = content.into();
+        if content.is_empty() {
+            return Err(ErrorDto::validation(
+                "invalid_model_reasoning_summary_delta",
+                "model reasoning summary delta must not be empty",
+            ));
+        }
+        ensure_reasoning_fragment_bound(&content)?;
+        Ok(Self::ReasoningSummaryDelta { content })
+    }
+
+    /// Creates the textless primary reasoning-channel presence marker.
     ///
     /// A provider can carry the reasoning channel with no textual content, and
     /// that presence alone must round-trip into the continuation request: the
@@ -678,6 +899,7 @@ impl ModelEventDto {
     #[must_use]
     pub const fn reasoning_presence() -> Self {
         Self::ReasoningDelta {
+            category: ReasoningFragmentCategoryDto::Primary,
             content: String::new(),
         }
     }
@@ -701,6 +923,22 @@ impl ModelEventDto {
     }
 }
 
+/// Validates the per-fragment reasoning representation bound.
+///
+/// # Errors
+///
+/// Returns the closed `provider_reasoning_fragment_too_large` failure when the
+/// fragment exceeds [`MAX_MODEL_REASONING_FRAGMENT_BYTES`].
+fn ensure_reasoning_fragment_bound(content: &str) -> DtoResult<()> {
+    if content.len() > MAX_MODEL_REASONING_FRAGMENT_BYTES {
+        return Err(ErrorDto::validation(
+            PROVIDER_REASONING_FRAGMENT_TOO_LARGE,
+            "one normalized reasoning fragment must not exceed 512 KiB",
+        ));
+    }
+    Ok(())
+}
+
 /// Validates normalized model-stream ordering without owning runtime delivery.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ModelStreamLifecycleDto {
@@ -722,37 +960,53 @@ impl ModelStreamLifecycleDto {
 
     /// Accepts one ordered normalized event.
     ///
+    /// Category-bearing reasoning fragments and reasoning summaries are live
+    /// facts between the start fact and the terminal fact; their textless
+    /// primary presence marker is one of those fragments. A reasoning fact
+    /// outside that window fails with the closed
+    /// `provider_reasoning_stream_invalid` failure, and any other out-of-order
+    /// fact fails with the ordinary stream-order failure.
+    ///
     /// # Errors
     ///
     /// Returns a validation error if the event cannot occur at this stream position.
     pub fn accept(&mut self, event: &ModelEventDto) -> DtoResult<()> {
         match event {
-            ModelEventDto::Started if !self.started && !self.terminal => {
+            ModelEventDto::Started => {
+                if self.started || self.terminal {
+                    return Err(stream_order_error());
+                }
                 self.started = true;
                 Ok(())
             }
-            ModelEventDto::Started => Err(stream_order_error()),
-            ModelEventDto::Finished { .. } if self.started && !self.terminal => {
+            ModelEventDto::Finished { .. } => {
+                if !self.started || self.terminal {
+                    return Err(stream_order_error());
+                }
                 self.terminal = true;
                 Ok(())
             }
-            ModelEventDto::Usage { .. } if self.started && !self.terminal && !self.usage_seen => {
+            ModelEventDto::Usage { .. } => {
+                if !self.started || self.terminal || self.usage_seen {
+                    return Err(stream_order_error());
+                }
                 self.usage_seen = true;
                 Ok(())
             }
-            ModelEventDto::TextDelta { .. }
-            | ModelEventDto::ReasoningDelta { .. }
-            | ModelEventDto::ToolCall { .. }
-                if self.started && !self.terminal =>
-            {
-                Ok(())
+            ModelEventDto::TextDelta { .. } | ModelEventDto::ToolCall { .. } => {
+                if self.started && !self.terminal {
+                    Ok(())
+                } else {
+                    Err(stream_order_error())
+                }
             }
-            ModelEventDto::Usage { .. } | ModelEventDto::Finished { .. } => {
-                Err(stream_order_error())
+            ModelEventDto::ReasoningDelta { .. } | ModelEventDto::ReasoningSummaryDelta { .. } => {
+                if self.started && !self.terminal {
+                    Ok(())
+                } else {
+                    Err(reasoning_stream_error())
+                }
             }
-            ModelEventDto::TextDelta { .. }
-            | ModelEventDto::ReasoningDelta { .. }
-            | ModelEventDto::ToolCall { .. } => Err(stream_order_error()),
         }
     }
 }
@@ -761,6 +1015,13 @@ fn stream_order_error() -> ErrorDto {
     ErrorDto::validation(
         "invalid_model_stream_order",
         "model stream event order is invalid",
+    )
+}
+
+fn reasoning_stream_error() -> ErrorDto {
+    ErrorDto::validation(
+        PROVIDER_REASONING_STREAM_INVALID,
+        "a reasoning value arrived outside the live reasoning window",
     )
 }
 
@@ -885,6 +1146,9 @@ fn remove_waiter(waiters: &mut Vec<(usize, Waker)>, waiter_id: usize) {
 pub type ModelEventStream =
     Pin<Box<dyn Stream<Item = Result<ModelEventDto, ProviderErrorDto>> + Send>>;
 
+/// One provider-neutral probe future returned by the driver probe boundary.
+pub type ProviderProbeFuture<T> = Pin<Box<dyn Future<Output = DtoResult<T>> + Send + 'static>>;
+
 /// Provider-neutral stream driver boundary. SDK and runtime resources stay private to providers/runtime.
 pub trait ModelExecutionDriver {
     /// Returns the static capability declaration for this configured driver.
@@ -896,4 +1160,42 @@ pub trait ModelExecutionDriver {
         request: ModelRequestDto,
         cancellation: ModelCancellationSignal,
     ) -> ModelEventStream;
+
+    /// Probes the configured provider for non-authorizing health evidence.
+    ///
+    /// A probe is one request with no retry and no automatic continuation, and
+    /// the evidence it returns never creates a run, retry counter, or quota.
+    /// The default fails closed: a driver that declares no probe path never
+    /// invents evidence about its provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns the closed `provider_probe_unsupported` failure when this driver
+    /// declares no health probe path.
+    fn health_probe(&self) -> ProviderProbeFuture<ProviderHealthEvidenceDto> {
+        Box::pin(async { Err(probe_unsupported()) })
+    }
+
+    /// Lists the provider's discovered model records.
+    ///
+    /// Discovery is additive evidence: it never authorizes a selection, and a
+    /// repeated model identity stays a provider fact rather than a local
+    /// decision. No retry and no automatic continuation follows. The default
+    /// fails closed with a typed error instead of inventing records.
+    ///
+    /// # Errors
+    ///
+    /// Returns the closed `provider_probe_unsupported` failure when this driver
+    /// declares no model listing path.
+    fn list_models(&self) -> ProviderProbeFuture<Vec<ProviderModelRecordDto>> {
+        Box::pin(async { Err(probe_unsupported()) })
+    }
+}
+
+/// The closed failure for a driver that cannot probe its provider.
+fn probe_unsupported() -> ErrorDto {
+    ErrorDto::unavailable(
+        PROVIDER_PROBE_UNSUPPORTED,
+        "the configured driver has no provider probe path",
+    )
 }

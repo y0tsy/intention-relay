@@ -241,6 +241,21 @@ impl HostState {
             self.fail_unadmitted_starting_run(session_id, run_id);
             return;
         };
+        // The run's driver is resolved from its own persisted resolved selection,
+        // before admission commits anything: an exact selection with no live
+        // private entry fails the run closed here, with no provider call and no
+        // rerouting to another profile or to a current default.
+        let driver = self
+            .facade
+            .repository()
+            .load_run_provider_selection(session_id, run_id)
+            .ok()
+            .and_then(|selection| self.facade.resolve_driver_for_run(&selection));
+        let Some(driver) = driver else {
+            drop(data);
+            self.fail_unavailable_provider_run(session_id, run_id);
+            return;
+        };
         let input = match ApplicationService::new(self.facade.repository()).schedule_starting_run(
             session_id,
             run_id,
@@ -275,7 +290,7 @@ impl HostState {
             );
             let result = ModelRunExecutionService::new(
                 host.facade.repository(),
-                host.facade.driver(),
+                driver.as_ref(),
                 &TokioTime,
                 &observer,
                 &executor,
@@ -334,6 +349,21 @@ impl HostState {
     fn fail_unadmitted_starting_run(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
         if self
             .fail_starting_run(session_id, run_id, "model_scheduling_unavailable")
+            .is_ok()
+        {
+            self.on_terminal(session_id, run_id);
+        }
+    }
+
+    /// Records the closed unavailability of one run's own provider selection.
+    ///
+    /// This is the execution-admission failure of an exact selection that has no
+    /// live private runtime entry any more: the run fails with
+    /// `provider_configuration_unavailable` before any provider work and is
+    /// never rerouted to another profile.
+    fn fail_unavailable_provider_run(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
+        if self
+            .fail_starting_run(session_id, run_id, "provider_configuration_unavailable")
             .is_ok()
         {
             self.on_terminal(session_id, run_id);
@@ -1103,6 +1133,24 @@ async fn serve_async_connection(
                         continue;
                     }
                     request => {
+                        // A provider probe awaits its own external boundary, so
+                        // it is answered here, where that await is available.
+                        if matches!(
+                            &request,
+                            ClientRequestDto::CheckProviderHealth(_)
+                                | ClientRequestDto::DiscoverProviderModels(_)
+                        ) {
+                            let message = match dispatch_probe_request(&host, request).await {
+                                Ok(result) => ProtocolDaemonMessageDto::reply(request_id, result),
+                                Err(error) => {
+                                    ProtocolDaemonMessageDto::rejection(Some(request_id), error)
+                                }
+                            };
+                            if !write_message_or_rejection(&mut messages, message).await {
+                                return;
+                            }
+                            continue;
+                        }
                         // A command reaches durable storage, so it runs on a
                         // blocking worker: a slow disk must not stall the
                         // connection's async task, and the per-connection queue
@@ -1169,11 +1217,65 @@ fn dispatch_request(
         ClientRequestDto::InterruptRun(command) => {
             host.interrupt_run(command.session_id(), command.run_id())
         }
+        ClientRequestDto::ListProviderCatalog(query) => host.facade.list_provider_catalog(query),
+        ClientRequestDto::GetProviderCatalogStatus => host.facade.provider_catalog_status(),
+        ClientRequestDto::SetSessionProviderProfile(command) => {
+            host.facade.set_session_provider_profile(command)
+        }
+        ClientRequestDto::GetSessionProviderProfile(query) => {
+            host.facade.session_provider_profile(query)
+        }
+        ClientRequestDto::AcceptProviderCatalogRemoval(command) => {
+            host.facade.accept_provider_catalog_removal(command)
+        }
+        ClientRequestDto::RejectProviderCatalogCandidate(command) => {
+            host.facade.reject_provider_catalog_candidate(command)
+        }
+        ClientRequestDto::ReloadConfiguration(command) => host.facade.reload_configuration(command),
+        ClientRequestDto::RotateProviderCredential(command) => {
+            host.facade.rotate_provider_credential(command)
+        }
+        ClientRequestDto::ApplyConfigurationDocument(command) => {
+            host.facade.apply_configuration_document(command)
+        }
+        ClientRequestDto::ApplyConfigurationEdits(command) => {
+            host.facade.apply_configuration_edits(command)
+        }
+        // A provider probe awaits an external boundary, so it is answered on the
+        // connection's async path instead of a blocking worker.
+        ClientRequestDto::CheckProviderHealth(_) | ClientRequestDto::DiscoverProviderModels(_) => {
+            Err(ErrorDto::validation(
+                "daemon_probe_route_unavailable",
+                "provider probes are answered by the connection probe path",
+            ))
+        }
         // A subscription is answered by the connection registration path, which
         // queues the correlated reply under the same lock that publishes.
         ClientRequestDto::SubscribeRun(_) => Err(ErrorDto::validation(
             "daemon_subscription_route_unavailable",
             "run subscriptions are answered by the connection registration path",
+        )),
+    }
+}
+
+/// Answers one provider probe whose external boundary must be awaited.
+///
+/// Only a provider probe reaches this path; the connection dispatches every
+/// other request to the blocking command path.
+async fn dispatch_probe_request(
+    host: &Arc<HostState>,
+    request: ClientRequestDto,
+) -> DtoResult<ProtocolResultDto> {
+    match request {
+        ClientRequestDto::CheckProviderHealth(command) => {
+            host.facade.check_provider_health(command).await
+        }
+        ClientRequestDto::DiscoverProviderModels(command) => {
+            host.facade.discover_provider_models(command).await
+        }
+        _ => Err(ErrorDto::validation(
+            "daemon_probe_route_unavailable",
+            "provider probes are answered by the connection probe path",
         )),
     }
 }
@@ -1351,17 +1453,13 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use intention_config::{
-        ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
-    };
     use intention_proto::{
-        ClientRequestDto, ConfigRevisionId, CreateSessionCommandDto, DaemonReadinessDto,
-        GetSessionSnapshotQueryDto, IdempotencyKey, MessageKindDto, MessageProjectionDto,
-        ProtocolDaemonMessageDto, ProtocolResultDto, RunModeDto, SendUserTurnCommandDto,
-        SendUserTurnOutcomeDto, SessionId, SubscribeRunCommandDto, WorkspaceId, WorkspaceRootDto,
-        decode_response, encode_request,
+        ClientRequestDto, CreateSessionCommandDto, DaemonReadinessDto, GetSessionSnapshotQueryDto,
+        IdempotencyKey, MessageKindDto, MessageProjectionDto, ProtocolDaemonMessageDto,
+        ProtocolResultDto, RunModeDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId,
+        SubscribeRunCommandDto, WorkspaceId, WorkspaceRootDto, decode_response, encode_request,
     };
-    use intention_proto::{ProjectId, RunId, SchemaVersionDto, TimestampDto};
+    use intention_proto::{ProjectId, RunId, TimestampDto};
     use intention_providers::{
         FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
         ModelEventStream, ModelExecutionDriver,
@@ -1384,28 +1482,24 @@ mod tests {
         fixture_facade_with_driver(Arc::new(EmptyDriver))
     }
 
-    fn fixture_snapshot() -> ConfigSnapshotDto {
-        let source = ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(
-                std::env::temp_dir()
-                    .join("intention-daemon-unit.toml")
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-            .expect("fixture configuration path is absolute"),
-        );
-        let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"",
-            source,
-        ))
-        .expect("fixture configuration resolves");
-        ConfigSnapshotDto::new(
-            SchemaVersionDto::new(1, 0),
-            ConfigRevisionId::new(),
-            TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid"),
-            resolved,
-        )
-        .expect("fixture snapshot is credential-free")
+    /// The one catalog document every daemon host fixture opens from.
+    const FIXTURE_DOCUMENT: &str = "schema_version = 1\n\
+        \n[provider]\n\
+        context_window_tokens = 180000\n\
+        default_profile = \"main\"\n\
+        \n[providers.profiles.main]\n\
+        kind = \"openrouter\"\n\
+        model = \"fixture\"\n\
+        credential = \"fixture-credential\"\n\
+        display_name = \"Main\"\n\
+        enabled = true\n\
+        \n[providers.profiles.main.capabilities]\n\
+        text_streaming = true\n\
+        reasoning = \"disabled\"\n\
+        tool_exchange = true\n";
+
+    fn fixture_document() -> &'static str {
+        FIXTURE_DOCUMENT
     }
 
     fn fixture_facade_with_driver(
@@ -1414,7 +1508,7 @@ mod tests {
         let directory = TempDir::new().expect("temporary fixture directory exists");
         let facade = DaemonApplicationFacade::open_for_test_support_with_driver(
             directory.path().join("daemon.sqlite"),
-            fixture_snapshot(),
+            fixture_document(),
             driver,
         )
         .expect("fixture facade opens");
@@ -1521,6 +1615,347 @@ mod tests {
             .await
             .expect("fixture client connects");
         connection.split()
+    }
+
+    /// The naive probe driver: answers both provider probes without a network.
+    struct ProbeControlDriver;
+
+    fn control_probe_health() -> DtoResult<intention_proto::provider::ProviderHealthEvidenceDto> {
+        intention_proto::provider::ProviderHealthEvidenceDto::new(
+            control_profile_id(),
+            intention_proto::provider::ProviderHealthStateDto::Available,
+            None,
+        )
+    }
+
+    fn control_probe_models() -> DtoResult<Vec<intention_proto::provider::ProviderModelRecordDto>> {
+        Ok(vec![
+            intention_proto::provider::ProviderModelRecordDto::new(
+                "probe-model",
+                Some("Probe Model".to_owned()),
+            )?,
+        ])
+    }
+
+    impl ModelExecutionDriver for ProbeControlDriver {
+        fn capabilities(&self) -> ModelCapabilitiesDto {
+            ModelCapabilitiesDto::new(true, true, true, false, false, true)
+        }
+
+        fn execute(
+            &self,
+            _request: intention_providers::ModelRequestDto,
+            _cancellation: ModelCancellationSignal,
+        ) -> ModelEventStream {
+            Box::pin(futures_util::stream::empty())
+        }
+
+        fn health_probe(
+            &self,
+        ) -> intention_providers::ProviderProbeFuture<
+            intention_proto::provider::ProviderHealthEvidenceDto,
+        > {
+            Box::pin(async { control_probe_health() })
+        }
+
+        fn list_models(
+            &self,
+        ) -> intention_providers::ProviderProbeFuture<
+            Vec<intention_proto::provider::ProviderModelRecordDto>,
+        > {
+            Box::pin(async { control_probe_models() })
+        }
+    }
+
+    fn control_profile_id() -> intention_proto::provider::ProviderProfileId {
+        intention_proto::provider::ProviderProfileId::parse("main")
+            .expect("fixture profile identity is valid")
+    }
+
+    /// Sends one typed request on a live fixture connection and decodes its reply.
+    async fn round_trip_request(
+        requests: &mut AsyncMessageSender,
+        messages: &mut AsyncMessageReceiver,
+        id: u64,
+        request: ClientRequestDto,
+    ) -> ProtocolResultDto {
+        requests
+            .send_message(&encode_request(id, request))
+            .await
+            .expect("fixture request sends");
+        let line = messages
+            .receive_line()
+            .await
+            .expect("fixture reply arrives");
+        decode_response(&line, id).expect("fixture reply is a success")
+    }
+
+    /// Sends one typed request on a live fixture connection and decodes its rejection.
+    async fn round_trip_rejection(
+        requests: &mut AsyncMessageSender,
+        messages: &mut AsyncMessageReceiver,
+        id: u64,
+        request: ClientRequestDto,
+    ) -> intention_proto::ErrorDto {
+        requests
+            .send_message(&encode_request(id, request))
+            .await
+            .expect("fixture request sends");
+        let line = messages
+            .receive_line()
+            .await
+            .expect("fixture reply arrives");
+        decode_response(&line, id).expect_err("fixture reply is a typed rejection")
+    }
+
+    #[tokio::test]
+    async fn every_new_control_plane_request_is_dispatched_over_one_connection() {
+        use intention_proto::provider::{
+            AcceptProviderCatalogRemovalCommandDto, ApplyConfigurationDocumentCommandDto,
+            ApplyConfigurationEditsCommandDto, CatalogRevisionId, CheckProviderHealthCommandDto,
+            ConfigurationEditDto, DiscoverProviderModelsCommandDto,
+            GetSessionProviderProfileQueryDto, ListProviderCatalogQueryDto,
+            ProviderCatalogActivationStateDto, ProviderCatalogCandidateHandleDto,
+            ProviderHealthStateDto, ProviderProfileOverrideDto,
+            RejectProviderCatalogCandidateCommandDto, ReloadConfigurationCommandDto,
+            RotateProviderCredentialCommandDto, SetSessionProviderProfileCommandDto,
+        };
+
+        let (_directory, facade) = fixture_facade_with_driver(Arc::new(ProbeControlDriver));
+        let session_id = SessionId::new();
+        let created = facade
+            .create_session(CreateSessionCommandDto::new(
+                ProjectId::new(),
+                session_id,
+                WorkspaceId::new(),
+                WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
+                    .expect("fixture workspace is absolute"),
+                RunModeDto::Build,
+            ))
+            .expect("fixture session creates");
+        assert!(matches!(created, ProtocolResultDto::SessionCreated(_)));
+        let projection_revision = facade
+            .repository()
+            .load_session_projection(session_id)
+            .expect("fixture session projection reads")
+            .session_projection_revision();
+        let endpoint = endpoint();
+        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+        let server = tokio::spawn(serve_one_test_connection(listener, facade));
+
+        let (mut requests, mut messages) = connect_fixture(&endpoint).await;
+
+        let ProtocolResultDto::ProviderCatalogPage(page) = round_trip_request(
+            &mut requests,
+            &mut messages,
+            1,
+            ClientRequestDto::ListProviderCatalog(
+                ListProviderCatalogQueryDto::new(None).expect("empty query is valid"),
+            ),
+        )
+        .await
+        else {
+            panic!("a catalog list answers with a page")
+        };
+        assert_eq!(page.entries().len(), 1);
+        assert!(page.entries()[0].credential_configured());
+
+        let ProtocolResultDto::ProviderCatalogStatus(status) = round_trip_request(
+            &mut requests,
+            &mut messages,
+            2,
+            ClientRequestDto::GetProviderCatalogStatus,
+        )
+        .await
+        else {
+            panic!("a catalog status read answers with its status")
+        };
+        assert_eq!(
+            status.activation_state(),
+            ProviderCatalogActivationStateDto::Active
+        );
+        assert_eq!(status.default_profile_id(), Some(&control_profile_id()));
+
+        let ProtocolResultDto::SessionProviderProfile(profile) = round_trip_request(
+            &mut requests,
+            &mut messages,
+            3,
+            ClientRequestDto::GetSessionProviderProfile(GetSessionProviderProfileQueryDto::new(
+                session_id,
+            )),
+        )
+        .await
+        else {
+            panic!("a session provider read answers with its projection")
+        };
+        assert_eq!(profile.session_id(), session_id);
+
+        let ProtocolResultDto::SessionProviderProfileSet(accepted) = round_trip_request(
+            &mut requests,
+            &mut messages,
+            4,
+            ClientRequestDto::SetSessionProviderProfile(SetSessionProviderProfileCommandDto::new(
+                session_id,
+                control_profile_id(),
+                projection_revision,
+                IdempotencyKey::new(),
+            )),
+        )
+        .await
+        else {
+            panic!("a session default change answers with its acceptance")
+        };
+        assert!(accepted.changed());
+
+        let ProtocolResultDto::ProviderHealth(evidence) = round_trip_request(
+            &mut requests,
+            &mut messages,
+            5,
+            ClientRequestDto::CheckProviderHealth(CheckProviderHealthCommandDto::new(
+                control_profile_id(),
+            )),
+        )
+        .await
+        else {
+            panic!("a health probe answers with its evidence")
+        };
+        assert_eq!(evidence.state(), ProviderHealthStateDto::Available);
+
+        let ProtocolResultDto::ProviderModelsDiscovered(discovered) = round_trip_request(
+            &mut requests,
+            &mut messages,
+            6,
+            ClientRequestDto::DiscoverProviderModels(DiscoverProviderModelsCommandDto::new(
+                control_profile_id(),
+            )),
+        )
+        .await
+        else {
+            panic!("a discovery attempt answers with its records")
+        };
+        assert_eq!(discovered.records().len(), 1);
+        assert_eq!(discovered.records()[0].model_id(), "probe-model");
+
+        let ProtocolResultDto::TurnAccepted(turn) = round_trip_request(
+            &mut requests,
+            &mut messages,
+            7,
+            ClientRequestDto::SendUserTurn(
+                SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "overridden turn")
+                    .expect("fixture turn is valid")
+                    .with_provider_profile(Some(ProviderProfileOverrideDto::new(
+                        control_profile_id(),
+                        None,
+                    ))),
+            ),
+        )
+        .await
+        else {
+            panic!("an overridden turn answers with its acceptance")
+        };
+        assert!(matches!(
+            turn.outcome(),
+            SendUserTurnOutcomeDto::Started { .. }
+        ));
+
+        // The file-backed commands reach the composition and fail closed on a
+        // host without a file-backed private source.
+        let error = round_trip_rejection(
+            &mut requests,
+            &mut messages,
+            8,
+            ClientRequestDto::ReloadConfiguration(ReloadConfigurationCommandDto::new(
+                IdempotencyKey::new(),
+            )),
+        )
+        .await;
+        assert_eq!(error.code(), "credential_rotation_source_unavailable");
+
+        let error = round_trip_rejection(
+            &mut requests,
+            &mut messages,
+            9,
+            ClientRequestDto::RotateProviderCredential(RotateProviderCredentialCommandDto::new(
+                control_profile_id(),
+                IdempotencyKey::new(),
+            )),
+        )
+        .await;
+        assert_eq!(error.code(), "credential_rotation_source_unavailable");
+
+        let edits = ApplyConfigurationEditsCommandDto::new(
+            vec![
+                ConfigurationEditDto::set_profile_display_name(control_profile_id(), "Renamed")
+                    .expect("fixture edit is valid"),
+            ],
+            IdempotencyKey::new(),
+        )
+        .expect("fixture edit command is valid");
+        let error = round_trip_rejection(
+            &mut requests,
+            &mut messages,
+            10,
+            ClientRequestDto::ApplyConfigurationEdits(edits),
+        )
+        .await;
+        assert_eq!(error.code(), "credential_rotation_source_unavailable");
+
+        let credential_bearing = ApplyConfigurationDocumentCommandDto::new(
+            "schema_version = 1\n[provider]\ncredential = \"fixture-secret\"\n",
+            IdempotencyKey::new(),
+        )
+        .expect("fixture document command is valid");
+        let error = round_trip_rejection(
+            &mut requests,
+            &mut messages,
+            11,
+            ClientRequestDto::ApplyConfigurationDocument(credential_bearing),
+        )
+        .await;
+        assert_eq!(error.code(), "configuration_edit_contains_credential");
+
+        let handle = ProviderCatalogCandidateHandleDto::new(
+            CatalogRevisionId::new(),
+            CatalogRevisionId::new(),
+        )
+        .expect("two distinct revisions form a candidate handle");
+        let error = round_trip_rejection(
+            &mut requests,
+            &mut messages,
+            12,
+            ClientRequestDto::AcceptProviderCatalogRemoval(
+                AcceptProviderCatalogRemovalCommandDto::new(handle, IdempotencyKey::new()),
+            ),
+        )
+        .await;
+        assert_eq!(error.code(), "provider_catalog_changed");
+        let error = round_trip_rejection(
+            &mut requests,
+            &mut messages,
+            13,
+            ClientRequestDto::RejectProviderCatalogCandidate(
+                RejectProviderCatalogCandidateCommandDto::new(handle, IdempotencyKey::new()),
+            ),
+        )
+        .await;
+        assert_eq!(error.code(), "provider_catalog_changed");
+
+        // The connection still serves an ordinary request after both awaited
+        // probes and every rejection.
+        let ProtocolResultDto::DaemonHealth(health) = round_trip_request(
+            &mut requests,
+            &mut messages,
+            14,
+            ClientRequestDto::GetDaemonHealth,
+        )
+        .await
+        else {
+            panic!("a health read answers with the daemon health")
+        };
+        assert_eq!(health.readiness(), DaemonReadinessDto::Ready);
+
+        drop(requests);
+        let _served = server.await;
     }
 
     #[tokio::test]

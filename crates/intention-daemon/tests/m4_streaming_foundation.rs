@@ -45,7 +45,7 @@ use intention_providers::{
 };
 use intention_test_support::ScriptedDriver;
 #[cfg(feature = "test-support")]
-use intention_test_support::{FIXTURE_CREDENTIAL, fixture_snapshot};
+use intention_test_support::{FIXTURE_CREDENTIAL, fixture_catalog_document};
 #[cfg(feature = "test-support")]
 use intention_transport::{AsyncLocalListener, LocalEndpoint};
 use tempfile::TempDir;
@@ -547,10 +547,10 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
     let first_driver = Arc::new(BlockingDriver::new());
     let directory = TempDir::new().expect("temporary directory exists");
     let database = directory.path().join("restart.sqlite");
-    let snapshot = fixture_snapshot();
+    let document = fixture_catalog_document("fixture");
     let first_facade = DaemonApplicationFacade::open_for_test_support_with_driver(
         &database,
-        snapshot.clone(),
+        &document,
         first_driver.clone(),
     )
     .expect("first durable host facade opens");
@@ -583,7 +583,7 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
     let restart_driver = Arc::new(ScriptedDriver::completed_text());
     let restarted = DaemonApplicationFacade::open_for_test_support_with_driver(
         &database,
-        snapshot,
+        &document,
         restart_driver.clone(),
     )
     .expect("restart recovery opens the existing durable host state");

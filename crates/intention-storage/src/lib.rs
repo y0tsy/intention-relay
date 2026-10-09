@@ -17,6 +17,11 @@
 //! behind the typed field, and only the typed value is visible to callers.
 
 use intention_config::ConfigSnapshotDto;
+use intention_proto::provider::{
+    CatalogRevisionId, ProviderDiscoveryAttemptId, ProviderKindDescriptorRevisionV1,
+    ProviderModelRecordDto, ProviderProfileId, ProviderProfilePolicyDto, ProviderProfileRevisionId,
+    ProviderProfileRevisionV1, ReasoningHistoryManifestDto, ResolvedRunProviderSelectionDto,
+};
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
     RemoveTurnCommandDto, RunProjectionDto, RunStatusDto, SessionProjectionDto, SessionSnapshotDto,
@@ -48,6 +53,24 @@ const MAX_TURN_CONTENT_BYTES: usize = 512 * 1024;
 /// are reported through the projection's omitted count instead of being
 /// materialised.
 const MAX_PENDING_TURN_PROJECTION_BYTES: usize = MAX_TURN_CONTENT_BYTES;
+
+/// The maximum aggregate reasoning material one cross-turn history may carry,
+/// in bytes.
+///
+/// It is the fixed combined reasoning bound of the provider reasoning contract
+/// (4 MiB). A history whose aggregate exceeds it is rejected whole before
+/// provider work; no fragment is truncated and no partial manifest is
+/// committed.
+const MAX_REASONING_HISTORY_AGGREGATE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The maximum aggregate discovery result content one attempt may record, in
+/// bytes.
+///
+/// The bound is one transport envelope (512 KiB): a record set whose model
+/// identities and display names together exceed one envelope could never be
+/// delivered as a single typed result, so the attempt rejects the whole set
+/// instead of truncating it.
+const MAX_DISCOVERY_RESULT_BYTES: usize = 512 * 1024;
 
 /// The terminal outcome recorded for one local tool result.
 ///
@@ -443,6 +466,777 @@ impl StartingRunModelContextDto {
     }
 }
 
+/// The closed append-only catalog audit taxonomy.
+///
+/// The storage path writes exactly these records around catalog preparation,
+/// acceptance, activation, rejection, and activation recovery. No wire DTO
+/// carries them; they are durable evidence, not a protocol surface.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCatalogAuditRecordKindDto {
+    /// A candidate catalog revision was prepared for acceptance.
+    ProviderCatalogCandidatePrepared,
+    /// A candidate removes at least one accepted profile or kind.
+    ProviderCatalogRemovalPending,
+    /// The removal candidate was accepted.
+    ProviderCatalogRemovalAccepted,
+    /// The removal candidate was rejected and dropped.
+    ProviderCatalogCandidateRejected,
+    /// The catalog revision was durably accepted.
+    ProviderCatalogAccepted,
+    /// The accepted catalog revision became the active one.
+    ProviderCatalogActivated,
+    /// An accepted revision was found unactivated after a crash.
+    ProviderCatalogActivationRecoveryRequired,
+    /// The exact accepted revision became active after recovery.
+    ProviderCatalogRecoveryCompleted,
+}
+
+impl ProviderCatalogAuditRecordKindDto {
+    /// Returns the canonical durable string representation of this audit kind.
+    ///
+    /// The representation is persisted verbatim, so it must stay byte-identical
+    /// across releases.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ProviderCatalogCandidatePrepared => "provider_catalog_candidate_prepared",
+            Self::ProviderCatalogRemovalPending => "provider_catalog_removal_pending",
+            Self::ProviderCatalogRemovalAccepted => "provider_catalog_removal_accepted",
+            Self::ProviderCatalogCandidateRejected => "provider_catalog_candidate_rejected",
+            Self::ProviderCatalogAccepted => "provider_catalog_accepted",
+            Self::ProviderCatalogActivated => "provider_catalog_activated",
+            Self::ProviderCatalogActivationRecoveryRequired => {
+                "provider_catalog_activation_recovery_required"
+            }
+            Self::ProviderCatalogRecoveryCompleted => "provider_catalog_recovery_completed",
+        }
+    }
+
+    /// Parses the canonical durable string representation of a catalog audit kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe internal error when `value` is not a declared audit kind.
+    pub fn parse(value: &str) -> DtoResult<Self> {
+        match value {
+            "provider_catalog_candidate_prepared" => Ok(Self::ProviderCatalogCandidatePrepared),
+            "provider_catalog_removal_pending" => Ok(Self::ProviderCatalogRemovalPending),
+            "provider_catalog_removal_accepted" => Ok(Self::ProviderCatalogRemovalAccepted),
+            "provider_catalog_candidate_rejected" => Ok(Self::ProviderCatalogCandidateRejected),
+            "provider_catalog_accepted" => Ok(Self::ProviderCatalogAccepted),
+            "provider_catalog_activated" => Ok(Self::ProviderCatalogActivated),
+            "provider_catalog_activation_recovery_required" => {
+                Ok(Self::ProviderCatalogActivationRecoveryRequired)
+            }
+            "provider_catalog_recovery_completed" => Ok(Self::ProviderCatalogRecoveryCompleted),
+            _ => Err(ErrorDto::new(
+                "invalid_catalog_audit_kind",
+                ErrorCategoryDto::Internal,
+                "the durable catalog audit kind is not declared",
+                ErrorRetryDto::Never,
+                None,
+            )?),
+        }
+    }
+}
+
+/// The current accepted and activated catalog pointers.
+///
+/// An accepted revision that is not the activated one is exactly the
+/// activation-recovery state: the process crashed after acceptance and before
+/// the exact accepted catalog became active.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProviderCatalogStateDto {
+    accepted_catalog_revision_id: Option<CatalogRevisionId>,
+    activated_catalog_revision_id: Option<CatalogRevisionId>,
+}
+
+impl ProviderCatalogStateDto {
+    /// Creates one coherent accepted/activated pointer pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when an activated pointer exists without any
+    /// accepted revision. The two pointers differ exactly while the accepted
+    /// catalog revision has not become active yet.
+    pub fn new(
+        accepted_catalog_revision_id: Option<CatalogRevisionId>,
+        activated_catalog_revision_id: Option<CatalogRevisionId>,
+    ) -> DtoResult<Self> {
+        if activated_catalog_revision_id.is_some() && accepted_catalog_revision_id.is_none() {
+            return Err(ErrorDto::validation(
+                "invalid_catalog_state",
+                "an activated catalog revision requires an accepted catalog revision",
+            ));
+        }
+        Ok(Self {
+            accepted_catalog_revision_id,
+            activated_catalog_revision_id,
+        })
+    }
+
+    /// Returns the accepted catalog revision, when one was accepted.
+    #[must_use]
+    pub const fn accepted_catalog_revision_id(&self) -> Option<CatalogRevisionId> {
+        self.accepted_catalog_revision_id
+    }
+
+    /// Returns the activated catalog revision, when one became active.
+    #[must_use]
+    pub const fn activated_catalog_revision_id(&self) -> Option<CatalogRevisionId> {
+        self.activated_catalog_revision_id
+    }
+
+    /// Returns whether an accepted catalog revision is not the activated one.
+    ///
+    /// A true value means the exact accepted revision must be rebuilt and
+    /// activated before the daemon can report ready.
+    #[must_use]
+    pub fn requires_activation_recovery(&self) -> bool {
+        self.accepted_catalog_revision_id
+            .is_some_and(|accepted| self.activated_catalog_revision_id != Some(accepted))
+    }
+}
+
+/// One profile's current display, enabled, and pricing policy carried by a
+/// catalog revision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderProfilePolicyEntryDto {
+    profile_id: ProviderProfileId,
+    policy: ProviderProfilePolicyDto,
+}
+
+impl ProviderProfilePolicyEntryDto {
+    /// Creates one profile policy entry.
+    #[must_use]
+    pub const fn new(profile_id: ProviderProfileId, policy: ProviderProfilePolicyDto) -> Self {
+        Self { profile_id, policy }
+    }
+
+    /// Returns the profile the policy belongs to.
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProviderProfileId {
+        &self.profile_id
+    }
+
+    /// Returns the current policy of the profile.
+    #[must_use]
+    pub const fn policy(&self) -> &ProviderProfilePolicyDto {
+        &self.policy
+    }
+}
+
+/// Returns the validation error for an incoherent catalog revision.
+fn invalid_catalog_revision() -> ErrorDto {
+    ErrorDto::validation(
+        "invalid_catalog_revision",
+        "a catalog revision must declare coherent kinds, profiles, and policies",
+    )
+}
+
+/// One credential-free provider catalog revision offered for durable acceptance.
+///
+/// The revision carries every kind descriptor and profile revision it declares,
+/// the current display/enabled/pricing policy of each member profile, and the
+/// global default profile. Credentials, raw TOML, configuration paths, and
+/// private driver resources never appear here.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderCatalogRevisionDto {
+    catalog_revision_id: CatalogRevisionId,
+    default_profile_id: Option<ProviderProfileId>,
+    captured_at: TimestampDto,
+    kind_descriptors: Vec<ProviderKindDescriptorRevisionV1>,
+    profile_revisions: Vec<ProviderProfileRevisionV1>,
+    profile_policies: Vec<ProviderProfilePolicyEntryDto>,
+}
+
+impl ProviderCatalogRevisionDto {
+    /// Creates one coherent credential-free catalog revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when kind or profile identities are
+    /// duplicated, when a profile references a kind the revision does not
+    /// declare, when a profile's declared kind descriptor revision is not the
+    /// revision declared for its kind, or when the policy entries are not
+    /// exactly one per member profile.
+    pub fn new(
+        catalog_revision_id: CatalogRevisionId,
+        default_profile_id: Option<ProviderProfileId>,
+        captured_at: TimestampDto,
+        kind_descriptors: Vec<ProviderKindDescriptorRevisionV1>,
+        profile_revisions: Vec<ProviderProfileRevisionV1>,
+        profile_policies: Vec<ProviderProfilePolicyEntryDto>,
+    ) -> DtoResult<Self> {
+        let mut kind_ids = std::collections::BTreeSet::new();
+        let mut descriptor_ids = std::collections::BTreeSet::new();
+        for descriptor in &kind_descriptors {
+            if !kind_ids.insert(descriptor.kind_id())
+                || !descriptor_ids.insert(descriptor.descriptor_revision_id())
+            {
+                return Err(invalid_catalog_revision());
+            }
+        }
+        let mut profile_ids = std::collections::BTreeSet::new();
+        for profile in &profile_revisions {
+            if !profile_ids.insert(profile.profile_id()) {
+                return Err(invalid_catalog_revision());
+            }
+            let declared = kind_descriptors
+                .iter()
+                .find(|descriptor| descriptor.kind_id() == profile.kind_id());
+            let Some(declared) = declared else {
+                return Err(invalid_catalog_revision());
+            };
+            if declared.descriptor_revision_id() != profile.kind_descriptor_revision_id() {
+                return Err(invalid_catalog_revision());
+            }
+        }
+        let mut policy_profile_ids = std::collections::BTreeSet::new();
+        for entry in &profile_policies {
+            if !policy_profile_ids.insert(entry.profile_id()) {
+                return Err(invalid_catalog_revision());
+            }
+        }
+        if policy_profile_ids != profile_ids {
+            return Err(invalid_catalog_revision());
+        }
+        Ok(Self {
+            catalog_revision_id,
+            default_profile_id,
+            captured_at,
+            kind_descriptors,
+            profile_revisions,
+            profile_policies,
+        })
+    }
+
+    /// Returns the catalog revision identity.
+    #[must_use]
+    pub const fn catalog_revision_id(&self) -> CatalogRevisionId {
+        self.catalog_revision_id
+    }
+
+    /// Returns the global default profile, when the revision declares one.
+    #[must_use]
+    pub const fn default_profile_id(&self) -> Option<&ProviderProfileId> {
+        self.default_profile_id.as_ref()
+    }
+
+    /// Returns the capture time the caller assigned to this revision.
+    #[must_use]
+    pub const fn captured_at(&self) -> TimestampDto {
+        self.captured_at
+    }
+
+    /// Returns the kind descriptor revisions this catalog revision declares.
+    #[must_use]
+    pub fn kind_descriptors(&self) -> &[ProviderKindDescriptorRevisionV1] {
+        &self.kind_descriptors
+    }
+
+    /// Returns the profile revisions this catalog revision declares.
+    #[must_use]
+    pub fn profile_revisions(&self) -> &[ProviderProfileRevisionV1] {
+        &self.profile_revisions
+    }
+
+    /// Returns the current policy of every member profile.
+    #[must_use]
+    pub fn profile_policies(&self) -> &[ProviderProfilePolicyEntryDto] {
+        &self.profile_policies
+    }
+}
+
+/// The committed outcome of one optimistic session provider-profile change.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SessionProviderProfileChangeDto {
+    session_id: SessionId,
+    changed: bool,
+    session_projection_revision: u64,
+}
+
+impl SessionProviderProfileChangeDto {
+    /// Creates one committed session provider-profile change outcome.
+    #[must_use]
+    pub const fn new(
+        session_id: SessionId,
+        changed: bool,
+        session_projection_revision: u64,
+    ) -> Self {
+        Self {
+            session_id,
+            changed,
+            session_projection_revision,
+        }
+    }
+
+    /// Returns the session whose durable default was addressed.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns whether the durable default changed.
+    #[must_use]
+    pub const fn changed(&self) -> bool {
+        self.changed
+    }
+
+    /// Returns the session projection revision after the commit.
+    #[must_use]
+    pub const fn session_projection_revision(&self) -> u64 {
+        self.session_projection_revision
+    }
+}
+
+/// One session's durable provider default and projection revision.
+///
+/// Availability, the resolved catalog entry, and the global default are
+/// daemon-computed read projections and are deliberately absent here.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionProviderProfileDto {
+    session_id: SessionId,
+    provider_profile_id: Option<ProviderProfileId>,
+    session_projection_revision: u64,
+}
+
+impl SessionProviderProfileDto {
+    /// Creates one durable session provider-profile read.
+    #[must_use]
+    pub const fn new(
+        session_id: SessionId,
+        provider_profile_id: Option<ProviderProfileId>,
+        session_projection_revision: u64,
+    ) -> Self {
+        Self {
+            session_id,
+            provider_profile_id,
+            session_projection_revision,
+        }
+    }
+
+    /// Returns the addressed session identity.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the durable session default, when one was set.
+    #[must_use]
+    pub const fn provider_profile_id(&self) -> Option<&ProviderProfileId> {
+        self.provider_profile_id.as_ref()
+    }
+
+    /// Returns the durable session projection revision.
+    #[must_use]
+    pub const fn session_projection_revision(&self) -> u64 {
+        self.session_projection_revision
+    }
+}
+
+/// The closed lifecycle state of one provider discovery attempt.
+///
+/// `Prepared` is the before-start state committed before any outbound
+/// boundary, `Started` is committed before the outbound call, and the three
+/// terminal states record a known result, a known failure, or a recovery-time
+/// interruption without terminal proof.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderDiscoveryAttemptStateDto {
+    /// The attempt is durably admitted but no outbound work started.
+    Prepared,
+    /// The attempt crossed its outbound boundary.
+    Started,
+    /// The attempt recorded a known terminal result.
+    Completed,
+    /// The attempt recorded a known failure.
+    Failed,
+    /// Recovery terminalized an attempt without terminal proof.
+    Interrupted,
+}
+
+impl ProviderDiscoveryAttemptStateDto {
+    /// Returns the canonical durable string representation of this attempt state.
+    ///
+    /// The representation is persisted verbatim, so it must stay byte-identical
+    /// across releases.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Prepared => "prepared",
+            Self::Started => "started",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Interrupted => "interrupted",
+        }
+    }
+
+    /// Parses the canonical durable string representation of a discovery attempt state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe internal error when `value` is not a declared attempt state.
+    pub fn parse(value: &str) -> DtoResult<Self> {
+        match value {
+            "prepared" => Ok(Self::Prepared),
+            "started" => Ok(Self::Started),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "interrupted" => Ok(Self::Interrupted),
+            _ => Err(ErrorDto::new(
+                "invalid_discovery_attempt_state",
+                ErrorCategoryDto::Internal,
+                "the durable discovery attempt state is not declared",
+                ErrorRetryDto::Never,
+                None,
+            )?),
+        }
+    }
+
+    /// Returns whether this state accepts no further transition.
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Interrupted)
+    }
+}
+
+/// Safe failure evidence recorded for one discovery attempt.
+///
+/// The pair mirrors the terminal run outcome convention: the code is a closed
+/// safe classification chosen by the caller and the message is safe text, never
+/// native provider output.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderDiscoveryFailureDto {
+    code: String,
+    message: String,
+}
+
+impl ProviderDiscoveryFailureDto {
+    /// Creates one safe discovery failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the code or message is blank or contains
+    /// a NUL byte.
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> DtoResult<Self> {
+        let code = code.into();
+        let message = message.into();
+        if code.trim().is_empty()
+            || message.trim().is_empty()
+            || code.contains('\0')
+            || message.contains('\0')
+        {
+            return Err(ErrorDto::validation(
+                "invalid_discovery_failure",
+                "a discovery failure needs a non-blank safe code and message",
+            ));
+        }
+        Ok(Self { code, message })
+    }
+
+    /// Returns the safe failure code.
+    #[must_use]
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    /// Returns the safe failure message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+/// One durable provider discovery attempt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderDiscoveryAttemptDto {
+    attempt_id: ProviderDiscoveryAttemptId,
+    profile_id: ProviderProfileId,
+    state: ProviderDiscoveryAttemptStateDto,
+    prepared_at: TimestampDto,
+    started_at: Option<TimestampDto>,
+    terminated_at: Option<TimestampDto>,
+    failure: Option<ProviderDiscoveryFailureDto>,
+}
+
+impl ProviderDiscoveryAttemptDto {
+    /// Creates one coherent durable discovery attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when a started or terminated time is
+    /// inconsistent with the attempt state or when failure evidence is not a
+    /// failed attempt's evidence.
+    pub fn new(
+        attempt_id: ProviderDiscoveryAttemptId,
+        profile_id: ProviderProfileId,
+        state: ProviderDiscoveryAttemptStateDto,
+        prepared_at: TimestampDto,
+        started_at: Option<TimestampDto>,
+        terminated_at: Option<TimestampDto>,
+        failure: Option<ProviderDiscoveryFailureDto>,
+    ) -> DtoResult<Self> {
+        let started_consistent = started_at.is_none_or(|started| started >= prepared_at);
+        // Only a dispatched attempt has a start time: a completed attempt always
+        // has one, while a failure or a recovery interruption is also
+        // representable before dispatch, where the durable before-start record
+        // never reached the provider.
+        let started_state = match state {
+            ProviderDiscoveryAttemptStateDto::Prepared => started_at.is_none(),
+            ProviderDiscoveryAttemptStateDto::Started
+            | ProviderDiscoveryAttemptStateDto::Completed => started_at.is_some(),
+            ProviderDiscoveryAttemptStateDto::Failed
+            | ProviderDiscoveryAttemptStateDto::Interrupted => true,
+        };
+        let terminal_shape = match state {
+            ProviderDiscoveryAttemptStateDto::Completed
+            | ProviderDiscoveryAttemptStateDto::Interrupted => {
+                terminated_at.is_some() && failure.is_none()
+            }
+            ProviderDiscoveryAttemptStateDto::Failed => {
+                terminated_at.is_some() && failure.is_some()
+            }
+            ProviderDiscoveryAttemptStateDto::Prepared
+            | ProviderDiscoveryAttemptStateDto::Started => {
+                terminated_at.is_none() && failure.is_none()
+            }
+        };
+        if !started_consistent || !started_state || !terminal_shape {
+            return Err(ErrorDto::validation(
+                "invalid_discovery_attempt",
+                "a discovery attempt state must match its recorded times and failure evidence",
+            ));
+        }
+        Ok(Self {
+            attempt_id,
+            profile_id,
+            state,
+            prepared_at,
+            started_at,
+            terminated_at,
+            failure,
+        })
+    }
+
+    /// Returns the discovery attempt identity.
+    #[must_use]
+    pub const fn attempt_id(&self) -> ProviderDiscoveryAttemptId {
+        self.attempt_id
+    }
+
+    /// Returns the profile the attempt discovers models for.
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProviderProfileId {
+        &self.profile_id
+    }
+
+    /// Returns the durable attempt state.
+    #[must_use]
+    pub const fn state(&self) -> ProviderDiscoveryAttemptStateDto {
+        self.state
+    }
+
+    /// Returns the before-start evidence time.
+    #[must_use]
+    pub const fn prepared_at(&self) -> TimestampDto {
+        self.prepared_at
+    }
+
+    /// Returns the outbound-boundary evidence time, when the attempt started.
+    #[must_use]
+    pub const fn started_at(&self) -> Option<TimestampDto> {
+        self.started_at
+    }
+
+    /// Returns the terminal evidence time, when the attempt terminated.
+    #[must_use]
+    pub const fn terminated_at(&self) -> Option<TimestampDto> {
+        self.terminated_at
+    }
+
+    /// Returns the recorded safe failure, when the attempt failed.
+    #[must_use]
+    pub const fn failure(&self) -> Option<&ProviderDiscoveryFailureDto> {
+        self.failure.as_ref()
+    }
+}
+
+/// One bounded usage aggregate per exact profile revision and model identity.
+///
+/// Aggregation is keyed by the run's committed provider selection, so different
+/// profiles that share every safe field stay independent usage groups. No
+/// price, currency, or estimated cost is recorded.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileUsageAggregateDto {
+    profile_id: ProviderProfileId,
+    provider_profile_revision_id: ProviderProfileRevisionId,
+    model_id: String,
+    reported_runs: u64,
+    unreported_runs: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    total_tokens: u64,
+}
+
+impl ProfileUsageAggregateDto {
+    /// Creates one coherent usage aggregate.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the model identity is blank or the
+    /// aggregate token counts are inconsistent with the reported run count.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The flat aggregate keeps one validating constructor per identity."
+    )]
+    pub fn new(
+        profile_id: ProviderProfileId,
+        provider_profile_revision_id: ProviderProfileRevisionId,
+        model_id: impl Into<String>,
+        reported_runs: u64,
+        unreported_runs: u64,
+        input_tokens: u64,
+        output_tokens: u64,
+        total_tokens: u64,
+    ) -> DtoResult<Self> {
+        let model_id = model_id.into();
+        let consistent = input_tokens.checked_add(output_tokens) == Some(total_tokens)
+            && (reported_runs > 0
+                || (input_tokens == 0 && output_tokens == 0 && total_tokens == 0));
+        if model_id.trim().is_empty() || !consistent {
+            return Err(ErrorDto::validation(
+                "invalid_profile_usage",
+                "a usage aggregate needs a model identity and coherent token counts",
+            ));
+        }
+        Ok(Self {
+            profile_id,
+            provider_profile_revision_id,
+            model_id,
+            reported_runs,
+            unreported_runs,
+            input_tokens,
+            output_tokens,
+            total_tokens,
+        })
+    }
+
+    /// Returns the exact profile identity of the aggregate.
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProviderProfileId {
+        &self.profile_id
+    }
+
+    /// Returns the exact profile revision identity of the aggregate.
+    #[must_use]
+    pub const fn provider_profile_revision_id(&self) -> ProviderProfileRevisionId {
+        self.provider_profile_revision_id
+    }
+
+    /// Returns the exact model identity of the aggregate.
+    #[must_use]
+    pub fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
+    /// Returns how many terminal runs reported usage.
+    #[must_use]
+    pub const fn reported_runs(&self) -> u64 {
+        self.reported_runs
+    }
+
+    /// Returns how many terminal runs reported no usage.
+    #[must_use]
+    pub const fn unreported_runs(&self) -> u64 {
+        self.unreported_runs
+    }
+
+    /// Returns the summed reported input tokens.
+    #[must_use]
+    pub const fn input_tokens(&self) -> u64 {
+        self.input_tokens
+    }
+
+    /// Returns the summed reported output tokens.
+    #[must_use]
+    pub const fn output_tokens(&self) -> u64 {
+        self.output_tokens
+    }
+
+    /// Returns the summed reported total tokens.
+    #[must_use]
+    pub const fn total_tokens(&self) -> u64 {
+        self.total_tokens
+    }
+}
+
+/// One committed completed reasoning source step of one session.
+///
+/// The read is the durable source from which a dependent run builds its typed
+/// cross-turn reasoning history; it carries the committed assistant step
+/// identity and the whole reasoning text of that step, never a fragment.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReasoningHistorySourceStepDto {
+    session_id: SessionId,
+    run_id: RunId,
+    message_id: i64,
+    reasoning: Option<String>,
+}
+
+impl ReasoningHistorySourceStepDto {
+    /// Creates one durable reasoning source step.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the message identity is negative or the
+    /// reasoning text carries a NUL byte.
+    pub fn new(
+        session_id: SessionId,
+        run_id: RunId,
+        message_id: i64,
+        reasoning: Option<String>,
+    ) -> DtoResult<Self> {
+        if message_id < 0 || reasoning.as_deref().is_some_and(|text| text.contains('\0')) {
+            return Err(ErrorDto::validation(
+                "invalid_reasoning_history_source",
+                "a reasoning source step needs a committed message identity and safe reasoning text",
+            ));
+        }
+        Ok(Self {
+            session_id,
+            run_id,
+            message_id,
+            reasoning,
+        })
+    }
+
+    /// Returns the owning session identity.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the completed run that produced the step.
+    #[must_use]
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
+    }
+
+    /// Returns the committed transcript row identity of the step.
+    #[must_use]
+    pub const fn message_id(&self) -> i64 {
+        self.message_id
+    }
+
+    /// Returns the whole committed reasoning text of the step, when it recorded one.
+    #[must_use]
+    pub fn reasoning(&self) -> Option<&str> {
+        self.reasoning.as_deref()
+    }
+}
+
 /// The DTO-only current-state storage contract implemented by durable backends.
 pub trait StorageRepositoryDto {
     /// Creates a session and returns its committed current-state projection.
@@ -462,15 +1256,26 @@ pub trait StorageRepositoryDto {
     ///
     /// `proposed_run_id` and `config_snapshot` are committed if this turn starts
     /// immediately, or retained as the immutable future-run selection if queued.
-    /// Repeating an accepted `idempotency_key` replays the current durable
-    /// outcome instead of recording a second turn.
+    /// `selection` is the exact resolved provider selection of this turn: it is
+    /// persisted credential-free in the same transaction, keyed by the turn's
+    /// proposed run identity, so the run that starts for this turn carries
+    /// exactly one committed selection whether it starts now or is promoted
+    /// later. `reasoning_history`, when present, commits its manifest, entries,
+    /// and bound audit record in that same transaction. Repeating an accepted
+    /// `idempotency_key` replays the current durable outcome instead of
+    /// recording a second turn.
     ///
     /// # Errors
     ///
     /// Returns a validation error when content is blank or exceeds the durable
-    /// turn-content bound (512 KiB), a validation, not-found, or conflict error
+    /// turn-content bound (512 KiB) or when the reasoning history exceeds the
+    /// fixed 4 MiB aggregate bound, a validation, not-found, or conflict error
     /// when the turn cannot be accepted for its session, or an unavailable error
     /// when storage fails.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One validating admission keeps the turn, its immutable run selection, and its history together."
+    )]
     fn accept_user_turn(
         &self,
         session_id: SessionId,
@@ -478,6 +1283,8 @@ pub trait StorageRepositoryDto {
         content: &str,
         proposed_run_id: RunId,
         config_snapshot: ConfigSnapshotDto,
+        selection: ResolvedRunProviderSelectionDto,
+        reasoning_history: Option<ReasoningHistoryManifestDto>,
         occurred_at: TimestampDto,
     ) -> DtoResult<AcceptedTurnOutcomeDto>;
 
@@ -712,4 +1519,232 @@ pub trait StorageRepositoryDto {
     /// Returns a validation or conflict error when the revision cannot be
     /// recorded, or an unavailable error when durable storage fails.
     fn accept_configuration_revision(&self, snapshot: ConfigSnapshotDto) -> DtoResult<()>;
+
+    /// Accepts one validated credential-free provider catalog revision.
+    ///
+    /// Acceptance commits the revision's kind descriptors, profile revisions,
+    /// current profile policies, and membership in one transaction, then
+    /// advances the accepted pointer and appends the preparation, optional
+    /// removal-acceptance, and acceptance audit records. Removal tombstones are
+    /// appended for members the revision omits; a removed kind that the revision
+    /// still references is rejected. Activation is a separate commit: an
+    /// accepted revision that is not activated is the activation-recovery state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conflict error when the revision cannot be
+    /// accepted under the single-version catalog law, or an unavailable error
+    /// when durable storage fails.
+    fn accept_catalog_revision(
+        &self,
+        revision: ProviderCatalogRevisionDto,
+    ) -> DtoResult<ProviderCatalogStateDto>;
+
+    /// Marks the exact accepted catalog revision as the active one.
+    ///
+    /// Repeating the activation of the already-active revision changes nothing.
+    /// When a different revision was active, the call records the
+    /// activation-recovery taxonomy in order: the required-recovery record, the
+    /// activation record, and the recovery-completed record.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict error when the addressed revision is not the accepted
+    /// one, or an unavailable error when durable storage fails.
+    fn mark_catalog_activated(
+        &self,
+        catalog_revision_id: CatalogRevisionId,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<ProviderCatalogStateDto>;
+
+    /// Records one rejected removal candidate as append-only audit evidence.
+    ///
+    /// A rejection never emits acceptance or activation; the recorded evidence
+    /// is the pending-removal record followed by the rejection record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when durable storage fails.
+    fn record_catalog_candidate_rejected(
+        &self,
+        candidate_revision_id: CatalogRevisionId,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<()>;
+
+    /// Loads the current accepted and activated catalog pointers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when durable storage cannot be read.
+    fn load_catalog_state(&self) -> DtoResult<ProviderCatalogStateDto>;
+
+    /// Loads one committed catalog revision with its current profile policies.
+    ///
+    /// # Errors
+    ///
+    /// Returns a not-found error when the revision is unknown, a decode failure
+    /// when a stored revision cannot be decoded, or an unavailable error when
+    /// durable storage cannot be read.
+    fn load_catalog_revision(
+        &self,
+        catalog_revision_id: CatalogRevisionId,
+    ) -> DtoResult<ProviderCatalogRevisionDto>;
+
+    /// Stores the current display, enabled, and pricing policy of one member profile.
+    ///
+    /// Display name, enabled state, and pricing are not revision-affecting, so
+    /// this call changes no catalog or profile revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns a not-found error when the profile is not a member of the
+    /// accepted catalog revision, or an unavailable error when durable storage
+    /// fails.
+    fn store_profile_policy(
+        &self,
+        profile_id: ProviderProfileId,
+        policy: ProviderProfilePolicyDto,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<ProviderProfilePolicyDto>;
+
+    /// Sets the durable session provider profile against its expected projection revision.
+    ///
+    /// The change is optimistic: a mismatched expected revision is a typed
+    /// conflict and commits nothing. Setting the already-durable profile is a
+    /// successful no-change outcome that leaves the revision untouched.
+    ///
+    /// # Errors
+    ///
+    /// Returns a not-found error for an unknown session, a conflict error when
+    /// the expected revision does not match, or an unavailable error when
+    /// durable storage fails.
+    fn set_session_provider_profile(
+        &self,
+        session_id: SessionId,
+        profile_id: ProviderProfileId,
+        expected_session_projection_revision: u64,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<SessionProviderProfileChangeDto>;
+
+    /// Loads one session's durable provider default and projection revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns a not-found error for an unknown session, or an unavailable error
+    /// when durable storage cannot be read.
+    fn load_session_provider_profile(
+        &self,
+        session_id: SessionId,
+    ) -> DtoResult<SessionProviderProfileDto>;
+
+    /// Loads one run's committed resolved provider selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a not-found error when the run or its committed selection does
+    /// not exist, a decode failure when the stored selection cannot be decoded,
+    /// or an unavailable error when durable storage cannot be read.
+    fn load_run_provider_selection(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<ResolvedRunProviderSelectionDto>;
+
+    /// Begins one discovery attempt before any external work.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict error when the attempt identity is already durable, or
+    /// an unavailable error when durable storage fails.
+    fn begin_discovery_attempt(
+        &self,
+        attempt_id: ProviderDiscoveryAttemptId,
+        profile_id: ProviderProfileId,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<ProviderDiscoveryAttemptDto>;
+
+    /// Marks one prepared discovery attempt started before its outbound boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns a not-found error for an unknown attempt, a conflict error when
+    /// the attempt accepts no start transition, or an unavailable error when
+    /// durable storage fails.
+    fn mark_discovery_started(
+        &self,
+        attempt_id: ProviderDiscoveryAttemptId,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<ProviderDiscoveryAttemptDto>;
+
+    /// Completes one started discovery attempt with its bounded result records.
+    ///
+    /// # Errors
+    ///
+    /// Returns a not-found error for an unknown attempt, a conflict error when
+    /// the attempt accepts no completion transition, a validation error when the
+    /// record set exceeds the durable result bound, or an unavailable error when
+    /// durable storage fails.
+    fn complete_discovery_attempt(
+        &self,
+        attempt_id: ProviderDiscoveryAttemptId,
+        records: Vec<ProviderModelRecordDto>,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<intention_proto::provider::ProviderDiscoveryResultDto>;
+
+    /// Fails one unfinished discovery attempt with its safe failure evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a not-found error for an unknown attempt, a conflict error when
+    /// the attempt is already terminal, or an unavailable error when durable
+    /// storage fails.
+    fn fail_discovery_attempt(
+        &self,
+        attempt_id: ProviderDiscoveryAttemptId,
+        failure: ProviderDiscoveryFailureDto,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<ProviderDiscoveryAttemptDto>;
+
+    /// Terminalizes every unfinished discovery attempt as interrupted.
+    ///
+    /// Every attempt that is not terminal becomes `Interrupted` with the
+    /// supplied time inside one transaction, so a restart cannot leave a
+    /// half-applied recovery. No attempt resumes or continues automatically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when recovery changes cannot be durably
+    /// committed.
+    fn recover_unfinished_discovery_attempts(
+        &self,
+        recovered_at: TimestampDto,
+    ) -> DtoResult<Vec<ProviderDiscoveryAttemptDto>>;
+
+    /// Loads one bounded usage aggregate per (profile revision, model) identity.
+    ///
+    /// Aggregation is computed from terminal runs and their committed provider
+    /// selections; no price, currency, or estimated cost is produced.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when durable storage cannot be read.
+    fn load_profile_usage(
+        &self,
+        profile_id: ProviderProfileId,
+    ) -> DtoResult<Vec<ProfileUsageAggregateDto>>;
+
+    /// Loads the committed completed reasoning source steps of one session.
+    ///
+    /// Steps are assistant steps of completed runs in durable transcript order,
+    /// so a dependent run can build its typed cross-turn history from committed
+    /// source material instead of rescanning live state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a not-found error for an unknown session, or an unavailable error
+    /// when durable storage cannot be read.
+    fn load_reasoning_history_source(
+        &self,
+        session_id: SessionId,
+    ) -> DtoResult<Vec<ReasoningHistorySourceStepDto>>;
 }

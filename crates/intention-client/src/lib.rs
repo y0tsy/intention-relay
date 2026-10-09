@@ -12,13 +12,23 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use intention_proto::{
-    ClientRequestDto, CreateSessionAcceptedDto, CreateSessionCommandDto, DaemonHealthDto,
-    DtoResult, ErrorCategoryDto, ErrorDto, GetSessionSnapshotQueryDto, IdempotencyKey,
-    InterruptRunAcceptedDto, InterruptRunCommandDto, MessageProjectionDto, ProtocolResultDto,
-    RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunId, RunProjectionDto, RunStatusDto,
-    RunStreamFrameDto, RunSubscriptionSnapshotDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto,
-    SessionId, SessionSnapshotDto, SubscribeRunCommandDto, TurnId, decode_response, encode_request,
-    parse_run_frame,
+    AcceptProviderCatalogRemovalCommandDto, ApplyConfigurationDocumentCommandDto,
+    ApplyConfigurationEditsCommandDto, CheckProviderHealthCommandDto, ClientRequestDto,
+    ConfigurationEditAcceptedDto, ConfigurationEditDto, ConfigurationReloadAcceptedDto,
+    CreateSessionAcceptedDto, CreateSessionCommandDto, CredentialRotationAcceptedDto,
+    DaemonHealthDto, DiscoverProviderModelsCommandDto, DtoResult, ErrorCategoryDto, ErrorDto,
+    GetSessionProviderProfileQueryDto, GetSessionSnapshotQueryDto, IdempotencyKey,
+    InterruptRunAcceptedDto, InterruptRunCommandDto, ListProviderCatalogQueryDto,
+    MessageProjectionDto, ProtocolResultDto, ProviderCatalogCandidateRejectedDto,
+    ProviderCatalogPageDto, ProviderCatalogRemovalAcceptedDto, ProviderCatalogStatusDto,
+    ProviderDiscoveryResultDto, ProviderHealthEvidenceDto, ProviderProfileId,
+    ProviderProfileOverrideDto, RejectProviderCatalogCandidateCommandDto,
+    ReloadConfigurationCommandDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto,
+    RotateProviderCredentialCommandDto, RunId, RunProjectionDto, RunStatusDto, RunStreamFrameDto,
+    RunSubscriptionSnapshotDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId,
+    SessionProviderProfileProjectionDto, SessionSnapshotDto, SetSessionProviderProfileAcceptedDto,
+    SetSessionProviderProfileCommandDto, SubscribeRunCommandDto, TurnId, decode_response,
+    encode_request, parse_run_frame,
 };
 use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncMessageSender, LocalEndpoint,
@@ -274,6 +284,350 @@ impl IntentionClient {
         }
     }
 
+    /// Lists one bounded page of the active provider catalog.
+    ///
+    /// The page carries the safe credential-free entry projection and an opaque
+    /// continuation token that is passed back unchanged for the next page.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection (including a malformed page token or
+    /// a token from another catalog revision), a typed transport or timeout
+    /// error, or an invalid-response error when the reply is not a catalog page.
+    pub async fn list_provider_catalog(
+        &self,
+        query: ListProviderCatalogQueryDto,
+    ) -> DtoResult<ProviderCatalogPageDto> {
+        match self
+            .request(ClientRequestDto::ListProviderCatalog(query))
+            .await?
+        {
+            ProtocolResultDto::ProviderCatalogPage(page) => Ok(page),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Queries the current safe provider catalog status.
+    ///
+    /// The status reports the closed activation state, the applicable closed
+    /// degraded reason, and safe revision and validation identities.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection, a typed transport or timeout error,
+    /// or an invalid-response error when the reply is not a catalog status.
+    pub async fn provider_catalog_status(&self) -> DtoResult<ProviderCatalogStatusDto> {
+        match self
+            .request(ClientRequestDto::GetProviderCatalogStatus)
+            .await?
+        {
+            ProtocolResultDto::ProviderCatalogStatus(status) => Ok(status),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Changes one session's durable default provider profile.
+    ///
+    /// The command carries the expected durable session projection revision, so
+    /// a stale expectation is the daemon's typed conflict; requesting the
+    /// profile that is already the default is accepted with `changed = false`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection, a typed transport or timeout error,
+    /// or an invalid-response error when the reply is not the acceptance of this
+    /// command's session.
+    pub async fn set_session_provider_profile(
+        &self,
+        command: SetSessionProviderProfileCommandDto,
+    ) -> DtoResult<SetSessionProviderProfileAcceptedDto> {
+        let session_id = command.session_id();
+        match self
+            .request(ClientRequestDto::SetSessionProviderProfile(command))
+            .await?
+        {
+            ProtocolResultDto::SessionProviderProfileSet(accepted)
+                if accepted.session_id() == session_id =>
+            {
+                Ok(accepted)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Queries one session's durable provider profile projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection, a typed transport or timeout error,
+    /// or an invalid-response error when the reply is not the requested
+    /// session's provider profile projection.
+    pub async fn session_provider_profile(
+        &self,
+        session_id: SessionId,
+    ) -> DtoResult<SessionProviderProfileProjectionDto> {
+        match self
+            .request(ClientRequestDto::GetSessionProviderProfile(
+                GetSessionProviderProfileQueryDto::new(session_id),
+            ))
+            .await?
+        {
+            ProtocolResultDto::SessionProviderProfile(profile)
+                if profile.session_id() == session_id =>
+            {
+                Ok(profile)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Re-reads the configuration file through the daemon's private loading boundary.
+    ///
+    /// A semantically equal configuration is a no-op success; a catalog-affecting
+    /// change is rejected with no durable change.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection (including
+    /// `catalog_change_requires_restart`), a typed transport or timeout error, or
+    /// an invalid-response error when the reply is not a configuration reload.
+    pub async fn reload_configuration(
+        &self,
+        operation_id: IdempotencyKey,
+    ) -> DtoResult<ConfigurationReloadAcceptedDto> {
+        match self
+            .request(ClientRequestDto::ReloadConfiguration(
+                ReloadConfigurationCommandDto::new(operation_id),
+            ))
+            .await?
+        {
+            ProtocolResultDto::ConfigurationReloaded(accepted) => Ok(accepted),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Rotates one profile's private credential from the daemon's own source.
+    ///
+    /// The command carries no credential material: the daemon re-reads its
+    /// private source inside the loading boundary and rebuilds the profile's
+    /// private client only when every safe selected field still matches.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection (including a frozen-meaning mismatch
+    /// and an unavailable source), a typed transport or timeout error, or an
+    /// invalid-response error when the reply rotates another profile.
+    pub async fn rotate_provider_credential(
+        &self,
+        profile_id: ProviderProfileId,
+        operation_id: IdempotencyKey,
+    ) -> DtoResult<CredentialRotationAcceptedDto> {
+        match self
+            .request(ClientRequestDto::RotateProviderCredential(
+                RotateProviderCredentialCommandDto::new(profile_id.clone(), operation_id),
+            ))
+            .await?
+        {
+            ProtocolResultDto::ProviderCredentialRotated(accepted)
+                if accepted.profile_id() == &profile_id =>
+            {
+                Ok(accepted)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Checks one profile's live provider health.
+    ///
+    /// Health evidence is non-authorizing operational evidence: it creates no
+    /// run, retry, or quota, and it never reroutes a selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection, a typed transport or timeout error,
+    /// or an invalid-response error when the reply is another provider's
+    /// evidence.
+    pub async fn check_provider_health(
+        &self,
+        profile_id: ProviderProfileId,
+    ) -> DtoResult<ProviderHealthEvidenceDto> {
+        match self
+            .request(ClientRequestDto::CheckProviderHealth(
+                CheckProviderHealthCommandDto::new(profile_id.clone()),
+            ))
+            .await?
+        {
+            ProtocolResultDto::ProviderHealth(evidence)
+                if evidence.provider_id() == &profile_id =>
+            {
+                Ok(evidence)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Begins one non-authorizing provider/model discovery attempt.
+    ///
+    /// Discovered records are additive: they never select, repair, or replace a
+    /// profile, and the attempt has no automatic continuation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection, a typed transport or timeout error,
+    /// or an invalid-response error when the reply is not a discovery result.
+    pub async fn discover_provider_models(
+        &self,
+        profile_id: ProviderProfileId,
+    ) -> DtoResult<ProviderDiscoveryResultDto> {
+        match self
+            .request(ClientRequestDto::DiscoverProviderModels(
+                DiscoverProviderModelsCommandDto::new(profile_id),
+            ))
+            .await?
+        {
+            ProtocolResultDto::ProviderModelsDiscovered(result) => Ok(result),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Applies one credential-free configuration document.
+    ///
+    /// The daemon validates the candidate server-side, writes the validated
+    /// document atomically, and restores the retained private credential inside
+    /// its own loading boundary; a candidate carrying credential material is
+    /// rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error for a blank document, the daemon's typed
+    /// rejection, a typed transport or timeout error, or an invalid-response
+    /// error when the reply is not an accepted configuration edit.
+    pub async fn apply_configuration_document(
+        &self,
+        document: String,
+        operation_id: IdempotencyKey,
+    ) -> DtoResult<ConfigurationEditAcceptedDto> {
+        let command = ApplyConfigurationDocumentCommandDto::new(document, operation_id)?;
+        match self
+            .request(ClientRequestDto::ApplyConfigurationDocument(command))
+            .await?
+        {
+            ProtocolResultDto::ConfigurationDocumentApplied(accepted) => Ok(accepted),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Applies closed typed configuration edits.
+    ///
+    /// The daemon validates the edits server-side, writes the resulting document
+    /// atomically, and commits the new configuration revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error when no edit is supplied, the daemon's
+    /// typed rejection, a typed transport or timeout error, or an
+    /// invalid-response error when the reply is not an accepted configuration
+    /// edit.
+    pub async fn apply_configuration_edits(
+        &self,
+        edits: Vec<ConfigurationEditDto>,
+        operation_id: IdempotencyKey,
+    ) -> DtoResult<ConfigurationEditAcceptedDto> {
+        let command = ApplyConfigurationEditsCommandDto::new(edits, operation_id)?;
+        match self
+            .request(ClientRequestDto::ApplyConfigurationEdits(command))
+            .await?
+        {
+            ProtocolResultDto::ConfigurationEditsApplied(accepted) => Ok(accepted),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Accepts one exact pending catalog removal candidate.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection, a typed transport or timeout error,
+    /// or an invalid-response error when the acceptance is not the requested
+    /// candidate's revision.
+    pub async fn accept_provider_catalog_removal(
+        &self,
+        command: AcceptProviderCatalogRemovalCommandDto,
+    ) -> DtoResult<ProviderCatalogRemovalAcceptedDto> {
+        let candidate_revision_id = command.candidate().candidate_revision_id();
+        match self
+            .request(ClientRequestDto::AcceptProviderCatalogRemoval(command))
+            .await?
+        {
+            ProtocolResultDto::ProviderCatalogRemovalAccepted(accepted)
+                if accepted.catalog_revision_id() == candidate_revision_id =>
+            {
+                Ok(accepted)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Rejects one pending catalog candidate.
+    ///
+    /// Rejection leaves the catalog degraded read-only on the active revision
+    /// the candidate was prepared against; it publishes no new catalog revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection, a typed transport or timeout error,
+    /// or an invalid-response error when the rejection does not report the active
+    /// revision the candidate was prepared against.
+    pub async fn reject_provider_catalog_candidate(
+        &self,
+        command: RejectProviderCatalogCandidateCommandDto,
+    ) -> DtoResult<ProviderCatalogCandidateRejectedDto> {
+        let expected_active_revision_id = command.candidate().expected_active_revision_id();
+        match self
+            .request(ClientRequestDto::RejectProviderCatalogCandidate(command))
+            .await?
+        {
+            ProtocolResultDto::ProviderCatalogCandidateRejected(rejected)
+                if rejected.active_catalog_revision_id() == Some(expected_active_revision_id) =>
+            {
+                Ok(rejected)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Sends one user turn carrying an explicit provider profile override.
+    ///
+    /// The override applies only to the run this turn starts, never to the
+    /// session default; the daemon resolves and records the exact selection
+    /// before the run commits.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error for blank content, the daemon's typed
+    /// rejection (including a revision mismatch and an unavailable runtime
+    /// selection), a typed transport or timeout error, or an invalid-response
+    /// error when the reply is not an accepted turn of this session.
+    pub async fn send_user_turn_with_profile(
+        &self,
+        session_id: SessionId,
+        idempotency_key: IdempotencyKey,
+        content: String,
+        provider_profile: ProviderProfileOverrideDto,
+    ) -> DtoResult<SendUserTurnOutcomeDto> {
+        let command = SendUserTurnCommandDto::new(session_id, idempotency_key, content)?
+            .with_provider_profile(Some(provider_profile));
+        match self
+            .request(ClientRequestDto::SendUserTurn(command))
+            .await?
+        {
+            ProtocolResultDto::TurnAccepted(turn) if turn.session_id() == session_id => {
+                Ok(turn.outcome())
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
     async fn connect_ready(&self) -> DtoResult<DaemonHealthDto> {
         let link = self.connect().await?;
         match Self::request_on(link, ClientRequestDto::GetDaemonHealth).await? {
@@ -471,7 +825,7 @@ impl RunStreamState {
     pub fn apply_initial(&mut self, snapshot: RunSubscriptionSnapshotDto) -> DtoResult<()> {
         self.ensure_scope(snapshot.run().session_id(), Some(snapshot.run().run_id()))?;
         let mut next = Self::new(self.session_id, self.run_id);
-        next.run = Some(*snapshot.run());
+        next.run = Some(snapshot.run().clone());
         next.messages = snapshot.messages().to_vec();
         next.retain_newest();
         *self = next;
@@ -551,7 +905,7 @@ impl RunStreamState {
     /// Returns the current run lifecycle status, once a snapshot has been accepted.
     #[must_use]
     pub const fn status(&self) -> Option<RunStatusDto> {
-        match self.run {
+        match self.run.as_ref() {
             Some(run) => Some(run.status()),
             None => None,
         }

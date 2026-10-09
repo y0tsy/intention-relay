@@ -831,7 +831,6 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "http",
- "intention-config",
  "intention-proto",
  "openrouter-rs",
  "serde",

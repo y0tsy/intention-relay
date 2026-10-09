@@ -3,7 +3,8 @@
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
-    DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, TurnId, WorkspaceId,
+    DtoResult, ErrorDto, IdempotencyKey, ProjectId, ProviderProfileOverrideDto, RunId, SessionId,
+    TurnId, WorkspaceId,
 };
 use crate::{RunModeDto, WorkspaceRootDto};
 
@@ -103,6 +104,8 @@ pub struct SendUserTurnCommandDto {
     session_id: SessionId,
     idempotency_key: IdempotencyKey,
     content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_profile: Option<ProviderProfileOverrideDto>,
 }
 
 impl<'de> Deserialize<'de> for SendUserTurnCommandDto {
@@ -115,15 +118,19 @@ impl<'de> Deserialize<'de> for SendUserTurnCommandDto {
             session_id: SessionId,
             idempotency_key: IdempotencyKey,
             content: String,
+            #[serde(default)]
+            provider_profile: Option<ProviderProfileOverrideDto>,
         }
 
         let raw = RawSendUserTurnCommandDto::deserialize(deserializer)?;
-        Self::new(raw.session_id, raw.idempotency_key, raw.content).map_err(de::Error::custom)
+        Self::new(raw.session_id, raw.idempotency_key, raw.content)
+            .map(|command| command.with_provider_profile(raw.provider_profile))
+            .map_err(de::Error::custom)
     }
 }
 
 impl SendUserTurnCommandDto {
-    /// Creates a command with a non-empty user message.
+    /// Creates a command with a non-empty user message and no profile override.
     ///
     /// # Errors
     ///
@@ -144,8 +151,21 @@ impl SendUserTurnCommandDto {
                 session_id,
                 idempotency_key,
                 content,
+                provider_profile: None,
             })
         }
+    }
+
+    /// Returns the same command carrying one optional profile override.
+    ///
+    /// A per-turn override changes only the run this command starts.
+    #[must_use]
+    pub fn with_provider_profile(
+        mut self,
+        provider_profile: Option<ProviderProfileOverrideDto>,
+    ) -> Self {
+        self.provider_profile = provider_profile;
+        self
     }
 
     /// Returns the target session identity.
@@ -164,6 +184,12 @@ impl SendUserTurnCommandDto {
     #[must_use]
     pub fn content(&self) -> &str {
         &self.content
+    }
+
+    /// Returns the optional explicit profile override for the started run.
+    #[must_use]
+    pub const fn provider_profile(&self) -> Option<&ProviderProfileOverrideDto> {
+        self.provider_profile.as_ref()
     }
 }
 

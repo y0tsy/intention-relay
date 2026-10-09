@@ -14,6 +14,25 @@ mod common;
 use common::{fixture_message, fixture_projection, fixture_workspace_root};
 
 use intention_proto::{
+    AcceptProviderCatalogRemovalCommandDto, ApplyConfigurationDocumentCommandDto,
+    ApplyConfigurationEditsCommandDto, CatalogRevisionId, CheckProviderHealthCommandDto,
+    ConfigurationEditAcceptedDto, ConfigurationEditDto, ConfigurationReloadAcceptedDto,
+    ContextPreservationCapabilityDto, CredentialRotationAcceptedDto, CredentialTransportDto,
+    DiscoverProviderModelsCommandDto, GetSessionProviderProfileQueryDto,
+    ListProviderCatalogQueryDto, ModelCapabilitySetV1, ModelCapabilityTaxonomyVersionDto,
+    ModelInputKindDto, ProviderCapabilityAvailabilityDto, ProviderCatalogActivationStateDto,
+    ProviderCatalogCandidateHandleDto, ProviderCatalogCandidateRejectedDto, ProviderCatalogPageDto,
+    ProviderCatalogRemovalAcceptedDto, ProviderCatalogStatusDto, ProviderDiscoveryAttemptId,
+    ProviderDiscoveryResultDto, ProviderDriverCapabilitiesDto, ProviderExecutionPolicyDto,
+    ProviderHealthEvidenceDto, ProviderHealthStateDto, ProviderKindDescriptorRevisionId,
+    ProviderKindId, ProviderModelRecordDto, ProviderProfileEntryDto, ProviderProfileId,
+    ProviderProfileReadinessDto, ReasoningCapabilityDto, ReasoningEffortLevelDto,
+    ReasoningHistoryTransferDto, RejectProviderCatalogCandidateCommandDto,
+    ReloadConfigurationCommandDto, RotateProviderCredentialCommandDto,
+    SessionProviderProfileProjectionDto, SetSessionProviderProfileAcceptedDto,
+    SetSessionProviderProfileCommandDto, ToolExchangeCapabilityDto,
+};
+use intention_proto::{
     ClientRequestDto, CreateSessionAcceptedDto, CreateSessionCommandDto, DaemonHealthDto, ErrorDto,
     GetSessionSnapshotQueryDto, InterruptRunAcceptedDto, InterruptRunCommandDto,
     ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto,
@@ -24,6 +43,82 @@ use intention_proto::{
 };
 use intention_proto::{ConfigRevisionId, IdempotencyKey, MessageKindDto, ProjectId, RunId};
 use intention_proto::{RunModeDto, SessionId, TurnId, WorkspaceId};
+
+fn fixture_profile_id() -> ProviderProfileId {
+    ProviderProfileId::parse("main").expect("fixture profile identity is valid")
+}
+
+fn fixture_capability_subset() -> ModelCapabilitySetV1 {
+    ModelCapabilitySetV1::new(
+        ModelCapabilityTaxonomyVersionDto::current(),
+        ModelInputKindDto::TextOnly,
+        ProviderCapabilityAvailabilityDto::Enabled,
+        ProviderCapabilityAvailabilityDto::Disabled,
+        ReasoningCapabilityDto::textual_reasoning_v1(
+            vec![
+                ReasoningEffortLevelDto::Low,
+                ReasoningEffortLevelDto::Medium,
+            ],
+            true,
+        )
+        .expect("fixture reasoning capability is valid"),
+        ToolExchangeCapabilityDto::model_tool_loop_v1("fixture-tool-loop-v1")
+            .expect("fixture tool loop is valid"),
+        ContextPreservationCapabilityDto::local_durable_history_v1(
+            ReasoningHistoryTransferDto::textual_history_v1("fixture-compatibility-v1")
+                .expect("fixture transfer is valid"),
+        ),
+    )
+    .expect("fixture capability subset is valid")
+}
+
+fn fixture_profile_entry() -> ProviderProfileEntryDto {
+    ProviderProfileEntryDto::new(
+        fixture_profile_id(),
+        "Main",
+        true,
+        ProviderKindId::parse("openrouter").expect("fixture kind identity is valid"),
+        ProviderKindDescriptorRevisionId::new(),
+        "fixture-model",
+        None,
+        ProviderExecutionPolicyDto::new(30, 2).expect("fixture execution policy is valid"),
+        fixture_capability_subset(),
+        CredentialTransportDto::bearer(),
+        true,
+        ProviderDriverCapabilitiesDto::new(true, true, true),
+        ProviderProfileReadinessDto::Ready,
+        None,
+    )
+    .expect("fixture profile entry is valid")
+}
+
+fn fixture_catalog_page() -> ProviderCatalogPageDto {
+    ProviderCatalogPageDto::new(
+        Some(CatalogRevisionId::new()),
+        Some(fixture_profile_id()),
+        vec![fixture_profile_entry()],
+        None,
+        false,
+    )
+    .expect("fixture catalog page is valid")
+}
+
+fn fixture_catalog_status() -> ProviderCatalogStatusDto {
+    ProviderCatalogStatusDto::new(
+        ProviderCatalogActivationStateDto::Active,
+        None,
+        Some(CatalogRevisionId::new()),
+        None,
+        Some(fixture_profile_id()),
+        Vec::new(),
+    )
+    .expect("fixture catalog status is valid")
+}
+
+fn fixture_candidate_handle() -> ProviderCatalogCandidateHandleDto {
+    ProviderCatalogCandidateHandleDto::new(CatalogRevisionId::new(), CatalogRevisionId::new())
+        .expect("fixture candidate handle is valid")
+}
 
 fn fixture_run(session_id: SessionId, run_id: RunId) -> RunProjectionDto {
     RunProjectionDto::new(
@@ -66,10 +161,25 @@ const fn result_kind(request: &ClientRequestDto) -> &'static str {
         ClientRequestDto::GetSessionSnapshot(_) => "session_snapshot",
         ClientRequestDto::GetDaemonHealth => "daemon_health",
         ClientRequestDto::SubscribeRun(_) => "run_subscribed",
+        ClientRequestDto::ListProviderCatalog(_) => "provider_catalog_page",
+        ClientRequestDto::GetProviderCatalogStatus => "provider_catalog_status",
+        ClientRequestDto::SetSessionProviderProfile(_) => "session_provider_profile_set",
+        ClientRequestDto::GetSessionProviderProfile(_) => "session_provider_profile",
+        ClientRequestDto::AcceptProviderCatalogRemoval(_) => "provider_catalog_removal_accepted",
+        ClientRequestDto::RejectProviderCatalogCandidate(_) => {
+            "provider_catalog_candidate_rejected"
+        }
+        ClientRequestDto::ReloadConfiguration(_) => "configuration_reloaded",
+        ClientRequestDto::RotateProviderCredential(_) => "provider_credential_rotated",
+        ClientRequestDto::CheckProviderHealth(_) => "provider_health",
+        ClientRequestDto::DiscoverProviderModels(_) => "provider_models_discovered",
+        ClientRequestDto::ApplyConfigurationDocument(_) => "configuration_document_applied",
+        ClientRequestDto::ApplyConfigurationEdits(_) => "configuration_edits_applied",
     }
 }
 
 fn fixture_requests(session_id: SessionId, run_id: RunId) -> Vec<ClientRequestDto> {
+    let profile_id = fixture_profile_id();
     vec![
         ClientRequestDto::CreateSession(CreateSessionCommandDto::new(
             ProjectId::new(),
@@ -87,10 +197,63 @@ fn fixture_requests(session_id: SessionId, run_id: RunId) -> Vec<ClientRequestDt
         ClientRequestDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id)),
         ClientRequestDto::GetDaemonHealth,
         ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, run_id)),
+        ClientRequestDto::ListProviderCatalog(
+            ListProviderCatalogQueryDto::new(None).expect("fixture catalog query is valid"),
+        ),
+        ClientRequestDto::GetProviderCatalogStatus,
+        ClientRequestDto::SetSessionProviderProfile(SetSessionProviderProfileCommandDto::new(
+            session_id,
+            profile_id.clone(),
+            0,
+            IdempotencyKey::new(),
+        )),
+        ClientRequestDto::GetSessionProviderProfile(GetSessionProviderProfileQueryDto::new(
+            session_id,
+        )),
+        ClientRequestDto::AcceptProviderCatalogRemoval(
+            AcceptProviderCatalogRemovalCommandDto::new(
+                fixture_candidate_handle(),
+                IdempotencyKey::new(),
+            ),
+        ),
+        ClientRequestDto::RejectProviderCatalogCandidate(
+            RejectProviderCatalogCandidateCommandDto::new(
+                fixture_candidate_handle(),
+                IdempotencyKey::new(),
+            ),
+        ),
+        ClientRequestDto::ReloadConfiguration(ReloadConfigurationCommandDto::new(
+            IdempotencyKey::new(),
+        )),
+        ClientRequestDto::RotateProviderCredential(RotateProviderCredentialCommandDto::new(
+            profile_id.clone(),
+            IdempotencyKey::new(),
+        )),
+        ClientRequestDto::CheckProviderHealth(CheckProviderHealthCommandDto::new(
+            profile_id.clone(),
+        )),
+        ClientRequestDto::DiscoverProviderModels(DiscoverProviderModelsCommandDto::new(
+            profile_id.clone(),
+        )),
+        ClientRequestDto::ApplyConfigurationDocument(
+            ApplyConfigurationDocumentCommandDto::new(
+                "schema_version = 1\n",
+                IdempotencyKey::new(),
+            )
+            .expect("fixture configuration document is valid"),
+        ),
+        ClientRequestDto::ApplyConfigurationEdits(
+            ApplyConfigurationEditsCommandDto::new(
+                vec![ConfigurationEditDto::set_profile_enabled(profile_id, true)],
+                IdempotencyKey::new(),
+            )
+            .expect("fixture configuration edits are valid"),
+        ),
     ]
 }
 
 fn fixture_results(session_id: SessionId, run_id: RunId) -> Vec<ProtocolResultDto> {
+    let profile_id = fixture_profile_id();
     vec![
         ProtocolResultDto::SessionCreated(CreateSessionAcceptedDto::new(
             ProjectId::new(),
@@ -107,6 +270,57 @@ fn fixture_results(session_id: SessionId, run_id: RunId) -> Vec<ProtocolResultDt
         ProtocolResultDto::SessionSnapshot(fixture_snapshot(session_id, run_id)),
         ProtocolResultDto::DaemonHealth(DaemonHealthDto::ready()),
         ProtocolResultDto::RunSubscribed(fixture_run_snapshot(session_id, run_id)),
+        ProtocolResultDto::ProviderCatalogPage(fixture_catalog_page()),
+        ProtocolResultDto::ProviderCatalogStatus(fixture_catalog_status()),
+        ProtocolResultDto::SessionProviderProfileSet(SetSessionProviderProfileAcceptedDto::new(
+            session_id, true, 1,
+        )),
+        ProtocolResultDto::SessionProviderProfile(
+            SessionProviderProfileProjectionDto::new(
+                session_id,
+                Some(profile_id.clone()),
+                Some(fixture_profile_entry()),
+                None,
+                1,
+                None,
+            )
+            .expect("fixture session provider projection is valid"),
+        ),
+        ProtocolResultDto::ProviderCatalogRemovalAccepted(ProviderCatalogRemovalAcceptedDto::new(
+            CatalogRevisionId::new(),
+        )),
+        ProtocolResultDto::ProviderCatalogCandidateRejected(
+            ProviderCatalogCandidateRejectedDto::new(Some(CatalogRevisionId::new())),
+        ),
+        ProtocolResultDto::ConfigurationReloaded(ConfigurationReloadAcceptedDto::new(
+            ConfigRevisionId::new(),
+            Some(CatalogRevisionId::new()),
+        )),
+        ProtocolResultDto::ProviderCredentialRotated(CredentialRotationAcceptedDto::new(
+            profile_id.clone(),
+        )),
+        ProtocolResultDto::ProviderHealth(
+            ProviderHealthEvidenceDto::new(profile_id, ProviderHealthStateDto::Available, None)
+                .expect("fixture health evidence is valid"),
+        ),
+        ProtocolResultDto::ProviderModelsDiscovered(
+            ProviderDiscoveryResultDto::new(
+                ProviderDiscoveryAttemptId::new(),
+                vec![
+                    ProviderModelRecordDto::new("fixture-model", Some("Fixture".to_owned()))
+                        .expect("fixture model record is valid"),
+                ],
+            )
+            .expect("fixture discovery result is valid"),
+        ),
+        ProtocolResultDto::ConfigurationDocumentApplied(ConfigurationEditAcceptedDto::new(
+            ConfigRevisionId::new(),
+            false,
+        )),
+        ProtocolResultDto::ConfigurationEditsApplied(ConfigurationEditAcceptedDto::new(
+            ConfigRevisionId::new(),
+            true,
+        )),
     ]
 }
 
@@ -151,9 +365,32 @@ fn every_request_round_trips_with_its_named_result_kind() {
         );
     }
     assert_eq!(
-        kinds.len(),
-        7,
-        "the wire implements exactly one request kind per operation"
+        kinds,
+        [
+            "apply_configuration_document",
+            "apply_configuration_edits",
+            "accept_provider_catalog_removal",
+            "check_provider_health",
+            "create_session",
+            "discover_provider_models",
+            "get_daemon_health",
+            "get_provider_catalog_status",
+            "get_session_provider_profile",
+            "get_session_snapshot",
+            "interrupt_run",
+            "list_provider_catalog",
+            "reject_provider_catalog_candidate",
+            "reload_configuration",
+            "remove_turn",
+            "rotate_provider_credential",
+            "send_user_turn",
+            "set_session_provider_profile",
+            "subscribe_run",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<std::collections::BTreeSet<String>>(),
+        "the wire implements exactly one request kind per operation with its frozen tag"
     );
 }
 

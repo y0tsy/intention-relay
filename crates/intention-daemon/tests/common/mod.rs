@@ -25,7 +25,7 @@ use intention_proto::{
     WorkspaceRootDto,
 };
 use intention_providers::ModelExecutionDriver;
-use intention_test_support::fixture_snapshot;
+use intention_test_support::{fixture_catalog_document, fixture_snapshot};
 use intention_transport::LocalEndpoint;
 use tempfile::TempDir;
 
@@ -36,9 +36,10 @@ pub fn fixture_facade(
 ) -> (TempDir, DaemonApplicationFacade, ConfigSnapshotDto) {
     let directory = TempDir::new().expect("temporary directory exists");
     let snapshot = fixture_snapshot();
+    let document = fixture_catalog_document("fixture");
     let facade = DaemonApplicationFacade::open_for_test_support_with_driver(
         directory.path().join(format!("{label}.sqlite")),
-        snapshot.clone(),
+        &document,
         driver,
     )
     .expect("fixture facade opens");

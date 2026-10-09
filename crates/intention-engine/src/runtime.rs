@@ -7,7 +7,7 @@
 //! become one `assistant` row per completed model step; a crash mid-step loses
 //! the in-flight step text.
 
-use intention_config::ConfigSnapshotDto;
+use intention_proto::provider::ResolvedRunProviderSelectionDto;
 use intention_proto::{
     DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, ProviderErrorDto, RunId,
     SessionId, TimestampDto, ToolCallDto, UsageDto,
@@ -22,6 +22,7 @@ use intention_storage::{RunOutcomeDto, StorageRepositoryDto};
 use intention_tools::CancellationSignal as ToolCancellationSignal;
 
 use crate::context_window::ContextWindowState;
+use crate::reasoning::RunReasoningAggregate;
 
 /// The durable context notice recorded when an interrupted call produced no
 /// final result of its own.
@@ -266,7 +267,7 @@ pub struct ModelRunExecutionInputDto {
     session_id: SessionId,
     run_id: RunId,
     request: ModelRequestDto,
-    safe_config: ConfigSnapshotDto,
+    selection: ResolvedRunProviderSelectionDto,
     cancellation: RunCancellation,
 }
 
@@ -279,26 +280,31 @@ impl std::fmt::Debug for ModelRunExecutionInputDto {
             .field("session_id", &self.session_id)
             .field("run_id", &self.run_id)
             .field("request", &self.request)
-            .field("safe_config", &self.safe_config)
+            .field("selection", &self.selection)
             .finish_non_exhaustive()
     }
 }
 
 impl ModelRunExecutionInputDto {
     /// Creates complete execution input without credentials or provider choice.
+    ///
+    /// The selection is the exact resolved selection of the run's persisted
+    /// `run_provider_selections` row; the executor verifies it against that row
+    /// before any provider work. The window policy is not part of this input:
+    /// it comes from the run's committed configuration revision.
     #[must_use]
     pub const fn new(
         session_id: SessionId,
         run_id: RunId,
         request: ModelRequestDto,
-        safe_config: ConfigSnapshotDto,
+        selection: ResolvedRunProviderSelectionDto,
         cancellation: RunCancellation,
     ) -> Self {
         Self {
             session_id,
             run_id,
             request,
-            safe_config,
+            selection,
             cancellation,
         }
     }
@@ -321,10 +327,10 @@ impl ModelRunExecutionInputDto {
         &self.request
     }
 
-    /// Returns the caller-selected durable configuration selection.
+    /// Returns the resolved exact provider selection of this run.
     #[must_use]
-    pub const fn safe_config(&self) -> &ConfigSnapshotDto {
-        &self.safe_config
+    pub const fn selection(&self) -> &ResolvedRunProviderSelectionDto {
+        &self.selection
     }
 }
 
@@ -438,12 +444,30 @@ where
                 "model execution requires a starting run",
             ));
         }
+        // Admission verifies the exact persisted selection before any provider
+        // work: the request must address the run's own selection, and that
+        // selection must be the one the run durably carries. A missing or
+        // different selection is never rerouted to a current default.
         if input.request.run_id() != input.run_id
-            || input.request.model() != input.safe_config.resolved().provider().model()
+            || input.request.model() != input.selection.model_id()
         {
             return self.failed_outcome(&input, provider_configuration_unavailable());
         }
         let persisted = match self
+            .repository
+            .load_run_provider_selection(input.session_id, input.run_id)
+        {
+            Ok(selection) => selection,
+            Err(_) => {
+                return self.failed_outcome(&input, provider_configuration_unavailable());
+            }
+        };
+        if persisted != input.selection {
+            return self.failed_outcome(&input, provider_configuration_unavailable());
+        }
+        // The window policy comes from the run's own committed configuration
+        // revision, never from a live or caller-supplied preference.
+        let configuration = match self
             .repository
             .load_run_config_snapshot(input.session_id, input.run_id)
         {
@@ -452,12 +476,9 @@ where
                 return self.failed_outcome(&input, provider_configuration_unavailable());
             }
         };
-        if !same_execution_selection(&persisted, &input.safe_config) {
-            return self.failed_outcome(&input, provider_configuration_unavailable());
-        }
 
-        let policy = persisted.resolved().provider_execution();
-        let context_window = persisted.resolved().context_window();
+        let policy = persisted.effective_execution_policy();
+        let context_window = *configuration.context_window();
         // Uncommitted assistant text of the current model step. A retryable
         // attempt failure commits it as the run's last assistant row, so
         // non-blank text closes the attempt budget; blank text commits nothing
@@ -465,6 +486,9 @@ where
         let mut pending_text = String::new();
         let mut usage: Option<UsageDto> = None;
         let mut durable_output = false;
+        // The combined reasoning aggregate spans every round and attempt of the
+        // run; crossing its fixed bound fails the run typed.
+        let mut run_reasoning = RunReasoningAggregate::new();
         // Context additions that must survive a retryable attempt boundary:
         // joined pending user messages and interruption notices. The live
         // context of the run stays continuous across provider attempts.
@@ -489,6 +513,7 @@ where
                         &mut durable_output,
                         ContextWindowState::new(context_window.window_tokens()),
                     ),
+                    &mut run_reasoning,
                     &mut extra_messages,
                 )
                 .await?;
@@ -535,6 +560,7 @@ where
         input: &ModelRunExecutionInputDto,
         timeout_seconds: u8,
         mut state: RoundState<'_>,
+        run_reasoning: &mut RunReasoningAggregate,
         extra_messages: &mut Vec<ModelMessageDto>,
     ) -> DtoResult<AttemptResult> {
         let mut messages: Vec<ModelMessageDto> = input.request.messages().to_vec();
@@ -550,7 +576,13 @@ where
         let mut tool_round = 0u8;
         loop {
             let outcome = self
-                .drive_provider_round(request.clone(), input, timeout_seconds, &mut state)
+                .drive_provider_round(
+                    request.clone(),
+                    input,
+                    timeout_seconds,
+                    &mut state,
+                    run_reasoning,
+                )
                 .await?;
             match outcome {
                 RoundOutcome::Finished { reason, assistant } => {
@@ -771,12 +803,16 @@ where
         input: &ModelRunExecutionInputDto,
         timeout_seconds: u8,
         state: &mut RoundState<'_>,
+        run_reasoning: &mut RunReasoningAggregate,
     ) -> DtoResult<RoundOutcome> {
         use futures_util::{FutureExt, StreamExt, future::Either};
 
         let mut lifecycle = ModelStreamLifecycleDto::new();
         let request_characters = ContextWindowState::request_characters(&request);
         state.begin_round();
+        // The reasoning channel of this round carries categorized fragments and
+        // summaries; summaries stay at the tail of the round's reasoning text.
+        let mut round_reasoning = RoundReasoning::new();
         let mut stream = self
             .driver
             .execute(request, input.cancellation.model_signal());
@@ -786,14 +822,13 @@ where
             .fuse();
         futures_util::pin_mut!(timeout);
         let mut calls: Vec<ToolCallDto> = Vec::new();
-        let mut reasoning_text = String::new();
         loop {
             if input.cancellation.is_cancelled() {
                 drop(stream);
                 let assistant = self.commit_interrupted_step(
                     input,
                     state.pending_text_mut(),
-                    step_reasoning(&reasoning_text),
+                    round_reasoning.durable_reasoning(),
                 )?;
                 state.record_step_commit(assistant.as_ref());
                 return Ok(RoundOutcome::Interrupted { assistant });
@@ -812,7 +847,7 @@ where
                     let assistant = self.commit_interrupted_step(
                         input,
                         state.pending_text_mut(),
-                        step_reasoning(&reasoning_text),
+                        round_reasoning.durable_reasoning(),
                     )?;
                     state.record_step_commit(assistant.as_ref());
                     return Ok(RoundOutcome::Interrupted { assistant });
@@ -847,14 +882,14 @@ where
                             retryable: false,
                         });
                     }
-                    let reasoning = match state.reasoning_attachment(&reasoning_text, &calls) {
+                    let reasoning = match round_reasoning.attachment(&calls) {
                         Ok(reasoning) => reasoning,
                         Err(_) => return Ok(unrepresentable_reasoning_round()),
                     };
                     let assistant = self.commit_step(
                         input,
                         state.pending_text_mut(),
-                        step_reasoning(&reasoning_text),
+                        round_reasoning.durable_reasoning(),
                     )?;
                     state.record_step_commit(assistant.as_ref());
                     return Ok(RoundOutcome::ToolCalls {
@@ -875,12 +910,29 @@ where
                 ModelEventDto::TextDelta { content } => {
                     state.push_text(&content);
                 }
-                ModelEventDto::ReasoningDelta { content } => {
-                    // The accumulated echo is bounded per round at the
-                    // attachment's representable bound: a round that crosses it
-                    // is marked unrepresentable and never truncated, and empty
-                    // fragments never become durable content.
-                    state.observe_reasoning(&content, &mut reasoning_text);
+                ModelEventDto::ReasoningDelta { content, .. } => {
+                    // The run's combined bound is checked first: crossing it
+                    // fails the whole run typed. The round echo is bounded
+                    // separately at the transient attachment's representable
+                    // bound, and empty fragments only mark the channel's
+                    // presence.
+                    if let Err(error) = round_reasoning.observe_fragment(&content, run_reasoning) {
+                        return Ok(RoundOutcome::Failed {
+                            error,
+                            retryable: false,
+                        });
+                    }
+                }
+                ModelEventDto::ReasoningSummaryDelta { content } => {
+                    // Summaries are the tail of the round's reasoning material:
+                    // they never precede the fragments they summarize, and they
+                    // never become ordinary assistant text.
+                    if let Err(error) = round_reasoning.observe_summary(&content, run_reasoning) {
+                        return Ok(RoundOutcome::Failed {
+                            error,
+                            retryable: false,
+                        });
+                    }
                 }
                 ModelEventDto::Usage { usage: reported } => {
                     state.observe_usage(reported, request_characters);
@@ -893,19 +945,19 @@ where
                         let assistant = self.commit_step(
                             input,
                             state.pending_text_mut(),
-                            step_reasoning(&reasoning_text),
+                            round_reasoning.durable_reasoning(),
                         )?;
                         state.record_step_commit(assistant.as_ref());
                         return Ok(RoundOutcome::Finished { reason, assistant });
                     }
-                    let reasoning = match state.reasoning_attachment(&reasoning_text, &calls) {
+                    let reasoning = match round_reasoning.attachment(&calls) {
                         Ok(reasoning) => reasoning,
                         Err(_) => return Ok(unrepresentable_reasoning_round()),
                     };
                     let assistant = self.commit_step(
                         input,
                         state.pending_text_mut(),
-                        step_reasoning(&reasoning_text),
+                        round_reasoning.durable_reasoning(),
                     )?;
                     state.record_step_commit(assistant.as_ref());
                     return Ok(RoundOutcome::ToolCalls {
@@ -956,8 +1008,9 @@ where
     /// Commits the accumulated assistant step as one transcript row.
     ///
     /// The step's text and reasoning accumulate in memory and become one
-    /// committed `assistant` message; a step without non-blank text commits
-    /// nothing, because the transcript shape requires assistant content.
+    /// committed `assistant` message carrying the step's whole reasoning text;
+    /// a step without non-blank text commits nothing, because the transcript
+    /// shape requires assistant content.
     ///
     /// # Errors
     ///
@@ -966,7 +1019,7 @@ where
         &self,
         input: &ModelRunExecutionInputDto,
         pending_text: &mut String,
-        reasoning: Option<&str>,
+        reasoning: Option<String>,
     ) -> DtoResult<Option<MessageProjectionDto>> {
         if pending_text.trim().is_empty() {
             pending_text.clear();
@@ -977,7 +1030,7 @@ where
             Some(input.run_id),
             MessageKindDto::Assistant,
             std::mem::take(pending_text),
-            reasoning.map(str::to_owned),
+            reasoning,
             None,
             None,
         )?;
@@ -1000,7 +1053,7 @@ where
         &self,
         input: &ModelRunExecutionInputDto,
         pending_text: &mut String,
-        reasoning: Option<&str>,
+        reasoning: Option<String>,
     ) -> DtoResult<Option<MessageProjectionDto>> {
         if !pending_text.trim().is_empty() {
             pending_text.push('\n');
@@ -1082,10 +1135,6 @@ struct RoundState<'a> {
     durable_output: &'a mut bool,
     /// Live context-window accounting of the current attempt.
     context_window: ContextWindowState,
-    /// Whether the current round observed the provider reasoning channel.
-    reasoning_channel_seen: bool,
-    /// Whether the current round's reasoning echo crossed the attachment bound.
-    reasoning_echo_exceeds_round_bound: bool,
     /// Whether the current tool batch answered an interrupted call partially.
     interrupted_tool: bool,
 }
@@ -1103,16 +1152,12 @@ impl<'a> RoundState<'a> {
             usage,
             durable_output,
             context_window,
-            reasoning_channel_seen: false,
-            reasoning_echo_exceeds_round_bound: false,
             interrupted_tool: false,
         }
     }
 
     /// Clears the previous round's observations before the next round begins.
     const fn begin_round(&mut self) {
-        self.reasoning_channel_seen = false;
-        self.reasoning_echo_exceeds_round_bound = false;
         self.interrupted_tool = false;
     }
 
@@ -1132,58 +1177,6 @@ impl<'a> RoundState<'a> {
         if matches!(reported, UsageDto::Reported { .. }) {
             *self.usage = Some(reported);
         }
-    }
-
-    /// Records one reasoning-channel fragment and accumulates its echo.
-    ///
-    /// The channel marks a presence even when it carries no text: the
-    /// continuation request must send the channel back on the assistant
-    /// tool-call message. The echo is bounded per round at the attachment's
-    /// representable bound; once the bound is crossed the round is marked
-    /// unrepresentable and the echo is never truncated.
-    fn observe_reasoning(&mut self, content: &str, echo: &mut String) {
-        self.reasoning_channel_seen = true;
-        if content.is_empty() {
-            return;
-        }
-        if self.reasoning_echo_exceeds_round_bound
-            || echo.len() + content.len() > MAX_ROUND_REASONING_ECHO_BYTES
-        {
-            self.reasoning_echo_exceeds_round_bound = true;
-        } else {
-            echo.push_str(content);
-        }
-    }
-
-    /// Builds the round's transient reasoning attachment for the tool-loop
-    /// continuation.
-    ///
-    /// The attachment is `Some` whenever the round observed the reasoning
-    /// channel, even when that channel carried no text. A round without the
-    /// channel produces `None`.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the round's accumulated echo cannot
-    /// form a valid attachment: it crossed the per-round attachment bound, or
-    /// the attachment DTO rejects its control characters. Callers record the
-    /// dedicated typed failed run instead of propagating the validation error.
-    fn reasoning_attachment(
-        &self,
-        echo: &str,
-        calls: &[ToolCallDto],
-    ) -> DtoResult<Option<AssistantReasoningDto>> {
-        if !self.reasoning_channel_seen {
-            return Ok(None);
-        }
-        if self.reasoning_echo_exceeds_round_bound {
-            return Err(ErrorDto::validation(
-                "invalid_round_reasoning_echo",
-                "the round reasoning echo exceeds the per-round attachment bound",
-            ));
-        }
-        let tool_call_ids = calls.iter().map(ToolCallDto::call_id).collect();
-        AssistantReasoningDto::new(tool_call_ids, echo).map(Some)
     }
 
     /// Applies one window accounting pass to the continuation messages.
@@ -1233,6 +1226,129 @@ impl<'a> RoundState<'a> {
     }
 }
 
+/// The reasoning material one provider round produced.
+///
+/// Categorized fragments accumulate in arrival order and summaries accumulate
+/// apart from them, so the round's reasoning text is always
+/// `fragments ++ summaries`: summaries are tail-only on every surface that
+/// carries the round's reasoning material. The whole echo is bounded at the
+/// transient attachment's representable bound; a round that crosses it is marked
+/// unrepresentable and its echo is never truncated.
+struct RoundReasoning {
+    fragments: String,
+    summaries: String,
+    channel_seen: bool,
+    echo_exceeds_attachment_bound: bool,
+}
+
+impl RoundReasoning {
+    /// Creates the empty reasoning material of one round.
+    const fn new() -> Self {
+        Self {
+            fragments: String::new(),
+            summaries: String::new(),
+            channel_seen: false,
+            echo_exceeds_attachment_bound: false,
+        }
+    }
+
+    /// Records one categorized reasoning fragment.
+    ///
+    /// The fragment marks the round's reasoning presence even when it carries no
+    /// text. The run's combined bound is checked first, so an over-bound
+    /// fragment fails the run instead of being dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns `reasoning_output_limit_exceeded` when the run's combined bound
+    /// is crossed.
+    fn observe_fragment(
+        &mut self,
+        content: &str,
+        run_reasoning: &mut RunReasoningAggregate,
+    ) -> DtoResult<()> {
+        self.channel_seen = true;
+        if content.is_empty() {
+            return Ok(());
+        }
+        run_reasoning.observe(content)?;
+        self.fragments.push_str(content);
+        self.check_attachment_bound();
+        Ok(())
+    }
+
+    /// Records one reasoning summary delta.
+    ///
+    /// Summaries accumulate apart from the fragments, so the round's reasoning
+    /// text always carries them at its tail.
+    ///
+    /// # Errors
+    ///
+    /// Returns `reasoning_output_limit_exceeded` when the run's combined bound
+    /// is crossed.
+    fn observe_summary(
+        &mut self,
+        content: &str,
+        run_reasoning: &mut RunReasoningAggregate,
+    ) -> DtoResult<()> {
+        self.channel_seen = true;
+        run_reasoning.observe(content)?;
+        self.summaries.push_str(content);
+        self.check_attachment_bound();
+        Ok(())
+    }
+
+    /// Marks the echo unrepresentable once the combined echo crosses its bound.
+    const fn check_attachment_bound(&mut self) {
+        if self.fragments.len() + self.summaries.len() > MAX_ROUND_REASONING_ECHO_BYTES {
+            self.echo_exceeds_attachment_bound = true;
+        }
+    }
+
+    /// Returns the whole reasoning text of the round, when it carried any.
+    ///
+    /// The text is `fragments ++ summaries`; summaries never precede the
+    /// fragments they summarize. The material is bounded by the run's combined
+    /// bound, so the echo is never truncated.
+    fn durable_reasoning(&self) -> Option<String> {
+        if self.fragments.is_empty() && self.summaries.is_empty() {
+            return None;
+        }
+        let mut text = String::with_capacity(self.fragments.len() + self.summaries.len());
+        text.push_str(&self.fragments);
+        text.push_str(&self.summaries);
+        Some(text)
+    }
+
+    /// Builds the round's transient reasoning attachment for the tool-loop
+    /// continuation.
+    ///
+    /// The attachment is `Some` whenever the round observed the reasoning
+    /// channel, even when that channel carried no text. A round without the
+    /// channel produces `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the round's accumulated echo cannot form
+    /// a valid attachment: it crossed the per-round attachment bound, or the
+    /// attachment DTO rejects its control characters. Callers record the
+    /// dedicated typed failed run instead of propagating the validation error.
+    fn attachment(&self, calls: &[ToolCallDto]) -> DtoResult<Option<AssistantReasoningDto>> {
+        if !self.channel_seen {
+            return Ok(None);
+        }
+        if self.echo_exceeds_attachment_bound {
+            return Err(ErrorDto::validation(
+                "invalid_round_reasoning_echo",
+                "the round reasoning echo exceeds the per-round attachment bound",
+            ));
+        }
+        let tool_call_ids = calls.iter().map(ToolCallDto::call_id).collect();
+        let combined = self.durable_reasoning().unwrap_or_default();
+        AssistantReasoningDto::new(tool_call_ids, combined).map(Some)
+    }
+}
+
 /// The outcome of one provider attempt.
 enum AttemptResult {
     /// The run reached completed state with its committed projection.
@@ -1268,11 +1384,6 @@ enum RoundOutcome {
         reasoning: Option<AssistantReasoningDto>,
         assistant: Option<MessageProjectionDto>,
     },
-}
-
-/// Returns the durable reasoning text of one step, when it carried any.
-fn step_reasoning(reasoning: &str) -> Option<&str> {
-    (!reasoning.is_empty()).then_some(reasoning)
 }
 
 /// Validates one tool result content and returns it unchanged.
@@ -1331,25 +1442,6 @@ fn provider_configuration_unavailable() -> ErrorDto {
         "provider_configuration_unavailable",
         "the provider configuration is unavailable",
     )
-}
-
-fn same_execution_selection(persisted: &ConfigSnapshotDto, current: &ConfigSnapshotDto) -> bool {
-    let persisted_provider = persisted.resolved().provider();
-    let current_provider = current.resolved().provider();
-    let persisted_execution = persisted.resolved().provider_execution();
-    let current_execution = current.resolved().provider_execution();
-    // The window policy decides whether tool results are compressed, so a
-    // persisted selection that disagrees with the validated one must fail typed
-    // before any provider work instead of compressing under a foreign window.
-    let persisted_window = persisted.resolved().context_window();
-    let current_window = current.resolved().context_window();
-    persisted_provider.kind() == current_provider.kind()
-        && persisted_provider.model() == current_provider.model()
-        && persisted_provider.endpoint() == current_provider.endpoint()
-        && persisted_execution.attempt_timeout_seconds()
-            == current_execution.attempt_timeout_seconds()
-        && persisted_execution.max_attempts() == current_execution.max_attempts()
-        && persisted_window.window_tokens() == current_window.window_tokens()
 }
 
 /// Returns the durable context notice for one interrupted call.

@@ -20,8 +20,14 @@ use std::time::Duration;
 
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
-    ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort, RunCancellation,
-    ToolExecutionPort, ToolResultOutcomeDto,
+    ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
+    ProviderDriverRegistry, RunCancellation, SessionEventSink, ToolExecutionPort,
+    ToolResultOutcomeDto,
+};
+use intention_proto::provider::{
+    CatalogRevisionId, ProviderDiscoveryAttemptId, ProviderModelRecordDto, ProviderProfileId,
+    ProviderProfilePolicyDto, ReasoningHistoryManifestDto, ResolvedRunProviderSelectionDto,
+    SessionProviderProfileChangedDto,
 };
 use intention_proto::{
     CreateSessionCommandDto, DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey,
@@ -31,10 +37,64 @@ use intention_proto::{
 };
 use intention_providers::ToolCallDto;
 use intention_storage::{
-    AcceptedTurnOutcomeDto, RunOutcomeDto, StartingRunModelContextDto, StorageRepositoryDto,
-    ToolResultEvidenceDto, ToolResultStatusDto,
+    AcceptedTurnOutcomeDto, ProfileUsageAggregateDto, ProviderCatalogRevisionDto,
+    ProviderCatalogStateDto, ProviderDiscoveryAttemptDto, ProviderDiscoveryFailureDto,
+    RunOutcomeDto, SessionProviderProfileChangeDto, SessionProviderProfileDto,
+    StartingRunModelContextDto, StorageRepositoryDto, ToolResultEvidenceDto, ToolResultStatusDto,
 };
-use intention_test_support::fixture_snapshot;
+use intention_test_support::{fixture_selection, fixture_snapshot};
+
+/// A fixture registry answering every liveness question the same way.
+pub struct ScriptedRegistry {
+    live: bool,
+}
+
+impl ScriptedRegistry {
+    /// Creates a registry that reports the supplied liveness for every selection.
+    #[must_use]
+    pub const fn new(live: bool) -> Self {
+        Self { live }
+    }
+}
+
+impl ProviderDriverRegistry for ScriptedRegistry {
+    fn has_live_driver(&self, _selection: &ResolvedRunProviderSelectionDto) -> bool {
+        self.live
+    }
+}
+
+/// Records every published session provider-profile change.
+pub struct RecordingSessionSink {
+    events: Mutex<Vec<SessionProviderProfileChangedDto>>,
+}
+
+impl RecordingSessionSink {
+    /// Creates an empty recorder.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            events: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Returns every published change in publication order.
+    #[must_use]
+    pub fn events(&self) -> Vec<SessionProviderProfileChangedDto> {
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl SessionEventSink for RecordingSessionSink {
+    fn observe_session_provider_profile_change(&self, event: &SessionProviderProfileChangedDto) {
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(event.clone());
+    }
+}
 
 /// Returns the exact fixture timestamp for one Unix second value.
 pub fn time(value: i64) -> TimestampDto {
@@ -122,6 +182,8 @@ impl RecordedTransition {
 pub struct RecordedTurn {
     proposed_run_id: RunId,
     config_snapshot: ConfigSnapshotDto,
+    selection: ResolvedRunProviderSelectionDto,
+    reasoning_history: Option<ReasoningHistoryManifestDto>,
     occurred_at: TimestampDto,
 }
 
@@ -135,6 +197,16 @@ impl RecordedTurn {
     #[must_use]
     pub const fn config_snapshot(&self) -> &ConfigSnapshotDto {
         &self.config_snapshot
+    }
+    /// Returns the exact resolved provider selection committed with the turn.
+    #[must_use]
+    pub const fn selection(&self) -> &ResolvedRunProviderSelectionDto {
+        &self.selection
+    }
+    /// Returns the committed reasoning history manifest, when one was supplied.
+    #[must_use]
+    pub const fn reasoning_history(&self) -> Option<&ReasoningHistoryManifestDto> {
+        self.reasoning_history.as_ref()
     }
     /// Returns the externally selected acceptance time.
     #[must_use]
@@ -176,6 +248,24 @@ pub struct FakeRepository {
     pub cancel_after_append: Mutex<Option<(usize, RunCancellation)>>,
     pub append_count: Mutex<usize>,
     pub config_error: Mutex<Option<ErrorDto>>,
+    /// The exact selection the persisted run carries.
+    pub selection: Mutex<Option<ResolvedRunProviderSelectionDto>>,
+    /// One committed session provider-profile change outcome.
+    pub session_change: Mutex<Option<SessionProviderProfileChangeDto>>,
+    /// An injected failure of the session provider-profile change.
+    pub session_change_error: Mutex<Option<ErrorDto>>,
+    /// The durable session provider default read.
+    pub session_profile: Mutex<Option<SessionProviderProfileDto>>,
+    /// The committed usage aggregates of one profile.
+    pub profile_usage: Mutex<Vec<ProfileUsageAggregateDto>>,
+    /// Every catalog revision the fixture accepted.
+    pub accepted_catalog_revisions: Mutex<Vec<ProviderCatalogRevisionDto>>,
+    /// Every catalog revision the fixture activated.
+    pub activated_catalog_revisions: Mutex<Vec<CatalogRevisionId>>,
+    /// Every removal candidate the fixture recorded as rejected.
+    pub rejected_candidates: Mutex<Vec<CatalogRevisionId>>,
+    /// The durable reasoning source steps the fixture reports.
+    pub reasoning_source: Mutex<Vec<intention_storage::ReasoningHistorySourceStepDto>>,
     /// Pending user messages committed by the next context boundary.
     pub pending: Mutex<VecDeque<MessageProjectionDto>>,
     pub pending_consumes: Mutex<usize>,
@@ -183,8 +273,28 @@ pub struct FakeRepository {
 
 impl FakeRepository {
     /// Creates the fixture for one exact run identity in its `Starting` state.
+    ///
+    /// The persisted selection carries the fixture model, so a run that passes
+    /// the matching exact selection executes.
     #[must_use]
     pub fn new(session_id: SessionId, run_id: RunId, config: ConfigSnapshotDto) -> Self {
+        Self::with_selection(
+            session_id,
+            run_id,
+            config,
+            fixture_selection("fixture-openrouter", "openrouter", "fixture")
+                .expect("the fixture selection is valid"),
+        )
+    }
+
+    /// Creates the fixture with one explicit persisted selection.
+    #[must_use]
+    pub fn with_selection(
+        session_id: SessionId,
+        run_id: RunId,
+        config: ConfigSnapshotDto,
+        selection: ResolvedRunProviderSelectionDto,
+    ) -> Self {
         Self {
             session_id,
             run_id,
@@ -211,9 +321,41 @@ impl FakeRepository {
             cancel_after_append: Mutex::new(None),
             append_count: Mutex::new(0),
             config_error: Mutex::new(None),
+            selection: Mutex::new(Some(selection)),
+            session_change: Mutex::new(None),
+            session_change_error: Mutex::new(None),
+            session_profile: Mutex::new(None),
+            profile_usage: Mutex::new(Vec::new()),
+            accepted_catalog_revisions: Mutex::new(Vec::new()),
+            activated_catalog_revisions: Mutex::new(Vec::new()),
+            rejected_candidates: Mutex::new(Vec::new()),
+            reasoning_source: Mutex::new(Vec::new()),
             pending: Mutex::new(VecDeque::new()),
             pending_consumes: Mutex::new(0),
         }
+    }
+
+    /// Returns the exact selection the persisted run carries.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the fixture holds no selection; the constructor always sets
+    /// one.
+    #[must_use]
+    pub fn selection(&self) -> ResolvedRunProviderSelectionDto {
+        self.selection
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .expect("the fixture always holds a persisted selection")
+    }
+
+    /// Clears the persisted selection so the run has none.
+    pub fn clear_selection(&self) {
+        *self
+            .selection
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
     }
 
     /// Creates a fixture run in the supplied status under a fresh identity.
@@ -247,7 +389,11 @@ impl FakeRepository {
     /// Returns the current run projection, preferring an explicitly stored run.
     #[must_use]
     pub fn projection(&self) -> RunProjectionDto {
-        let stored = *self.run.lock().unwrap_or_else(PoisonError::into_inner);
+        let stored = self
+            .run
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         if let Some(run) = stored {
             return run;
         }
@@ -374,6 +520,8 @@ impl StorageRepositoryDto for FakeRepository {
         _content: &str,
         proposed_run_id: RunId,
         config_snapshot: ConfigSnapshotDto,
+        selection: ResolvedRunProviderSelectionDto,
+        reasoning_history: Option<ReasoningHistoryManifestDto>,
         occurred_at: TimestampDto,
     ) -> DtoResult<AcceptedTurnOutcomeDto> {
         self.accepted_inputs
@@ -382,6 +530,8 @@ impl StorageRepositoryDto for FakeRepository {
             .push(RecordedTurn {
                 proposed_run_id,
                 config_snapshot,
+                selection,
+                reasoning_history,
                 occurred_at,
             });
         self.accepted
@@ -652,6 +802,203 @@ impl StorageRepositoryDto for FakeRepository {
             "fixture_unused",
             "configuration acceptance is not used by this fixture",
         ))
+    }
+
+    fn accept_catalog_revision(
+        &self,
+        revision: ProviderCatalogRevisionDto,
+    ) -> DtoResult<ProviderCatalogStateDto> {
+        let revision_id = revision.catalog_revision_id();
+        self.accepted_catalog_revisions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(revision);
+        ProviderCatalogStateDto::new(Some(revision_id), None)
+    }
+
+    fn mark_catalog_activated(
+        &self,
+        catalog_revision_id: CatalogRevisionId,
+        _occurred_at: TimestampDto,
+    ) -> DtoResult<ProviderCatalogStateDto> {
+        self.activated_catalog_revisions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(catalog_revision_id);
+        ProviderCatalogStateDto::new(Some(catalog_revision_id), Some(catalog_revision_id))
+    }
+
+    fn record_catalog_candidate_rejected(
+        &self,
+        candidate_revision_id: CatalogRevisionId,
+        _occurred_at: TimestampDto,
+    ) -> DtoResult<()> {
+        self.rejected_candidates
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(candidate_revision_id);
+        Ok(())
+    }
+
+    fn load_catalog_state(&self) -> DtoResult<ProviderCatalogStateDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "catalog state reads are not used by this fixture",
+        ))
+    }
+
+    fn load_catalog_revision(
+        &self,
+        _catalog_revision_id: CatalogRevisionId,
+    ) -> DtoResult<ProviderCatalogRevisionDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "catalog revision reads are not used by this fixture",
+        ))
+    }
+
+    fn store_profile_policy(
+        &self,
+        _profile_id: ProviderProfileId,
+        _policy: ProviderProfilePolicyDto,
+        _occurred_at: TimestampDto,
+    ) -> DtoResult<ProviderProfilePolicyDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "profile policy storage is not used by this fixture",
+        ))
+    }
+
+    fn set_session_provider_profile(
+        &self,
+        session_id: SessionId,
+        _profile_id: ProviderProfileId,
+        _expected_session_projection_revision: u64,
+        _occurred_at: TimestampDto,
+    ) -> DtoResult<SessionProviderProfileChangeDto> {
+        assert_eq!(session_id, self.session_id);
+        let injected = self
+            .session_change_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(error) = injected {
+            return Err(error);
+        }
+        (*self
+            .session_change
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner))
+        .ok_or_else(|| {
+            ErrorDto::unavailable("fixture_unused", "the fixture stages no session change")
+        })
+    }
+
+    fn load_session_provider_profile(
+        &self,
+        _session_id: SessionId,
+    ) -> DtoResult<SessionProviderProfileDto> {
+        let profile = self
+            .session_profile
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        profile.ok_or_else(|| {
+            ErrorDto::unavailable("session_not_found", "the session holds no provider default")
+        })
+    }
+
+    fn load_run_provider_selection(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+    ) -> DtoResult<ResolvedRunProviderSelectionDto> {
+        self.selection
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or_else(|| {
+                ErrorDto::unavailable(
+                    "run_provider_selection_not_found",
+                    "the run carries no persisted provider selection",
+                )
+            })
+    }
+
+    fn begin_discovery_attempt(
+        &self,
+        _attempt_id: ProviderDiscoveryAttemptId,
+        _profile_id: ProviderProfileId,
+        _occurred_at: TimestampDto,
+    ) -> DtoResult<ProviderDiscoveryAttemptDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "discovery is not used by this fixture",
+        ))
+    }
+
+    fn mark_discovery_started(
+        &self,
+        _attempt_id: ProviderDiscoveryAttemptId,
+        _occurred_at: TimestampDto,
+    ) -> DtoResult<ProviderDiscoveryAttemptDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "discovery is not used by this fixture",
+        ))
+    }
+
+    fn complete_discovery_attempt(
+        &self,
+        _attempt_id: ProviderDiscoveryAttemptId,
+        _records: Vec<ProviderModelRecordDto>,
+        _occurred_at: TimestampDto,
+    ) -> DtoResult<intention_proto::provider::ProviderDiscoveryResultDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "discovery is not used by this fixture",
+        ))
+    }
+
+    fn fail_discovery_attempt(
+        &self,
+        _attempt_id: ProviderDiscoveryAttemptId,
+        _failure: ProviderDiscoveryFailureDto,
+        _occurred_at: TimestampDto,
+    ) -> DtoResult<ProviderDiscoveryAttemptDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "discovery is not used by this fixture",
+        ))
+    }
+
+    fn recover_unfinished_discovery_attempts(
+        &self,
+        _recovered_at: TimestampDto,
+    ) -> DtoResult<Vec<ProviderDiscoveryAttemptDto>> {
+        Ok(Vec::new())
+    }
+
+    fn load_profile_usage(
+        &self,
+        _profile_id: ProviderProfileId,
+    ) -> DtoResult<Vec<ProfileUsageAggregateDto>> {
+        Ok(self
+            .profile_usage
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone())
+    }
+
+    fn load_reasoning_history_source(
+        &self,
+        _session_id: SessionId,
+    ) -> DtoResult<Vec<intention_storage::ReasoningHistorySourceStepDto>> {
+        Ok(self
+            .reasoning_source
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone())
     }
 }
 

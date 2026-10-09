@@ -9,11 +9,9 @@
 )]
 mod common;
 
-use common::{create_session, repository, time};
+use common::{create_session, repository, selection, time};
 
-use intention_config::{
-    ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
-};
+use intention_config::{ConfigSnapshotDto, ContextWindowPolicyDto};
 use intention_proto::{
     ConfigRevisionId, FinishReasonDto, IdempotencyKey, RunId, SchemaVersionDto, SessionId,
     ToolCallId, UsageDto,
@@ -28,7 +26,7 @@ fn starting_run_model_context_rebuilds_the_committed_transcript_in_insertion_ord
     let (_directory, repository) = repository();
     let session_id = create_session(&repository, "model-context");
 
-    let first_run = start_run(&repository, session_id, "first user", "first-model", 2);
+    let first_run = start_run(&repository, session_id, "first user", 2);
     let call_id = ToolCallId::new();
     append(
         &repository,
@@ -82,7 +80,7 @@ fn starting_run_model_context_rebuilds_the_committed_transcript_in_insertion_ord
         )
         .expect("first run completes");
 
-    let starting_run = start_run(&repository, session_id, "current user", "current-model", 5);
+    let starting_run = start_run(&repository, session_id, "current user", 5);
     let context = repository
         .load_starting_run_model_context(session_id, starting_run)
         .expect("starting run context loads");
@@ -90,8 +88,9 @@ fn starting_run_model_context_rebuilds_the_committed_transcript_in_insertion_ord
     assert_eq!(context.session_id(), session_id);
     assert_eq!(context.run_id(), starting_run);
     assert_eq!(
-        context.safe_config().resolved().provider().model(),
-        "current-model"
+        context.safe_config().context_window().window_tokens(),
+        250_000,
+        "the starting context carries the run's committed window policy"
     );
     assert_eq!(
         context
@@ -129,7 +128,7 @@ fn starting_run_model_context_rebuilds_the_committed_transcript_in_insertion_ord
 fn starting_run_context_ends_at_the_target_run_user_turn() {
     let (_directory, repository) = repository();
     let session_id = create_session(&repository, "boundary");
-    let run_id = start_run(&repository, session_id, "first user", "current-model", 2);
+    let run_id = start_run(&repository, session_id, "first user", 2);
     // A message committed after the run's starting turn (for example a pending
     // message consumed at a boundary) never extends the starting context.
     append(
@@ -161,7 +160,7 @@ fn starting_run_context_ends_at_the_target_run_user_turn() {
 fn model_context_rejects_unknown_cross_session_and_non_starting_runs_safely() {
     let (_directory, repository) = repository();
     let session_id = create_session(&repository, "owner");
-    let run_id = start_run(&repository, session_id, "owner user", "owner-model", 2);
+    let run_id = start_run(&repository, session_id, "owner user", 2);
     let other_session_id = create_session(&repository, "other");
     repository
         .transition_run(session_id, run_id, RunStatusDto::Running, time(3))
@@ -194,7 +193,6 @@ fn start_run(
     repository: &SqliteStorageRepository,
     session_id: SessionId,
     content: &str,
-    model: &str,
     event_time: i64,
 ) -> RunId {
     let run_id = RunId::new();
@@ -204,7 +202,9 @@ fn start_run(
             IdempotencyKey::new(),
             content,
             run_id,
-            snapshot(model),
+            snapshot(),
+            selection("fixture"),
+            None,
             time(event_time),
         )
         .expect("turn starts");
@@ -252,7 +252,7 @@ fn append(
 fn starting_run_context_reads_without_taking_a_write_lock() {
     let (directory, repository) = repository();
     let session_id = create_session(&repository, "read-lock");
-    let run_id = start_run(&repository, session_id, "user", "current-model", 2);
+    let run_id = start_run(&repository, session_id, "user", 2);
 
     // Another connection holds the database's write lock. The pure read takes
     // no transaction of its own, so it still succeeds; an immediate transaction
@@ -271,27 +271,12 @@ fn starting_run_context_reads_without_taking_a_write_lock() {
         .expect("the write lock releases");
 }
 
-fn snapshot(model: &str) -> ConfigSnapshotDto {
-    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-        format!(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"recognizable-fixture-credential\""
-        ),
-        ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(
-                std::env::temp_dir()
-                    .join("model-context.toml")
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-            .expect("configuration path is absolute"),
-        ),
-    ))
-    .expect("safe configuration resolves");
+fn snapshot() -> ConfigSnapshotDto {
     ConfigSnapshotDto::new(
         SchemaVersionDto::new(1, 0),
         ConfigRevisionId::new(),
         time(1),
-        resolved,
+        ContextWindowPolicyDto::default_policy(),
     )
     .expect("safe snapshot is valid")
 }

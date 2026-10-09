@@ -59,15 +59,16 @@ use std::time::{Duration, Instant};
 
 use common::{config_path, spawn_daemon, unique_endpoint, write_config_document};
 use intention_client::{IntentionClient, ProcessDaemonLauncher, RunStreamClient};
-use intention_config::{
-    ConfigPathDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto,
-};
+use intention_config::RawConfigInputDto;
+use intention_config::catalog::{CatalogCandidate, normalize_provider_endpoint};
+use intention_proto::provider::{ProviderKindId, ProviderProfileId};
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto,
     RunStatusDto, WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_proto::{IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId};
 use intention_proto::{SendUserTurnOutcomeDto, SessionSnapshotDto, SubscribeRunCommandDto};
+use intention_providers::{GENERIC_CHAT_KIND_ID, OPENROUTER_KIND_ID};
 use intention_transport::LocalEndpoint;
 use tempfile::TempDir;
 
@@ -145,7 +146,7 @@ const DAEMON_REMOVED_ENVIRONMENT: [&str; 7] = [
 
 /// The opt-in live-provider selection resolved from the process environment.
 struct LiveProviderConfig {
-    kind: ProviderKindDto,
+    kind: ProviderKindId,
     model: String,
     credential: String,
     endpoint: Option<String>,
@@ -165,20 +166,23 @@ impl LiveProviderConfig {
             return None;
         }
         let kind = match std::env::var("INTENTION_REAL_API_KIND").ok().as_deref() {
-            None | Some("") | Some("generic-chat-completion-api") => {
-                ProviderKindDto::GenericChatCompletionApi
+            None | Some("") | Some(GENERIC_CHAT_KIND_ID) => {
+                ProviderKindId::parse(GENERIC_CHAT_KIND_ID)
+                    .expect("the reserved kind identity parses")
             }
-            Some("openrouter") => ProviderKindDto::Openrouter,
+            Some(OPENROUTER_KIND_ID) => ProviderKindId::parse(OPENROUTER_KIND_ID)
+                .expect("the reserved kind identity parses"),
             Some(_) => panic!(
                 "INTENTION_REAL_API_KIND must be 'generic-chat-completion-api' or 'openrouter'"
             ),
         };
-        let endpoint = match kind {
-            // The OpenRouter adapter owns its base URL: the frozen live
-            // contract writes no endpoint for that selection, even when the
-            // optional override is present in the environment.
-            ProviderKindDto::Openrouter => None,
-            ProviderKindDto::GenericChatCompletionApi => Some(
+        // The OpenRouter adapter owns its base URL: the frozen live contract
+        // writes no endpoint for that selection, even when the optional
+        // override is present in the environment.
+        let endpoint = if kind.as_str() == OPENROUTER_KIND_ID {
+            None
+        } else {
+            Some(
                 std::env::var("INTENTION_REAL_API_ENDPOINT")
                     .ok()
                     .filter(|value| !value.trim().is_empty())
@@ -186,7 +190,7 @@ impl LiveProviderConfig {
                         || DEFAULT_GENERIC_CHAT_ENDPOINT.to_owned(),
                         |value| value.trim().to_owned(),
                     ),
-            ),
+            )
         };
         Some(Self {
             kind,
@@ -210,6 +214,9 @@ impl LiveProviderConfig {
         let mut lines = vec![
             "schema_version = 1".to_owned(),
             "[provider]".to_owned(),
+            "default_profile = \"main\"".to_owned(),
+            String::new(),
+            "[providers.profiles.main]".to_owned(),
             format!("kind = \"{}\"", self.kind.as_str()),
             format!("model = \"{}\"", escape_toml_basic_string(&self.model)),
         ];
@@ -220,9 +227,15 @@ impl LiveProviderConfig {
             ));
         }
         lines.push(format!("credential = \"{credential}\""));
-        lines.push("[provider.execution]".to_owned());
+        lines.push("display_name = \"Live\"".to_owned());
+        lines.push("enabled = true".to_owned());
+        lines.push(String::new());
+        lines.push("[providers.profiles.main.execution]".to_owned());
         lines.push("attempt_timeout_seconds = 60".to_owned());
         lines.push("max_attempts = 2".to_owned());
+        lines.push(String::new());
+        lines.push("[providers.profiles.main.capabilities]".to_owned());
+        lines.push("text_streaming = true".to_owned());
         let joined = lines.join("\n");
         format!("{joined}\n")
     }
@@ -294,47 +307,62 @@ fn fixture_state_directory(host: &LiveE2eHost) -> PathBuf {
     }
 }
 
-/// Resolves the document through the production configuration parser and
-/// asserts the safe projection matches the requested selection.
+/// Resolves the document through the production catalog parser and asserts the
+/// declared profile matches the requested selection.
 ///
 /// The document passes through opaque configuration input only and is never
 /// printed, even on failure.
-fn preflight_config_document(path: &Path, provider: &LiveProviderConfig, document: &str) {
-    let source = ConfigSourceDto::Explicit(
-        ConfigPathDto::parse(path.to_string_lossy().into_owned())
-            .expect("the fixture configuration path is absolute"),
-    );
-    let resolved =
-        ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(document.to_owned(), source))
-            .unwrap_or_else(|_| panic!("the live provider configuration document resolves"));
+fn preflight_config_document(provider: &LiveProviderConfig, document: &str) {
+    let candidate = CatalogCandidate::parse(RawConfigInputDto::new(document.to_owned()))
+        .unwrap_or_else(|_| panic!("the live provider configuration document resolves"));
+    let profile_id = ProviderProfileId::parse("main").expect("the fixture profile identity parses");
+    let profile = candidate
+        .safe_document()
+        .profile(&profile_id)
+        .unwrap_or_else(|| panic!("the live provider configuration declares the fixture profile"));
     assert_eq!(
-        resolved.provider().kind(),
-        provider.kind,
+        profile.declaration().kind_id(),
+        &provider.kind,
         "the configuration selects the requested provider kind"
     );
     assert_eq!(
-        resolved.provider().model(),
+        profile.declaration().model_id(),
         provider.model.as_str(),
         "the configuration selects the requested model"
     );
+    let expected_endpoint = provider.endpoint.as_deref().map(|endpoint| {
+        normalize_provider_endpoint(endpoint)
+            .unwrap_or_else(|_| panic!("the live endpoint is a canonical provider endpoint"))
+    });
     assert_eq!(
-        resolved.provider().endpoint(),
-        provider.endpoint.as_deref(),
+        profile.declaration().normalized_effective_endpoint(),
+        expected_endpoint.as_deref(),
         "the configuration carries the expected endpoint"
     );
-    assert!(
-        resolved.provider().credential_configured(),
-        "the configuration carries a credential without exposing it"
-    );
     assert_eq!(
-        resolved.provider_execution().attempt_timeout_seconds(),
+        profile
+            .declaration()
+            .effective_execution_policy()
+            .attempt_timeout_seconds(),
         60,
         "the live configuration bounds each provider attempt"
     );
     assert_eq!(
-        resolved.provider_execution().max_attempts(),
+        profile
+            .declaration()
+            .effective_execution_policy()
+            .max_attempts(),
         2,
         "the live configuration allows at most two provider attempts"
+    );
+    let credential_configured = candidate.into_parts_for_catalog(|_document, material| {
+        material
+            .with_profile_credential(&profile_id, |_| ())
+            .is_ok()
+    });
+    assert!(
+        credential_configured,
+        "the configuration carries a credential without exposing it"
     );
 }
 
@@ -365,9 +393,8 @@ impl LiveE2eHost {
         for (name, content) in workspace_files {
             std::fs::write(workspace.path().join(name), content).expect("workspace fixture writes");
         }
-        let config_path = config_path(config_home.path());
         let config_document = provider.config_document();
-        preflight_config_document(&config_path, provider, &config_document);
+        preflight_config_document(provider, &config_document);
         write_config_document(config_home.path(), &config_document);
         let endpoint = unique_endpoint("real-api-e2e");
         let log_path = config_home.path().join("daemon-live-e2e.log");
@@ -700,10 +727,11 @@ async fn collect_run_frames(
             .status()
             .is_some_and(run_status_is_terminal)
         {
-            let run = *subscription
+            let run = subscription
                 .state()
                 .run()
-                .expect("an accepted subscription snapshot carries the run projection");
+                .expect("an accepted subscription snapshot carries the run projection")
+                .clone();
             return RunObservation::Terminal(Box::new(ObservedRun {
                 run,
                 messages: subscription.state().messages().to_vec(),

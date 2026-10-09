@@ -5,8 +5,8 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
-    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, ProjectId, RunId,
-    SessionId, ToolCallId, TurnId, WorkspaceId,
+    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, ProjectId,
+    ProviderProfileId, RunId, SessionId, ToolCallId, TurnId, WorkspaceId,
 };
 use crate::{RunModeDto, RunProjectionDto, WorkspaceRootDto};
 
@@ -94,6 +94,10 @@ pub struct SessionProjectionDto {
     active_run: Option<RunProjectionDto>,
     pending_turns: Vec<PendingTurnProjectionDto>,
     pending_turns_omitted: u32,
+    #[serde(default)]
+    session_projection_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_profile_id: Option<ProviderProfileId>,
 }
 
 impl<'de> Deserialize<'de> for SessionProjectionDto {
@@ -115,6 +119,10 @@ impl<'de> Deserialize<'de> for SessionProjectionDto {
             pending_turns: Vec<PendingTurnProjectionDto>,
             #[serde(default)]
             pending_turns_omitted: u32,
+            #[serde(default)]
+            session_projection_revision: u64,
+            #[serde(default)]
+            provider_profile_id: Option<ProviderProfileId>,
         }
 
         let raw = RawSessionProjectionDto::deserialize(deserializer)?;
@@ -130,6 +138,8 @@ impl<'de> Deserialize<'de> for SessionProjectionDto {
         )
         .map_err(de::Error::custom)?;
         projection.pending_turns_omitted = raw.pending_turns_omitted;
+        projection.session_projection_revision = raw.session_projection_revision;
+        projection.provider_profile_id = raw.provider_profile_id;
         Ok(projection)
     }
 }
@@ -137,9 +147,11 @@ impl<'de> Deserialize<'de> for SessionProjectionDto {
 impl SessionProjectionDto {
     /// Creates a coherent safe public session projection.
     ///
-    /// The projection reports no omitted pending turns; a bounded read that left
-    /// turns out records its own count with
-    /// [`SessionProjectionDto::with_pending_turns_omitted`].
+    /// The projection reports no omitted pending turns, no durable default
+    /// provider profile, and session projection revision zero; a bounded read
+    /// or one committed provider-selection change records its own state with
+    /// [`SessionProjectionDto::with_pending_turns_omitted`] or
+    /// [`SessionProjectionDto::with_session_provider_profile`].
     ///
     /// # Errors
     ///
@@ -160,7 +172,9 @@ impl SessionProjectionDto {
         pending_turns: Vec<PendingTurnProjectionDto>,
     ) -> DtoResult<Self> {
         let mut unique_turn_ids = BTreeSet::new();
-        if active_run.is_some_and(|run| run.session_id() != session_id)
+        if active_run
+            .as_ref()
+            .is_some_and(|run| run.session_id() != session_id)
             || pending_turns.iter().any(|turn| {
                 turn.session_id() != session_id || !unique_turn_ids.insert(turn.turn_id())
             })
@@ -180,6 +194,8 @@ impl SessionProjectionDto {
             active_run,
             pending_turns,
             pending_turns_omitted: 0,
+            session_projection_revision: 0,
+            provider_profile_id: None,
         })
     }
 
@@ -190,6 +206,20 @@ impl SessionProjectionDto {
     #[must_use]
     pub const fn with_pending_turns_omitted(mut self, omitted: u32) -> Self {
         self.pending_turns_omitted = omitted;
+        self
+    }
+
+    /// Returns the same projection carrying one durable session default profile.
+    #[must_use]
+    pub fn with_session_provider_profile(mut self, profile_id: ProviderProfileId) -> Self {
+        self.provider_profile_id = Some(profile_id);
+        self
+    }
+
+    /// Returns the same projection at one committed session projection revision.
+    #[must_use]
+    pub const fn with_session_projection_revision(mut self, revision: u64) -> Self {
+        self.session_projection_revision = revision;
         self
     }
 
@@ -231,13 +261,23 @@ impl SessionProjectionDto {
     }
     /// Returns the sole active run, if one exists.
     #[must_use]
-    pub const fn active_run(&self) -> Option<RunProjectionDto> {
-        self.active_run
+    pub fn active_run(&self) -> Option<RunProjectionDto> {
+        self.active_run.clone()
     }
     /// Returns pending turns in durable insertion order.
     #[must_use]
     pub fn pending_turns(&self) -> &[PendingTurnProjectionDto] {
         &self.pending_turns
+    }
+    /// Returns the committed durable session projection revision.
+    #[must_use]
+    pub const fn session_projection_revision(&self) -> u64 {
+        self.session_projection_revision
+    }
+    /// Returns the durable session default provider profile, if one exists.
+    #[must_use]
+    pub const fn provider_profile_id(&self) -> Option<&ProviderProfileId> {
+        self.provider_profile_id.as_ref()
     }
 }
 

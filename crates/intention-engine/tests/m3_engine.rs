@@ -11,10 +11,12 @@ use std::sync::{Mutex, PoisonError};
 
 use common::{FakeRepository, RecordingCommitObserver, workspace_root};
 use intention_config::ConfigSnapshotDto;
+use intention_engine::reasoning::build_history_manifest;
 use intention_engine::{
     ApplicationService, ModelRunCommitDto, ModelRunCommitObserver, RunCancellation,
     ToolInvocationRequestDto, ToolResultOutcomeDto,
 };
+use intention_proto::provider::{ReasoningHistoryManifestDto, ReasoningHistoryTransferDto};
 use intention_proto::{
     CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
     PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
@@ -62,6 +64,24 @@ fn fixture_time() -> TimestampDto {
     TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid")
 }
 
+/// Returns one exact fixture history manifest over a single completed response.
+fn fixture_history_manifest(session_id: SessionId, reasoning: &str) -> ReasoningHistoryManifestDto {
+    let step = intention_storage::ReasoningHistorySourceStepDto::new(
+        session_id,
+        RunId::new(),
+        3,
+        Some(reasoning.to_owned()),
+    )
+    .expect("the fixture source step is valid");
+    build_history_manifest(
+        &[step],
+        &ReasoningHistoryTransferDto::textual_history_v1("fixture-compatibility-v1")
+            .expect("the fixture transfer contract is valid"),
+        Some("fixture-compatibility-v1".to_owned()),
+    )
+    .expect("the fixture manifest builds")
+}
+
 /// Unwraps the content of one completed invocation outcome; any other outcome
 /// is a fixture error.
 fn completed_outcome(outcome: ToolResultOutcomeDto) -> String {
@@ -82,7 +102,7 @@ fn projection(
         WorkspaceId::new(),
         workspace_root(),
         RunModeDto::Build,
-        active_run.map(RunProjectionDto::config_revision_id),
+        active_run.as_ref().map(|run| run.config_revision_id()),
         active_run,
         pending_turns,
     )
@@ -312,8 +332,17 @@ fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection
         "turn_admission_unavailable",
         "the durable session refused the turn",
     )));
+    let selection = repository.selection();
+    let history = fixture_history_manifest(command.session_id(), "why");
     let error = ApplicationService::new(&repository)
-        .send_user_turn(command, proposed_run_id, config.clone(), fixture_time())
+        .send_user_turn(
+            command,
+            proposed_run_id,
+            config.clone(),
+            selection.clone(),
+            Some(history.clone()),
+            fixture_time(),
+        )
         .expect_err("admission failure is propagated");
     assert_eq!(error.code(), "turn_admission_unavailable");
     let inputs = repository
@@ -322,7 +351,17 @@ fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection
         .unwrap_or_else(PoisonError::into_inner)
         .clone();
     assert_eq!(inputs[0].proposed_run_id(), proposed_run_id);
-    assert_eq!(inputs[0].config_snapshot().resolved(), config.resolved());
+    assert_eq!(inputs[0].config_snapshot(), &config);
+    assert_eq!(
+        inputs[0].selection(),
+        &selection,
+        "the accepted turn carries the exact resolved selection"
+    );
+    assert_eq!(
+        inputs[0].reasoning_history(),
+        Some(&history),
+        "the accepted turn carries the committed typed history manifest"
+    );
     assert_eq!(inputs[0].occurred_at(), fixture_time());
     drop(inputs);
 
@@ -353,7 +392,11 @@ fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection
         .expect("matching schedule is accepted");
     assert_eq!(scheduled.session_id(), session_id);
     assert_eq!(scheduled.run_id(), matching_run);
-    assert_eq!(scheduled.safe_config(), &config);
+    assert_eq!(
+        scheduled.selection(),
+        &selection,
+        "the schedule carries the run's persisted exact selection"
+    );
     let request = scheduled.request();
     assert_eq!(request.run_id(), matching_run);
     assert_eq!(request.model(), "fixture");
@@ -373,7 +416,7 @@ fn interrupt_run_workflow_maps_durable_results() {
         RunStatusDto::Starting,
         config.revision_id(),
     );
-    let state = projection(session_id, Some(expected), Vec::new());
+    let state = projection(session_id, Some(expected.clone()), Vec::new());
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable(
         "fixture_unused",
         "accept is not used by this fixture",

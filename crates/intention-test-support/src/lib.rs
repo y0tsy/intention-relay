@@ -1,15 +1,17 @@
 //! Non-production fixtures for durable integration tests.
 
 mod model_fixtures;
+mod provider_fixtures;
 
 use std::path::Path;
 
 use tempfile::TempDir;
 
 pub use crate::model_fixtures::{ScriptedDriver, run_ready};
-use intention_config::{
-    ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
+pub use crate::provider_fixtures::{
+    fixture_driver_contract, fixture_profile_revision, fixture_reasoning_history, fixture_selection,
 };
+use intention_config::{ConfigSnapshotDto, ContextWindowPolicyDto};
 use intention_daemon::{DaemonApplicationFacade, TestHostLifecycle};
 use intention_proto::{
     ConfigRevisionId, DtoResult, ProjectId, ProtocolResultDto, SchemaVersionDto, SessionId,
@@ -18,67 +20,79 @@ use intention_proto::{
 use intention_proto::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
 use intention_transport::{AsyncLocalListener, LocalEndpoint};
 
-/// The provider credential every fixture snapshot carries.
+/// The fake provider credential every fixture catalog document carries.
 ///
 /// Suites assert against this constant instead of repeating the literal, so a
 /// fixture change can never silently drift away from the assertions.
 pub const FIXTURE_CREDENTIAL: &str = "fixture-secret";
 
-/// Creates a durable facade with a controlled credential-free fixture snapshot.
+/// Creates a durable facade with a controlled fixture catalog document.
 ///
 /// # Errors
 ///
 /// Returns the typed facade startup failure.
 fn open_fixture_facade(path: impl AsRef<Path>) -> DtoResult<DaemonApplicationFacade> {
-    DaemonApplicationFacade::open_for_test_support(path, fixture_snapshot())
+    DaemonApplicationFacade::open_for_test_support(path, &fixture_catalog_document("fixture"))
 }
 
-/// Returns a credential-free fixture snapshot with a native absolute source path.
+/// Returns one fixture provider catalog document with a fake credential.
+///
+/// The document is the Slice 2 configuration shape: one `openrouter` profile
+/// named `main` that is the global default, carrying a fixture credential value
+/// that is never real and never a secret.
+#[must_use]
+pub fn fixture_catalog_document(model: &str) -> String {
+    format!(
+        "schema_version = 1\n\
+         \n\
+         [provider]\n\
+         context_window_tokens = 180000\n\
+         default_profile = \"main\"\n\
+         \n\
+         [providers.profiles.main]\n\
+         kind = \"openrouter\"\n\
+         model = \"{model}\"\n\
+         credential = \"{FIXTURE_CREDENTIAL}\"\n\
+         display_name = \"Fixture\"\n\
+         enabled = true\n\
+         reasoning_effort = \"medium\"\n\
+         \n\
+         [providers.profiles.main.execution]\n\
+         attempt_timeout_seconds = 30\n\
+         max_attempts = 2\n\
+         \n\
+         [providers.profiles.main.capabilities]\n\
+         text_streaming = true\n\
+         reasoning = \"textual_reasoning_v1\"\n\
+         reasoning_efforts = [\"medium\"]\n\
+         tool_exchange = true\n"
+    )
+}
+
+/// Returns a credential-free fixture snapshot with the default window policy.
 #[must_use]
 pub fn fixture_snapshot() -> ConfigSnapshotDto {
-    fixture_snapshot_with_model("fixture")
-}
-
-/// Returns a fixture snapshot that explicitly selects one provider model.
-#[must_use]
-pub fn fixture_snapshot_with_model(model: &str) -> ConfigSnapshotDto {
-    fixture_snapshot_with_context_window(model, None)
+    fixture_snapshot_with_context_window(None)
 }
 
 /// Returns a fixture snapshot with the exact context-window policy the caller requests.
 ///
-/// `None` keeps the resolved configuration's default window policy; `Some`
-/// writes the window token count the sliding-window fixtures drive.
+/// `None` keeps the configuration default window policy; `Some` writes the
+/// window token count the sliding-window fixtures drive. A run's provider
+/// identity comes from its persisted selection, not from this snapshot.
 #[must_use]
-pub fn fixture_snapshot_with_context_window(
-    model: &str,
-    window_tokens: Option<u64>,
-) -> ConfigSnapshotDto {
-    let source = ConfigSourceDto::Explicit(
-        ConfigPathDto::parse(
-            std::env::temp_dir()
-                .join("intention-relay-fixtures.toml")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .unwrap_or_else(|_| unreachable!("fixture configuration source is absolute")),
-    );
-    let context_window = window_tokens.map_or_else(String::new, |window| {
-        format!("context_window_tokens = {window}\n")
-    });
-    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-        format!(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"{FIXTURE_CREDENTIAL}\"\n{context_window}"
-        ),
-        source,
-    ))
-    .unwrap_or_else(|_| unreachable!("fixture configuration resolves"));
+pub fn fixture_snapshot_with_context_window(window_tokens: Option<u64>) -> ConfigSnapshotDto {
+    let context_window =
+        window_tokens.map_or_else(ContextWindowPolicyDto::default_policy, |tokens| {
+            ContextWindowPolicyDto::new(tokens)
+                .unwrap_or_else(|_| unreachable!("fixture window is positive"))
+        });
     ConfigSnapshotDto::new(
         SchemaVersionDto::new(1, 0),
         ConfigRevisionId::new(),
         TimestampDto::from_unix_seconds(1)
             .unwrap_or_else(|_| unreachable!("fixture timestamp is valid")),
-        resolved,
+        context_window,
     )
     .unwrap_or_else(|_| unreachable!("fixture snapshot is credential-free"))
 }

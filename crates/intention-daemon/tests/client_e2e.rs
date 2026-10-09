@@ -127,7 +127,26 @@ impl Drop for E2eHost {
 /// Renders the fixture daemon configuration document for the fake provider.
 fn fixture_config_document(port: u16, credential: &str) -> String {
     format!(
-        "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"fixture-model\"\nendpoint = \"http://127.0.0.1:{port}/v1\"\ncredential = \"{credential}\"\n"
+        "schema_version = 1\n\
+         \n\
+         [provider]\n\
+         default_profile = \"main\"\n\
+         \n\
+         [providers.profiles.main]\n\
+         kind = \"generic-chat-completion-api\"\n\
+         model = \"fixture-model\"\n\
+         endpoint = \"http://127.0.0.1:{port}/v1\"\n\
+         credential = \"{credential}\"\n\
+         display_name = \"Fixture\"\n\
+         enabled = true\n\
+         \n\
+         [providers.profiles.main.execution]\n\
+         attempt_timeout_seconds = 30\n\
+         max_attempts = 2\n\
+         \n\
+         [providers.profiles.main.capabilities]\n\
+         text_streaming = true\n\
+         tool_exchange = true\n"
     )
 }
 

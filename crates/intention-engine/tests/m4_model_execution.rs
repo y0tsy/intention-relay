@@ -9,11 +9,11 @@ use std::sync::PoisonError;
 use std::time::Duration;
 
 use common::{FakeRepository, ImmediateTime, RecordedTransition, RecordingCommitObserver};
-use intention_config::ConfigSnapshotDto;
 use intention_engine::{
     ModelRunCommitDto, ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto,
     ModelRunExecutionService, RunCancellation, ToolExecutionPort, ToolResultOutcomeDto,
 };
+use intention_proto::provider::ReasoningFragmentCategoryDto;
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId};
 use intention_proto::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
 use intention_providers::{
@@ -21,7 +21,8 @@ use intention_providers::{
     ProviderErrorDto, ToolCallDto, UsageDto,
 };
 use intention_test_support::{
-    ScriptedDriver, fixture_snapshot_with_context_window, fixture_snapshot_with_model, run_ready,
+    ScriptedDriver, fixture_selection, fixture_snapshot, fixture_snapshot_with_context_window,
+    run_ready,
 };
 
 fn request(run_id: RunId, model: &str) -> ModelRequestDto {
@@ -62,7 +63,6 @@ fn execute(
     repository: &FakeRepository,
     driver: &ScriptedDriver,
     request: ModelRequestDto,
-    config: ConfigSnapshotDto,
     signal: RunCancellation,
 ) -> DtoResult<ModelRunExecutionOutcomeDto> {
     let clock = ImmediateTime::new();
@@ -74,7 +74,7 @@ fn execute(
                 repository.session_id,
                 repository.run_id,
                 request,
-                config,
+                repository.selection(),
                 signal,
             )),
     )
@@ -84,8 +84,8 @@ fn execute(
 fn observer_receives_only_committed_transcript_rows_and_statuses() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let driver = ScriptedDriver::new(vec![
         Ok(ModelEventDto::started()),
         Ok(ModelEventDto::text_delta("complete").expect("text is valid")),
@@ -106,7 +106,7 @@ fn observer_receives_only_committed_transcript_rows_and_statuses() {
             session_id,
             run_id,
             request(run_id, "fixture"),
-            config,
+            repository.selection(),
             RunCancellation::new(),
         )),
     )
@@ -175,8 +175,8 @@ fn observer_receives_only_committed_transcript_rows_and_statuses() {
 fn observer_receives_no_content_when_a_message_commit_fails() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     *repository
         .append_failure
         .lock()
@@ -204,7 +204,7 @@ fn observer_receives_no_content_when_a_message_commit_fails() {
             session_id,
             run_id,
             request(run_id, "fixture"),
-            config,
+            repository.selection(),
             RunCancellation::new(),
         )),
     )
@@ -238,13 +238,16 @@ fn observer_receives_no_content_when_a_message_commit_fails() {
 fn streams_commit_one_assistant_step_with_reasoning_and_complete() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let content = format!("{}€tail", "a".repeat(4094));
     let driver = ScriptedDriver::new(vec![
         Ok(ModelEventDto::started()),
         Ok(ModelEventDto::text_delta(content.clone()).expect("text is valid")),
-        Ok(ModelEventDto::reasoning_delta("why").expect("reasoning is valid")),
+        Ok(
+            ModelEventDto::reasoning_delta(ReasoningFragmentCategoryDto::Primary, "why")
+                .expect("reasoning is valid"),
+        ),
         Ok(ModelEventDto::usage(
             UsageDto::reported(1, 2, 3).expect("usage is valid"),
         )),
@@ -254,7 +257,6 @@ fn streams_commit_one_assistant_step_with_reasoning_and_complete() {
         &repository,
         &driver,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("run completes");
@@ -327,14 +329,13 @@ fn malformed_provider_and_eof_streams_safely_fail_without_committing_content() {
     ] {
         let session_id = SessionId::new();
         let run_id = RunId::new();
-        let config = fixture_snapshot_with_model("fixture");
+        let config = fixture_snapshot();
         let repository = FakeRepository::new(session_id, run_id, config.clone());
         let driver = ScriptedDriver::new(events);
         let outcome = execute(
             &repository,
             &driver,
             request(run_id, "fixture"),
-            config,
             RunCancellation::new(),
         )
         .expect("safe failure commits");
@@ -365,8 +366,8 @@ fn malformed_provider_and_eof_streams_safely_fail_without_committing_content() {
 fn interruption_records_a_notice_and_continues_the_same_run() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let signal = RunCancellation::new();
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
@@ -382,14 +383,8 @@ fn interruption_records_a_notice_and_continues_the_same_run() {
     // The interrupt is requested while the first provider stream is live,
     // after its partial text was delivered.
     driver.cancel_during_stream(1, signal.model_signal());
-    let outcome = execute(
-        &repository,
-        &driver,
-        request(run_id, "fixture"),
-        config,
-        signal,
-    )
-    .expect("the interrupted run continues and completes");
+    let outcome = execute(&repository, &driver, request(run_id, "fixture"), signal)
+        .expect("the interrupted run continues and completes");
     assert!(matches!(
         outcome,
         ModelRunExecutionOutcomeDto::Completed { .. }
@@ -452,8 +447,8 @@ fn interruption_records_a_notice_and_continues_the_same_run() {
 fn an_interrupt_before_the_first_round_still_records_a_notice_and_continues() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let signal = RunCancellation::new();
     signal.cancel();
     let driver = ScriptedDriver::with_rounds(vec![
@@ -464,14 +459,8 @@ fn an_interrupt_before_the_first_round_still_records_a_notice_and_continues() {
         ],
     ]);
 
-    let outcome = execute(
-        &repository,
-        &driver,
-        request(run_id, "fixture"),
-        config,
-        signal,
-    )
-    .expect("a pre-requested interrupt is handled and the run continues");
+    let outcome = execute(&repository, &driver, request(run_id, "fixture"), signal)
+        .expect("a pre-requested interrupt is handled and the run continues");
 
     assert!(matches!(
         outcome,
@@ -509,8 +498,8 @@ fn an_interrupt_before_the_first_round_still_records_a_notice_and_continues() {
 fn an_interrupt_whose_notice_cannot_commit_surfaces_the_storage_error() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let signal = RunCancellation::new();
     // The stopped step commits its text first; the interruption notice append
     // then fails as the second committed row.
@@ -530,14 +519,8 @@ fn an_interrupt_whose_notice_cannot_commit_surfaces_the_storage_error() {
     ]);
     driver.cancel_during_stream(1, signal.model_signal());
 
-    let error = execute(
-        &repository,
-        &driver,
-        request(run_id, "fixture"),
-        config,
-        signal,
-    )
-    .expect_err("an uncommittable notice is a typed error, never a silent stop");
+    let error = execute(&repository, &driver, request(run_id, "fixture"), signal)
+        .expect_err("an uncommittable notice is a typed error, never a silent stop");
     assert_eq!(error.code(), "fixture_notice_unavailable");
     assert_eq!(driver.executions(), 1);
     assert_eq!(
@@ -561,12 +544,15 @@ fn an_interrupt_whose_notice_cannot_commit_surfaces_the_storage_error() {
 fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
             Ok(ModelEventDto::started()),
-            Ok(ModelEventDto::reasoning_delta("why").expect("reasoning is valid")),
+            Ok(
+                ModelEventDto::reasoning_delta(ReasoningFragmentCategoryDto::Primary, "why")
+                    .expect("reasoning is valid"),
+            ),
             Err(ProviderErrorDto::unavailable("provider_down", true, None).expect("error is valid")),
         ],
         vec![
@@ -587,7 +573,7 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
             session_id,
             run_id,
             request(run_id, "fixture"),
-            config,
+            repository.selection(),
             RunCancellation::new(),
         )),
     )
@@ -636,18 +622,22 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
 
 #[test]
 fn model_execution_preconditions_fail_without_provider_calls() {
-    // A persisted configuration that disagrees with the requested selection is
+    // A persisted selection that disagrees with the requested selection is
     // a safe terminal failure with no provider work.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let repository =
-        FakeRepository::new(session_id, run_id, fixture_snapshot_with_model("persisted"));
+    let repository = FakeRepository::with_selection(
+        session_id,
+        run_id,
+        fixture_snapshot(),
+        fixture_selection("fixture-openrouter", "openrouter", "persisted")
+            .expect("the fixture selection is valid"),
+    );
     let driver = ScriptedDriver::new(Vec::new());
     let outcome = execute(
         &repository,
         &driver,
         request(run_id, "current"),
-        fixture_snapshot_with_model("current"),
         RunCancellation::new(),
     )
     .expect("mismatch safely fails");
@@ -673,8 +663,8 @@ fn model_execution_preconditions_fail_without_provider_calls() {
     // An unavailable persisted configuration behaves the same way.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     *repository
         .config_error
         .lock()
@@ -687,7 +677,6 @@ fn model_execution_preconditions_fail_without_provider_calls() {
         &repository,
         &driver,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("configuration absence becomes durable safe failure");
@@ -713,14 +702,13 @@ fn model_execution_preconditions_fail_without_provider_calls() {
     // A request that names another run is rejected the same way.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let driver = ScriptedDriver::new(Vec::new());
     let outcome = execute(
         &repository,
         &driver,
         request(RunId::new(), "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("wrong request identity becomes durable safe failure");
@@ -743,11 +731,93 @@ fn model_execution_preconditions_fail_without_provider_calls() {
 }
 
 #[test]
+fn execution_requires_the_exact_persisted_selection_and_never_a_model_match() {
+    // The persisted selection is verified exactly: a run whose requested model
+    // matches but whose exact selection differs is never rerouted.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
+    let persisted = repository.selection();
+    let requested = intention_test_support::fixture_selection(
+        "another-profile",
+        persisted.kind_id().as_str(),
+        persisted.model_id(),
+    )
+    .expect("the fixture selection is valid");
+    assert_eq!(requested.model_id(), persisted.model_id());
+    assert_ne!(requested, persisted);
+
+    let driver = ScriptedDriver::new(Vec::new());
+    let clock = ImmediateTime::new();
+    let outcome = run_ready(
+        ModelRunExecutionService::new(
+            &repository,
+            &driver,
+            &clock,
+            &RecordingCommitObserver::new(),
+            &NeverInvokedToolExecutor,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request(run_id, "fixture"),
+            requested,
+            RunCancellation::new(),
+        )),
+    )
+    .expect("a selection mismatch safely fails");
+    let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
+        unreachable!("a selection mismatch fails the run");
+    };
+    assert_eq!(run.status(), RunStatusDto::Failed);
+    assert_eq!(error.code(), "provider_configuration_unavailable");
+    assert_eq!(
+        driver.executions(),
+        0,
+        "the mismatch is rejected before any provider work"
+    );
+    drop(repository);
+
+    // A run that carries no persisted selection fails the same way.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let repository = FakeRepository::new(session_id, run_id, fixture_snapshot());
+    let requested = repository.selection();
+    repository.clear_selection();
+    let driver = ScriptedDriver::new(Vec::new());
+    let clock = ImmediateTime::new();
+    let outcome = run_ready(
+        ModelRunExecutionService::new(
+            &repository,
+            &driver,
+            &clock,
+            &RecordingCommitObserver::new(),
+            &NeverInvokedToolExecutor,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request(run_id, "fixture"),
+            requested,
+            RunCancellation::new(),
+        )),
+    )
+    .expect("an absent persisted selection becomes a durable safe failure");
+    let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
+        unreachable!("an absent persisted selection fails the run");
+    };
+    assert_eq!(run.status(), RunStatusDto::Failed);
+    assert_eq!(error.code(), "provider_configuration_unavailable");
+    assert_eq!(driver.executions(), 0);
+}
+
+#[test]
 fn execution_rejects_non_starting_run_before_configuration_or_provider_work() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     *repository
         .status
         .lock()
@@ -758,7 +828,6 @@ fn execution_rejects_non_starting_run_before_configuration_or_provider_work() {
         &repository,
         &driver,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect_err("a non-starting run cannot execute");
@@ -792,8 +861,8 @@ fn execution_rejects_non_starting_run_before_configuration_or_provider_work() {
 fn retryable_failure_after_a_committed_step_does_not_retry() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let signal = RunCancellation::new();
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
@@ -822,7 +891,7 @@ fn retryable_failure_after_a_committed_step_does_not_retry() {
             session_id,
             run_id,
             request(run_id, "fixture"),
-            config,
+            repository.selection(),
             signal,
         )),
     )
@@ -867,8 +936,8 @@ fn retryable_failure_after_a_committed_step_does_not_retry() {
 fn exhausted_retryable_failure_stops_after_second_attempt() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let driver = ScriptedDriver::with_rounds(vec![
         vec![Err(ProviderErrorDto::unavailable(
             "provider_down",
@@ -897,7 +966,7 @@ fn exhausted_retryable_failure_stops_after_second_attempt() {
             session_id,
             run_id,
             request(run_id, "fixture"),
-            config,
+            repository.selection(),
             RunCancellation::new(),
         )),
     )
@@ -933,8 +1002,8 @@ fn exhausted_retryable_failure_stops_after_second_attempt() {
 fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let driver = ScriptedDriver::new(Vec::new());
     driver.stay_pending();
     let clock = ImmediateTime::new();
@@ -951,7 +1020,7 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
             session_id,
             run_id,
             request(run_id, "fixture"),
-            config,
+            repository.selection(),
             RunCancellation::new(),
         )),
     )
@@ -996,15 +1065,14 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
 fn a_completed_step_never_carries_the_interrupted_marker() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let driver = ScriptedDriver::completed_text();
 
     let outcome = execute(
         &repository,
         &driver,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("a completed run commits its step unchanged");
@@ -1033,8 +1101,8 @@ fn a_completed_step_never_carries_the_interrupted_marker() {
 fn retryable_failure_with_uncommitted_text_commits_the_text_and_does_not_retry() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let driver = ScriptedDriver::with_rounds(vec![vec![
         Ok(ModelEventDto::started()),
         Ok(ModelEventDto::text_delta("partial answer").expect("text is valid")),
@@ -1054,7 +1122,7 @@ fn retryable_failure_with_uncommitted_text_commits_the_text_and_does_not_retry()
             session_id,
             run_id,
             request(run_id, "fixture"),
-            config,
+            repository.selection(),
             RunCancellation::new(),
         )),
     )
@@ -1100,8 +1168,8 @@ fn retryable_failure_with_uncommitted_text_commits_the_text_and_does_not_retry()
 fn whitespace_only_text_keeps_the_attempt_budget_open() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
             Ok(ModelEventDto::started()),
@@ -1127,7 +1195,7 @@ fn whitespace_only_text_keeps_the_attempt_budget_open() {
             session_id,
             run_id,
             request(run_id, "fixture"),
-            config,
+            repository.selection(),
             RunCancellation::new(),
         )),
     )
@@ -1162,34 +1230,44 @@ fn whitespace_only_text_keeps_the_attempt_budget_open() {
 }
 
 #[test]
-fn a_persisted_window_policy_disagreement_fails_the_run_before_provider_work() {
+fn the_run_owns_its_window_policy_and_the_input_cannot_supply_one() {
+    // The window policy now comes from the run's own committed configuration
+    // revision, and the execution input carries no window at all: a caller
+    // cannot supply, override, or disagree with it. A run whose committed
+    // revision cannot be read therefore fails before any provider work.
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let repository = FakeRepository::new(
         session_id,
         run_id,
-        fixture_snapshot_with_context_window("fixture", Some(60)),
+        fixture_snapshot_with_context_window(Some(60)),
     );
+    *repository
+        .config_error
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(ErrorDto::unavailable(
+        "configuration_not_found",
+        "the run's committed configuration revision is unavailable",
+    ));
     let driver = ScriptedDriver::new(Vec::new());
 
     let outcome = execute(
         &repository,
         &driver,
         request(run_id, "fixture"),
-        fixture_snapshot_with_context_window("fixture", Some(80)),
         RunCancellation::new(),
     )
-    .expect("a window policy disagreement safely fails");
+    .expect("an unreadable window policy safely fails");
 
     let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
-        unreachable!("a window policy disagreement fails the run");
+        unreachable!("an unreadable window policy fails the run");
     };
     assert_eq!(run.status(), RunStatusDto::Failed);
     assert_eq!(error.code(), "provider_configuration_unavailable");
     assert_eq!(
         driver.executions(),
         0,
-        "the disagreement is rejected before any provider work"
+        "the missing window policy is rejected before any provider work"
     );
     let finishes = repository
         .finishes

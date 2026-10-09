@@ -10,9 +10,10 @@
 use intention_proto::{
     CorrelationIdDto, CreateSessionCommandDto, ErrorCategoryDto, ErrorDto, ErrorRetryDto,
     GetSessionSnapshotQueryDto, IdempotencyKey, InterruptRunCommandDto, ProjectId,
-    ProviderErrorDto, RemoveTurnCommandDto, RunId, RunModeDto, RunStatusDto,
-    SendUserTurnCommandDto, SessionId, TimestampDto, ToolCallDto, ToolCallId, TurnId, UsageDto,
-    WorkspaceId, WorkspaceRelativePathDto, WorkspaceRootDto, run_status_is_terminal,
+    ProviderErrorDto, ProviderProfileId, ProviderProfileOverrideDto, RemoveTurnCommandDto, RunId,
+    RunModeDto, RunStatusDto, SendUserTurnCommandDto, SessionId, TimestampDto, ToolCallDto,
+    ToolCallId, TurnId, UsageDto, WorkspaceId, WorkspaceRelativePathDto, WorkspaceRootDto,
+    run_status_is_terminal,
 };
 
 fn workspace_root() -> WorkspaceRootDto {
@@ -233,6 +234,49 @@ fn send_turn_requires_content_and_typed_identity() {
             "future_additive_field": true
         }))
         .is_ok()
+    );
+}
+
+#[test]
+fn send_turn_carries_an_optional_provider_profile_override() {
+    let session_id = SessionId::new();
+    let command = SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "Explain M1")
+        .expect("fixture turn is valid");
+    assert!(
+        command.provider_profile().is_none(),
+        "a turn without an override carries none"
+    );
+    let override_dto = ProviderProfileOverrideDto::new(
+        ProviderProfileId::parse("main").expect("fixture profile identity is valid"),
+        None,
+    );
+    assert_eq!(override_dto.profile_id().as_str(), "main");
+    assert_eq!(override_dto.expected_profile_revision_id(), None);
+
+    let overridden = command.with_provider_profile(Some(override_dto.clone()));
+    assert_eq!(overridden.provider_profile(), Some(&override_dto));
+    let decoded: SendUserTurnCommandDto =
+        serde_json::from_str(&serde_json::to_string(&overridden).expect("command serializes"))
+            .expect("command decodes");
+    assert_eq!(decoded, overridden);
+
+    let defaulted: SendUserTurnCommandDto = serde_json::from_value(serde_json::json!({
+        "session_id": session_id,
+        "idempotency_key": IdempotencyKey::new(),
+        "content": "Explain M1"
+    }))
+    .expect("a turn without the override field decodes");
+    assert!(defaulted.provider_profile().is_none());
+
+    assert!(
+        serde_json::from_value::<SendUserTurnCommandDto>(serde_json::json!({
+            "session_id": session_id,
+            "idempotency_key": IdempotencyKey::new(),
+            "content": "Explain M1",
+            "provider_profile": {"profile_id": "bad profile id"}
+        }))
+        .is_err(),
+        "a malformed override fails closed"
     );
 }
 

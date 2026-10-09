@@ -14,6 +14,7 @@ use uuid::Uuid;
 mod model;
 mod projection;
 pub mod protocol;
+pub mod provider;
 mod run;
 mod turn;
 mod workspace;
@@ -29,6 +30,34 @@ pub use protocol::{
     RunSubscriptionSnapshotDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
     SessionSnapshotDto, SubscribeRunCommandDto, decode_request_line, decode_response, encode_reply,
     encode_request, parse_daemon_message, parse_run_frame,
+};
+pub use provider::{
+    AcceptProviderCatalogRemovalCommandDto, ApplyConfigurationDocumentCommandDto,
+    ApplyConfigurationEditsCommandDto, CheckProviderHealthCommandDto, ConfigurationEditAcceptedDto,
+    ConfigurationEditDto, ConfigurationReloadAcceptedDto, ContextPreservationCapabilityDto,
+    CredentialRotationAcceptedDto, CredentialTransportContractDto, CredentialTransportDto,
+    CredentialTransportModeDto, DiscoverProviderModelsCommandDto,
+    GetSessionProviderProfileQueryDto, ListProviderCatalogQueryDto, LoopbackPolicyDto,
+    ModelCapabilitySetV1, ModelCapabilityTaxonomyVersionDto, ModelInputKindDto,
+    ProviderCapabilityAvailabilityDto, ProviderCatalogActivationStateDto,
+    ProviderCatalogCandidateHandleDto, ProviderCatalogCandidateRejectedDto,
+    ProviderCatalogDegradedReasonDto, ProviderCatalogPageDto, ProviderCatalogRemovalAcceptedDto,
+    ProviderCatalogStatusDto, ProviderCatalogValidationIssueDto, ProviderDiscoveryResultDto,
+    ProviderDriverCapabilitiesDto, ProviderDriverContractRevisionDto, ProviderEndpointPolicyDto,
+    ProviderExecutionPolicyDto, ProviderHealthEvidenceDto, ProviderHealthReasonDto,
+    ProviderHealthStateDto, ProviderKindDescriptorRevisionV1, ProviderKindId,
+    ProviderModelRecordDto, ProviderPricingPolicyDto, ProviderProfileEntryDto, ProviderProfileId,
+    ProviderProfileOverrideDto, ProviderProfilePolicyDto, ProviderProfileReadinessDto,
+    ProviderProfileRevisionV1, ProviderSelectionSourceDto, ProviderSelectionUnavailabilityDto,
+    ReasoningCapabilityDto, ReasoningEffortLevelDto, ReasoningFragmentCategoryDto,
+    ReasoningHistoryBoundDto, ReasoningHistoryManifestDto, ReasoningHistoryRecordReferenceDto,
+    ReasoningHistorySourceEntryDto, ReasoningHistoryTransferDto,
+    RejectProviderCatalogCandidateCommandDto, ReloadConfigurationCommandDto,
+    ResolvedReasoningPolicyDto, ResolvedRunProviderSelectionDto,
+    RotateProviderCredentialCommandDto, SessionProviderProfileChangedDto,
+    SessionProviderProfileProjectionDto, SetSessionProviderProfileAcceptedDto,
+    SetSessionProviderProfileCommandDto, ToolExchangeCapabilityDto, UserKindActivationPartDto,
+    UserKindCompositionDto, UserKindEffortPartDto, UserKindReasoningPartDto, UserKindStreamPartDto,
 };
 pub use run::{
     RunModeDto, RunProjectionDto, RunStatusDto, run_status_is_terminal,
@@ -121,6 +150,26 @@ define_id!(
 define_id!(
     IdempotencyKey,
     "A caller-supplied identity that makes one mutating operation repeatable."
+);
+define_id!(
+    CatalogRevisionId,
+    "A stable identity for one accepted provider catalog revision."
+);
+define_id!(
+    ProviderProfileRevisionId,
+    "A stable identity for one immutable provider profile revision."
+);
+define_id!(
+    ProviderKindDescriptorRevisionId,
+    "A stable identity for one immutable provider kind descriptor revision."
+);
+define_id!(
+    ProviderDiscoveryAttemptId,
+    "A stable identity for one provider/model discovery attempt."
+);
+define_id!(
+    ReasoningHistoryManifestId,
+    "A stable identity for one reasoning history manifest."
 );
 
 /// The schema version carried by configuration and persisted DTOs.

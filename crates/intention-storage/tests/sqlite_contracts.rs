@@ -9,11 +9,9 @@
 )]
 mod common;
 
-use common::{create_session, open, reopen, repository, time, workspace_root};
+use common::{create_session, open, reopen, repository, selection, time, workspace_root};
 
-use intention_config::{
-    ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
-};
+use intention_config::{ConfigSnapshotDto, ContextWindowPolicyDto};
 use intention_proto::{
     ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId,
     RunId, SchemaVersionDto, SessionId, ToolCallId, UsageDto, WorkspaceId,
@@ -35,28 +33,17 @@ fn snapshot() -> ConfigSnapshotDto {
     .expect("safe configuration snapshot decodes")
 }
 
-fn snapshot_with_revision_and_model(
+fn snapshot_with_revision_and_window(
     revision_id: ConfigRevisionId,
-    model: &str,
+    window_tokens: u64,
 ) -> ConfigSnapshotDto {
-    let source = ConfigSourceDto::Explicit(
-        ConfigPathDto::parse(
-            std::env::temp_dir()
-                .join("intention-storage-test.toml")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("fixture path is absolute"),
-    );
-    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-        format!(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"fixture-secret\""
-        ),
-        source,
-    ))
-    .expect("fixture configuration resolves");
-    ConfigSnapshotDto::new(SchemaVersionDto::new(1, 0), revision_id, time(1), resolved)
-        .expect("fixture snapshot is valid")
+    ConfigSnapshotDto::new(
+        SchemaVersionDto::new(1, 0),
+        revision_id,
+        time(1),
+        ContextWindowPolicyDto::new(window_tokens).expect("fixture window is positive"),
+    )
+    .expect("fixture snapshot is valid")
 }
 
 fn create(store: &SqliteStorageRepository) -> SessionId {
@@ -71,7 +58,16 @@ fn accept(
     text: &str,
 ) -> AcceptedTurnOutcomeDto {
     store
-        .accept_user_turn(session, key, text, run, snapshot(), time(2))
+        .accept_user_turn(
+            session,
+            key,
+            text,
+            run,
+            snapshot(),
+            selection("fixture"),
+            None,
+            time(2),
+        )
         .expect("turn commits")
 }
 
@@ -215,6 +211,8 @@ fn create_accept_pending_idempotence_and_removal_are_typed_and_durable() {
                 " ",
                 RunId::new(),
                 snapshot(),
+                selection("fixture"),
+                None,
                 time(2),
             )
             .expect_err("blank turn content rejects")
@@ -242,6 +240,8 @@ fn create_accept_pending_idempotence_and_removal_are_typed_and_durable() {
                 "second",
                 second_run,
                 snapshot(),
+                selection("fixture"),
+                None,
                 time(3),
             )
             .expect("turn queues"),
@@ -256,6 +256,8 @@ fn create_accept_pending_idempotence_and_removal_are_typed_and_durable() {
                 "second",
                 second_run,
                 snapshot(),
+                selection("fixture"),
+                None,
                 time(4),
             )
             .expect("pending replay is accepted"),
@@ -268,12 +270,21 @@ fn create_accept_pending_idempotence_and_removal_are_typed_and_durable() {
         (
             "second",
             second_run,
-            snapshot_with_revision_and_model(ConfigRevisionId::new(), "fixture-other"),
+            snapshot_with_revision_and_window(ConfigRevisionId::new(), 1_000),
         ),
     ] {
         assert_eq!(
             store
-                .accept_user_turn(session, second_key, content, run, candidate, time(5))
+                .accept_user_turn(
+                    session,
+                    second_key,
+                    content,
+                    run,
+                    candidate,
+                    selection("fixture"),
+                    None,
+                    time(5)
+                )
                 .expect_err("different durable content under one key conflicts")
                 .code(),
             "turn_idempotency_conflict"
@@ -328,6 +339,8 @@ fn create_accept_pending_idempotence_and_removal_are_typed_and_durable() {
                 "second",
                 second_run,
                 snapshot(),
+                selection("fixture"),
+                None,
                 time(6)
             )
             .expect_err("a removed key stays bound to its durable state")
@@ -354,7 +367,16 @@ fn turn_idempotency_replay_reports_current_run_status_and_committed_message() {
     let key = IdempotencyKey::new();
     let (_, message) = started(
         store
-            .accept_user_turn(session, key, "idempotent", run, snapshot(), time(2))
+            .accept_user_turn(
+                session,
+                key,
+                "idempotent",
+                run,
+                snapshot(),
+                selection("fixture"),
+                None,
+                time(2),
+            )
             .expect("turn commits"),
     );
     store
@@ -363,7 +385,16 @@ fn turn_idempotency_replay_reports_current_run_status_and_committed_message() {
 
     let (replayed_run, replayed_message) = started(
         store
-            .accept_user_turn(session, key, "idempotent", run, snapshot(), time(4))
+            .accept_user_turn(
+                session,
+                key,
+                "idempotent",
+                run,
+                snapshot(),
+                selection("fixture"),
+                None,
+                time(4),
+            )
             .expect("turn replay is accepted"),
     );
     assert_eq!(replayed_run.run_id(), run);
@@ -452,7 +483,7 @@ fn idle_admission_retains_the_oldest_pending_message_selection() {
     let _ = accept(&store, session, IdempotencyKey::new(), active_run, "active");
     let pending_run = RunId::new();
     let revision_a = ConfigRevisionId::new();
-    let config_a = snapshot_with_revision_and_model(revision_a, "fixture-a");
+    let config_a = snapshot_with_revision_and_window(revision_a, 100_000);
     let queued = pending(
         store
             .accept_user_turn(
@@ -461,11 +492,13 @@ fn idle_admission_retains_the_oldest_pending_message_selection() {
                 "pending",
                 pending_run,
                 config_a.clone(),
+                selection("fixture"),
+                None,
                 time(3),
             )
             .expect("turn becomes pending"),
     );
-    let config_b = snapshot_with_revision_and_model(ConfigRevisionId::new(), "fixture-b");
+    let config_b = snapshot_with_revision_and_window(ConfigRevisionId::new(), 200_000);
     store
         .accept_configuration_revision(config_b)
         .expect("new daemon-start configuration may be accepted");
@@ -578,6 +611,8 @@ fn consume_pending_user_turns_appends_ordered_messages_and_marks_turns_appended(
                 "first pending",
                 first_run,
                 snapshot(),
+                selection("fixture"),
+                None,
                 time(3),
             )
             .expect("first turn queues"),
@@ -627,6 +662,8 @@ fn consume_pending_user_turns_appends_ordered_messages_and_marks_turns_appended(
                     "first pending",
                     first_run,
                     snapshot(),
+                    selection("fixture"),
+                    None,
                     time(5),
                 )
                 .expect("a joined turn replays as pending")
@@ -1153,7 +1190,7 @@ fn canonical_config_revision_binds_one_snapshot_across_both_entry_points() {
     let (_directory, store) = repository();
     let session = create(&store);
     let revision = ConfigRevisionId::new();
-    let original = snapshot_with_revision_and_model(revision, "fixture-a");
+    let original = snapshot_with_revision_and_window(revision, 100_000);
     store
         .accept_configuration_revision(original.clone())
         .expect("initial revision persists");
@@ -1161,7 +1198,7 @@ fn canonical_config_revision_binds_one_snapshot_across_both_entry_points() {
         .accept_configuration_revision(original.clone())
         .expect("identical revision is idempotent");
     let direct = store
-        .accept_configuration_revision(snapshot_with_revision_and_model(revision, "fixture-b"))
+        .accept_configuration_revision(snapshot_with_revision_and_window(revision, 200_000))
         .expect_err("revision cannot bind a different snapshot");
     assert_eq!(direct.code(), "config_revision_conflict");
     assert_eq!(direct.category(), ErrorCategoryDto::Conflict);
@@ -1178,6 +1215,8 @@ fn canonical_config_revision_binds_one_snapshot_across_both_entry_points() {
             "first",
             RunId::new(),
             original,
+            selection("fixture"),
+            None,
             time(2),
         )
         .expect("the canonical revision serves the accepted turn");
@@ -1187,7 +1226,9 @@ fn canonical_config_revision_binds_one_snapshot_across_both_entry_points() {
             IdempotencyKey::new(),
             "second",
             RunId::new(),
-            snapshot_with_revision_and_model(revision, "fixture-b"),
+            snapshot_with_revision_and_window(revision, 200_000),
+            selection("fixture"),
+            None,
             time(3),
         )
         .expect_err("turn acceptance cannot reuse revision for different snapshot");
@@ -1293,6 +1334,8 @@ fn reused_run_identity_across_sessions_is_a_typed_conflict() {
             "second",
             run,
             snapshot(),
+            selection("fixture"),
+            None,
             time(2),
         )
         .expect_err("the run identity is already durable in another session");
@@ -1315,6 +1358,8 @@ fn reused_run_identity_across_sessions_is_a_typed_conflict() {
             "queued second",
             run,
             snapshot(),
+            selection("fixture"),
+            None,
             time(3),
         )
         .expect_err("the run identity stays rejected for a queued turn");
@@ -1336,6 +1381,8 @@ fn reused_run_identity_across_sessions_is_a_typed_conflict() {
                 "duplicate identity",
                 reserved_run,
                 snapshot(),
+                selection("fixture"),
+                None,
                 time(4),
             )
             .expect_err("a reserved proposed run identity cannot be reused")
@@ -1394,7 +1441,7 @@ fn messages_transcript_indexes_and_stamp_are_current() {
     let stamp: i32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("the schema stamp reads");
-    assert_eq!(stamp, 2, "the created database carries the current stamp");
+    assert_eq!(stamp, 4, "the created database carries the current stamp");
     let mut statement = connection
         .prepare("SELECT name FROM sqlite_master WHERE type='index' ORDER BY name")
         .expect("index catalogue prepares");
@@ -1408,6 +1455,8 @@ fn messages_transcript_indexes_and_stamp_are_current() {
         "messages_session_id_id",
         "messages_session_run_id_id",
         "one_active_run_per_session",
+        "provider_discovery_attempts_state",
+        "run_provider_selections_usage",
     ] {
         assert!(
             indexes.iter().any(|name| name == expected),
@@ -1423,7 +1472,7 @@ fn messages_transcript_indexes_and_stamp_are_current() {
     connection
         .execute_batch(
             "CREATE TABLE legacy_messages (id INTEGER PRIMARY KEY);
-             PRAGMA user_version = 1;",
+             PRAGMA user_version = 3;",
         )
         .expect("the previous stamp applies");
     drop(connection);
@@ -1449,7 +1498,7 @@ fn messages_transcript_indexes_and_stamp_are_current() {
     let stamp: i32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("the recreated stamp reads");
-    assert_eq!(stamp, 2, "the recreated database carries the current stamp");
+    assert_eq!(stamp, 4, "the recreated database carries the current stamp");
 }
 
 #[test]
@@ -1828,6 +1877,8 @@ fn accept_user_turn_rejects_content_over_the_durable_turn_bound() {
             &"x".repeat(bound + 1),
             RunId::new(),
             snapshot(),
+            selection("fixture"),
+            None,
             time(2),
         )
         .expect_err("content over the durable bound is rejected");
@@ -1846,6 +1897,8 @@ fn accept_user_turn_rejects_content_over_the_durable_turn_bound() {
                 &"y".repeat(bound),
                 RunId::new(),
                 snapshot(),
+                selection("fixture"),
+                None,
                 time(3),
             )
             .expect("content at the bound is admitted"),

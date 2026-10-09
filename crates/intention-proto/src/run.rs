@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, RunId, SessionId,
-    TurnId,
+    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, ProviderProfileId,
+    RunId, SessionId, TurnId,
 };
 
 /// The agent policy active for a run.
@@ -150,17 +150,23 @@ pub fn validate_run_status_transition(from: RunStatusDto, to: RunStatusDto) -> D
 }
 
 /// A safe current projection of one durable run.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RunProjectionDto {
     session_id: SessionId,
     run_id: RunId,
     turn_id: TurnId,
     status: RunStatusDto,
     config_revision_id: ConfigRevisionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_profile_id: Option<ProviderProfileId>,
 }
 
 impl RunProjectionDto {
     /// Creates the safe public projection of one M3 run lifecycle.
+    ///
+    /// The projection reports no selected provider profile; a run carrying the
+    /// resolved exact selection records it with
+    /// [`RunProjectionDto::with_provider_profile_id`].
     #[must_use]
     pub const fn new(
         session_id: SessionId,
@@ -175,37 +181,54 @@ impl RunProjectionDto {
             turn_id,
             status,
             config_revision_id,
+            provider_profile_id: None,
         }
+    }
+
+    /// Returns the same projection recording its selected profile identity.
+    #[must_use]
+    pub fn with_provider_profile_id(
+        mut self,
+        provider_profile_id: Option<ProviderProfileId>,
+    ) -> Self {
+        self.provider_profile_id = provider_profile_id;
+        self
     }
 
     /// Returns the owning session identity.
     #[must_use]
-    pub const fn session_id(self) -> SessionId {
+    pub const fn session_id(&self) -> SessionId {
         self.session_id
     }
 
     /// Returns the durable run identity.
     #[must_use]
-    pub const fn run_id(self) -> RunId {
+    pub const fn run_id(&self) -> RunId {
         self.run_id
     }
 
     /// Returns the causal user turn identity.
     #[must_use]
-    pub const fn turn_id(self) -> TurnId {
+    pub const fn turn_id(&self) -> TurnId {
         self.turn_id
     }
 
     /// Returns the durable lifecycle status.
     #[must_use]
-    pub const fn status(self) -> RunStatusDto {
+    pub const fn status(&self) -> RunStatusDto {
         self.status
     }
 
     /// Returns the immutable configuration revision selected by this run.
     #[must_use]
-    pub const fn config_revision_id(self) -> ConfigRevisionId {
+    pub const fn config_revision_id(&self) -> ConfigRevisionId {
         self.config_revision_id
+    }
+
+    /// Returns the selected provider profile identity, when the run records one.
+    #[must_use]
+    pub const fn provider_profile_id(&self) -> Option<&ProviderProfileId> {
+        self.provider_profile_id.as_ref()
     }
 }
 

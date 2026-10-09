@@ -5,13 +5,20 @@
 //! Every tool call commits its `tool_call` row before dispatch and exactly one
 //! terminal result row with its answering `tool_result` message afterwards.
 
+pub mod catalog;
 mod context_window;
+pub mod reasoning;
 mod runtime;
+pub mod selection;
 
+pub use crate::catalog::*;
+pub use crate::reasoning::*;
 pub use crate::runtime::*;
+pub use crate::selection::*;
 
 use intention_config::ConfigSnapshotDto;
 use intention_proto::ToolCallId;
+use intention_proto::provider::{ReasoningHistoryManifestDto, ResolvedRunProviderSelectionDto};
 use intention_proto::{
     CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
     PendingTurnProjectionDto, RemoveTurnCommandDto, RunProjectionDto, SendUserTurnCommandDto,
@@ -360,6 +367,13 @@ where
     /// with `turn_idempotency_conflict`, so a client could never learn that its
     /// turn was already accepted.
     ///
+    /// `selection` is the exact resolved selection of this turn, resolved
+    /// through [`resolve_selection`] before this call; `reasoning_history`, when
+    /// present, is the manifest resolved through
+    /// [`resolve_reasoning_history`]. Both commit in the same transaction as the
+    /// turn, so the run that starts for it carries exactly one committed
+    /// selection and its frozen history bound.
+    ///
     /// # Errors
     ///
     /// Returns an admission or malformed durable-acceptance error.
@@ -368,6 +382,8 @@ where
         command: SendUserTurnCommandDto,
         proposed_run_id: RunId,
         config_snapshot: ConfigSnapshotDto,
+        selection: ResolvedRunProviderSelectionDto,
+        reasoning_history: Option<ReasoningHistoryManifestDto>,
         occurred_at: TimestampDto,
     ) -> DtoResult<AcceptedTurnOutcomeDto> {
         self.repository.accept_user_turn(
@@ -376,6 +392,8 @@ where
             command.content(),
             proposed_run_id,
             config_snapshot,
+            selection,
+            reasoning_history,
             occurred_at,
         )
     }
@@ -422,19 +440,28 @@ where
     /// the supplied run-scoped cancellation handle becomes part of the returned
     /// execution input so the host that created it owns the run's interruption.
     ///
+    /// The run's committed resolved provider selection is read here as well: the
+    /// daemon resolves the private driver from that exact selection, and the
+    /// executor verifies it against the same durable row before any provider
+    /// work. A starting run without a committed selection is not schedulable.
+    ///
     /// # Errors
     ///
-    /// Returns a typed context or scheduling error when the exact durable run is
-    /// unavailable or is no longer eligible for execution.
+    /// Returns a typed context, selection, or scheduling error when the exact
+    /// durable run is unavailable or is no longer eligible for execution.
     pub fn schedule_starting_run(
         &self,
         session_id: SessionId,
         run_id: RunId,
         cancellation: RunCancellation,
     ) -> DtoResult<ModelRunExecutionInputDto> {
+        let selection = self
+            .repository
+            .load_run_provider_selection(session_id, run_id)?;
         schedule_from_context(
             self.repository
                 .load_starting_run_model_context(session_id, run_id)?,
+            selection,
             run_id,
             cancellation,
         )
@@ -463,6 +490,7 @@ fn tool_result_metadata(result: &ToolResult) -> DtoResult<Vec<ToolResultMetadata
 
 fn schedule_from_context(
     context: intention_storage::StartingRunModelContextDto,
+    selection: ResolvedRunProviderSelectionDto,
     run_id: RunId,
     cancellation: RunCancellation,
 ) -> DtoResult<ModelRunExecutionInputDto> {
@@ -487,18 +515,11 @@ fn schedule_from_context(
             )
         })
         .collect::<DtoResult<Vec<_>>>()?;
-    let request = ModelRequestDto::new(
-        context.run_id(),
-        context.safe_config().resolved().provider().model(),
-        messages,
-        None,
-    )?
-    .with_tools(advertised_tool_definitions()?)?;
+    let request = ModelRequestDto::new(context.run_id(), selection.model_id(), messages, None)?
+        .with_tools(advertised_tool_definitions()?)?;
     // The constructed request must agree with the requested run identity and
     // the durable starting-run selection before it becomes executable work.
-    if request.run_id() != run_id
-        || request.model() != context.safe_config().resolved().provider().model()
-    {
+    if request.run_id() != run_id || request.model() != selection.model_id() {
         return Err(ErrorDto::validation(
             "invalid_model_run_schedule",
             "model scheduling request must match the durable starting run selection",
@@ -508,7 +529,7 @@ fn schedule_from_context(
         context.session_id(),
         context.run_id(),
         request,
-        context.safe_config().clone(),
+        selection,
         cancellation,
     ))
 }

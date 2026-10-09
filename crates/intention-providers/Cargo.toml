@@ -10,10 +10,9 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-async-openai = { version = "=0.42.1", default-features = false, features = ["rustls", "chat-completion", "byot"] }
+async-openai = { version = "=0.42.1", default-features = false, features = ["rustls", "chat-completion", "byot", "model"] }
 futures-core = "0.3.31"
 futures-util = "0.3.31"
-intention-config = { path = "../intention-config", version = "=0.0.0" }
 intention-proto = { path = "../intention-proto", version = "=0.0.0" }
 openrouter-rs = "=0.18.0"
 serde = { version = "1.0.228", features = ["derive"] }

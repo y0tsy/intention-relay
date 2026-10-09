@@ -1,15 +1,19 @@
 //! TOML configuration parsing, validation, resolution, and safe projection.
 //!
-//! One TOML document is parsed and validated exactly once into one resolved,
-//! credential-free shape; the same parse also yields the private credential for
-//! startup. Raw credentials remain inside this crate and are never serialized,
-//! displayed, or included in errors.
+//! The [`catalog`] module owns the one live configuration document shape
+//! (`schema_version = 1`): a global `[provider]` policy, provider profiles, and
+//! optional user-kind declarations. This module owns the shared configuration
+//! location, input, policy, and snapshot value types that document path and the
+//! daemon composition build on. Raw credentials remain inside this crate's
+//! private loading boundary and are never serialized, displayed, or included in
+//! errors.
 
-use std::fmt::{Display, Formatter};
 use std::path::Path;
 
 use intention_proto::{ConfigRevisionId, DtoResult, ErrorDto, SchemaVersionDto, TimestampDto};
 use serde::{Deserialize, Serialize};
+
+pub mod catalog;
 
 const CURRENT_SCHEMA_MAJOR: u16 = 1;
 const CURRENT_SCHEMA_MINOR: u16 = 0;
@@ -80,33 +84,6 @@ impl ConfigPathDto {
     }
 }
 
-/// Identifies how a configuration location was selected without disclosing it.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConfigSourceKindDto {
-    /// A caller explicitly selected the configuration file location.
-    Explicit,
-    /// The location came from the operating system's standard config directory.
-    PlatformDefault,
-}
-
-impl ConfigSourceKindDto {
-    /// Returns the stable safe representation for diagnostics and snapshots.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Explicit => "explicit",
-            Self::PlatformDefault => "platform_default",
-        }
-    }
-}
-
-impl Display for ConfigSourceKindDto {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
 /// Identifies how the configuration file location was selected.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -123,15 +100,6 @@ impl ConfigSourceDto {
     pub const fn path(&self) -> &ConfigPathDto {
         match self {
             Self::Explicit(path) | Self::PlatformDefault(path) => path,
-        }
-    }
-
-    /// Returns the safe source category without disclosing the path.
-    #[must_use]
-    pub const fn kind(&self) -> ConfigSourceKindDto {
-        match self {
-            Self::Explicit(_) => ConfigSourceKindDto::Explicit,
-            Self::PlatformDefault(_) => ConfigSourceKindDto::PlatformDefault,
         }
     }
 }
@@ -195,278 +163,28 @@ fn platform_config_path() -> Option<String> {
     }
 }
 
-/// Raw configuration text paired with a validated selection source.
+/// Raw configuration text for one catalog parse.
 ///
 /// This input intentionally has no `Debug`, serialization, or content accessor
 /// because it may contain an open-text credential by explicit product decision.
 pub struct RawConfigInputDto {
     text: String,
-    source: ConfigSourceDto,
 }
 
 impl RawConfigInputDto {
-    /// Creates opaque TOML input for parse/validate/resolve processing.
+    /// Creates opaque TOML input for one catalog-document parse.
     #[must_use]
-    pub fn new(text: impl Into<String>, source: ConfigSourceDto) -> Self {
-        Self {
-            text: text.into(),
-            source,
-        }
-    }
-}
-
-/// The provider API contract selected by validated configuration.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum ProviderKindDto {
-    /// The OpenRouter provider adapter.
-    #[serde(rename = "openrouter")]
-    Openrouter,
-    /// An OpenAI-compatible Chat Completions endpoint.
-    #[serde(rename = "generic-chat-completion-api")]
-    GenericChatCompletionApi,
-}
-
-impl ProviderKindDto {
-    /// Returns the stable TOML and projection representation.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Openrouter => "openrouter",
-            Self::GenericChatCompletionApi => "generic-chat-completion-api",
-        }
-    }
-}
-
-impl Display for ProviderKindDto {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-/// A public, credential-free provider selection projection.
-///
-/// Decoding re-validates the model and endpoint through the same constructor
-/// the TOML path uses, so a decoded snapshot cannot carry a blank selection.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ProviderSelectionDto {
-    kind: ProviderKindDto,
-    model: String,
-    endpoint: Option<String>,
-    credential_configured: bool,
-}
-
-impl<'de> Deserialize<'de> for ProviderSelectionDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawProviderSelectionDto {
-            kind: ProviderKindDto,
-            model: String,
-            endpoint: Option<String>,
-            credential_configured: bool,
-        }
-
-        let raw = RawProviderSelectionDto::deserialize(deserializer)?;
-        Self::new(raw.kind, raw.model, raw.endpoint, raw.credential_configured)
-            .map_err(serde::de::Error::custom)
-    }
-}
-
-impl ProviderSelectionDto {
-    fn new(
-        kind: ProviderKindDto,
-        model: String,
-        endpoint: Option<String>,
-        credential_configured: bool,
-    ) -> DtoResult<Self> {
-        if model.trim().is_empty() {
-            return Err(ErrorDto::validation(
-                "invalid_provider_model",
-                "provider model must not be empty",
-            ));
-        }
-        if endpoint
-            .as_ref()
-            .is_some_and(|configured_endpoint| configured_endpoint.trim().is_empty())
-        {
-            return Err(ErrorDto::validation(
-                "invalid_provider_endpoint",
-                "provider endpoint must not be empty when configured",
-            ));
-        }
-        Ok(Self {
-            kind,
-            model,
-            endpoint,
-            credential_configured,
-        })
-    }
-    /// Returns the selected provider API contract.
-    #[must_use]
-    pub const fn kind(&self) -> ProviderKindDto {
-        self.kind
-    }
-
-    /// Returns the configured model identifier.
-    #[must_use]
-    pub fn model(&self) -> &str {
-        &self.model
-    }
-
-    /// Returns the optional non-secret provider endpoint.
-    #[must_use]
-    pub fn endpoint(&self) -> Option<&str> {
-        self.endpoint.as_deref()
-    }
-
-    /// Returns whether a credential was supplied, without exposing it.
-    #[must_use]
-    pub const fn credential_configured(&self) -> bool {
-        self.credential_configured
-    }
-}
-
-/// A public, credential-free resolved configuration DTO.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ResolvedConfigDto {
-    provider: ProviderSelectionDto,
-    provider_execution: ProviderExecutionPolicyDto,
-    context_window: ContextWindowPolicyDto,
-    source_kind: ConfigSourceKindDto,
-}
-
-impl ResolvedConfigDto {
-    /// Parses, validates, and resolves opaque TOML input.
-    ///
-    /// # Errors
-    ///
-    /// Returns only safe typed validation errors. The input TOML and any
-    /// credential it contains are deliberately omitted from errors.
-    pub fn parse_resolve(input: RawConfigInputDto) -> DtoResult<Self> {
-        Self::parse_document(&input.text, input.source.kind())
-            .map(|(resolved, _credential)| resolved)
-    }
-
-    /// Parses configuration into opaque startup-only material and its safe projection.
-    ///
-    /// # Errors
-    ///
-    /// Returns only safe typed validation errors and never exposes the raw credential.
-    pub fn parse_startup_material(input: RawConfigInputDto) -> DtoResult<StartupProviderMaterial> {
-        let (resolved, credential) = Self::parse_document(&input.text, input.source.kind())?;
-        Ok(StartupProviderMaterial {
-            resolved,
-            opaque: credential,
-        })
-    }
-
-    /// Parses, validates, and resolves one TOML document exactly once.
-    ///
-    /// The returned credential is the private `provider.credential` value; it
-    /// never enters a public value, error, or log.
-    ///
-    /// # Errors
-    ///
-    /// Returns only safe typed validation errors. The input TOML and any
-    /// credential it contains are deliberately omitted from errors.
-    fn parse_document(text: &str, source_kind: ConfigSourceKindDto) -> DtoResult<(Self, String)> {
-        let document: toml::Value = toml::from_str(text).map_err(|_| {
-            ErrorDto::validation(
-                "invalid_config_toml",
-                "configuration TOML could not be parsed",
-            )
-        })?;
-        match document.get("schema_version") {
-            Some(toml::Value::Integer(major)) if *major == i64::from(CURRENT_SCHEMA_MAJOR) => {}
-            Some(toml::Value::Integer(_)) => {
-                return Err(ErrorDto::validation(
-                    "unsupported_config_schema_version",
-                    "configuration schema version is not supported",
-                ));
-            }
-            Some(_) => {
-                return Err(ErrorDto::validation(
-                    "invalid_config_schema_version",
-                    "configuration schema version must be an integer",
-                ));
-            }
-            None => {
-                return Err(ErrorDto::validation(
-                    "invalid_config_schema",
-                    "configuration does not include a schema version",
-                ));
-            }
-        }
-        let raw: RawV1Config = document.try_into().map_err(|_| {
-            ErrorDto::validation(
-                "invalid_config_schema",
-                "configuration does not match the supported schema",
-            )
-        })?;
-        let RawProviderConfig {
-            kind,
-            model,
-            credential,
-            endpoint,
-            execution,
-            context_window_tokens,
-        } = raw.provider;
-        let credential = match credential {
-            Some(credential) if !credential.trim().is_empty() => credential,
-            Some(_) => {
-                return Err(ErrorDto::validation(
-                    "missing_provider_credential",
-                    "provider credential must not be empty",
-                ));
-            }
-            None => {
-                return Err(ErrorDto::validation(
-                    "invalid_config_schema",
-                    "configuration does not match the supported schema",
-                ));
-            }
-        };
-        let context_window = ContextWindowPolicyDto::from_raw(context_window_tokens)?;
-        let provider = ProviderSelectionDto::new(kind, model, endpoint, true)?;
-        let resolved = Self {
-            provider,
-            provider_execution: ProviderExecutionPolicyDto::from_raw(execution)?,
-            context_window,
-            source_kind,
-        };
-        Ok((resolved, credential))
-    }
-
-    /// Returns the public credential-free provider selection.
-    #[must_use]
-    pub const fn provider(&self) -> &ProviderSelectionDto {
-        &self.provider
-    }
-
-    /// Returns the fully effective safe provider execution policy.
-    #[must_use]
-    pub const fn provider_execution(&self) -> &ProviderExecutionPolicyDto {
-        &self.provider_execution
-    }
-
-    /// Returns the fully effective safe context-window policy.
-    #[must_use]
-    pub const fn context_window(&self) -> &ContextWindowPolicyDto {
-        &self.context_window
-    }
-
-    /// Returns the safe source category without its local filesystem path.
-    #[must_use]
-    pub const fn source_kind(&self) -> ConfigSourceKindDto {
-        self.source_kind
+    pub fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into() }
     }
 }
 
 /// An immutable, credential-free configuration selection captured for a future run.
+///
+/// The snapshot is the safe part of one committed configuration revision that
+/// a run actually reads: its revision identity, its capture time, and the
+/// effective context-window policy. Provider identity is never read from a
+/// snapshot; a run's exact provider comes from its persisted resolved selection.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigSnapshotDto {
@@ -474,7 +192,7 @@ pub struct ConfigSnapshotDto {
     schema_version: SchemaVersionDto,
     revision_id: ConfigRevisionId,
     captured_at: TimestampDto,
-    resolved: ResolvedConfigDto,
+    context_window: ContextWindowPolicyDto,
 }
 
 impl ConfigSnapshotDto {
@@ -488,14 +206,14 @@ impl ConfigSnapshotDto {
         schema_version: SchemaVersionDto,
         revision_id: ConfigRevisionId,
         captured_at: TimestampDto,
-        resolved: ResolvedConfigDto,
+        context_window: ContextWindowPolicyDto,
     ) -> DtoResult<Self> {
         require_current_schema_version(schema_version)?;
         Ok(Self {
             schema_version,
             revision_id,
             captured_at,
-            resolved,
+            context_window,
         })
     }
 
@@ -517,10 +235,10 @@ impl ConfigSnapshotDto {
         self.captured_at
     }
 
-    /// Returns the safe resolved configuration projection.
+    /// Returns the effective context-window policy this revision commits.
     #[must_use]
-    pub const fn resolved(&self) -> &ResolvedConfigDto {
-        &self.resolved
+    pub const fn context_window(&self) -> &ContextWindowPolicyDto {
+        &self.context_window
     }
 
     /// Verifies the already-redacted snapshot remains suitable for durable storage.
@@ -536,61 +254,28 @@ impl ConfigSnapshotDto {
 
 /// Safe per-run provider execution policy resolved at startup.
 ///
-/// Decoding applies the same defaults and range validation as resolution, so a
-/// decoded policy always carries a supported attempt budget.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-pub struct ProviderExecutionPolicyDto {
-    attempt_timeout_seconds: u8,
-    max_attempts: u8,
+/// The shared Slice 2 DTO moved to `intention-proto`; this crate re-exports it
+/// so every existing `intention_config::ProviderExecutionPolicyDto` path keeps
+/// compiling, and keeps applying its own default/range resolution below.
+pub use intention_proto::ProviderExecutionPolicyDto;
+
+/// Applies the M4 defaults and range validation to one raw execution policy.
+///
+/// # Errors
+///
+/// Returns a safe validation error when the attempt timeout is outside `1..=60`
+/// or the attempt budget is outside `1..=2`.
+fn resolve_provider_execution_policy(
+    raw: Option<RawProviderExecutionPolicyDto>,
+) -> DtoResult<ProviderExecutionPolicyDto> {
+    let raw = raw.unwrap_or_default();
+    ProviderExecutionPolicyDto::new(
+        raw.attempt_timeout_seconds.unwrap_or(30),
+        raw.max_attempts.unwrap_or(2),
+    )
 }
 
-impl<'de> Deserialize<'de> for ProviderExecutionPolicyDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = RawProviderExecutionPolicyDto::deserialize(deserializer)?;
-        Self::from_raw(Some(raw)).map_err(serde::de::Error::custom)
-    }
-}
-
-impl ProviderExecutionPolicyDto {
-    fn from_raw(raw: Option<RawProviderExecutionPolicyDto>) -> DtoResult<Self> {
-        let raw = raw.unwrap_or_default();
-        let attempt_timeout_seconds = raw.attempt_timeout_seconds.unwrap_or(30);
-        let max_attempts = raw.max_attempts.unwrap_or(2);
-        if !(1..=60).contains(&attempt_timeout_seconds) {
-            return Err(ErrorDto::validation(
-                "invalid_provider_attempt_timeout_seconds",
-                "provider attempt timeout seconds must be between 1 and 60",
-            ));
-        }
-        if !(1..=2).contains(&max_attempts) {
-            return Err(ErrorDto::validation(
-                "invalid_provider_max_attempts",
-                "provider max attempts must be between 1 and 2",
-            ));
-        }
-        Ok(Self {
-            attempt_timeout_seconds,
-            max_attempts,
-        })
-    }
-
-    /// Returns the timeout for one provider attempt in seconds.
-    #[must_use]
-    pub const fn attempt_timeout_seconds(self) -> u8 {
-        self.attempt_timeout_seconds
-    }
-
-    /// Returns the bounded number of attempts available to the run.
-    #[must_use]
-    pub const fn max_attempts(self) -> u8 {
-        self.max_attempts
-    }
-}
-
-/// Safe per-run provider context-window policy resolved at startup.
+/// Safe context-window policy committed with a configuration revision.
 ///
 /// Decoding applies the same positive-window validation as resolution, so a
 /// decoded policy can never carry an empty window.
@@ -616,8 +301,20 @@ impl<'de> Deserialize<'de> for ContextWindowPolicyDto {
 }
 
 impl ContextWindowPolicyDto {
-    fn from_raw(window_tokens: Option<u64>) -> DtoResult<Self> {
-        let window_tokens = window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS);
+    /// Returns the current default context-window policy.
+    #[must_use]
+    pub const fn default_policy() -> Self {
+        Self {
+            window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+        }
+    }
+
+    /// Creates a validated context-window policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the window is zero.
+    pub fn new(window_tokens: u64) -> DtoResult<Self> {
         if window_tokens == 0 {
             return Err(ErrorDto::validation(
                 "invalid_provider_context_window_tokens",
@@ -627,56 +324,20 @@ impl ContextWindowPolicyDto {
         Ok(Self { window_tokens })
     }
 
+    /// Applies the current default to an optional document window.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the supplied window is zero.
+    fn from_raw(window_tokens: Option<u64>) -> DtoResult<Self> {
+        Self::new(window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS))
+    }
+
     /// Returns the sliding context window size in tokens.
     #[must_use]
     pub const fn window_tokens(self) -> u64 {
         self.window_tokens
     }
-}
-
-/// Startup-only opaque provider material paired with its safe resolved projection.
-///
-/// This type intentionally implements no `Debug`, `Display`, or serde traits and
-/// provides no credential accessor. Composition may move it only into a selected
-/// provider constructor during daemon startup.
-pub struct StartupProviderMaterial {
-    resolved: ResolvedConfigDto,
-    opaque: String,
-}
-
-impl StartupProviderMaterial {
-    /// Returns the credential-free startup selection.
-    #[must_use]
-    pub const fn safe_resolved(&self) -> &ResolvedConfigDto {
-        &self.resolved
-    }
-
-    /// Moves this opaque material into the supplied startup-only consumer.
-    pub fn into_parts_for_provider<T>(
-        self,
-        consumer: impl FnOnce(ResolvedConfigDto, String) -> T,
-    ) -> T {
-        consumer(self.resolved, self.opaque)
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawV1Config {
-    #[serde(rename = "schema_version")]
-    _schema_version: u16,
-    provider: RawProviderConfig,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawProviderConfig {
-    kind: ProviderKindDto,
-    model: String,
-    credential: Option<String>,
-    endpoint: Option<String>,
-    execution: Option<RawProviderExecutionPolicyDto>,
-    context_window_tokens: Option<u64>,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -724,37 +385,11 @@ mod tests {
 
     use super::*;
 
-    const CREDENTIAL: &str = "fixture-credential-not-real-12345";
-
     fn fixture_path(filename: &str) -> String {
         std::env::temp_dir()
             .join(filename)
             .to_string_lossy()
             .into_owned()
-    }
-
-    fn explicit_source() -> ConfigSourceDto {
-        ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(fixture_path("intention-relay-test.toml"))
-                .expect("fixture path is absolute"),
-        )
-    }
-
-    fn v1(provider: &str, model: &str, credential: &str, endpoint: Option<&str>) -> String {
-        let endpoint = endpoint.map_or_else(String::new, |value| {
-            format!(
-                "endpoint = \"{value}\"
-"
-            )
-        });
-        format!(
-            "schema_version = 1
-[provider]
-kind = \"{provider}\"
-model = \"{model}\"
-credential = \"{credential}\"
-{endpoint}"
-        )
     }
 
     #[test]
@@ -771,121 +406,50 @@ credential = \"{credential}\"
             );
         }
         let explicit = ConfigPathResolver::resolve(Some(path.clone())).expect("override resolves");
-        assert_eq!(explicit.kind(), ConfigSourceKindDto::Explicit);
-        assert_eq!(explicit.kind().as_str(), "explicit");
+        assert!(matches!(explicit, ConfigSourceDto::Explicit(_)));
         assert_eq!(explicit.path(), &path);
         let platform = ConfigPathResolver::resolve(None).expect("platform path resolves");
-        assert_eq!(platform.kind(), ConfigSourceKindDto::PlatformDefault);
-        assert_eq!(platform.kind().as_str(), "platform_default");
-        assert_eq!(platform.kind().to_string(), "platform_default");
+        assert!(matches!(platform, ConfigSourceDto::PlatformDefault(_)));
         assert!(platform.path().as_str().ends_with("config.toml"));
     }
 
     #[test]
-    fn provider_kinds_and_public_selection_projection_cover_supported_values() {
-        for (kind, expected) in [
-            (ProviderKindDto::Openrouter, "openrouter"),
-            (
-                ProviderKindDto::GenericChatCompletionApi,
-                "generic-chat-completion-api",
-            ),
-        ] {
-            assert_eq!(kind.as_str(), expected);
-            assert_eq!(kind.to_string(), expected);
-        }
-        for (provider, model) in [
-            ("openrouter", "fixture-model"),
-            ("generic-chat-completion-api", "example-chat-model"),
-        ] {
-            let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-                v1(
-                    provider,
-                    model,
-                    CREDENTIAL,
-                    Some("https://example.invalid/v1"),
-                ),
-                explicit_source(),
-            ))
-            .expect("supported provider resolves");
-            assert_eq!(resolved.provider().kind().as_str(), provider);
-            assert_eq!(resolved.provider().model(), model);
-            assert_eq!(
-                resolved.provider().endpoint(),
-                Some("https://example.invalid/v1")
-            );
-            assert!(resolved.provider().credential_configured());
-        }
-        let unknown = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            v1("unknown", "fixture-model", CREDENTIAL, None),
-            explicit_source(),
-        ))
-        .expect_err("unknown provider must fail");
-        assert_eq!(unknown.code(), "invalid_config_schema");
-    }
+    fn context_window_policy_validates_and_commits_into_a_snapshot() {
+        assert_eq!(
+            ContextWindowPolicyDto::new(0)
+                .expect_err("a zero window rejects")
+                .code(),
+            "invalid_provider_context_window_tokens"
+        );
+        assert_eq!(
+            ContextWindowPolicyDto::default_policy().window_tokens(),
+            250_000
+        );
+        let window = ContextWindowPolicyDto::new(180_000).expect("a positive window is valid");
+        assert_eq!(window.window_tokens(), 180_000);
 
-    #[test]
-    fn configuration_validation_rejects_all_boundary_failures_safely() {
-        let fixtures = [
-            (
-                v1("openrouter", " ", CREDENTIAL, None),
-                "invalid_provider_model",
-            ),
-            (
-                v1("openrouter", "fixture-model", " ", None),
-                "missing_provider_credential",
-            ),
-            (
-                v1("openrouter", "fixture-model", CREDENTIAL, Some(" ")),
-                "invalid_provider_endpoint",
-            ),
-            (
-                "schema_version = 2
-"
-                .to_owned(),
-                "unsupported_config_schema_version",
-            ),
-            (
-                "schema_version = -1
-"
-                .to_owned(),
-                "unsupported_config_schema_version",
-            ),
-            ("not = [valid".to_owned(), "invalid_config_toml"),
-        ];
-        for (text, expected_code) in fixtures {
-            let error =
-                ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(text, explicit_source()))
-                    .expect_err("invalid fixture must fail");
-            assert_eq!(error.code(), expected_code);
-            assert!(!error.to_string().contains(CREDENTIAL));
-        }
-    }
-
-    #[test]
-    fn parse_helpers_reject_schema_and_shape_mismatches() {
-        let wrong_major = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            v1("openrouter", "fixture", CREDENTIAL, None).replacen(
-                "schema_version = 1",
-                "schema_version = 2",
-                1,
-            ),
-            explicit_source(),
-        ))
-        .expect_err("wrong version must fail");
-        assert_eq!(wrong_major.code(), "unsupported_config_schema_version");
-        let missing_provider = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            "schema_version = 1".to_owned(),
-            explicit_source(),
-        ))
-        .expect_err("missing provider must fail");
-        assert_eq!(missing_provider.code(), "invalid_config_schema");
-        let unversioned = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            "[model]\nprovider = \"openrouter\"\nname = \"fixture\"\napi_key = \"fixture-credential-not-real-12345\"\n"
-                .to_owned(),
-            explicit_source(),
-        ))
-        .expect_err("unversioned configuration must fail closed");
-        assert_eq!(unversioned.code(), "invalid_config_schema");
+        let captured_at =
+            TimestampDto::from_unix_seconds(1_700_000_000).expect("fixture timestamp is valid");
+        let snapshot = ConfigSnapshotDto::new(
+            SchemaVersionDto::new(1, 0),
+            ConfigRevisionId::new(),
+            captured_at,
+            window,
+        )
+        .expect("a compatible snapshot is valid");
+        assert_eq!(snapshot.schema_version(), SchemaVersionDto::new(1, 0));
+        assert_eq!(snapshot.captured_at(), captured_at);
+        assert_eq!(snapshot.context_window().window_tokens(), 180_000);
+        assert!(snapshot.validate_for_persistence().is_ok());
+        assert!(
+            ConfigSnapshotDto::new(
+                SchemaVersionDto::new(2, 0),
+                ConfigRevisionId::new(),
+                captured_at,
+                window,
+            )
+            .is_err()
+        );
     }
 
     #[cfg(unix)]
@@ -931,69 +495,5 @@ credential = \"{credential}\"
                 .code(),
             "config_permission_metadata_unavailable"
         );
-    }
-
-    #[test]
-    fn startup_material_preserves_the_exact_private_credential_without_echoing_it() {
-        // Serialize the document so string escaping is the TOML serializer's
-        // responsibility, exactly like a raw configuration file.
-        fn document_with_credential(credential: &str) -> String {
-            let mut provider = toml::map::Map::new();
-            provider.insert(
-                "kind".to_owned(),
-                toml::Value::String("openrouter".to_owned()),
-            );
-            provider.insert(
-                "model".to_owned(),
-                toml::Value::String("fixture-model".to_owned()),
-            );
-            provider.insert(
-                "credential".to_owned(),
-                toml::Value::String(credential.to_owned()),
-            );
-            let mut document = toml::map::Map::new();
-            document.insert("schema_version".to_owned(), toml::Value::Integer(1));
-            document.insert("provider".to_owned(), toml::Value::Table(provider));
-            toml::to_string(&toml::Value::Table(document)).expect("document serializes")
-        }
-
-        let tricky = "sk-\"quoted\"-and\\backslash";
-        let material = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
-            document_with_credential(tricky),
-            explicit_source(),
-        ))
-        .expect("credential parses from the document");
-        let (resolved, credential) =
-            material.into_parts_for_provider(|resolved, credential| (resolved, credential));
-        assert_eq!(
-            credential, tricky,
-            "escaping is the TOML parser's responsibility"
-        );
-        assert_eq!(resolved.provider().kind(), ProviderKindDto::Openrouter);
-
-        // A blank credential is a value failure, an absent one is a shape
-        // failure, and malformed TOML is a document failure: three distinct
-        // typed codes that all stay free of document content.
-        for (failure, expected_code) in [
-            (document_with_credential(" "), "missing_provider_credential"),
-            (
-                "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\n"
-                    .to_owned(),
-                "invalid_config_schema",
-            ),
-            ("not a toml document [[".to_owned(), "invalid_config_toml"),
-        ] {
-            let error = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
-                failure,
-                explicit_source(),
-            ))
-            .err()
-            .expect("invalid document must fail");
-            assert_eq!(error.code(), expected_code);
-            assert!(
-                !error.to_string().contains(CREDENTIAL),
-                "the error never echoes document content"
-            );
-        }
     }
 }

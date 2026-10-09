@@ -9,9 +9,18 @@
 //! presentation logic.
 
 use crate::{
-    ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorDto, GetSessionSnapshotQueryDto,
-    InterruptRunCommandDto, MessageProjectionDto, ProjectId, RemoveTurnCommandDto, RunId,
-    RunProjectionDto, SendUserTurnCommandDto, SessionId, SessionProjectionDto, TurnId, WorkspaceId,
+    AcceptProviderCatalogRemovalCommandDto, ApplyConfigurationDocumentCommandDto,
+    ApplyConfigurationEditsCommandDto, CheckProviderHealthCommandDto, ConfigRevisionId,
+    ConfigurationEditAcceptedDto, ConfigurationReloadAcceptedDto, CreateSessionCommandDto,
+    CredentialRotationAcceptedDto, DiscoverProviderModelsCommandDto, DtoResult, ErrorDto,
+    GetSessionProviderProfileQueryDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto,
+    ListProviderCatalogQueryDto, MessageProjectionDto, ProjectId,
+    ProviderCatalogCandidateRejectedDto, ProviderCatalogPageDto, ProviderCatalogRemovalAcceptedDto,
+    ProviderCatalogStatusDto, ProviderDiscoveryResultDto, ProviderHealthEvidenceDto,
+    RejectProviderCatalogCandidateCommandDto, ReloadConfigurationCommandDto, RemoveTurnCommandDto,
+    RotateProviderCredentialCommandDto, RunId, RunProjectionDto, SendUserTurnCommandDto, SessionId,
+    SessionProjectionDto, SessionProviderProfileProjectionDto,
+    SetSessionProviderProfileAcceptedDto, SetSessionProviderProfileCommandDto, TurnId, WorkspaceId,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -243,6 +252,30 @@ pub enum ClientRequestDto {
     GetDaemonHealth,
     /// Begins a dedicated run-stream subscription.
     SubscribeRun(SubscribeRunCommandDto),
+    /// Lists one bounded page of the active provider catalog.
+    ListProviderCatalog(ListProviderCatalogQueryDto),
+    /// Obtains the current provider catalog status.
+    GetProviderCatalogStatus,
+    /// Changes the durable session default provider profile.
+    SetSessionProviderProfile(SetSessionProviderProfileCommandDto),
+    /// Obtains one session's provider profile projection.
+    GetSessionProviderProfile(GetSessionProviderProfileQueryDto),
+    /// Accepts one pending catalog removal.
+    AcceptProviderCatalogRemoval(AcceptProviderCatalogRemovalCommandDto),
+    /// Rejects one pending catalog candidate.
+    RejectProviderCatalogCandidate(RejectProviderCatalogCandidateCommandDto),
+    /// Reloads configuration through the private loading boundary.
+    ReloadConfiguration(ReloadConfigurationCommandDto),
+    /// Rotates one profile's private credential material.
+    RotateProviderCredential(RotateProviderCredentialCommandDto),
+    /// Checks one profile's live provider health.
+    CheckProviderHealth(CheckProviderHealthCommandDto),
+    /// Begins one provider/model discovery attempt.
+    DiscoverProviderModels(DiscoverProviderModelsCommandDto),
+    /// Applies one credential-free configuration document.
+    ApplyConfigurationDocument(ApplyConfigurationDocumentCommandDto),
+    /// Applies closed typed configuration edits.
+    ApplyConfigurationEdits(ApplyConfigurationEditsCommandDto),
 }
 
 /// One correlated client request line.
@@ -296,6 +329,30 @@ pub enum ProtocolResultDto {
     DaemonHealth(DaemonHealthDto),
     /// The current run state of a new subscription.
     RunSubscribed(RunSubscriptionSnapshotDto),
+    /// One bounded page of the active provider catalog.
+    ProviderCatalogPage(ProviderCatalogPageDto),
+    /// The current provider catalog status.
+    ProviderCatalogStatus(ProviderCatalogStatusDto),
+    /// Acceptance evidence for a session default profile change.
+    SessionProviderProfileSet(SetSessionProviderProfileAcceptedDto),
+    /// One session's provider profile projection.
+    SessionProviderProfile(SessionProviderProfileProjectionDto),
+    /// Acceptance evidence for an accepted catalog removal.
+    ProviderCatalogRemovalAccepted(ProviderCatalogRemovalAcceptedDto),
+    /// Evidence for a rejected catalog candidate.
+    ProviderCatalogCandidateRejected(ProviderCatalogCandidateRejectedDto),
+    /// Acceptance evidence for a controlled configuration reload.
+    ConfigurationReloaded(ConfigurationReloadAcceptedDto),
+    /// Acceptance evidence for a credential rotation.
+    ProviderCredentialRotated(CredentialRotationAcceptedDto),
+    /// Non-authorizing provider health evidence.
+    ProviderHealth(ProviderHealthEvidenceDto),
+    /// One non-authorizing discovery result.
+    ProviderModelsDiscovered(ProviderDiscoveryResultDto),
+    /// Acceptance evidence for an applied configuration document.
+    ConfigurationDocumentApplied(ConfigurationEditAcceptedDto),
+    /// Acceptance evidence for applied typed configuration edits.
+    ConfigurationEditsApplied(ConfigurationEditAcceptedDto),
 }
 
 /// Typed acceptance evidence for a created session.
@@ -523,6 +580,10 @@ impl ProtocolRejectionDto {
 
 /// One daemon-to-client line: a correlated reply, a correlated rejection, or an
 /// uncorrelated committed run frame.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "One committed projection travels by value per daemon envelope; boxing the reply would add indirection to every dispatch site without changing the wire."
+)]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum ProtocolDaemonMessageDto {

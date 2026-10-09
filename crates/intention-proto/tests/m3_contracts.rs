@@ -18,7 +18,7 @@ use intention_proto::{
     SendUserTurnOutcomeDto, SessionProjectionDto, SessionSnapshotDto, ToolCallId, TurnId,
     WorkspaceRootDto, validate_run_status_transition,
 };
-use intention_proto::{ProjectId, SessionId, WorkspaceId};
+use intention_proto::{ProjectId, ProviderProfileId, SessionId, WorkspaceId};
 
 fn workspace_root() -> WorkspaceRootDto {
     WorkspaceRootDto::parse(
@@ -290,6 +290,36 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
         serde_json::from_str(&serde_json::to_string(&run).expect("run serializes"))
             .expect("run decodes");
     assert_eq!(decoded_run, run);
+    assert_eq!(
+        run.provider_profile_id(),
+        None,
+        "a run without a recorded selection reports none"
+    );
+    assert!(
+        !serde_json::to_string(&run)
+            .expect("run serializes")
+            .contains("provider_profile_id"),
+        "an absent provider profile is skipped on the wire"
+    );
+
+    let profile_id = ProviderProfileId::parse("main").expect("fixture profile identity is valid");
+    let selected_run = run
+        .clone()
+        .with_provider_profile_id(Some(profile_id.clone()));
+    assert_eq!(selected_run.provider_profile_id(), Some(&profile_id));
+    let decoded_selected: RunProjectionDto =
+        serde_json::from_str(&serde_json::to_string(&selected_run).expect("run serializes"))
+            .expect("run decodes");
+    assert_eq!(decoded_selected, selected_run);
+    let defaulted_run: RunProjectionDto = serde_json::from_value(serde_json::json!({
+        "session_id": session_id,
+        "run_id": RunId::new(),
+        "turn_id": TurnId::new(),
+        "status": "running",
+        "config_revision_id": ConfigRevisionId::new()
+    }))
+    .expect("a run without the selection field decodes");
+    assert_eq!(defaulted_run.provider_profile_id(), None);
 
     let pending = PendingTurnProjectionDto::new(session_id, TurnId::new(), "pending")
         .expect("pending turn is valid");
@@ -300,7 +330,7 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
         workspace_root(),
         RunModeDto::Plan,
         Some(revision),
-        Some(run),
+        Some(run.clone()),
         vec![pending],
     )
     .expect("projection is valid");
@@ -312,10 +342,31 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
     assert_eq!(projection.config_revision_id(), Some(revision));
     assert_eq!(projection.active_run(), Some(run));
     assert_eq!(projection.pending_turns().len(), 1);
+    assert_eq!(
+        projection.session_projection_revision(),
+        0,
+        "an untrimmed projection reports revision zero"
+    );
+    assert_eq!(
+        projection.provider_profile_id(),
+        None,
+        "a projection without a session default reports none"
+    );
     let decoded: SessionProjectionDto =
         serde_json::from_str(&serde_json::to_string(&projection).expect("projection serializes"))
             .expect("projection decodes");
     assert_eq!(decoded, projection);
+
+    let selected_projection = projection
+        .with_session_provider_profile(profile_id.clone())
+        .with_session_projection_revision(3);
+    assert_eq!(selected_projection.provider_profile_id(), Some(&profile_id));
+    assert_eq!(selected_projection.session_projection_revision(), 3);
+    let decoded_selected: SessionProjectionDto = serde_json::from_str(
+        &serde_json::to_string(&selected_projection).expect("projection serializes"),
+    )
+    .expect("projection decodes");
+    assert_eq!(decoded_selected, selected_projection);
 
     let minimal = serde_json::json!({
         "project_id": project_id,
@@ -330,6 +381,8 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
     assert_eq!(decoded.config_revision_id(), None);
     assert_eq!(decoded.active_run(), None);
     assert!(decoded.pending_turns().is_empty());
+    assert_eq!(decoded.session_projection_revision(), 0);
+    assert_eq!(decoded.provider_profile_id(), None);
 }
 
 #[test]

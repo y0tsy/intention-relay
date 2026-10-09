@@ -11,12 +11,12 @@ use common::{
     FakeRepository, ImmediateTime, RecordedTransition, RecordingCommitObserver, ScriptedPort, time,
 };
 use futures_util::{StreamExt, stream};
-use intention_config::ConfigSnapshotDto;
 use intention_engine::{
     ModelRunCommitDto, ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto,
     ModelRunExecutionService, ModelSleepFuture, ModelTimePort, RunCancellation, ToolExecutionPort,
     ToolResultOutcomeDto,
 };
+use intention_proto::provider::ReasoningFragmentCategoryDto;
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto, ToolCallId};
 use intention_proto::{MessageKindDto, MessageProjectionDto, RunStatusDto};
 use intention_providers::{
@@ -25,7 +25,7 @@ use intention_providers::{
     ModelRoleDto, ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto,
 };
 use intention_test_support::{
-    ScriptedDriver, fixture_snapshot_with_context_window, fixture_snapshot_with_model, run_ready,
+    ScriptedDriver, fixture_snapshot, fixture_snapshot_with_context_window, run_ready,
 };
 
 fn tool_definition() -> ModelToolDefinitionDto {
@@ -283,7 +283,6 @@ fn execute(
     driver: &ScriptedDriver,
     port: &ScriptedPort,
     request: ModelRequestDto,
-    config: ConfigSnapshotDto,
     signal: RunCancellation,
 ) -> DtoResult<ModelRunExecutionOutcomeDto> {
     let clock = ImmediateTime::new();
@@ -299,7 +298,7 @@ fn execute(
             repository.session_id,
             repository.run_id,
             request,
-            config,
+            repository.selection(),
             signal,
         )),
     )
@@ -309,8 +308,8 @@ fn execute(
 fn tool_call_executes_tool_and_completes() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
@@ -333,7 +332,6 @@ fn tool_call_executes_tool_and_completes() {
         &driver,
         &port,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("tool loop completes");
@@ -414,8 +412,8 @@ fn tool_call_executes_tool_and_completes() {
 fn the_window_pass_compresses_a_large_tool_result_before_the_continuation_request() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_context_window("fixture", Some(60));
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot_with_context_window(Some(60));
+    let repository = FakeRepository::new(session_id, run_id, config);
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
@@ -437,7 +435,6 @@ fn the_window_pass_compresses_a_large_tool_result_before_the_continuation_reques
         &driver,
         &port,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("windowed tool loop completes");
@@ -488,8 +485,8 @@ fn the_window_pass_accounts_for_tool_call_arguments() {
     let run_id = RunId::new();
     // A window that fits the message content alone: the call's arguments are
     // what pushes the request past it.
-    let config = fixture_snapshot_with_context_window("fixture", Some(100));
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot_with_context_window(Some(100));
+    let repository = FakeRepository::new(session_id, run_id, config);
     let long_pattern = "z".repeat(380);
     let arguments = format!(r#"{{"pattern":"{long_pattern}"}}"#);
     let call =
@@ -513,7 +510,6 @@ fn the_window_pass_accounts_for_tool_call_arguments() {
         &driver,
         &port,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("the windowed tool loop completes");
@@ -552,8 +548,8 @@ fn the_window_pass_accounts_for_tool_call_arguments() {
 fn partial_tool_result_continues_the_loop_without_terminalizing() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let call = ToolCallDto::new(ToolCallId::new(), "execute", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
@@ -576,7 +572,6 @@ fn partial_tool_result_continues_the_loop_without_terminalizing() {
         &driver,
         &port,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("the loop continues after a partial tool result");
@@ -618,8 +613,8 @@ fn partial_tool_result_continues_the_loop_without_terminalizing() {
 fn multiple_tool_calls_execute_sequentially_in_provider_order() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let first = ToolCallDto::new(ToolCallId::new(), "first", "{}").expect("call is valid");
     let second = ToolCallDto::new(ToolCallId::new(), "second", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
@@ -643,7 +638,6 @@ fn multiple_tool_calls_execute_sequentially_in_provider_order() {
         &driver,
         &port,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("sequential tool loop completes");
@@ -679,8 +673,8 @@ fn multiple_tool_calls_execute_sequentially_in_provider_order() {
 fn repeated_tool_rounds_continue_until_finished() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let first = ToolCallDto::new(ToolCallId::new(), "first", "{}").expect("call is valid");
     let second = ToolCallDto::new(ToolCallId::new(), "second", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
@@ -708,7 +702,6 @@ fn repeated_tool_rounds_continue_until_finished() {
         &driver,
         &port,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("repeated tool rounds complete");
@@ -747,19 +740,26 @@ fn repeated_tool_rounds_continue_until_finished() {
 fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let first = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let second = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
             Ok(ModelEventDto::started()),
-            Ok(ModelEventDto::reasoning_delta("think ").expect("reasoning is valid")),
+            Ok(
+                ModelEventDto::reasoning_delta(ReasoningFragmentCategoryDto::Primary, "think ")
+                    .expect("reasoning is valid"),
+            ),
             Ok(ModelEventDto::tool_call(first.clone())),
         ],
         vec![
             Ok(ModelEventDto::started()),
-            Ok(ModelEventDto::reasoning_delta("second round").expect("reasoning is valid")),
+            Ok(ModelEventDto::reasoning_delta(
+                ReasoningFragmentCategoryDto::Primary,
+                "second round",
+            )
+            .expect("reasoning is valid")),
             Ok(ModelEventDto::tool_call(second.clone())),
         ],
         vec![
@@ -778,7 +778,6 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
         &driver,
         &port,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("tool loop completes");
@@ -820,11 +819,84 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
 }
 
 #[test]
+fn reasoning_summaries_attach_after_the_fragments_they_summarize() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
+    let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
+    // The summary deltas arrive interleaved with the fragments; the round's
+    // reasoning text must still carry the fragments first and the summaries at
+    // the tail, and both are durable on the same assistant step.
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(
+                ModelEventDto::reasoning_delta(ReasoningFragmentCategoryDto::Primary, "step ")
+                    .expect("reasoning is valid"),
+            ),
+            Ok(ModelEventDto::reasoning_summary_delta("summary ").expect("summary is valid")),
+            Ok(
+                ModelEventDto::reasoning_delta(ReasoningFragmentCategoryDto::Detail, "detail")
+                    .expect("reasoning is valid"),
+            ),
+            Ok(ModelEventDto::reasoning_summary_delta("two").expect("summary is valid")),
+            Ok(ModelEventDto::tool_call(call.clone())),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::text_delta("after").expect("text is valid")),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    let port = ScriptedPort::new(vec![Ok(
+        ToolResultOutcomeDto::completed("one").expect("content is valid")
+    )]);
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        &port,
+        request(run_id, "fixture"),
+        RunCancellation::new(),
+    )
+    .expect("the summarized tool round completes");
+    assert!(matches!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
+
+    let expected = AssistantReasoningDto::new(vec![call.call_id()], "step detailsummary two")
+        .expect("the fixture attachment is valid");
+    let requests = driver.requests();
+    assert_eq!(
+        requests[1].assistant_reasoning(),
+        std::slice::from_ref(&expected),
+        "the continuation carries fragments first and summaries at the tail"
+    );
+    drop(requests);
+
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| (message.kind(), message.text(), message.reasoning()))
+            .collect::<Vec<_>>(),
+        vec![(MessageKindDto::Assistant, "after", None)],
+        "a textless tool round keeps its reasoning transient: only the continuation carries it"
+    );
+}
+
+#[test]
 fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
@@ -846,7 +918,6 @@ fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
         &driver,
         &port,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("textless reasoning round completes");
@@ -880,8 +951,8 @@ fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
 fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     // Each fragment stays inside the transient per-round bound; only the
     // accumulated echo crosses the attachment's representable bound.
@@ -889,8 +960,14 @@ fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
     let second = "b".repeat(300 * 1024);
     let driver = ScriptedDriver::new(vec![
         Ok(ModelEventDto::started()),
-        Ok(ModelEventDto::reasoning_delta(first).expect("reasoning is valid")),
-        Ok(ModelEventDto::reasoning_delta(second).expect("reasoning is valid")),
+        Ok(
+            ModelEventDto::reasoning_delta(ReasoningFragmentCategoryDto::Primary, first)
+                .expect("reasoning is valid"),
+        ),
+        Ok(
+            ModelEventDto::reasoning_delta(ReasoningFragmentCategoryDto::Primary, second)
+                .expect("reasoning is valid"),
+        ),
         Ok(ModelEventDto::tool_call(call)),
     ]);
     let port = ScriptedPort::new(Vec::new());
@@ -900,7 +977,6 @@ fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
         &driver,
         &port,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("an unrepresentable attachment terminalizes as a typed failed run");
@@ -938,13 +1014,16 @@ fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
 fn control_character_reasoning_echo_terminalizes_as_typed_failed_run() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     // The transient attachment DTO rejects the control character.
     let driver = ScriptedDriver::new(vec![
         Ok(ModelEventDto::started()),
-        Ok(ModelEventDto::reasoning_delta("thinking\u{7}").expect("reasoning is valid")),
+        Ok(
+            ModelEventDto::reasoning_delta(ReasoningFragmentCategoryDto::Primary, "thinking\u{7}")
+                .expect("reasoning is valid"),
+        ),
         Ok(ModelEventDto::tool_call(call)),
         Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
     ]);
@@ -955,7 +1034,6 @@ fn control_character_reasoning_echo_terminalizes_as_typed_failed_run() {
         &driver,
         &port,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("an unrepresentable attachment terminalizes as a typed failed run");
@@ -998,7 +1076,7 @@ fn tool_failure_terminalizes_without_retry() {
     ] {
         let session_id = SessionId::new();
         let run_id = RunId::new();
-        let config = fixture_snapshot_with_model("fixture");
+        let config = fixture_snapshot();
         let repository = FakeRepository::new(session_id, run_id, config.clone());
         let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
         let driver = ScriptedDriver::new(vec![
@@ -1014,7 +1092,6 @@ fn tool_failure_terminalizes_without_retry() {
             &driver,
             &port,
             request(run_id, "fixture"),
-            config,
             RunCancellation::new(),
         )
         .expect("a typed tool failure terminalizes safely");
@@ -1052,8 +1129,8 @@ fn tool_failure_terminalizes_without_retry() {
 fn port_infrastructure_error_terminalizes_with_the_safe_error() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::new(vec![
         Ok(ModelEventDto::started()),
@@ -1069,7 +1146,6 @@ fn port_infrastructure_error_terminalizes_with_the_safe_error() {
         &driver,
         &port,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("port failure terminalizes safely");
@@ -1106,8 +1182,8 @@ fn port_infrastructure_error_terminalizes_with_the_safe_error() {
 fn interruption_during_tool_execution_records_the_notice_and_continues() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
@@ -1139,7 +1215,7 @@ fn interruption_during_tool_execution_records_the_notice_and_continues() {
                 session_id,
                 run_id,
                 request(run_id, "fixture"),
-                config,
+                repository.selection(),
                 execution_signal,
             )),
         );
@@ -1191,8 +1267,8 @@ fn interruption_during_tool_execution_records_the_notice_and_continues() {
 fn provider_failure_after_tool_round_is_terminal_without_retry() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
@@ -1215,7 +1291,6 @@ fn provider_failure_after_tool_round_is_terminal_without_retry() {
         &driver,
         &port,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("provider failure after a tool round terminalizes");
@@ -1244,8 +1319,8 @@ fn provider_failure_after_tool_round_is_terminal_without_retry() {
 fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
@@ -1286,7 +1361,7 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
             session_id,
             run_id,
             request(run_id, "fixture"),
-            config,
+            repository.selection(),
             signal,
         )),
     )
@@ -1317,8 +1392,8 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
 fn tool_loop_with_commit_observer_executes_and_observes() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
@@ -1344,7 +1419,7 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
                 session_id,
                 run_id,
                 request(run_id, "fixture"),
-                config,
+                repository.selection(),
                 RunCancellation::new(),
             ),
         ),
@@ -1390,8 +1465,8 @@ fn second_tool_call_does_not_start_until_first_finishes() {
     // context in call order and the run completes.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let first = ToolCallDto::new(ToolCallId::new(), "first", "{}").expect("call is valid");
     let second = ToolCallDto::new(ToolCallId::new(), "second", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
@@ -1431,7 +1506,7 @@ fn second_tool_call_does_not_start_until_first_finishes() {
                 session_id,
                 run_id,
                 request(run_id, "fixture"),
-                config,
+                repository.selection(),
                 RunCancellation::new(),
             )),
         );
@@ -1481,8 +1556,8 @@ fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
     // than by a later pre-stream check, and the run continues.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let signal = RunCancellation::new();
     let (started_tx, _started_rx) = mpsc::channel();
     let driver = PendingAfterStartedDriver {
@@ -1509,7 +1584,7 @@ fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
                 session_id,
                 run_id,
                 request(run_id, "fixture"),
-                config,
+                repository.selection(),
                 execution_signal,
             )),
         );
@@ -1555,8 +1630,8 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
     // notice, clears the signal, and starts the second attempt immediately.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let driver = ScriptedDriver::with_rounds(vec![
         vec![Err(ProviderErrorDto::unavailable(
             "provider_busy",
@@ -1590,7 +1665,7 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
                 session_id,
                 run_id,
                 request(run_id, "fixture"),
-                config,
+                repository.selection(),
                 execution_signal,
             )),
         );
@@ -1634,8 +1709,8 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
     // its notice without arming the sub-second retry delay at all.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let driver = ScriptedDriver::with_rounds(vec![
         vec![Err(ProviderErrorDto::unavailable(
             "provider_busy",
@@ -1665,7 +1740,7 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
             session_id,
             run_id,
             request(run_id, "fixture"),
-            config,
+            repository.selection(),
             signal,
         )),
     )
@@ -1711,13 +1786,16 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
     // without a finish event.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
             Ok(ModelEventDto::started()),
-            Ok(ModelEventDto::reasoning_delta("plan ").expect("reasoning is valid")),
+            Ok(
+                ModelEventDto::reasoning_delta(ReasoningFragmentCategoryDto::Primary, "plan ")
+                    .expect("reasoning is valid"),
+            ),
             Ok(ModelEventDto::tool_call(call.clone())),
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
         ],
@@ -1735,7 +1813,6 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
         &driver,
         &port,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("a finished round with tool calls continues the loop");
@@ -1787,8 +1864,8 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
 fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
     repository
         .pending
@@ -1814,7 +1891,6 @@ fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
         &driver,
         &port,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("the run completes after joining the pending message");
@@ -1853,8 +1929,8 @@ fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
 fn a_pending_message_at_the_finish_boundary_continues_instead_of_completing() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let config = fixture_snapshot_with_model("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let config = fixture_snapshot();
+    let repository = FakeRepository::new(session_id, run_id, config);
     repository
         .pending
         .lock()
@@ -1881,7 +1957,6 @@ fn a_pending_message_at_the_finish_boundary_continues_instead_of_completing() {
         &driver,
         &port,
         request(run_id, "fixture"),
-        config,
         RunCancellation::new(),
     )
     .expect("the run continues with the joined message and then completes");
