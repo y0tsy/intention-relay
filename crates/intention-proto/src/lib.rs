@@ -30,7 +30,10 @@ pub use protocol::{
     SessionSnapshotDto, SubscribeRunCommandDto, decode_request_line, decode_response, encode_reply,
     encode_request, parse_daemon_message, parse_run_frame,
 };
-pub use run::{RunModeDto, RunProjectionDto, RunStatusDto};
+pub use run::{
+    RunModeDto, RunProjectionDto, RunStatusDto, run_status_is_terminal,
+    validate_run_status_transition,
+};
 pub use turn::{
     CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto,
     RemoveTurnCommandDto, SendUserTurnCommandDto,

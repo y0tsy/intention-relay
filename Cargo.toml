@@ -1,26 +1,19 @@
 [workspace]
 members = [
   "crates/intention-proto",
-  "crates/intention-domain",
   "crates/intention-engine",
   "crates/intention-storage",
   "crates/intention-config",
   "crates/intention-providers",
   "crates/intention-tools",
-  "crates/intention-vfr",
-  "crates/intention-headroom",
-  "crates/intention-plans",
   "crates/intention-transport",
   "crates/intention-client",
   "crates/intention-daemon",
   "crates/intention-test-support",
-  "crates/intention-tauri",
   "crates/intention-tui",
-  "quality/harness",
 ]
 default-members = [
   "crates/intention-proto",
-  "crates/intention-domain",
   "crates/intention-config",
 ]
 resolver = "3"

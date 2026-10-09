@@ -14,7 +14,6 @@ use common::{create_session, open, reopen, repository, time, workspace_root};
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
-use intention_domain::{ToolResultMetadataEntryDto, ToolResultStatusDto};
 use intention_proto::{
     ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId,
     RunId, SchemaVersionDto, SessionId, ToolCallId, UsageDto, WorkspaceId,
@@ -25,6 +24,7 @@ use intention_proto::{
 };
 use intention_storage::{
     AcceptedTurnOutcomeDto, SqliteStorageRepository, StorageRepositoryDto, ToolResultEvidenceDto,
+    ToolResultMetadataEntryDto, ToolResultStatusDto,
 };
 use tempfile::TempDir;
 

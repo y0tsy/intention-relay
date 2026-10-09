@@ -32,7 +32,8 @@ use intention_proto::{
 };
 use intention_providers::ToolCallDto;
 use intention_storage::{
-    AcceptedTurnOutcomeDto, StartingRunModelContextDto, StorageRepositoryDto, ToolResultEvidenceDto,
+    AcceptedTurnOutcomeDto, StartingRunModelContextDto, StorageRepositoryDto,
+    ToolResultEvidenceDto, ToolResultStatusDto,
 };
 use intention_test_support::fixture_snapshot;
 
@@ -272,7 +273,7 @@ impl FakeRepository {
     pub fn completed_result_count(&self) -> usize {
         self.committed_results()
             .iter()
-            .filter(|row| row.status() == intention_domain::ToolResultStatusDto::Completed)
+            .filter(|row| row.status() == ToolResultStatusDto::Completed)
             .count()
     }
 

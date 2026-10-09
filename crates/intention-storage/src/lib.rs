@@ -17,7 +17,6 @@
 //! behind the typed field, and only the typed value is visible to callers.
 
 use intention_config::ConfigSnapshotDto;
-use intention_domain::{ToolResultMetadataEntryDto, ToolResultStatusDto};
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
     RemoveTurnCommandDto, RunProjectionDto, RunStatusDto, SessionProjectionDto,
@@ -26,6 +25,7 @@ use intention_proto::{
     DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, RunId, SessionId, TimestampDto,
     ToolCallId, UsageDto,
 };
+use serde::{Deserialize, Deserializer, Serialize, de};
 
 mod sqlite;
 
@@ -33,6 +33,77 @@ pub use sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 
 /// The maximum durable tool result content size in bytes.
 const MAX_TOOL_RESULT_CONTENT_BYTES: usize = 512 * 1024;
+
+/// The terminal outcome recorded for one local tool result.
+///
+/// The taxonomy is deliberately closed to terminal outcomes: a call records
+/// exactly one result row, and admission, rejection, and start evidence are
+/// not persisted.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolResultStatusDto {
+    /// The tool completed and produced a normalized safe result.
+    Completed,
+    /// The tool reported a safe failure outcome.
+    Failed,
+    /// The tool stopped before a final outcome; its captured output is partial.
+    Partial,
+}
+
+/// One credential-free structured metadata entry of a tool result.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ToolResultMetadataEntryDto {
+    key: String,
+    value: String,
+}
+
+impl<'de> Deserialize<'de> for ToolResultMetadataEntryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawToolResultMetadataEntryDto {
+            key: String,
+            value: String,
+        }
+
+        let raw = RawToolResultMetadataEntryDto::deserialize(deserializer)?;
+        Self::new(raw.key, raw.value).map_err(de::Error::custom)
+    }
+}
+
+impl ToolResultMetadataEntryDto {
+    /// Creates one metadata entry with a non-blank key.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the key is blank or either field
+    /// contains a NUL character.
+    pub fn new(key: impl Into<String>, value: impl Into<String>) -> DtoResult<Self> {
+        let key = key.into();
+        let value = value.into();
+        if key.trim().is_empty() || key.contains('\0') || value.contains('\0') {
+            return Err(ErrorDto::validation(
+                "invalid_tool_result_metadata",
+                "tool result metadata must have a non-blank key",
+            ));
+        }
+        Ok(Self { key, value })
+    }
+
+    /// Returns the stable metadata key.
+    #[must_use]
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// Returns the metadata value.
+    #[must_use]
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+}
 
 /// Typed durable evidence of one committed local tool result.
 ///

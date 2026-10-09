@@ -2,7 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ConfigRevisionId, RunId, SessionId, TurnId};
+use crate::{
+    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, RunId, SessionId,
+    TurnId,
+};
 
 /// The agent policy active for a run.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -28,6 +31,43 @@ pub enum RunStatusDto {
     Failed,
     /// Daemon recovery ended an unfinished run without retrying it.
     Interrupted,
+}
+
+/// Returns whether no future run status transition is valid from `status`.
+#[must_use]
+pub const fn run_status_is_terminal(status: RunStatusDto) -> bool {
+    matches!(
+        status,
+        RunStatusDto::Completed | RunStatusDto::Failed | RunStatusDto::Interrupted
+    )
+}
+
+/// Validates one durable run lifecycle transition without accessing runtime or storage state.
+///
+/// # Errors
+///
+/// Returns a conflict error when `to` is not a declared successor of `from`.
+pub fn validate_run_status_transition(from: RunStatusDto, to: RunStatusDto) -> DtoResult<()> {
+    let allowed = matches!(
+        (from, to),
+        (RunStatusDto::Starting, RunStatusDto::Running)
+            | (RunStatusDto::Starting, RunStatusDto::Failed)
+            | (RunStatusDto::Starting, RunStatusDto::Interrupted)
+            | (RunStatusDto::Running, RunStatusDto::Completed)
+            | (RunStatusDto::Running, RunStatusDto::Failed)
+            | (RunStatusDto::Running, RunStatusDto::Interrupted)
+    );
+    if allowed {
+        Ok(())
+    } else {
+        Err(ErrorDto::new(
+            "invalid_run_status_transition",
+            ErrorCategoryDto::Conflict,
+            "run status transition is not permitted",
+            ErrorRetryDto::Never,
+            None,
+        )?)
+    }
 }
 
 /// A safe current projection of one durable run.

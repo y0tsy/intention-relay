@@ -11,7 +11,6 @@ use std::sync::{Mutex, PoisonError};
 
 use common::{FakeRepository, RecordingCommitObserver, workspace_root};
 use intention_config::ConfigSnapshotDto;
-use intention_domain::ToolResultStatusDto;
 use intention_engine::{
     ApplicationService, ModelRunCommitDto, ModelRunCommitObserver, RunCancellation,
     ToolInvocationRequestDto, ToolResultOutcomeDto,
@@ -25,7 +24,7 @@ use intention_proto::{
     ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, TimestampDto, ToolCallId, TurnId,
     WorkspaceId,
 };
-use intention_storage::StartingRunModelContextDto;
+use intention_storage::{StartingRunModelContextDto, ToolResultStatusDto};
 use intention_test_support::fixture_snapshot;
 use intention_tools::{BoundedText, ExecuteInput, ReadInput, ToolInput, WorkspaceRoot};
 

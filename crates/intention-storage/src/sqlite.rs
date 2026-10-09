@@ -17,13 +17,10 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use crate::{
-    AcceptedTurnOutcomeDto, StartingRunModelContextDto, StorageRepositoryDto, ToolResultEvidenceDto,
+    AcceptedTurnOutcomeDto, StartingRunModelContextDto, StorageRepositoryDto,
+    ToolResultEvidenceDto, ToolResultMetadataEntryDto, ToolResultStatusDto,
 };
 use intention_config::ConfigSnapshotDto;
-use intention_domain::{
-    ToolResultMetadataEntryDto, ToolResultStatusDto, run_status_is_terminal,
-    validate_run_status_transition,
-};
 use intention_proto::{
     ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorCategoryDto, ErrorDto,
     ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId, RemoveTurnCommandDto, RunId,
@@ -31,7 +28,8 @@ use intention_proto::{
 };
 use intention_proto::{
     MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, RunModeDto, RunProjectionDto,
-    RunStatusDto, SessionProjectionDto, WorkspaceRootDto,
+    RunStatusDto, SessionProjectionDto, WorkspaceRootDto, run_status_is_terminal,
+    validate_run_status_transition,
 };
 use sqlite::OptionalExtension;
 

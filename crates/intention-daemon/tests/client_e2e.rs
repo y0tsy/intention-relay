@@ -28,10 +28,10 @@ use common::{spawn_daemon, unique_endpoint, write_config_document};
 use intention_client::{
     IntentionClient, ProcessDaemonLauncher, RunStreamClient, RunStreamSubscription,
 };
-use intention_domain::run_status_is_terminal;
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunStatusDto,
     RunStreamFrameDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto, WorkspaceRootDto,
+    run_status_is_terminal,
 };
 use intention_proto::{IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId};
 use intention_transport::LocalEndpoint;

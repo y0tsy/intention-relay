@@ -16,13 +16,11 @@ use std::{
     time::Duration,
 };
 
-use intention_domain::run_status_is_terminal;
 use intention_engine::{
     ApplicationService, ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionService,
     ModelSleepFuture, ModelTimePort, RunCancellation, ToolExecutionPort, ToolInvocationRequestDto,
     ToolResultOutcomeDto, fail_starting_run,
 };
-use intention_proto::RunStatusDto;
 use intention_proto::{
     ClientRequestDto, DtoResult, ErrorDto, InterruptRunCommandDto, RunId,
     RunSubscriptionSnapshotDto, SendUserTurnOutcomeDto, SessionId, SubscribeRunCommandDto,
@@ -31,6 +29,7 @@ use intention_proto::{
 use intention_proto::{
     ProtocolDaemonMessageDto, ProtocolResultDto, RunStreamFrameDto, decode_request_line,
 };
+use intention_proto::{RunStatusDto, run_status_is_terminal};
 use intention_storage::StorageRepositoryDto;
 use intention_tools::{ToolInput, WorkspaceRoot};
 use intention_transport::{AsyncLocalListener, AsyncMessageSender, LocalEndpoint};

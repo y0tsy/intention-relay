@@ -62,10 +62,9 @@ use intention_client::{IntentionClient, ProcessDaemonLauncher, RunStreamClient};
 use intention_config::{
     ConfigPathDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto,
 };
-use intention_domain::run_status_is_terminal;
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto,
-    RunStatusDto, WorkspaceRootDto,
+    RunStatusDto, WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_proto::{IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId};
 use intention_proto::{SendUserTurnOutcomeDto, SessionSnapshotDto, SubscribeRunCommandDto};

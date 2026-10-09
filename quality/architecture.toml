@@ -1,11 +1,9 @@
 [policy]
 phase = "slice15"
 active_milestone = "slice15"
-quality_harness = "quality-harness"
 non_production_test_crates = ["intention-test-support"]
 active_production_crates = [
   "intention-proto",
-  "intention-domain",
   "intention-config",
   "intention-transport",
   "intention-client",
@@ -15,11 +13,7 @@ active_production_crates = [
   "intention-providers",
   "intention-tools",
 ]
-skeleton_crates = [
-  "intention-headroom",
-  "intention-plans",
-  "intention-vfr",
-]
+skeleton_crates = []
 
 [forbidden]
 source_patterns = [
@@ -41,18 +35,17 @@ test_only_source_patterns = [
 # cross-crate edge needs exactly one reviewable declaration.
 [dependencies]
 "intention-proto" = []
-"intention-domain" = ["intention-proto"]
 "intention-config" = ["intention-proto"]
-"intention-storage" = ["intention-config", "intention-domain", "intention-proto"]
+"intention-storage" = ["intention-config", "intention-proto"]
 "intention-transport" = ["intention-proto"]
 "intention-client" = ["intention-transport", "intention-proto"]
-"intention-daemon" = ["intention-client", "intention-config", "intention-domain", "intention-engine", "intention-proto", "intention-providers", "intention-storage", "intention-test-support", "intention-tools", "intention-transport"]
-"intention-engine" = ["intention-config", "intention-domain", "intention-providers", "intention-proto", "intention-storage", "intention-test-support", "intention-tools"]
+"intention-daemon" = ["intention-client", "intention-config", "intention-engine", "intention-proto", "intention-providers", "intention-storage", "intention-test-support", "intention-tools", "intention-transport"]
+"intention-engine" = ["intention-config", "intention-providers", "intention-proto", "intention-storage", "intention-test-support", "intention-tools"]
 "intention-providers" = ["intention-config", "intention-proto"]
 "intention-tools" = ["intention-proto"]
 
 [adapter_boundaries]
-packages = ["intention-tauri", "intention-tui"]
+packages = ["intention-tui"]
 allowed_workspace_dependencies = ["intention-client", "intention-transport", "intention-proto"]
 allowed_test_workspace_dependencies = ["intention-daemon", "intention-test-support"]
 allowed_external_dependencies = ["serde_json", "tokio"]
@@ -72,7 +65,6 @@ allowed_external_dependencies = ["serde", "serde_json", "uuid"]
 forbidden_source_patterns = [
   "tauri::",
   "rusqlite::",
-  "intention_tauri::",
   "intention_tui::",
   "intention_provider_",
   "async_openai::",
@@ -81,11 +73,7 @@ forbidden_source_patterns = [
 
 [composition]
 root_package = "intention-daemon"
-concrete_implementation_crates = [
-  "intention-vfr",
-  "intention-headroom",
-  "intention-plans",
-]
+concrete_implementation_crates = []
 owned_selection_patterns = [
   "SelectedProvider",
 ]

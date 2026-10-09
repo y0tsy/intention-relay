@@ -481,9 +481,9 @@ mod tests {
 
     use super::*;
 
-    use intention_domain::ToolResultStatusDto;
     use intention_engine::{ModelRunCommitDto, RunCancellation};
     use intention_proto::{MessageKindDto, MessageProjectionDto, SendUserTurnCommandDto};
+    use intention_storage::ToolResultStatusDto;
     use tempfile::TempDir;
 
     fn test_facade() -> (TempDir, DaemonApplicationFacade) {

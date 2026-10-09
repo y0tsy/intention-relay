@@ -11,7 +11,6 @@ mod runtime;
 pub use crate::runtime::*;
 
 use intention_config::ConfigSnapshotDto;
-use intention_domain::{ToolResultMetadataEntryDto, ToolResultStatusDto};
 use intention_proto::ToolCallId;
 use intention_proto::{
     CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
@@ -19,7 +18,10 @@ use intention_proto::{
     SessionProjectionDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
-use intention_storage::{AcceptedTurnOutcomeDto, StorageRepositoryDto, ToolResultEvidenceDto};
+use intention_storage::{
+    AcceptedTurnOutcomeDto, StorageRepositoryDto, ToolResultEvidenceDto,
+    ToolResultMetadataEntryDto, ToolResultStatusDto,
+};
 use intention_tools::{
     InterruptCause, ToolDispatchOutcome, ToolInput, ToolResult, ToolService, WorkspaceRoot,
     partial_tool_result_content, render_tool_result_content,

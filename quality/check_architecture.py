@@ -304,9 +304,6 @@ def check_phase_policy(
         fail("adapter boundary table is required")
     adapter_set = set(string_list(adapters, "packages"))
     non_production_test = set(string_list(state, "non_production_test_crates"))
-    quality_harness = state.get("quality_harness")
-    if not isinstance(quality_harness, str):
-        fail("quality_harness must be a crate name")
 
     # The classification is this policy's crate map. Cargo metadata is the
     # authority for the workspace itself, so a crate change edits one
@@ -319,7 +316,7 @@ def check_phase_policy(
         fail("non-production test crates cannot be active, skeleton, or adapters")
     if active_set & adapter_set:
         fail(f"{phase.upper()} adapters cannot be active production crates")
-    classified = active_set | skeleton_set | adapter_set | non_production_test | {quality_harness}
+    classified = active_set | skeleton_set | adapter_set | non_production_test
     actual_names = set(packages)
     if classified != actual_names:
         fail(
