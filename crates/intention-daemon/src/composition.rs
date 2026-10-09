@@ -24,8 +24,9 @@ use intention_proto::DaemonHealthDto;
 use intention_proto::{
     ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto, DtoResult, ErrorDto,
     InterruptRunAcceptedDto, InterruptRunCommandDto, ProtocolResultDto, RemoveTurnAcceptedDto,
-    RemoveTurnCommandDto, RunId, SchemaVersionDto, SendUserTurnAcceptedDto, SendUserTurnCommandDto,
-    SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto, TimestampDto,
+    RemoveTurnCommandDto, RunId, RunProjectionDto, SchemaVersionDto, SendUserTurnAcceptedDto,
+    SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId, SessionProjectionDto,
+    SessionSnapshotDto, TimestampDto,
 };
 #[cfg(test)]
 use intention_proto::{ProjectId, RunModeDto, WorkspaceId, WorkspaceRootDto};
@@ -82,10 +83,12 @@ struct FacadeInner {
 /// takes it. `run` is the gate's only entry point, so a command path cannot run
 /// ungated by construction.
 ///
-/// Ordering: the gate is an independent lock. It is never held together with
-/// the daemon host's registry lock, and no other lock is acquired while it is
-/// held, so its only ordering relation is with the durable writes it
-/// serializes.
+/// Ordering: the gate is an independent lock, and it is never held together
+/// with the daemon host's registry lock. Every gated closure reaches durable
+/// storage, which takes the repository's one connection lock, so the only
+/// ordering relations are gate → storage and registry → storage: storage is
+/// always the last lock taken, and no lock is taken while the connection lock
+/// is held.
 pub struct CommandGate {
     inner: Mutex<()>,
 }
@@ -302,7 +305,8 @@ impl DaemonApplicationFacade {
     ///
     /// This is the single session read: recent transcript rows are bounded by
     /// the retained delivery bound and the byte budget derived from the
-    /// transport envelope cap. The run-scoped read is the dedicated run
+    /// transport envelope cap, which charges the encoded projection as well as
+    /// the transcript rows. The run-scoped read is the dedicated run
     /// subscription, which the daemon host answers from the same repository.
     ///
     /// # Errors
@@ -311,7 +315,9 @@ impl DaemonApplicationFacade {
     /// transcript rows cannot be read.
     pub fn session_snapshot(&self, session_id: SessionId) -> DtoResult<SessionSnapshotDto> {
         let projection = self.inner.repository.load_session_projection(session_id)?;
+        let projection_bytes = session_projection_bytes(&projection)?;
         let messages = bounded_snapshot_messages(
+            projection_bytes,
             self.inner
                 .repository
                 .load_recent_messages(session_id, SESSION_SNAPSHOT_MESSAGES)?,
@@ -340,14 +346,21 @@ impl DaemonApplicationFacade {
 
     /// Accepts one user turn and assembles its typed reply evidence.
     ///
+    /// The proposed run identity is derived from the caller's idempotency key,
+    /// so a repeated command proposes the identity the durable turn already
+    /// recorded and the repository replays its outcome instead of reporting a
+    /// conflict. Both identities are canonical UUIDs, so one caller identity
+    /// selects exactly one run.
+    ///
     /// # Errors
     ///
     /// Returns the typed admission failure when the turn is rejected.
     pub fn send_user_turn(&self, command: SendUserTurnCommandDto) -> DtoResult<ProtocolResultDto> {
         self.inner.command_gate.run(|| {
+            let proposed_run_id = RunId::parse(&command.idempotency_key().to_string())?;
             let outcome = ApplicationService::new(&self.inner.repository).send_user_turn(
                 command,
-                RunId::new(),
+                proposed_run_id,
                 self.inner.config_snapshot.clone(),
                 now()?,
             )?;
@@ -470,29 +483,82 @@ impl std::io::Write for CountingWriter {
 /// A transcript snapshot is the only legitimate response large enough to
 /// approach the envelope cap, so the read path owns the byte budget and the
 /// transport owns the cap: no legitimate snapshot can be dropped silently at
-/// the connection level.
+/// the connection level. The whole message is charged, so the encoded
+/// projection that travels beside the transcript is subtracted before the rows
+/// are measured, and the newest row is kept unconditionally: a row that alone
+/// exceeds the budget must reach the transport, which answers with its typed
+/// over-size failure instead of serving an empty transcript.
+///
+/// # Errors
+///
+/// Returns the typed local encode failure when a transcript row cannot be
+/// encoded.
 pub fn bounded_snapshot_messages(
+    projection_bytes: usize,
     mut messages: Vec<intention_proto::MessageProjectionDto>,
 ) -> DtoResult<Vec<intention_proto::MessageProjectionDto>> {
-    let mut budget = MAX_TRANSCRIPT_SNAPSHOT_BYTES;
+    let mut budget = MAX_TRANSCRIPT_SNAPSHOT_BYTES.saturating_sub(projection_bytes);
+    let newest = messages.len().saturating_sub(1);
     let mut keep_from = messages.len();
     for (index, message) in messages.iter().enumerate().rev() {
-        let mut encoded_bytes = CountingWriter(0);
-        serde_json::to_writer(&mut encoded_bytes, message).map_err(|_| {
-            ErrorDto::validation(
-                "local_protocol_encode_failed",
-                "a typed local protocol message could not be encoded",
-            )
-        })?;
-        let size = encoded_bytes.0.saturating_add(1);
-        if size > budget {
+        let size = encoded_message_bytes(message)?.saturating_add(1);
+        if size > budget && index != newest {
             break;
         }
-        budget -= size;
+        budget = budget.saturating_sub(size);
         keep_from = index;
     }
     messages.drain(..keep_from);
     Ok(messages)
+}
+
+/// Trims one run subscription transcript to the budget its projection leaves.
+///
+/// The run snapshot carries the same whole-message contract as the session
+/// snapshot, so its committed projection is charged before the transcript rows
+/// are measured.
+///
+/// # Errors
+///
+/// Returns the typed local encode failure when the projection or a transcript
+/// row cannot be encoded.
+pub fn bounded_run_snapshot_messages(
+    run: &RunProjectionDto,
+    messages: Vec<intention_proto::MessageProjectionDto>,
+) -> DtoResult<Vec<intention_proto::MessageProjectionDto>> {
+    let mut counter = CountingWriter(0);
+    serde_json::to_writer(&mut counter, run).map_err(|_| encode_failure())?;
+    bounded_snapshot_messages(counter.0, messages)
+}
+
+/// Counts the encoded bytes one session projection adds to its snapshot.
+///
+/// # Errors
+///
+/// Returns the typed local encode failure when the projection cannot be encoded.
+fn session_projection_bytes(projection: &SessionProjectionDto) -> DtoResult<usize> {
+    let mut counter = CountingWriter(0);
+    serde_json::to_writer(&mut counter, projection).map_err(|_| encode_failure())?;
+    Ok(counter.0)
+}
+
+/// Counts the encoded bytes one transcript row adds to its snapshot.
+///
+/// # Errors
+///
+/// Returns the typed local encode failure when the row cannot be encoded.
+fn encoded_message_bytes(message: &intention_proto::MessageProjectionDto) -> DtoResult<usize> {
+    let mut counter = CountingWriter(0);
+    serde_json::to_writer(&mut counter, message).map_err(|_| encode_failure())?;
+    Ok(counter.0)
+}
+
+/// The one typed failure of a local protocol value that cannot be encoded.
+fn encode_failure() -> ErrorDto {
+    ErrorDto::validation(
+        "local_protocol_encode_failed",
+        "a typed local protocol message could not be encoded",
+    )
 }
 
 pub fn now() -> DtoResult<TimestampDto> {
@@ -704,7 +770,7 @@ mod tests {
     }
 
     #[test]
-    fn facade_replay_of_the_same_user_turn_conflicts_without_duplicating_transcript_or_dispatch() {
+    fn facade_replay_of_the_same_user_turn_returns_the_recorded_outcome() {
         let directory = TempDir::new().expect("temporary directory exists");
         let facade = DaemonApplicationFacade::open_for_test_support(
             directory.path().join("idempotent-turn.sqlite"),
@@ -713,12 +779,9 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
-        let command = SendUserTurnCommandDto::new(
-            session_id,
-            intention_proto::IdempotencyKey::new(),
-            "idempotent turn",
-        )
-        .expect("fixture user turn is valid");
+        let key = intention_proto::IdempotencyKey::new();
+        let command = SendUserTurnCommandDto::new(session_id, key, "idempotent turn")
+            .expect("fixture user turn is valid");
 
         let initial = facade
             .send_user_turn(command.clone())
@@ -726,21 +789,82 @@ mod tests {
         let ProtocolResultDto::TurnAccepted(initial_turn) = initial else {
             unreachable!("the first user turn returns user-turn evidence")
         };
-        let SendUserTurnOutcomeDto::Started { run_id, .. } = initial_turn.outcome() else {
+        let SendUserTurnOutcomeDto::Started {
+            run_id,
+            config_revision_id,
+        } = initial_turn.outcome()
+        else {
             unreachable!("the first user turn starts a run")
         };
         let committed = run_messages(&facade, session_id, run_id);
 
-        // The facade proposes a fresh run identity for every command, so a
-        // repeated command conflicts durably instead of starting a second run.
-        let error = facade
+        // The proposed run identity is derived from the caller's idempotency
+        // key, so a repeated command proposes the identity the durable turn
+        // already recorded and replays its outcome instead of conflicting.
+        let replayed = facade
             .send_user_turn(command)
-            .expect_err("a repeated command cannot start a second run");
-        assert_eq!(error.code(), "turn_idempotency_conflict");
+            .expect("a repeated command replays its recorded outcome");
+        let ProtocolResultDto::TurnAccepted(replayed_turn) = replayed else {
+            unreachable!("the replay returns user-turn evidence")
+        };
+        assert_eq!(
+            replayed_turn.outcome(),
+            SendUserTurnOutcomeDto::Started {
+                run_id,
+                config_revision_id,
+            }
+        );
         assert_eq!(
             run_messages(&facade, session_id, run_id),
             committed,
-            "the rejected replay duplicates no transcript row"
+            "the replayed command duplicates no transcript row"
+        );
+
+        // The same key bound to different content stays a durable conflict.
+        let conflicting = SendUserTurnCommandDto::new(session_id, key, "different turn")
+            .expect("fixture user turn is valid");
+        let error = facade
+            .send_user_turn(conflicting)
+            .expect_err("one key bound to different content conflicts");
+        assert_eq!(error.code(), "turn_idempotency_conflict");
+    }
+
+    #[test]
+    fn an_over_budget_newest_row_is_kept_and_the_projection_is_charged() {
+        let row = |text: String| {
+            MessageProjectionDto::new(
+                SessionId::new(),
+                None,
+                MessageKindDto::User,
+                text,
+                None,
+                None,
+                None,
+            )
+            .expect("fixture transcript row is valid")
+        };
+        // A single row larger than the whole budget is kept: the transport owns
+        // the envelope cap and answers with its typed over-size failure instead
+        // of the peer receiving a valid but empty transcript.
+        let oversized = row("x".repeat(MAX_TRANSCRIPT_SNAPSHOT_BYTES));
+        let kept = bounded_snapshot_messages(0, vec![oversized.clone()])
+            .expect("the over-budget snapshot bounds");
+        assert_eq!(kept, vec![oversized]);
+
+        // The projection travelling beside the transcript is charged against
+        // the same budget, so it displaces the oldest rows first.
+        let rows: Vec<MessageProjectionDto> = (0..4)
+            .map(|index| row(format!("row {index} {}", "y".repeat(200 * 1024))))
+            .collect();
+        let unbounded =
+            bounded_snapshot_messages(0, rows.clone()).expect("the uncharged read bounds");
+        let charged =
+            bounded_snapshot_messages(400 * 1024, rows.clone()).expect("the charged read bounds");
+        assert!(charged.len() < unbounded.len());
+        assert_eq!(
+            charged.last().map(|message| message.text().to_owned()),
+            rows.last().map(|message| message.text().to_owned()),
+            "the newest row is always kept"
         );
     }
 

@@ -22,7 +22,7 @@ intention-tools = { path = "../intention-tools", version = "=0.0.0" }
 intention-transport = { path = "../intention-transport", version = "=0.0.0" }
 intention-proto = { path = "../intention-proto", version = "=0.0.0" }
 serde_json = "1.0.149"
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "sync", "test-util", "time"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "sync", "test-util", "time"] }
 
 [dev-dependencies]
 intention-client = { path = "../intention-client", version = "=0.0.0" }

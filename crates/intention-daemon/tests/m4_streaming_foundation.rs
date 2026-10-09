@@ -28,7 +28,7 @@ use futures_util::StreamExt;
 use futures_util::stream;
 use intention_daemon::DaemonApplicationFacade;
 #[cfg(feature = "test-support")]
-use intention_engine::INTERRUPT_NOTICE;
+use intention_engine::{INTERRUPT_NOTICE, INTERRUPTED_MARKER};
 use intention_proto::SendUserTurnOutcomeDto;
 #[cfg(feature = "test-support")]
 use intention_proto::TurnId;
@@ -121,6 +121,72 @@ impl ModelExecutionDriver for BlockingDriver {
                 Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
             ])),
         )
+    }
+}
+
+/// Delivers a partial model answer and then blocks its first round.
+///
+/// The environment-stop scenario needs the answer to be *in flight* when the
+/// stop arrives: this driver yields its first text delta and then waits, so the
+/// cancellation commits exactly the text the model had produced. Every later
+/// round completes immediately, so a drained run reaches its terminal state.
+#[cfg(feature = "test-support")]
+struct PartialAnswerDriver {
+    executions: Mutex<usize>,
+    reached: Arc<tokio::sync::Notify>,
+}
+
+#[cfg(feature = "test-support")]
+impl PartialAnswerDriver {
+    fn new() -> Self {
+        Self {
+            executions: Mutex::new(0),
+            reached: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+}
+
+#[cfg(feature = "test-support")]
+impl ModelExecutionDriver for PartialAnswerDriver {
+    fn capabilities(&self) -> ModelCapabilitiesDto {
+        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+    }
+
+    fn execute(
+        &self,
+        _request: ModelRequestDto,
+        _cancellation: ModelCancellationSignal,
+    ) -> ModelEventStream {
+        let execution = {
+            let mut executions = self
+                .executions
+                .lock()
+                .expect("driver recorder remains available");
+            *executions += 1;
+            *executions
+        };
+        if execution == 1 {
+            let reached = Arc::clone(&self.reached);
+            return Box::pin(
+                stream::iter(vec![
+                    Ok(ModelEventDto::started()),
+                    Ok(ModelEventDto::text_delta("partial answer").expect("fixture text is valid")),
+                ])
+                .chain(stream::once(async move {
+                    // The engine holds the delta in its pending step by the time
+                    // this chained future is polled, so the stop it wakes commits
+                    // exactly that text.
+                    reached.notify_one();
+                    std::future::pending::<()>().await;
+                    Ok(ModelEventDto::finished(FinishReasonDto::Stop))
+                })),
+            );
+        }
+        Box::pin(stream::iter(vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::text_delta("final answer").expect("fixture text is valid")),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ]))
     }
 }
 
@@ -301,6 +367,60 @@ async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
         .await
         .expect("host accepts command and interrupt peers");
     host.shutdown().await;
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_stopped_answer_is_durable_with_its_marker_after_a_graceful_shutdown() {
+    // An environment stop takes the same path as a user interrupt: every
+    // registered run is cancelled and drained, so the answer the model had
+    // produced is durable, with its marker, before the host returns.
+    let driver = Arc::new(PartialAnswerDriver::new());
+    let (_directory, facade, _snapshot) = fixture_facade("graceful-shutdown", driver.clone());
+    let session_id = SessionId::new();
+    create_session(&facade, session_id, &std::env::temp_dir());
+    let endpoint =
+        LocalEndpoint::from_instance_id(format!("m4-graceful-shutdown-{}", RunId::new()))
+            .expect("fixture endpoint is valid");
+    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
+    let host = intention_daemon::test_host_lifecycle(facade.clone());
+    let host_server = host.clone();
+    let server = tokio::spawn(async move {
+        host_server.serve_connections(listener, 1).await;
+    });
+    let run_id = send_user_turn_through_host(&endpoint, session_id).await;
+    tokio::time::timeout(Duration::from_secs(1), driver.reached.notified())
+        .await
+        .expect("the driver delivers its partial answer before the stop");
+
+    host.shutdown_gracefully().await;
+
+    let snapshot = facade
+        .session_snapshot(session_id)
+        .expect("durable state reads");
+    assert!(
+        snapshot.messages().iter().any(|message| {
+            message.run_id() == Some(run_id)
+                && message.kind() == MessageKindDto::Assistant
+                && message.text().contains("partial answer")
+                && message.text().contains(INTERRUPTED_MARKER)
+        }),
+        "the stopped answer is durable with its marker"
+    );
+    assert!(
+        snapshot.messages().iter().any(|message| {
+            message.run_id() == Some(run_id)
+                && message.kind() == MessageKindDto::Notice
+                && message.text() == INTERRUPT_NOTICE
+        }),
+        "the stopped answer is followed by its durable notice"
+    );
+    assert_eq!(
+        snapshot.projection().active_run().map(|run| run.status()),
+        None,
+        "the drained run reached its terminal state"
+    );
+    server.await.expect("host serves the stopped run's peer");
 }
 
 #[cfg(feature = "test-support")]
