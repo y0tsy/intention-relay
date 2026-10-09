@@ -30,7 +30,7 @@ use intention_proto::{
     ProtocolDaemonMessageDto, ProtocolResultDto, RunStreamFrameDto, decode_request_line,
 };
 use intention_proto::{RunStatusDto, run_status_is_terminal};
-use intention_storage::StorageRepositoryDto;
+use intention_storage::{RunOutcomeDto, StorageRepositoryDto};
 use intention_tools::{ToolInput, WorkspaceRoot};
 use intention_transport::{AsyncLocalListener, AsyncMessageSender, LocalEndpoint};
 
@@ -68,16 +68,126 @@ struct Subscriber {
 #[derive(Default)]
 struct HostData {
     tasks: HashMap<RunKey, RunCancellation>,
-    #[cfg(any(test, feature = "test-support"))]
-    execution_tasks: Vec<tokio::task::JoinHandle<()>>,
-    #[cfg(any(test, feature = "test-support"))]
-    execution_completion: HashMap<RunKey, tokio::sync::watch::Sender<bool>>,
     subscribers: HashMap<RunKey, Vec<Subscriber>>,
 }
+
+/// The one execution-recording seam of the daemon host.
+///
+/// Every admitted run registers its completion signal and hands its spawned
+/// execution task to this seam. A production build records nothing: the durable
+/// run registry and the one commit observer are all a production execution
+/// needs, and a detached task needs no owner. A test or test-support build
+/// records the per-run completion senders and the spawned task handles so a
+/// fixture can wait for the exact admitted execution and can abort and join
+/// every task it created. Only the seam implementation is conditional, so no
+/// production shape carries fixture state.
+trait ExecutionRecorder: Send + Sync {
+    /// Registers the completion signal of one newly admitted run.
+    fn register(&self, key: RunKey);
+
+    /// Takes ownership of one spawned execution task.
+    fn track(&self, task: tokio::task::JoinHandle<()>);
+
+    /// Reports that the exact registered execution has returned.
+    ///
+    /// The recorded sender stays in the recorder so the unified terminalizer
+    /// can report completion for runs it terminalizes after the executor task
+    /// has already returned (PR24-013).
+    fn signal(&self, key: RunKey);
+}
+
+/// Fixture-only inspection of the execution recorder.
+///
+/// It exists only in a test or test-support build, where the recorder keeps the
+/// state a fixture waits on and aborts; a production recorder has nothing to
+/// inspect.
+#[cfg(any(test, feature = "test-support"))]
+trait RecordedExecution: ExecutionRecorder {
+    /// Returns a receiver of the exact run's completion signal.
+    fn completion(&self, key: RunKey) -> Option<tokio::sync::watch::Receiver<bool>>;
+
+    /// Returns every execution task this recorder still owns, leaving none.
+    fn take_tasks(&self) -> Vec<tokio::task::JoinHandle<()>>;
+}
+
+/// The production execution recorder: a zero-sized no-op.
+#[cfg(not(any(test, feature = "test-support")))]
+#[derive(Default)]
+struct NoopExecutionRecorder;
+
+#[cfg(not(any(test, feature = "test-support")))]
+impl ExecutionRecorder for NoopExecutionRecorder {
+    fn register(&self, _key: RunKey) {}
+
+    fn track(&self, _task: tokio::task::JoinHandle<()>) {}
+
+    fn signal(&self, _key: RunKey) {}
+}
+
+/// The fixture execution recorder: keeps the completion sender of every
+/// admitted run and the handle of every spawned execution task.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Default)]
+struct RecordingExecutionRecorder {
+    tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    completions: Mutex<HashMap<RunKey, tokio::sync::watch::Sender<bool>>>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ExecutionRecorder for RecordingExecutionRecorder {
+    fn register(&self, key: RunKey) {
+        if let Ok(mut completions) = self.completions.lock() {
+            let (completion, _) = tokio::sync::watch::channel(false);
+            completions.insert(key, completion);
+        }
+    }
+
+    fn track(&self, task: tokio::task::JoinHandle<()>) {
+        if let Ok(mut tasks) = self.tasks.lock() {
+            tasks.push(task);
+        } else {
+            task.abort();
+        }
+    }
+
+    fn signal(&self, key: RunKey) {
+        if let Ok(completions) = self.completions.lock()
+            && let Some(completion) = completions.get(&key)
+        {
+            let _ = completion.send_replace(true);
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl RecordedExecution for RecordingExecutionRecorder {
+    fn completion(&self, key: RunKey) -> Option<tokio::sync::watch::Receiver<bool>> {
+        self.completions
+            .lock()
+            .ok()
+            .and_then(|completions| completions.get(&key).cloned())
+            .map(|sender| sender.subscribe())
+    }
+
+    fn take_tasks(&self) -> Vec<tokio::task::JoinHandle<()>> {
+        let Ok(mut tasks) = self.tasks.lock() else {
+            return Vec::new();
+        };
+        std::mem::take(&mut tasks)
+    }
+}
+
+/// The execution recorder one host build uses.
+#[cfg(not(any(test, feature = "test-support")))]
+type HostRecorder = NoopExecutionRecorder;
+
+#[cfg(any(test, feature = "test-support"))]
+type HostRecorder = RecordingExecutionRecorder;
 
 struct HostState {
     facade: DaemonApplicationFacade,
     data: Mutex<HostData>,
+    recorder: HostRecorder,
 }
 
 impl HostState {
@@ -112,12 +222,8 @@ impl HostState {
             return;
         };
         entry.insert(cancellation.clone());
-        #[cfg(any(test, feature = "test-support"))]
-        {
-            let (completion, _) = tokio::sync::watch::channel(false);
-            data.execution_completion.insert(key, completion);
-        }
         drop(data);
+        self.recorder.register(key);
         let host = Arc::clone(self);
         let task = tokio::spawn(async move {
             let observer = HostCommitObserver {
@@ -156,15 +262,9 @@ impl HostState {
             if let Ok(mut data) = host.data.lock() {
                 data.tasks.remove(&key);
             }
-            #[cfg(any(test, feature = "test-support"))]
-            {
-                host.signal_execution_completion(key);
-            }
+            host.recorder.signal(key);
         });
-        #[cfg(any(test, feature = "test-support"))]
-        self.track_test_execution_task(task);
-        #[cfg(not(any(test, feature = "test-support")))]
-        std::mem::drop(task);
+        self.recorder.track(task);
     }
 
     /// Interrupts the current operation of one active run.
@@ -194,58 +294,6 @@ impl HostState {
         Ok(accepted)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    fn track_test_execution_task(&self, task: tokio::task::JoinHandle<()>) {
-        if let Ok(mut data) = self.data.lock() {
-            data.execution_tasks.push(task);
-        } else {
-            task.abort();
-        }
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    fn abort_test_execution_tasks(&self) -> Vec<tokio::task::JoinHandle<()>> {
-        let Ok(mut data) = self.data.lock() else {
-            return Vec::new();
-        };
-        std::mem::take(&mut data.execution_tasks)
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    async fn wait_for_execution_completion(&self, key: RunKey) -> bool {
-        let Some(mut completion) = self
-            .data
-            .lock()
-            .ok()
-            .and_then(|data| data.execution_completion.get(&key).cloned())
-            .map(|sender| sender.subscribe())
-        else {
-            return false;
-        };
-        loop {
-            if *completion.borrow_and_update() {
-                return true;
-            }
-            if completion.changed().await.is_err() {
-                return false;
-            }
-        }
-    }
-
-    /// Marks the exact registered execution complete.
-    ///
-    /// The sender stays in the host registry so the unified terminalizer can
-    /// report completion for runs it terminalizes after the executor task has
-    /// already returned (PR24-013).
-    #[cfg(any(test, feature = "test-support"))]
-    fn signal_execution_completion(&self, key: RunKey) {
-        if let Ok(data) = self.data.lock()
-            && let Some(completion) = data.execution_completion.get(&key)
-        {
-            let _ = completion.send_replace(true);
-        }
-    }
-
     fn fail_unadmitted_starting_run(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
         if self
             .fail_starting_run(session_id, run_id, "model_scheduling_unavailable")
@@ -266,20 +314,16 @@ impl HostState {
         run_id: RunId,
         failure_code: &'static str,
     ) -> DtoResult<()> {
-        let _gate = self.facade.command_gate().lock().map_err(|_| {
-            ErrorDto::unavailable(
-                "daemon_command_unavailable",
-                "daemon command is unavailable",
-            )
-        })?;
-        fail_starting_run(
-            self.facade.repository(),
-            session_id,
-            run_id,
-            failure_code,
-            composition::now()?,
-        )?;
-        Ok(())
+        self.facade.command_gate().run(|| {
+            fail_starting_run(
+                self.facade.repository(),
+                session_id,
+                run_id,
+                failure_code,
+                composition::now()?,
+            )?;
+            Ok(())
+        })
     }
 
     /// Terminalizes one still-active run as durably `Failed`.
@@ -300,28 +344,22 @@ impl HostState {
         run_id: RunId,
         failure_code: &str,
     ) -> DtoResult<()> {
-        let _gate = self.facade.command_gate().lock().map_err(|_| {
-            ErrorDto::unavailable(
-                "daemon_command_unavailable",
-                "daemon command is unavailable",
-            )
-        })?;
-        let repository = self.facade.repository();
-        let run = repository.load_run_projection(session_id, run_id)?;
-        if run_status_is_terminal(run.status()) {
-            return Ok(());
-        }
-        repository.finish_run(
-            session_id,
-            run_id,
-            RunStatusDto::Failed,
-            None,
-            None,
-            Some(failure_code.to_owned()),
-            Some("the scheduled run execution failed".to_owned()),
-            composition::now()?,
-        )?;
-        Ok(())
+        self.facade.command_gate().run(|| {
+            let repository = self.facade.repository();
+            let run = repository.load_run_projection(session_id, run_id)?;
+            if run_status_is_terminal(run.status()) {
+                return Ok(());
+            }
+            let outcome = RunOutcomeDto::new(
+                RunStatusDto::Failed,
+                None,
+                None,
+                Some(failure_code.to_owned()),
+                Some("the scheduled run execution failed".to_owned()),
+            )?;
+            repository.finish_run(session_id, run_id, outcome, composition::now()?)?;
+            Ok(())
+        })
     }
 
     /// Runs the terminal side effect for one run that just reached a durable
@@ -424,21 +462,44 @@ impl HostState {
     }
 
     /// Removes one connection's subscription from one run.
+    ///
+    /// Removal is by the connection's own channel identity: the guard that owns
+    /// the registration passes the exact channel it registered, so no other
+    /// subscriber can be removed. The removed subscriber is dropped only after
+    /// the host data lock is released, so dropping its channel handles never
+    /// runs under the registry lock.
     fn remove_subscriber(
         &self,
         key: RunKey,
         sender: &tokio::sync::mpsc::Sender<ProtocolDaemonMessageDto>,
     ) {
-        let Ok(mut data) = self.data.lock() else {
-            return;
+        let removed = {
+            let Ok(mut data) = self.data.lock() else {
+                return;
+            };
+            let Some(subscribers) = data.subscribers.get_mut(&key) else {
+                return;
+            };
+            let mut removed: Option<Subscriber> = None;
+            let mut index = subscribers.len();
+            while index > 0 {
+                index -= 1;
+                if subscribers[index].sender.same_channel(sender) {
+                    // One connection registers at most one subscription, so at
+                    // most one entry can match this channel.
+                    debug_assert!(
+                        removed.is_none(),
+                        "one subscriber channel is registered at most once"
+                    );
+                    removed = Some(subscribers.remove(index));
+                }
+            }
+            if subscribers.is_empty() {
+                data.subscribers.remove(&key);
+            }
+            removed
         };
-        let empty = data.subscribers.get_mut(&key).is_some_and(|subscribers| {
-            subscribers.retain(|subscriber| !subscriber.sender.same_channel(sender));
-            subscribers.is_empty()
-        });
-        if empty {
-            data.subscribers.remove(&key);
-        }
+        drop(removed);
     }
 
     /// Registers one connection's run subscription and queues its correlated reply.
@@ -657,7 +718,71 @@ fn new_host(facade: DaemonApplicationFacade) -> Arc<HostState> {
     Arc::new(HostState {
         facade,
         data: Mutex::new(HostData::default()),
+        recorder: HostRecorder::default(),
     })
+}
+
+/// The one RAII registration of one connection's run subscription.
+///
+/// The guard owns the exact run key the host registered this connection's
+/// channel under, and it removes that registration when it is dropped, so every
+/// connection exit path (closed channel, parse failure, close signal, over-size
+/// frame, write failure) unregisters exactly once without repeating the removal
+/// at each branch. Removal is by the connection's own channel identity under
+/// the key the host confirmed, so the guard can never remove a subscriber it
+/// does not own; `clear` is idempotent, and the removed subscriber's channel
+/// handles are dropped only after the host data lock has been released.
+struct SubscriptionGuard<'host> {
+    host: &'host Arc<HostState>,
+    sender: &'host tokio::sync::mpsc::Sender<ProtocolDaemonMessageDto>,
+    registered: Option<RunKey>,
+}
+
+impl<'host> SubscriptionGuard<'host> {
+    const fn new(
+        host: &'host Arc<HostState>,
+        sender: &'host tokio::sync::mpsc::Sender<ProtocolDaemonMessageDto>,
+    ) -> Self {
+        Self {
+            host,
+            sender,
+            registered: None,
+        }
+    }
+
+    /// Registers this connection's run subscription, replacing any previous one.
+    ///
+    /// The previous registration is removed first, so the host's registry never
+    /// holds two entries for one connection and the guard always owns exactly
+    /// the registration the host just confirmed.
+    fn subscribe(
+        &mut self,
+        subscription: SubscribeRunCommandDto,
+        close: tokio::sync::watch::Sender<bool>,
+        request_id: u64,
+    ) {
+        let key = (subscription.session_id(), subscription.run_id());
+        self.clear();
+        if self
+            .host
+            .register_subscriber(subscription, self.sender.clone(), close, request_id)
+        {
+            self.registered = Some(key);
+        }
+    }
+
+    /// Removes the current registration, if any; a second call does nothing.
+    fn clear(&mut self) {
+        if let Some(key) = self.registered.take() {
+            self.host.remove_subscriber(key, self.sender);
+        }
+    }
+}
+
+impl Drop for SubscriptionGuard<'_> {
+    fn drop(&mut self) {
+        self.clear();
+    }
 }
 
 async fn serve_async_listener(
@@ -685,22 +810,16 @@ async fn serve_async_connection(
     // registration reply keeps its ordering ahead of live frames (PR24-014).
     let (sender, mut receiver) = tokio::sync::mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
     let (close_sender, mut close_receiver) = tokio::sync::watch::channel(false);
-    let mut registered: Option<RunKey> = None;
+    let mut registration = SubscriptionGuard::new(&host, &sender);
     loop {
         tokio::select! {
             changed = close_receiver.changed() => {
                 if changed.is_err() || *close_receiver.borrow() {
-                    if let Some(key) = registered {
-                        host.remove_subscriber(key, &sender);
-                    }
                     return;
                 }
             }
             line = requests.receive_line() => {
                 let Ok(line) = line else {
-                    if let Some(key) = registered {
-                        host.remove_subscriber(key, &sender);
-                    }
                     return;
                 };
                 let request = match decode_request_line(&line) {
@@ -711,9 +830,6 @@ async fn serve_async_connection(
                         // keeps serving.
                         let rejection = ProtocolDaemonMessageDto::rejection(None, error);
                         if !write_message_or_rejection(&mut messages, rejection).await {
-                            if let Some(key) = registered {
-                                host.remove_subscriber(key, &sender);
-                            }
                             return;
                         }
                         continue;
@@ -722,18 +838,7 @@ async fn serve_async_connection(
                 let request_id = request.id();
                 let message = match request.into_request() {
                     ClientRequestDto::SubscribeRun(subscription) => {
-                        if let Some(key) = registered.take() {
-                            host.remove_subscriber(key, &sender);
-                        }
-                        if host.register_subscriber(
-                            subscription,
-                            sender.clone(),
-                            close_sender.clone(),
-                            request_id,
-                        ) {
-                            registered =
-                                Some((subscription.session_id(), subscription.run_id()));
-                        }
+                        registration.subscribe(subscription, close_sender.clone(), request_id);
                         continue;
                     }
                     request => match dispatch_request(&host, request) {
@@ -742,23 +847,14 @@ async fn serve_async_connection(
                     },
                 };
                 if !write_message_or_rejection(&mut messages, message).await {
-                    if let Some(key) = registered {
-                        host.remove_subscriber(key, &sender);
-                    }
                     return;
                 }
             }
             message = receiver.recv() => {
                 let Some(message) = message else {
-                    if let Some(key) = registered {
-                        host.remove_subscriber(key, &sender);
-                    }
                     return;
                 };
                 if !write_message_or_rejection(&mut messages, message).await {
-                    if let Some(key) = registered {
-                        host.remove_subscriber(key, &sender);
-                    }
                     return;
                 }
             }
@@ -898,9 +994,17 @@ impl TestHostLifecycle {
         session_id: SessionId,
         run_id: RunId,
     ) -> bool {
-        self.host
-            .wait_for_execution_completion((session_id, run_id))
-            .await
+        let Some(mut completion) = self.host.recorder.completion((session_id, run_id)) else {
+            return false;
+        };
+        loop {
+            if *completion.borrow_and_update() {
+                return true;
+            }
+            if completion.changed().await.is_err() {
+                return false;
+            }
+        }
     }
 
     /// Serves exactly `connection_count` fixture peers through this host.
@@ -933,7 +1037,7 @@ impl TestHostLifecycle {
         for task in &connection_tasks {
             task.abort();
         }
-        let execution_tasks = self.host.abort_test_execution_tasks();
+        let execution_tasks = self.host.recorder.take_tasks();
         for task in &execution_tasks {
             task.abort();
         }
@@ -1177,6 +1281,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_closed_connection_leaves_no_subscriber_registered() {
+        // The guard owns the registration: the graceful close path must remove
+        // the subscriber exactly once, without any explicit removal in the loop.
+        let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
+        let (session_id, run_id) = create_and_start(&facade);
+        let endpoint = endpoint();
+        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+        let host = new_host(facade);
+        let server = {
+            let host = Arc::clone(&host);
+            tokio::spawn(async move {
+                let Ok(connection) = listener.accept().await else {
+                    return;
+                };
+                serve_async_connection(connection, host).await;
+            })
+        };
+
+        let (mut requests, mut messages) = connect_fixture(&endpoint).await;
+        requests
+            .send_message(&encode_request(
+                1,
+                ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, run_id)),
+            ))
+            .await
+            .expect("subscription sends");
+        let line = messages
+            .receive_line()
+            .await
+            .expect("subscription reply arrives");
+        assert!(matches!(
+            decode_response(&line, 1),
+            Ok(ProtocolResultDto::RunSubscribed(_))
+        ));
+        assert_eq!(
+            host.data
+                .lock()
+                .expect("host registry remains available")
+                .subscribers
+                .get(&(session_id, run_id))
+                .map(Vec::len),
+            Some(1),
+            "the connection registers exactly one subscriber"
+        );
+
+        drop((requests, messages));
+        server.await.expect("host serves the closed peer");
+        assert_eq!(
+            host.data
+                .lock()
+                .expect("host registry remains available")
+                .subscribers
+                .get(&(session_id, run_id))
+                .map_or(0, Vec::len),
+            0,
+            "a closed connection leaves no subscriber registered"
+        );
+    }
+
+    #[tokio::test]
     async fn an_over_size_response_answers_with_a_typed_error_instead_of_closing() {
         let (_directory, facade) = fixture_facade();
         let (session_id, _run_id) = create_and_start(&facade);
@@ -1412,7 +1576,7 @@ mod tests {
                 .tasks
                 .contains_key(&(session_id, run_id))
         );
-        for task in host.abort_test_execution_tasks() {
+        for task in host.recorder.take_tasks() {
             task.abort();
             let _ = task.await;
         }

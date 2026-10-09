@@ -68,15 +68,73 @@ struct FacadeInner {
     repository: SqliteStorageRepository,
     config_snapshot: ConfigSnapshotDto,
     selected_provider: SelectedProvider,
-    command_gate: Mutex<()>,
+    command_gate: CommandGate,
 }
 
-enum SelectedProvider {
+/// The one durable-command admission gate of this composition root.
+///
+/// A durable command is a multi-step sequence: it reads current durable state
+/// and then commits a transition, so two commands that interleave their steps
+/// could both decide from the same pre-state and break the single-writer rule
+/// the durable run registry depends on. The gate serializes exactly those
+/// sequences against each other. A pure read — the session snapshot, the run
+/// snapshot a subscription answers with, and the interrupt validation — never
+/// takes it. `run` is the gate's only entry point, so a command path cannot run
+/// ungated by construction.
+///
+/// Ordering: the gate is an independent lock. It is never held together with
+/// the daemon host's registry lock, and no other lock is acquired while it is
+/// held, so its only ordering relation is with the durable writes it
+/// serializes.
+pub struct CommandGate {
+    inner: Mutex<()>,
+}
+
+impl CommandGate {
+    const fn new() -> Self {
+        Self {
+            inner: Mutex::new(()),
+        }
+    }
+
+    /// Runs one durable multi-step command sequence as the single writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed unavailable failure when an earlier command panicked
+    /// while holding the gate.
+    pub fn run<T>(&self, command: impl FnOnce() -> DtoResult<T>) -> DtoResult<T> {
+        let _gate = self.inner.lock().map_err(|_| {
+            ErrorDto::unavailable(
+                "daemon_command_unavailable",
+                "daemon command is unavailable",
+            )
+        })?;
+        command()
+    }
+}
+
+/// The provider driver the platform configuration selected at open time.
+enum ConfiguredProvider {
     OpenRouter(OpenRouterDriver),
     GenericChat(GenericChatDriver),
-    #[cfg(any(test, feature = "test-support"))]
-    TestSupport(Arc<dyn ModelExecutionDriver + Send + Sync>),
 }
+
+/// The one provider driver slot this composition root serves.
+///
+/// A production build holds the configured provider; a test or test-support
+/// build holds the driver the caller injected instead. Only the slot
+/// implementation is conditional, so no production shape carries a test-only
+/// provider variant.
+#[cfg(not(any(test, feature = "test-support")))]
+type SelectedProvider = ConfiguredProvider;
+
+#[cfg(any(test, feature = "test-support"))]
+type SelectedProvider = InjectedProvider;
+
+/// The driver slot of a test or test-support build.
+#[cfg(any(test, feature = "test-support"))]
+struct InjectedProvider(Arc<dyn ModelExecutionDriver + Send + Sync>);
 
 #[cfg(any(test, feature = "test-support"))]
 struct TestSupportUnconfiguredDriver;
@@ -96,7 +154,7 @@ impl ModelExecutionDriver for TestSupportUnconfiguredDriver {
     }
 }
 
-impl SelectedProvider {
+impl ConfiguredProvider {
     fn from_startup_material(material: StartupProviderMaterial) -> DtoResult<Self> {
         let selected = match material.safe_resolved().provider().kind() {
             ProviderKindDto::Openrouter => {
@@ -115,18 +173,33 @@ impl SelectedProvider {
         Ok(selected)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    fn for_test_support(driver: Arc<dyn ModelExecutionDriver + Send + Sync>) -> Self {
-        Self::TestSupport(driver)
-    }
-
     fn driver(&self) -> &(dyn ModelExecutionDriver + Send + Sync) {
         match self {
             Self::OpenRouter(driver) => driver,
             Self::GenericChat(driver) => driver,
-            #[cfg(any(test, feature = "test-support"))]
-            Self::TestSupport(driver) => driver.as_ref(),
         }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl InjectedProvider {
+    /// Resolves the configured provider so a test-support build can still open
+    /// from real platform configuration.
+    fn from_startup_material(material: StartupProviderMaterial) -> DtoResult<Self> {
+        let configured = ConfiguredProvider::from_startup_material(material)?;
+        let driver: Arc<dyn ModelExecutionDriver + Send + Sync> = match configured {
+            ConfiguredProvider::OpenRouter(driver) => Arc::new(driver),
+            ConfiguredProvider::GenericChat(driver) => Arc::new(driver),
+        };
+        Ok(Self(driver))
+    }
+
+    const fn for_test_support(driver: Arc<dyn ModelExecutionDriver + Send + Sync>) -> Self {
+        Self(driver)
+    }
+
+    fn driver(&self) -> &(dyn ModelExecutionDriver + Send + Sync) {
+        self.0.as_ref()
     }
 }
 
@@ -141,8 +214,8 @@ impl DaemonApplicationFacade {
         self.inner.selected_provider.driver()
     }
 
-    /// Serializes durable command handling against interrupts and failures.
-    pub(crate) fn command_gate(&self) -> &Mutex<()> {
+    /// Returns the durable-command admission gate to the daemon host.
+    pub(crate) fn command_gate(&self) -> &CommandGate {
         &self.inner.command_gate
     }
 
@@ -212,7 +285,7 @@ impl DaemonApplicationFacade {
                 repository,
                 config_snapshot,
                 selected_provider,
-                command_gate: Mutex::new(()),
+                command_gate: CommandGate::new(),
             }),
         };
         facade.recover_before_ready()?;
@@ -252,16 +325,17 @@ impl DaemonApplicationFacade {
     ///
     /// Returns the typed durable failure when session creation is rejected.
     pub fn create_session(&self, command: CreateSessionCommandDto) -> DtoResult<ProtocolResultDto> {
-        let _gate = self.lock_command_gate()?;
-        let projection =
-            ApplicationService::new(&self.inner.repository).create_session(command, now()?)?;
-        Ok(ProtocolResultDto::SessionCreated(
-            CreateSessionAcceptedDto::new(
-                projection.project_id(),
-                projection.workspace_id(),
-                projection.session_id(),
-            ),
-        ))
+        self.inner.command_gate.run(|| {
+            let projection =
+                ApplicationService::new(&self.inner.repository).create_session(command, now()?)?;
+            Ok(ProtocolResultDto::SessionCreated(
+                CreateSessionAcceptedDto::new(
+                    projection.project_id(),
+                    projection.workspace_id(),
+                    projection.session_id(),
+                ),
+            ))
+        })
     }
 
     /// Accepts one user turn and assembles its typed reply evidence.
@@ -270,14 +344,15 @@ impl DaemonApplicationFacade {
     ///
     /// Returns the typed admission failure when the turn is rejected.
     pub fn send_user_turn(&self, command: SendUserTurnCommandDto) -> DtoResult<ProtocolResultDto> {
-        let _gate = self.lock_command_gate()?;
-        let outcome = ApplicationService::new(&self.inner.repository).send_user_turn(
-            command,
-            RunId::new(),
-            self.inner.config_snapshot.clone(),
-            now()?,
-        )?;
-        Ok(turn_accepted(&outcome))
+        self.inner.command_gate.run(|| {
+            let outcome = ApplicationService::new(&self.inner.repository).send_user_turn(
+                command,
+                RunId::new(),
+                self.inner.config_snapshot.clone(),
+                now()?,
+            )?;
+            Ok(turn_accepted(&outcome))
+        })
     }
 
     /// Removes one not-yet-seen pending user turn and assembles its typed reply evidence.
@@ -286,37 +361,31 @@ impl DaemonApplicationFacade {
     ///
     /// Returns the typed durable failure when no pending turn can be removed.
     pub fn remove_turn(&self, command: RemoveTurnCommandDto) -> DtoResult<ProtocolResultDto> {
-        let _gate = self.lock_command_gate()?;
-        let turn = ApplicationService::new(&self.inner.repository).remove_turn(command, now()?)?;
-        Ok(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
-            turn.session_id(),
-            turn.turn_id(),
-        )))
+        self.inner.command_gate.run(|| {
+            let turn =
+                ApplicationService::new(&self.inner.repository).remove_turn(command, now()?)?;
+            Ok(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
+                turn.session_id(),
+                turn.turn_id(),
+            )))
+        })
     }
 
     /// Validates one interruption request and assembles its typed reply evidence.
     ///
-    /// Interruption is not a durable run state: the validation commits nothing
-    /// and the daemon host signals the registered execution afterwards.
+    /// Interruption is not a durable run state: the validation commits nothing,
+    /// so it is a pure read and never enters the command gate. The daemon host
+    /// signals the registered execution afterwards, and the host registry lock
+    /// is what orders that signal against admission.
     ///
     /// # Errors
     ///
     /// Returns a typed validation error when the exact run is not active.
     pub fn interrupt_run(&self, command: InterruptRunCommandDto) -> DtoResult<ProtocolResultDto> {
-        let _gate = self.lock_command_gate()?;
         let run = ApplicationService::new(&self.inner.repository).interrupt_run(command)?;
         Ok(ProtocolResultDto::RunInterrupted(
             InterruptRunAcceptedDto::new(run.session_id(), run.run_id()),
         ))
-    }
-
-    fn lock_command_gate(&self) -> DtoResult<std::sync::MutexGuard<'_, ()>> {
-        self.inner.command_gate.lock().map_err(|_| {
-            ErrorDto::unavailable(
-                "daemon_command_unavailable",
-                "daemon command is unavailable",
-            )
-        })
     }
 
     fn recover_before_ready(&self) -> DtoResult<()> {
@@ -378,6 +447,23 @@ fn load_provider_configuration(
     Ok((snapshot, selected_provider))
 }
 
+/// Counts the bytes one typed message encodes to without buffering them.
+///
+/// The snapshot budget needs the encoded length only, so encoding writes into
+/// this counter instead of one intermediate `Vec<u8>` per committed row.
+struct CountingWriter(usize);
+
+impl std::io::Write for CountingWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.0 = self.0.saturating_add(buffer.len());
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Trims one snapshot transcript to the representation budget derived from the
 /// single transport envelope cap, keeping the newest committed rows that fit.
 ///
@@ -391,15 +477,14 @@ pub fn bounded_snapshot_messages(
     let mut budget = MAX_TRANSCRIPT_SNAPSHOT_BYTES;
     let mut keep_from = messages.len();
     for (index, message) in messages.iter().enumerate().rev() {
-        let size = serde_json::to_vec(message)
-            .map_err(|_| {
-                ErrorDto::validation(
-                    "local_protocol_encode_failed",
-                    "a typed local protocol message could not be encoded",
-                )
-            })?
-            .len()
-            .saturating_add(1);
+        let mut encoded_bytes = CountingWriter(0);
+        serde_json::to_writer(&mut encoded_bytes, message).map_err(|_| {
+            ErrorDto::validation(
+                "local_protocol_encode_failed",
+                "a typed local protocol message could not be encoded",
+            )
+        })?;
+        let size = encoded_bytes.0.saturating_add(1);
         if size > budget {
             break;
         }
