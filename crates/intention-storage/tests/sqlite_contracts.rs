@@ -23,8 +23,8 @@ use intention_proto::{
     RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
 };
 use intention_storage::{
-    AcceptedTurnOutcomeDto, SqliteStorageRepository, StorageRepositoryDto, ToolResultEvidenceDto,
-    ToolResultMetadataEntryDto, ToolResultStatusDto,
+    AcceptedTurnOutcomeDto, RunOutcomeDto, SqliteStorageRepository, StorageRepositoryDto,
+    ToolResultEvidenceDto, ToolResultMetadataEntryDto, ToolResultStatusDto,
 };
 use tempfile::TempDir;
 
@@ -97,6 +97,23 @@ fn append(
     store
         .append_message(message, time(event_time))
         .expect("transcript row commits")
+}
+
+/// Returns one valid terminal run outcome for the fixture call sites.
+fn outcome(
+    status: RunStatusDto,
+    usage: Option<UsageDto>,
+    finish_reason: Option<FinishReasonDto>,
+    error: Option<(&str, &str)>,
+) -> RunOutcomeDto {
+    RunOutcomeDto::new(
+        status,
+        usage,
+        finish_reason,
+        error.map(|(code, _)| code.to_owned()),
+        error.map(|(_, message)| message.to_owned()),
+    )
+    .expect("fixture run outcome is valid")
 }
 
 #[test]
@@ -894,57 +911,49 @@ fn finish_run_commits_terminal_outcome_and_is_idempotent() {
     store
         .transition_run(session, run, RunStatusDto::Running, time(3))
         .expect("run starts");
-    // The repository owns the terminal-safe outcome rule.
+    // The outcome type owns the terminal-safe rule.
     for status in [RunStatusDto::Starting, RunStatusDto::Running] {
         assert_eq!(
-            store
-                .finish_run(session, run, status, None, None, None, None, time(3))
+            RunOutcomeDto::new(status, None, None, None, None)
                 .expect_err("a non-terminal outcome rejects")
                 .code(),
             "invalid_run_outcome"
         );
     }
     assert_eq!(
-        store
-            .finish_run(
-                session,
-                run,
-                RunStatusDto::Failed,
-                None,
-                None,
-                Some("provider_failed".to_owned()),
-                None,
-                time(3),
-            )
-            .expect_err("an incomplete error pair rejects")
-            .code(),
+        RunOutcomeDto::new(
+            RunStatusDto::Failed,
+            None,
+            None,
+            Some("provider_failed".to_owned()),
+            None,
+        )
+        .expect_err("an incomplete error pair rejects")
+        .code(),
         "invalid_run_outcome"
     );
     assert_eq!(
-        store
-            .finish_run(
-                session,
-                run,
-                RunStatusDto::Failed,
-                None,
-                None,
-                Some("provider_failed".to_owned()),
-                Some("unsafe\0message".to_owned()),
-                time(3),
-            )
-            .expect_err("unsafe error text rejects")
-            .code(),
+        RunOutcomeDto::new(
+            RunStatusDto::Failed,
+            None,
+            None,
+            Some("provider_failed".to_owned()),
+            Some("unsafe\0message".to_owned()),
+        )
+        .expect_err("unsafe error text rejects")
+        .code(),
         "invalid_run_outcome"
     );
     let finished = store
         .finish_run(
             session,
             run,
-            RunStatusDto::Completed,
-            Some(UsageDto::reported(2, 3, 5).expect("fixture usage is consistent")),
-            Some(FinishReasonDto::Stop),
-            None,
-            None,
+            outcome(
+                RunStatusDto::Completed,
+                Some(UsageDto::reported(2, 3, 5).expect("fixture usage is consistent")),
+                Some(FinishReasonDto::Stop),
+                None,
+            ),
             time(4),
         )
         .expect("run completes");
@@ -956,11 +965,7 @@ fn finish_run_commits_terminal_outcome_and_is_idempotent() {
         .finish_run(
             session,
             run,
-            RunStatusDto::Completed,
-            None,
-            None,
-            None,
-            None,
+            outcome(RunStatusDto::Completed, None, None, None),
             time(5),
         )
         .expect("repeated terminal outcome is idempotent");
@@ -970,11 +975,12 @@ fn finish_run_commits_terminal_outcome_and_is_idempotent() {
             .finish_run(
                 session,
                 run,
-                RunStatusDto::Failed,
-                None,
-                None,
-                Some("provider_failed".to_owned()),
-                Some("safe failure".to_owned()),
+                outcome(
+                    RunStatusDto::Failed,
+                    None,
+                    None,
+                    Some(("provider_failed", "safe failure")),
+                ),
                 time(6),
             )
             .expect_err("a completed run cannot become failed")
@@ -997,11 +1003,12 @@ fn finish_run_commits_terminal_outcome_and_is_idempotent() {
         .finish_run(
             failed_session,
             failed_run,
-            RunStatusDto::Failed,
-            Some(UsageDto::NotReported),
-            None,
-            Some("provider_failed".to_owned()),
-            Some("safe failure".to_owned()),
+            outcome(
+                RunStatusDto::Failed,
+                Some(UsageDto::NotReported),
+                None,
+                Some(("provider_failed", "safe failure")),
+            ),
             time(7),
         )
         .expect("failed run commits");
@@ -1048,11 +1055,12 @@ fn recovery_marks_every_unfinished_run_in_its_own_transaction() {
         .finish_run(
             second_session,
             completed_run,
-            RunStatusDto::Completed,
-            Some(UsageDto::NotReported),
-            Some(FinishReasonDto::Stop),
-            None,
-            None,
+            outcome(
+                RunStatusDto::Completed,
+                Some(UsageDto::NotReported),
+                Some(FinishReasonDto::Stop),
+                None,
+            ),
             time(4),
         )
         .expect("run completes");
@@ -1316,11 +1324,12 @@ fn undeclared_terminal_successors_are_rejected() {
         .finish_run(
             session,
             run,
-            RunStatusDto::Completed,
-            Some(UsageDto::NotReported),
-            Some(FinishReasonDto::Stop),
-            None,
-            None,
+            outcome(
+                RunStatusDto::Completed,
+                Some(UsageDto::NotReported),
+                Some(FinishReasonDto::Stop),
+                None,
+            ),
             time(4),
         )
         .expect("run completes");

@@ -22,8 +22,8 @@ use intention_proto::{
     RemoveTurnCommandDto, RunProjectionDto, RunStatusDto, SessionProjectionDto,
 };
 use intention_proto::{
-    DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, RunId, SessionId, TimestampDto,
-    ToolCallId, UsageDto,
+    DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, RunId,
+    SessionId, TimestampDto, ToolCallId, UsageDto, run_status_is_terminal,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
@@ -48,6 +48,41 @@ pub enum ToolResultStatusDto {
     Failed,
     /// The tool stopped before a final outcome; its captured output is partial.
     Partial,
+}
+
+impl ToolResultStatusDto {
+    /// Returns the canonical durable string representation of this tool result status.
+    ///
+    /// The representation is persisted verbatim, so it must stay byte-identical
+    /// across releases.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Partial => "partial",
+        }
+    }
+
+    /// Parses the canonical durable string representation of a tool result status.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe internal error when `value` is not a declared durable tool result status.
+    pub fn parse(value: &str) -> DtoResult<Self> {
+        match value {
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "partial" => Ok(Self::Partial),
+            _ => Err(ErrorDto::new(
+                "invalid_tool_result_status",
+                ErrorCategoryDto::Internal,
+                "the durable tool result status is not declared",
+                ErrorRetryDto::Never,
+                None,
+            )?),
+        }
+    }
 }
 
 /// One credential-free structured metadata entry of a tool result.
@@ -233,6 +268,96 @@ pub enum AcceptedTurnOutcomeDto {
     Pending(PendingTurnProjectionDto),
 }
 
+/// One validated terminal run outcome, committed by a single durable transaction.
+///
+/// The status is always terminal. `usage` and `finish_reason` may be absent
+/// when the provider reported neither, and the optional error pair carries the
+/// safe code and message of a failed run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RunOutcomeDto {
+    status: RunStatusDto,
+    usage: Option<UsageDto>,
+    finish_reason: Option<FinishReasonDto>,
+    error_code: Option<String>,
+    error_message: Option<String>,
+}
+
+impl RunOutcomeDto {
+    /// Creates one validated terminal run outcome.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when `status` is not terminal, or when the
+    /// error pair is incomplete, blank, or contains a NUL byte.
+    pub fn new(
+        status: RunStatusDto,
+        usage: Option<UsageDto>,
+        finish_reason: Option<FinishReasonDto>,
+        error_code: Option<String>,
+        error_message: Option<String>,
+    ) -> DtoResult<Self> {
+        if !run_status_is_terminal(status) {
+            return Err(ErrorDto::validation(
+                "invalid_run_outcome",
+                "a terminal run outcome needs a terminal status",
+            ));
+        }
+        let error_valid = match (&error_code, &error_message) {
+            (None, None) => true,
+            (Some(code), Some(message)) => {
+                !code.trim().is_empty()
+                    && !message.trim().is_empty()
+                    && !code.contains('\0')
+                    && !message.contains('\0')
+            }
+            _ => false,
+        };
+        if !error_valid {
+            return Err(ErrorDto::validation(
+                "invalid_run_outcome",
+                "a terminal run outcome carries either both error fields or neither",
+            ));
+        }
+        Ok(Self {
+            status,
+            usage,
+            finish_reason,
+            error_code,
+            error_message,
+        })
+    }
+
+    /// Returns the terminal run status.
+    #[must_use]
+    pub const fn status(&self) -> RunStatusDto {
+        self.status
+    }
+
+    /// Returns the reported model usage, when the provider reported one.
+    #[must_use]
+    pub const fn usage(&self) -> Option<&UsageDto> {
+        self.usage.as_ref()
+    }
+
+    /// Returns the provider finish reason, when the provider reported one.
+    #[must_use]
+    pub const fn finish_reason(&self) -> Option<FinishReasonDto> {
+        self.finish_reason
+    }
+
+    /// Returns the safe error code of a failed run, when one was recorded.
+    #[must_use]
+    pub fn error_code(&self) -> Option<&str> {
+        self.error_code.as_deref()
+    }
+
+    /// Returns the safe error message of a failed run, when one was recorded.
+    #[must_use]
+    pub fn error_message(&self) -> Option<&str> {
+        self.error_message.as_deref()
+    }
+}
+
 /// DTO-only full session model context for one current starting run.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartingRunModelContextDto {
@@ -382,27 +507,19 @@ pub trait StorageRepositoryDto {
         occurred_at: TimestampDto,
     ) -> DtoResult<RunProjectionDto>;
 
-    /// Commits one terminal run outcome with its usage, finish, and error evidence.
+    /// Commits one validated terminal run outcome with its usage, finish, and
+    /// error evidence.
     ///
     /// # Errors
     ///
-    /// Returns a validation error when the status is not terminal or the error
-    /// pair is incomplete, blank, or unsafe, a not-found or conflict error when
-    /// the outcome is invalid for the run, or an unavailable error when storage
-    /// fails.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "One flat terminal outcome keeps the single transaction at one call site."
-    )]
+    /// Returns a not-found, conflict, or classified storage error when the
+    /// outcome cannot be committed for the run. The outcome's terminal shape
+    /// is validated by [`RunOutcomeDto::new`] before this call.
     fn finish_run(
         &self,
         session_id: SessionId,
         run_id: RunId,
-        status: RunStatusDto,
-        usage: Option<UsageDto>,
-        finish_reason: Option<FinishReasonDto>,
-        error_code: Option<String>,
-        error_message: Option<String>,
+        outcome: RunOutcomeDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<RunProjectionDto>;
 

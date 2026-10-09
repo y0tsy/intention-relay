@@ -17,6 +17,39 @@ pub enum RunModeDto {
     Build,
 }
 
+impl RunModeDto {
+    /// Returns the canonical durable string representation of this run mode.
+    ///
+    /// The representation is persisted verbatim, so it must stay byte-identical
+    /// across releases.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Build => "build",
+        }
+    }
+
+    /// Parses the canonical durable string representation of a run mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe internal error when `value` is not a declared durable run mode.
+    pub fn parse(value: &str) -> DtoResult<Self> {
+        match value {
+            "plan" => Ok(Self::Plan),
+            "build" => Ok(Self::Build),
+            _ => Err(ErrorDto::new(
+                "invalid_run_mode",
+                ErrorCategoryDto::Internal,
+                "the durable run mode is not declared",
+                ErrorRetryDto::Never,
+                None,
+            )?),
+        }
+    }
+}
+
 /// The durable lifecycle status for a run.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -31,6 +64,45 @@ pub enum RunStatusDto {
     Failed,
     /// Daemon recovery ended an unfinished run without retrying it.
     Interrupted,
+}
+
+impl RunStatusDto {
+    /// Returns the canonical durable string representation of this run status.
+    ///
+    /// The representation is persisted verbatim, so it must stay byte-identical
+    /// across releases.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Interrupted => "interrupted",
+        }
+    }
+
+    /// Parses the canonical durable string representation of a run status.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe internal error when `value` is not a declared durable run status.
+    pub fn parse(value: &str) -> DtoResult<Self> {
+        match value {
+            "starting" => Ok(Self::Starting),
+            "running" => Ok(Self::Running),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "interrupted" => Ok(Self::Interrupted),
+            _ => Err(ErrorDto::new(
+                "invalid_run_status",
+                ErrorCategoryDto::Internal,
+                "the durable run status is not declared",
+                ErrorRetryDto::Never,
+                None,
+            )?),
+        }
+    }
 }
 
 /// Returns whether no future run status transition is valid from `status`.
@@ -127,5 +199,63 @@ impl RunProjectionDto {
     #[must_use]
     pub const fn config_revision_id(self) -> ConfigRevisionId {
         self.config_revision_id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durable_run_modes_round_trip_their_canonical_strings() {
+        assert_eq!(RunModeDto::Plan.as_str(), "plan");
+        assert_eq!(RunModeDto::Build.as_str(), "build");
+        for mode in [RunModeDto::Plan, RunModeDto::Build] {
+            assert_eq!(RunModeDto::parse(mode.as_str()).ok(), Some(mode));
+        }
+        let rejected = RunModeDto::parse("Plan");
+        assert_eq!(
+            rejected.as_ref().err().map(ErrorDto::code),
+            Some("invalid_run_mode")
+        );
+        assert_eq!(
+            rejected.as_ref().err().map(ErrorDto::category),
+            Some(ErrorCategoryDto::Internal)
+        );
+        assert_eq!(
+            rejected.as_ref().err().map(ErrorDto::retry),
+            Some(ErrorRetryDto::Never)
+        );
+    }
+
+    #[test]
+    fn durable_run_statuses_round_trip_their_canonical_strings() {
+        assert_eq!(RunStatusDto::Starting.as_str(), "starting");
+        assert_eq!(RunStatusDto::Running.as_str(), "running");
+        assert_eq!(RunStatusDto::Completed.as_str(), "completed");
+        assert_eq!(RunStatusDto::Failed.as_str(), "failed");
+        assert_eq!(RunStatusDto::Interrupted.as_str(), "interrupted");
+        for status in [
+            RunStatusDto::Starting,
+            RunStatusDto::Running,
+            RunStatusDto::Completed,
+            RunStatusDto::Failed,
+            RunStatusDto::Interrupted,
+        ] {
+            assert_eq!(RunStatusDto::parse(status.as_str()).ok(), Some(status));
+        }
+        let rejected = RunStatusDto::parse("running ");
+        assert_eq!(
+            rejected.as_ref().err().map(ErrorDto::code),
+            Some("invalid_run_status")
+        );
+        assert_eq!(
+            rejected.as_ref().err().map(ErrorDto::category),
+            Some(ErrorCategoryDto::Internal)
+        );
+        assert_eq!(
+            rejected.as_ref().err().map(ErrorDto::retry),
+            Some(ErrorRetryDto::Never)
+        );
     }
 }

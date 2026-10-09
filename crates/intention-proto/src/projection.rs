@@ -3,8 +3,8 @@
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
-    ConfigRevisionId, DtoResult, ErrorDto, ProjectId, RunId, SessionId, ToolCallId, TurnId,
-    WorkspaceId,
+    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, ProjectId, RunId,
+    SessionId, ToolCallId, TurnId, WorkspaceId,
 };
 use crate::{RunModeDto, RunProjectionDto, WorkspaceRootDto};
 
@@ -236,6 +236,45 @@ pub enum MessageKindDto {
     Notice,
 }
 
+impl MessageKindDto {
+    /// Returns the canonical durable string representation of this message kind.
+    ///
+    /// The representation is persisted verbatim, so it must stay byte-identical
+    /// across releases.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Assistant => "assistant",
+            Self::ToolCall => "tool_call",
+            Self::ToolResult => "tool_result",
+            Self::Notice => "notice",
+        }
+    }
+
+    /// Parses the canonical durable string representation of a message kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe internal error when `value` is not a declared durable message kind.
+    pub fn parse(value: &str) -> DtoResult<Self> {
+        match value {
+            "user" => Ok(Self::User),
+            "assistant" => Ok(Self::Assistant),
+            "tool_call" => Ok(Self::ToolCall),
+            "tool_result" => Ok(Self::ToolResult),
+            "notice" => Ok(Self::Notice),
+            _ => Err(ErrorDto::new(
+                "invalid_message_kind",
+                ErrorCategoryDto::Internal,
+                "the durable message kind is not declared",
+                ErrorRetryDto::Never,
+                None,
+            )?),
+        }
+    }
+}
+
 /// One committed transcript row, in durable insertion order.
 ///
 /// The transcript is the canonical record of user, assistant, tool-call,
@@ -393,5 +432,41 @@ impl MessageProjectionDto {
     #[must_use]
     pub fn tool_id(&self) -> Option<&str> {
         self.tool_id.as_deref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durable_message_kinds_round_trip_their_canonical_strings() {
+        assert_eq!(MessageKindDto::User.as_str(), "user");
+        assert_eq!(MessageKindDto::Assistant.as_str(), "assistant");
+        assert_eq!(MessageKindDto::ToolCall.as_str(), "tool_call");
+        assert_eq!(MessageKindDto::ToolResult.as_str(), "tool_result");
+        assert_eq!(MessageKindDto::Notice.as_str(), "notice");
+        for kind in [
+            MessageKindDto::User,
+            MessageKindDto::Assistant,
+            MessageKindDto::ToolCall,
+            MessageKindDto::ToolResult,
+            MessageKindDto::Notice,
+        ] {
+            assert_eq!(MessageKindDto::parse(kind.as_str()).ok(), Some(kind));
+        }
+        let rejected = MessageKindDto::parse("ToolCall");
+        assert_eq!(
+            rejected.as_ref().err().map(ErrorDto::code),
+            Some("invalid_message_kind")
+        );
+        assert_eq!(
+            rejected.as_ref().err().map(ErrorDto::category),
+            Some(ErrorCategoryDto::Internal)
+        );
+        assert_eq!(
+            rejected.as_ref().err().map(ErrorDto::retry),
+            Some(ErrorRetryDto::Never)
+        );
     }
 }

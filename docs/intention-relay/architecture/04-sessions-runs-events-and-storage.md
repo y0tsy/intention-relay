@@ -151,7 +151,9 @@ A runtime configuration lookup for a matching `(SessionId, RunId)` returns only 
 configuration revision, selected by the run's persisted `ConfigRevisionId`. Unknown sessions, unknown runs, and
 cross-session runs all return `run_configuration_not_found`; an absent persisted selection returns
 `run_configuration_unavailable`, a present but undecodable selection returns `storage_decode_failed`, and a backend read
-failure is transient `storage_unavailable`, never a permanent not-found. Raw TOML, configuration paths, credentials, and
+failure surfaces its classified error: `storage_busy` while the backend is locked, an internal `storage_corrupt` or
+`storage_api_misuse` when it is damaged or misused, and `storage_unavailable` otherwise; none of them is a permanent
+not-found and none carries SQL text, parameters, paths, or row content. Raw TOML, configuration paths, credentials, and
 SQLite resources never cross this DTO-only read boundary.
 
 The daemon task and interruption registries are keyed by exact `(SessionId, RunId)`. Admission and interruption

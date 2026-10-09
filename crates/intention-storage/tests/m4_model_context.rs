@@ -19,7 +19,9 @@ use intention_proto::{
     ToolCallId, UsageDto,
 };
 use intention_proto::{MessageKindDto, MessageProjectionDto, RunStatusDto};
-use intention_storage::{AcceptedTurnOutcomeDto, SqliteStorageRepository, StorageRepositoryDto};
+use intention_storage::{
+    AcceptedTurnOutcomeDto, RunOutcomeDto, SqliteStorageRepository, StorageRepositoryDto,
+};
 
 #[test]
 fn starting_run_model_context_rebuilds_the_committed_transcript_in_insertion_order() {
@@ -68,11 +70,14 @@ fn starting_run_model_context_rebuilds_the_committed_transcript_in_insertion_ord
         .finish_run(
             session_id,
             first_run,
-            RunStatusDto::Completed,
-            Some(UsageDto::reported(1, 1, 2).expect("fixture usage is consistent")),
-            Some(FinishReasonDto::Stop),
-            None,
-            None,
+            RunOutcomeDto::new(
+                RunStatusDto::Completed,
+                Some(UsageDto::reported(1, 1, 2).expect("fixture usage is consistent")),
+                Some(FinishReasonDto::Stop),
+                None,
+                None,
+            )
+            .expect("fixture outcome is valid"),
             time(4),
         )
         .expect("first run completes");
