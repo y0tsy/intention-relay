@@ -18,11 +18,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use intention_client::{DaemonLauncher, IntentionClient, ProcessDaemonLauncher};
 use intention_proto::{
-    CreateSessionCommandDto, DaemonHealthDto, DaemonReadinessDto, ProtocolDaemonMessageDto,
-    ProtocolResultDto, RemoveTurnAcceptedDto, SessionId, SessionSnapshotDto, TurnId,
-    decode_request_line,
+    ClientRequestDto, CreateSessionCommandDto, DaemonHealthDto, DaemonReadinessDto,
+    InterruptRunAcceptedDto, ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto,
+    RunId, SessionId, SessionSnapshotDto, TurnId, decode_request_line, encode_request,
 };
-use intention_proto::{DtoResult, ErrorDto, ProjectId, WorkspaceId};
+use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, ProjectId, WorkspaceId};
 use intention_proto::{MessageKindDto, RunModeDto, SessionProjectionDto};
 use intention_transport::{AsyncLocalDaemonConnection, AsyncLocalListener, LocalEndpoint};
 
@@ -51,8 +51,10 @@ enum FixtureResponse {
     Health(DaemonHealthDto),
     Rejected(ErrorDto),
     Snapshot(SessionSnapshotDto),
-    /// A valid current-wire reply that is not the requested result.
-    WrongResult,
+    /// A valid current-wire reply carrying the result the fixture selects.
+    Result(ProtocolResultDto),
+    /// A peer that answers a current-wire request with another dialect's line.
+    Foreign,
     Disconnect,
 }
 
@@ -129,6 +131,18 @@ async fn serve_fixture_connection(
         .await
         .expect("fixture request arrives");
     let request = decode_request_line(&line).expect("fixture request decodes");
+    if matches!(response, FixtureResponse::Foreign) {
+        // Another dialect answers with its own envelope: a typed request line is
+        // not a daemon message of the current wire.
+        messages
+            .send_message(&encode_request(
+                request.id(),
+                ClientRequestDto::GetDaemonHealth,
+            ))
+            .await
+            .expect("fixture foreign line sends");
+        return;
+    }
     messages
         .send_message(&fixture_reply(request.id(), &response))
         .await
@@ -147,14 +161,12 @@ fn fixture_reply(request_id: u64, response: &FixtureResponse) -> ProtocolDaemonM
             request_id,
             ProtocolResultDto::SessionSnapshot(snapshot.clone()),
         ),
-        FixtureResponse::WrongResult => ProtocolDaemonMessageDto::reply(
-            request_id,
-            ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
-                SessionId::new(),
-                TurnId::new(),
-            )),
-        ),
-        FixtureResponse::Disconnect => ProtocolDaemonMessageDto::reply(
+        FixtureResponse::Result(result) => {
+            ProtocolDaemonMessageDto::reply(request_id, result.clone())
+        }
+        // The peer that answers with a foreign line and the peer that closes the
+        // channel never reach this encoder.
+        FixtureResponse::Foreign | FixtureResponse::Disconnect => ProtocolDaemonMessageDto::reply(
             request_id,
             ProtocolResultDto::DaemonHealth(DaemonHealthDto::ready()),
         ),
@@ -246,7 +258,10 @@ async fn connection_rejection_and_invalid_response_are_typed() {
             "fixture_rejected",
         ),
         (
-            FixtureResponse::WrongResult,
+            FixtureResponse::Result(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
+                SessionId::new(),
+                TurnId::new(),
+            ))),
             "invalid_local_protocol_response",
         ),
     ];
@@ -393,4 +408,130 @@ async fn await_ready_returns_ready_health_and_reports_an_unavailable_daemon() {
     .await
     .expect_err("an unavailable daemon must not be reported ready");
     assert_eq!(error.code(), "local_daemon_unavailable");
+}
+
+#[tokio::test]
+async fn correlated_replies_are_scope_checked() {
+    let _guard = fixture_guard();
+    let session_id = SessionId::new();
+
+    // A snapshot for another session is not this request's answer.
+    let other_session = SessionId::new();
+    let foreign_snapshot = SessionSnapshotDto::with_projection(
+        other_session,
+        fixture_projection(other_session),
+        Vec::new(),
+    )
+    .expect("fixture snapshot is valid");
+    let snapshot_endpoint = endpoint();
+    let server = start_fixture_server(
+        snapshot_endpoint.clone(),
+        FixtureResponse::Result(ProtocolResultDto::SessionSnapshot(foreign_snapshot.clone())),
+    );
+    assert_eq!(
+        client(
+            snapshot_endpoint,
+            FixtureResponse::Result(ProtocolResultDto::SessionSnapshot(foreign_snapshot)),
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .session_snapshot(session_id)
+        .await
+        .expect_err("a snapshot for another session is not this request's answer")
+        .code(),
+        "invalid_local_protocol_response"
+    );
+    server.await.expect("scope fixture server completes");
+
+    // A removal for another turn is not this request's answer.
+    let removed_endpoint = endpoint();
+    let server = start_fixture_server(
+        removed_endpoint.clone(),
+        FixtureResponse::Result(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
+            session_id,
+            TurnId::new(),
+        ))),
+    );
+    assert_eq!(
+        client(
+            removed_endpoint,
+            FixtureResponse::Result(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
+                session_id,
+                TurnId::new(),
+            ))),
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .remove_turn(session_id, TurnId::new())
+        .await
+        .expect_err("a removal of another turn is not this request's answer")
+        .code(),
+        "invalid_local_protocol_response"
+    );
+    server.await.expect("scope fixture server completes");
+
+    // An interruption for another run is not this request's answer.
+    let interrupted_endpoint = endpoint();
+    let server = start_fixture_server(
+        interrupted_endpoint.clone(),
+        FixtureResponse::Result(ProtocolResultDto::RunInterrupted(
+            InterruptRunAcceptedDto::new(session_id, RunId::new()),
+        )),
+    );
+    assert_eq!(
+        client(
+            interrupted_endpoint,
+            FixtureResponse::Result(ProtocolResultDto::RunInterrupted(
+                InterruptRunAcceptedDto::new(session_id, RunId::new()),
+            )),
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .interrupt_run(session_id, RunId::new())
+        .await
+        .expect_err("an interruption of another run is not this request's answer")
+        .code(),
+        "invalid_local_protocol_response"
+    );
+    server.await.expect("scope fixture server completes");
+}
+
+#[tokio::test]
+async fn invalid_response_does_not_launch_a_daemon() {
+    let _guard = fixture_guard();
+    let endpoint = endpoint();
+    let launches = Arc::new(AtomicUsize::new(0));
+    let response = FixtureResponse::Result(ProtocolResultDto::TurnRemoved(
+        RemoveTurnAcceptedDto::new(SessionId::new(), TurnId::new()),
+    ));
+    let server = start_fixture_server(endpoint.clone(), response.clone());
+    let error = client(endpoint, response, Arc::clone(&launches))
+        .connect_or_bootstrap()
+        .await
+        .expect_err("a current-wire payload failure is not a stale peer");
+    assert_eq!(error.code(), "invalid_local_protocol_response");
+    assert_eq!(error.category(), ErrorCategoryDto::Validation);
+    assert_eq!(
+        launches.load(Ordering::SeqCst),
+        0,
+        "an unretryable protocol failure never launches a daemon"
+    );
+    server
+        .await
+        .expect("invalid-response fixture server completes");
+}
+
+#[tokio::test]
+async fn foreign_peer_on_the_current_endpoint_is_stale() {
+    let _guard = fixture_guard();
+    let endpoint = endpoint();
+    let server = start_fixture_server(endpoint.clone(), FixtureResponse::Foreign);
+    let error = client(
+        endpoint,
+        FixtureResponse::Foreign,
+        Arc::new(AtomicUsize::new(0)),
+    )
+    .session_snapshot(SessionId::new())
+    .await
+    .expect_err("a foreign peer on the current endpoint fails closed");
+    assert_eq!(error.code(), "stale_daemon_protocol");
+    assert_eq!(error.category(), ErrorCategoryDto::Unavailable);
+    server.await.expect("foreign fixture server completes");
 }

@@ -8,6 +8,8 @@
 #[cfg(unix)]
 use std::fs;
 use std::future::Future;
+#[cfg(unix)]
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -37,6 +39,12 @@ pub const MAX_MESSAGE_BYTES: usize = 1_048_576;
 /// for the snapshot projection and its fixed envelope fields. The session
 /// snapshot is the only legitimate response large enough to approach the
 /// envelope cap.
+///
+/// The budget bounds transcript rows only. The read path that spends it must
+/// charge the whole encoded snapshot — projection, pending turns, and rows —
+/// against [`MAX_MESSAGE_BYTES`], and answer a snapshot it cannot fit with the
+/// typed `local_protocol_message_too_large` rejection instead of writing a line
+/// the peer refuses.
 pub const MAX_TRANSCRIPT_SNAPSHOT_BYTES: usize = MAX_MESSAGE_BYTES - MAX_MESSAGE_BYTES / 4;
 
 /// The single live local wire version.
@@ -68,6 +76,23 @@ pub struct LocalEndpoint {
     path: PathBuf,
 }
 
+/// Validates one logical endpoint instance identifier.
+fn validate_instance_id(instance_id: &str) -> DtoResult<()> {
+    let valid = !instance_id.is_empty()
+        && instance_id.len() <= 100
+        && instance_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+    if valid {
+        Ok(())
+    } else {
+        Err(ErrorDto::validation(
+            "invalid_local_endpoint_instance",
+            "local daemon instance identifier must be a safe logical name",
+        ))
+    }
+}
+
 impl LocalEndpoint {
     /// Creates a local endpoint from a safe logical instance identifier.
     ///
@@ -81,19 +106,29 @@ impl LocalEndpoint {
     /// unavailable error if the platform runtime directory cannot be determined.
     pub fn from_instance_id(instance_id: impl Into<String>) -> DtoResult<Self> {
         let instance_id = instance_id.into();
-        let valid = !instance_id.is_empty()
-            && instance_id.len() <= 100
-            && instance_id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
-        if !valid {
-            return Err(ErrorDto::validation(
-                "invalid_local_endpoint_instance",
-                "local daemon instance identifier must be a safe logical name",
-            ));
-        }
+        validate_instance_id(&instance_id)?;
         Ok(Self {
             path: platform_endpoint_path(&instance_id)?,
+            instance_id,
+        })
+    }
+
+    /// Creates a Unix endpoint from a safe logical identifier under `base`.
+    ///
+    /// Fixtures use this to root their sockets outside the live platform runtime
+    /// directory; production code resolves endpoints through
+    /// [`LocalEndpoint::from_instance_id`], and Windows named pipes have no
+    /// filesystem base to root.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error for an unsafe logical identifier.
+    #[cfg(unix)]
+    pub fn from_instance_id_in(base: &Path, instance_id: impl Into<String>) -> DtoResult<Self> {
+        let instance_id = instance_id.into();
+        validate_instance_id(&instance_id)?;
+        Ok(Self {
+            path: base.join(format!("{instance_id}.sock")),
             instance_id,
         })
     }
@@ -176,8 +211,9 @@ impl AsyncLocalListener {
     ///
     /// On Unix, a bind conflict from an unclean previous daemon exit is
     /// recovered: a stale socket whose bounded probe connection is refused is
-    /// removed and the bind is retried once. Dropping the listener never
-    /// removes the endpoint path.
+    /// removed and the bind is retried once. On Unix, dropping the listener
+    /// never removes the endpoint path; on Windows the named pipe disappears
+    /// with the last listener handle.
     ///
     /// # Errors
     ///
@@ -276,6 +312,11 @@ pub struct AsyncMessageReceiver {
 impl AsyncMessageReceiver {
     /// Receives one bounded NDJSON message line.
     ///
+    /// The wait is unbounded by contract: the transport applies no per-call read
+    /// deadline, so each caller owns its own bound — the client bounds every
+    /// correlated and stream reply, and the daemon host owns the per-connection
+    /// read bound.
+    ///
     /// # Errors
     ///
     /// Returns a safe framing or connection error when the line cannot be read.
@@ -358,7 +399,9 @@ async fn write_async_message<T: serde::Serialize + Sync + ?Sized>(
 
 /// Reads the next complete NDJSON line with the asynchronous transport read.
 ///
-/// The framing rules live in [`take_line`] and [`append_chunk`].
+/// The framing rules live in [`take_line`] and [`append_chunk`]. The transport
+/// applies no read deadline: a peer that accepts the connection and then stops
+/// sending leaves this read pending, so the caller owns its own bound.
 async fn read_async_line(
     stream: &mut (impl AsyncRead + Send + Unpin),
     residual: &mut Vec<u8>,
@@ -400,6 +443,9 @@ fn append_chunk(residual: &mut Vec<u8>, chunk: &[u8]) -> DtoResult<()> {
 }
 
 /// Encodes one typed message into its bounded, newline-terminated NDJSON line.
+///
+/// The bound is the framed line, terminator included, so a message the sender
+/// writes is exactly a message the receiver accepts.
 fn encode_message<T: serde::Serialize + ?Sized>(value: &T) -> DtoResult<Vec<u8>> {
     let mut payload = serde_json::to_vec(value).map_err(|_| {
         ErrorDto::validation(
@@ -407,7 +453,7 @@ fn encode_message<T: serde::Serialize + ?Sized>(value: &T) -> DtoResult<Vec<u8>>
             "a typed local protocol message could not be encoded",
         )
     })?;
-    if payload.len() > MAX_MESSAGE_BYTES {
+    if payload.len() >= MAX_MESSAGE_BYTES {
         return Err(oversized_message());
     }
     payload.push(b'\n');
@@ -513,8 +559,10 @@ fn remove_socket_if_identity_unchanged(path: &std::path::Path, identity: SocketI
 /// whose bounded probe connection is refused. A probe that fails for any
 /// other reason is treated as "in use", never as stale. The socket is removed
 /// only when it still has the identity captured before the probe, so a path
-/// replaced while the probe ran is never removed. Reclaim at the next bind is
-/// the only removal path: no listener ever unlinks its endpoint on drop.
+/// replaced while the probe ran is not removed; a path replaced between that
+/// identity re-check and the unlink is outside this guarantee. Reclaim at the
+/// next bind is the only removal path: no listener ever unlinks its endpoint
+/// on drop.
 #[cfg(unix)]
 fn reclaim_stale_socket(endpoint: &LocalEndpoint) -> bool {
     let Some(identity) = socket_identity(&endpoint.path) else {
@@ -545,8 +593,23 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+    #[cfg(unix)]
+    use tempfile::TempDir;
 
     static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(0);
+
+    /// Returns the process-wide fixture directory the unit sockets live in.
+    ///
+    /// The directory outlives the process, so unit fixtures never create or
+    /// chmod an endpoint inside the live platform runtime directory.
+    #[cfg(unix)]
+    fn fixture_base() -> &'static Path {
+        use std::sync::OnceLock;
+
+        static BASE: OnceLock<TempDir> = OnceLock::new();
+        BASE.get_or_init(|| TempDir::new().expect("fixture base directory is available"))
+            .path()
+    }
 
     fn endpoint() -> LocalEndpoint {
         let sequence = NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed);
@@ -554,19 +617,60 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time is after Unix epoch")
             .as_nanos();
-        LocalEndpoint::from_instance_id(format!("transport-unit-{nanos}-{sequence}"))
-            .expect("fixture endpoint is valid")
+        let instance_id = format!("transport-unit-{nanos}-{sequence}");
+        #[cfg(unix)]
+        {
+            LocalEndpoint::from_instance_id_in(fixture_base(), instance_id)
+                .expect("fixture endpoint is valid")
+        }
+        #[cfg(windows)]
+        {
+            LocalEndpoint::from_instance_id(instance_id).expect("fixture endpoint is valid")
+        }
     }
 
     #[test]
     fn platform_default_uses_a_safe_logical_instance_identifier() {
         let endpoint = LocalEndpoint::platform_default().expect("platform default is available");
-        assert_eq!(endpoint.instance_id(), "intention-relay-v1");
-        assert!(
-            endpoint.instance_id().ends_with(&WIRE_VERSION.to_string()),
-            "the endpoint name carries the live wire version byte"
+        assert_eq!(
+            endpoint.instance_id(),
+            format!("intention-relay-v{WIRE_VERSION}")
         );
         assert!(endpoint.path.is_absolute());
+    }
+
+    #[test]
+    fn envelope_cap_bounds_one_framed_line() {
+        // The send bound counts the terminator, so the largest message one peer
+        // writes is exactly the largest framed line the other peer accepts.
+        let payload = "x".repeat(MAX_MESSAGE_BYTES - 3);
+        let encoded = encode_message(&payload).expect("the largest payload encodes");
+        assert_eq!(encoded.len(), MAX_MESSAGE_BYTES);
+        assert_eq!(encoded.last(), Some(&b'\n'));
+        let mut residual = Vec::new();
+        append_chunk(&mut residual, &encoded).expect("a line of exactly the cap is framed");
+        assert_eq!(
+            take_line(&mut residual)
+                .expect("the line is complete")
+                .expect("the line decodes")
+                .len(),
+            MAX_MESSAGE_BYTES - 1
+        );
+
+        assert_eq!(
+            encode_message(&"x".repeat(MAX_MESSAGE_BYTES - 2))
+                .expect_err("a payload one byte past the cap is refused")
+                .code(),
+            "local_protocol_message_too_large"
+        );
+        let oversized = vec![b'x'; MAX_MESSAGE_BYTES + 1];
+        let mut residual = Vec::new();
+        assert_eq!(
+            append_chunk(&mut residual, &oversized)
+                .expect_err("an over-cap line is refused")
+                .code(),
+            "local_protocol_message_too_large"
+        );
     }
 
     #[cfg(unix)]

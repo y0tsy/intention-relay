@@ -110,6 +110,66 @@ fn session_snapshot_validation_covers_m3_failure_boundaries() {
         .code(),
         "invalid_session_snapshot_projection"
     );
+    assert_eq!(
+        SessionSnapshotDto::with_projection(
+            session_id,
+            fixture_projection(session_id),
+            vec![fixture_message(SessionId::new(), RunId::new())],
+        )
+        .expect_err("a transcript row from another session rejects")
+        .code(),
+        "invalid_session_snapshot_projection"
+    );
+}
+
+#[test]
+fn a_session_projection_reports_its_omitted_pending_turn_count() {
+    let session_id = SessionId::new();
+    let projection = SessionProjectionDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        workspace_root(),
+        RunModeDto::Build,
+        None,
+        None,
+        Vec::new(),
+    )
+    .expect("projection is valid");
+    assert_eq!(
+        projection.pending_turns_omitted(),
+        0,
+        "an untrimmed projection omits nothing"
+    );
+
+    let trimmed = projection.with_pending_turns_omitted(7);
+    assert_eq!(trimmed.pending_turns_omitted(), 7);
+    assert!(trimmed.pending_turns().is_empty());
+    let decoded: SessionProjectionDto = serde_json::from_str(
+        &serde_json::to_string(&trimmed).expect("the trimmed projection serializes"),
+    )
+    .expect("the trimmed projection decodes");
+    assert_eq!(decoded, trimmed);
+    assert_eq!(
+        decoded.pending_turns_omitted(),
+        7,
+        "the omitted count survives the wire"
+    );
+
+    let absent = serde_json::from_value::<SessionProjectionDto>(serde_json::json!({
+        "project_id": ProjectId::new(),
+        "session_id": session_id,
+        "workspace_id": WorkspaceId::new(),
+        "workspace_root": workspace_root(),
+        "mode": "build",
+        "pending_turns": []
+    }))
+    .expect("a projection without the count decodes");
+    assert_eq!(
+        absent.pending_turns_omitted(),
+        0,
+        "a projection that carries no count omits nothing"
+    );
 }
 
 #[test]
@@ -148,6 +208,24 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
             vec![first.clone(), first],
         )
         .is_err()
+    );
+    let third = PendingTurnProjectionDto::new(session_id, TurnId::new(), "third")
+        .expect("pending turn is valid");
+    let fourth = PendingTurnProjectionDto::new(session_id, TurnId::new(), "fourth")
+        .expect("pending turn is valid");
+    assert!(
+        SessionProjectionDto::new(
+            project_id,
+            session_id,
+            workspace_id,
+            workspace_root(),
+            RunModeDto::Build,
+            None,
+            None,
+            vec![third.clone(), fourth, third],
+        )
+        .is_err(),
+        "a repeated pending turn identity is rejected wherever it appears"
     );
     assert!(PendingTurnProjectionDto::new(session_id, TurnId::new(), "   ").is_err());
     assert!(

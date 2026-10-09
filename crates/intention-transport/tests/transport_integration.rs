@@ -16,14 +16,25 @@ use tempfile::TempDir;
 
 static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(0);
 
-fn endpoint(_directory: &TempDir) -> LocalEndpoint {
+fn endpoint(directory: &TempDir) -> LocalEndpoint {
     let sequence = NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time must be after Unix epoch")
         .as_nanos();
-    LocalEndpoint::from_instance_id(format!("transport-fixture-{nanos}-{sequence}"))
-        .expect("fixture instance name must be valid")
+    let instance_id = format!("transport-fixture-{nanos}-{sequence}");
+    #[cfg(unix)]
+    {
+        // The fixture root is its own temporary directory, so no test creates or
+        // chmods an endpoint inside the live platform runtime directory.
+        LocalEndpoint::from_instance_id_in(directory.path(), instance_id)
+            .expect("fixture instance name must be valid")
+    }
+    #[cfg(windows)]
+    {
+        let _ = directory;
+        LocalEndpoint::from_instance_id(instance_id).expect("fixture instance name must be valid")
+    }
 }
 
 const fn health_request(id: u64) -> intention_proto::ProtocolRequestDto {

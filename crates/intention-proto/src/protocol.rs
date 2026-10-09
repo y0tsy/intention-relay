@@ -178,17 +178,21 @@ impl SessionSnapshotDto {
     ///
     /// # Errors
     ///
-    /// Returns a validation error when the projection session identity differs
-    /// from this snapshot session.
+    /// Returns a validation error when the projection session identity or any
+    /// carried transcript row differs from this snapshot session.
     pub fn with_projection(
         session_id: SessionId,
         projection: SessionProjectionDto,
         messages: Vec<MessageProjectionDto>,
     ) -> DtoResult<Self> {
-        if projection.session_id() != session_id {
+        if projection.session_id() != session_id
+            || messages
+                .iter()
+                .any(|message| message.session_id() != session_id)
+        {
             return Err(ErrorDto::validation(
                 "invalid_session_snapshot_projection",
-                "snapshot projection must share the snapshot session",
+                "snapshot projection and transcript rows must share the snapshot session",
             ));
         }
         Ok(Self {
@@ -578,23 +582,47 @@ pub const fn encode_reply(id: u64, result: ProtocolResultDto) -> ProtocolDaemonM
     ProtocolDaemonMessageDto::reply(id, result)
 }
 
+/// The envelope kinds of the current daemon wire.
+const DAEMON_MESSAGE_KINDS: [&str; 3] = ["reply", "rejection", "frame"];
+
 /// Parses one daemon line.
 ///
 /// # Errors
 ///
 /// Returns a typed `stale_daemon_protocol` unavailable error when the line is
-/// not a message of the current wire, so an adapter can offer a safe
-/// restart/reconnect action instead of reinterpreting foreign bytes.
+/// not an envelope of the current wire, so an adapter can offer a safe
+/// restart/reconnect action instead of reinterpreting foreign bytes. A line
+/// that names a current envelope kind whose payload does not decode is this
+/// wire's own failure, so it returns the typed
+/// `invalid_local_protocol_response` error instead of blaming a stale peer.
 pub fn parse_daemon_message(line: &str) -> DtoResult<ProtocolDaemonMessageDto> {
-    serde_json::from_str(line).map_err(|_| {
-        ErrorDto::unavailable(
+    serde_json::from_str(line).map_err(|_| match envelope_kind(line) {
+        Some(kind) if DAEMON_MESSAGE_KINDS.contains(&kind) => invalid_wire_response(),
+        _ => ErrorDto::unavailable(
             "stale_daemon_protocol",
             "the local daemon does not speak the current local wire protocol",
-        )
+        ),
     })
 }
 
+/// Returns the envelope kind one daemon line names, when it names one.
+fn envelope_kind(line: &str) -> Option<&str> {
+    #[derive(Deserialize)]
+    struct EnvelopeKindDto<'a> {
+        kind: &'a str,
+    }
+
+    serde_json::from_str::<EnvelopeKindDto<'_>>(line)
+        .ok()
+        .map(|envelope| envelope.kind)
+}
+
 /// Decodes the correlated answer to one request.
+///
+/// An identity-less rejection is the daemon's answer to a request line it could
+/// not decode, so it carries no identity to match; accepting it for `id` is
+/// unambiguous only while one connection carries one in-flight request, which
+/// is the client's dispatch convention.
 ///
 /// # Errors
 ///
@@ -604,6 +632,8 @@ pub fn parse_daemon_message(line: &str) -> DtoResult<ProtocolDaemonMessageDto> {
 pub fn decode_response(line: &str, id: u64) -> DtoResult<ProtocolResultDto> {
     match parse_daemon_message(line)? {
         ProtocolDaemonMessageDto::Reply(reply) if reply.id() == id => Ok(reply.into_result()),
+        // The daemon answers an undecodable request line without an identity,
+        // and one in-flight request per connection makes that answer this one's.
         ProtocolDaemonMessageDto::Rejection(rejection)
             if rejection.id().is_none() || rejection.id() == Some(id) =>
         {
@@ -721,6 +751,23 @@ mod tests {
             )
             .expect("run result deserializes"),
             result
+        );
+
+        // A bounded read reports its omitted pending turns, and the nested
+        // projection carries that count across the wire.
+        let trimmed = SessionSnapshotDto::with_projection(
+            session_id,
+            fixture_projection(session_id).with_pending_turns_omitted(3),
+            Vec::new(),
+        )
+        .expect("a snapshot with a trimmed projection is valid");
+        assert_eq!(trimmed.projection().pending_turns_omitted(), 3);
+        assert_eq!(
+            serde_json::from_str::<SessionSnapshotDto>(
+                &serde_json::to_string(&trimmed).expect("snapshot serializes")
+            )
+            .expect("snapshot deserializes"),
+            trimmed
         );
     }
 

@@ -12,7 +12,7 @@ mod common;
 
 use common::{TEST_REPLY_BOUND, endpoint, message};
 
-use intention_client::{RunStreamClient, RunStreamState};
+use intention_client::{RETAINED_TRANSCRIPT_MESSAGES, RunStreamClient, RunStreamState};
 use intention_proto::{
     ClientRequestDto, ProtocolDaemonMessageDto, ProtocolResultDto, RunStreamFrameDto,
     RunSubscriptionSnapshotDto, SubscribeRunCommandDto, decode_request_line, encode_reply,
@@ -184,6 +184,53 @@ fn state_rejects_frames_from_another_scope_without_mutation() {
         "invalid_run_subscription"
     );
     assert!(fresh.run().is_none());
+}
+
+#[test]
+fn state_dedupes_the_newest_row_and_bounds_the_transcript() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = RunStreamState::new(session_id, run_id);
+    let snapshot_row = message(
+        session_id,
+        Some(run_id),
+        MessageKindDto::Assistant,
+        "committed by the snapshot",
+    );
+    state
+        .apply_initial(snapshot(
+            session_id,
+            run_id,
+            RunStatusDto::Running,
+            vec![snapshot_row.clone()],
+        ))
+        .expect("fixture snapshot applies");
+
+    state
+        .apply_frame(RunStreamFrameDto::Content(snapshot_row))
+        .expect("a frame repeating the newest accepted row applies once");
+    assert_eq!(
+        state.messages().len(),
+        1,
+        "a content frame the snapshot already carried is not appended twice"
+    );
+
+    for index in 0..RETAINED_TRANSCRIPT_MESSAGES + 4 {
+        state
+            .apply_frame(RunStreamFrameDto::Content(message(
+                session_id,
+                Some(run_id),
+                MessageKindDto::Notice,
+                &format!("row {index}"),
+            )))
+            .expect("a fresh committed row applies");
+    }
+    assert_eq!(state.messages().len(), RETAINED_TRANSCRIPT_MESSAGES);
+    assert_eq!(
+        state.messages().last().expect("rows remain").text(),
+        format!("row {}", RETAINED_TRANSCRIPT_MESSAGES + 3),
+        "the retained transcript keeps the newest rows"
+    );
 }
 
 #[tokio::test]

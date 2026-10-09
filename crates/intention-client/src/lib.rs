@@ -7,7 +7,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -119,7 +119,7 @@ impl IntentionClient {
             Err(_) => {}
         }
 
-        let _lock = StartupLock::acquire(&self.endpoint)?;
+        let _lock = StartupLock::acquire(&self.endpoint).await?;
         match self.connect_ready().await {
             Ok(health) => return Ok(health),
             Err(error) if !is_unavailable(&error) => return Err(error),
@@ -144,6 +144,10 @@ impl IntentionClient {
     }
 
     /// Creates a durable session and returns the daemon's acceptance evidence.
+    ///
+    /// The command carries no session identity to compare: the daemon assigns
+    /// the session, project, and workspace, so acceptance evidence is the only
+    /// thing the reply can be checked for.
     ///
     /// # Errors
     ///
@@ -172,7 +176,7 @@ impl IntentionClient {
     ///
     /// Returns a typed validation error for blank content, the daemon's typed
     /// rejection, a typed transport or timeout error, or an invalid-response
-    /// error when the reply is not an accepted turn.
+    /// error when the reply is not an accepted turn of this session.
     pub async fn send_user_turn(
         &self,
         session_id: SessionId,
@@ -184,7 +188,9 @@ impl IntentionClient {
             .request(ClientRequestDto::SendUserTurn(command))
             .await?
         {
-            ProtocolResultDto::TurnAccepted(turn) => Ok(turn.outcome()),
+            ProtocolResultDto::TurnAccepted(turn) if turn.session_id() == session_id => {
+                Ok(turn.outcome())
+            }
             _ => Err(invalid_response()),
         }
     }
@@ -194,7 +200,8 @@ impl IntentionClient {
     /// # Errors
     ///
     /// Returns the daemon's typed rejection, a typed transport or timeout error,
-    /// or an invalid-response error when the reply is not a pending-turn removal.
+    /// or an invalid-response error when the reply is not the removal of this
+    /// session's turn.
     pub async fn remove_turn(
         &self,
         session_id: SessionId,
@@ -206,7 +213,11 @@ impl IntentionClient {
             )))
             .await?
         {
-            ProtocolResultDto::TurnRemoved(removed) => Ok(removed),
+            ProtocolResultDto::TurnRemoved(removed)
+                if removed.session_id() == session_id && removed.turn_id() == turn_id =>
+            {
+                Ok(removed)
+            }
             _ => Err(invalid_response()),
         }
     }
@@ -216,7 +227,8 @@ impl IntentionClient {
     /// # Errors
     ///
     /// Returns the daemon's typed rejection, a typed transport or timeout error,
-    /// or an invalid-response error when the reply is not an accepted interrupt.
+    /// or an invalid-response error when the reply is not an accepted interrupt
+    /// of this session's run.
     pub async fn interrupt_run(
         &self,
         session_id: SessionId,
@@ -228,7 +240,11 @@ impl IntentionClient {
             )))
             .await?
         {
-            ProtocolResultDto::RunInterrupted(interrupted) => Ok(interrupted),
+            ProtocolResultDto::RunInterrupted(interrupted)
+                if interrupted.session_id() == session_id && interrupted.run_id() == run_id =>
+            {
+                Ok(interrupted)
+            }
             _ => Err(invalid_response()),
         }
     }
@@ -242,7 +258,8 @@ impl IntentionClient {
     /// # Errors
     ///
     /// Returns the daemon's typed rejection, a typed transport or timeout error,
-    /// or an invalid-response error when the reply is not a session snapshot.
+    /// or an invalid-response error when the reply is not the requested
+    /// session's snapshot.
     pub async fn session_snapshot(&self, session_id: SessionId) -> DtoResult<SessionSnapshotDto> {
         match self
             .request(ClientRequestDto::GetSessionSnapshot(
@@ -250,25 +267,24 @@ impl IntentionClient {
             ))
             .await?
         {
-            ProtocolResultDto::SessionSnapshot(snapshot) => Ok(snapshot),
+            ProtocolResultDto::SessionSnapshot(snapshot) if snapshot.session_id() == session_id => {
+                Ok(snapshot)
+            }
             _ => Err(invalid_response()),
         }
     }
 
     async fn connect_ready(&self) -> DtoResult<DaemonHealthDto> {
-        let mut link = self.connect().await?;
-        match self
-            .request_on(&mut link, ClientRequestDto::GetDaemonHealth)
-            .await?
-        {
+        let link = self.connect().await?;
+        match Self::request_on(link, ClientRequestDto::GetDaemonHealth).await? {
             ProtocolResultDto::DaemonHealth(health) => Ok(health),
             _ => Err(invalid_response()),
         }
     }
 
     async fn request(&self, request: ClientRequestDto) -> DtoResult<ProtocolResultDto> {
-        let mut link = self.connect().await?;
-        self.request_on(&mut link, request).await
+        let link = self.connect().await?;
+        Self::request_on(link, request).await
     }
 
     async fn connect(&self) -> DtoResult<LocalLink> {
@@ -277,9 +293,13 @@ impl IntentionClient {
         Ok(LocalLink { sender, receiver })
     }
 
+    /// Sends one request and decodes its correlated answer.
+    ///
+    /// The link is consumed, so one connection carries exactly one in-flight
+    /// request; that convention is what makes the daemon's identity-less
+    /// rejection of an undecodable request line unambiguous.
     async fn request_on(
-        &self,
-        link: &mut LocalLink,
+        mut link: LocalLink,
         request: ClientRequestDto,
     ) -> DtoResult<ProtocolResultDto> {
         let message = encode_request(REQUEST_ID, request);
@@ -402,13 +422,24 @@ impl RunStreamSubscription {
     }
 }
 
+/// The number of newest committed transcript rows one subscription retains.
+///
+/// Live content frames are unbounded in number, so a long-lived subscription
+/// keeps only the newest rows; the durable transcript stays complete, and a
+/// re-subscribe re-reads the bounded current-state snapshot.
+pub const RETAINED_TRANSCRIPT_MESSAGES: usize = 256;
+
 /// The committed state of one fixed run scope.
 ///
 /// The subscription reply is the current run snapshot, and every later frame
 /// carries the committed value of its own scope: a content frame appends its
 /// committed transcript row and a status frame replaces the committed run
 /// projection. There are no cursors and no positions, so no merge machine is
-/// needed; duplicate or stale frames simply re-apply an older committed value.
+/// needed: a status frame is idempotent because it replaces the whole run, and
+/// a content frame is idempotent only for the newest accepted row — the wire
+/// carries no row identity, so the daemon-side watermark remains the authority
+/// for a row the snapshot already carried. The retained transcript keeps the
+/// newest [`RETAINED_TRANSCRIPT_MESSAGES`] rows.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunStreamState {
     session_id: SessionId,
@@ -442,6 +473,7 @@ impl RunStreamState {
         let mut next = Self::new(self.session_id, self.run_id);
         next.run = Some(*snapshot.run());
         next.messages = snapshot.messages().to_vec();
+        next.retain_newest();
         *self = next;
         Ok(())
     }
@@ -462,8 +494,23 @@ impl RunStreamState {
 
     fn apply_content(&mut self, message: MessageProjectionDto) -> DtoResult<()> {
         self.ensure_scope(message.session_id(), message.run_id())?;
+        // A content frame repeating the newest accepted row is the frame the
+        // subscription snapshot already carried: re-appending it would show the
+        // same committed row twice.
+        if self.messages.last() == Some(&message) {
+            return Ok(());
+        }
         self.messages.push(message);
+        self.retain_newest();
         Ok(())
+    }
+
+    /// Drops the oldest retained rows past [`RETAINED_TRANSCRIPT_MESSAGES`].
+    fn retain_newest(&mut self) {
+        if self.messages.len() > RETAINED_TRANSCRIPT_MESSAGES {
+            let excess = self.messages.len() - RETAINED_TRANSCRIPT_MESSAGES;
+            self.messages.drain(..excess);
+        }
     }
 
     fn apply_status(&mut self, run: RunProjectionDto) -> DtoResult<()> {
@@ -522,8 +569,26 @@ struct StartupLock {
 }
 
 impl StartupLock {
-    fn acquire(endpoint: &LocalEndpoint) -> DtoResult<Self> {
-        let path = startup_lock_path(endpoint)?;
+    /// Takes the per-endpoint bootstrap lock within the bootstrap budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed startup-lock failure when the lock cannot be taken
+    /// before the budget expires.
+    async fn acquire(endpoint: &LocalEndpoint) -> DtoResult<Self> {
+        Self::acquire_path(&startup_lock_path(endpoint)?, STARTUP_TIMEOUT).await
+    }
+
+    /// Takes the lock at `path`, retrying a contended lock until `budget` ends.
+    ///
+    /// The wait is bounded and yields to the runtime between attempts, so a
+    /// bootstrap never blocks a task on another process without a deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed startup-lock failure when the lock cannot be taken
+    /// before `budget` expires.
+    async fn acquire_path(path: &Path, budget: Duration) -> DtoResult<Self> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|_| unavailable("startup_lock_unavailable"))?;
             #[cfg(unix)]
@@ -538,7 +603,7 @@ impl StartupLock {
             .read(true)
             .write(true)
             .truncate(false)
-            .open(&path)
+            .open(path)
             .map_err(|_| unavailable("startup_lock_unavailable"))?;
         #[cfg(unix)]
         {
@@ -546,8 +611,19 @@ impl StartupLock {
             fs::set_permissions(path, fs::Permissions::from_mode(0o600))
                 .map_err(|_| unavailable("startup_lock_unavailable"))?;
         }
-        fs4::FileExt::lock(&file).map_err(|_| unavailable("startup_lock_unavailable"))?;
-        Ok(Self { file })
+        let deadline = tokio::time::Instant::now() + budget;
+        loop {
+            match fs4::FileExt::try_lock(&file) {
+                Ok(()) => return Ok(Self { file }),
+                Err(fs4::TryLockError::WouldBlock) if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(STARTUP_RETRY).await;
+                }
+                Err(fs4::TryLockError::WouldBlock) => return Err(startup_lock_timeout()),
+                Err(fs4::TryLockError::Error(_)) => {
+                    return Err(unavailable("startup_lock_unavailable"));
+                }
+            }
+        }
     }
 }
 
@@ -645,4 +721,54 @@ fn stream_reply_timeout() -> ErrorDto {
 
 fn unavailable(code: &'static str) -> ErrorDto {
     ErrorDto::unavailable(code, "the local daemon connection is unavailable")
+}
+
+fn startup_lock_timeout() -> ErrorDto {
+    ErrorDto::unavailable(
+        "local_daemon_startup_timeout",
+        "the local daemon bootstrap lock was not released in time",
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::expect_used,
+        clippy::panic,
+        reason = "Unit fixtures use direct assertions for precise diagnostics."
+    )]
+
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[tokio::test]
+    async fn startup_lock_wait_is_bounded_by_its_budget() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time is after the Unix epoch")
+            .as_nanos();
+        // The fixture root is its own directory under the temporary directory:
+        // the lock path owns its parent, so the fixture never chmods a shared
+        // directory such as the platform runtime directory.
+        let base = std::env::temp_dir().join(format!(
+            "intention-client-lock-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&base).expect("the fixture directory is created");
+        let path = base.join("bootstrap.lock");
+        let budget = Duration::from_millis(50);
+        let held = StartupLock::acquire_path(&path, budget)
+            .await
+            .expect("an uncontended bootstrap lock is taken");
+
+        let error = match StartupLock::acquire_path(&path, budget).await {
+            Ok(_) => panic!("a contended bootstrap lock must end the bounded wait"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), "local_daemon_startup_timeout");
+        assert_eq!(error.category(), ErrorCategoryDto::Unavailable);
+
+        drop(held);
+        let _ = fs::remove_dir_all(&base);
+    }
 }

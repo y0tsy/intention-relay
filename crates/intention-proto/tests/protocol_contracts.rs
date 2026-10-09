@@ -20,10 +20,10 @@ use intention_proto::{
     RunProjectionDto, RunStatusDto, RunStreamFrameDto, RunSubscriptionSnapshotDto,
     SendUserTurnAcceptedDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionSnapshotDto,
     SubscribeRunCommandDto, decode_request_line, decode_response, encode_reply, encode_request,
-    parse_daemon_message, parse_run_frame,
+    parse_daemon_message, parse_run_frame, run_status_is_terminal, validate_run_status_transition,
 };
-use intention_proto::{ConfigRevisionId, IdempotencyKey, ProjectId, RunId, SessionId, TurnId};
-use intention_proto::{RunModeDto, WorkspaceId};
+use intention_proto::{ConfigRevisionId, IdempotencyKey, MessageKindDto, ProjectId, RunId};
+use intention_proto::{RunModeDto, SessionId, TurnId, WorkspaceId};
 
 fn fixture_run(session_id: SessionId, run_id: RunId) -> RunProjectionDto {
     RunProjectionDto::new(
@@ -280,4 +280,95 @@ fn malformed_wire_lines_fail_closed() {
             .code(),
         "stale_daemon_protocol"
     );
+
+    // A current envelope whose payload does not decode is this wire's own
+    // failure, not a stale peer: the client must not answer it by launching a
+    // daemon against the peer that answered.
+    assert_eq!(
+        parse_daemon_message(
+            r#"{"kind":"reply","data":{"id":1,"result":{"kind":"daemon_health","data":{}}}}"#
+        )
+        .expect_err("a current envelope with an invalid payload fails closed")
+        .code(),
+        "invalid_local_protocol_response"
+    );
+    for foreign in [
+        r#"{"jsonrpc":"2.0","id":1,"result":{}}"#,
+        r#"{"kind":"hello","data":{}}"#,
+        r#"{"id":1,"request":{"kind":"get_daemon_health","data":null}}"#,
+    ] {
+        assert_eq!(
+            parse_daemon_message(foreign)
+                .expect_err("foreign bytes are a stale-peer failure")
+                .code(),
+            "stale_daemon_protocol",
+            "{foreign} is not an envelope of the current wire"
+        );
+    }
+}
+
+#[test]
+fn durable_enum_spellings_match_their_wire_spelling() {
+    for status in [
+        RunStatusDto::Starting,
+        RunStatusDto::Running,
+        RunStatusDto::Completed,
+        RunStatusDto::Failed,
+        RunStatusDto::Interrupted,
+    ] {
+        assert_eq!(
+            serde_json::to_value(status).expect("status serializes"),
+            serde_json::json!(status.as_str()),
+            "the wire spelling of {status:?} is its durable spelling"
+        );
+        assert_eq!(RunStatusDto::parse(status.as_str()).ok(), Some(status));
+    }
+    for mode in [RunModeDto::Plan, RunModeDto::Build] {
+        assert_eq!(
+            serde_json::to_value(mode).expect("mode serializes"),
+            serde_json::json!(mode.as_str()),
+            "the wire spelling of {mode:?} is its durable spelling"
+        );
+        assert_eq!(RunModeDto::parse(mode.as_str()).ok(), Some(mode));
+    }
+    for kind in [
+        MessageKindDto::User,
+        MessageKindDto::Assistant,
+        MessageKindDto::ToolCall,
+        MessageKindDto::ToolResult,
+        MessageKindDto::Notice,
+    ] {
+        assert_eq!(
+            serde_json::to_value(kind).expect("kind serializes"),
+            serde_json::json!(kind.as_str()),
+            "the wire spelling of {kind:?} is its durable spelling"
+        );
+        assert_eq!(MessageKindDto::parse(kind.as_str()).ok(), Some(kind));
+    }
+}
+
+#[test]
+fn terminal_run_statuses_are_the_transition_predicate_set() {
+    let statuses = [
+        RunStatusDto::Starting,
+        RunStatusDto::Running,
+        RunStatusDto::Completed,
+        RunStatusDto::Failed,
+        RunStatusDto::Interrupted,
+    ];
+    for status in statuses {
+        assert_eq!(
+            RunStatusDto::TERMINAL.contains(&status),
+            run_status_is_terminal(status),
+            "{status:?} is terminal in both the list and the predicate"
+        );
+    }
+    for terminal in RunStatusDto::TERMINAL {
+        for successor in statuses {
+            assert!(
+                validate_run_status_transition(terminal, successor).is_err(),
+                "a terminal status has no declared successor: {terminal:?} -> {successor:?}"
+            );
+        }
+    }
 }

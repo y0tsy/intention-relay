@@ -103,6 +103,13 @@ impl RunStatusDto {
             )?),
         }
     }
+
+    /// The durable terminal run statuses, in `as_str` order.
+    ///
+    /// This is the single source for the storage terminal-status predicate that
+    /// excludes finished runs, and the proto tests pin it to
+    /// [`run_status_is_terminal`] and to the wire spelling of every member.
+    pub const TERMINAL: [Self; 3] = [Self::Completed, Self::Failed, Self::Interrupted];
 }
 
 /// Returns whether no future run status transition is valid from `status`.
