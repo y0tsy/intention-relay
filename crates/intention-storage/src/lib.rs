@@ -467,8 +467,8 @@ pub trait StorageRepositoryDto {
     ///
     /// # Errors
     ///
-    /// Returns a validation error when content is blank or exceeds
-    /// [`MAX_TURN_CONTENT_BYTES`], a validation, not-found, or conflict error
+    /// Returns a validation error when content is blank or exceeds the durable
+    /// turn-content bound (512 KiB), a validation, not-found, or conflict error
     /// when the turn cannot be accepted for its session, or an unavailable error
     /// when storage fails.
     fn accept_user_turn(
