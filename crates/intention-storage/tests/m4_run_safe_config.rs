@@ -170,6 +170,56 @@ fn backend_failure_on_a_run_config_lookup_is_unavailable_not_not_found() {
     }
 }
 
+#[test]
+fn run_config_read_requires_a_persistable_snapshot() {
+    let (directory, repository) = repository();
+    let session_id = create_session(&repository, "unpersistable");
+    let run_id = RunId::new();
+    let snapshot = snapshot("safe-model", None, 30, 2);
+    let revision_id = snapshot.revision_id();
+    repository
+        .accept_user_turn(
+            session_id,
+            IdempotencyKey::new(),
+            "turn",
+            run_id,
+            snapshot.clone(),
+            time(2),
+        )
+        .expect("turn starts");
+
+    // The stored selection is rewritten to a foreign schema version: it no
+    // longer satisfies the persistence gate, so the read must not hand it out.
+    let mut wire: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&snapshot).expect("snapshot serializes"))
+            .expect("snapshot is JSON");
+    wire["schema_version"]["major"] = serde_json::json!(2);
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for the rewrite");
+    connection
+        .execute(
+            "UPDATE configuration_revisions SET snapshot_json=?2 WHERE id=?1",
+            sqlite::params![
+                revision_id.to_string(),
+                serde_json::to_string(&wire).expect("mutated snapshot serializes")
+            ],
+        )
+        .expect("the stored snapshot is replaced");
+    drop(connection);
+
+    let error = repository
+        .load_run_config_snapshot(session_id, run_id)
+        .expect_err("an unpersistable stored snapshot is not served");
+    assert_eq!(error.code(), "storage_decode_failed");
+    assert_eq!(error.category(), ErrorCategoryDto::Internal);
+    assert_eq!(error.retry(), ErrorRetryDto::Never);
+    assert!(
+        !error
+            .to_string()
+            .contains("recognizable-fixture-credential")
+    );
+}
+
 fn snapshot(
     model: &str,
     endpoint: Option<&str>,

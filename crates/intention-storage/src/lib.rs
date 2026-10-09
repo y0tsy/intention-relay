@@ -19,7 +19,7 @@
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
-    RemoveTurnCommandDto, RunProjectionDto, RunStatusDto, SessionProjectionDto,
+    RemoveTurnCommandDto, RunProjectionDto, RunStatusDto, SessionProjectionDto, SessionSnapshotDto,
 };
 use intention_proto::{
     DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, RunId,
@@ -33,6 +33,21 @@ pub use sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 
 /// The maximum durable tool result content size in bytes.
 const MAX_TOOL_RESULT_CONTENT_BYTES: usize = 512 * 1024;
+
+/// The maximum durable user turn content size in bytes.
+///
+/// A turn is admitted with a bound so the session projection that carries its
+/// pending rows can never be permanently larger than one transport envelope.
+const MAX_TURN_CONTENT_BYTES: usize = 512 * 1024;
+
+/// The maximum encoded pending-turn projection content kept in one session
+/// projection, in bytes.
+///
+/// It equals the admission bound, so the newest queued turn always fits and a
+/// projection always reports at least one pending turn; older turns beyond it
+/// are reported through the projection's omitted count instead of being
+/// materialised.
+const MAX_PENDING_TURN_PROJECTION_BYTES: usize = MAX_TURN_CONTENT_BYTES;
 
 /// The terminal outcome recorded for one local tool result.
 ///
@@ -452,9 +467,10 @@ pub trait StorageRepositoryDto {
     ///
     /// # Errors
     ///
-    /// Returns a validation error when content is blank, a validation,
-    /// not-found, or conflict error when the turn cannot be accepted for its
-    /// session, or an unavailable error when storage fails.
+    /// Returns a validation error when content is blank or exceeds
+    /// [`MAX_TURN_CONTENT_BYTES`], a validation, not-found, or conflict error
+    /// when the turn cannot be accepted for its session, or an unavailable error
+    /// when storage fails.
     fn accept_user_turn(
         &self,
         session_id: SessionId,
@@ -466,6 +482,10 @@ pub trait StorageRepositoryDto {
     ) -> DtoResult<AcceptedTurnOutcomeDto>;
 
     /// Removes a not-yet-seen pending turn and returns its committed projection.
+    ///
+    /// `occurred_at` is intentionally unrecorded: a removed pending turn keeps
+    /// no durable removal time, and the caller-supplied value never enters a
+    /// stored column.
     ///
     /// # Errors
     ///
@@ -509,6 +529,10 @@ pub trait StorageRepositoryDto {
 
     /// Commits one validated terminal run outcome with its usage, finish, and
     /// error evidence.
+    ///
+    /// The outcome is written once: repeating the exact committed outcome is
+    /// idempotent, while a different terminal outcome for the same run is a
+    /// typed conflict instead of a silent overwrite of the recorded evidence.
     ///
     /// # Errors
     ///
@@ -647,6 +671,9 @@ pub trait StorageRepositoryDto {
 
     /// Marks persisted unfinished runs interrupted at the supplied time.
     ///
+    /// Every unfinished run is marked in one transaction, and the supplied time
+    /// becomes each recovered run's finish time.
+    ///
     /// # Errors
     ///
     /// Returns an unavailable error when recovery changes cannot be durably
@@ -655,6 +682,28 @@ pub trait StorageRepositoryDto {
         &self,
         recovered_at: TimestampDto,
     ) -> DtoResult<Vec<RunProjectionDto>>;
+
+    /// Loads the current durable projection of one session together with its
+    /// newest committed transcript rows in one read.
+    ///
+    /// The default body composes [`Self::load_session_projection`] and
+    /// [`Self::load_recent_messages`]; a backend that can serve both from one
+    /// committed read overrides it. Either way the returned projection and
+    /// transcript rows are the committed state observed by that read.
+    ///
+    /// # Errors
+    ///
+    /// Returns the not-found, validation, or unavailable error of the
+    /// underlying projection and transcript reads.
+    fn load_session_snapshot(
+        &self,
+        session_id: SessionId,
+        message_limit: u32,
+    ) -> DtoResult<SessionSnapshotDto> {
+        let projection = self.load_session_projection(session_id)?;
+        let messages = self.load_recent_messages(session_id, message_limit)?;
+        SessionSnapshotDto::with_projection(session_id, projection, messages)
+    }
 
     /// Records an already credential-free configuration revision snapshot.
     ///

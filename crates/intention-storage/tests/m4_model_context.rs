@@ -248,6 +248,29 @@ fn append(
         .expect("fixture transcript row commits");
 }
 
+#[test]
+fn starting_run_context_reads_without_taking_a_write_lock() {
+    let (directory, repository) = repository();
+    let session_id = create_session(&repository, "read-lock");
+    let run_id = start_run(&repository, session_id, "user", "current-model", 2);
+
+    // Another connection holds the database's write lock. The pure read takes
+    // no transaction of its own, so it still succeeds; an immediate transaction
+    // would have taken a RESERVED lock and surfaced as `storage_busy`.
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for the lock fixture");
+    connection
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("the write lock is taken");
+    let context = repository
+        .load_starting_run_model_context(session_id, run_id)
+        .expect("the context read takes no write lock");
+    assert_eq!(context.run_id(), run_id);
+    connection
+        .execute_batch("ROLLBACK")
+        .expect("the write lock releases");
+}
+
 fn snapshot(model: &str) -> ConfigSnapshotDto {
     let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
         format!(

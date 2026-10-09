@@ -960,15 +960,20 @@ fn finish_run_commits_terminal_outcome_and_is_idempotent() {
     assert_eq!(finished.status(), RunStatusDto::Completed);
     assert_eq!(finished.run_id(), run);
 
-    // The same terminal outcome replays idempotently and changes nothing.
+    // The identical terminal outcome replays idempotently and changes nothing.
     let replayed = store
         .finish_run(
             session,
             run,
-            outcome(RunStatusDto::Completed, None, None, None),
+            outcome(
+                RunStatusDto::Completed,
+                Some(UsageDto::reported(2, 3, 5).expect("fixture usage is consistent")),
+                Some(FinishReasonDto::Stop),
+                None,
+            ),
             time(5),
         )
-        .expect("repeated terminal outcome is idempotent");
+        .expect("the identical terminal outcome is idempotent");
     assert_eq!(replayed, finished);
     assert_eq!(
         store
@@ -1016,8 +1021,8 @@ fn finish_run_commits_terminal_outcome_and_is_idempotent() {
 }
 
 #[test]
-fn recovery_marks_every_unfinished_run_in_its_own_transaction() {
-    let (_directory, store) = repository();
+fn recovery_marks_every_unfinished_run_interrupted_and_stamps_its_finish_time() {
+    let (directory, store) = repository();
     let first_session = create(&store);
     let second_session = create(&store);
     let first_run = RunId::new();
@@ -1105,6 +1110,41 @@ fn recovery_marks_every_unfinished_run_in_its_own_transaction() {
             .expect("a second recovery commits")
             .is_empty(),
         "recovery is idempotent once every run is terminal"
+    );
+
+    // One transaction marked every unfinished run and stamped its finish time;
+    // the already-terminal run keeps the time its own finish recorded.
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for inspection");
+    let mut statement = connection
+        .prepare("SELECT status, finished_at FROM runs ORDER BY id")
+        .expect("run evidence prepares");
+    let evidence = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+        })
+        .expect("run evidence reads")
+        .map(|row| row.expect("run evidence row reads"))
+        .collect::<Vec<_>>();
+    drop(statement);
+    let interrupted = evidence
+        .iter()
+        .filter(|(status, _)| status == "interrupted")
+        .map(|(_, finished)| *finished)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        interrupted,
+        vec![Some(5), Some(5)],
+        "every recovered run carries the recovery time as its finish time"
+    );
+    assert_eq!(
+        evidence
+            .iter()
+            .filter(|(status, _)| status == "completed")
+            .map(|(_, finished)| *finished)
+            .collect::<Vec<_>>(),
+        vec![Some(4)],
+        "an already-terminal run keeps its own finish time"
     );
 }
 
@@ -1333,4 +1373,483 @@ fn undeclared_terminal_successors_are_rejected() {
             time(4),
         )
         .expect("run completes");
+}
+
+#[test]
+fn messages_transcript_indexes_and_stamp_are_current() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    let store = open(&directory);
+    let session = create(&store);
+    let _ = accept(
+        &store,
+        session,
+        IdempotencyKey::new(),
+        RunId::new(),
+        "indexed",
+    );
+    drop(store);
+
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for inspection");
+    let stamp: i32 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("the schema stamp reads");
+    assert_eq!(stamp, 2, "the created database carries the current stamp");
+    let mut statement = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' ORDER BY name")
+        .expect("index catalogue prepares");
+    let indexes = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("index catalogue reads")
+        .map(|row| row.expect("index name reads"))
+        .collect::<Vec<_>>();
+    drop(statement);
+    for expected in [
+        "messages_session_id_id",
+        "messages_session_run_id_id",
+        "one_active_run_per_session",
+    ] {
+        assert!(
+            indexes.iter().any(|name| name == expected),
+            "the current schema declares {expected}: {indexes:?}"
+        );
+    }
+    drop(connection);
+
+    // A database carrying the previous stamp is discarded once and recreated
+    // with the current stamp and its indexes.
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for stamp mutation");
+    connection
+        .execute_batch(
+            "CREATE TABLE legacy_messages (id INTEGER PRIMARY KEY);
+             PRAGMA user_version = 1;",
+        )
+        .expect("the previous stamp applies");
+    drop(connection);
+    let recreated = open(&directory);
+    assert_eq!(
+        recreated
+            .load_session_projection(session)
+            .expect_err("the discarded database no longer holds its rows")
+            .code(),
+        "storage_record_not_found"
+    );
+    drop(recreated);
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("recreated database reopens for inspection");
+    let legacy: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name='legacy_messages'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("legacy table lookup runs");
+    assert_eq!(legacy, 0, "the discarded database's old objects are gone");
+    let stamp: i32 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("the recreated stamp reads");
+    assert_eq!(stamp, 2, "the recreated database carries the current stamp");
+}
+
+#[test]
+fn unreadable_database_image_and_its_journal_are_discarded() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    std::fs::write(
+        directory.path().join("storage.sqlite"),
+        "not a database image",
+    )
+    .expect("partial image writes");
+    std::fs::write(
+        directory.path().join("storage.sqlite-journal"),
+        "stale journal",
+    )
+    .expect("stale journal writes");
+
+    // A non-empty file that is not a database image does not carry the current
+    // stamp, so it is discarded instead of failing the whole open.
+    let store = open(&directory);
+    let session = create(&store);
+    drop(store);
+    assert!(
+        !directory.path().join("storage.sqlite-journal").exists(),
+        "the discard removes the stale rollback journal with its database"
+    );
+    assert_eq!(
+        reopen(&directory)
+            .load_session_projection(session)
+            .expect("the recreated database serves its session")
+            .session_id(),
+        session
+    );
+}
+
+#[test]
+fn pending_turns_projection_keeps_the_newest_turns_and_reports_omitted() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let active_run = RunId::new();
+    let (run, _) = started(accept(
+        &store,
+        session,
+        IdempotencyKey::new(),
+        active_run,
+        "active",
+    ));
+    let large = "x".repeat(300 * 1024);
+    let _ = pending(accept(
+        &store,
+        session,
+        IdempotencyKey::new(),
+        RunId::new(),
+        &large,
+    ));
+    let second_large = pending(accept(
+        &store,
+        session,
+        IdempotencyKey::new(),
+        RunId::new(),
+        &large,
+    ));
+    let newest = pending(accept(
+        &store,
+        session,
+        IdempotencyKey::new(),
+        RunId::new(),
+        "newest",
+    ));
+
+    let projection = store
+        .load_session_projection(session)
+        .expect("session projection loads");
+    assert_eq!(
+        projection.pending_turns_omitted(),
+        1,
+        "the bounded projection reports the turn it left out"
+    );
+    assert_eq!(projection.pending_turns().len(), 2);
+    assert_eq!(
+        projection.pending_turns()[0].turn_id(),
+        second_large.turn_id(),
+        "the newest turns that fit are kept in insertion order"
+    );
+    assert_eq!(projection.pending_turns()[1].turn_id(), newest.turn_id());
+    assert_eq!(projection.pending_turns()[1].content(), "newest");
+
+    // The durable queue is untouched: the admission read still joins every
+    // pending turn, including the one the projection left out.
+    let consumed = store
+        .consume_pending_user_turns(session, run.run_id(), time(4))
+        .expect("every pending turn joins the run");
+    assert_eq!(consumed.len(), 3);
+    assert_eq!(consumed[0].text().len(), large.len());
+}
+
+#[test]
+fn finish_run_rejects_a_different_terminal_outcome_for_the_same_status() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "run");
+    store
+        .transition_run(session, run, RunStatusDto::Running, time(3))
+        .expect("run starts");
+    let finished = store
+        .finish_run(
+            session,
+            run,
+            outcome(
+                RunStatusDto::Completed,
+                Some(UsageDto::reported(2, 3, 5).expect("fixture usage is consistent")),
+                Some(FinishReasonDto::Stop),
+                None,
+            ),
+            time(4),
+        )
+        .expect("run completes");
+
+    // A repeated commit with different evidence would silently discard the
+    // recorded outcome, so it is a typed conflict.
+    let conflict = store
+        .finish_run(
+            session,
+            run,
+            outcome(RunStatusDto::Completed, None, None, None),
+            time(5),
+        )
+        .expect_err("a different terminal outcome for the same status conflicts");
+    assert_eq!(conflict.code(), "run_outcome_conflict");
+    assert_eq!(conflict.category(), ErrorCategoryDto::Conflict);
+    assert_eq!(conflict.retry(), ErrorRetryDto::Never);
+    assert_eq!(
+        store
+            .finish_run(
+                session,
+                run,
+                outcome(
+                    RunStatusDto::Completed,
+                    Some(UsageDto::reported(2, 3, 5).expect("fixture usage is consistent")),
+                    Some(FinishReasonDto::Stop),
+                    None,
+                ),
+                time(6),
+            )
+            .expect("the recorded outcome still replays and decodes"),
+        finished
+    );
+
+    // The same rule covers a failed run's error evidence.
+    let failed_run = RunId::new();
+    let _ = accept(
+        &store,
+        session,
+        IdempotencyKey::new(),
+        failed_run,
+        "failing",
+    );
+    store
+        .transition_run(session, failed_run, RunStatusDto::Running, time(7))
+        .expect("failing run starts");
+    store
+        .finish_run(
+            session,
+            failed_run,
+            outcome(
+                RunStatusDto::Failed,
+                None,
+                None,
+                Some(("provider_failed", "safe failure")),
+            ),
+            time(8),
+        )
+        .expect("failed run commits");
+    assert_eq!(
+        store
+            .finish_run(
+                session,
+                failed_run,
+                outcome(
+                    RunStatusDto::Failed,
+                    None,
+                    None,
+                    Some(("provider_failed", "corrected failure")),
+                ),
+                time(9),
+            )
+            .expect_err("different error evidence conflicts")
+            .code(),
+        "run_outcome_conflict"
+    );
+}
+
+#[test]
+fn terminal_runs_reject_pending_turns_messages_and_tool_results() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "active");
+    let queued = pending(accept(
+        &store,
+        session,
+        IdempotencyKey::new(),
+        RunId::new(),
+        "queued",
+    ));
+    store
+        .transition_run(session, run, RunStatusDto::Running, time(3))
+        .expect("run starts");
+    store
+        .finish_run(
+            session,
+            run,
+            outcome(
+                RunStatusDto::Completed,
+                Some(UsageDto::NotReported),
+                Some(FinishReasonDto::Stop),
+                None,
+            ),
+            time(4),
+        )
+        .expect("run completes");
+
+    let terminal = store
+        .consume_pending_user_turns(session, run, time(5))
+        .expect_err("a terminal run joins no pending turn");
+    assert_eq!(terminal.code(), "run_already_terminal");
+    assert_eq!(terminal.category(), ErrorCategoryDto::Conflict);
+    assert_eq!(terminal.retry(), ErrorRetryDto::Never);
+    assert_eq!(
+        store
+            .append_message(
+                MessageProjectionDto::new(
+                    session,
+                    Some(run),
+                    MessageKindDto::Assistant,
+                    "late answer",
+                    None,
+                    None,
+                    None,
+                )
+                .expect("late row is valid"),
+                time(5),
+            )
+            .expect_err("a terminal run accepts no transcript row")
+            .code(),
+        "run_already_terminal"
+    );
+    let call_id = ToolCallId::new();
+    let evidence = ToolResultEvidenceDto::new(
+        session,
+        run,
+        call_id,
+        "read",
+        ToolResultStatusDto::Completed,
+        r#"{"result":"read"}"#,
+        Vec::new(),
+        time(5),
+    )
+    .expect("fixture evidence is valid");
+    assert_eq!(
+        store
+            .write_tool_result(
+                evidence,
+                MessageProjectionDto::new(
+                    session,
+                    Some(run),
+                    MessageKindDto::ToolResult,
+                    r#"{"result":"read"}"#,
+                    None,
+                    Some(call_id),
+                    Some("read".to_owned()),
+                )
+                .expect("answering row is valid"),
+            )
+            .expect_err("a terminal run accepts no tool result")
+            .code(),
+        "run_already_terminal"
+    );
+
+    // Nothing the rejected writes addressed changed.
+    let projection = store
+        .load_session_projection(session)
+        .expect("session projection loads");
+    assert_eq!(projection.pending_turns(), std::slice::from_ref(&queued));
+    assert_eq!(
+        store
+            .load_run_messages(session, run, 10)
+            .expect("run transcript loads")
+            .len(),
+        1,
+        "the terminal run keeps only its starting turn"
+    );
+    assert_eq!(
+        store
+            .load_tool_result(session, run, call_id)
+            .expect_err("no tool result was written")
+            .code(),
+        "tool_result_not_found"
+    );
+}
+
+#[test]
+fn session_snapshot_reads_projection_and_transcript_in_one_call() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "start");
+    let _ = append(
+        &store,
+        MessageProjectionDto::new(
+            session,
+            Some(run),
+            MessageKindDto::Assistant,
+            "answer",
+            None,
+            None,
+            None,
+        )
+        .expect("assistant row is valid"),
+        3,
+    );
+
+    let snapshot = store
+        .load_session_snapshot(session, 10)
+        .expect("session snapshot loads");
+    assert_eq!(snapshot.session_id(), session);
+    assert_eq!(
+        snapshot.projection(),
+        &store
+            .load_session_projection(session)
+            .expect("projection loads")
+    );
+    assert_eq!(
+        snapshot
+            .messages()
+            .iter()
+            .map(MessageProjectionDto::text)
+            .collect::<Vec<_>>(),
+        vec!["start", "answer"]
+    );
+    assert_eq!(
+        store
+            .load_session_snapshot(session, 2)
+            .expect("a bounded snapshot loads")
+            .messages()
+            .iter()
+            .map(MessageProjectionDto::text)
+            .collect::<Vec<_>>(),
+        vec!["start", "answer"]
+    );
+    assert_eq!(
+        store
+            .load_session_snapshot(session, 0)
+            .expect_err("a zero limit is invalid")
+            .code(),
+        "invalid_message_limit"
+    );
+    assert_eq!(
+        store
+            .load_session_snapshot(SessionId::new(), 1)
+            .expect_err("an unknown session is hidden")
+            .code(),
+        "storage_record_not_found"
+    );
+}
+
+#[test]
+fn accept_user_turn_rejects_content_over_the_durable_turn_bound() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let bound = 512 * 1024;
+    let error = store
+        .accept_user_turn(
+            session,
+            IdempotencyKey::new(),
+            &"x".repeat(bound + 1),
+            RunId::new(),
+            snapshot(),
+            time(2),
+        )
+        .expect_err("content over the durable bound is rejected");
+    assert_eq!(error.code(), "invalid_turn_content");
+    assert_eq!(error.category(), ErrorCategoryDto::Validation);
+    // Caller-fixable input carries the same retry class as the sibling blank
+    // content rejection: the caller must send a smaller turn, not retry it.
+    assert_eq!(error.retry(), ErrorRetryDto::Manual);
+
+    // Exactly the bound is admitted and starts the run.
+    let (run, message) = started(
+        store
+            .accept_user_turn(
+                session,
+                IdempotencyKey::new(),
+                &"y".repeat(bound),
+                RunId::new(),
+                snapshot(),
+                time(3),
+            )
+            .expect("content at the bound is admitted"),
+    );
+    assert_eq!(message.run_id(), Some(run.run_id()));
+    assert_eq!(message.text().len(), bound);
 }

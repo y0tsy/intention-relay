@@ -17,18 +17,20 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use crate::{
-    AcceptedTurnOutcomeDto, RunOutcomeDto, StartingRunModelContextDto, StorageRepositoryDto,
-    ToolResultEvidenceDto, ToolResultMetadataEntryDto, ToolResultStatusDto,
+    AcceptedTurnOutcomeDto, MAX_PENDING_TURN_PROJECTION_BYTES, MAX_TURN_CONTENT_BYTES,
+    RunOutcomeDto, StartingRunModelContextDto, StorageRepositoryDto, ToolResultEvidenceDto,
+    ToolResultMetadataEntryDto, ToolResultStatusDto,
 };
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorCategoryDto, ErrorDto,
     ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId, RemoveTurnCommandDto, RunId,
-    SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
+    SessionId, SessionSnapshotDto, TimestampDto, ToolCallId, TurnId, UsageDto, WorkspaceId,
 };
 use intention_proto::{
     MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, RunModeDto, RunProjectionDto,
-    RunStatusDto, SessionProjectionDto, WorkspaceRootDto, validate_run_status_transition,
+    RunStatusDto, SessionProjectionDto, WorkspaceRootDto, run_status_is_terminal,
+    validate_run_status_transition,
 };
 use sqlite::OptionalExtension;
 
@@ -119,6 +121,8 @@ CREATE TABLE IF NOT EXISTS configuration_revisions (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_session ON runs(session_id)
   WHERE status NOT IN ('completed','failed','interrupted');
+CREATE INDEX IF NOT EXISTS messages_session_id_id ON messages(session_id, id);
+CREATE INDEX IF NOT EXISTS messages_session_run_id_id ON messages(session_id, run_id, id);
 ";
 
 /// The single schema stamp of the current storage schema, written to the
@@ -128,15 +132,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_session ON runs(session_id)
 /// column changes: the next open discards the whole database file and its
 /// rollback journal and recreates the current schema from scratch. That discard
 /// is the only version gate; there is no migration path.
-const SCHEMA_STAMP: i32 = 1;
+const SCHEMA_STAMP: i32 = 2;
 
 /// Returns whether the open database already carries the current schema stamp.
 /// A database written under any other stamp is discarded by its opener.
 fn carries_current_schema_stamp(connection: &sqlite::Connection) -> DtoResult<bool> {
-    let stamp: i32 = connection
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(storage_error)?;
-    Ok(stamp == SCHEMA_STAMP)
+    match connection.query_row("PRAGMA user_version", [], |row| row.get::<_, i32>(0)) {
+        Ok(stamp) => Ok(stamp == SCHEMA_STAMP),
+        // A file that cannot be read as a database at all is a partial write or
+        // a truncated image: it does not carry the current stamp either, so it
+        // takes the same discard path instead of failing the whole open.
+        Err(sqlite::Error::SqliteFailure(failure, _))
+            if matches!(
+                failure.code,
+                sqlite::ErrorCode::NotADatabase | sqlite::ErrorCode::DatabaseCorrupt
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(storage_error(error)),
+    }
 }
 
 /// Recreates the database file at a location that does not carry the current
@@ -151,7 +166,9 @@ fn recreate_stale_database(location: &str) -> DtoResult<()> {
     if current {
         return Ok(());
     }
-    for suffix in ["", "-journal"] {
+    // The rollback journal goes first: a crash between the two removals must
+    // never leave a journal whose database image no longer exists.
+    for suffix in ["-journal", ""] {
         match remove_file(format!("{location}{suffix}")) {
             Ok(()) => {}
             Err(error) if error.kind() == ErrorKind::NotFound => {}
@@ -412,7 +429,7 @@ impl SqliteStorageRepository {
                 run_projection(session_id, &run, &turn, &status, &revision)
             })
             .transpose()?;
-        let pending_turns = pending_turns(connection, session_id)?;
+        let (pending_turns, pending_turns_omitted) = bounded_pending_turns(connection, session_id)?;
         SessionProjectionDto::new(
             ProjectId::parse(&session.0).map_err(codec_error)?,
             session_id,
@@ -423,6 +440,7 @@ impl SqliteStorageRepository {
             active,
             pending_turns,
         )
+        .map(|projection| projection.with_pending_turns_omitted(pending_turns_omitted))
     }
 
     /// Inserts one committed transcript row with its external commit time.
@@ -796,6 +814,12 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 "user turn content must not be empty",
             ));
         }
+        if content.len() > MAX_TURN_CONTENT_BYTES {
+            return Err(ErrorDto::validation(
+                "invalid_turn_content",
+                "user turn content exceeds the durable canonical size limit",
+            ));
+        }
         let config_revision_id = config_snapshot.revision_id();
         let occurred_at = occurred_at.unix_seconds();
         self.with_immediate_transaction(|transaction| {
@@ -819,7 +843,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             }
             Self::store_config(transaction, &config_snapshot)?;
             if Self::session_has_active_run(transaction, session_id)? {
-                return Self::queue_pending_turn(
+                let queued = Self::queue_pending_turn(
                     transaction,
                     session_id,
                     idempotency_key,
@@ -827,7 +851,9 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     proposed_run_id,
                     config_revision_id,
                     occurred_at,
-                );
+                )?;
+                self.fault(FaultPoint::TurnAcceptance)?;
+                return Ok(queued);
             }
             // An idle session either starts the oldest pending message (its own
             // stored run identity, configuration revision, and content) or
@@ -850,6 +876,9 @@ impl StorageRepositoryDto for SqliteStorageRepository {
     fn remove_turn(
         &self,
         command: RemoveTurnCommandDto,
+        // A removed pending turn keeps no durable removal time, so the supplied
+        // time is intentionally unrecorded; it stays in the contract so every
+        // state-changing method carries one uniform time parameter.
         _occurred_at: TimestampDto,
     ) -> DtoResult<PendingTurnProjectionDto> {
         let session_id = command.session_id();
@@ -881,7 +910,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         occurred_at: TimestampDto,
     ) -> DtoResult<Vec<MessageProjectionDto>> {
         self.with_immediate_transaction(|transaction| {
-            load_scoped_run(transaction, session_id, run_id)?;
+            require_active_run(transaction, session_id, run_id)?;
             let pending = pending_turns(transaction, session_id)?;
             let occurred_at = occurred_at.unix_seconds();
             let mut messages = Vec::with_capacity(pending.len());
@@ -913,15 +942,24 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         session_id: SessionId,
         run_id: RunId,
         status: RunStatusDto,
-        _occurred_at: TimestampDto,
+        occurred_at: TimestampDto,
     ) -> DtoResult<RunProjectionDto> {
         self.with_immediate_transaction(|transaction| {
             let current = load_scoped_run(transaction, session_id, run_id)?;
             validate_run_status_transition(current.status(), status)?;
+            // A terminal transition is the run's last write, so it records the
+            // supplied time as the finish time; a non-terminal transition only
+            // re-writes the NULL it never set.
+            let finished_at = run_status_is_terminal(status).then(|| occurred_at.unix_seconds());
             transaction
                 .execute(
-                    "UPDATE runs SET status=?3 WHERE session_id=?1 AND id=?2",
-                    sqlite::params![session_id.to_string(), run_id.to_string(), status.as_str()],
+                    "UPDATE runs SET status=?3, finished_at=?4 WHERE session_id=?1 AND id=?2",
+                    sqlite::params![
+                        session_id.to_string(),
+                        run_id.to_string(),
+                        status.as_str(),
+                        finished_at
+                    ],
                 )
                 .map_err(storage_error)?;
             Ok(RunProjectionDto::new(
@@ -952,9 +990,13 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 current.config_revision_id(),
             );
             if current.status() == status {
-                // The run already holds this exact terminal outcome; the
-                // repeated commit is accepted and changes nothing.
-                return Ok(run);
+                // The run already holds a terminal outcome. Repeating the exact
+                // recorded outcome is idempotent; a different outcome would
+                // silently discard its evidence, so it is a typed conflict.
+                if load_run_outcome(transaction, session_id, run_id)? == outcome {
+                    return Ok(run);
+                }
+                return Err(run_outcome_conflict());
             }
             validate_run_status_transition(current.status(), status)?;
             let usage_json = outcome
@@ -992,7 +1034,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         self.with_immediate_transaction(|transaction| {
             Self::require_session(transaction, session_id)?;
             if let Some(run_id) = message.run_id() {
-                load_scoped_run(transaction, session_id, run_id)?;
+                require_active_run(transaction, session_id, run_id)?;
             }
             Self::insert_message(transaction, &message, occurred_at.unix_seconds())?;
             self.fault(FaultPoint::Message)?;
@@ -1021,7 +1063,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         let call_id = evidence.call_id();
         self.with_immediate_transaction(|transaction| {
             Self::require_session(transaction, session_id)?;
-            load_scoped_run(transaction, session_id, run_id)?;
+            require_active_run(transaction, session_id, run_id)?;
             let duplicate = transaction
                 .query_row(
                     "SELECT 1 FROM tool_results WHERE tool_call_id=?1",
@@ -1139,7 +1181,12 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 other => storage_error(other),
             })?;
         drop(connection);
-        serde_json::from_str(&snapshot).map_err(codec_error)
+        let snapshot: ConfigSnapshotDto = serde_json::from_str(&snapshot).map_err(codec_error)?;
+        // The read returns only a snapshot the storage gate would accept again:
+        // a stored selection that is no longer persistable is a decode failure,
+        // not a value the caller can act on.
+        snapshot.validate_for_persistence().map_err(codec_error)?;
+        Ok(snapshot)
     }
 
     fn load_starting_run_model_context(
@@ -1147,44 +1194,32 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         session_id: SessionId,
         run_id: RunId,
     ) -> DtoResult<StartingRunModelContextDto> {
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(sqlite::TransactionBehavior::Immediate)
-            .map_err(storage_error)?;
-        let context = (|| {
-            // An absent or cross-session run row is the same safe
-            // context-specific unavailability as a non-starting run; only a
-            // backend failure keeps its classified storage error.
-            let target = scoped_run_row(&transaction, session_id, run_id)?
-                .ok_or_else(run_model_context_unavailable)?;
-            let target = run_projection(
-                session_id,
-                &run_id.to_string(),
-                &target.0,
-                &target.1,
-                &target.2,
-            )
+        // A read takes no transaction: the connection guard already serialises
+        // every operation on this connection, and an immediate transaction
+        // would only add a RESERVED lock for no isolation benefit.
+        let connection = self.connection()?;
+        // An absent or cross-session run row is the same safe context-specific
+        // unavailability as a non-starting run; only a backend failure keeps
+        // its classified storage error.
+        let target = scoped_run_row(&connection, session_id, run_id)?
+            .ok_or_else(run_model_context_unavailable)?;
+        let target = run_projection(
+            session_id,
+            &run_id.to_string(),
+            &target.0,
+            &target.1,
+            &target.2,
+        )
+        .map_err(|_| run_model_context_unavailable())?;
+        if target.status() != RunStatusDto::Starting {
+            return Err(run_model_context_unavailable());
+        }
+        let safe_config = load_config_snapshot(&connection, target.config_revision_id())?;
+        let messages = starting_context_messages(&connection, session_id, run_id)?;
+        let context = StartingRunModelContextDto::new(session_id, run_id, safe_config, messages)
             .map_err(|_| run_model_context_unavailable())?;
-            if target.status() != RunStatusDto::Starting {
-                return Err(run_model_context_unavailable());
-            }
-            let safe_config = load_config_snapshot(&transaction, target.config_revision_id())?;
-            let messages = starting_context_messages(&transaction, session_id, run_id)?;
-            StartingRunModelContextDto::new(session_id, run_id, safe_config, messages)
-                .map_err(|_| run_model_context_unavailable())
-        })();
-        let result = match context {
-            Ok(context) => transaction
-                .commit()
-                .map_err(storage_error)
-                .map(|()| context),
-            Err(error) => {
-                let _ = transaction.rollback();
-                Err(error)
-            }
-        };
         drop(connection);
-        result
+        Ok(context)
     }
 
     fn load_run_projection(
@@ -1210,30 +1245,24 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         session_id: SessionId,
         limit: u32,
     ) -> DtoResult<Vec<MessageProjectionDto>> {
-        validate_message_limit(limit)?;
         let connection = self.connection()?;
-        Self::require_session(&connection, session_id)?;
-        let mut statement = connection
-            .prepare(&format!(
-                "SELECT {MESSAGE_COLUMNS} FROM messages WHERE session_id=?1 ORDER BY id DESC LIMIT ?2"
-            ))
-            .map_err(storage_error)?;
-        let rows = statement
-            .query_map(
-                sqlite::params![session_id.to_string(), i64::from(limit)],
-                raw_message_row,
-            )
-            .map_err(storage_error)?;
-        let mut messages = rows
-            .map(|row| {
-                let row = row.map_err(storage_error)?;
-                decode_message(row)
-            })
-            .collect::<DtoResult<Vec<_>>>()?;
-        messages.reverse();
-        drop(statement);
+        let messages = recent_messages(&connection, session_id, limit)?;
         drop(connection);
         Ok(messages)
+    }
+
+    /// Loads the session projection and its newest transcript rows from one
+    /// committed read instead of two independent reads.
+    fn load_session_snapshot(
+        &self,
+        session_id: SessionId,
+        message_limit: u32,
+    ) -> DtoResult<SessionSnapshotDto> {
+        let connection = self.connection()?;
+        let projection = Self::projection_of(&connection, session_id)?;
+        let messages = recent_messages(&connection, session_id, message_limit)?;
+        drop(connection);
+        SessionSnapshotDto::with_projection(session_id, projection, messages)
     }
 
     fn load_run_messages(
@@ -1273,36 +1302,54 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         &self,
         recovered_at: TimestampDto,
     ) -> DtoResult<Vec<RunProjectionDto>> {
-        let unfinished = {
-            let connection = self.connection()?;
-            let mut statement = connection
+        let recovered_at = recovered_at.unix_seconds();
+        self.with_immediate_transaction(|transaction| {
+            let mut statement = transaction
                 .prepare(&format!(
-                    "SELECT session_id, id FROM runs WHERE status NOT IN ({TERMINAL_STATUSES}) \
-                     ORDER BY session_id, id"
+                    "SELECT session_id, id, turn_id, config_revision_id, status FROM runs \
+                     WHERE status NOT IN ({TERMINAL_STATUSES}) ORDER BY session_id, id"
                 ))
                 .map_err(storage_error)?;
             let rows = statement
                 .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
                 })
                 .map_err(storage_error)?;
             let unfinished = rows
                 .map(|row| row.map_err(storage_error))
                 .collect::<DtoResult<Vec<_>>>()?;
             drop(statement);
-            drop(connection);
-            unfinished
-        };
-        let mut recovered = Vec::with_capacity(unfinished.len());
-        for (session, run) in unfinished {
-            recovered.push(self.transition_run(
-                SessionId::parse(&session).map_err(codec_error)?,
-                RunId::parse(&run).map_err(codec_error)?,
-                RunStatusDto::Interrupted,
-                recovered_at,
-            )?);
-        }
-        Ok(recovered)
+            let mut recovered = Vec::with_capacity(unfinished.len());
+            for (session, run, turn, revision, status) in unfinished {
+                let current = RunStatusDto::parse(&status)?;
+                validate_run_status_transition(current, RunStatusDto::Interrupted)?;
+                recovered.push(RunProjectionDto::new(
+                    SessionId::parse(&session).map_err(codec_error)?,
+                    RunId::parse(&run).map_err(codec_error)?,
+                    TurnId::parse(&turn).map_err(codec_error)?,
+                    RunStatusDto::Interrupted,
+                    ConfigRevisionId::parse(&revision).map_err(codec_error)?,
+                ));
+            }
+            // One transaction marks every unfinished run, so a crash mid-recovery
+            // leaves no partially recovered set.
+            transaction
+                .execute(
+                    &format!(
+                        "UPDATE runs SET status='interrupted', finished_at=?1 \
+                         WHERE status NOT IN ({TERMINAL_STATUSES})"
+                    ),
+                    [recovered_at],
+                )
+                .map_err(storage_error)?;
+            Ok(recovered)
+        })
     }
 
     fn accept_configuration_revision(&self, snapshot: ConfigSnapshotDto) -> DtoResult<()> {
@@ -1392,6 +1439,65 @@ fn load_scoped_run(
     run_projection(session_id, &run_id.to_string(), &row.0, &row.1, &row.2)
 }
 
+/// Loads one scoped durable run that still accepts further writes.
+///
+/// A terminal run accepts no further transcript row, pending-turn join, or tool
+/// result, so a write that addresses one is a typed conflict instead of an
+/// append to a closed run.
+fn require_active_run(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+    run_id: RunId,
+) -> DtoResult<RunProjectionDto> {
+    let run = load_scoped_run(connection, session_id, run_id)?;
+    if run_status_is_terminal(run.status()) {
+        return Err(run_already_terminal());
+    }
+    Ok(run)
+}
+
+/// Loads the committed terminal outcome of one run for an idempotent replay.
+///
+/// The whole outcome is decoded, so a replay is compared against the recorded
+/// evidence and not against its status alone.
+fn load_run_outcome(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+    run_id: RunId,
+) -> DtoResult<RunOutcomeDto> {
+    let (status, usage_json, finish_reason, error_code, error_message) = connection
+        .query_row(
+            "SELECT status, usage_json, finish_reason, error_code, error_message FROM runs \
+             WHERE session_id=?1 AND id=?2",
+            sqlite::params![session_id.to_string(), run_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            },
+        )
+        .map_err(storage_error)?;
+    RunOutcomeDto::new(
+        RunStatusDto::parse(&status)?,
+        usage_json
+            .as_deref()
+            .map(serde_json::from_str::<UsageDto>)
+            .transpose()
+            .map_err(codec_error)?,
+        finish_reason
+            .as_deref()
+            .map(parse_finish_reason)
+            .transpose()?,
+        error_code,
+        error_message,
+    )
+    .map_err(|_| codec_error("the committed run outcome is not a declared terminal outcome"))
+}
+
 /// Loads the committed user message that started one run.
 fn first_user_message(
     connection: &sqlite::Connection,
@@ -1456,6 +1562,40 @@ fn starting_context_messages(
     .collect()
 }
 
+/// Loads the most recent committed transcript rows of one session in insertion
+/// order.
+///
+/// The session must exist, and the limit must be able to select a row: both are
+/// the read's own preconditions, shared by every caller that reads the session
+/// transcript.
+fn recent_messages(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+    limit: u32,
+) -> DtoResult<Vec<MessageProjectionDto>> {
+    validate_message_limit(limit)?;
+    SqliteStorageRepository::require_session(connection, session_id)?;
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT {MESSAGE_COLUMNS} FROM messages WHERE session_id=?1 ORDER BY id DESC LIMIT ?2"
+        ))
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(
+            sqlite::params![session_id.to_string(), i64::from(limit)],
+            raw_message_row,
+        )
+        .map_err(storage_error)?;
+    let mut messages = rows
+        .map(|row| {
+            let row = row.map_err(storage_error)?;
+            decode_message(row)
+        })
+        .collect::<DtoResult<Vec<_>>>()?;
+    messages.reverse();
+    Ok(messages)
+}
+
 /// Loads the persisted credential-free revision of one configuration identity.
 fn load_config_snapshot(
     connection: &sqlite::Connection,
@@ -1479,6 +1619,9 @@ fn load_config_snapshot(
 }
 
 /// Returns every pending turn of one session in insertion order.
+///
+/// The admission path joins every queued turn, so this read is deliberately
+/// unbounded; the projection read uses [`bounded_pending_turns`] instead.
 fn pending_turns(
     connection: &sqlite::Connection,
     session_id: SessionId,
@@ -1502,6 +1645,54 @@ fn pending_turns(
         )
     })
     .collect()
+}
+
+/// Returns the newest pending turns of one session that fit the projection
+/// bound, in insertion order, together with the count of older turns left out.
+///
+/// The session projection is bounded so a large queued turn can never make the
+/// snapshot permanently unrepresentable; the durable rows are untouched, and
+/// the omitted count is what tells a reader that older turns are still queued.
+fn bounded_pending_turns(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+) -> DtoResult<(Vec<PendingTurnProjectionDto>, u32)> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, content FROM turns WHERE session_id=?1 AND state='pending' \
+             ORDER BY rowid DESC",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([session_id.to_string()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(storage_error)?;
+    let mut kept = Vec::new();
+    let mut omitted = 0_u32;
+    let mut budget = MAX_PENDING_TURN_PROJECTION_BYTES;
+    let mut full = false;
+    for row in rows {
+        let (turn, content) = row.map_err(storage_error)?;
+        if full {
+            omitted = omitted.saturating_add(1);
+            continue;
+        }
+        let turn = PendingTurnProjectionDto::new(
+            session_id,
+            TurnId::parse(&turn).map_err(codec_error)?,
+            content,
+        )?;
+        if turn.content().len() > budget {
+            full = true;
+            omitted = omitted.saturating_add(1);
+            continue;
+        }
+        budget -= turn.content().len();
+        kept.push(turn);
+    }
+    kept.reverse();
+    Ok((kept, omitted))
 }
 
 /// Returns the oldest pending turn of one session with its durable run selection.
@@ -1574,6 +1765,24 @@ const fn finish_reason_name(value: FinishReasonDto) -> &'static str {
     }
 }
 
+/// Parses the canonical durable string representation of a provider finish
+/// reason, the inverse of [`finish_reason_name`].
+///
+/// # Errors
+///
+/// Returns a decode failure when `value` is not a declared durable finish reason.
+fn parse_finish_reason(value: &str) -> DtoResult<FinishReasonDto> {
+    match value {
+        "stop" => Ok(FinishReasonDto::Stop),
+        "length" => Ok(FinishReasonDto::Length),
+        "tool_calls" => Ok(FinishReasonDto::ToolCalls),
+        "content_filter" => Ok(FinishReasonDto::ContentFilter),
+        "error" => Ok(FinishReasonDto::Error),
+        "unknown" => Ok(FinishReasonDto::Unknown),
+        _ => Err(codec_error("the durable finish reason is not declared")),
+    }
+}
+
 fn run_configuration_unavailable() -> ErrorDto {
     ErrorDto::new(
         "run_configuration_unavailable",
@@ -1625,6 +1834,20 @@ fn turn_identity_conflict() -> ErrorDto {
     conflict(
         "turn_identity_conflict",
         "the durable run identity is already bound to another turn",
+    )
+}
+
+fn run_outcome_conflict() -> ErrorDto {
+    conflict(
+        "run_outcome_conflict",
+        "the run already holds a different terminal outcome",
+    )
+}
+
+fn run_already_terminal() -> ErrorDto {
+    conflict(
+        "run_already_terminal",
+        "the run holds a terminal status and accepts no further writes",
     )
 }
 
@@ -1687,14 +1910,19 @@ fn storage_backend_unavailable() -> ErrorDto {
 ///   primary-key, or not-null rule that the repository pre-checks for every
 ///   expected case, so reaching here means durable state disagrees with the
 ///   request -> `storage_constraint_violation` (Conflict, Never).
-/// - type mismatch: a bound value does not fit its stored column ->
-///   `storage_type_mismatch` (Validation, Never).
+/// - type mismatch: a bound value does not fit its stored column, which is
+///   always a defect of this backend's own binding rather than caller input ->
+///   `storage_type_mismatch` (Internal, Never).
 /// - API misuse: the driver was driven incorrectly -> `storage_api_misuse`
 ///   (Internal, Never).
-/// - disk-full, I/O, permission, read-only, cannot-open, out-of-memory,
-///   interrupted, and every otherwise unclassified engine failure: the
-///   underlying resource is not usable now -> `storage_unavailable`
-///   (Unavailable, Delayed).
+/// - engine, schema, and limit codes that no retry can change
+///   (`internal`, `schema-changed`, `too-big`, `parameter-out-of-range`,
+///   `read-only`, `permission-denied`, `not-found`, `abort`,
+///   `interrupt`, `protocol`, `no-large-file-support`, `auth`): a permanent
+///   backend defect -> `storage_internal_fault` (Internal, Never).
+/// - disk-full, I/O, out-of-memory, cannot-open, and every otherwise
+///   unclassified engine failure: the underlying resource is not usable now ->
+///   `storage_unavailable` (Unavailable, Delayed).
 ///
 /// A missing expected row is `storage_record_not_found`, and any driver-side
 /// failure that is not a SQLite result (row decoding, parameter binding,
@@ -1738,7 +1966,7 @@ fn sqlite_code_error(code: sqlite::ErrorCode) -> ErrorDto {
         .unwrap_or_else(|_| unavailable()),
         sqlite::ErrorCode::TypeMismatch => ErrorDto::new(
             "storage_type_mismatch",
-            ErrorCategoryDto::Validation,
+            ErrorCategoryDto::Internal,
             "the durable write supplies a value that does not fit its stored type",
             ErrorRetryDto::Never,
             None,
@@ -1752,6 +1980,21 @@ fn sqlite_code_error(code: sqlite::ErrorCode) -> ErrorDto {
             None,
         )
         .unwrap_or_else(|_| unavailable()),
+        // Permanent backend defects: every one of these describes a storage
+        // engine or schema state that no retry can change, so they must not
+        // masquerade as transient unavailability.
+        sqlite::ErrorCode::InternalMalfunction
+        | sqlite::ErrorCode::SchemaChanged
+        | sqlite::ErrorCode::TooBig
+        | sqlite::ErrorCode::ParameterOutOfRange
+        | sqlite::ErrorCode::ReadOnly
+        | sqlite::ErrorCode::PermissionDenied
+        | sqlite::ErrorCode::NotFound
+        | sqlite::ErrorCode::OperationAborted
+        | sqlite::ErrorCode::OperationInterrupted
+        | sqlite::ErrorCode::FileLockingProtocolFailed
+        | sqlite::ErrorCode::NoLargeFileSupport
+        | sqlite::ErrorCode::AuthorizationForStatementDenied => storage_internal_fault(),
         _ => storage_backend_unavailable(),
     }
 }
@@ -2035,7 +2278,7 @@ mod tests {
                 sqlite::ErrorCode::TypeMismatch,
                 (
                     "storage_type_mismatch",
-                    ErrorCategoryDto::Validation,
+                    ErrorCategoryDto::Internal,
                     ErrorRetryDto::Never,
                 ),
             ),
@@ -2043,6 +2286,70 @@ mod tests {
                 sqlite::ErrorCode::ApiMisuse,
                 (
                     "storage_api_misuse",
+                    ErrorCategoryDto::Internal,
+                    ErrorRetryDto::Never,
+                ),
+            ),
+            (
+                sqlite::ErrorCode::InternalMalfunction,
+                (
+                    "storage_internal_fault",
+                    ErrorCategoryDto::Internal,
+                    ErrorRetryDto::Never,
+                ),
+            ),
+            (
+                sqlite::ErrorCode::SchemaChanged,
+                (
+                    "storage_internal_fault",
+                    ErrorCategoryDto::Internal,
+                    ErrorRetryDto::Never,
+                ),
+            ),
+            (
+                sqlite::ErrorCode::TooBig,
+                (
+                    "storage_internal_fault",
+                    ErrorCategoryDto::Internal,
+                    ErrorRetryDto::Never,
+                ),
+            ),
+            (
+                sqlite::ErrorCode::ParameterOutOfRange,
+                (
+                    "storage_internal_fault",
+                    ErrorCategoryDto::Internal,
+                    ErrorRetryDto::Never,
+                ),
+            ),
+            (
+                sqlite::ErrorCode::ReadOnly,
+                (
+                    "storage_internal_fault",
+                    ErrorCategoryDto::Internal,
+                    ErrorRetryDto::Never,
+                ),
+            ),
+            (
+                sqlite::ErrorCode::PermissionDenied,
+                (
+                    "storage_internal_fault",
+                    ErrorCategoryDto::Internal,
+                    ErrorRetryDto::Never,
+                ),
+            ),
+            (
+                sqlite::ErrorCode::OperationAborted,
+                (
+                    "storage_internal_fault",
+                    ErrorCategoryDto::Internal,
+                    ErrorRetryDto::Never,
+                ),
+            ),
+            (
+                sqlite::ErrorCode::OperationInterrupted,
+                (
+                    "storage_internal_fault",
                     ErrorCategoryDto::Internal,
                     ErrorRetryDto::Never,
                 ),
@@ -2057,6 +2364,14 @@ mod tests {
             ),
             (
                 sqlite::ErrorCode::SystemIoFailure,
+                (
+                    "storage_unavailable",
+                    ErrorCategoryDto::Unavailable,
+                    ErrorRetryDto::Delayed,
+                ),
+            ),
+            (
+                sqlite::ErrorCode::CannotOpen,
                 (
                     "storage_unavailable",
                     ErrorCategoryDto::Unavailable,
@@ -2094,6 +2409,48 @@ mod tests {
         assert_eq!(classified.code(), "storage_constraint_violation");
         assert!(!classified.to_string().contains("UNIQUE"));
         assert!(!classified.to_string().contains("proposed_run_id"));
+    }
+
+    /// Pins the durable terminal-status literal to the proto terminal set, so a
+    /// status added to one and not the other fails loudly instead of silently
+    /// changing which runs the storage predicate treats as finished.
+    #[test]
+    fn durable_terminal_status_literal_matches_the_proto_terminal_set() {
+        let mut literal = TERMINAL_STATUSES
+            .split(',')
+            .map(|value| value.trim().trim_matches('\''))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        literal.sort_unstable();
+        let mut expected = RunStatusDto::TERMINAL
+            .iter()
+            .map(|status| status.as_str().to_owned())
+            .collect::<Vec<_>>();
+        expected.sort_unstable();
+        assert_eq!(literal, expected);
+    }
+
+    #[test]
+    fn finish_reason_mapping_round_trips_through_its_durable_strings() {
+        for reason in [
+            FinishReasonDto::Stop,
+            FinishReasonDto::Length,
+            FinishReasonDto::ToolCalls,
+            FinishReasonDto::ContentFilter,
+            FinishReasonDto::Error,
+            FinishReasonDto::Unknown,
+        ] {
+            assert_eq!(
+                parse_finish_reason(finish_reason_name(reason)).expect("declared reason parses"),
+                reason
+            );
+        }
+        assert_eq!(
+            parse_finish_reason("not-a-reason")
+                .expect_err("an undeclared finish reason rejects")
+                .code(),
+            "storage_decode_failed"
+        );
     }
 
     #[test]
@@ -2141,6 +2498,36 @@ mod tests {
         // The revision recorded by the aborted acceptance rolls back with the
         // rest of the transaction.
         assert_eq!(raw_count(&location, "configuration_revisions"), 0);
+    }
+
+    #[test]
+    fn queued_turn_acceptance_fault_rolls_back_the_pending_turn() {
+        let location = fixture_location();
+        let repository = SqliteStorageRepository::open(location.clone()).expect("database opens");
+        let session_id = create_fixture_session(&repository);
+        let _active = accept_fixture_turn(&repository, session_id, "active");
+        repository.arm_fault(FaultPoint::TurnAcceptance);
+        let error = repository
+            .accept_user_turn(
+                session_id,
+                IdempotencyKey::new(),
+                "queued",
+                RunId::new(),
+                fixture_snapshot(),
+                fixture_time(3),
+            )
+            .expect_err("injected acceptance fault aborts the queued transaction");
+        assert_eq!(error.code(), "injected_storage_fault");
+        drop(repository);
+        assert_eq!(raw_count(&location, "turns"), 1);
+        let reopened = SqliteStorageRepository::open(location).expect("database reopens");
+        assert!(
+            reopened
+                .load_session_projection(session_id)
+                .expect("baseline projection loads")
+                .pending_turns()
+                .is_empty()
+        );
     }
 
     #[test]

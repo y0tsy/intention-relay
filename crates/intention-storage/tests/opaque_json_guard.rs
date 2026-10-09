@@ -420,11 +420,12 @@ fn scan_storage_source_tree(root: &Path) -> Result<(usize, Vec<String>), String>
 }
 
 /// The storage boundary guard: no storage DTO may declare a JSON-shaped carrier
-/// field. The guard scans the crate-root contract module, parses each struct
-/// body whatever the field visibility and layout, resolves same-crate type
-/// aliases, and fails closed when the contract source cannot be read. The
-/// private `sqlite` backend module owns its own JSON codecs and is deliberately
-/// outside the contract surface this guard protects.
+/// field. The guard scans the whole storage source tree — the crate-root
+/// contract module and the private backend module that owns the JSON codecs —
+/// parses each struct body whatever the field visibility and layout, resolves
+/// same-crate type aliases, and fails closed when a source cannot be read. The
+/// backend module is inside the scanned surface because it is the module that
+/// encodes and decodes the persisted JSON columns.
 ///
 /// A carrier is a field whose type names the JSON crate (its untyped
 /// value, its map, or any other shape) or a field whose name contains
@@ -435,12 +436,12 @@ fn scan_storage_source_tree(root: &Path) -> Result<(usize, Vec<String>), String>
 /// invisible to the scan.
 #[test]
 fn storage_dto_surface_declares_no_opaque_json_string_field() {
-    let contract = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
+    let source_tree = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let (scanned, offenses) =
-        scan_storage_source_tree(&contract).expect("the storage contract module is readable");
+        scan_storage_source_tree(&source_tree).expect("the storage source tree is readable");
     assert_eq!(
-        scanned, 1,
-        "the guard must scan exactly the crate-root contract module"
+        scanned, 2,
+        "the guard must scan the contract module and the backend module that owns the JSON codecs"
     );
     assert!(
         offenses.is_empty(),
