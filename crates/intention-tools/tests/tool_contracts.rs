@@ -709,6 +709,26 @@ fn dispatch_covers_empty_read_and_successful_empty_edit() {
 }
 
 #[test]
+fn read_reports_invalid_utf8_as_truncated() {
+    let root_dir = fixture_dir("read-lossy");
+    std::fs::write(root_dir.path().join("lossy.txt"), b"he\xff\xfe").expect("seed");
+    let service = service(&root_dir);
+    let read = service.dispatch_completed(
+        ToolInput::Read(ReadInput {
+            path: WorkspaceRelativePathDto::parse("lossy.txt").expect("path"),
+        }),
+        CancellationSignal::new(),
+    );
+    // A read that rewrote invalid UTF-8 reports the rewrite the way grep does,
+    // so the model can tell the returned text is not the file's bytes.
+    let ToolResult::Read(value) = read else {
+        unreachable!("a read dispatch produces a read result");
+    };
+    assert!(value.truncated, "a lossy read is flagged truncated");
+    assert!(value.text.as_str().contains('\u{fffd}'));
+}
+
+#[test]
 fn execute_reports_signal_termination_as_known_terminal_result() {
     if cfg!(windows) {
         return;

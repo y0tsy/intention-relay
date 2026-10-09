@@ -1259,50 +1259,73 @@ pub struct WriteResult {
     pub bytes: u64,
 }
 
+/// Canonical model-visible content of an empty path list.
+const NO_PATHS_PLACEHOLDER: &str = "[no paths]";
+/// Canonical model-visible content of an empty match list.
+const NO_MATCHES_PLACEHOLDER: &str = "[no matches]";
+/// Canonical model-visible content of an empty text result.
+const EMPTY_TEXT_PLACEHOLDER: &str = "[empty]";
+
 /// Renders one typed tool result into its bounded model-visible content.
 ///
 /// The typed result is redacted and workspace-relative by construction: text
 /// and search payloads keep their own bounds, truncated content keeps its
 /// explicit marker, and mutations report their byte count.
 ///
+/// An empty projection is a successful outcome, so it renders its canonical
+/// placeholder (`[no paths]`, `[no matches]`, or `[empty]`) instead of blank
+/// content: every call always gets one readable answering result.
+///
 /// # Errors
 ///
-/// Returns a validation error when the rendered content is blank, because a
-/// tool result must always answer its call with readable content.
+/// Returns a validation error when the rendered content is blank, which the
+/// per-projection placeholders leave unreachable; the guard stays as the
+/// invariant backstop of "a tool result must always answer its call with
+/// readable content".
 pub fn render_tool_result_content(result: &ToolResult) -> DtoResult<String> {
     let content = match result {
         ToolResult::Read(value) | ToolResult::Execute(value) => {
-            if value.truncated {
-                format!("{}\n[truncated]", value.text.as_str())
+            let mut content = if value.text.as_str().trim().is_empty() {
+                EMPTY_TEXT_PLACEHOLDER.to_owned()
             } else {
                 value.text.as_str().to_owned()
-            }
+            };
+            append_truncation_marker(&mut content, value.truncated);
+            content
         }
         ToolResult::Glob(value) => {
-            let mut content = value
-                .paths
-                .iter()
-                .map(WorkspaceRelativePathDto::as_str)
-                .collect::<Vec<_>>()
-                .join("\n");
+            let mut content = if value.paths.is_empty() {
+                NO_PATHS_PLACEHOLDER.to_owned()
+            } else {
+                value
+                    .paths
+                    .iter()
+                    .map(WorkspaceRelativePathDto::as_str)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
             append_truncation_marker(&mut content, value.truncated);
             content
         }
         ToolResult::Grep(value) => {
-            let mut content = value
-                .matches
-                .iter()
-                .map(|matched| {
-                    format!(
-                        "{}:{}:{}: {}",
-                        matched.path.as_str(),
-                        matched.line,
-                        matched.column,
-                        matched.fragment.as_str()
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
+            let mut content = if value.matches.is_empty() {
+                NO_MATCHES_PLACEHOLDER.to_owned()
+            } else {
+                value
+                    .matches
+                    .iter()
+                    .map(|matched| {
+                        format!(
+                            "{}:{}:{}: {}",
+                            matched.path.as_str(),
+                            matched.line,
+                            matched.column,
+                            matched.fragment.as_str()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
             append_truncation_marker(&mut content, value.truncated);
             content
         }
@@ -1424,13 +1447,55 @@ mod tool_result_renderer_tests {
     }
 
     #[test]
-    fn blank_tool_result_content_is_rejected() {
-        let read = ToolResult::Read(TextResult {
+    fn empty_projections_render_a_canonical_placeholder() {
+        let blank_read = ToolResult::Read(TextResult {
             text: bounded(""),
             truncated: false,
         });
-        let error = render_tool_result_content(&read).expect_err("blank content is rejected");
-        assert_eq!(error.code(), "invalid_tool_result_content");
+        assert_eq!(
+            render_tool_result_content(&blank_read).expect("an empty read renders"),
+            "[empty]"
+        );
+        let whitespace_read = ToolResult::Read(TextResult {
+            text: bounded("  \n "),
+            truncated: false,
+        });
+        assert_eq!(
+            render_tool_result_content(&whitespace_read).expect("a whitespace read renders"),
+            "[empty]"
+        );
+        let empty_glob = ToolResult::Glob(PathsResult {
+            paths: Vec::new(),
+            truncated: false,
+        });
+        assert_eq!(
+            render_tool_result_content(&empty_glob).expect("an empty glob renders"),
+            "[no paths]"
+        );
+        let truncated_empty_glob = ToolResult::Glob(PathsResult {
+            paths: Vec::new(),
+            truncated: true,
+        });
+        assert_eq!(
+            render_tool_result_content(&truncated_empty_glob)
+                .expect("an empty truncated glob renders"),
+            "[no paths]\n[truncated]"
+        );
+        let no_match_grep = ToolResult::Grep(GrepResult {
+            matches: Vec::new(),
+            truncated: false,
+        });
+        assert_eq!(
+            render_tool_result_content(&no_match_grep).expect("a no-match grep renders"),
+            "[no matches]"
+        );
+        // The interrupted path renders through the same projection, so a
+        // pre-empted empty search still answers its call with content.
+        assert_eq!(
+            partial_tool_result_content(true, Some(&empty_glob))
+                .expect("a stopped empty search renders"),
+            "[no paths]\n[The tool call was stopped before a final result; the output above is partial.]"
+        );
     }
 
     #[test]
@@ -1543,9 +1608,12 @@ fn read_tool(
         intention_proto::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
     })?;
     let (text, truncated) = bounded_lossy(&bytes);
+    // A read that rewrote invalid UTF-8 reports it the way grep does, so the
+    // replacement text is honest: the model can tell content was rewritten.
+    let lossy = std::str::from_utf8(&bytes).is_err();
     let result = ToolResult::Read(TextResult {
         text: bounded_text(text)?,
-        truncated: truncated || source_truncated,
+        truncated: truncated || source_truncated || lossy,
     });
     // A stop observed after the bounded read keeps the captured bytes as the
     // call's partial output instead of discarding them.

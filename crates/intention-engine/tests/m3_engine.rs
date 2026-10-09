@@ -26,7 +26,7 @@ use intention_proto::{
 };
 use intention_storage::{StartingRunModelContextDto, ToolResultStatusDto};
 use intention_test_support::fixture_snapshot;
-use intention_tools::{BoundedText, ExecuteInput, ReadInput, ToolInput, WorkspaceRoot};
+use intention_tools::{BoundedText, ExecuteInput, GlobInput, ReadInput, ToolInput, WorkspaceRoot};
 
 fn invoke_read_input(path: &str) -> ToolInvocationRequestDto {
     ToolInvocationRequestDto::new(
@@ -178,6 +178,48 @@ fn local_tool_success_records_admission_and_completion() {
     assert_eq!(results[0].session_id(), session);
     assert_eq!(results[0].run_id(), run);
     assert_eq!(results[0].call_id(), call);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn an_empty_search_result_still_commits_one_terminal_answer() {
+    let root = hello_tool_root("empty-glob");
+    let session = SessionId::new();
+    let run = RunId::new();
+    let call = ToolCallId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let result = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            ToolInvocationRequestDto::new(
+                hello_workspace(&root),
+                session,
+                run,
+                call,
+                "glob",
+                ToolInput::Glob(GlobInput {
+                    pattern: BoundedText::new("*.none").expect("pattern"),
+                }),
+                fixture_time(),
+            ),
+            &RecordingCommitObserver::new(),
+        )
+        .expect("an empty search result answers its call instead of failing");
+
+    // An ordinary no-match search renders its canonical placeholder, and the
+    // call row committed before dispatch is answered by exactly one terminal
+    // result row.
+    assert_eq!(completed_outcome(result), "[no paths]");
+    let messages = repository.committed_messages();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].kind(), MessageKindDto::ToolCall);
+    assert_eq!(messages[0].tool_call_id(), Some(call));
+    assert_eq!(messages[1].kind(), MessageKindDto::ToolResult);
+    assert_eq!(messages[1].text(), "[no paths]");
+    assert_eq!(messages[1].tool_call_id(), Some(call));
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
+    assert_eq!(results[0].content(), "[no paths]");
     let _ = fs::remove_dir_all(root);
 }
 

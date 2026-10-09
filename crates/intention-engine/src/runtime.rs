@@ -27,6 +27,13 @@ use crate::context_window::ContextWindowState;
 /// final result of its own.
 pub const INTERRUPT_NOTICE: &str = "[The call was stopped before a final result.]";
 
+/// The durable mark of a model answer stopped before it finished.
+///
+/// A model step stopped by the user or the environment commits the text it had
+/// produced up to that moment with this marker on its own line, so a reader can
+/// tell the answer was cut; a step with no text commits nothing.
+pub const INTERRUPTED_MARKER: &str = "[interrupted]";
+
 /// The bounded delay between two provider attempts.
 const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 
@@ -451,8 +458,10 @@ where
 
         let policy = persisted.resolved().provider_execution();
         let context_window = persisted.resolved().context_window();
-        // Uncommitted assistant text stays live across a retryable attempt
-        // boundary, while its absence keeps the attempt budget open.
+        // Uncommitted assistant text of the current model step. A retryable
+        // attempt failure commits it as the run's last assistant row, so
+        // non-blank text closes the attempt budget; blank text commits nothing
+        // and keeps that budget open.
         let mut pending_text = String::new();
         let mut usage: Option<UsageDto> = None;
         let mut durable_output = false;
@@ -491,9 +500,13 @@ where
                     return Ok(ModelRunExecutionOutcomeDto::Failed { run, error });
                 }
                 AttemptResult::Failed { error, retryable } => {
+                    // Non-blank uncommitted text forbids a retry: it becomes the
+                    // failed run's last step, so retrying would discard output
+                    // the model already produced. Whitespace-only text commits
+                    // nothing (`commit_step`), so it keeps the budget open.
                     let retry = retryable
                         && !durable_output
-                        && pending_text.is_empty()
+                        && pending_text.trim().is_empty()
                         && attempt < u16::from(policy.max_attempts());
                     if retry {
                         self.wait_for_retry(&input, &mut extra_messages).await?;
@@ -511,7 +524,10 @@ where
                 }
             }
         }
-        unreachable!("validated provider execution policy supplies at least one attempt")
+        // The attempt range is enforced at the configuration boundary, not by
+        // the policy type, so a snapshot carrying zero attempts fails the run
+        // typed instead of panicking the spawned execution task.
+        self.failed_outcome(&input, provider_configuration_unavailable())
     }
 
     async fn drive_attempt(
@@ -523,11 +539,14 @@ where
     ) -> DtoResult<AttemptResult> {
         let mut messages: Vec<ModelMessageDto> = input.request.messages().to_vec();
         messages.extend(extra_messages.iter().cloned());
+        // The reasoning attachments of every closed tool round are part of the
+        // measured request input, so the window accounting observes them from
+        // the first pass onwards.
+        let mut reasoning_attachments: Vec<AssistantReasoningDto> = Vec::new();
         // The starting context is windowed once, before its first provider
         // request, exactly like every later tool-result round.
-        state.apply_window(&mut messages)?;
+        state.apply_window(&mut messages, &reasoning_attachments)?;
         let mut request = input.request.with_messages(messages.clone())?;
-        let mut reasoning_attachments: Vec<AssistantReasoningDto> = Vec::new();
         let mut tool_round = 0u8;
         loop {
             let outcome = self
@@ -544,12 +563,12 @@ where
                         self.record_interrupt_notice(input)?;
                         messages.push(interrupt_notice_message()?);
                         extra_messages.push(interrupt_notice_message()?);
-                        state.apply_window(&mut messages)?;
+                        state.apply_window(&mut messages, &reasoning_attachments)?;
                         request = continuation_request(input, &messages, &reasoning_attachments)?;
                         continue;
                     }
                     if self.consume_pending_user_turns(input, &mut messages, extra_messages)? {
-                        state.apply_window(&mut messages)?;
+                        state.apply_window(&mut messages, &reasoning_attachments)?;
                         request = continuation_request(input, &messages, &reasoning_attachments)?;
                         continue;
                     }
@@ -567,7 +586,7 @@ where
                     self.record_interrupt_notice(input)?;
                     messages.push(interrupt_notice_message()?);
                     extra_messages.push(interrupt_notice_message()?);
-                    state.apply_window(&mut messages)?;
+                    state.apply_window(&mut messages, &reasoning_attachments)?;
                     request = continuation_request(input, &messages, &reasoning_attachments)?;
                 }
                 RoundOutcome::Failed { error, retryable } => {
@@ -599,39 +618,33 @@ where
                         reasoning_attachments.push(reasoning);
                     }
                     for call in calls {
-                        // An interrupt that arrived before this call started
-                        // never begins a new effect: the call is answered with
-                        // the stopped-call notice as its partial result, so the
-                        // assistant tool-call message stays fully answered. The
-                        // tool path owns every dispatched call's durable
-                        // tool-call and tool-result rows.
-                        let outcome = if input.cancellation.is_cancelled() {
-                            ToolResultOutcomeDto::partial(
-                                intention_tools::partial_tool_result_content(true, None)?,
-                            )?
-                        } else {
-                            let outcome = self
-                                .tool_executor
-                                .execute_tool(input.session_id, input.run_id, call.clone())
-                                .await;
-                            // The tool path committed this call's evidence, so
-                            // the run holds irreversible output from here on.
-                            state.mark_durable_output();
-                            match outcome {
-                                Ok(outcome) => outcome,
-                                Err(error) => {
-                                    // A tool infrastructure error is a typed failed
-                                    // tool result committed by the tool path: the
-                                    // run terminalizes without retrying.
-                                    let run = self.finish_run(
-                                        input,
-                                        RunStatusDto::Failed,
-                                        None,
-                                        Some(&error),
-                                        state.reported_usage(),
-                                    )?;
-                                    return Ok(AttemptResult::FailedTerminal { run, error });
-                                }
+                        // Every call is dispatched through the port, including a
+                        // call whose run was already signalled: the port observes
+                        // the run's signal before any effect and owns the call's
+                        // durable `tool_call` row plus its terminal result row,
+                        // so the assistant tool-call message stays fully
+                        // answered even when the interruption pre-empts it.
+                        let outcome = self
+                            .tool_executor
+                            .execute_tool(input.session_id, input.run_id, call.clone())
+                            .await;
+                        // The tool path committed this call's evidence, so
+                        // the run holds irreversible output from here on.
+                        state.mark_durable_output();
+                        let outcome = match outcome {
+                            Ok(outcome) => outcome,
+                            Err(error) => {
+                                // A tool infrastructure error is a typed failed
+                                // tool result committed by the tool path: the
+                                // run terminalizes without retrying.
+                                let run = self.finish_run(
+                                    input,
+                                    RunStatusDto::Failed,
+                                    None,
+                                    Some(&error),
+                                    state.reported_usage(),
+                                )?;
+                                return Ok(AttemptResult::FailedTerminal { run, error });
                             }
                         };
                         match outcome {
@@ -662,7 +675,7 @@ where
                         // Every added tool result re-runs the window pass, so
                         // the continuation request carries a trimmed context
                         // and recomputed breakpoints.
-                        state.apply_window(&mut messages)?;
+                        state.apply_window(&mut messages, &reasoning_attachments)?;
                     }
                     // A tool batch is the second bounded interruption
                     // boundary. A partial tool result already carries the
@@ -679,7 +692,7 @@ where
                         }
                     }
                     self.consume_pending_user_turns(input, &mut messages, extra_messages)?;
-                    state.apply_window(&mut messages)?;
+                    state.apply_window(&mut messages, &reasoning_attachments)?;
                     request = continuation_request(input, &messages, &reasoning_attachments)?;
                 }
             }
@@ -777,7 +790,7 @@ where
         loop {
             if input.cancellation.is_cancelled() {
                 drop(stream);
-                let assistant = self.commit_step(
+                let assistant = self.commit_interrupted_step(
                     input,
                     state.pending_text_mut(),
                     step_reasoning(&reasoning_text),
@@ -796,7 +809,7 @@ where
             {
                 Either::Left(((), _)) => {
                     drop(stream);
-                    let assistant = self.commit_step(
+                    let assistant = self.commit_interrupted_step(
                         input,
                         state.pending_text_mut(),
                         step_reasoning(&reasoning_text),
@@ -971,6 +984,29 @@ where
         let committed = self.repository.append_message(message, self.time.now())?;
         self.publish_content(&committed);
         Ok(Some(committed))
+    }
+
+    /// Commits one stopped model step with its durable interruption marker.
+    ///
+    /// The text the model produced before the stop becomes durable exactly like
+    /// a completed step's text, with [`INTERRUPTED_MARKER`] on its own line; a
+    /// blank or whitespace-only step commits nothing, so an interruption that
+    /// produced no text leaves only the notice row.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or storage error when the row cannot commit.
+    fn commit_interrupted_step(
+        &self,
+        input: &ModelRunExecutionInputDto,
+        pending_text: &mut String,
+        reasoning: Option<&str>,
+    ) -> DtoResult<Option<MessageProjectionDto>> {
+        if !pending_text.trim().is_empty() {
+            pending_text.push('\n');
+            pending_text.push_str(INTERRUPTED_MARKER);
+        }
+        self.commit_step(input, pending_text, reasoning)
     }
 
     /// Commits one terminal run outcome and publishes the committed status.
@@ -1156,8 +1192,12 @@ impl<'a> RoundState<'a> {
     ///
     /// Returns a validation error only when a compressed result cannot form a
     /// valid tool-role message, which the placeholder construction prevents.
-    fn apply_window(&self, messages: &mut [ModelMessageDto]) -> DtoResult<()> {
-        self.context_window.apply(messages)
+    fn apply_window(
+        &self,
+        messages: &mut [ModelMessageDto],
+        reasoning: &[AssistantReasoningDto],
+    ) -> DtoResult<()> {
+        self.context_window.apply(messages, reasoning)
     }
 
     /// Records whether the committed step carried a durable assistant row.
@@ -1298,12 +1338,18 @@ fn same_execution_selection(persisted: &ConfigSnapshotDto, current: &ConfigSnaps
     let current_provider = current.resolved().provider();
     let persisted_execution = persisted.resolved().provider_execution();
     let current_execution = current.resolved().provider_execution();
+    // The window policy decides whether tool results are compressed, so a
+    // persisted selection that disagrees with the validated one must fail typed
+    // before any provider work instead of compressing under a foreign window.
+    let persisted_window = persisted.resolved().context_window();
+    let current_window = current.resolved().context_window();
     persisted_provider.kind() == current_provider.kind()
         && persisted_provider.model() == current_provider.model()
         && persisted_provider.endpoint() == current_provider.endpoint()
         && persisted_execution.attempt_timeout_seconds()
             == current_execution.attempt_timeout_seconds()
         && persisted_execution.max_attempts() == current_execution.max_attempts()
+        && persisted_window.window_tokens() == current_window.window_tokens()
 }
 
 /// Returns the durable context notice for one interrupted call.

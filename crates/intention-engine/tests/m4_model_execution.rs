@@ -20,7 +20,9 @@ use intention_providers::{
     FinishReasonDto, ModelEventDto, ModelMessageDto, ModelRequestDto, ModelRoleDto,
     ProviderErrorDto, ToolCallDto, UsageDto,
 };
-use intention_test_support::{ScriptedDriver, fixture_snapshot_with_model, run_ready};
+use intention_test_support::{
+    ScriptedDriver, fixture_snapshot_with_context_window, fixture_snapshot_with_model, run_ready,
+};
 
 fn request(run_id: RunId, model: &str) -> ModelRequestDto {
     ModelRequestDto::new(
@@ -401,14 +403,20 @@ fn interruption_records_a_notice_and_continues_the_same_run() {
     assert_eq!(
         messages
             .iter()
-            .map(|message| (message.kind(), message.text()))
+            .map(|message| (message.kind(), message.text().to_owned()))
             .collect::<Vec<_>>(),
         vec![
-            (MessageKindDto::Assistant, "partial answer"),
-            (MessageKindDto::Notice, intention_engine::INTERRUPT_NOTICE),
-            (MessageKindDto::Assistant, "final answer"),
+            (
+                MessageKindDto::Assistant,
+                format!("partial answer\n{}", intention_engine::INTERRUPTED_MARKER),
+            ),
+            (
+                MessageKindDto::Notice,
+                intention_engine::INTERRUPT_NOTICE.to_owned(),
+            ),
+            (MessageKindDto::Assistant, "final answer".to_owned()),
         ],
-        "the stopped step commits its text and the durable notice"
+        "the stopped step commits its text with the interruption marker and the durable notice"
     );
     assert_eq!(messages[1].run_id(), Some(run_id));
     drop(messages);
@@ -981,5 +989,216 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
             .unwrap_or_else(PoisonError::into_inner)
             .is_empty(),
         "a timed-out attempt commits no transcript row"
+    );
+}
+
+#[test]
+fn a_completed_step_never_carries_the_interrupted_marker() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = fixture_snapshot_with_model("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let driver = ScriptedDriver::completed_text();
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        request(run_id, "fixture"),
+        config,
+        RunCancellation::new(),
+    )
+    .expect("a completed run commits its step unchanged");
+
+    assert!(matches!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].kind(), MessageKindDto::Assistant);
+    assert_eq!(messages[0].text(), "complete response");
+    assert!(
+        !messages[0]
+            .text()
+            .contains(intention_engine::INTERRUPTED_MARKER),
+        "only a stopped step carries the interruption marker"
+    );
+}
+
+#[test]
+fn retryable_failure_with_uncommitted_text_commits_the_text_and_does_not_retry() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = fixture_snapshot_with_model("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let driver = ScriptedDriver::with_rounds(vec![vec![
+        Ok(ModelEventDto::started()),
+        Ok(ModelEventDto::text_delta("partial answer").expect("text is valid")),
+        Err(ProviderErrorDto::unavailable("provider_down", true, None).expect("error is valid")),
+    ]]);
+    let clock = ImmediateTime::new();
+
+    let outcome = run_ready(
+        ModelRunExecutionService::new(
+            &repository,
+            &driver,
+            &clock,
+            &RecordingCommitObserver::new(),
+            &NeverInvokedToolExecutor,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request(run_id, "fixture"),
+            config,
+            RunCancellation::new(),
+        )),
+    )
+    .expect("uncommitted text closes the attempt budget");
+
+    let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
+        unreachable!("the retryable failure terminalizes the run");
+    };
+    assert_eq!(run.status(), RunStatusDto::Failed);
+    assert_eq!(error.code(), "provider_down");
+    assert_eq!(
+        driver.executions(),
+        1,
+        "uncommitted text forbids a second attempt"
+    );
+    assert!(
+        clock
+            .sleeps
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|&&duration| duration == Duration::from_millis(250))
+            .count()
+            == 0,
+        "no retry delay runs once the text is committed"
+    );
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| (message.kind(), message.text()))
+            .collect::<Vec<_>>(),
+        vec![(MessageKindDto::Assistant, "partial answer")],
+        "the uncommitted step text becomes the failed run's last row"
+    );
+}
+
+#[test]
+fn whitespace_only_text_keeps_the_attempt_budget_open() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = fixture_snapshot_with_model("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::text_delta("   ").expect("text is valid")),
+            Err(ProviderErrorDto::unavailable("provider_down", true, None).expect("error is valid")),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    let clock = ImmediateTime::new();
+
+    let outcome = run_ready(
+        ModelRunExecutionService::new(
+            &repository,
+            &driver,
+            &clock,
+            &RecordingCommitObserver::new(),
+            &NeverInvokedToolExecutor,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request(run_id, "fixture"),
+            config,
+            RunCancellation::new(),
+        )),
+    )
+    .expect("whitespace-only text is no durable output and retries");
+
+    assert!(matches!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
+    assert_eq!(driver.executions(), 2);
+    assert_eq!(
+        clock
+            .sleeps
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_slice(),
+        &[
+            Duration::from_secs(30),
+            Duration::from_millis(250),
+            Duration::from_secs(30)
+        ],
+        "exactly one retry delay runs"
+    );
+    assert!(
+        repository
+            .messages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty(),
+        "whitespace-only text commits no transcript row"
+    );
+}
+
+#[test]
+fn a_persisted_window_policy_disagreement_fails_the_run_before_provider_work() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let repository = FakeRepository::new(
+        session_id,
+        run_id,
+        fixture_snapshot_with_context_window("fixture", Some(60)),
+    );
+    let driver = ScriptedDriver::new(Vec::new());
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        request(run_id, "fixture"),
+        fixture_snapshot_with_context_window("fixture", Some(80)),
+        RunCancellation::new(),
+    )
+    .expect("a window policy disagreement safely fails");
+
+    let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
+        unreachable!("a window policy disagreement fails the run");
+    };
+    assert_eq!(run.status(), RunStatusDto::Failed);
+    assert_eq!(error.code(), "provider_configuration_unavailable");
+    assert_eq!(
+        driver.executions(),
+        0,
+        "the disagreement is rejected before any provider work"
+    );
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(
+        finishes[0].error_code(),
+        Some("provider_configuration_unavailable")
     );
 }

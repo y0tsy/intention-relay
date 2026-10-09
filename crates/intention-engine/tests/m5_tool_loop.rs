@@ -483,6 +483,72 @@ fn the_window_pass_compresses_a_large_tool_result_before_the_continuation_reques
 }
 
 #[test]
+fn the_window_pass_accounts_for_tool_call_arguments() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    // A window that fits the message content alone: the call's arguments are
+    // what pushes the request past it.
+    let config = fixture_snapshot_with_context_window("fixture", Some(100));
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let long_pattern = "z".repeat(380);
+    let arguments = format!(r#"{{"pattern":"{long_pattern}"}}"#);
+    let call =
+        ToolCallDto::new(ToolCallId::new(), "grep", arguments.clone()).expect("call is valid");
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::tool_call(call)),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    let port = ScriptedPort::new(vec![Ok(
+        ToolResultOutcomeDto::completed("y".repeat(200)).expect("content is valid")
+    )]);
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        &port,
+        request(run_id, "fixture"),
+        config,
+        RunCancellation::new(),
+    )
+    .expect("the windowed tool loop completes");
+
+    assert!(matches!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
+    let requests = driver.requests();
+    let messages = requests[1].messages();
+    let tool_message = messages
+        .iter()
+        .find(|message| message.role() == ModelRoleDto::Tool)
+        .expect("the continuation carries the tool result");
+    assert!(
+        tool_message.content().contains("[compressed]"),
+        "the tool-call arguments count toward the window"
+    );
+    let assistant = messages
+        .iter()
+        .find(|message| message.role() == ModelRoleDto::Assistant)
+        .expect("the assistant tool-call message is preserved");
+    assert_eq!(
+        assistant
+            .tool_calls()
+            .expect("the assistant message carries its calls")
+            .first()
+            .expect("one call is preserved")
+            .arguments_json(),
+        arguments.as_str(),
+        "compression never rewrites the requested arguments"
+    );
+}
+
+#[test]
 fn partial_tool_result_continues_the_loop_without_terminalizing() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
@@ -1192,9 +1258,12 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
         ],
     ]);
-    let port = ScriptedPort::new(vec![Ok(
-        ToolResultOutcomeDto::completed("never used").expect("content is valid")
-    )]);
+    let stopped_notice = intention_tools::partial_tool_result_content(true, None)
+        .expect("the stopped-call notice renders");
+    let port = ScriptedPort::new(vec![Ok(ToolResultOutcomeDto::partial(
+        stopped_notice.clone(),
+    )
+    .expect("the stopped-call outcome is valid"))]);
     let signal = RunCancellation::new();
     // The interrupt lands on the assistant step commit, before the port
     // invocation of the round's call.
@@ -1227,13 +1296,12 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
         outcome,
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
-    assert!(
-        port.calls().is_empty(),
-        "the interrupt never starts the tool effect"
+    assert_eq!(
+        port.calls().len(),
+        1,
+        "a pre-empted call is still dispatched, so the tool path owns its durable call and result rows"
     );
     let requests = driver.requests();
-    let stopped_notice = intention_tools::partial_tool_result_content(true, None)
-        .expect("the stopped-call notice renders");
     let answered = requests[1].messages().iter().any(|message| {
         message.role() == ModelRoleDto::Tool
             && message.tool_call_id() == Some(call.call_id())

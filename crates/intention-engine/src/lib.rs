@@ -352,6 +352,14 @@ where
     /// so acceptance never schedules work itself and a post-commit scheduling
     /// failure cannot change the committed acceptance result.
     ///
+    /// `proposed_run_id` must be a deterministic function of the command's own
+    /// identity: the same session and `IdempotencyKey` must always propose the
+    /// same [`RunId`], because the repository compares it when it replays an
+    /// accepted turn. A retry that proposes a fresh identity is
+    /// indistinguishable from the same key bound to different content and fails
+    /// with `turn_idempotency_conflict`, so a client could never learn that its
+    /// turn was already accepted.
+    ///
     /// # Errors
     ///
     /// Returns an admission or malformed durable-acceptance error.
