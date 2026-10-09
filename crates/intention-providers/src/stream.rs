@@ -39,14 +39,21 @@ pub trait EventTranslator {
 /// shared stream keeps the order contract: `Started` is seeded before the
 /// first native poll, facts stay in translation order, and a terminal fact
 /// (`Finished` or a provider failure) is what ends the stream.
+///
+/// The sink is total once terminal: every later write is dropped, so no fact
+/// and no second terminal failure can be queued behind the terminal one, and a
+/// translator may keep translating the rest of an item without re-checking.
 pub struct NormalizedEvents<'a> {
     pending: &'a mut VecDeque<Result<ModelEventDto, ProviderErrorDto>>,
     terminal: &'a mut bool,
 }
 
 impl NormalizedEvents<'_> {
-    /// Queues one normalized fact.
+    /// Queues one normalized fact, unless a terminal fact already ended the stream.
     pub(crate) fn push(&mut self, event: ModelEventDto) {
+        if *self.terminal {
+            return;
+        }
         self.pending.push_back(Ok(event));
     }
 
@@ -58,6 +65,9 @@ impl NormalizedEvents<'_> {
 
     /// Queues one typed provider failure and terminalizes the stream.
     pub(crate) fn fail_error(&mut self, error: ProviderErrorDto) {
+        if *self.terminal {
+            return;
+        }
         self.pending.push_back(Err(error));
         *self.terminal = true;
     }

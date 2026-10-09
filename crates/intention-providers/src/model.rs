@@ -332,8 +332,10 @@ impl ModelCapabilitiesDto {
     /// Verifies this declaration can serve every request the runtime builds.
     ///
     /// The runtime streams text with tool calls, so a driver that cannot
-    /// declare both cannot serve any run; the check runs once when the
-    /// selected provider is composed.
+    /// declare both cannot serve any run. The check runs once when the
+    /// configuration-selected provider is composed. A test-support facade that
+    /// injects its own driver is exempt: it carries the injected driver's own
+    /// declaration instead of a configuration-selected one.
     ///
     /// # Errors
     ///

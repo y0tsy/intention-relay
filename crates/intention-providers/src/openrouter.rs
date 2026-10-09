@@ -21,6 +21,9 @@ use openrouter_rs::{
     types::{FinishReason as OpenRouterFinishReason, Role, stream::StreamEvent},
 };
 
+/// The fixed non-retryable failure for a request this adapter cannot translate.
+const OPENROUTER_REQUEST_REJECTED: &str = "openrouter_request_rejected";
+
 /// OpenRouter driver with private SDK client state.
 pub struct OpenRouterDriver {
     resolved: ResolvedConfigDto,
@@ -87,7 +90,7 @@ impl ModelExecutionDriver for OpenRouterDriver {
             Ok(request) => request,
             Err(_) => {
                 return Box::pin(stream::once(async {
-                    Err(mapping::fixed_error("openrouter_request_rejected"))
+                    Err(mapping::fixed_error(OPENROUTER_REQUEST_REJECTED))
                 }));
             }
         };
@@ -762,5 +765,62 @@ mod tests {
                 .contains("chain of thought"),
             "transient reasoning text must never enter the native request"
         );
+    }
+
+    /// Pins the reachability argument for the retained request-rejection arm.
+    ///
+    /// The arm is taken only when `translate_request` fails, and every fallible
+    /// step of that translation is guarded by a DTO constructor: the widest
+    /// request the public API can build translates, and the states the two
+    /// fallible steps would need are rejected where they are built. The arm's
+    /// own fixed code and retry guidance are pinned at the constant it uses.
+    #[test]
+    fn every_constructible_request_translates_so_the_rejection_arm_stays_unreachable() {
+        let message = ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid");
+        let call = ToolCallDto::new(ToolCallId::new(), "read", r#"{"path":"hello.txt"}"#)
+            .expect("fixture call is valid");
+        let definition = ModelToolDefinitionDto::new(
+            "read",
+            "Read a workspace file",
+            r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
+        )
+        .expect("tool definition is valid");
+        let widest = ModelRequestDto::new(
+            RunId::new(),
+            "fixture-model",
+            vec![
+                ModelMessageDto::new(ModelRoleDto::System, "instructions")
+                    .expect("message is valid"),
+                message.clone(),
+                ModelMessageDto::assistant_tool_calls(
+                    Some("before".to_owned()),
+                    vec![call.clone()],
+                )
+                .expect("message is valid"),
+                ModelMessageDto::tool_result(call.call_id(), "hello world")
+                    .expect("message is valid"),
+            ],
+            Some("instructions".to_owned()),
+        )
+        .expect("request is valid")
+        .with_tools(vec![definition])
+        .expect("tool advertisement is valid");
+
+        assert!(
+            translate_request(&widest).is_ok(),
+            "every request the public API can build must translate"
+        );
+
+        // A tool-role message always carries its identity, so the tool-result
+        // step cannot fail; tool parameters and the request identity are
+        // validated where they are built, so the remaining steps cannot fail.
+        assert!(ModelMessageDto::new(ModelRoleDto::Tool, "result").is_err());
+        assert!(ModelToolDefinitionDto::new("read", "Read a file", "not-json").is_err());
+        assert!(ModelRequestDto::new(RunId::new(), " ", vec![message], None).is_err());
+        assert!(ModelRequestDto::new(RunId::new(), "fixture-model", Vec::new(), None).is_err());
+
+        let error = crate::mapping::fixed_error(OPENROUTER_REQUEST_REJECTED);
+        assert_eq!(error.code(), "openrouter_request_rejected");
+        assert_eq!(error.retry(), intention_proto::ErrorRetryDto::Never);
     }
 }

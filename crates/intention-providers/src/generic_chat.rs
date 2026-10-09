@@ -31,6 +31,9 @@ mod wire;
 
 use wire::{WireCacheControl, WireChunk, WireDelta, WireMessage, WireRequest};
 
+/// The fixed non-retryable failure for a request this adapter cannot translate.
+const GENERIC_CHAT_REQUEST_REJECTED: &str = "generic_chat_request_rejected";
+
 /// Generic Chat Completions driver with private SDK client state.
 pub struct GenericChatDriver {
     resolved: ResolvedConfigDto,
@@ -99,7 +102,7 @@ impl ModelExecutionDriver for GenericChatDriver {
             Ok(request) => request,
             Err(_) => {
                 return Box::pin(stream::once(async {
-                    Err(mapping::fixed_error("generic_chat_request_rejected"))
+                    Err(mapping::fixed_error(GENERIC_CHAT_REQUEST_REJECTED))
                 }));
             }
         };
@@ -189,9 +192,6 @@ impl GenericTranslator {
             }
             return;
         }
-        // A rejected usage total already queued this chunk's failure, so a
-        // later malformed tool fragment must not replace it.
-        let mut usage_rejected = false;
         if let Some(usage) = chunk.usage {
             if self.usage_reported {
                 events.fail("generic_chat_duplicate_usage");
@@ -206,10 +206,9 @@ impl GenericTranslator {
                     self.usage_reported = true;
                     events.push(ModelEventDto::usage(usage));
                 }
-                Err(_) => {
-                    usage_rejected = true;
-                    events.fail("generic_chat_invalid_usage");
-                }
+                // A rejected usage total is terminal, so the shared sink drops
+                // everything the rest of this chunk would queue.
+                Err(_) => events.fail("generic_chat_invalid_usage"),
             }
         }
         if post_finish {
@@ -220,9 +219,7 @@ impl GenericTranslator {
                 .accept_delta(choice.index, choice.delta, events)
                 .is_err()
             {
-                if !usage_rejected {
-                    events.fail("generic_chat_invalid_tool_call");
-                }
+                events.fail("generic_chat_invalid_tool_call");
                 return;
             }
             if let Some(reason) = choice.finish_reason
@@ -865,6 +862,72 @@ mod tests {
         );
     }
 
+    /// Pins the reachability argument for the retained request-rejection arm.
+    ///
+    /// The arm is taken only when `translate_request` fails, and every fallible
+    /// step of that translation is guarded by a DTO constructor: the widest
+    /// request the public API can build translates, and the states the two
+    /// fallible steps would need are rejected where they are built. The arm's
+    /// own fixed code and retry guidance are pinned at the constant it uses.
+    #[test]
+    fn every_constructible_request_translates_so_the_rejection_arm_stays_unreachable() {
+        let message = ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid");
+        let call = ToolCallDto::new(ToolCallId::new(), "read", r#"{"path":"hello.txt"}"#)
+            .expect("fixture call is valid");
+        let definition = crate::model::ModelToolDefinitionDto::new(
+            "read",
+            "Read a workspace file",
+            r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
+        )
+        .expect("tool definition is valid");
+        let attachment =
+            crate::model::AssistantReasoningDto::new(vec![call.call_id()], "chain of thought")
+                .expect("reasoning attachment is valid");
+        let widest = ModelRequestDto::new(
+            RunId::new(),
+            "fixture",
+            vec![
+                ModelMessageDto::new(ModelRoleDto::System, "instructions")
+                    .expect("message is valid"),
+                message.clone(),
+                ModelMessageDto::new(ModelRoleDto::Notice, "[The tool call did not finish.]")
+                    .expect("notice is valid"),
+                ModelMessageDto::assistant_tool_calls(
+                    Some("before".to_owned()),
+                    vec![call.clone()],
+                )
+                .expect("message is valid"),
+                ModelMessageDto::tool_result(call.call_id(), "hello world")
+                    .expect("message is valid"),
+            ],
+            Some("instructions".to_owned()),
+        )
+        .expect("request is valid")
+        .with_tools(vec![definition])
+        .expect("tool advertisement is valid")
+        .with_assistant_reasoning(vec![attachment])
+        .expect("attachment is accepted");
+
+        assert!(
+            translate_request(&widest).is_ok(),
+            "every request the public API can build must translate"
+        );
+
+        // A tool-role message always carries its identity, so the tool-result
+        // step cannot fail; tool parameters and the request identity are
+        // validated where they are built, so the remaining steps cannot fail.
+        assert!(ModelMessageDto::new(ModelRoleDto::Tool, "result").is_err());
+        assert!(
+            crate::model::ModelToolDefinitionDto::new("read", "Read a file", "not-json").is_err()
+        );
+        assert!(ModelRequestDto::new(RunId::new(), " ", vec![message], None).is_err());
+        assert!(ModelRequestDto::new(RunId::new(), "fixture", Vec::new(), None).is_err());
+
+        let error = crate::mapping::fixed_error(GENERIC_CHAT_REQUEST_REJECTED);
+        assert_eq!(error.code(), "generic_chat_request_rejected");
+        assert_eq!(error.retry(), ErrorRetryDto::Never);
+    }
+
     fn assistant_tool_request(first: &ToolCallDto, second: &ToolCallDto) -> ModelRequestDto {
         ModelRequestDto::new(
             RunId::new(),
@@ -1077,6 +1140,33 @@ mod tests {
         assert!(matches!(
             post_finish.last(),
             Some(Err(error)) if error.code() == "generic_chat_post_finish_content"
+        ));
+    }
+
+    #[test]
+    fn a_rejected_usage_total_ends_the_chunk_before_any_delta() {
+        // A rejected usage total is terminal, so the text delta and the finish
+        // reason carried beside it are dropped instead of being queued behind
+        // the failure: nothing may follow a terminal fact.
+        let events = collect_chunks(vec![
+            Ok(chunk(
+                vec![choice(Some("late"), None, None, Some("stop"))],
+                Some(async_openai::types::chat::CompletionUsage {
+                    prompt_tokens: 1,
+                    completion_tokens: 1,
+                    total_tokens: 1,
+                    prompt_tokens_details: None,
+                    completion_tokens_details: None,
+                }),
+            )),
+            Ok(chunk(vec![choice(Some("later"), None, None, None)], None)),
+        ]);
+
+        assert_eq!(events.len(), 2, "no fact may follow the terminal failure");
+        assert_eq!(events[0], Ok(ModelEventDto::started()));
+        assert!(matches!(
+            events[1],
+            Err(ref error) if error.code() == "generic_chat_invalid_usage"
         ));
     }
 
