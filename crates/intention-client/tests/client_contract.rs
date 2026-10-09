@@ -18,9 +18,25 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use intention_client::{DaemonLauncher, IntentionClient, ProcessDaemonLauncher};
 use intention_proto::{
-    ClientRequestDto, CreateSessionCommandDto, DaemonHealthDto, DaemonReadinessDto,
-    InterruptRunAcceptedDto, ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto,
-    RunId, SessionId, SessionSnapshotDto, TurnId, decode_request_line, encode_request,
+    AcceptProviderCatalogRemovalCommandDto, CatalogRevisionId, ClientRequestDto, ConfigRevisionId,
+    ConfigurationEditAcceptedDto, ConfigurationEditDto, ConfigurationReloadAcceptedDto,
+    ContextPreservationCapabilityDto, CreateSessionCommandDto, CredentialRotationAcceptedDto,
+    CredentialTransportDto, DaemonHealthDto, DaemonReadinessDto, IdempotencyKey,
+    InterruptRunAcceptedDto, ListProviderCatalogQueryDto, ModelCapabilitySetV1,
+    ModelCapabilityTaxonomyVersionDto, ModelInputKindDto, ProtocolDaemonMessageDto,
+    ProtocolResultDto, ProviderCapabilityAvailabilityDto, ProviderCatalogActivationStateDto,
+    ProviderCatalogCandidateHandleDto, ProviderCatalogCandidateRejectedDto, ProviderCatalogPageDto,
+    ProviderCatalogRemovalAcceptedDto, ProviderCatalogStatusDto, ProviderDiscoveryAttemptId,
+    ProviderDiscoveryResultDto, ProviderDriverCapabilitiesDto, ProviderExecutionPolicyDto,
+    ProviderHealthEvidenceDto, ProviderHealthStateDto, ProviderKindDescriptorRevisionId,
+    ProviderKindId, ProviderModelRecordDto, ProviderProfileEntryDto, ProviderProfileId,
+    ProviderProfileOverrideDto, ProviderProfileReadinessDto, ProviderProfileRevisionId,
+    ReasoningCapabilityDto, ReasoningEffortLevelDto, ReasoningHistoryTransferDto,
+    RejectProviderCatalogCandidateCommandDto, RemoveTurnAcceptedDto, RunId,
+    SendUserTurnAcceptedDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId,
+    SessionProviderProfileProjectionDto, SessionSnapshotDto, SetSessionProviderProfileAcceptedDto,
+    SetSessionProviderProfileCommandDto, ToolExchangeCapabilityDto, TurnId, decode_request_line,
+    encode_request,
 };
 use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, ProjectId, WorkspaceId};
 use intention_proto::{MessageKindDto, RunModeDto, SessionProjectionDto};
@@ -53,6 +69,11 @@ enum FixtureResponse {
     Snapshot(SessionSnapshotDto),
     /// A valid current-wire reply carrying the result the fixture selects.
     Result(ProtocolResultDto),
+    /// A valid current-wire reply sent only when the decoded request matches.
+    CheckedRequest {
+        expected: ClientRequestDto,
+        result: ProtocolResultDto,
+    },
     /// A peer that answers a current-wire request with another dialect's line.
     Foreign,
     Disconnect,
@@ -143,10 +164,33 @@ async fn serve_fixture_connection(
             .expect("fixture foreign line sends");
         return;
     }
+    if !expected_request_matches(&response, request.request()) {
+        messages
+            .send_message(&fixture_reply(
+                request.id(),
+                &FixtureResponse::Rejected(ErrorDto::validation(
+                    "fixture_request_mismatch",
+                    "the fixture request does not carry the expected command",
+                )),
+            ))
+            .await
+            .expect("fixture mismatch rejection sends");
+        return;
+    }
     messages
         .send_message(&fixture_reply(request.id(), &response))
         .await
         .expect("fixture reply sends");
+}
+
+/// Reports whether one decoded request is the command the fixture checks.
+///
+/// A fixture that checks no request accepts every decoded request.
+fn expected_request_matches(response: &FixtureResponse, request: &ClientRequestDto) -> bool {
+    match response {
+        FixtureResponse::CheckedRequest { expected, .. } => request == expected,
+        _ => true,
+    }
 }
 
 fn fixture_reply(request_id: u64, response: &FixtureResponse) -> ProtocolDaemonMessageDto {
@@ -162,6 +206,9 @@ fn fixture_reply(request_id: u64, response: &FixtureResponse) -> ProtocolDaemonM
             ProtocolResultDto::SessionSnapshot(snapshot.clone()),
         ),
         FixtureResponse::Result(result) => {
+            ProtocolDaemonMessageDto::reply(request_id, result.clone())
+        }
+        FixtureResponse::CheckedRequest { result, .. } => {
             ProtocolDaemonMessageDto::reply(request_id, result.clone())
         }
         // The peer that answers with a foreign line and the peer that closes the
@@ -187,6 +234,107 @@ fn fixture_create_command(session_id: SessionId) -> CreateSessionCommandDto {
         .expect("fixture workspace root is valid"),
         RunModeDto::Build,
     )
+}
+
+fn fixture_profile_id(value: &str) -> ProviderProfileId {
+    ProviderProfileId::parse(value).expect("fixture profile identity is valid")
+}
+
+fn fixture_kind_id() -> ProviderKindId {
+    ProviderKindId::parse("openrouter").expect("fixture kind identity is valid")
+}
+
+fn fixture_execution_policy() -> ProviderExecutionPolicyDto {
+    ProviderExecutionPolicyDto::new(30, 2).expect("fixture execution policy is valid")
+}
+
+fn fixture_capability_subset() -> ModelCapabilitySetV1 {
+    ModelCapabilitySetV1::new(
+        ModelCapabilityTaxonomyVersionDto::current(),
+        ModelInputKindDto::TextOnly,
+        ProviderCapabilityAvailabilityDto::Enabled,
+        ProviderCapabilityAvailabilityDto::Disabled,
+        ReasoningCapabilityDto::textual_reasoning_v1(vec![ReasoningEffortLevelDto::Medium], true)
+            .expect("fixture reasoning capability is valid"),
+        ToolExchangeCapabilityDto::model_tool_loop_v1("fixture-tool-loop-v1")
+            .expect("fixture tool loop is valid"),
+        ContextPreservationCapabilityDto::local_durable_history_v1(
+            ReasoningHistoryTransferDto::textual_history_v1("fixture-compatibility-v1")
+                .expect("fixture transfer contract is valid"),
+        ),
+    )
+    .expect("fixture capability subset is valid")
+}
+
+fn fixture_entry(profile_id: ProviderProfileId) -> ProviderProfileEntryDto {
+    ProviderProfileEntryDto::new(
+        profile_id,
+        "Main",
+        true,
+        fixture_kind_id(),
+        ProviderKindDescriptorRevisionId::new(),
+        "fixture-model",
+        Some("https://provider.example/v1".to_owned()),
+        fixture_execution_policy(),
+        fixture_capability_subset(),
+        CredentialTransportDto::bearer(),
+        true,
+        ProviderDriverCapabilitiesDto::new(true, true, true),
+        ProviderProfileReadinessDto::Ready,
+        None,
+    )
+    .expect("fixture provider entry is valid")
+}
+
+fn fixture_catalog_page() -> ProviderCatalogPageDto {
+    ProviderCatalogPageDto::new(
+        Some(CatalogRevisionId::new()),
+        Some(fixture_profile_id("main")),
+        vec![fixture_entry(fixture_profile_id("main"))],
+        None,
+        false,
+    )
+    .expect("fixture catalog page is valid")
+}
+
+fn fixture_catalog_status() -> ProviderCatalogStatusDto {
+    ProviderCatalogStatusDto::new(
+        ProviderCatalogActivationStateDto::Active,
+        None,
+        Some(CatalogRevisionId::new()),
+        None,
+        Some(fixture_profile_id("main")),
+        Vec::new(),
+    )
+    .expect("fixture catalog status is valid")
+}
+
+fn fixture_candidate_handle() -> ProviderCatalogCandidateHandleDto {
+    ProviderCatalogCandidateHandleDto::new(CatalogRevisionId::new(), CatalogRevisionId::new())
+        .expect("fixture candidate handle is valid")
+}
+
+fn fixture_session_profile(session_id: SessionId) -> SessionProviderProfileProjectionDto {
+    SessionProviderProfileProjectionDto::new(
+        session_id,
+        Some(fixture_profile_id("main")),
+        Some(fixture_entry(fixture_profile_id("main"))),
+        None,
+        1,
+        Some(fixture_profile_id("main")),
+    )
+    .expect("fixture session provider projection is valid")
+}
+
+fn fixture_discovery_result() -> ProviderDiscoveryResultDto {
+    ProviderDiscoveryResultDto::new(
+        ProviderDiscoveryAttemptId::new(),
+        vec![
+            ProviderModelRecordDto::new("fixture-model", None)
+                .expect("fixture model record is valid"),
+        ],
+    )
+    .expect("fixture discovery result is valid")
 }
 
 #[test]
@@ -534,4 +682,569 @@ async fn foreign_peer_on_the_current_endpoint_is_stale() {
     assert_eq!(error.code(), "stale_daemon_protocol");
     assert_eq!(error.category(), ErrorCategoryDto::Unavailable);
     server.await.expect("foreign fixture server completes");
+}
+
+#[tokio::test]
+async fn list_provider_catalog_validates_success_and_rejection() {
+    let _guard = fixture_guard();
+    let page = fixture_catalog_page();
+
+    let page_endpoint = endpoint();
+    let response = FixtureResponse::Result(ProtocolResultDto::ProviderCatalogPage(page.clone()));
+    let server = start_fixture_server(page_endpoint.clone(), response.clone());
+    let received = client(page_endpoint, response, Arc::new(AtomicUsize::new(0)))
+        .list_provider_catalog(
+            ListProviderCatalogQueryDto::new(None).expect("fixture catalog query is valid"),
+        )
+        .await
+        .expect("a typed catalog page is returned");
+    assert_eq!(received, page);
+    assert_eq!(received.entries().len(), 1);
+    server.await.expect("catalog fixture server completes");
+
+    // A reply of another operation is not this request's answer.
+    let foreign_endpoint = endpoint();
+    let response =
+        FixtureResponse::Result(ProtocolResultDto::DaemonHealth(DaemonHealthDto::ready()));
+    let server = start_fixture_server(foreign_endpoint.clone(), response.clone());
+    assert_eq!(
+        client(foreign_endpoint, response, Arc::new(AtomicUsize::new(0)))
+            .list_provider_catalog(
+                ListProviderCatalogQueryDto::new(None).expect("fixture catalog query is valid"),
+            )
+            .await
+            .expect_err("a reply of another operation is not this request's answer")
+            .code(),
+        "invalid_local_protocol_response"
+    );
+    server.await.expect("foreign fixture server completes");
+}
+
+#[tokio::test]
+async fn provider_catalog_status_validates_success_and_rejection() {
+    let _guard = fixture_guard();
+    let status = fixture_catalog_status();
+
+    let status_endpoint = endpoint();
+    let response =
+        FixtureResponse::Result(ProtocolResultDto::ProviderCatalogStatus(status.clone()));
+    let server = start_fixture_server(status_endpoint.clone(), response.clone());
+    let received = client(status_endpoint, response, Arc::new(AtomicUsize::new(0)))
+        .provider_catalog_status()
+        .await
+        .expect("a typed catalog status is returned");
+    assert_eq!(received, status);
+    assert_eq!(
+        received.activation_state(),
+        ProviderCatalogActivationStateDto::Active
+    );
+    server
+        .await
+        .expect("catalog status fixture server completes");
+
+    // A reply of another operation is not this request's answer.
+    let foreign_endpoint = endpoint();
+    let response =
+        FixtureResponse::Result(ProtocolResultDto::DaemonHealth(DaemonHealthDto::ready()));
+    let server = start_fixture_server(foreign_endpoint.clone(), response.clone());
+    assert_eq!(
+        client(foreign_endpoint, response, Arc::new(AtomicUsize::new(0)))
+            .provider_catalog_status()
+            .await
+            .expect_err("a reply of another operation is not this request's answer")
+            .code(),
+        "invalid_local_protocol_response"
+    );
+    server.await.expect("foreign fixture server completes");
+}
+
+#[tokio::test]
+async fn set_session_provider_profile_validates_success_and_foreign_scope_rejection() {
+    let _guard = fixture_guard();
+    let session_id = SessionId::new();
+    let profile_id = fixture_profile_id("main");
+    let command = SetSessionProviderProfileCommandDto::new(
+        session_id,
+        profile_id.clone(),
+        2,
+        IdempotencyKey::new(),
+    );
+    let accepted = SetSessionProviderProfileAcceptedDto::new(session_id, true, 3);
+
+    let accepted_endpoint = endpoint();
+    let response = FixtureResponse::Result(ProtocolResultDto::SessionProviderProfileSet(accepted));
+    let server = start_fixture_server(accepted_endpoint.clone(), response.clone());
+    let received = client(accepted_endpoint, response, Arc::new(AtomicUsize::new(0)))
+        .set_session_provider_profile(command)
+        .await
+        .expect("typed session default acceptance is returned");
+    assert!(received.changed());
+    assert_eq!(received.session_projection_revision(), 3);
+    server
+        .await
+        .expect("session default fixture server completes");
+
+    // An acceptance for another session is not this request's answer.
+    let foreign_endpoint = endpoint();
+    let response = FixtureResponse::Result(ProtocolResultDto::SessionProviderProfileSet(
+        SetSessionProviderProfileAcceptedDto::new(SessionId::new(), true, 3),
+    ));
+    let server = start_fixture_server(foreign_endpoint.clone(), response.clone());
+    assert_eq!(
+        client(foreign_endpoint, response, Arc::new(AtomicUsize::new(0)))
+            .set_session_provider_profile(SetSessionProviderProfileCommandDto::new(
+                session_id,
+                profile_id,
+                2,
+                IdempotencyKey::new(),
+            ))
+            .await
+            .expect_err("an acceptance for another session is not this request's answer")
+            .code(),
+        "invalid_local_protocol_response"
+    );
+    server
+        .await
+        .expect("foreign scope fixture server completes");
+}
+
+#[tokio::test]
+async fn session_provider_profile_validates_success_and_foreign_scope_rejection() {
+    let _guard = fixture_guard();
+    let session_id = SessionId::new();
+    let projection = fixture_session_profile(session_id);
+
+    let projection_endpoint = endpoint();
+    let response = FixtureResponse::Result(ProtocolResultDto::SessionProviderProfile(
+        projection.clone(),
+    ));
+    let server = start_fixture_server(projection_endpoint.clone(), response.clone());
+    let received = client(projection_endpoint, response, Arc::new(AtomicUsize::new(0)))
+        .session_provider_profile(session_id)
+        .await
+        .expect("the requested session provider projection is returned");
+    assert_eq!(received, projection);
+    assert_eq!(
+        received.durable_profile_id(),
+        Some(&fixture_profile_id("main"))
+    );
+    server
+        .await
+        .expect("session provider fixture server completes");
+
+    // A projection for another session is not this request's answer.
+    let foreign_endpoint = endpoint();
+    let response = FixtureResponse::Result(ProtocolResultDto::SessionProviderProfile(
+        fixture_session_profile(SessionId::new()),
+    ));
+    let server = start_fixture_server(foreign_endpoint.clone(), response.clone());
+    assert_eq!(
+        client(foreign_endpoint, response, Arc::new(AtomicUsize::new(0)))
+            .session_provider_profile(session_id)
+            .await
+            .expect_err("a projection for another session is not this request's answer")
+            .code(),
+        "invalid_local_protocol_response"
+    );
+    server
+        .await
+        .expect("foreign scope fixture server completes");
+}
+
+#[tokio::test]
+async fn reload_configuration_validates_success_and_rejection() {
+    let _guard = fixture_guard();
+    let accepted = ConfigurationReloadAcceptedDto::new(
+        ConfigRevisionId::new(),
+        Some(CatalogRevisionId::new()),
+    );
+
+    let accepted_endpoint = endpoint();
+    let response = FixtureResponse::Result(ProtocolResultDto::ConfigurationReloaded(accepted));
+    let server = start_fixture_server(accepted_endpoint.clone(), response.clone());
+    let received = client(accepted_endpoint, response, Arc::new(AtomicUsize::new(0)))
+        .reload_configuration(IdempotencyKey::new())
+        .await
+        .expect("typed configuration reload acceptance is returned");
+    assert_eq!(received.config_revision_id(), accepted.config_revision_id());
+    assert_eq!(
+        received.catalog_revision_id(),
+        accepted.catalog_revision_id()
+    );
+    server.await.expect("reload fixture server completes");
+
+    // A reply of another operation is not this request's answer.
+    let foreign_endpoint = endpoint();
+    let response =
+        FixtureResponse::Result(ProtocolResultDto::DaemonHealth(DaemonHealthDto::ready()));
+    let server = start_fixture_server(foreign_endpoint.clone(), response.clone());
+    assert_eq!(
+        client(foreign_endpoint, response, Arc::new(AtomicUsize::new(0)))
+            .reload_configuration(IdempotencyKey::new())
+            .await
+            .expect_err("a reply of another operation is not this request's answer")
+            .code(),
+        "invalid_local_protocol_response"
+    );
+    server.await.expect("foreign fixture server completes");
+}
+
+#[tokio::test]
+async fn rotate_provider_credential_validates_success_and_foreign_scope_rejection() {
+    let _guard = fixture_guard();
+    let profile_id = fixture_profile_id("main");
+    let accepted = CredentialRotationAcceptedDto::new(profile_id.clone());
+
+    let accepted_endpoint = endpoint();
+    let response = FixtureResponse::Result(ProtocolResultDto::ProviderCredentialRotated(
+        accepted.clone(),
+    ));
+    let server = start_fixture_server(accepted_endpoint.clone(), response.clone());
+    let received = client(accepted_endpoint, response, Arc::new(AtomicUsize::new(0)))
+        .rotate_provider_credential(profile_id.clone(), IdempotencyKey::new())
+        .await
+        .expect("typed credential rotation acceptance is returned");
+    assert_eq!(received.profile_id(), &profile_id);
+    server.await.expect("rotation fixture server completes");
+
+    // An acceptance for another profile is not this request's answer.
+    let foreign_endpoint = endpoint();
+    let response = FixtureResponse::Result(ProtocolResultDto::ProviderCredentialRotated(
+        CredentialRotationAcceptedDto::new(fixture_profile_id("secondary")),
+    ));
+    let server = start_fixture_server(foreign_endpoint.clone(), response.clone());
+    assert_eq!(
+        client(foreign_endpoint, response, Arc::new(AtomicUsize::new(0)))
+            .rotate_provider_credential(profile_id, IdempotencyKey::new())
+            .await
+            .expect_err("an acceptance for another profile is not this request's answer")
+            .code(),
+        "invalid_local_protocol_response"
+    );
+    server
+        .await
+        .expect("foreign scope fixture server completes");
+}
+
+#[tokio::test]
+async fn check_provider_health_validates_success_and_foreign_scope_rejection() {
+    let _guard = fixture_guard();
+    let profile_id = fixture_profile_id("main");
+    let evidence =
+        ProviderHealthEvidenceDto::new(profile_id.clone(), ProviderHealthStateDto::Available, None)
+            .expect("fixture health evidence is valid");
+
+    let evidence_endpoint = endpoint();
+    let response = FixtureResponse::Result(ProtocolResultDto::ProviderHealth(evidence.clone()));
+    let server = start_fixture_server(evidence_endpoint.clone(), response.clone());
+    let received = client(evidence_endpoint, response, Arc::new(AtomicUsize::new(0)))
+        .check_provider_health(profile_id.clone())
+        .await
+        .expect("typed health evidence is returned");
+    assert_eq!(received, evidence);
+    assert_eq!(received.state(), ProviderHealthStateDto::Available);
+    server.await.expect("health fixture server completes");
+
+    // Evidence for another provider is not this request's answer.
+    let foreign_endpoint = endpoint();
+    let response = FixtureResponse::Result(ProtocolResultDto::ProviderHealth(
+        ProviderHealthEvidenceDto::new(
+            fixture_profile_id("secondary"),
+            ProviderHealthStateDto::Available,
+            None,
+        )
+        .expect("fixture health evidence is valid"),
+    ));
+    let server = start_fixture_server(foreign_endpoint.clone(), response.clone());
+    assert_eq!(
+        client(foreign_endpoint, response, Arc::new(AtomicUsize::new(0)))
+            .check_provider_health(profile_id)
+            .await
+            .expect_err("evidence for another provider is not this request's answer")
+            .code(),
+        "invalid_local_protocol_response"
+    );
+    server
+        .await
+        .expect("foreign scope fixture server completes");
+}
+
+#[tokio::test]
+async fn discover_provider_models_validates_success_and_rejection() {
+    let _guard = fixture_guard();
+    let result = fixture_discovery_result();
+
+    let result_endpoint = endpoint();
+    let response =
+        FixtureResponse::Result(ProtocolResultDto::ProviderModelsDiscovered(result.clone()));
+    let server = start_fixture_server(result_endpoint.clone(), response.clone());
+    let received = client(result_endpoint, response, Arc::new(AtomicUsize::new(0)))
+        .discover_provider_models(fixture_profile_id("main"))
+        .await
+        .expect("typed discovery result is returned");
+    assert_eq!(received, result);
+    assert_eq!(received.records().len(), 1);
+    server.await.expect("discovery fixture server completes");
+
+    // A reply of another operation is not this request's answer.
+    let foreign_endpoint = endpoint();
+    let response =
+        FixtureResponse::Result(ProtocolResultDto::DaemonHealth(DaemonHealthDto::ready()));
+    let server = start_fixture_server(foreign_endpoint.clone(), response.clone());
+    assert_eq!(
+        client(foreign_endpoint, response, Arc::new(AtomicUsize::new(0)))
+            .discover_provider_models(fixture_profile_id("main"))
+            .await
+            .expect_err("a reply of another operation is not this request's answer")
+            .code(),
+        "invalid_local_protocol_response"
+    );
+    server.await.expect("foreign fixture server completes");
+}
+
+#[tokio::test]
+async fn apply_configuration_document_validates_success_and_rejection() {
+    let _guard = fixture_guard();
+    let accepted = ConfigurationEditAcceptedDto::new(ConfigRevisionId::new(), false);
+
+    let accepted_endpoint = endpoint();
+    let response =
+        FixtureResponse::Result(ProtocolResultDto::ConfigurationDocumentApplied(accepted));
+    let server = start_fixture_server(accepted_endpoint.clone(), response.clone());
+    let received = client(accepted_endpoint, response, Arc::new(AtomicUsize::new(0)))
+        .apply_configuration_document("schema_version = 1\n".to_owned(), IdempotencyKey::new())
+        .await
+        .expect("typed applied-document acceptance is returned");
+    assert_eq!(received.config_revision_id(), accepted.config_revision_id());
+    server
+        .await
+        .expect("applied document fixture server completes");
+
+    assert_eq!(
+        client(
+            endpoint(),
+            FixtureResponse::Result(ProtocolResultDto::DaemonHealth(DaemonHealthDto::ready())),
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .apply_configuration_document(" ".to_owned(), IdempotencyKey::new())
+        .await
+        .expect_err("a blank candidate document fails before any request")
+        .code(),
+        "invalid_configuration_edit"
+    );
+
+    // A reply of another operation is not this request's answer.
+    let foreign_endpoint = endpoint();
+    let response =
+        FixtureResponse::Result(ProtocolResultDto::DaemonHealth(DaemonHealthDto::ready()));
+    let server = start_fixture_server(foreign_endpoint.clone(), response.clone());
+    assert_eq!(
+        client(foreign_endpoint, response, Arc::new(AtomicUsize::new(0)))
+            .apply_configuration_document("schema_version = 1\n".to_owned(), IdempotencyKey::new())
+            .await
+            .expect_err("a reply of another operation is not this request's answer")
+            .code(),
+        "invalid_local_protocol_response"
+    );
+    server.await.expect("foreign fixture server completes");
+}
+
+#[tokio::test]
+async fn apply_configuration_edits_validates_success_and_rejection() {
+    let _guard = fixture_guard();
+    let accepted = ConfigurationEditAcceptedDto::new(ConfigRevisionId::new(), true);
+
+    let accepted_endpoint = endpoint();
+    let response = FixtureResponse::Result(ProtocolResultDto::ConfigurationEditsApplied(accepted));
+    let server = start_fixture_server(accepted_endpoint.clone(), response.clone());
+    let received = client(accepted_endpoint, response, Arc::new(AtomicUsize::new(0)))
+        .apply_configuration_edits(
+            vec![ConfigurationEditDto::set_profile_enabled(
+                fixture_profile_id("main"),
+                true,
+            )],
+            IdempotencyKey::new(),
+        )
+        .await
+        .expect("typed applied-edits acceptance is returned");
+    assert_eq!(received.config_revision_id(), accepted.config_revision_id());
+    server
+        .await
+        .expect("applied edits fixture server completes");
+
+    // A reply of another operation is not this request's answer.
+    let foreign_endpoint = endpoint();
+    let response =
+        FixtureResponse::Result(ProtocolResultDto::DaemonHealth(DaemonHealthDto::ready()));
+    let server = start_fixture_server(foreign_endpoint.clone(), response.clone());
+    assert_eq!(
+        client(foreign_endpoint, response, Arc::new(AtomicUsize::new(0)))
+            .apply_configuration_edits(
+                vec![ConfigurationEditDto::set_profile_enabled(
+                    fixture_profile_id("main"),
+                    true,
+                )],
+                IdempotencyKey::new(),
+            )
+            .await
+            .expect_err("a reply of another operation is not this request's answer")
+            .code(),
+        "invalid_local_protocol_response"
+    );
+    server.await.expect("foreign fixture server completes");
+}
+
+#[tokio::test]
+async fn accept_provider_catalog_removal_validates_success_and_foreign_scope_rejection() {
+    let _guard = fixture_guard();
+    let handle = fixture_candidate_handle();
+    let command = AcceptProviderCatalogRemovalCommandDto::new(handle, IdempotencyKey::new());
+    let accepted = ProviderCatalogRemovalAcceptedDto::new(handle.candidate_revision_id());
+
+    let accepted_endpoint = endpoint();
+    let response =
+        FixtureResponse::Result(ProtocolResultDto::ProviderCatalogRemovalAccepted(accepted));
+    let server = start_fixture_server(accepted_endpoint.clone(), response.clone());
+    let received = client(accepted_endpoint, response, Arc::new(AtomicUsize::new(0)))
+        .accept_provider_catalog_removal(command)
+        .await
+        .expect("typed removal acceptance is returned");
+    assert_eq!(
+        received.catalog_revision_id(),
+        accepted.catalog_revision_id()
+    );
+    server.await.expect("removal fixture server completes");
+
+    // An acceptance of another catalog revision is not this request's answer.
+    let foreign_endpoint = endpoint();
+    let response = FixtureResponse::Result(ProtocolResultDto::ProviderCatalogRemovalAccepted(
+        ProviderCatalogRemovalAcceptedDto::new(CatalogRevisionId::new()),
+    ));
+    let server = start_fixture_server(foreign_endpoint.clone(), response.clone());
+    assert_eq!(
+        client(foreign_endpoint, response, Arc::new(AtomicUsize::new(0)))
+            .accept_provider_catalog_removal(AcceptProviderCatalogRemovalCommandDto::new(
+                handle,
+                IdempotencyKey::new(),
+            ))
+            .await
+            .expect_err("an acceptance of another revision is not this request's answer")
+            .code(),
+        "invalid_local_protocol_response"
+    );
+    server
+        .await
+        .expect("foreign scope fixture server completes");
+}
+
+#[tokio::test]
+async fn reject_provider_catalog_candidate_validates_success_and_foreign_scope_rejection() {
+    let _guard = fixture_guard();
+    let handle = fixture_candidate_handle();
+    let command = RejectProviderCatalogCandidateCommandDto::new(handle, IdempotencyKey::new());
+    let rejected =
+        ProviderCatalogCandidateRejectedDto::new(Some(handle.expected_active_revision_id()));
+
+    let rejected_endpoint = endpoint();
+    let response = FixtureResponse::Result(ProtocolResultDto::ProviderCatalogCandidateRejected(
+        rejected,
+    ));
+    let server = start_fixture_server(rejected_endpoint.clone(), response.clone());
+    let received = client(rejected_endpoint, response, Arc::new(AtomicUsize::new(0)))
+        .reject_provider_catalog_candidate(command)
+        .await
+        .expect("typed candidate rejection evidence is returned");
+    assert_eq!(
+        received.active_catalog_revision_id(),
+        rejected.active_catalog_revision_id()
+    );
+    server.await.expect("rejection fixture server completes");
+
+    // Evidence for another active catalog revision is not this request's answer.
+    let foreign_endpoint = endpoint();
+    let response = FixtureResponse::Result(ProtocolResultDto::ProviderCatalogCandidateRejected(
+        ProviderCatalogCandidateRejectedDto::new(Some(CatalogRevisionId::new())),
+    ));
+    let server = start_fixture_server(foreign_endpoint.clone(), response.clone());
+    assert_eq!(
+        client(foreign_endpoint, response, Arc::new(AtomicUsize::new(0)))
+            .reject_provider_catalog_candidate(RejectProviderCatalogCandidateCommandDto::new(
+                handle,
+                IdempotencyKey::new(),
+            ))
+            .await
+            .expect_err("evidence for another revision is not this request's answer")
+            .code(),
+        "invalid_local_protocol_response"
+    );
+    server
+        .await
+        .expect("foreign scope fixture server completes");
+}
+
+#[tokio::test]
+async fn send_user_turn_with_profile_validates_success_and_foreign_scope_rejection() {
+    let _guard = fixture_guard();
+    let session_id = SessionId::new();
+    let profile_id = fixture_profile_id("main");
+    let provider_profile =
+        ProviderProfileOverrideDto::new(profile_id.clone(), Some(ProviderProfileRevisionId::new()));
+    let idempotency_key = IdempotencyKey::new();
+    let content = "fixture turn".to_owned();
+    let expected_command =
+        SendUserTurnCommandDto::new(session_id, idempotency_key, content.clone())
+            .expect("fixture turn command is valid")
+            .with_provider_profile(Some(provider_profile.clone()));
+    let outcome = SendUserTurnOutcomeDto::Started {
+        run_id: RunId::new(),
+        config_revision_id: ConfigRevisionId::new(),
+    };
+    let accepted = SendUserTurnAcceptedDto::new(session_id, TurnId::new(), outcome);
+
+    let accepted_endpoint = endpoint();
+    let response = FixtureResponse::CheckedRequest {
+        expected: ClientRequestDto::SendUserTurn(expected_command.clone()),
+        result: ProtocolResultDto::TurnAccepted(accepted),
+    };
+    let server = start_fixture_server(accepted_endpoint.clone(), response.clone());
+    let received = client(accepted_endpoint, response, Arc::new(AtomicUsize::new(0)))
+        .send_user_turn_with_profile(
+            session_id,
+            idempotency_key,
+            content.clone(),
+            provider_profile.clone(),
+        )
+        .await
+        .expect("a checked turn command is accepted");
+    assert_eq!(received, outcome);
+    server
+        .await
+        .expect("turn override fixture server completes");
+
+    // An accepted turn of another session is not this request's answer.
+    let foreign_endpoint = endpoint();
+    let response = FixtureResponse::Result(ProtocolResultDto::TurnAccepted(
+        SendUserTurnAcceptedDto::new(
+            SessionId::new(),
+            TurnId::new(),
+            SendUserTurnOutcomeDto::Pending,
+        ),
+    ));
+    let server = start_fixture_server(foreign_endpoint.clone(), response.clone());
+    assert_eq!(
+        client(foreign_endpoint, response, Arc::new(AtomicUsize::new(0)))
+            .send_user_turn_with_profile(
+                session_id,
+                IdempotencyKey::new(),
+                content,
+                provider_profile,
+            )
+            .await
+            .expect_err("an accepted turn of another session is not this request's answer")
+            .code(),
+        "invalid_local_protocol_response"
+    );
+    server
+        .await
+        .expect("foreign scope fixture server completes");
 }
