@@ -1,4 +1,4 @@
-# Tools, Workspace, and Hooks
+# Tools and Workspace
 
 **Current policy.**
 
@@ -124,7 +124,7 @@ returns its captured output as a partial result when stopped.
 ### Tooling execution API and status rendering
 
 `intention-tools` exposes exactly one current execution surface: the cancellation-aware dispatch
-`ToolService::dispatch_with_cancellation(call, input, cancellation)` returns a typed `ToolDispatchOutcome`
+`ToolService::dispatch_with_cancellation(input, cancellation)` returns a typed `ToolDispatchOutcome`
 (`completed(ToolResult)` or `interrupted(cause, partial)`), and the application renders each completed result into the
 bounded, redacted text its durable rows carry. There are no compatibility wrappers without cancellation and no second
 invocation or result-boundary entry. Every executed program is classified by a typed `ToolProcessStatus` (`success`,

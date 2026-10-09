@@ -41,7 +41,7 @@ silently merges into an in-flight request.
 A session has an obligatory `WorkspaceRoot`. All filesystem tools resolve paths against it, reject absolute and parent
 (`..`) paths at the typed input, and never fall back to process `pwd`. Process execution receives it as CWD. The root is
 an addressing anchor, not a containment boundary: a path may leave it through a symbolic link, and v1 is trusted local
-execution, not a sandbox ([architecture 05](05-tools-workspace-and-hooks.md)).
+execution, not a sandbox ([architecture 05](05-tools-and-workspace.md)).
 
 ### 7. Cross-cutting features attach as ordinary calls
 
@@ -127,7 +127,7 @@ work; the second stays owned by the named slice.
 | Topic | Settled decision and source |
 | --- | --- |
 | Turn input | A user turn accepted during an active run is recorded as a durable pending turn and joins that run's live context in FIFO order at the next model boundary; removal of a not-yet-seen pending turn stays explicit, `run.interrupt` stops the in-flight call with a notice while the run continues, and no automatic retry or resume exists ([architecture 04](04-sessions-runs-events-and-storage.md), "Pending turns"). |
-| Risk policy | Build runs without a per-action confirmation barrier for configured active capabilities, while Plan keeps hard-denied project writes and an advisory-guided `execute` ([architecture 07](07-plan-and-build-modes.md)); the exact capability taxonomy and audit policy for `execute`, network, and destructive file actions remains listed as open in [architecture 05](05-tools-workspace-and-hooks.md). |
+| Risk policy | Build runs without a per-action confirmation barrier for configured active capabilities, while Plan keeps hard-denied project writes and an advisory-guided `execute` ([architecture 07](07-plan-and-build-modes.md)); the exact capability taxonomy and audit policy for `execute`, network, and destructive file actions remains listed as open in [architecture 05](05-tools-and-workspace.md). |
 | AppData location | Production SQLite state lives in the platform AppData/state location with no process-CWD fallback (roadmap M3), and the migration half of the question is closed by the single-live-schema rule. |
 | Schema history | The existence of databases is not an argument for keeping DB migrations or old-schema compatibility; every versioned system keeps exactly one live version and evolves in place. |
 | Plan revision mechanics | Each edit rewrites the single full-file `plan.md` artifact, preserves controlled metadata, increments the frontmatter revision, and persists a matching typed plan revision ([architecture 07](07-plan-and-build-modes.md)); no patch-record family exists, and Plan mode itself is M7 scope. |

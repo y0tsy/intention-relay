@@ -139,7 +139,7 @@ projection that comes from project material.
 
 - The file is addressed by joining its path onto the session's `WorkspaceRoot`;
 the root is an addressing anchor, not a security boundary, and no symlink or containment check exists
-([architecture 05](05-tools-workspace-and-hooks.md)); an unreadable or non-regular file fails closed.
+([architecture 05](05-tools-and-workspace.md)); an unreadable or non-regular file fails closed.
 - The file is read as bounded UTF-8 text; its content is never executed, never
 parsed as configuration, and never treated as a tool definition or policy input.
 - An absent file contributes nothing and is not a failure; a project without

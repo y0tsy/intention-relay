@@ -50,7 +50,7 @@ The following are mandatory candidates for automated architecture tests:
 | Rule | Required protection |
 | --- | --- |
 | Small-crate structure | Dependency graph check, deny cycles, and a manifest assertion for the required v1 crate set. |
-| Crate accountability | A Cargo-metadata-backed check that every workspace crate is classified exactly once and every active production crate keeps an integration test target. |
+| Crate accountability | A Cargo-metadata-backed check that every workspace crate is classified exactly once by its declared role and responsibility, that its named integration test targets match Cargo exactly, and that every active production crate keeps at least one. |
 | Composition ownership | Only `intention-daemon` selects concrete storage/provider/tool implementations. |
 | Adapter isolation | Adapter crates (`intention-tui` today; `intention-tauri` is added at M6) cannot depend directly on application runtime/storage implementations. |
 | DTO-first | Public cross-crate APIs use DTOs; forbidden implementation resources/SDK types cannot escape. |
@@ -116,7 +116,7 @@ The following scenarios must become executable before the corresponding capabili
 3. Invoke a filesystem tool with relative paths, and a `glob`/`grep` without an explicit path.
 4.  Verify relative access resolves from the session root, `execute` observes it as CWD, and the pathless search starts
    at the root; absolute and parent paths are addressed as given, not contained
-   ([architecture 05](05-tools-workspace-and-hooks.md)).
+   ([architecture 05](05-tools-and-workspace.md)).
 
 ### C. Durable run interruption
 

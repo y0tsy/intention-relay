@@ -13,7 +13,13 @@ Verification](10-test-driven-delivery-and-verification.md).
 The systems of documents 15 and 18-30 and of Slices 2-5 are not activated, and each activation requires an accepted
 activating specification ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
+## Closed milestones (M0-M5)
 
+M0-M5 are closed. Their per-milestone sections and the `docs/intention-relay/closeout/` acceptance evidence were
+removed as dead historical artifacts by `eeff780`, and both remain recoverable from repository history:
+`git show eeff780^:docs/intention-relay/architecture/11-implementation-roadmap.md` for the sections and
+`git show eeff780^:docs/intention-relay/closeout/` for the evidence. The milestones below therefore record the
+remaining plan (M6-M12); the delivered behavior of M0-M5 is described by the architecture documents themselves.
 
 ## Dependency graph
 
@@ -317,7 +323,8 @@ necessary;
 - no unapproved architectural, lint, coverage, feature, or dependency exception remains implicit;
 -  every public DTO and crate boundary agrees with the architecture documentation or the documentation is updated in the
 same change;
--  every milestone, M0-M9 and Milestones 11-12, records its acceptance evidence, and the `make ci` run covers them;
+-  every milestone, M0-M5 (in repository history) and M6-M9 and Milestones 11-12 (as recorded artifacts), records its
+acceptance evidence, and the `make ci` run covers them;
 - `make ci` passes from a clean environment using only pinned inputs.
 
 ## Milestone 11: Tool registry, model-tool loop, and Gateway/RLM bridge
@@ -329,8 +336,8 @@ activating specification per [architecture 12](12-quality-gates-and-makefile.md)
 
 ### Deliver
 
--  the fixed fourteen-slot registry, typed descriptor and registry revisions, frozen tool selection, and
-`WorkspaceRoot` semantics (architecture 15);
+-  the closed `ToolId` set and its code-owned spec match, where a new tool id is a new `ToolId` variant with its own
+spec (architecture 15);
 -  the model-tool loop: sequential steps, one ordered group per tool-calling step, durable `ToolCall`/`ToolResult`
 evidence, no-retry and no-resume recovery, and current-state tool-result delivery (architecture 15);
 -  bridge attachment and typed handshake, the ephemeral daemon-issued grant, immutable bridge-contract selection,
@@ -428,7 +435,8 @@ record gains authority;
 
 The v1 implementation phase is ready to claim architectural completion only when:
 
-- every milestone acceptance outcome has evidence (M0-M9 and Milestones 11-12);
+- every milestone acceptance outcome has evidence (M0-M5 in repository history, M6-M9 and Milestones 11-12 as
+recorded artifacts);
 - Tauri and TUI/REPL use the same typed client/protocol in real integration tests;
 - all critical architecture rules have automated protection or documented, approved justification;
 - security redaction and workspace boundary tests pass;

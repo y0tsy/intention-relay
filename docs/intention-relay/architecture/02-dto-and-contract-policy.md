@@ -1,5 +1,7 @@
 # DTO and Contract Policy
 
+**Current policy.**
+
 This document makes the DTO-first principle executable. It applies to all crate, process, persistence, provider, tool,
 and presentation boundaries.
 

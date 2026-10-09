@@ -45,11 +45,16 @@ closed six-variant `ToolId`, and any other tool name is rejected as `unknown_too
 The M1-M5 activation notes are historical records: the coverage policy is now the per-crate tiers declared in
 `quality/coverage.toml` ([12 Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
-## Planned crates
+## Pre-collapse crate map (historical)
+
+This table and the diagram below record the pre-collapse crate plan. They are superseded by the
+[Slice 1.5 crate map (activated)](#slice-15-crate-map-activated) further down, which is the live map; several crates
+named here (`intention-domain`, `intention-protocol`, `intention-application`, `intention-runtime`,
+`intention-model`, the provider crates, `intention-workspace`, and `intention-hooks`) are not workspace members.
 
 | Crate | Owns | May depend on |
 | --- | --- | --- |
-| `intention-proto` | ID newtypes, schema versions, common errors, time, envelopes. | Minimal shared dependencies only. |
+| `intention-proto` | ID newtypes, schema versions, common errors, and time. | Minimal shared dependencies only. |
 | `intention-engine` | Commands, queries, semantic use-case workflows, and protocol-result mapping plus deterministic run execution, interruption handling, context-window accounting, and recovery-before-ready, over DTO-only storage. | Domain, storage, tools, providers, configuration revisions, proto. |
 | `intention-storage` | DTO-only semantic repository methods, committed-change evidence, transcript and tool-result reads, and persisted configuration-revision inputs. | Config, domain, types. |
 | `intention-config` | TOML parsing, validation, resolved configuration and revision DTOs. | Types, domain as needed. |
@@ -64,7 +69,10 @@ The M1-M5 activation notes are historical records: the coverage policy is now th
 | `intention-tauri` (created at M6) | Tauri bootstrap and native bridge. | Client, protocol, presentation DTO mapping. |
 | `intention-tui` | TUI and REPL presentation adapters. | Client, protocol, presentation crates. |
 
-## Dependency direction
+## Pre-collapse dependency direction (historical)
+
+This diagram records the pre-collapse dependency direction. The live edges are the ones declared in
+`quality/architecture.toml` and shown by the activated crate map below.
 
 ```mermaid
 flowchart BT
@@ -168,7 +176,7 @@ transaction closure, SQL connection, filesystem path, or backend resource.
 -  `intention-storage` owns bundled SQLite opening and direct creation of the single current storage schema,
 single-transaction state writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId
 -> WorkspaceRootDto` association; the workspace addressing policy — the root as an anchor, not a containment boundary
-([architecture 05](05-tools-workspace-and-hooks.md)) — remains M5 policy ownership.
+([architecture 05](05-tools-and-workspace.md)) — remains M5 policy ownership.
 -  `intention-engine` decides valid run state edges and owns interruption handling: a stopped provider stream or tool
 call records a notice, resets its signal, and the run continues with its next model step. The repository owns run
 creation, pending-turn context joins, and recovery. It has no provider, tool, timer, or stream dependency in

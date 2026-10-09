@@ -129,7 +129,7 @@ resource, and no selection, cell, or checkpoint carries its source.
 An epoch's import surface is exactly the library directory named by `script_library_reference`; the parent, the
 workspace root as a second library, and any other path never enter it. The directory is addressed as
 `WorkspaceRoot.join('.ir/scripts')`; `WorkspaceRoot` is an addressing anchor and not a security boundary
-([architecture 05](05-tools-workspace-and-hooks.md)), so
+([architecture 05](05-tools-and-workspace.md)), so
 no lexical symlink or containment check gates the surface. A missing library directory yields an empty import surface,
 so a project without saved modules behaves as if the capability were absent; an unreadable library directory fails
 before effect with `kernel_script_library_unavailable`. Python-level import errors inside a cell stay ordinary safe

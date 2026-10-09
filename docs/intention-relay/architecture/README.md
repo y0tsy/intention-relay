@@ -25,11 +25,13 @@ flowchart TD
   BR --> CL
   CL --> TR[Local transport]
   TR --> DM[Intention daemon]
-  DM --> AP[Application]
-  AP --> RT[Run runtime]
-  AP --> ST[SQLite storage]
-  RT --> TL[Tools]
-  RT --> MD[Model drivers]
+  DM --> EN[Engine]
+  DM --> ST[SQLite storage]
+  DM --> MD[Model drivers]
+  DM --> TL[Tools]
+  EN --> ST
+  EN --> MD
+  EN --> TL
 ```
 
 <!-- UI: Svelte presentation; BR: Tauri Rust bridge; DM: single-user daemon. -->
@@ -45,7 +47,7 @@ flowchart TD
 | **Turn** | A causally identified unit of conversation, such as a user request or assistant response. |
 | **Pending turn** | A user turn accepted while a session run is active: durable input that joins that run's live context at the next model boundary and is removed only before it is seen. |
 | **Run** | One agent execution lifecycle started from an accepted user turn. |
-| **WorkspaceRoot** | The required addressing anchor and process CWD for every session tool: relative paths join the root, `execute` starts there, and pathless `glob`/`grep` search from there ([architecture 05](05-tools-workspace-and-hooks.md)). |
+| **WorkspaceRoot** | The required addressing anchor and process CWD for every session tool: relative paths join the root, `execute` starts there, and pathless `glob`/`grep` search from there ([architecture 05](05-tools-and-workspace.md)). |
 | **Artifact** | A durable work product associated with a session or run. Plans are artifacts. |
 | **Plan** | A physical, revisioned artifact produced by a planning-focused mode; ordinary project writes remain denied, while `execute` is available as trusted-local, advisory-guided execution. |
 | **Build Autopilot** | The single user-authorized Build policy that executes the configured active tool surface without per-action confirmation. |
@@ -68,7 +70,7 @@ flowchart TD
 1. [Daemon, transport, and adapters](03-daemon-transport-and-adapters.md)
 2. [Sessions, runs, and storage](04-sessions-runs-events-and-storage.md)
 3. [Tool registry and model-tool loop](15-tool-registry-and-model-tool-loop.md)
-4. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
+4. [Tools and workspace](05-tools-and-workspace.md)
 5. [VFR and Headroom](06-vfr-and-headroom.md)
 6. [MCP capability lifecycle](18-mcp-capability-lifecycle.md)
 7. [Gateway/RLM bridge](19-gateway-rlm-bridge.md)
@@ -104,7 +106,7 @@ flowchart TD
   D --> T
   D --> S[04 Sessions storage]
   T --> S
-  D --> W[05 Tools workspace hooks]
+  D --> W[05 Tools and workspace]
   W --> V[06 VFR Headroom]
   W --> B[07 Plan Build]
   D --> M[08 Model providers]

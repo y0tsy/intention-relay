@@ -7,10 +7,10 @@ are planned adapters over one typed local protocol and one shared Rust client.
 The project is under active development: the daemon-side backend is
 implemented through the closed M0-M5 milestones, the M5+ retrospective stack
 (the no-backward-compatibility removal program, request-side tool
-advertisement, the opt-in live-provider channel, the same-run reasoning round
-trip, and the project script library for kernel cells) is merged, and the
-post-M5 foundation (Milestone 5+) is in progress with two of its six slices
-activated. No user-facing UI or released product exists yet.
+advertisement, the opt-in live-provider channel, and the same-run reasoning
+round trip) is merged, and the post-M5 foundation (Milestone 5+) is in progress
+with two of its six slices activated. No user-facing UI or released product
+exists yet.
 
 Everything here is development-machine software: there are no deployed users,
 no externally persisted data, and no third-party consumers. Backward
@@ -22,7 +22,7 @@ compatibility is neither required nor in demand (see `AGENTS.md`).
   an accepted user turn can start one agent-execution run with a tracked
   lifecycle (`Starting`, `Running`, `Completed`, `Failed`, `Interrupted`). A
   reconnecting client re-reads current state: there are no cursors, replays,
-  snapshots, model facts, or event envelopes.
+  event-log snapshots, model facts, or event envelopes.
 - **One typed protocol, one shared client.** All adapters reach the daemon
   through `intention-client` over a private, per-user local transport (Unix
   domain sockets on Unix, named pipes on Windows). DTOs are the only things
@@ -54,7 +54,7 @@ of each.
 | --- | --- | --- |
 | M0 Quality foundation | Closed | Reproducible Makefile-orchestrated quality pipeline (format, lint, nextest, docs, architecture, coverage, supply-chain gates) with pinned tools. |
 | M1 Contracts, configuration, workspace skeleton | Closed | Tier-A crate boundaries (`intention-proto`, `intention-config`; M1's `intention-domain` was later folded into `intention-proto`), DTO-first policy, TOML config with redacted projections, compile-only skeletons for every later crate. |
-| M1+ Quality policy hardening | Closed | Machine-readable policies (`quality/*.toml`) enforce workspace dependency graphs, executable test targets, public-API surface, and coverage tiers. |
+| M1+ Quality policy hardening | Closed | Machine-readable policies (`quality/*.toml`) enforce the crate classification with its declared responsibilities, workspace and external dependency edges, named integration test targets, and coverage tiers. |
 | M2 Local protocol, client, daemon bootstrap | Closed | Private local IPC, correlated request/response codec, shared bootstrap client with startup lock and readiness polling, in-memory fixture composition, minimal TUI proof adapter (the hello/version handshake was later replaced by one typed wire). |
 | M3 SQLite sessions, transcript, queue | Closed | Durable SQLite-backed sessions, runs, turns, and transcript rows; turn queueing; canonical credential-free config revisions; recovery-before-ready. |
 | M4 Model contract, providers, one streaming run | Closed | Provider-neutral model contracts and validated stream facts; private OpenRouter and generic Chat Completions drivers; durable model evidence in the transcript; one daemon-owned streaming run with reconnect to current state and run-scoped delivery. |
@@ -100,7 +100,7 @@ exempt at 0% and outside collection.
 
 | Crate | Responsibility |
 | --- | --- |
-| [intention-tools](crates/intention-tools) | Tool contracts with JSON Schema descriptors, the static six-tool spec match, and the `WorkspaceRoot` addressing anchor (owned by [architecture 05](docs/intention-relay/architecture/05-tools-workspace-and-hooks.md)). |
+| [intention-tools](crates/intention-tools) | Tool contracts with JSON Schema descriptors, the static six-tool spec match, and the `WorkspaceRoot` addressing anchor (owned by [architecture 05](docs/intention-relay/architecture/05-tools-and-workspace.md)). |
 
 ### Transport, client, and daemon (active)
 
@@ -261,7 +261,7 @@ enabled for dependency updates
   target architecture with reading paths (principles, crate map, DTO policy,
   quality gates, TTD, roadmap, and the instruction channel).
 - [Implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md):
-  milestone-by-milestone delivery plan and the M5+ slice order.
+  the remaining milestone plan (M6-M12) and the M5+ slice order.
 
 - [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md): generated license notices
   for registry dependencies.
@@ -278,6 +278,9 @@ What `main` does not yet provide (all of it is documented roadmap work):
   branching, and no UI foundation or fork override commands (slices 3-4); no
   instruction-source, `AGENTS.md`, or effective instruction projection behavior
   (slice 5, owned by [architecture 30](docs/intention-relay/architecture/30-instruction-sources-and-system-context.md)).
+- No project script library for kernel cells (`.ir/scripts`), which Milestone 12
+  delivers as agent-authored modules persisted through the frozen tool
+  descriptors ([architecture 20](docs/intention-relay/architecture/20-ipython-kernel-lifecycle.md)).
 - Slice 1.5 core simplification is activated on this branch, not yet on
   `main`: the event log, snapshots, cursors, and resync are replaced by the
   eight current-state tables written in one SQLite transaction per state

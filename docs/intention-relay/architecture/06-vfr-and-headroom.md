@@ -5,7 +5,7 @@ milestone (M8), and activation requires an activating specification.** Virtual F
 Representation (VFR) and Headroom/CCR are required v1 capabilities: separate extension crates attached as ordinary calls
 in the direct tool sequence, not hard-coded dependencies of base tools. The typed hook plane was removed in Slice 1.5 and
 is not part of this design: the stages below describe that call order, not a hook framework ([architecture
-05](05-tools-workspace-and-hooks.md)).
+05](05-tools-and-workspace.md)).
 
 ## Design principle
 
@@ -146,7 +146,7 @@ Makefile](12-quality-gates-and-makefile.md).
 
 ## Dependencies and non-goals
 
-Depends on [Tools, Workspace, and Hooks](05-tools-workspace-and-hooks.md) and [architecture
+Depends on [Tools and Workspace](05-tools-and-workspace.md) and [architecture
 30](30-instruction-sources-and-system-context.md). Non-goals: conflating VFR with Headroom, and any base-tool linkage to
 an extension implementation crate.
 

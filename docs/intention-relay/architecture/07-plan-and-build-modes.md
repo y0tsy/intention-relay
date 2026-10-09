@@ -223,7 +223,7 @@ Makefile](12-quality-gates-and-makefile.md).
 
 ## Dependencies and non-goals
 
-Depends on [Tools, Workspace, and Hooks](05-tools-workspace-and-hooks.md), [Sessions, Runs, Events, and
+Depends on [Tools and Workspace](05-tools-and-workspace.md), [Sessions, Runs, Events, and
 Storage](04-sessions-runs-events-and-storage.md), and [architecture 30](30-instruction-sources-and-system-context.md).
 Non-goals: an in-memory-only plan, model-visible frontmatter, Plan project writes through normal write/edit tools, and
 any claim that prompt instructions turn `execute` into a technical sandbox.

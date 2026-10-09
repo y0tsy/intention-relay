@@ -119,7 +119,8 @@ The current bounds are:
 | --- | --- |
 | Transport message cap (`MAX_MESSAGE_BYTES`, 1 MiB) | Liveness: the single owner of the envelope bound; rejects an over-size frame before unbounded allocation, and an over-size correlated response is answered with the typed `local_protocol_message_too_large` failure instead of a silent close. |
 | Tool read and output windows (`MAX_TOOL_OUTPUT_BYTES`, `MAX_EDIT_TARGET_BYTES`, `MAX_GREP_AGGREGATE_BYTES`) | Representation: bounds one tool read or rendered result; a cut is marked, never hidden. |
-| Assistant-message bound (`MAX_ASSISTANT_CONTENT_BYTES`) | Representation: bounds one committed assistant message; long assistant text is split at this size. |
+| Tool-result content (`MAX_TOOL_RESULT_CONTENT_BYTES`, 512 KiB) | Representation: bounds one persisted tool-result content; an over-bound value fails `invalid_tool_result` instead of truncating. |
+| Transient reasoning attachment (`MAX_MODEL_ASSISTANT_REASONING_BYTES`, 512 KiB) | Representation: bounds the reasoning one provider response attaches to its tool calls for the same-run continuation; an over-bound value fails `invalid_model_assistant_reasoning_text`. |
 | Process timeout and drain windows (`EXECUTE_TIMEOUT` 30 s, `READER_DRAIN_GRACE` 5 s) | Liveness: a child process that stops producing progress or never exits cannot hang the loop. |
 | Provider progress and retry timeouts | Liveness: a live provider request that stops producing progress fails typed. |
 | Subscriber queue and write deadline (`SUBSCRIBER_QUEUE_CAPACITY` 64, `SUBSCRIBER_WRITE_DEADLINE` 10 s) | Liveness: isolates a slow local peer from execution, persistence, and healthy delivery. |

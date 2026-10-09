@@ -173,7 +173,7 @@ The workspace rule is the same for every run:
 | Relative paths | Default base: `workspace_root.join(path)`. |
 | `execute` | Initial CWD; the child process starts in the root. |
 | glob/grep | Default scope root when no path is supplied. |
-| Containment | None. The anchor does not contain: no symlink parser, containment check, or path-based denial remains, and a path inside the root may resolve outside it through a symbolic link. The typed input still rejects absolute and parent (`..`) paths — `WorkspaceRelativePathDto` for tool paths and the search-pattern validator for `glob`/`grep` patterns — as an input-shape rule, not a boundary; `WorkspaceRoot` is not a security boundary ([architecture 05](05-tools-workspace-and-hooks.md)). |
+| Containment | None. The anchor does not contain: no symlink parser, containment check, or path-based denial remains, and a path inside the root may resolve outside it through a symbolic link. The typed input still rejects absolute and parent (`..`) paths — `WorkspaceRelativePathDto` for tool paths and the search-pattern validator for `glob`/`grep` patterns — as an input-shape rule, not a boundary; `WorkspaceRoot` is not a security boundary ([architecture 05](05-tools-and-workspace.md)). |
 
 For path-bearing calls, typed safe observation may record path form, base reference, effective path/CWD subject to
 redaction, and observation completeness: audit evidence, not authorization, neither tracking descendants nor forming a
@@ -219,8 +219,9 @@ sequenceDiagram
   L->>P: Fresh next request
 ```
 
-A `ToolCalls` finish closes a model step, not the run, and is valid only when one transaction records the completed
-assistant message, the normalized calls, and the tool-call rows; no local effect occurs inside it.
+A `ToolCalls` finish closes a model step, not the run: one transaction records the completed assistant message alone,
+and each admitted call then records its own `tool_results` row and its answering transcript row in one transaction; no
+local effect occurs inside it.
 
 Calls admit independently and may execute concurrently; a group is not a workspace transaction and makes no
 serializability or merge claim. Each call commits exactly one terminal result; the next model step waits for all calls
@@ -286,6 +287,11 @@ without a terminal result through one notice per call, `[The tool call "<tool_id
 and writes no new record for it: nothing follows a `Partial` fact for that call, no further result is recorded for it,
 and recovery never changes the call's recorded lifecycle. Blank partial content fails construction with
 `invalid_tool_result_content`.
+
+A stopped *answer* carries a different durable mark. The assistant message committed for a model step that the user or
+the environment stopped has `[interrupted]` appended on its own line, so the transcript records that the answer was
+cut; a step with no text commits no assistant row, a completed step never carries the marker, and the durable notice
+row that follows either way is unchanged.
 
 ### Tool result delivery
 

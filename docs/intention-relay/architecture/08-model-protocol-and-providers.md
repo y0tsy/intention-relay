@@ -131,14 +131,15 @@ decision before it is introduced. The generic provider accepts text context/outp
 finish reasons, `tool_calls` tool-call fragments, and textual `reasoning_content` output; multimodal and vendor
 extensions stay outside its capability declaration, which provider selection validates before any outbound request is
 prepared. Reasoning output is normalized as
-`ModelEventDto::ReasoningDelta` (`Primary`), and when a configured thinking-mode gateway requires it the adapter
+`ModelEventDto::ReasoningDelta`, and when a configured thinking-mode gateway requires it the adapter
 serializes the same round's accepted reasoning as `reasoning_content` on the assistant tool-call message of the same-run
 continuation, as transient request state with no durable representation; an empty channel is only a presence marker.
 The OpenRouter adapter ignores the transient attachment because its pinned SDK request type has no reasoning
 field and its wire does not require the echo. OpenRouter declares text, reasoning, tool-call, and streaming capability
 while its M4 foundation declares no multimodal or vendor-extension support. Capability negotiation happens once at
 provider selection: the selected driver's declaration must serve streamed text with tool calls, and the per-request
-execution path carries no capability check.
+execution path carries no capability check. A truncation limitation of that pinned SDK is recorded under
+[Retry and timeout ownership](#retry-and-timeout-ownership).
 
 ## Provider selection
 
@@ -166,8 +167,8 @@ streamed text with tool calls, so a driver without tool-call support fails close
 `tool_choice`; an empty advertisement preserves the previous request shape. A definition validates its input: the name is an ASCII `[A-Za-z0-9_-]` token of
 at most 64 characters (`invalid_tool_definition_name`), the description is non-blank
 (`invalid_tool_definition_description`), and the schema text is non-empty JSON-object text of at most 64 KiB
-(`invalid_tool_definition_parameters`). A model-visible tool without a schema fails with
-`model_tool_schema_unavailable`. Advertisement is transient request state: it creates no durable record, digest, or
+(`invalid_tool_definition_parameters`). The schema text is code-owned and always present, so no missing-schema
+failure mode exists. Advertisement is transient request state: it creates no durable record, digest, or
 storage row, and it never reconstructs a stored selection from the current spec match.
 
 The same-run continuation is the one place provider reasoning returns to a request: the runtime attaches the current
@@ -231,6 +232,9 @@ The classification selects the normalized `generic_chat_provider_unavailable` (r
 - Config snapshots define timeout/retry limits applied to the run.
 - A retry must produce explicit events and preserve causal relation to the originating model turn.
 - A daemon restart does not retry an in-flight provider request.
+- Recorded truncation limitation: a provider body that ends without `[DONE]` completes as `Finished { Unknown }`,
+  because the pinned OpenRouter SDK consumes the marker inside its own stream, so the adapter cannot classify
+  `openrouter_stream_incomplete` and a truncated generation is reported as an ordinary completion.
 
 The runtime uses the immutable persisted attempt timeout and at most two total attempts. A deadline is a retryable
 `provider_attempt_timed_out` failure. Before any durable text, reasoning, usage, or tool fact, only a delayed/retryable
@@ -247,7 +251,7 @@ wait starts the next attempt immediately.
 | Event normalization | Provider fixture stream tests. | Equivalent native sequences map to valid ordered `ModelEventDto` values. |
 | Capability check | Model contract test. | A declaration without streamed text or tool calls fails closed with `unsupported_model_capability` at provider selection. |
 | Tool advertisement | Model/adapter/runtime/daemon-host tests. | The outgoing request contains the six active tool definitions in advertisement order, both adapters translate them without `tool_choice`, a driver without tool-call support is rejected at provider selection, and the advertisement survives the tool-result continuation request. |
-| Reasoning round trip | Model/adapter/runtime tests. | The generic adapter normalizes typed `reasoning_content` deltas as `Primary` reasoning events and serializes the same round's accepted reasoning on the assistant tool-call continuation without adding a durable representation; empty text is presence-only; multimodal and vendor extensions stay outside the declared capabilities. |
+| Reasoning round trip | Model/adapter/runtime tests. | The generic adapter normalizes typed `reasoning_content` deltas as `ReasoningDelta` events and serializes the same round's accepted reasoning on the assistant tool-call continuation without adding a durable representation; empty text is presence-only; multimodal and vendor extensions stay outside the declared capabilities. |
 | Tool loop integration | Runtime/provider/application integration test. | Provider emits a tool-call DTO; the application builds the typed invocation, the daemon-owned tool service executes it, and the runtime persists the correlated result and continues the exchange. |
 | Provider selection | Configuration contract test. | A configured provider and model ID are preserved. |
 | Retry | Controlled provider failure test. | Retry lifecycle is typed, bounded, and durable. |

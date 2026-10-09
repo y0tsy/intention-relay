@@ -1,5 +1,7 @@
 # Sessions, Runs, and Storage
 
+**Current policy.**
+
 This document defines the durable session/run model, automatic persistence, the transcript, and recovery semantics. It
 depends on [DTO and Contract Policy](02-dto-and-contract-policy.md) and [Daemon, Transport, and
 Adapters](03-daemon-transport-and-adapters.md).
@@ -27,7 +29,7 @@ erDiagram
 
 1.  Each session has one mandatory stable `WorkspaceId` and declared `WorkspaceRootDto`; M3 persists the identity/root
 association, while M5 owns the workspace addressing policy — the root as an anchor, not a containment boundary
-([architecture 05](05-tools-workspace-and-hooks.md)).
+([architecture 05](05-tools-and-workspace.md)).
 2. A session has at most one run in an active state.
 3. Every turn, run, plan, tool call, todo, permission, question, and message carries stable typed identity.
 4.  Every state-changing repository method commits its change in one SQLite transaction, or changes nothing. No
@@ -40,6 +42,9 @@ boundary; it never starts a second run.
 silently resumes, while `run.interrupt` leaves the live run `Running` and continues its work.
 8. The transcript is the durable record of user, assistant, and notice content; every completed tool call has exactly
 one structured `tool_results` row.
+9. A stopped model answer is durable: the text a step produced before the stop is committed as the assistant message
+with the `[interrupted]` marker before the durable notice row, and the marker is the transcript's record that the
+answer was cut.
 
 ## Run state machine
 
@@ -58,11 +63,16 @@ stateDiagram
 ```
 
 Interruption is not a run state. `run.interrupt` is accepted only for an exact active run, commits no durable status
-change, records a durable notice message for the stopped provider stream or tool call, resets the run's cancellation
-signal, and the run continues with its next model step; `Cancelling` and `Cancelled` no longer exist, and `Interrupted`
+change, commits the stopped model answer's text with the `[interrupted]` marker before the durable notice message for
+the stopped provider stream or tool call, resets the run's cancellation signal, and the run continues with its next
+model step; `Cancelling` and `Cancelled` no longer exist, and `Interrupted`
 remains recovery-only. The closed status vocabulary is `Starting`, `Running`, `Completed`, `Failed`, and
 `Interrupted`; the live path creates every run in `Starting`, and a terminal repository transition commits its state
 change in one transaction.
+
+An environment stop takes the same path: a graceful daemon shutdown cancels every registered run and drains under a
+bounded timeout, so the partial answer is committed with the marker and its notice before the process exits. A hard
+kill cannot persist the in-memory buffer; recovery then marks the unfinished run `Interrupted` with no answer text.
 
 The exact policy for a question or permission after restart remains future tool and interaction work and adds no run
 status. M4 preserves the M3 rule: the unfinished run is marked interrupted and does not resume.
@@ -108,10 +118,16 @@ evidence; and
 revision is idempotent, while the same ID with a different revision fails with a typed conflict.
 
 The storage schema contains the `projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`, `tool_results`,
-and `configuration_revisions` tables, all created directly on open. The `turns` table carries one accepted turn with
+and `configuration_revisions` tables, all created directly on open, plus the `messages_session_id_id` and
+`messages_session_run_id_id` indexes that serve the transcript reads. The `turns` table carries one accepted turn with
 its proposed run and configuration revision and a closed `state` in `started`, `pending`, `appended`, or `removed`.
 Ordering is SQLite row insertion order — `messages.id` for the transcript — and there is no separate event log,
 snapshot, or ordering authority.
+
+Recovery is one immediate transaction over every unfinished run: each run that is not terminal becomes `Interrupted`
+and records its `finished_at` time inside that same transaction, so a restart cannot leave a half-applied recovery. A
+session projection that would exceed the pending-turn projection bound keeps the newest pending turns that fit, in
+insertion order, and reports how many were omitted through `SessionProjectionDto.pending_turns_omitted`.
 
 ## Transaction and publication order
 
@@ -145,16 +161,19 @@ state. Model context is rebuilt from `messages`; `turns` stays the acceptance an
 The daemon writes no mid-stream content: text and reasoning accumulate in memory and commit once per completed model
 step as one `messages` row, while usage, finish reason, and error commit on the `runs` row. A crash mid-step loses the
 in-flight step text and the run is marked `Interrupted` on restart; this lost text is an accepted consequence of the
-one-transaction rule.
+one-transaction rule, and a stopped step is the exception: its committed text carries the `[interrupted]` marker.
 
 A runtime configuration lookup for a matching `(SessionId, RunId)` returns only its immutable credential-free
 configuration revision, selected by the run's persisted `ConfigRevisionId`. Unknown sessions, unknown runs, and
 cross-session runs all return `run_configuration_not_found`; an absent persisted selection returns
-`run_configuration_unavailable`, a present but undecodable selection returns `storage_decode_failed`, and a backend read
+`run_configuration_unavailable`, a present but undecodable configuration snapshot returns `storage_decode_failed`, and
+a backend read
 failure surfaces its classified error: `storage_busy` while the backend is locked, an internal `storage_corrupt` or
 `storage_api_misuse` when it is damaged or misused, and `storage_unavailable` otherwise; none of them is a permanent
-not-found and none carries SQL text, parameters, paths, or row content. Raw TOML, configuration paths, credentials, and
-SQLite resources never cross this DTO-only read boundary.
+not-found and none carries SQL text, parameters, paths, or row content. Transcript and projection reads decode each
+typed field through its proto parser, so an undecodable `runs.status` or `messages.kind` surfaces
+`invalid_run_status` or `invalid_message_kind` instead of a storage-local decode code. Raw TOML, configuration paths,
+credentials, and SQLite resources never cross this DTO-only read boundary.
 
 The daemon task and interruption registries are keyed by exact `(SessionId, RunId)`. Admission and interruption
 serialize through that registry: a host inserts a provider-neutral cancellation signal before spawning a newly admitted
