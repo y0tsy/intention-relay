@@ -108,7 +108,7 @@ remains the proof adapter and `intention-test-support` the non-production fixtur
 feature crates are created at their milestones. The target
 keeps DTOs only at the three physical boundaries — the IPC wire, SQLite persistence, and provider SDKs — with internal
 crates passing domain types, and makes schema-validated JSON tool inputs and outputs the only JSON payloads in the
-system. The current-state core has already landed on this branch: the event log, snapshots, cursors, and resync are
+system. The current-state core has landed: the event log, snapshots, cursors, and resync are
 replaced by the eight current-state tables (`projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`,
 `tool_results`, `configuration_revisions`); `messages` and `tool_results` are the transcript; identity is the eight
 newtypes (`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`,
