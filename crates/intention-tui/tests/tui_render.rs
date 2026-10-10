@@ -18,8 +18,8 @@ use intention_proto::{
     ConfigRevisionId, DaemonHealthDto, ErrorDto, MessageKindDto, MessageProjectionDto, ProjectId,
     RunId, RunModeDto, RunProjectionDto, RunStatusDto, RunStreamFrameDto,
     RunSubscriptionSnapshotDto, SessionId, SessionProjectionDto, SessionSnapshotDto,
-    SessionSummariesDto, SessionSummaryDto, TextDeltaFrameDto, ToolCallId, TurnId, WorkspaceId,
-    WorkspaceRootDto,
+    SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto, TextDeltaFrameDto, ToolCallId,
+    TurnId, WorkspaceId, WorkspaceRootDto,
 };
 use intention_tui::app::{
     Action, AppState, BrowserCursorMove, InputCursorMove, TranscriptScroll, short_identifier,
@@ -343,7 +343,34 @@ fn streaming_state(provisional: Option<&str>) -> AppState {
     subscribe(&mut state, session_id, run_id, RunStatusDto::Running);
     if let Some(text) = provisional {
         state.update(Action::FrameReceived(RunStreamFrameDto::TextDelta(
-            TextDeltaFrameDto::new(session_id, run_id, 0, text)
+            TextDeltaFrameDto::new(session_id, run_id, 0, TextDeltaChannelDto::Answer, text)
+                .expect("the fixture delta is valid"),
+        )));
+    }
+    state
+}
+
+/// Returns a connected session whose current step streams `reasoning` before
+/// the `answer` it informs.
+fn streaming_reasoning_state(reasoning: &str, answer: &str) -> AppState {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = open_state(
+        session_id,
+        vec![row(
+            session_id,
+            run_id,
+            MessageKindDto::Assistant,
+            "the committed row",
+        )],
+    );
+    subscribe(&mut state, session_id, run_id, RunStatusDto::Running);
+    for (channel, text) in [
+        (TextDeltaChannelDto::Reasoning, reasoning),
+        (TextDeltaChannelDto::Answer, answer),
+    ] {
+        state.update(Action::FrameReceived(RunStreamFrameDto::TextDelta(
+            TextDeltaFrameDto::new(session_id, run_id, 0, channel, text)
                 .expect("the fixture delta is valid"),
         )));
     }
@@ -1021,6 +1048,30 @@ fn the_streaming_tail_renders_as_the_answer_row_it_becomes() {
     let pilot = Pilot::new(&mut app);
     pilot.assert_contains("∷ partial answer");
     pilot.assert_not_contains("(provisional)");
+}
+
+#[test]
+fn the_live_reasoning_segment_renders_as_the_committed_block_it_becomes() {
+    let state = streaming_reasoning_state("weighing the options", "partial answer");
+    let mut app = TestApp::new(RevueView::new(&state));
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_contains("∴ reasoning");
+    pilot.assert_contains("weighing the options");
+    pilot.assert_contains("∷ partial answer");
+    pilot.assert_not_contains("(provisional)");
+
+    // A step that thinks longer than the collapsed block shows carries the
+    // committed block's own collapse: the same affordance, the same count, and
+    // the answer after it.
+    let long = (0..25)
+        .map(|index| format!("thought {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let state = streaming_reasoning_state(&long, "partial answer");
+    let mut app = TestApp::new(RevueView::new(&state));
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_contains("more reasoning lines hidden — click or Ctrl+E to reveal more");
+    pilot.assert_contains("∷ partial answer");
 }
 
 #[test]

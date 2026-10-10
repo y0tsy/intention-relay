@@ -79,7 +79,7 @@ use crate::app::{
 
 use driver::Driver;
 use keymap::key_action;
-use layout::{TranscriptLayoutCache, TranscriptWindow};
+use layout::{LaidOutRow, TranscriptLayoutCache, TranscriptWindow};
 
 /// Runs the terminal front end until the user quits.
 ///
@@ -418,13 +418,16 @@ impl FrontEnd {
     }
 
     /// Returns the collapsed reasoning block one display row's marker expands.
+    ///
+    /// A marker row inside the committed rows names that row; the live tail's
+    /// marker is not cached, so the row the pane published for it names the row
+    /// the live segment will become.
     fn marker_at(&self, row: u16) -> Option<usize> {
-        let cache = self.cache.borrow();
-        let row = usize::from(row);
-        if !cache.laid_out().get(row)?.is_reasoning_marker() {
-            return None;
-        }
-        cache.message_at(row)
+        marker_target(
+            &self.cache.borrow(),
+            self.state.live_reasoning_row(),
+            usize::from(row),
+        )
     }
 
     /// Reports the live turn's elapsed time when a tenth of a second changed.
@@ -435,6 +438,26 @@ impl FrontEnd {
         self.apply(Action::ElapsedReported { millis });
         true
     }
+}
+
+/// Returns the reasoning block one display row's expand marker belongs to.
+///
+/// A marker row inside the committed rows names the committed row that owns it.
+/// The live tail is laid out per frame and never enters the cache, so a row the
+/// frame published as the live marker names `live_row` instead: the row the
+/// live segment will become, which is the anchor its expansion state uses.
+fn marker_target(cache: &TranscriptLayoutCache, live_row: usize, row: usize) -> Option<usize> {
+    if cache.window().live_reasoning_marker.map(usize::from) == Some(row) {
+        return Some(live_row);
+    }
+    if !cache
+        .laid_out()
+        .get(row)
+        .is_some_and(LaidOutRow::is_reasoning_marker)
+    {
+        return None;
+    }
+    cache.message_at(row)
 }
 
 /// The fraction of a second one live timer report covers.
@@ -519,9 +542,9 @@ mod tests {
     use revue::widget::{RenderContext, View};
 
     use crate::app::{Action, AppState, Screen, TRANSCRIPT_DRAG_ROWS, TranscriptScroll};
-    use crate::tui::layout::TranscriptWindow;
+    use crate::tui::layout::{TranscriptLayoutCache, TranscriptWindow};
 
-    use super::{Pointer, RevueView, TurnTimer, mouse_action};
+    use super::{Pointer, RevueView, TurnTimer, marker_target, mouse_action};
 
     /// A view over a shared state, so a test handler can feed actions back in.
     struct SharedState<'a>(&'a RefCell<AppState>);
@@ -542,12 +565,41 @@ mod tests {
             visible: 10,
             start,
             total,
+            live_reasoning_marker: None,
         }
     }
 
     /// Returns one mouse event of `kind` at one screen row.
     fn mouse(kind: MouseEventKind, y: u16) -> MouseEvent {
         MouseEvent::new(1, y, kind)
+    }
+
+    #[test]
+    fn the_published_live_marker_names_the_row_the_live_segment_becomes() {
+        let mut cache = TranscriptLayoutCache::new();
+        assert_eq!(
+            marker_target(&cache, 7, 0),
+            None,
+            "no painted frame publishes a live marker"
+        );
+
+        cache.publish_window(TranscriptWindow {
+            top: 4,
+            visible: 10,
+            start: 0,
+            total: 3,
+            live_reasoning_marker: Some(1),
+        });
+        assert_eq!(
+            marker_target(&cache, 7, 1),
+            Some(7),
+            "the row the pane published as the live marker expands the live segment"
+        );
+        assert_eq!(
+            marker_target(&cache, 7, 0),
+            None,
+            "a row with no marker expands nothing"
+        );
     }
 
     /// Returns one session summary with a deterministic id and timestamp.

@@ -58,7 +58,11 @@ impl TranscriptSelection {
     }
 }
 
-/// One expanded reasoning block, keyed by its committed transcript row.
+/// One expanded reasoning block, keyed by the committed transcript row the
+/// block belongs to.
+///
+/// A live segment is keyed by the row it will become, so an expansion applies
+/// to the same block before and after the commit that lands it there.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ReasoningExpansion {
     /// The committed transcript row the block belongs to.
@@ -82,9 +86,11 @@ impl AppState {
     /// affordance.
     ///
     /// `row` names the committed transcript row a click's marker hit; `None`
-    /// is the key binding, which expands the newest committed row that carries
-    /// reasoning. A row that carries none has nothing to expand. The selection
-    /// is dropped: the rows it named move when the block grows.
+    /// is the key binding, which expands the newest block that carries
+    /// reasoning - the live segment while one streams, otherwise the newest
+    /// committed row that carries one. A row that carries none has nothing to
+    /// expand. The selection is dropped: the rows it named move when the block
+    /// grows.
     ///
     /// The window counts its offset back from the newest display row, so an
     /// expansion that inserts rows above the window's first visible row leaves
@@ -123,15 +129,28 @@ impl AppState {
         Vec::new()
     }
 
-    /// Returns the newest committed row that carries reasoning.
+    /// Returns the newest row that carries reasoning.
+    ///
+    /// The live segment is newer than every committed row while it streams: it
+    /// is anchored at the row it will become, which no committed row occupies
+    /// yet.
     fn newest_reasoning_row(&self) -> Option<usize> {
+        if !self.provisional_reasoning().is_empty() {
+            return Some(self.live_reasoning_row());
+        }
         self.transcript
             .iter()
             .rposition(|row| row.reasoning().is_some())
     }
 
-    /// Returns whether one committed row carries a reasoning block.
+    /// Returns whether one row carries a reasoning block.
+    ///
+    /// The live segment's row carries the streaming reasoning until the commit
+    /// replaces it with the committed row of the same index.
     fn carries_reasoning(&self, row: usize) -> bool {
+        if row == self.live_reasoning_row() && !self.provisional_reasoning().is_empty() {
+            return true;
+        }
         self.transcript
             .get(row)
             .is_some_and(|message| message.reasoning().is_some())

@@ -592,9 +592,10 @@ pub(in crate::tui) fn box_bottom(width: usize, border: RowStyleId, surface: Colo
 ///
 /// The pane owns the frame's geometry, and the next mouse event hit-tests
 /// against what it published: which screen rows and columns the window
-/// occupies, which display row it starts at, and how many display rows the
-/// whole transcript has. The core never sees these values; the front end reads
-/// them back to turn a cell into a display row.
+/// occupies, which display row it starts at, how many display rows the whole
+/// transcript has, and where the live reasoning segment's expand marker was
+/// painted. The core never sees these values; the front end reads them back to
+/// turn a cell into a display row.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(in crate::tui) struct TranscriptWindow {
     /// The screen row of the window's first display row.
@@ -605,6 +606,13 @@ pub(in crate::tui) struct TranscriptWindow {
     pub(in crate::tui) start: u16,
     /// How many display rows the whole transcript has.
     pub(in crate::tui) total: u16,
+    /// The display row of the live reasoning segment's expand marker, when the
+    /// live tail collapsed one.
+    ///
+    /// The live tail is laid out per frame and never enters the cache, so a
+    /// marker click can only recognize it through the row the pane published
+    /// here; `None` means no live marker was painted.
+    pub(in crate::tui) live_reasoning_marker: Option<u16>,
 }
 
 impl TranscriptWindow {
@@ -724,6 +732,7 @@ impl TranscriptLayoutCache {
                 visible: 0,
                 start: 0,
                 total: 0,
+                live_reasoning_marker: None,
             },
             #[cfg(test)]
             layouts: 0,

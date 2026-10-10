@@ -500,12 +500,38 @@ impl AppState {
         self.stream
     }
 
-    /// Returns the transient provisional text of the run's current model step.
+    /// Returns the transient provisional answer text of the run's current model
+    /// step.
     #[must_use]
     pub fn provisional_text(&self) -> &str {
         self.run_stream
             .as_ref()
             .map_or("", RunStreamState::provisional_text)
+    }
+
+    /// Returns the transient provisional reasoning of the run's current model
+    /// step.
+    ///
+    /// The reasoning channel streams before the answer it informs and commits
+    /// as that answer's reasoning attachment, so the live segment the pane
+    /// renders from it is the reasoning block's own streaming form.
+    #[must_use]
+    pub fn provisional_reasoning(&self) -> &str {
+        self.run_stream
+            .as_ref()
+            .map_or("", RunStreamState::provisional_reasoning)
+    }
+
+    /// Returns the committed row the live reasoning segment will become.
+    ///
+    /// A step's running reasoning belongs to the assistant row that step will
+    /// commit, which is exactly the transcript's next row. Anchoring the live
+    /// segment there makes its expansion state the committed block's: the row
+    /// key is the same before and after the commit, so a reader who expanded
+    /// the streaming reasoning still sees it expanded once it is committed.
+    #[must_use]
+    pub const fn live_reasoning_row(&self) -> usize {
+        self.transcript.len()
     }
 
     /// Returns the current input line.

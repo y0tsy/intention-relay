@@ -57,6 +57,9 @@ const TOOL_ARGUMENTS: &str = r#"{"path":"hello.txt"}"#;
 /// The assistant text the scripted provider streams and commits.
 const COMMITTED_TEXT: &str = "done";
 
+/// The reasoning chunks the reasoning script streams before that answer.
+const REASONING_CHUNKS: [&str; 2] = ["weighing ", "the fixture file"];
+
 /// The fixture provider credential; no scenario asserts on it.
 const CREDENTIAL: &str = "d1-terminal-fixture-credential";
 
@@ -237,6 +240,15 @@ impl ProviderEndpoint {
     /// Starts the scripted fake provider the fixture rounds are served from.
     fn scripted() -> Self {
         Self::Scripted(FakeProvider::start(TOOL_ARGUMENTS))
+    }
+
+    /// Starts the scripted fake provider whose text round streams the thinking
+    /// channel before the answer it informs.
+    fn scripted_with_reasoning() -> Self {
+        Self::Scripted(FakeProvider::start_with_reasoning(
+            TOOL_ARGUMENTS,
+            &REASONING_CHUNKS,
+        ))
     }
 
     /// Binds a provider endpoint that never answers a request.
@@ -531,6 +543,111 @@ fn the_json_run_reports_transient_deltas_before_the_committed_row() {
         ],
         "the reported session holds the committed transcript"
     );
+}
+
+#[test]
+fn the_json_run_reports_the_reasoning_channel_before_the_answer_it_informs() {
+    let host = TerminalHost::new(
+        ProviderEndpoint::scripted_with_reasoning(),
+        Some(WORKSPACE_FILE),
+    );
+    let workspace = host.workspace_root();
+    let output = host.run(
+        &["run", PROMPT, "--format", "json", "--workspace", &workspace],
+        None,
+    );
+    assert_eq!(output.code, Some(0), "the run completes: {}", output.stderr);
+    assert!(output.stderr.is_empty(), "stderr: {}", output.stderr);
+
+    let records = json_records(&output.stdout);
+    let channel = |wanted: &'static str| {
+        records
+            .iter()
+            .filter(|record| kind(record) == "delta" && record["channel"] == wanted)
+            .collect::<Vec<_>>()
+    };
+    let reasoning = channel("reasoning");
+    let answers = channel("answer");
+    assert!(
+        !reasoning.is_empty(),
+        "the thinking channel reaches the terminal as its own delta records"
+    );
+    assert_eq!(
+        reasoning
+            .iter()
+            .map(|record| text(record))
+            .collect::<String>(),
+        REASONING_CHUNKS.concat(),
+        "the reasoning channel keeps the provider's chunks in their order"
+    );
+    assert_eq!(
+        answers
+            .iter()
+            .map(|record| text(record))
+            .collect::<String>(),
+        COMMITTED_TEXT,
+        "the answer channel is reported apart from the reasoning it follows"
+    );
+    assert!(
+        reasoning
+            .iter()
+            .chain(answers.iter())
+            .all(|record| record["channel"] == "reasoning" || record["channel"] == "answer"),
+        "every delta names one of the step's two channels"
+    );
+    let step = reasoning[0]["step"]
+        .as_u64()
+        .expect("every delta carries its step");
+    assert!(
+        reasoning
+            .iter()
+            .chain(answers.iter())
+            .all(|record| record["step"].as_u64() == Some(step)),
+        "both channels of the step carry the same model step index"
+    );
+
+    let last_reasoning = records
+        .iter()
+        .rposition(|record| kind(record) == "delta" && record["channel"] == "reasoning")
+        .expect("the reasoning channel is non-empty");
+    let last_answer = records
+        .iter()
+        .rposition(|record| kind(record) == "delta" && record["channel"] == "answer")
+        .expect("the answer channel is non-empty");
+    let assistant = records
+        .iter()
+        .position(|record| {
+            kind(record) == "message"
+                && record["kind"] == "assistant"
+                && text(record) == COMMITTED_TEXT
+        })
+        .expect("the streamed answer is committed as one assistant row");
+    assert!(
+        last_reasoning < last_answer && last_answer < assistant,
+        "the reasoning and the answer both precede the committed row that supersedes them"
+    );
+
+    // The channel is transient, the row is durable: the same reasoning the live
+    // segment streamed is what the committed assistant row carries.
+    let session_id = SessionId::parse(
+        records
+            .last()
+            .and_then(|result| result["session_id"].as_str())
+            .expect("the result reports its session"),
+    )
+    .expect("the reported session identity is canonical");
+    let snapshot = host.snapshot(session_id);
+    let committed = snapshot
+        .messages()
+        .iter()
+        .find(|message| message.kind() == MessageKindDto::Assistant)
+        .expect("the run commits one assistant row");
+    assert_eq!(
+        committed.reasoning(),
+        Some(REASONING_CHUNKS.concat().as_str()),
+        "the committed row carries the reasoning the live channel streamed"
+    );
+    assert_eq!(committed.text(), COMMITTED_TEXT);
 }
 
 #[test]

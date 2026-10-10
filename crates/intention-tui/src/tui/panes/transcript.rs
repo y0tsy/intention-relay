@@ -12,10 +12,11 @@
 //!   where the exchange a call and its result form is drawn once, at the call's
 //!   row, and its result row contributes no block;
 //! - a committed **notice** row stays a plain line;
-//! - the live **provisional** tail is the answer block of the step in flight:
-//!   it is laid out through the same [`answer_block`] the committed assistant
-//!   row uses, marker included, so streaming text never looks provisional and
-//!   never changes when the commit arrives.
+//! - the live **provisional** tail is the step in flight: its reasoning block
+//!   and the answer block after it, each laid out through the very function
+//!   the committed assistant row uses (same marker, hanging indent, collapse
+//!   rule, inks, and wash), so no live row looks provisional and none changes
+//!   when the commit arrives.
 //!
 //! The gap rule is one constant and one helper, so the user card is padded from
 //! the reasoning above the answer, the reasoning is padded from the answer, and
@@ -28,10 +29,11 @@
 //! Committed rows are laid out once and kept in the [`TranscriptLayoutCache`]
 //! the front end owns; this pane asks that cache for the rows of the current
 //! transcript version and materialises `RichText` for the visible window only.
-//! The provisional tail is laid out per frame (it is one or two rows) and never
-//! enters the cache; that is a caching decision, not a style one, because its
-//! rows are identical to the committed row's. Every frame publishes the window
-//! it painted ([`TranscriptWindow`]) so the next mouse event can hit-test it.
+//! The provisional tail is laid out per frame and never enters the cache; that
+//! is a caching decision, not a style one, because its rows are identical to
+//! the committed row's. Every frame publishes the window it painted
+//! ([`TranscriptWindow`], live reasoning marker included) so the next mouse
+//! event can hit-test it.
 
 use std::cell::RefCell;
 use std::ops::Range;
@@ -44,8 +46,8 @@ use revue::widget::{Border, ScrollView, hstack, vstack};
 use crate::app::AppState;
 use crate::tui::layout::{
     CONTINUATION_INDENT, LaidOutRow, MARKER_GAP, MessageBlocks, RowBuilder, RowStyleId,
-    TranscriptLayoutCache, TranscriptWindow, box_bottom, box_content, box_top, display_width,
-    marker_text,
+    TranscriptLayoutCache, TranscriptWindow, append_blocks, box_bottom, box_content, box_top,
+    display_width, marker_text,
 };
 use crate::tui::palette;
 use crate::tui::panes::{markdown, tools};
@@ -133,11 +135,19 @@ pub(in crate::tui) fn transcript_pane(
     let visible = usize::from(height.saturating_sub(TRANSCRIPT_FRAME_ROWS));
     let newest = total.saturating_sub(visible);
     let start = newest.saturating_sub(usize::from(state.scroll()));
+    // The live tail's expand marker is not in the cache, so the pane publishes
+    // the display row it painted it on: that is what turns a click there into
+    // an expansion of the live segment.
+    let live_reasoning_marker = provisional
+        .iter()
+        .position(LaidOutRow::is_reasoning_marker)
+        .map(|offset| as_row(tail_offset + offset));
     cache.publish_window(TranscriptWindow {
         top,
         visible: as_row(visible),
         start: as_row(start),
         total: as_row(total),
+        live_reasoning_marker,
     });
     let committed = cache.laid_out();
     let selection = state.transcript_selection();
@@ -225,16 +235,41 @@ fn committed_blocks(state: &AppState, range: Range<usize>, width: usize) -> Vec<
 
 /// Returns the rows of the live provisional tail, laid out for this frame.
 ///
-/// The tail is an answer that has not been committed yet, so it is laid out
-/// through the very [`answer_block`] its committed row will use: same markdown
-/// pipeline, same marker, same hanging indent, same inks and wash. Nothing here
-/// knows it is streaming, and the text cannot change when the commit arrives.
+/// The tail is the step's two blocks before they commit - its reasoning, then
+/// the answer it precedes - laid out through the very functions their committed
+/// assistant row will use: the same markdown pipeline, the same markers, the
+/// same hanging indents, the same collapse rule, the same inks and wash, and
+/// the same one-row block gap between them. Nothing here knows it is streaming,
+/// and no row of it changes when the commit arrives.
 fn provisional_rows(state: &AppState, width: usize) -> Vec<LaidOutRow> {
-    let provisional = state.provisional_text();
-    if provisional.is_empty() {
-        return Vec::new();
+    let mut rows = Vec::new();
+    append_blocks(&mut rows, provisional_blocks(state, width));
+    rows
+}
+
+/// Returns the blocks the live provisional tail renders, in stream order.
+///
+/// A step streams its reasoning before the answer it informs, and the
+/// committed assistant row carries both, so the live tail is exactly the
+/// block list that row will produce - with the empty block a channel that has
+/// not streamed yet simply contributing no row.
+fn provisional_blocks(state: &AppState, width: usize) -> MessageBlocks {
+    let mut blocks = Vec::new();
+    let reasoning = state.provisional_reasoning();
+    if !reasoning.is_empty() {
+        // The live segment reads the expansion state of the row it will
+        // become, so its expand affordance reveals the same rows there.
+        blocks.push(reasoning_block(
+            reasoning,
+            width,
+            state.reasoning_expansion(state.live_reasoning_row()),
+        ));
     }
-    answer_block(provisional, width)
+    let answer = state.provisional_text();
+    if !answer.is_empty() {
+        blocks.push(answer_block(answer, width));
+    }
+    blocks
 }
 
 /// Returns the blocks one committed row renders, one entry per block.
@@ -262,6 +297,10 @@ fn message_blocks(
 }
 
 /// Returns one committed assistant row's blocks: its reasoning, then the answer.
+///
+/// The reasoning here is the durable attachment the committed row carries; the
+/// live chain of thought of a step in flight is not a committed row, and the
+/// pane draws it as the provisional tail's own reasoning segment.
 fn assistant_blocks(
     state: &AppState,
     message: &MessageProjectionDto,
@@ -269,8 +308,6 @@ fn assistant_blocks(
     width: usize,
 ) -> MessageBlocks {
     let mut blocks = Vec::new();
-    // @todo(core): no reasoning frame kind on the wire, so only the committed
-    // reasoning of a finished step is drawn; a live chain of thought is not.
     if let Some(reasoning) = message.reasoning() {
         blocks.push(reasoning_block(
             reasoning,
@@ -482,14 +519,14 @@ mod tests {
     use intention_proto::{
         ConfigRevisionId, MessageKindDto, MessageProjectionDto, ProjectId, RunId, RunModeDto,
         RunProjectionDto, RunStatusDto, RunStreamFrameDto, RunSubscriptionSnapshotDto, SessionId,
-        SessionProjectionDto, SessionSnapshotDto, TextDeltaFrameDto, TurnId, WorkspaceId,
-        WorkspaceRootDto,
+        SessionProjectionDto, SessionSnapshotDto, TextDeltaChannelDto, TextDeltaFrameDto, TurnId,
+        WorkspaceId, WorkspaceRootDto,
     };
     use revue::render::Modifier;
 
     use crate::app::{Action, AppState};
     use crate::tui::layout::{
-        LaidOutRow, MARKER_GAP, RowStyleId, TranscriptLayoutCache, append_messages,
+        LaidOutRow, MARKER_GAP, RowStyleId, TranscriptLayoutCache, append_blocks, append_messages,
     };
     use crate::tui::palette;
 
@@ -611,6 +648,40 @@ mod tests {
             fixture_messages(session_id, run_id),
         )));
         state
+    }
+
+    /// Opens the fixture transcript's run stream, so deltas can reach it.
+    fn opened_stream(session_id: SessionId, run_id: RunId) -> AppState {
+        let mut state = fixture_state(session_id, run_id);
+        let rows = state.transcript().to_vec();
+        state.update(Action::RunStreamOpened(stream_state(
+            session_id, run_id, rows,
+        )));
+        state
+    }
+
+    /// Streams one answer chunk of the fixture stream's first model step.
+    fn stream_answer(state: &mut AppState, session_id: SessionId, run_id: RunId, text: &str) {
+        state.update(Action::FrameReceived(RunStreamFrameDto::TextDelta(
+            TextDeltaFrameDto::new(session_id, run_id, 0, TextDeltaChannelDto::Answer, text)
+                .expect("the fixture answer delta is valid"),
+        )));
+    }
+
+    /// Streams one reasoning chunk of the fixture stream's first model step.
+    fn stream_reasoning(state: &mut AppState, session_id: SessionId, run_id: RunId, text: &str) {
+        state.update(Action::FrameReceived(RunStreamFrameDto::TextDelta(
+            TextDeltaFrameDto::new(session_id, run_id, 0, TextDeltaChannelDto::Reasoning, text)
+                .expect("the fixture reasoning delta is valid"),
+        )));
+    }
+
+    /// Returns a reasoning fixture longer than the collapsed block shows.
+    fn long_reasoning() -> String {
+        (0..super::REASONING_VISIBLE_ROWS + 10)
+            .map(|index| format!("step {index}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Appends one committed assistant row through the live stream path.
@@ -867,20 +938,13 @@ mod tests {
     fn the_provisional_tail_is_laid_out_per_frame_and_never_cached() {
         let session_id = SessionId::new();
         let run_id = RunId::new();
-        let mut state = fixture_state(session_id, run_id);
+        let mut state = opened_stream(session_id, run_id);
         let mut cache = TranscriptLayoutCache::new();
         cache.rows(&state, WIDTH, |range, width| {
             committed_blocks(&state, range, width)
         });
 
-        let rows = state.transcript().to_vec();
-        state.update(Action::RunStreamOpened(stream_state(
-            session_id, run_id, rows,
-        )));
-        state.update(Action::FrameReceived(RunStreamFrameDto::TextDelta(
-            TextDeltaFrameDto::new(session_id, run_id, 0, "partial")
-                .expect("the fixture delta is valid"),
-        )));
+        stream_answer(&mut state, session_id, run_id, "partial");
         let tail = provisional_rows(&state, WIDTH);
         assert_eq!(tail.len(), 1, "the tail is one wrapped line here");
         assert_eq!(tail[0].text, format!("{ANSWER_GLYPH} partial"));
@@ -900,16 +964,9 @@ mod tests {
     fn the_streaming_tail_lays_out_as_the_committed_answer_row_it_becomes() {
         let session_id = SessionId::new();
         let run_id = RunId::new();
-        let mut state = fixture_state(session_id, run_id);
-        let rows = state.transcript().to_vec();
-        state.update(Action::RunStreamOpened(stream_state(
-            session_id, run_id, rows,
-        )));
+        let mut state = opened_stream(session_id, run_id);
         let text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda";
-        state.update(Action::FrameReceived(RunStreamFrameDto::TextDelta(
-            TextDeltaFrameDto::new(session_id, run_id, 0, text)
-                .expect("the fixture delta is valid"),
-        )));
+        stream_answer(&mut state, session_id, run_id, text);
 
         let tail = provisional_rows(&state, WIDTH);
         assert!(tail.len() > 1, "the fixture tail wraps");
@@ -939,6 +996,157 @@ mod tests {
             roles(&committed[0]),
             "the live tail lays out exactly as the committed answer row it becomes"
         );
+    }
+
+    #[test]
+    fn the_streaming_tail_lays_out_as_the_committed_reasoning_block_it_becomes() {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let mut state = opened_stream(session_id, run_id);
+        let reasoning = "weighing the options carefully";
+        let answer = "the answer it informs";
+        stream_reasoning(&mut state, session_id, run_id, reasoning);
+        stream_answer(&mut state, session_id, run_id, answer);
+
+        let tail = provisional_rows(&state, WIDTH);
+        assert!(
+            tail[0].text.starts_with(&format!("{REASONING_GLYPH} ")),
+            "the live reasoning segment opens with the committed marker: {:?}",
+            tail[0].text
+        );
+
+        // The committed assistant row this step becomes owns both blocks, with
+        // the one-row gap the transcript puts between them.
+        let committed = assistant_blocks(
+            &AppState::new(None),
+            &assistant_row(session_id, run_id, answer, Some(reasoning)),
+            0,
+            WIDTH,
+        );
+        assert_eq!(committed.len(), 2, "reasoning and answer are two blocks");
+        let mut expected = Vec::new();
+        append_blocks(&mut expected, committed);
+        assert!(
+            expected.iter().any(LaidOutRow::is_blank),
+            "the fixture keeps the gap row between the two blocks"
+        );
+        assert_eq!(
+            roles(&tail),
+            roles(&expected),
+            "the live tail is the committed row's own blocks, row for row"
+        );
+    }
+
+    #[test]
+    fn the_live_reasoning_segment_collapses_like_the_committed_block_it_becomes() {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let reasoning = long_reasoning();
+        let mut state = opened_stream(session_id, run_id);
+        stream_reasoning(&mut state, session_id, run_id, &reasoning);
+        stream_answer(&mut state, session_id, run_id, "the answer");
+
+        let tail = provisional_rows(&state, WIDTH);
+        let committed = reasoning_block(&reasoning, WIDTH, 0);
+        assert!(
+            committed.iter().any(LaidOutRow::is_reasoning_marker),
+            "the committed block of this reasoning collapses"
+        );
+        assert_eq!(
+            roles(&tail[..committed.len()]),
+            roles(&committed),
+            "the live segment shows the committed block's rows, marker included"
+        );
+    }
+
+    #[test]
+    fn an_expansion_of_the_live_reasoning_segment_survives_the_commit() {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let reasoning = long_reasoning();
+        let answer = "the answer";
+        let mut state = opened_stream(session_id, run_id);
+        stream_reasoning(&mut state, session_id, run_id, &reasoning);
+        stream_answer(&mut state, session_id, run_id, answer);
+        let live_row = state.live_reasoning_row();
+        let collapsed = provisional_rows(&state, WIDTH).len();
+
+        state.update(Action::ExpandReasoning {
+            row: Some(live_row),
+        });
+        let expansion = state.reasoning_expansion(live_row);
+        assert!(expansion > 0, "the live segment expands by one chunk");
+        let expanded_tail = provisional_rows(&state, WIDTH);
+        assert!(
+            expanded_tail.len() > collapsed,
+            "the activation reveals rows the collapsed live segment hid"
+        );
+        assert!(
+            !expanded_tail.iter().any(LaidOutRow::is_reasoning_marker),
+            "a fully revealed live segment stops advertising its affordance"
+        );
+
+        // The commit lands the assistant row at exactly the row the live
+        // segment was anchored at, carrying the same reasoning.
+        state.update(Action::FrameReceived(RunStreamFrameDto::Content(
+            assistant_row(session_id, run_id, answer, Some(&reasoning)),
+        )));
+        assert_eq!(state.transcript().len(), live_row + 1);
+        assert_eq!(
+            state.provisional_reasoning(),
+            "",
+            "the committed row supersedes the live segment"
+        );
+        assert_eq!(
+            state.reasoning_expansion(live_row),
+            expansion,
+            "the row the live segment became keeps the expansion it had"
+        );
+        let committed = assistant_blocks(
+            &state,
+            &assistant_row(session_id, run_id, answer, Some(&reasoning)),
+            live_row,
+            WIDTH,
+        );
+        let mut expected = Vec::new();
+        append_blocks(&mut expected, committed);
+        assert_eq!(
+            roles(&expanded_tail),
+            roles(&expected),
+            "the expanded live segment is the committed block, row for row"
+        );
+    }
+
+    #[test]
+    fn the_pane_publishes_the_live_reasoning_marker_it_painted() {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let mut state = opened_stream(session_id, run_id);
+        stream_reasoning(&mut state, session_id, run_id, &long_reasoning());
+        let cache = RefCell::new(TranscriptLayoutCache::new());
+        let _pane = transcript_pane(&state, 0, 40, 50, &cache);
+        let window = cache.borrow().window();
+        let committed_len = cache.borrow().laid_out().len();
+        let marker = window
+            .live_reasoning_marker
+            .map(usize::from)
+            .expect("the collapsed live segment publishes its expand marker row");
+        assert!(
+            marker >= committed_len,
+            "the published marker belongs to the live tail, not the committed rows"
+        );
+        assert!(
+            marker < usize::from(window.total),
+            "the published marker is a row the frame painted"
+        );
+
+        // A live segment that fits publishes no marker: the row is cleared
+        // every frame, so a stale one can never expand a block that is gone.
+        let mut short = opened_stream(session_id, run_id);
+        stream_reasoning(&mut short, session_id, run_id, "a thought");
+        let cache = RefCell::new(TranscriptLayoutCache::new());
+        let _pane = transcript_pane(&short, 0, 40, 50, &cache);
+        assert_eq!(cache.borrow().window().live_reasoning_marker, None);
     }
 
     #[test]

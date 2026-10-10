@@ -8,8 +8,8 @@ use intention_proto::{
     ConfigRevisionId, DaemonHealthDto, ErrorDto, MessageKindDto, MessageProjectionDto, ProjectId,
     RunId, RunModeDto, RunProjectionDto, RunStatusDto, RunStreamFrameDto,
     RunSubscriptionSnapshotDto, SendUserTurnOutcomeDto, SessionId, SessionProjectionDto,
-    SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TextDeltaFrameDto, TurnId,
-    WorkspaceId, WorkspaceRootDto,
+    SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto,
+    TextDeltaFrameDto, TurnId, WorkspaceId, WorkspaceRootDto,
 };
 
 use super::{
@@ -171,7 +171,26 @@ fn reasoning_row(
 
 fn delta(session_id: SessionId, run_id: RunId, step: u32, text: &str) -> RunStreamFrameDto {
     RunStreamFrameDto::TextDelta(
-        TextDeltaFrameDto::new(session_id, run_id, step, text).expect("the fixture delta is valid"),
+        TextDeltaFrameDto::new(session_id, run_id, step, TextDeltaChannelDto::Answer, text)
+            .expect("the fixture delta is valid"),
+    )
+}
+
+fn reasoning_delta(
+    session_id: SessionId,
+    run_id: RunId,
+    step: u32,
+    text: &str,
+) -> RunStreamFrameDto {
+    RunStreamFrameDto::TextDelta(
+        TextDeltaFrameDto::new(
+            session_id,
+            run_id,
+            step,
+            TextDeltaChannelDto::Reasoning,
+            text,
+        )
+        .expect("the fixture reasoning delta is valid"),
     )
 }
 
@@ -1118,6 +1137,69 @@ fn a_new_model_step_replaces_the_provisional_tail() {
         session_id, run_id, 1, "second",
     )));
     assert_eq!(state.provisional_text(), "second");
+}
+
+#[test]
+fn the_reasoning_channel_buffers_apart_from_the_answer_it_precedes() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    state.update(Action::FrameReceived(reasoning_delta(
+        session_id, run_id, 0, "weigh",
+    )));
+    state.update(Action::FrameReceived(reasoning_delta(
+        session_id, run_id, 0, "ing",
+    )));
+    state.update(Action::FrameReceived(delta(
+        session_id,
+        run_id,
+        0,
+        "the answer",
+    )));
+    assert_eq!(state.provisional_reasoning(), "weighing");
+    assert_eq!(state.provisional_text(), "the answer");
+
+    state.update(Action::FrameReceived(RunStreamFrameDto::Content(
+        assistant_row(session_id, run_id, "the answer"),
+    )));
+    assert_eq!(
+        state.provisional_reasoning(),
+        "",
+        "the committed assistant row supersedes the live reasoning segment"
+    );
+    assert_eq!(state.provisional_text(), "");
+}
+
+#[test]
+fn the_key_expansion_targets_the_live_reasoning_segment_while_it_streams() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    let row = state.live_reasoning_row();
+    state.update(Action::ExpandReasoning { row: None });
+    assert_eq!(
+        state.reasoning_expansion(row),
+        0,
+        "a step that streamed no reasoning has nothing to expand"
+    );
+
+    state.update(Action::FrameReceived(reasoning_delta(
+        session_id,
+        run_id,
+        0,
+        "a thought",
+    )));
+    state.update(Action::ExpandReasoning { row: None });
+    assert_eq!(
+        state.reasoning_expansion(state.live_reasoning_row()),
+        100,
+        "the live segment is the newest block that carries reasoning"
+    );
+    assert_eq!(
+        state.live_reasoning_row(),
+        row,
+        "the committed row the live segment becomes is the row it was anchored at"
+    );
 }
 
 #[test]

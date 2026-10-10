@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 use intention_client::{IntentionClient, RunStreamSubscription};
 use intention_proto::{
     ErrorDto, MessageKindDto, MessageProjectionDto, RunId, RunModeDto, RunStatusDto,
-    RunStreamFrameDto, SessionId, SessionSummaryDto, WorkspaceRootDto, run_status_is_terminal,
+    RunStreamFrameDto, SessionId, SessionSummaryDto, TextDeltaChannelDto, WorkspaceRootDto,
+    run_status_is_terminal,
 };
 // The inline unit tests build session summary fixtures through `use super::*`.
 #[cfg(test)]
@@ -236,12 +237,16 @@ enum Received {
 
 /// One output sink for the observable events of a driven run.
 pub trait Report {
-    /// Reports one transient provisional text chunk of one model step.
+    /// Reports one transient provisional text chunk of one model step and
+    /// channel.
+    ///
+    /// Every chunk carries the channel it belongs to, so a sink decides for
+    /// itself what to do with the reasoning a step streams before its answer.
     ///
     /// # Errors
     ///
     /// Returns the output failure.
-    fn delta(&mut self, step: u32, text: &str) -> io::Result<()>;
+    fn delta(&mut self, step: u32, channel: TextDeltaChannelDto, text: &str) -> io::Result<()>;
 
     /// Reports one committed transcript row.
     ///
@@ -423,7 +428,7 @@ impl Driver {
                 Received::Frame(frame) => {
                     if let RunStreamFrameDto::TextDelta(delta) = &frame {
                         events
-                            .delta(delta.step(), delta.text())
+                            .delta(delta.step(), delta.channel(), delta.text())
                             .map_err(PumpFailure::Output)?;
                     }
                     self.apply(Action::FrameReceived(frame)).await;
@@ -612,10 +617,10 @@ impl<'a, W: Write> Output<'a, W> {
 }
 
 impl<W: Write> Report for Output<'_, W> {
-    fn delta(&mut self, step: u32, text: &str) -> io::Result<()> {
+    fn delta(&mut self, step: u32, channel: TextDeltaChannelDto, text: &str) -> io::Result<()> {
         match self {
-            Self::Text(report) => report.delta(step, text),
-            Self::Json(report) => report.delta(step, text),
+            Self::Text(report) => report.delta(step, channel, text),
+            Self::Json(report) => report.delta(step, channel, text),
         }
     }
 
@@ -636,10 +641,15 @@ impl<W: Write> Report for Output<'_, W> {
 
 /// The progressive human output of one run.
 ///
-/// The streamed provisional text is written as it arrives. A committed
+/// The streamed provisional answer text is written as it arrives. A committed
 /// assistant row that repeats the streamed text of its step supersedes that
 /// text instead of printing it twice, which is the committed-row rule of the
 /// terminal model applied to a pipe.
+///
+/// The reasoning channel is not written: this format reports the transcript's
+/// prose, and a committed row's reasoning is never printed either, so a step's
+/// pipe output stays exactly the answer it commits. The machine-readable format
+/// carries both channels for a consumer that wants them.
 pub struct TextReport<W> {
     writer: W,
     step: Option<u32>,
@@ -680,7 +690,10 @@ impl<W: Write> TextReport<W> {
 }
 
 impl<W: Write> Report for TextReport<W> {
-    fn delta(&mut self, step: u32, text: &str) -> io::Result<()> {
+    fn delta(&mut self, step: u32, channel: TextDeltaChannelDto, text: &str) -> io::Result<()> {
+        if channel == TextDeltaChannelDto::Reasoning {
+            return Ok(());
+        }
         if self.step != Some(step) {
             self.step = Some(step);
             self.streamed.clear();
@@ -720,12 +733,15 @@ impl<W: Write> Report for TextReport<W> {
 ///
 /// The record kinds are the command's closed script interface: `delta`,
 /// `message`, `status`, `error`, and `result`. A delta record marks itself
-/// transient, so a consumer can tell provisional text from a committed row.
+/// transient and names its channel, so a consumer can tell provisional text of
+/// either channel from a committed row.
 enum Record<'a> {
     /// One transient provisional model text chunk.
     Delta {
         /// The zero-based model step the chunk belongs to.
         step: u32,
+        /// The step's text channel the chunk belongs to.
+        channel: &'a str,
         /// The chunk text.
         text: &'a str,
     },
@@ -765,10 +781,15 @@ impl Record<'_> {
     /// Writes this record as one JSON line.
     fn write(&self, writer: &mut impl Write) -> io::Result<()> {
         let value = match self {
-            Self::Delta { step, text } => serde_json::json!({
+            Self::Delta {
+                step,
+                channel,
+                text,
+            } => serde_json::json!({
                 "record": "delta",
                 "transient": true,
                 "step": step,
+                "channel": channel,
                 "text": text,
             }),
             Self::Message { kind, text } => serde_json::json!({
@@ -843,8 +864,13 @@ impl<W: Write> JsonReport<W> {
 }
 
 impl<W: Write> Report for JsonReport<W> {
-    fn delta(&mut self, step: u32, text: &str) -> io::Result<()> {
-        Record::Delta { step, text }.write(&mut self.writer)
+    fn delta(&mut self, step: u32, channel: TextDeltaChannelDto, text: &str) -> io::Result<()> {
+        Record::Delta {
+            step,
+            channel: channel.as_str(),
+            text,
+        }
+        .write(&mut self.writer)
     }
 
     fn row(&mut self, row: &MessageProjectionDto) -> io::Result<()> {
@@ -1006,9 +1032,10 @@ mod tests {
         assert_eq!(
             written(Record::Delta {
                 step: 2,
+                channel: "reasoning",
                 text: "hi"
             }),
-            "{\"record\":\"delta\",\"step\":2,\"text\":\"hi\",\"transient\":true}\n"
+            "{\"channel\":\"reasoning\",\"record\":\"delta\",\"step\":2,\"text\":\"hi\",\"transient\":true}\n"
         );
         assert_eq!(
             written(Record::Message {
@@ -1043,11 +1070,12 @@ mod tests {
     fn json_record_text_is_escaped() {
         let line = written(Record::Delta {
             step: 0,
+            channel: "answer",
             text: "a \"quote\"\n",
         });
         assert_eq!(
             line,
-            "{\"record\":\"delta\",\"step\":0,\"text\":\"a \\\"quote\\\"\\n\",\"transient\":true}\n"
+            "{\"channel\":\"answer\",\"record\":\"delta\",\"step\":0,\"text\":\"a \\\"quote\\\"\\n\",\"transient\":true}\n"
         );
     }
 
@@ -1057,7 +1085,10 @@ mod tests {
         let run = RunId::new();
         let mut buffer = Vec::new();
         let mut sink = Output::new(Format::Json, &mut buffer);
-        sink.delta(0, "hi").expect("the delta writes");
+        sink.delta(0, TextDeltaChannelDto::Reasoning, "weighing")
+            .expect("the reasoning delta writes");
+        sink.delta(0, TextDeltaChannelDto::Answer, "hi")
+            .expect("the answer delta writes");
         sink.row(&row(MessageKindDto::Assistant, "hi"))
             .expect("the row writes");
         sink.status(RunStatusDto::Running)
@@ -1070,22 +1101,28 @@ mod tests {
         .expect("the result writes");
         let text = text_of(&buffer);
         let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len(), 4);
+        assert_eq!(lines.len(), 5);
         assert!(lines[0].contains("\"record\":\"delta\""));
         assert!(lines[0].contains("\"transient\":true"));
-        assert!(lines[1].contains("\"record\":\"message\""));
-        assert!(lines[2].contains("\"record\":\"status\""));
-        assert!(lines[3].contains("\"outcome\":\"completed\""));
-        assert!(lines[3].contains(&run.to_string()));
-        assert!(lines[3].contains(&session.to_string()));
+        assert!(lines[0].contains("\"channel\":\"reasoning\""));
+        assert!(lines[1].contains("\"channel\":\"answer\""));
+        assert!(lines[2].contains("\"record\":\"message\""));
+        assert!(lines[3].contains("\"record\":\"status\""));
+        assert!(lines[4].contains("\"outcome\":\"completed\""));
+        assert!(lines[4].contains(&run.to_string()));
+        assert!(lines[4].contains(&session.to_string()));
     }
 
     #[test]
     fn a_text_sink_streams_deltas_and_lets_the_committed_row_supersede_them() {
         let mut buffer = Vec::new();
         let mut report = TextReport::new(&mut buffer);
-        report.delta(0, "hello ").expect("the delta writes");
-        report.delta(0, "world").expect("the delta writes");
+        report
+            .delta(0, TextDeltaChannelDto::Answer, "hello ")
+            .expect("the delta writes");
+        report
+            .delta(0, TextDeltaChannelDto::Answer, "world")
+            .expect("the delta writes");
         report
             .row(&row(MessageKindDto::Assistant, "hello world"))
             .expect("the row writes");
@@ -1096,10 +1133,32 @@ mod tests {
     }
 
     #[test]
+    fn a_text_sink_writes_the_answer_channel_and_leaves_the_reasoning_out() {
+        let mut buffer = Vec::new();
+        let mut report = TextReport::new(&mut buffer);
+        report
+            .delta(0, TextDeltaChannelDto::Reasoning, "weighing the options")
+            .expect("the reasoning delta writes");
+        report
+            .delta(0, TextDeltaChannelDto::Answer, "the answer")
+            .expect("the answer delta writes");
+        report
+            .row(&row(MessageKindDto::Assistant, "the answer"))
+            .expect("the row writes");
+        assert_eq!(
+            text_of(&buffer),
+            "the answer\n",
+            "the pipe reports the answer the row carries, never the reasoning channel"
+        );
+    }
+
+    #[test]
     fn a_text_sink_prints_a_committed_row_the_stream_did_not_carry() {
         let mut buffer = Vec::new();
         let mut report = TextReport::new(&mut buffer);
-        report.delta(0, "partial").expect("the delta writes");
+        report
+            .delta(0, TextDeltaChannelDto::Answer, "partial")
+            .expect("the delta writes");
         report
             .row(&row(MessageKindDto::Assistant, "partial and more"))
             .expect("the row writes");
@@ -1119,7 +1178,9 @@ mod tests {
         report
             .row(&row(MessageKindDto::User, "hello"))
             .expect("the row writes");
-        report.delta(0, "answer").expect("the delta writes");
+        report
+            .delta(0, TextDeltaChannelDto::Answer, "answer")
+            .expect("the delta writes");
         report
             .row(&row(MessageKindDto::Assistant, "answer"))
             .expect("the row writes");
@@ -1133,8 +1194,12 @@ mod tests {
     fn a_text_sink_starts_a_new_step_with_an_empty_stream() {
         let mut buffer = Vec::new();
         let mut report = TextReport::new(&mut buffer);
-        report.delta(0, "first").expect("the delta writes");
-        report.delta(1, "second").expect("the delta writes");
+        report
+            .delta(0, TextDeltaChannelDto::Answer, "first")
+            .expect("the delta writes");
+        report
+            .delta(1, TextDeltaChannelDto::Answer, "second")
+            .expect("the delta writes");
         report
             .row(&row(MessageKindDto::Assistant, "second"))
             .expect("the row writes");
