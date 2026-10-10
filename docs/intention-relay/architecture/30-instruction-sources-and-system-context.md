@@ -2,20 +2,20 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.** Architecture 30 owns the
 instruction channel of a model request: instruction sources, profile revisions, canonical assembly, the effective
-instruction projection, its bounds, failures, and observability. It follows the single live version and no-backward-compatibility policy ([architecture 00](00-principles-and-scope.md)); delivery belongs to the fifth activating slice of Milestone 5+.
+instruction projection, its failures, and observability. It follows the single live version and no-backward-compatibility policy ([architecture 00](00-principles-and-scope.md)); delivery belongs to the third activating slice of Milestone 5+.
 
 Owner: architecture 30.
 
 ## Ownership and non-authorities
 
 This document owns the source model, the profile revision identity, the canonical assembly order and separators, the
-effective instruction projection, its intrinsic bounds, its closed failures, and its observability rules. Architecture
+effective instruction projection, its closed failures, and its observability rules. Architecture
 21 owns Goal, Skill, context-manifest, projection, memory, and compaction semantics; instruction sources are not a
 context source and never enter a context manifest, a Skill disclosure, or a model-step projection. Architecture 23 owns
 fork lineage and the frozen records that carry the materialized projection. Architecture 07 owns the `Mode` contribution
 text; architecture 06 owns the `Vfr` contribution content and its configuration dependency; architecture 08 owns the
-request contract and driver translation; architecture 09 owns classification and redaction; architecture 25 owns the
-control-plane commands that edit and preview instructions.
+request contract and driver translation; architecture 09 owns classification and redaction. Architecture 25 owns no
+instruction commands: instruction configuration is filesystem-level.
 
 Instruction text is not authority: it cannot create, widen, or remove a tool permission, provider selection, admission
 decision, child, MCP capability, bridge grant, kernel epoch, or reconciliation outcome, and it
@@ -58,7 +58,7 @@ InstructionSourceV1
 ```
 
 A source carries no authority, no executable content, no credential, no provider or tool payload, and no implementation
-resource. Instruction text is UTF-8 configuration content; a source that is not representable as bounded text fails
+resource. Instruction text is UTF-8 configuration content; a source that is not representable as UTF-8 text fails
 closed.
 
 The records in this document are typed serde JSON; the former `typed-tlv` framing, canonical bytes, SHA-256 digests, and
@@ -140,7 +140,7 @@ projection that comes from project material.
 - The file is addressed by joining its path onto the session's `WorkspaceRoot`;
 the root is an addressing anchor, not a security boundary, and no symlink or containment check exists
 ([architecture 05](05-tools-and-workspace.md)); an unreadable or non-regular file fails closed.
-- The file is read as bounded UTF-8 text; its content is never executed, never
+- The file is read as UTF-8 text; its content is never executed, never
 parsed as configuration, and never treated as a tool definition or policy input.
 - An absent file contributes nothing and is not a failure; a project without
 instructions behaves exactly as a project with an empty source.
@@ -150,25 +150,18 @@ the projection.
 - The workspace reference, not the text, is durable outside the projection
 itself.
 
-## Editing surface and preview
+## Configuration and editing
 
-The control plane ([architecture 25](25-configuration-provider-control-plane.md)) exposes the instruction configuration
-surface:
+Instruction fragments and the instruction profile are configuration content; the user edits them at the filesystem
+level in the configuration files, and the configuration takes effect through the ordinary configuration load
+([architecture 09](09-configuration-security-and-observability.md)). There is no control-plane, UI, TUI, or CLI surface
+that lists, creates, edits, duplicates, enables, disables, reorders, re-scopes, validates, or previews instructions, and
+adding any such surface requires a new decision. An invalid, inconsistent, or unsupported instruction configuration
+fails closed through the closed failure set below.
 
-- list, create, edit, duplicate, enable, disable, reorder, and re-scope
-fragments;
-- validate an edit before it commits and reject it with a typed failure when it
-is invalid, inconsistent, or over bound;
-- show the current profile revision identity;
-- preview the effective instruction projection for a chosen session, policy,
-and mode without admitting a run, creating a reason or selection, or writing durable instruction state;
-- keep the surface credential-free, and keep fragment text visible only where
-the user edits it.
-
-Fragment editing is configuration, not admission: once a run is admitted, its projection is immutable and stays the
-stable leading block of every request, and a later edit affects only future runs; the following request window is
-mutable under [architecture 08](08-model-protocol-and-providers.md). The primary UI exposes the surface; TUI/REPL
-remains contract-equivalent. Preview is non-authorizing and non-admitting.
+Instruction configuration is configuration, not admission: once a run is admitted, its projection is immutable and
+stays the stable leading block of every request, and a later configuration change affects only future runs; the
+following request window is mutable under [architecture 08](08-model-protocol-and-providers.md).
 
 ## Trust, authority, and the injection boundary
 
@@ -187,15 +180,7 @@ driver may add framing or templating of its own; the daemon-owned request marks 
 with the ephemeral prompt-cache breakpoint of [architecture 08](08-model-protocol-and-providers.md), which adds no text
 and changes no projection.
 
-## Bounds and deterministic assembly
-
-Intrinsic bounds are:
-
-- total assembled projection at most 100,000 characters, aligned by the
-activating specification with the existing `system_context` validation;
-- one fragment at most 16,384 characters;
-- at most 64 enabled fragments;
-- workspace project instructions at most 16,384 characters.
+## Deterministic assembly
 
 Assembly is deterministic: the same profile revision, project instruction content, mode, and configuration must produce
 the same ordered contribution list and the same rendered projection on every platform. A future projection identity must
@@ -208,16 +193,13 @@ The closed instruction failure set is:
 
 ```text
 instruction_profile_unavailable
-instruction_projection_too_large
 instruction_source_unavailable
 ```
 
 - `instruction_profile_unavailable`: a configured profile revision is missing,
 corrupt, inconsistent, or no longer resolvable.
-- `instruction_projection_too_large`: the projection exceeds an intrinsic
-bound.
 - `instruction_source_unavailable`: a workspace instruction source is
-unreadable, is not bounded text, or exceeds its own bound.
+unreadable or is not valid UTF-8 text.
 
 Each failure is a typed known pre-effect rejection at admission. It discloses no credential, absolute path, file
 content, raw payload, or implementation detail. No fallback revision, partial projection, silent omission, truncation,
@@ -230,8 +212,8 @@ notification projections, and audit records carry the profile revision identity 
 only; they never carry fragment text, `AGENTS.md` content, or the assembled projection, and fake-secret regression
 covers every public, durable, log, and activity surface.
 
-The control-plane configuration surface displays fragment text because the user edits it there; that surface is not an
-activity, notification, audit, or diagnostics channel, and it crosses no public or durable safe-projection boundary.
+Fragment text is visible only in the user's own configuration files; no control-plane, UI, activity, notification,
+audit, or diagnostics surface displays it.
 Classification and redaction rules of [architecture 09](09-configuration-security-and-observability.md) apply unchanged.
 
 ## Compatibility and historical preservation

@@ -134,8 +134,9 @@ headless exit codes and safe errors are typed, and no presentation logic enters 
 forks remain Slice 6 work; desktop presentation remains Milestone 6 work.
 -  **Slice 3 — Instruction sources and system context — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
-deployment instruction profile adapted from the legacy Antibusy static prompt set, user-editable fragments at user,
-project, and session scope, workspace `AGENTS.md` project instructions read through the `WorkspaceRoot` anchor, and the
+deployment instruction profile adapted from the legacy Antibusy static prompt set, user-authored fragments at user,
+project, and session scope edited at the filesystem level, workspace `AGENTS.md` project instructions read through the
+`WorkspaceRoot` anchor, and the
 reserved `Mode` and `Vfr` contributions owned by architectures 07 and 06; immutable profile revisions with typed
 identity; deterministic assembly and the effective instruction projection, frozen at admission, delivered through the
 existing `system_context` channel, materialized into fork, plan, and handoff records, and recorded as safe usage
@@ -204,8 +205,6 @@ instruction-source slices.
 -  minimal Svelte UI to create/open a session, send a turn, render streamed state, reconnect, and render the safe
 activity-journal and notification projections;
 - TUI/REPL remains a contract-equivalent client;
--  instruction-fragment editing and effective-projection preview in the primary UI over the fifth Milestone 5+ slice's
-control-plane surface ([architecture 30](30-instruction-sources-and-system-context.md));
 -  post-M4 activity-journal and notification contracts are delivered by the Milestone 5+ UI-foundation slice and
 consumed here, while the durable `SessionProviderProfileChanged` delivery stays reserved to M6.
 
@@ -220,8 +219,6 @@ consumed here, while the durable `SessionProviderProfileChanged` delivery stays 
 
 - Tauri and TUI can observe the same daemon-owned session; closing Tauri does not stop daemon-owned work;
 - no Tauri crate imports application/runtime/storage implementation APIs;
--  the primary UI can list, create, edit, reorder, enable, disable, and re-scope instruction fragments and preview the
-effective projection over the typed control-plane surface, with TUI/REPL equivalence;
 - adapters satisfy mapping-contract and smoke/outcome requirements rather than a misleading aggregate UI line target.
 
 ## Milestone 7: Plan/Build policies, physical plans, and Build Autopilot
