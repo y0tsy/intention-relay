@@ -410,11 +410,14 @@ text above is the live policy.
   (`SESSION_LIST_ROWS`) and an `omitted` count, so the list is never silently truncated; storage owns the ordering and
   the count, and the daemon passes the result through unchanged. Tree and branching views remain Slice 6 work.
 - Transient delta semantics. The run stream also carries `RunStreamFrameDto::TextDelta` frames, whose
-  `TextDeltaFrameDto` names its session, run, model step, and one coalesced chunk of that step's uncommitted text. A
+  `TextDeltaFrameDto` names its session, run, model step, channel, and one coalesced chunk of that step's uncommitted
+  text. The channel closes over the two things a step says before it is committed — the reasoning it thinks with and
+  the answer it produces — so a provider's reasoning stream reaches the front end without a second frame shape, and
+  each channel keeps its own coalesced window and drop flag. A
   delta is never persisted and never replayed: a re-subscribing client receives committed state only. A step's pending
   deltas flush before that step's committed
-  `content` frames, a committed assistant row replaces the provisional text in the client, and a run without
-  subscribers drops its deltas — the committed transcript row stays the only authority.
+  `content` frames, reasoning ahead of answer, a committed assistant row replaces both channels in the client, and a
+  run without subscribers drops its deltas — the committed transcript row stays the only authority.
 
 ### The `@todo(core)` boundary
 
@@ -433,7 +436,6 @@ fabricated value. The table below names each one, taken from the markers in the 
 | the row counter's `+N omitted (core: paged list @todo)` | a session list that can be paged past its bounded window |
 | the `ctx @todo(core)` status run | token usage on the run projection |
 | the `model @todo(core)` badge | the provider model on the session projection |
-| committed reasoning only | live reasoning frames on the wire |
 | the `Ctrl+F` tree notice | session forks (Slice 6) |
 | the `write`, `edit`, and `execute` plates | a typed projection of each result |
 | the read preview, which can only repeat the tool's own `[truncated]` line | typed result metadata (for example a read truncation flag) |
@@ -446,6 +448,7 @@ The committed transcript is laid out once into neutral rows and cached per (pane
 append-only fast path that lays out only the appended tail; a width change, a replacement, a front trim, a session
 switch, a reasoning expansion, or a newly committed tool result that pairs an earlier call lays the whole transcript out
 again. Only the visible window is materialised into widgets, the layout works on
-text slices carrying style ids instead of a style per character, and the live provisional tail is laid out per frame and
-never cached. The binary takes `mimalloc` as its process-wide global allocator, because a frame allocates many
-short-lived small strings.
+text slices carrying style ids instead of a style per character, and the live tail a step is streaming — its reasoning
+segment and its answer segment — is laid out per frame through the same block functions the committed rows use, never
+cached and never styled apart from the rows it becomes. The binary takes `mimalloc` as its process-wide global
+allocator, because a frame allocates many short-lived small strings.
