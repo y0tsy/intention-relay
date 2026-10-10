@@ -47,14 +47,11 @@ impl AppState {
         // arrives while it is open re-selects its rows under the same filter.
         self.browser.refresh(&self.sessions);
         self.error = None;
-        // The daemon orders summaries by recency, so the first one is the
-        // newest session the caller asked to continue. A session the caller
-        // selected wins: the command line rejects both requests together, and
-        // a selected session's snapshot may arrive before or after this list.
-        // @todo(core): resolve the continue target in the core - the list's
-        // recency order is not a documented wire guarantee, and the headless
-        // command re-derives the same fact from `updated_at` - so the front end
-        // never picks a session from list position.
+        // The daemon orders summaries by recency, and that order is the
+        // documented list contract, so the first one is the newest session the
+        // caller asked to continue. A session the caller selected wins: the
+        // command line rejects both requests together, and a selected session's
+        // snapshot may arrive before or after this list.
         if self.continue_session
             && self.session_id.is_none()
             && self.initial_session.is_none()

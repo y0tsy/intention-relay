@@ -3,19 +3,21 @@
     reason = "Unit tests build typed fixture DTOs directly and assert them for diagnostics."
 )]
 
+use std::sync::atomic::{AtomicI64, Ordering};
+
 use intention_client::{RETAINED_TRANSCRIPT_MESSAGES, RunStreamState};
 use intention_proto::{
-    ConfigRevisionId, DaemonHealthDto, ErrorDto, MessageKindDto, MessageProjectionDto, ProjectId,
-    RunId, RunModeDto, RunProjectionDto, RunStatusDto, RunStreamFrameDto,
+    ConfigRevisionId, DaemonHealthDto, ErrorDto, MessageId, MessageKindDto, MessageProjectionDto,
+    ProjectId, RunId, RunModeDto, RunProjectionDto, RunStatusDto, RunStreamFrameDto,
     RunSubscriptionSnapshotDto, SendUserTurnOutcomeDto, SessionId, SessionProjectionDto,
     SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto,
-    TextDeltaFrameDto, ThemeDto, TurnId, WorkspaceId, WorkspaceRootDto,
+    TextDeltaFrameDto, ThemeDto, TimestampDto, ToolCallId, TurnId, WorkspaceId, WorkspaceRootDto,
 };
 
 use super::{
     Action, AppState, BrowserCursorMove, BrowserTab, COMMANDS, ConnectionStatus, Effect,
-    InputCursorMove, InputHistoryMove, MenuMove, Screen, StreamStatus, TRANSCRIPT_DRAG_ROWS, Theme,
-    TranscriptScroll,
+    InputCursorMove, InputHistoryMove, MenuMove, RunPhase, Screen, StreamStatus,
+    TRANSCRIPT_DRAG_ROWS, Theme, TranscriptScroll,
 };
 
 /// The canonical id of the first fixture session.
@@ -27,6 +29,13 @@ const SECOND_SESSION: &str = "22222222-2222-4222-8222-222222222222";
 /// Returns the fixture session id spelled by one canonical UUID literal.
 fn fixture_session(value: &str) -> SessionId {
     SessionId::parse(value).expect("the fixture session id is canonical")
+}
+
+/// Returns one fresh durable row identity for a committed fixture row.
+fn row_id() -> MessageId {
+    static NEXT: AtomicI64 = AtomicI64::new(0);
+    MessageId::new(NEXT.fetch_add(1, Ordering::Relaxed) + 1)
+        .expect("the fixture row identity is positive")
 }
 
 fn workspace_root() -> WorkspaceRootDto {
@@ -96,14 +105,38 @@ fn snapshot_in_mode(
 }
 
 fn summary(session_id: SessionId, updated_at: i64) -> SessionSummaryDto {
+    summary_in_root(session_id, updated_at, workspace_root())
+}
+
+/// Returns one session summary durably bound to `root`.
+fn summary_in_root(
+    session_id: SessionId,
+    updated_at: i64,
+    root: WorkspaceRootDto,
+) -> SessionSummaryDto {
+    let updated_at = TimestampDto::from_unix_seconds(updated_at).expect("fixture time is valid");
     SessionSummaryDto::new(
         session_id,
         ProjectId::new(),
         WorkspaceId::new(),
         RunModeDto::Build,
         updated_at,
+        updated_at,
+        root,
+        0,
         None,
     )
+}
+
+/// Returns one fixture workspace root distinct from [`workspace_root`].
+fn other_workspace_root() -> WorkspaceRootDto {
+    WorkspaceRootDto::parse(
+        std::env::temp_dir()
+            .join("intention-fixture-other-folder")
+            .to_string_lossy()
+            .into_owned(),
+    )
+    .expect("the fixture workspace root is an absolute native path")
 }
 
 fn summaries(sessions: Vec<SessionSummaryDto>) -> SessionSummariesDto {
@@ -127,6 +160,7 @@ fn stream_state(
 
 fn user_row(session_id: SessionId, run_id: Option<RunId>, text: &str) -> MessageProjectionDto {
     MessageProjectionDto::new(
+        row_id(),
         session_id,
         run_id,
         MessageKindDto::User,
@@ -140,6 +174,7 @@ fn user_row(session_id: SessionId, run_id: Option<RunId>, text: &str) -> Message
 
 fn assistant_row(session_id: SessionId, run_id: RunId, text: &str) -> MessageProjectionDto {
     MessageProjectionDto::new(
+        row_id(),
         session_id,
         Some(run_id),
         MessageKindDto::Assistant,
@@ -159,6 +194,7 @@ fn reasoning_row(
     reasoning: &str,
 ) -> MessageProjectionDto {
     MessageProjectionDto::new(
+        row_id(),
         session_id,
         Some(run_id),
         MessageKindDto::Assistant,
@@ -168,6 +204,57 @@ fn reasoning_row(
         None,
     )
     .expect("the fixture reasoning row is coherent")
+}
+
+/// Returns one committed tool-call row carrying `arguments` for `call_id`.
+fn tool_call_row(
+    session_id: SessionId,
+    run_id: RunId,
+    tool_id: &str,
+    arguments: &str,
+    call_id: ToolCallId,
+) -> MessageProjectionDto {
+    MessageProjectionDto::new(
+        row_id(),
+        session_id,
+        Some(run_id),
+        MessageKindDto::ToolCall,
+        arguments,
+        None,
+        Some(call_id),
+        Some(tool_id.to_owned()),
+    )
+    .expect("the fixture tool-call row is coherent")
+}
+
+/// Returns one committed tool-result row carrying `content` for `call_id`.
+fn tool_result_row(
+    session_id: SessionId,
+    run_id: RunId,
+    tool_id: &str,
+    content: &str,
+    call_id: ToolCallId,
+) -> MessageProjectionDto {
+    MessageProjectionDto::new(
+        row_id(),
+        session_id,
+        Some(run_id),
+        MessageKindDto::ToolResult,
+        content,
+        None,
+        Some(call_id),
+        Some(tool_id.to_owned()),
+    )
+    .expect("the fixture tool-result row is coherent")
+}
+
+/// Applies one committed transcript row to `state` as a stream content frame.
+fn commit_row(state: &mut AppState, row: MessageProjectionDto) {
+    let effects = state.update(Action::FrameReceived(RunStreamFrameDto::Content(row)));
+    assert!(
+        effects.is_empty(),
+        "a committed row asks for no client work"
+    );
 }
 
 fn delta(session_id: SessionId, run_id: RunId, step: u32, text: &str) -> RunStreamFrameDto {
@@ -287,6 +374,37 @@ fn running_session(session_id: SessionId, run_id: RunId, status: RunStatusDto) -
         "opening a stream asks for no client work"
     );
     state
+}
+
+/// Returns a running session whose answer stream started and one tool call just
+/// committed at the reported elapsed value `at`, with the fixture identities.
+///
+/// The commit's elapsed value is the baseline the working threshold measures
+/// from: reporting `at` before the row is what pins the baseline a test then
+/// advances past or stays under.
+fn tool_call_in_flight(at: u64) -> (AppState, SessionId, RunId, ToolCallId) {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let call_id = ToolCallId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    state.update(Action::FrameReceived(delta(
+        session_id,
+        run_id,
+        0,
+        "the answer",
+    )));
+    state.update(Action::ElapsedReported { millis: at });
+    commit_row(
+        &mut state,
+        tool_call_row(
+            session_id,
+            run_id,
+            "read",
+            r#"{"path":"src/lib.rs"}"#,
+            call_id,
+        ),
+    );
+    (state, session_id, run_id, call_id)
 }
 
 #[test]
@@ -1178,7 +1296,7 @@ fn the_sessions_command_opens_the_browser_and_refreshes_the_list() {
     assert_eq!(
         state.browser_tab(),
         BrowserTab::All,
-        "the browser starts on the only tab the core can fill"
+        "the browser opens on the whole list"
     );
     assert_eq!(state.browser_filter(), "");
     assert_eq!(state.input(), "", "a command never stays in the input line");
@@ -1627,13 +1745,56 @@ fn a_list_that_arrives_while_the_browser_is_open_re_selects_its_rows() {
     let mut state = opened_browser(first, vec![summary(first, 30)]);
     assert_eq!(browser_row_ids(&state), vec![first]);
     state.update(Action::SessionsListed(summaries(vec![
-        summary(first, 30),
         summary(second, 40),
+        summary(first, 30),
     ])));
     assert_eq!(
         browser_row_ids(&state),
         vec![second, first],
-        "a fresh list is selected again, most recently updated first"
+        "a fresh list is selected again, in the daemon's recency order"
+    );
+}
+
+#[test]
+fn the_current_folder_tab_selects_the_sessions_of_the_front_end_root() {
+    let here = fixture_session(FIRST_SESSION);
+    let elsewhere = fixture_session(SECOND_SESSION);
+    let mut state = opened_session(here, Vec::new()).with_workspace_root(workspace_root());
+    state.update(Action::SessionsListed(summaries(vec![
+        summary_in_root(here, 30, workspace_root()),
+        summary_in_root(elsewhere, 20, other_workspace_root()),
+    ])));
+    state.update(Action::SessionsBrowserRequested);
+    assert_eq!(
+        browser_row_ids(&state),
+        vec![here, elsewhere],
+        "`All` selects every listed session"
+    );
+    state.update(Action::BrowserTabPrevious);
+    assert_eq!(state.browser_tab(), BrowserTab::CurrentFolder);
+    assert_eq!(
+        browser_row_ids(&state),
+        vec![here],
+        "`Current Folder` selects only the sessions bound to the front end's root"
+    );
+    state.update(Action::BrowserTabNext);
+    assert_eq!(state.browser_tab(), BrowserTab::All);
+    assert_eq!(
+        browser_row_ids(&state),
+        vec![here, elsewhere],
+        "the whole list is one press away"
+    );
+}
+
+#[test]
+fn the_current_folder_tab_without_a_declared_root_selects_nothing() {
+    let first = fixture_session(FIRST_SESSION);
+    let mut state = opened_browser(first, vec![summary(first, 20)]);
+    state.update(Action::BrowserTabPrevious);
+    assert_eq!(state.browser_tab(), BrowserTab::CurrentFolder);
+    assert!(
+        state.browser_rows().is_empty(),
+        "a state with no declared root matches no session's folder"
     );
 }
 
@@ -2436,6 +2597,274 @@ fn opening_a_session_forgets_the_previous_turns_elapsed_time() {
         state.elapsed_millis(),
         None,
         "the measurement belongs to the turn the previous session ran"
+    );
+}
+
+#[test]
+fn a_dispatched_turn_starts_the_waiting_phase() {
+    let session_id = SessionId::new();
+    let mut state = opened_session(session_id, Vec::new());
+    assert_eq!(
+        state.run_phase(),
+        None,
+        "no turn request has left the state yet"
+    );
+    type_text(&mut state, "hello");
+    let effects = state.update(Action::InputSubmitted);
+    assert!(
+        matches!(effects.as_slice(), [Effect::SendTurn { .. }]),
+        "the submission dispatches one turn request"
+    );
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Waiting),
+        "the run the request starts waits for its first streamed token"
+    );
+
+    // The created session's own first turn leaves the same way: the snapshot
+    // that opens the created session returns the pending prompt's `SendTurn`.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "hello");
+    state.update(Action::InputSubmitted);
+    let created = SessionId::new();
+    state.update(Action::SessionCreated(created));
+    state.update(Action::SessionSnapshotLoaded(snapshot(
+        created,
+        None,
+        Vec::new(),
+    )));
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Waiting),
+        "the prompt the snapshot sends starts its run waiting too"
+    );
+}
+
+#[test]
+fn a_turn_request_that_never_reached_a_run_leaves_no_phase() {
+    let session_id = SessionId::new();
+    let mut state = opened_session(session_id, Vec::new());
+    type_text(&mut state, "hello");
+    state.update(Action::InputSubmitted);
+    assert_eq!(state.run_phase(), Some(RunPhase::Waiting));
+    state.update(Action::TurnFailed(failure()));
+    assert_eq!(
+        state.run_phase(),
+        None,
+        "the waiting phase belonged to the run the failed request never started"
+    );
+    assert!(
+        state.error().is_some(),
+        "the failure reaches the error line"
+    );
+}
+
+#[test]
+fn the_reasoning_stream_starts_the_thinking_phase_and_the_answer_stream_the_answering_one() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Waiting),
+        "a fresh subscription waits for the token it will see first"
+    );
+    state.update(Action::FrameReceived(reasoning_delta(
+        session_id, run_id, 0, "weighing",
+    )));
+    assert_eq!(state.run_phase(), Some(RunPhase::Thinking));
+    state.update(Action::FrameReceived(delta(
+        session_id,
+        run_id,
+        0,
+        "the answer",
+    )));
+    assert_eq!(state.run_phase(), Some(RunPhase::Answering));
+}
+
+#[test]
+fn a_terminal_status_ends_the_live_phase() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    state.update(Action::FrameReceived(delta(
+        session_id,
+        run_id,
+        0,
+        "the answer",
+    )));
+    assert_eq!(state.run_phase(), Some(RunPhase::Answering));
+    state.update(Action::FrameReceived(status_frame(
+        session_id,
+        run_id,
+        RunStatusDto::Completed,
+    )));
+    assert_eq!(
+        state.run_phase(),
+        None,
+        "a terminal run's word comes from its own status, not a live phase"
+    );
+    assert_eq!(state.run_status(), Some(RunStatusDto::Completed));
+}
+
+#[test]
+fn a_tool_call_in_flight_under_half_a_second_keeps_the_phase_it_found() {
+    let (mut state, ..) = tool_call_in_flight(2_000);
+    state.update(Action::ElapsedReported { millis: 2_400 });
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Answering),
+        "a tool call under half a second in flight leaves the answering phase"
+    );
+    state.update(Action::ElapsedReported { millis: 2_500 });
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Answering),
+        "half a second exactly is not yet past the threshold"
+    );
+}
+
+#[test]
+fn a_tool_call_in_flight_past_half_a_second_names_the_working_phase() {
+    let (mut state, session_id, run_id, call_id) = tool_call_in_flight(2_000);
+    state.update(Action::ElapsedReported { millis: 2_501 });
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Working),
+        "one millisecond past half a second the row names the tool"
+    );
+    commit_row(
+        &mut state,
+        tool_result_row(session_id, run_id, "read", "the file", call_id),
+    );
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Answering),
+        "the answering result ends the watch and the phase it covered"
+    );
+}
+
+#[test]
+fn one_result_leaves_the_watch_while_another_call_is_in_flight() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let first = ToolCallId::new();
+    let second = ToolCallId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    state.update(Action::FrameReceived(delta(
+        session_id,
+        run_id,
+        0,
+        "the answer",
+    )));
+    state.update(Action::ElapsedReported { millis: 1_000 });
+    commit_row(
+        &mut state,
+        tool_call_row(session_id, run_id, "read", "{}", first),
+    );
+    commit_row(
+        &mut state,
+        tool_call_row(session_id, run_id, "glob", "{}", second),
+    );
+    state.update(Action::ElapsedReported { millis: 1_700 });
+    assert_eq!(state.run_phase(), Some(RunPhase::Working));
+    commit_row(
+        &mut state,
+        tool_result_row(session_id, run_id, "read", "the file", first),
+    );
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Working),
+        "the other call is still in flight"
+    );
+    commit_row(
+        &mut state,
+        tool_result_row(session_id, run_id, "glob", "the files", second),
+    );
+    assert_eq!(state.run_phase(), Some(RunPhase::Answering));
+}
+
+#[test]
+fn a_tool_call_before_any_elapsed_report_never_names_working() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    state.update(Action::FrameReceived(delta(
+        session_id,
+        run_id,
+        0,
+        "the answer",
+    )));
+    commit_row(
+        &mut state,
+        tool_call_row(session_id, run_id, "read", "{}", ToolCallId::new()),
+    );
+    state.update(Action::ElapsedReported { millis: 10_000 });
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Answering),
+        "a call that committed before any report has no baseline to measure"
+    );
+}
+
+#[test]
+fn a_new_turn_forgets_the_previous_runs_phase_and_tool_watch() {
+    let (mut state, ..) = tool_call_in_flight(2_000);
+    state.update(Action::ElapsedReported { millis: 2_600 });
+    assert_eq!(state.run_phase(), Some(RunPhase::Working));
+    type_text(&mut state, "next");
+    let effects = state.update(Action::InputSubmitted);
+    assert!(
+        matches!(effects.as_slice(), [Effect::SendTurn { .. }]),
+        "the next turn leaves for the network"
+    );
+    assert_eq!(state.run_phase(), Some(RunPhase::Waiting));
+    state.update(Action::ElapsedReported { millis: 2_600 });
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Waiting),
+        "the previous run's tool baseline never measures the new turn"
+    );
+}
+
+#[test]
+fn opening_a_session_rebases_the_phase_on_its_own_run() {
+    let first = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = running_session(first, run_id, RunStatusDto::Running);
+    state.update(Action::FrameReceived(delta(first, run_id, 0, "the answer")));
+    assert_eq!(state.run_phase(), Some(RunPhase::Answering));
+
+    let second = SessionId::new();
+    state.update(Action::SessionSnapshotLoaded(snapshot(
+        second,
+        None,
+        Vec::new(),
+    )));
+    assert_eq!(
+        state.run_phase(),
+        None,
+        "an idle session carries no phase from the one it replaced"
+    );
+
+    let third = SessionId::new();
+    let live = RunId::new();
+    let effects = state.update(Action::SessionSnapshotLoaded(snapshot(
+        third,
+        Some(run(third, live, RunStatusDto::Running)),
+        Vec::new(),
+    )));
+    assert_eq!(
+        effects,
+        vec![Effect::Subscribe {
+            session_id: third,
+            run_id: live,
+        }]
+    );
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Waiting),
+        "the snapshot's own live run waits for the token this state will see first"
     );
 }
 

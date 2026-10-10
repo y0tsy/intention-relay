@@ -404,11 +404,15 @@ text above is the live policy.
   cell visible, and the run status row under it. A `\` immediately before `Enter` inserts a line break and never reaches
   the buffer, so a prompt is typed over several lines; the block takes one more row per buffer line while the transcript
   gives up exactly those rows, no line count is capped, and a buffer taller than the block shows the window of lines
-  that keeps the cursor's line visible. The status row reads in words — `Ready · session … · build · Thinking… 3.2s ·
-  ctx @todo(core)` — and
-  the removed debug vocabulary (`connected`, `run none`, `stream idle`, `stream closed`) is gone: the stream is this
-  front end's own plumbing, and a run is described by what it is doing. The elapsed value is the front end's own
-  measurement, reported to the core as `Action::ElapsedReported` so the view stays a pure function of state.
+  that keeps the cursor's line visible. The status row reads in words — `Ready · session … · build · Working… 6.2s ·
+  ctx @todo(core)` — and names the live phase of the run: `Waiting…` from the moment the turn request leaves for the
+  network, `Thinking…` when the reasoning stream starts, `Answering…` when the answer stream starts, and `Working…`
+  while a tool call has been in flight for more than half a second — a shorter call leaves the phase the one it found —
+  with `Answered in 13.4s` once the run reaches its terminal status. The removed debug vocabulary (`connected`,
+  `run none`, `stream idle`, `stream closed`) is gone: the stream is this front end's own plumbing, and a run is
+  described by what it is doing. Every elapsed value reads in tenths of a second, live and final. The elapsed value is
+  the front end's own measurement, reported to the core as `Action::ElapsedReported` so the view stays a pure function
+  of state, and the same value is what the half-second tool threshold measures against: the core stays clock-free.
 - Terminal settings. `config.toml` supplies the default through its optional `[tui] theme` key (`light` or `dark`; an
   absent section and an absent key both mean light, and an unknown spelling is the typed `invalid_tui_theme` validation
   error, so nothing silently falls back). The daemon owns the runtime value as a single-row `tui_settings` override in
@@ -499,9 +503,6 @@ fabricated value. The table below names each one, taken from the markers in the 
 
 | The terminal shows | The core fact this stub lacks |
 | --- | --- |
-| the `Current Folder` tab's empty state and the `Path` column | a session working directory |
-| the `Created` column's missing value | a session `created_at` |
-| the `Size` column's missing value | a step or message count |
 | the `Exec` tab's empty state | an execute-call fact on the session summary |
 | the title column, the filter, and the `Ctrl+R` notice | a durable session title and its rename command |
 | the `Favorites` tab's empty state | a durable favorite flag |
@@ -526,10 +527,7 @@ lacks. Each site carries the same `@todo(core):` prefix and names what the core 
 | matches a wire `tool_id` against the six tool names (`tui/panes/tools.rs`) | the closed set of tool ids and their typed kind |
 | decodes a tool call's arguments document and reads `path`, `offset`, `limit`, `pattern`, `scope`, `program`, and `args` (`tui/panes/tools.rs`) | typed tool-argument structs |
 | splits a tool result's text into a path list, a located hit, or a preview (`tui/panes/tools.rs`) | a typed tool result and its metadata |
-| picks the `--continue` session from list position or `updated_at` (`app/sessions.rs`, `app/browser.rs`, `headless.rs`) | the session recency order and the continue target |
-| de-duplicates and merges committed transcript rows by value (`app/run.rs`) | row identity and transcript reconciliation in the client |
 | parses `--mode` against hand-spelled `plan`/`build` (`cli.rs`) | the durable run-mode vocabulary |
-| runs civil-from-days arithmetic on a raw Unix second (`tui/screens/sessions.rs`) | a typed timestamp and its calendar reading |
 
 ### Frame cost
 

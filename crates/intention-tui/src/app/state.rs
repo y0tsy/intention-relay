@@ -8,12 +8,12 @@
 use intention_client::RunStreamState;
 use intention_proto::{
     ErrorDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto, RunStatusDto,
-    SessionId, SessionSummaryDto,
+    SessionId, SessionSummaryDto, WorkspaceRootDto,
 };
 
 use super::{
-    Action, BrowserRow, BrowserTab, CommandMenu, ConnectionStatus, Effect, Screen, StreamStatus,
-    Theme, TranscriptSelection, browser, ctrl_c, error_text, transcript,
+    Action, BrowserRow, BrowserTab, CommandMenu, ConnectionStatus, Effect, RunPhase, Screen,
+    StreamStatus, Theme, TranscriptSelection, browser, ctrl_c, error_text, transcript,
 };
 
 /// Every value one terminal session holds, with no terminal attached.
@@ -82,6 +82,23 @@ pub struct AppState {
     /// partition point rather than a scan.
     pub(super) transcript_appends: Vec<u64>,
     pub(super) active_run: Option<RunProjectionDto>,
+    /// The live phase of the run the status row names.
+    ///
+    /// `None` means no live phase: no turn request has left the state since it
+    /// was created, or the run it mirrors reached a terminal status. The
+    /// terminal words come from the run projection's own status.
+    pub(super) phase: Option<RunPhase>,
+    /// How many committed tool calls no committed result answers yet.
+    pub(super) tools_in_flight: usize,
+    /// The elapsed value the oldest in-flight tool call committed at.
+    ///
+    /// The value is the front end's own measurement, so the working threshold
+    /// is a subtraction on reported time and never a clock read here. A call
+    /// that commits before any report has no baseline, and the row never
+    /// invents one.
+    pub(super) tool_wait_from: Option<u64>,
+    /// Whether an in-flight tool call is past the working threshold.
+    pub(super) tool_working: bool,
     /// The elapsed time the front end measured for the current or last turn.
     pub(super) elapsed_millis: Option<u64>,
     pub(super) run_stream: Option<RunStreamState>,
@@ -169,6 +186,10 @@ impl AppState {
             transcript_append_base: 0,
             transcript_appends: Vec::new(),
             active_run: None,
+            phase: None,
+            tools_in_flight: 0,
+            tool_wait_from: None,
+            tool_working: false,
             elapsed_millis: None,
             run_stream: None,
             stream: StreamStatus::Inactive,
@@ -214,6 +235,19 @@ impl AppState {
         self
     }
 
+    /// Returns the same state whose sessions browser selects the current folder
+    /// by `root`.
+    ///
+    /// The root is the front end's own - the directory it was launched in - and
+    /// the browser's `Current Folder` tab selects exactly the sessions durably
+    /// bound to it. A caller that supplies no root leaves that tab empty; every
+    /// front end resolves its root at startup.
+    #[must_use]
+    pub fn with_workspace_root(mut self, root: WorkspaceRootDto) -> Self {
+        self.browser.workspace_root = Some(root);
+        self
+    }
+
     /// Returns the effects that connect a freshly created state.
     #[must_use]
     pub fn start(&self) -> Vec<Effect> {
@@ -226,10 +260,13 @@ impl AppState {
     /// failure carried by an action becomes the error line instead of an error
     /// return, so a front end never has to recover from a state transition.
     ///
-    /// The one cross-cutting rule lives here: each layered arm - the Ctrl+C
-    /// arm and the Esc clear arm - is consecutive over the user's own actions,
-    /// so any other action the user asks for disarms it at its entry point, and
-    /// `Action::is_client_report` leaves it standing.
+    /// Two cross-cutting rules live here. Each layered arm - the Ctrl+C arm
+    /// and the Esc clear arm - is consecutive over the user's own actions, so
+    /// any other action the user asks for disarms it at its entry point, and
+    /// `Action::is_client_report` leaves it standing. And a produced
+    /// `Effect::SendTurn` starts the waiting phase of the run it requests,
+    /// whichever transition produced it, so the status row names that run from
+    /// the moment its request leaves for the network.
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         // Each layered arm is consecutive over the user's own actions: any
         // other user action clears it - including the other key - while a
@@ -242,12 +279,20 @@ impl AppState {
                 self.escape_arm = false;
             }
         }
-        match action {
+        let effects = match action {
             Action::Bootstrapped(health) => self.apply_bootstrapped(health.readiness()),
             Action::BootstrapFailed(error) => self.apply_bootstrap_failed(&error),
             Action::SessionsListed(summaries) => self.apply_sessions_listed(&summaries),
             Action::SessionsListFailed(error) => self.apply_failure(&error),
-            Action::SessionSnapshotLoaded(snapshot) => self.apply_session_snapshot(snapshot),
+            Action::SessionSnapshotLoaded(snapshot) => {
+                let effects = self.apply_session_snapshot(snapshot);
+                // A snapshot re-reads committed state: the phase of the run the
+                // previous state mirrored does not describe the session it
+                // opens. The snapshot's own run, when it is still live, starts
+                // as waiting for the first token this state will see.
+                self.rebase_run_phase();
+                effects
+            }
             Action::SessionSnapshotFailed(error) => self.apply_session_open_failure(&error),
             Action::SessionCreated(session_id) => self.apply_session_created(session_id),
             Action::SessionCreateFailed(error) => self.apply_session_open_failure(&error),
@@ -262,7 +307,7 @@ impl AppState {
             Action::FrameReceived(frame) => self.apply_frame(frame),
             Action::TurnAccepted(outcome) => self.apply_turn_accepted(outcome),
             Action::ElapsedReported { millis } => self.apply_elapsed_reported(millis),
-            Action::TurnFailed(error) => self.apply_failure(&error),
+            Action::TurnFailed(error) => self.apply_turn_send_failed(&error),
             Action::InterruptAccepted => self.apply_interrupt_accepted(),
             Action::InterruptFailed(error) => self.apply_failure(&error),
             Action::InputChar(character) => self.apply_input_char(character),
@@ -315,7 +360,17 @@ impl AppState {
                 self.quit = true;
                 Vec::new()
             }
+        };
+        // A turn request leaving for the network starts the run the row names:
+        // the run that request begins is waiting for its first streamed token,
+        // and a previous run's phase never describes it.
+        if effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::SendTurn { .. }))
+        {
+            self.apply_turn_dispatched();
         }
+        effects
     }
 
     /// Returns the current connection status.
@@ -512,6 +567,13 @@ impl AppState {
     /// Appends one committed row, recording the append.
     pub(super) fn push_transcript_row(&mut self, row: MessageProjectionDto) {
         self.tool_results += usize::from(row.kind() == MessageKindDto::ToolResult);
+        match row.kind() {
+            // A tool call is in flight from this row until the result row that
+            // answers it, so the append opens or closes the working watch.
+            MessageKindDto::ToolCall => self.note_tool_call(),
+            MessageKindDto::ToolResult => self.note_tool_result(),
+            MessageKindDto::User | MessageKindDto::Assistant | MessageKindDto::Notice => {}
+        }
         self.transcript.push(row);
         self.transcript_epoch += 1;
         self.transcript_appends.push(self.transcript_epoch);
@@ -553,6 +615,7 @@ impl AppState {
             .iter()
             .filter(|row| row.kind() == MessageKindDto::ToolResult)
             .count();
+        self.recount_tool_watch();
     }
 
     /// Returns the last known run projection.
@@ -568,6 +631,22 @@ impl AppState {
     #[must_use]
     pub fn run_status(&self) -> Option<RunStatusDto> {
         self.active_run.map(|run| run.status())
+    }
+
+    /// Returns the live phase of the run the status row names, if one is live.
+    ///
+    /// The phase follows the run's own transitions: it starts at
+    /// [`RunPhase::Waiting`] the moment a turn request leaves the state, moves
+    /// with the stream's reasoning and answer channels, and names
+    /// [`RunPhase::Working`] while a committed tool call is in flight past the
+    /// working threshold. A run whose projection reached a terminal status
+    /// carries no phase; the status row shows that projection's terminal word.
+    #[must_use]
+    pub const fn run_phase(&self) -> Option<RunPhase> {
+        if self.tool_working {
+            return Some(RunPhase::Working);
+        }
+        self.phase
     }
 
     /// Returns the state of the live run-stream subscription.

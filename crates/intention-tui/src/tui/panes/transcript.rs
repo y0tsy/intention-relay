@@ -562,13 +562,14 @@ mod tests {
 
     use std::cell::RefCell;
     use std::ops::Range;
+    use std::sync::atomic::{AtomicI64, Ordering};
 
     use intention_client::{RETAINED_TRANSCRIPT_MESSAGES, RunStreamState};
     use intention_proto::{
-        ConfigRevisionId, MessageKindDto, MessageProjectionDto, ProjectId, RunId, RunModeDto,
-        RunProjectionDto, RunStatusDto, RunStreamFrameDto, RunSubscriptionSnapshotDto, SessionId,
-        SessionProjectionDto, SessionSnapshotDto, TextDeltaChannelDto, TextDeltaFrameDto, TurnId,
-        WorkspaceId, WorkspaceRootDto,
+        ConfigRevisionId, MessageId, MessageKindDto, MessageProjectionDto, ProjectId, RunId,
+        RunModeDto, RunProjectionDto, RunStatusDto, RunStreamFrameDto, RunSubscriptionSnapshotDto,
+        SessionId, SessionProjectionDto, SessionSnapshotDto, TextDeltaChannelDto,
+        TextDeltaFrameDto, TurnId, WorkspaceId, WorkspaceRootDto,
     };
     use revue::render::Modifier;
 
@@ -593,9 +594,17 @@ mod tests {
     /// A content width wide enough for the whole fixture set to lay out.
     const WIDTH: usize = 48;
 
+    /// Returns one fresh durable row identity for a committed fixture row.
+    fn row_id() -> MessageId {
+        static NEXT: AtomicI64 = AtomicI64::new(0);
+        MessageId::new(NEXT.fetch_add(1, Ordering::Relaxed) + 1)
+            .expect("the fixture row identity is positive")
+    }
+
     /// Returns one committed user row carrying `text`.
     fn user_row(session_id: SessionId, text: &str) -> MessageProjectionDto {
         MessageProjectionDto::new(
+            row_id(),
             session_id,
             None,
             MessageKindDto::User,
@@ -615,6 +624,7 @@ mod tests {
         reasoning: Option<&str>,
     ) -> MessageProjectionDto {
         MessageProjectionDto::new(
+            row_id(),
             session_id,
             Some(run_id),
             MessageKindDto::Assistant,

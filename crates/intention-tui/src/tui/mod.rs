@@ -67,7 +67,9 @@ use std::cell::RefCell;
 use std::time::Instant;
 
 use intention_client::IntentionClient;
-use intention_proto::{DtoResult, ErrorDto, RunStreamFrameDto, SessionId, run_status_is_terminal};
+use intention_proto::{
+    DtoResult, ErrorDto, RunStreamFrameDto, SessionId, WorkspaceRootDto, run_status_is_terminal,
+};
 use intention_transport::LocalEndpoint;
 use revue::core::app::App;
 use revue::event::{Event, MouseButton, MouseEvent, MouseEventKind};
@@ -102,7 +104,12 @@ pub fn run_blocking(
         options.workspace_root().clone(),
         options.mode(),
     )?;
-    let front_end = FrontEnd::new(options.session(), options.continue_session(), driver);
+    let front_end = FrontEnd::new(
+        options.session(),
+        options.continue_session(),
+        options.workspace_root().clone(),
+        driver,
+    );
     front_end.start();
     App::builder()
         // @todo(revue): revue has no text-selection model, so the front end
@@ -367,9 +374,16 @@ impl FrontEnd {
     /// A launch with no selected session opens none unless the caller asked to
     /// continue the newest one; either way the user can still ask for a session
     /// later with `/new` or a row of the sessions browser.
-    const fn new(session: Option<SessionId>, continue_session: bool, driver: Driver) -> Self {
+    fn new(
+        session: Option<SessionId>,
+        continue_session: bool,
+        workspace_root: WorkspaceRootDto,
+        driver: Driver,
+    ) -> Self {
         Self {
-            state: AppState::new(session).continuing(continue_session),
+            state: AppState::new(session)
+                .continuing(continue_session)
+                .with_workspace_root(workspace_root),
             driver,
             timer: TurnTimer::new(),
             pointer: Pointer { drag: None },
@@ -561,7 +575,7 @@ mod tests {
 
     use intention_proto::{
         DaemonHealthDto, ProjectId, RunModeDto, SessionId, SessionSummariesDto, SessionSummaryDto,
-        WorkspaceId,
+        TimestampDto, WorkspaceId, WorkspaceRootDto,
     };
     use revue::event::{MouseButton, MouseEvent, MouseEventKind};
     use revue::testing::TestApp;
@@ -631,12 +645,18 @@ mod tests {
     /// Returns one session summary with a deterministic id and timestamp.
     fn summary(index: usize) -> SessionSummaryDto {
         let literal = format!("{index:08}-1111-4111-8111-111111111111");
+        let updated_at = TimestampDto::from_unix_seconds(1_759_000_000 - index as i64 * 60)
+            .expect("the fixture timestamp is valid");
         SessionSummaryDto::new(
             SessionId::parse(&literal).expect("the fixture session id is canonical"),
             ProjectId::new(),
             WorkspaceId::new(),
             RunModeDto::Build,
-            1_759_000_000 - index as i64 * 60,
+            updated_at,
+            updated_at,
+            WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
+                .expect("the fixture workspace root is absolute"),
+            0,
             None,
         )
     }

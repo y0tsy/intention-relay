@@ -742,7 +742,11 @@ mod tests {
         reason = "Unit tests build typed fixture DTOs directly and assert them for diagnostics."
     )]
 
-    use intention_proto::{MessageKindDto, MessageProjectionDto, RunId, SessionId, ToolCallId};
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    use intention_proto::{
+        MessageId, MessageKindDto, MessageProjectionDto, RunId, SessionId, ToolCallId,
+    };
 
     use crate::tui::layout::MARKER_GAP;
     use crate::tui::palette::Palette;
@@ -752,6 +756,13 @@ mod tests {
     /// The light palette every fixture renders with.
     const LIGHT: &Palette = &crate::tui::palette::LIGHT;
 
+    /// Returns one fresh durable row identity for a committed fixture row.
+    fn row_id() -> MessageId {
+        static NEXT: AtomicI64 = AtomicI64::new(0);
+        MessageId::new(NEXT.fetch_add(1, Ordering::Relaxed) + 1)
+            .expect("the fixture row identity is positive")
+    }
+
     /// Returns one committed tool row naming `tool_id` with `text`.
     fn tool_row(
         kind: MessageKindDto,
@@ -760,6 +771,7 @@ mod tests {
         call_id: ToolCallId,
     ) -> MessageProjectionDto {
         MessageProjectionDto::new(
+            row_id(),
             SessionId::new(),
             Some(RunId::new()),
             kind,

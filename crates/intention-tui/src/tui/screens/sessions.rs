@@ -90,21 +90,6 @@ const ACTIVE_TAB: char = '⦿';
 /// The glyph of every other tab.
 const INACTIVE_TAB: char = '◦';
 
-/// The value of a column the core cannot report yet.
-const MISSING_VALUE: &str = "—";
-
-/// The value of the `Created` column.
-// @todo(core): the session summary carries no `created_at`.
-const MISSING_CREATED: &str = MISSING_VALUE;
-
-/// The value of the `Size` column.
-// @todo(core): the session summary carries no step or message count.
-const MISSING_SIZE: &str = MISSING_VALUE;
-
-/// The value of the trailing `Path` column.
-// @todo(core): the session summary carries no working folder.
-const MISSING_PATH: &str = MISSING_VALUE;
-
 /// The hotkey legend: every key, then the action it runs.
 ///
 /// The two halves are styled and positioned apart, so a terminal that maps the
@@ -419,13 +404,15 @@ fn data_row(
     palette: &'static Palette,
 ) -> Text {
     let modified = relative_time(row.updated_at(), now);
+    let created = relative_time(row.created_at(), now);
+    let size = row.message_count().to_string();
     let cells = Cells {
         marker: if selected { CURSOR_MARKER } else { ROW_MARKER },
         modified: &modified,
-        created: MISSING_CREATED,
-        size: MISSING_SIZE,
+        created: &created,
+        size: &size,
         title: row.title(),
-        path: MISSING_PATH,
+        path: row.workspace_root(),
     };
     let line = row_text(columns, &cells, width);
     if selected {
@@ -536,7 +523,7 @@ fn row_text(columns: &Columns, cells: &Cells<'_>, width: usize) -> String {
         created = pad(cells.created, columns.created),
         size = pad(cells.size, columns.size),
         title = pad(&truncate(cells.title, columns.title), columns.title),
-        path = pad_start(cells.path, columns.path),
+        path = pad_start(&truncate(cells.path, columns.path), columns.path),
     );
     pad(&line, width)
 }
@@ -599,13 +586,14 @@ fn visible_window(rows: usize, cursor: usize, height: usize) -> Range<usize> {
     start..start + height
 }
 
-/// Returns the age of one durable update as the `Modified` column shows it.
+/// Returns the age of one durable timestamp as the `Modified` and `Created`
+/// columns show it.
 ///
 /// Under a minute reads `now`, then whole minutes, hours, and days read
 /// `Nm ago`, `Nh ago`, and `Nd ago`; a week and older reads as its month and
 /// day (`Sep 19`). A timestamp ahead of the clock reads `now`.
-fn relative_time(updated_at: i64, now: i64) -> String {
-    let age = now.saturating_sub(updated_at);
+fn relative_time(timestamp: i64, now: i64) -> String {
+    let age = now.saturating_sub(timestamp);
     if age < MINUTE_SECONDS {
         return "now".to_owned();
     }
@@ -618,7 +606,7 @@ fn relative_time(updated_at: i64, now: i64) -> String {
     if age < RELATIVE_DAYS * DAY_SECONDS {
         return format!("{}d ago", age / DAY_SECONDS);
     }
-    let (month, day) = civil_month_day(updated_at);
+    let (month, day) = civil_month_day(timestamp);
     format!("{} {day}", MONTHS[month - 1])
 }
 
@@ -627,9 +615,8 @@ fn relative_time(updated_at: i64, now: i64) -> String {
 /// The conversion is the civil-from-days algorithm: `days` counts from
 /// 1970-01-01, the epoch is shifted to 0000-03-01 so a leap day closes a
 /// 400-year era, and the era and the year inside it give the day of the year.
-// @todo(core): the wire carries `updated_at` as a raw Unix-second scalar; a
-// typed core timestamp should own the epoch and its calendar reading, so the
-// pane never does calendar arithmetic on a raw field.
+/// The wire carries a typed timestamp, so this reading is presentation and
+/// nothing but the view derives it.
 fn civil_month_day(unix_seconds: i64) -> (usize, u32) {
     let days = unix_seconds.div_euclid(DAY_SECONDS) + 719_468;
     let era = days.div_euclid(146_097);
@@ -696,8 +683,8 @@ fn truncate(text: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        civil_month_day, columns, display_width, pad, pad_start, relative_time, truncate,
-        visible_window,
+        Cells, Columns, civil_month_day, columns, display_width, pad, pad_start, relative_time,
+        row_text, truncate, visible_window,
     };
 
     #[test]
@@ -727,6 +714,37 @@ mod tests {
         assert_eq!(civil_month_day(0), (1, 1));
         assert_eq!(civil_month_day(1_759_000_000), (9, 27));
         assert_eq!(civil_month_day(951_782_400), (2, 29));
+    }
+
+    #[test]
+    fn the_path_cell_truncates_its_value_and_keeps_it_right_aligned() {
+        let columns = Columns {
+            modified: 8,
+            created: 7,
+            size: 4,
+            title: 5,
+            path: 6,
+        };
+        let width = 2 + 8 + 1 + 7 + 1 + 4 + 1 + 5 + 1 + 6;
+        let mut cells = Cells {
+            marker: "> ",
+            modified: "now",
+            created: "now",
+            size: "1",
+            title: "title",
+            path: "/workspace/project",
+        };
+        let line = row_text(&columns, &cells, width);
+        assert!(
+            line.ends_with("/work…"),
+            "the path keeps its head and marks the cut: {line:?}"
+        );
+        cells.path = "/tmp";
+        let line = row_text(&columns, &cells, width);
+        assert!(
+            line.ends_with("  /tmp"),
+            "a path shorter than its column is right-aligned: {line:?}"
+        );
     }
 
     #[test]

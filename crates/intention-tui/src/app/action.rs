@@ -32,6 +32,26 @@ pub enum StreamStatus {
     Failed,
 }
 
+/// The live phase of the run the status row names.
+///
+/// The phase is a value of the render-free core like the stream status: the
+/// transitions that move it live beside the run transitions, and the status
+/// row only pairs the value it reads with a word and the elapsed time the
+/// state carries. A phase exists only while a run is live; the terminal words
+/// (`Answered`, `Interrupted`, `Failed`) come from the run projection's own
+/// status.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RunPhase {
+    /// The turn request left for the network; no streamed text has arrived.
+    Waiting,
+    /// The reasoning stream started.
+    Thinking,
+    /// The answer stream started.
+    Answering,
+    /// A tool call has been in flight past the working threshold.
+    Working,
+}
+
 /// One transcript scroll request, in display rows.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TranscriptScroll {

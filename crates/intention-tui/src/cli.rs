@@ -312,14 +312,8 @@ fn text(parser: &mut lexopt::Parser) -> Result<String, String> {
 /// # Errors
 ///
 /// Returns the usage message for a mode the grammar does not declare.
-// @todo(core): parse the value through the core's run-mode vocabulary
-// (`RunModeDto::parse`) instead of re-spelling the durable strings here.
 fn mode_value(value: &str) -> Result<RunModeDto, String> {
-    match value {
-        "plan" => Ok(RunModeDto::Plan),
-        "build" => Ok(RunModeDto::Build),
-        _ => Err(format!("--mode must be plan or build, got '{value}'")),
-    }
+    RunModeDto::parse(value).map_err(|_| format!("--mode must be plan or build, got '{value}'"))
 }
 
 /// Parses one `--format` value.
@@ -480,7 +474,10 @@ mod tests {
             "a second positional argument is rejected"
         );
         assert!(parsed(&["repl", "prompt"]).is_err(), "repl takes no prompt");
-        assert!(parsed(&["run", "hello", "--mode", "fast"]).is_err());
+        assert_eq!(
+            parsed(&["run", "hello", "--mode", "fast"]),
+            Err("--mode must be plan or build, got 'fast'".to_owned()),
+        );
         assert!(parsed(&["run", "hello", "--format", "yaml"]).is_err());
         assert!(parsed(&["run", "hello", "--timeout", "soon"]).is_err());
         assert!(parsed(&["run", "hello", "--session", "not-an-identifier"]).is_err());

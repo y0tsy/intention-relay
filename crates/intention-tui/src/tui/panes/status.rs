@@ -1,11 +1,19 @@
 //! The status pane: the human status row under the input and the detail line.
 //!
 //! The row names what the user acts on in words: the connection, the session,
-//! the session's run mode, the run's own state, and the context-usage
+//! the session's run mode, the run's live phase, and the context-usage
 //! placeholder. The old debug vocabulary (`connected`, `run none`,
 //! `stream idle`, `stream closed`) described this front end's own plumbing and
 //! is gone: the stream is an implementation detail, and a run is described by
 //! what it is doing, not by the mirror's status word.
+//!
+//! The live phase is the shared state machine's own value: `Waiting…` from the
+//! moment a turn request leaves for the network, `Thinking…` when the reasoning
+//! stream starts, `Answering…` when the answer stream starts, and `Working…`
+//! while a tool call is in flight past the half-second threshold - a shorter
+//! call leaves the phase the one it found. A completed run reads
+//! `Answered in 13.4s`; the interrupted and failed runs keep their words. Every
+//! elapsed value reads in tenths of a second, live and final.
 //!
 //! The elapsed value is the front end's measurement, reported through
 //! `Action::ElapsedReported`; the row only formats the value the state carries,
@@ -15,7 +23,7 @@ use intention_proto::RunStatusDto;
 use revue::style::Color;
 use revue::widget::{RichText, Span, Style, Text};
 
-use crate::app::{AppState, ConnectionStatus, short_identifier};
+use crate::app::{AppState, ConnectionStatus, RunPhase, short_identifier};
 use crate::tui::palette::Palette;
 
 /// The detail line this front end shows while no error or notice claims it.
@@ -40,8 +48,17 @@ const OFFLINE: &str = "Offline";
 /// The separator between two status runs.
 const SEPARATOR: &str = " · ";
 
-/// The marker of a run that has not finished yet.
+/// The marker of a run whose turn request left for the network.
+const WAITING: &str = "Waiting…";
+
+/// The marker of a run whose reasoning stream started.
 const THINKING: &str = "Thinking…";
+
+/// The marker of a run whose answer stream started.
+const ANSWERING: &str = "Answering…";
+
+/// The marker of a run with a tool call in flight past the working threshold.
+const WORKING: &str = "Working…";
 
 /// The marker of a completed run.
 const ANSWERED: &str = "Answered";
@@ -82,9 +99,13 @@ pub(in crate::tui) fn status_row(state: &AppState, palette: &'static Palette) ->
         text = run(text, SEPARATOR, palette.ink_faint, palette);
         text = run(text, mode.as_str(), palette.ink_muted, palette);
     }
-    if let Some(status) = state.run_status() {
+    let phase = state.run_phase();
+    let status = state.run_status();
+    // A live phase names the run even before a refreshed projection arrives;
+    // the status word covers every other run, terminal ones included.
+    if phase.is_some() || status.is_some() {
         text = run(text, SEPARATOR, palette.ink_faint, palette);
-        text = run_phrase(text, status, state.elapsed_millis(), palette);
+        text = run_phrase(text, phase, status, state.elapsed_millis(), palette);
     }
     text = run(text, SEPARATOR, palette.ink_faint, palette);
     run(text, CONTEXT_USAGE, palette.todo_ink, palette)
@@ -107,69 +128,96 @@ fn run(text: RichText, content: &str, ink: Color, palette: &'static Palette) -> 
     ))
 }
 
-/// Appends the phrase one run status reads as, with its measured elapsed value.
+/// Appends the phrase one run reads as, with its measured elapsed value.
 ///
-/// A live run reads `Thinking… 3.2s`, a finished one `Answered in 13s`, a
-/// failed one `Failed` (the typed error is the detail line), and an interrupted
-/// one `Interrupted`. A run whose elapsed value the front end never reported
-/// keeps the word without a number instead of showing a fabricated one.
+/// A live phase reads `Waiting… 0.4s`, `Thinking… 3.2s`, `Answering… 4.1s`, or
+/// `Working… 6.2s`; a completed run reads `Answered in 13.4s`; a failed one
+/// `Failed` (the typed error is the detail line), and an interrupted one
+/// `Interrupted`. Every elapsed value reads in tenths of a second, and a run
+/// whose elapsed value the front end never reported keeps the word without a
+/// number instead of showing a fabricated one.
 fn run_phrase(
     text: RichText,
-    status: RunStatusDto,
+    phase: Option<RunPhase>,
+    status: Option<RunStatusDto>,
     elapsed: Option<u64>,
     palette: &'static Palette,
 ) -> RichText {
-    match status {
-        RunStatusDto::Starting | RunStatusDto::Running => {
-            let mut text = run(text, THINKING, palette.scarlet, palette);
-            if let Some(millis) = elapsed {
-                text = run(
-                    text,
-                    &format!(" {}", live_elapsed(millis)),
-                    palette.timer_ink,
-                    palette,
-                );
-            }
-            text
+    if let Some(phase) = phase {
+        let mut text = run(text, phase_word(phase), palette.scarlet, palette);
+        if let Some(millis) = elapsed {
+            text = run(
+                text,
+                &format!(" {}", elapsed_tenths(millis)),
+                palette.timer_ink,
+                palette,
+            );
         }
-        RunStatusDto::Completed => {
+        return text;
+    }
+    match status {
+        Some(RunStatusDto::Completed) => {
             let mut text = run(text, ANSWERED, palette.success, palette);
             if let Some(millis) = elapsed {
                 text = run(text, " in ", palette.success, palette);
-                text = run(text, &finished_elapsed(millis), palette.timer_ink, palette);
+                text = run(text, &elapsed_tenths(millis), palette.timer_ink, palette);
             }
             text
         }
-        RunStatusDto::Interrupted => run(text, INTERRUPTED, palette.warning, palette),
-        RunStatusDto::Failed => run(text, FAILED, palette.error, palette),
+        Some(RunStatusDto::Interrupted) => run(text, INTERRUPTED, palette.warning, palette),
+        Some(RunStatusDto::Failed) => run(text, FAILED, palette.error, palette),
+        // A live run the state carries no phase for is one this front end is
+        // waiting on its first token; the state names a phase for every run it
+        // mirrors, so this arm only keeps the view total.
+        Some(RunStatusDto::Starting | RunStatusDto::Running) => {
+            run(text, WAITING, palette.scarlet, palette)
+        }
+        None => text,
     }
 }
 
-/// Returns the elapsed value a live run shows: tenths of a second.
-fn live_elapsed(millis: u64) -> String {
-    format!("{:.1}s", millis as f64 / 1000.0)
+/// Returns the word one live phase reads as.
+const fn phase_word(phase: RunPhase) -> &'static str {
+    match phase {
+        RunPhase::Waiting => WAITING,
+        RunPhase::Thinking => THINKING,
+        RunPhase::Answering => ANSWERING,
+        RunPhase::Working => WORKING,
+    }
 }
 
-/// Returns the elapsed value a finished run shows: whole seconds.
-fn finished_elapsed(millis: u64) -> String {
-    format!("{}s", millis / 1000)
+/// Returns how one measured elapsed value reads: tenths of a second.
+///
+/// Live and final values read the same way, so a whole second never appears in
+/// the row.
+fn elapsed_tenths(millis: u64) -> String {
+    format!("{:.1}s", millis as f64 / 1000.0)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{finished_elapsed, live_elapsed};
+    use crate::app::RunPhase;
+
+    use super::{elapsed_tenths, phase_word};
 
     #[test]
-    fn a_live_elapsed_value_reads_in_tenths_of_a_second() {
-        assert_eq!(live_elapsed(0), "0.0s");
-        assert_eq!(live_elapsed(3_200), "3.2s");
-        assert_eq!(live_elapsed(12_999), "13.0s");
+    fn every_elapsed_value_reads_in_tenths_of_a_second() {
+        assert_eq!(elapsed_tenths(0), "0.0s");
+        assert_eq!(elapsed_tenths(3_200), "3.2s");
+        assert_eq!(elapsed_tenths(12_999), "13.0s");
+        assert_eq!(elapsed_tenths(13_000), "13.0s");
+        assert_eq!(elapsed_tenths(13_400), "13.4s");
     }
 
     #[test]
-    fn a_finished_elapsed_value_reads_in_whole_seconds() {
-        assert_eq!(finished_elapsed(0), "0s");
-        assert_eq!(finished_elapsed(13_000), "13s");
-        assert_eq!(finished_elapsed(13_900), "13s");
+    fn every_live_phase_pairs_its_word() {
+        for (phase, word) in [
+            (RunPhase::Waiting, "Waiting…"),
+            (RunPhase::Thinking, "Thinking…"),
+            (RunPhase::Answering, "Answering…"),
+            (RunPhase::Working, "Working…"),
+        ] {
+            assert_eq!(phase_word(phase), word);
+        }
     }
 }

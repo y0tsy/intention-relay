@@ -13,13 +13,15 @@
     reason = "Render tests build typed fixture states and assert the rendered text directly."
 )]
 
+use std::sync::atomic::{AtomicI64, Ordering};
+
 use intention_client::RunStreamState;
 use intention_proto::{
-    ConfigRevisionId, DaemonHealthDto, ErrorDto, MessageKindDto, MessageProjectionDto, ProjectId,
-    RunId, RunModeDto, RunProjectionDto, RunStatusDto, RunStreamFrameDto,
+    ConfigRevisionId, DaemonHealthDto, ErrorDto, MessageId, MessageKindDto, MessageProjectionDto,
+    ProjectId, RunId, RunModeDto, RunProjectionDto, RunStatusDto, RunStreamFrameDto,
     RunSubscriptionSnapshotDto, SessionId, SessionProjectionDto, SessionSnapshotDto,
-    SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto, TextDeltaFrameDto, ToolCallId,
-    TurnId, WorkspaceId, WorkspaceRootDto,
+    SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto, TextDeltaFrameDto, TimestampDto,
+    ToolCallId, TurnId, WorkspaceId, WorkspaceRootDto,
 };
 use intention_tui::app::{
     Action, AppState, BrowserCursorMove, InputCursorMove, MenuMove, Screen, Theme,
@@ -164,14 +166,38 @@ fn summary(session_id: SessionId) -> SessionSummaryDto {
 
 /// Returns one session summary last updated at `updated_at`.
 fn summary_at(session_id: SessionId, updated_at: i64) -> SessionSummaryDto {
+    summary_of(session_id, updated_at, updated_at, 0)
+}
+
+/// Returns one session summary with every durable field the table renders.
+fn summary_of(
+    session_id: SessionId,
+    created_at: i64,
+    updated_at: i64,
+    message_count: u64,
+) -> SessionSummaryDto {
+    let created_at =
+        TimestampDto::from_unix_seconds(created_at).expect("the fixture time is valid");
+    let updated_at =
+        TimestampDto::from_unix_seconds(updated_at).expect("the fixture time is valid");
     SessionSummaryDto::new(
         session_id,
         ProjectId::new(),
         WorkspaceId::new(),
         RunModeDto::Build,
+        created_at,
         updated_at,
+        workspace_root(),
+        message_count,
         None,
     )
+}
+
+/// Returns one fresh durable row identity for a committed fixture row.
+fn row_id() -> MessageId {
+    static NEXT: AtomicI64 = AtomicI64::new(0);
+    MessageId::new(NEXT.fetch_add(1, Ordering::Relaxed) + 1)
+        .expect("the fixture row identity is positive")
 }
 
 /// Returns one committed transcript row of the fixture session.
@@ -181,8 +207,17 @@ fn row(
     kind: MessageKindDto,
     text: &str,
 ) -> MessageProjectionDto {
-    MessageProjectionDto::new(session_id, Some(run_id), kind, text, None, None, None)
-        .expect("the fixture transcript row is coherent")
+    MessageProjectionDto::new(
+        row_id(),
+        session_id,
+        Some(run_id),
+        kind,
+        text,
+        None,
+        None,
+        None,
+    )
+    .expect("the fixture transcript row is coherent")
 }
 
 /// Returns one committed tool-call row carrying `arguments` for `tool_id`.
@@ -194,6 +229,7 @@ fn tool_call_row(
     call_id: ToolCallId,
 ) -> MessageProjectionDto {
     MessageProjectionDto::new(
+        row_id(),
         session_id,
         Some(run_id),
         MessageKindDto::ToolCall,
@@ -214,6 +250,7 @@ fn tool_result_row(
     call_id: ToolCallId,
 ) -> MessageProjectionDto {
     MessageProjectionDto::new(
+        row_id(),
         session_id,
         Some(run_id),
         MessageKindDto::ToolResult,
@@ -243,6 +280,7 @@ fn tool_exchange(
 /// Returns one committed daemon notice row carrying `text`.
 fn notice_row(session_id: SessionId, run_id: RunId, text: &str) -> MessageProjectionDto {
     MessageProjectionDto::new(
+        row_id(),
         session_id,
         Some(run_id),
         MessageKindDto::Notice,
@@ -262,6 +300,7 @@ fn reasoning_row(
     reasoning: &str,
 ) -> MessageProjectionDto {
     MessageProjectionDto::new(
+        row_id(),
         session_id,
         Some(run_id),
         MessageKindDto::Assistant,
@@ -327,9 +366,9 @@ fn subscribe(state: &mut AppState, session_id: SessionId, run_id: RunId, status:
     state.update(Action::RunStreamOpened(stream));
 }
 
-/// Returns a connected session that streams one running run with one committed
-/// row, carrying `provisional` as the transient tail of the current step.
-fn streaming_state(provisional: Option<&str>) -> AppState {
+/// Returns a connected session streaming one running run, with the session and
+/// run that the fixture rows and deltas belong to.
+fn streaming_ids() -> (AppState, SessionId, RunId) {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = open_state(
@@ -342,11 +381,35 @@ fn streaming_state(provisional: Option<&str>) -> AppState {
         )],
     );
     subscribe(&mut state, session_id, run_id, RunStatusDto::Running);
+    (state, session_id, run_id)
+}
+
+/// Applies one text delta of `channel` to the run of `state`.
+fn delta_frame(
+    state: &mut AppState,
+    session_id: SessionId,
+    run_id: RunId,
+    channel: TextDeltaChannelDto,
+    text: &str,
+) {
+    state.update(Action::FrameReceived(RunStreamFrameDto::TextDelta(
+        TextDeltaFrameDto::new(session_id, run_id, 0, channel, text)
+            .expect("the fixture delta is valid"),
+    )));
+}
+
+/// Returns a connected session that streams one running run with one committed
+/// row, carrying `provisional` as the transient tail of the current step.
+fn streaming_state(provisional: Option<&str>) -> AppState {
+    let (mut state, session_id, run_id) = streaming_ids();
     if let Some(text) = provisional {
-        state.update(Action::FrameReceived(RunStreamFrameDto::TextDelta(
-            TextDeltaFrameDto::new(session_id, run_id, 0, TextDeltaChannelDto::Answer, text)
-                .expect("the fixture delta is valid"),
-        )));
+        delta_frame(
+            &mut state,
+            session_id,
+            run_id,
+            TextDeltaChannelDto::Answer,
+            text,
+        );
     }
     state
 }
@@ -354,26 +417,12 @@ fn streaming_state(provisional: Option<&str>) -> AppState {
 /// Returns a connected session whose current step streams `reasoning` before
 /// the `answer` it informs.
 fn streaming_reasoning_state(reasoning: &str, answer: &str) -> AppState {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let mut state = open_state(
-        session_id,
-        vec![row(
-            session_id,
-            run_id,
-            MessageKindDto::Assistant,
-            "the committed row",
-        )],
-    );
-    subscribe(&mut state, session_id, run_id, RunStatusDto::Running);
+    let (mut state, session_id, run_id) = streaming_ids();
     for (channel, text) in [
         (TextDeltaChannelDto::Reasoning, reasoning),
         (TextDeltaChannelDto::Answer, answer),
     ] {
-        state.update(Action::FrameReceived(RunStreamFrameDto::TextDelta(
-            TextDeltaFrameDto::new(session_id, run_id, 0, channel, text)
-                .expect("the fixture delta is valid"),
-        )));
+        delta_frame(&mut state, session_id, run_id, channel, text);
     }
     state
 }
@@ -596,13 +645,47 @@ fn a_stub_tab_shows_its_todo_empty_state() {
 
 #[test]
 fn the_browser_table_shows_a_right_aligned_trailing_column() {
+    let root = workspace_root();
     let state = two_session_state();
     let mut app = TestApp::with_size(RevueView::with_now(&state, NOW), 130, BROWSER_HEIGHT);
     let (path_x, header_row) = find_text(&app, "Path");
+    let trailing = app
+        .buffer()
+        .get(path_x + 3, header_row + 1)
+        .expect("the trailing column's last cell is rendered");
+    assert_ne!(
+        trailing.symbol, ' ',
+        "the path ends at the column's last cell instead of leaving a gap"
+    );
+    let shown: String = root.as_str().chars().take(4).collect();
     let pilot = Pilot::new(&mut app);
     pilot.assert_cell(path_x + 4, header_row, ' ');
     pilot.assert_cell(path_x + 6, header_row, '│');
-    pilot.assert_cell(path_x + 3, header_row + 1, '—');
+    pilot.assert_line_contains(header_row + 1, &shown);
+}
+
+#[test]
+fn the_browser_shows_the_created_size_and_path_columns_from_the_summary() {
+    let session_id = fixture_session(FIRST_SESSION);
+    let root = workspace_root();
+    let state = browser_state(
+        vec![summary_of(session_id, NOW - 8 * 86_400, NOW - 23 * 60, 42)],
+        0,
+    );
+    let mut app = TestApp::with_size(
+        RevueView::with_now(&state, NOW),
+        BROWSER_WIDTH,
+        BROWSER_HEIGHT,
+    );
+    let (size_x, header_row) = find_text(&app, "Size");
+    let row = header_row + 1;
+    let shown: String = root.as_str().chars().take(4).collect();
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_line_contains(row, "Sep 19");
+    pilot.assert_line_contains(row, "23m ago");
+    pilot.assert_cell(size_x, row, '4');
+    pilot.assert_cell(size_x + 1, row, '2');
+    pilot.assert_line_contains(row, &shown);
 }
 
 #[test]
@@ -1793,8 +1876,38 @@ fn a_two_line_buffer_grows_the_input_block_and_shrinks_the_transcript() {
 }
 
 #[test]
-fn a_running_turn_shows_the_measured_elapsed_time() {
+fn a_waiting_turn_shows_the_waiting_word_and_its_measured_time() {
     let mut state = streaming_state(None);
+    state.update(Action::ElapsedReported { millis: 400 });
+    let mut app = TestApp::new(RevueView::new(&state));
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_contains("Waiting… 0.4s");
+}
+
+#[test]
+fn a_dispatched_turn_waits_before_any_run_projection_arrives() {
+    let session_id = SessionId::new();
+    let mut state = open_state(session_id, Vec::new());
+    for character in "hi".chars() {
+        state.update(Action::InputChar(character));
+    }
+    state.update(Action::InputSubmitted);
+    state.update(Action::ElapsedReported { millis: 200 });
+    let mut app = TestApp::new(RevueView::new(&state));
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_contains("Waiting… 0.2s");
+}
+
+#[test]
+fn a_thinking_turn_shows_the_thinking_word() {
+    let (mut state, session_id, run_id) = streaming_ids();
+    delta_frame(
+        &mut state,
+        session_id,
+        run_id,
+        TextDeltaChannelDto::Reasoning,
+        "weighing",
+    );
     state.update(Action::ElapsedReported { millis: 3_200 });
     let mut app = TestApp::new(RevueView::new(&state));
     let pilot = Pilot::new(&mut app);
@@ -1802,15 +1915,126 @@ fn a_running_turn_shows_the_measured_elapsed_time() {
 }
 
 #[test]
-fn a_finished_run_shows_its_measured_duration() {
+fn an_answering_turn_shows_the_answering_word() {
+    let mut state = streaming_state(Some("the answer"));
+    state.update(Action::ElapsedReported { millis: 4_100 });
+    let mut app = TestApp::new(RevueView::new(&state));
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_contains("Answering… 4.1s");
+}
+
+#[test]
+fn a_tool_call_in_flight_past_half_a_second_shows_the_working_word() {
+    let (mut state, session_id, run_id) = streaming_ids();
+    delta_frame(
+        &mut state,
+        session_id,
+        run_id,
+        TextDeltaChannelDto::Answer,
+        "the answer",
+    );
+    state.update(Action::ElapsedReported { millis: 2_000 });
+    state.update(Action::FrameReceived(RunStreamFrameDto::Content(
+        tool_call_row(
+            session_id,
+            run_id,
+            "read",
+            r#"{"path":"src/lib.rs"}"#,
+            ToolCallId::new(),
+        ),
+    )));
+    state.update(Action::ElapsedReported { millis: 2_600 });
+    let mut app = TestApp::new(RevueView::new(&state));
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_contains("Working… 2.6s");
+}
+
+#[test]
+fn a_tool_call_under_half_a_second_keeps_the_answering_word() {
+    let (mut state, session_id, run_id) = streaming_ids();
+    delta_frame(
+        &mut state,
+        session_id,
+        run_id,
+        TextDeltaChannelDto::Answer,
+        "the answer",
+    );
+    state.update(Action::ElapsedReported { millis: 2_000 });
+    state.update(Action::FrameReceived(RunStreamFrameDto::Content(
+        tool_call_row(
+            session_id,
+            run_id,
+            "read",
+            r#"{"path":"src/lib.rs"}"#,
+            ToolCallId::new(),
+        ),
+    )));
+    state.update(Action::ElapsedReported { millis: 2_400 });
+    let mut app = TestApp::new(RevueView::new(&state));
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_contains("Answering… 2.4s");
+}
+
+#[test]
+fn a_finished_tool_call_returns_the_row_to_the_answering_word() {
+    let (mut state, session_id, run_id) = streaming_ids();
+    let call_id = ToolCallId::new();
+    delta_frame(
+        &mut state,
+        session_id,
+        run_id,
+        TextDeltaChannelDto::Answer,
+        "the answer",
+    );
+    state.update(Action::ElapsedReported { millis: 2_000 });
+    state.update(Action::FrameReceived(RunStreamFrameDto::Content(
+        tool_call_row(session_id, run_id, "read", "{}", call_id),
+    )));
+    state.update(Action::ElapsedReported { millis: 2_700 });
+    state.update(Action::FrameReceived(RunStreamFrameDto::Content(
+        tool_result_row(session_id, run_id, "read", "the file", call_id),
+    )));
+    let mut app = TestApp::new(RevueView::new(&state));
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_contains("Answering… 2.7s");
+}
+
+#[test]
+fn a_run_whose_elapsed_was_never_reported_keeps_the_word_alone() {
+    let (mut state, session_id, run_id) = streaming_ids();
+    delta_frame(
+        &mut state,
+        session_id,
+        run_id,
+        TextDeltaChannelDto::Reasoning,
+        "weighing",
+    );
+    let mut app = TestApp::new(RevueView::new(&state));
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_contains("Thinking… · ctx @todo(core)");
+}
+
+#[test]
+fn a_finished_run_shows_its_measured_duration_in_tenths() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = open_state(session_id, Vec::new());
     subscribe(&mut state, session_id, run_id, RunStatusDto::Completed);
-    state.update(Action::ElapsedReported { millis: 13_000 });
+    state.update(Action::ElapsedReported { millis: 13_400 });
     let mut app = TestApp::new(RevueView::new(&state));
     let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Answered in 13s");
+    pilot.assert_contains("Answered in 13.4s");
+    pilot.assert_not_contains("13s");
+}
+
+#[test]
+fn the_status_row_never_shows_whole_seconds() {
+    let mut state = streaming_state(Some("the answer"));
+    state.update(Action::ElapsedReported { millis: 3_200 });
+    let mut app = TestApp::new(RevueView::new(&state));
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_contains("Answering… 3.2s");
+    pilot.assert_not_contains("3s");
 }
 
 #[test]

@@ -14,12 +14,8 @@ use std::time::{Duration, Instant};
 use intention_client::{IntentionClient, RunStreamSubscription};
 use intention_proto::{
     ErrorDto, MessageKindDto, MessageProjectionDto, RunId, RunModeDto, RunStatusDto,
-    RunStreamFrameDto, SessionId, SessionSummaryDto, TextDeltaChannelDto, WorkspaceRootDto,
-    run_status_is_terminal,
+    RunStreamFrameDto, SessionId, TextDeltaChannelDto, WorkspaceRootDto, run_status_is_terminal,
 };
-// The inline unit tests build session summary fixtures through `use super::*`.
-#[cfg(test)]
-use intention_proto::{ProjectId, WorkspaceId};
 use intention_transport::LocalEndpoint;
 use intention_tui::app::{Action, AppState, Effect};
 use intention_tui::client_task;
@@ -148,23 +144,6 @@ fn terminal_outcome(status: Option<RunStatusDto>) -> Option<RunOutcome> {
         .map(RunOutcome::Terminal)
 }
 
-/// Returns the newest session of one daemon-ordered session list.
-///
-/// The daemon orders summaries by recency and then by session identity, so the
-/// first summary carrying the maximum update time is the continued session.
-// @todo(core): resolve the continue target in the core (the client or the
-// daemon) instead of re-deriving the maximum `updated_at` from a raw field in
-// the front end.
-fn most_recent(summaries: &[SessionSummaryDto]) -> Option<SessionId> {
-    let mut newest: Option<SessionSummaryDto> = None;
-    for summary in summaries {
-        if newest.is_none_or(|current| summary.updated_at() > current.updated_at()) {
-            newest = Some(*summary);
-        }
-    }
-    newest.map(SessionSummaryDto::session_id)
-}
-
 /// The terminal end of one driven run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunOutcome {
@@ -289,7 +268,7 @@ pub struct Driver {
 impl Driver {
     /// Creates a driver over one client with an empty application state.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         client: IntentionClient,
         endpoint: LocalEndpoint,
         workspace_root: WorkspaceRootDto,
@@ -298,9 +277,9 @@ impl Driver {
         Self {
             client,
             endpoint,
-            workspace_root,
+            workspace_root: workspace_root.clone(),
             mode,
-            state: AppState::new(None),
+            state: AppState::new(None).with_workspace_root(workspace_root),
             subscription: None,
             last_failure: None,
             reported_rows: 0,
@@ -391,7 +370,7 @@ impl Driver {
     ///
     /// Returns the typed failure when the session list cannot be read.
     pub async fn most_recent_session(&self) -> Result<Option<SessionId>, ErrorDto> {
-        Ok(most_recent(self.client.list_sessions().await?.sessions()))
+        self.client.most_recent_session().await
     }
 
     /// Sends one prompt as a user turn through the core.
@@ -587,7 +566,9 @@ impl Driver {
 
     /// Drops every session-scoped value a new selection replaces.
     fn reset(&mut self, session: Option<SessionId>, continue_session: bool) {
-        self.state = AppState::new(session).continuing(continue_session);
+        self.state = AppState::new(session)
+            .continuing(continue_session)
+            .with_workspace_root(self.workspace_root.clone());
         self.subscription = None;
         self.last_failure = None;
         self.reported_rows = 0;
@@ -732,9 +713,10 @@ impl<W: Write> Report for TextReport<W> {
             return Ok(());
         }
         // @todo(hack): streamed text is matched to its committed row by string
-        // equality because the wire carries no row identity, so a committed row
-        // that repeats the streamed text for another reason is suppressed too;
-        // the client should mark the row a stream supersedes.
+        // equality because a delta names only its model step, never the
+        // committed row it will become, so a committed row that repeats the
+        // streamed text for another reason is suppressed too; the client should
+        // mark the row a stream supersedes.
         let supersedes = row.kind() == MessageKindDto::Assistant
             && !self.streamed.is_empty()
             && row.text() == self.streamed;
@@ -922,10 +904,21 @@ mod tests {
     )]
 
     use super::*;
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    use intention_proto::MessageId;
+
+    /// Returns one fresh durable row identity for a committed fixture row.
+    fn row_id() -> MessageId {
+        static NEXT: AtomicI64 = AtomicI64::new(0);
+        MessageId::new(NEXT.fetch_add(1, Ordering::Relaxed) + 1)
+            .expect("the fixture row identity is positive")
+    }
 
     /// Returns one coherent committed transcript row fixture.
     fn row(kind: MessageKindDto, text: &str) -> MessageProjectionDto {
         MessageProjectionDto::new(
+            row_id(),
             SessionId::new(),
             Some(RunId::new()),
             kind,
@@ -935,18 +928,6 @@ mod tests {
             None,
         )
         .expect("the fixture row is coherent")
-    }
-
-    /// Returns one bounded session summary fixture.
-    fn summary(updated_at: i64) -> SessionSummaryDto {
-        SessionSummaryDto::new(
-            SessionId::new(),
-            ProjectId::new(),
-            WorkspaceId::new(),
-            RunModeDto::Build,
-            updated_at,
-            None,
-        )
     }
 
     /// Writes one record and returns the written line.
@@ -959,23 +940,6 @@ mod tests {
     /// Returns the text one report wrote into `buffer`.
     fn text_of(buffer: &[u8]) -> &str {
         std::str::from_utf8(buffer).expect("the report wrote UTF-8 text")
-    }
-
-    #[test]
-    fn the_most_recently_updated_session_wins_a_continuation() {
-        let older = summary(10);
-        let newer = summary(20);
-        let summaries = [older, newer, summary(5)];
-        assert_eq!(most_recent(&summaries), Some(newer.session_id()));
-    }
-
-    #[test]
-    fn a_continuation_prefers_the_daemon_order_on_equal_update_times() {
-        let first = summary(7);
-        let second = summary(7);
-        let summaries = [first, second];
-        assert_eq!(most_recent(&summaries), Some(first.session_id()));
-        assert_eq!(most_recent(&[]), None);
     }
 
     #[test]

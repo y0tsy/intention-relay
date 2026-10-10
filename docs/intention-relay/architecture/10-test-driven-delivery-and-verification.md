@@ -233,7 +233,7 @@ another theme. Daemon tests prove the effective-theme rule (the stored override,
 light) and that a stored theme survives a daemon restart.
 
 The terminal crate itself carries a render suite and a process end-to-end suite. `tests/tui_render.rs` renders the
-render-free `AppState` through revue's own test app in seventy cases: the welcome surface (the lockup and the
+render-free `AppState` through revue's own test app in seventy-nine cases: the welcome surface (the lockup and the
 overview, gone once a session opens, the launch that lists sessions but opens none, and the state that never covers a
 reported row), the chat panel, the transcript blocks (the
 labelled user card and the markdown inside it, the markdown answer, the heading, the bold phrase, the aligned table,
@@ -270,9 +270,9 @@ browser geometry and row helpers, the markdown layout, the per-tool block dispat
 transcript layout cache's append-only fast path, width change, theme change, replacement, reasoning expansion,
 paired-result, and
 front-trim replays, and the clipboard-free source audit. A run of
-`cargo nextest run -p intention-tui` observed 338 tests across four binaries, all passing: 226 library unit tests,
-70 `tui_render` cases, 31 binary unit tests, and 11 `terminal_e2e` cases. A run of `cargo nextest run --workspace`
-observed 717 tests run, 717 passed, and 2 skipped.
+`cargo nextest run -p intention-tui` observed 358 tests across four binaries, all passing: 239 library unit tests,
+79 `tui_render` cases, 29 binary unit tests, and 11 `terminal_e2e` cases. A run of `cargo nextest run --workspace`
+observed 740 tests run, 740 passed, and 2 skipped.
 
 The per-crate self-checks are `cargo fmt -p intention-tui`, `cargo nextest run -p intention-tui`, and
 `cargo clippy -p intention-tui --all-targets`; the slice's acceptance gate is `make quick` during delivery and

@@ -65,9 +65,16 @@ separate dimmed block, tool exchanges as framed blocks, daemon notices as their
 own `※` block), the input block (a badge header with the session's real mode and
 a model placeholder, one row per buffer line with a `█` block cursor, and the run
 status row under it), and the notice or error line. The status row reads
-in words - `Ready · session … · build · Thinking… 3.2s · ctx @todo(core)` - and
-the elapsed value is measured by this front end's turn clock and reported to the
-core as `Action::ElapsedReported`, so the view stays a pure function of state.
+in words - `Ready · session … · build · Working… 6.2s · ctx @todo(core)` - and
+names the run's live phase: `waiting` from the moment the turn request leaves
+for the network, `thinking` when the reasoning stream starts, `answering` when
+the answer stream starts, and `working` while a tool call has been in flight for
+more than half a second (a shorter call leaves the phase it found). A completed
+run reads `Answered in 13.4s`, and the interrupted and failed runs keep their
+words. Every elapsed value reads in tenths of a second, live and final; the
+value is measured by this front end's turn clock and reported to the core as
+`Action::ElapsedReported`, so the view stays a pure function of state and the
+half-second tool threshold measures reported time instead of a clock in the core.
 A `\` immediately before `Enter` inserts a line break instead of submitting, and
 the backslash never reaches the buffer; the block grows a row per buffer line
 while the transcript gives up exactly those rows, with no line cap.
@@ -198,12 +205,8 @@ Rules the panes keep:
   either can be a `@todo(core)`.
 - The same `@todo(core)` marker also names work the front end still performs
   that belongs to the core rather than a fact it lacks: the tool arguments and
-  result payloads `src/tui/panes/tools.rs` parses, the session recency order
-  and continue target `src/app/sessions.rs`, `src/app/browser.rs`, and
-  `src/headless.rs` derive from raw fields, the transcript rows
-  `src/app/run.rs` reconciles by value, the `--mode` spelling `src/cli.rs`
-  repeats, and the calendar arithmetic `src/tui/screens/sessions.rs` runs on a
-  raw Unix second. Each marker names what the core should own.
+  result payloads `src/tui/panes/tools.rs` parses are the remaining site, and
+  each marker names what the core should own.
 
 ## Palette
 

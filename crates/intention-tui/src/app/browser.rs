@@ -7,16 +7,9 @@
 //! the view stays a pure function of them. Every fact the core cannot supply
 //! yet carries a `@todo(core)` marker here and in the text the user sees.
 
-use std::cmp::Reverse;
-
-use intention_proto::{RunModeDto, SessionId, SessionSummaryDto};
+use intention_proto::{RunModeDto, SessionId, SessionSummaryDto, WorkspaceRootDto};
 
 use super::{AppState, BrowserCursorMove, Effect, Screen, short_identifier};
-
-/// The empty state of the `Current Folder` tab.
-// @todo(core): the session summary carries no working folder, so the tab cannot
-// select the sessions of the directory the front end runs in.
-const CURRENT_FOLDER_REASON: &str = "@todo(core): the session summary carries no working folder, so this tab cannot select sessions";
 
 /// The empty state of the `Exec` tab.
 // @todo(core): the session summary carries no "ran an execute call" fact.
@@ -60,7 +53,7 @@ const NO_SELECTION_NOTICE: &str = "no session to select";
 /// The tabs the sessions browser offers, in the order the radio row shows them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrowserTab {
-    /// Sessions whose working folder is the current folder.
+    /// Sessions bound to the workspace root this front end runs in.
     CurrentFolder,
     /// Every listed session, most recently updated first.
     All,
@@ -122,8 +115,7 @@ impl BrowserTab {
     /// explain its empty state instead of rendering an empty table.
     const fn stub_reason(self) -> Option<&'static str> {
         match self {
-            Self::CurrentFolder => Some(CURRENT_FOLDER_REASON),
-            Self::All => None,
+            Self::CurrentFolder | Self::All => None,
             Self::Exec => Some(EXEC_REASON),
             Self::Favorites => Some(FAVORITES_REASON),
             Self::Archived => Some(ARCHIVED_REASON),
@@ -133,14 +125,20 @@ impl BrowserTab {
 
 /// One session row the browser shows.
 ///
-/// The row carries the placeholder title the core has, so the filter matches
-/// exactly the text the view renders and no later layer derives it again.
+/// The row carries the durable summary facts the table renders - when the
+/// session was created and last updated, how many committed rows it holds, and
+/// the workspace root it is bound to - beside the placeholder title the core
+/// has, so the filter matches exactly the text the view renders and no later
+/// layer derives it again.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BrowserRow {
     session_id: SessionId,
     title: String,
     mode: RunModeDto,
+    created_at: i64,
     updated_at: i64,
+    workspace_root: WorkspaceRootDto,
+    message_count: u64,
 }
 
 impl BrowserRow {
@@ -150,7 +148,10 @@ impl BrowserRow {
             session_id: summary.session_id(),
             title: placeholder_title(summary.session_id()),
             mode: summary.mode(),
-            updated_at: summary.updated_at(),
+            created_at: summary.created_at().unix_seconds(),
+            updated_at: summary.updated_at().unix_seconds(),
+            workspace_root: summary.workspace_root().clone(),
+            message_count: summary.message_count(),
         }
     }
 
@@ -172,10 +173,28 @@ impl BrowserRow {
         self.mode
     }
 
+    /// Returns when the durable session was created, in whole Unix seconds.
+    #[must_use]
+    pub const fn created_at(&self) -> i64 {
+        self.created_at
+    }
+
     /// Returns the last durable update of the session, in whole Unix seconds.
     #[must_use]
     pub const fn updated_at(&self) -> i64 {
         self.updated_at
+    }
+
+    /// Returns the workspace root the session is durably bound to.
+    #[must_use]
+    pub fn workspace_root(&self) -> &str {
+        self.workspace_root.as_str()
+    }
+
+    /// Returns how many committed transcript rows the session holds.
+    #[must_use]
+    pub const fn message_count(&self) -> u64 {
+        self.message_count
     }
 }
 
@@ -187,6 +206,11 @@ impl BrowserRow {
 pub(super) struct SessionsBrowserState {
     pub(super) tab: BrowserTab,
     pub(super) filter: String,
+    /// The front end's own workspace root, when it declared one.
+    ///
+    /// `Current Folder` selects the sessions bound to exactly this root; a
+    /// state that never received one selects no session there.
+    pub(super) workspace_root: Option<WorkspaceRootDto>,
     pub(super) rows: Vec<BrowserRow>,
     pub(super) cursor: usize,
 }
@@ -196,11 +220,12 @@ impl SessionsBrowserState {
     pub(super) const fn new() -> Self {
         Self {
             // `All` is the deliberate deviation from the mock's `Current
-            // Folder` default: the core carries no working folder to select by,
-            // so the only tab that can show sessions is the one that shows them
-            // all.
+            // Folder` default: the browser opens on the whole list, and a state
+            // with no declared workspace root still shows sessions instead of
+            // an empty current folder.
             tab: BrowserTab::All,
             filter: String::new(),
+            workspace_root: None,
             rows: Vec::new(),
             cursor: 0,
         }
@@ -221,28 +246,33 @@ impl SessionsBrowserState {
     }
 
     /// Recomputes the rows the current tab and filter select.
+    ///
+    /// The rows keep the daemon's own order: a session list is a recency-ordered
+    /// contract, so the browser shows the order it received instead of
+    /// re-sorting a raw timestamp.
     pub(super) fn refresh(&mut self, sessions: &[SessionSummaryDto]) {
         let rows = if self.tab.stub_reason().is_some() {
             Vec::new()
         } else {
-            let mut rows: Vec<BrowserRow> = sessions
+            sessions
                 .iter()
                 .filter(|summary| self.matches(summary))
                 .map(BrowserRow::from_summary)
-                .collect();
-            // The daemon already orders by recency; sorting here makes the
-            // browser's own contract explicit and survives any other source.
-            // @todo(core): the recency order of a session list is a core fact;
-            // read the core's order instead of re-sorting a raw `updated_at`.
-            rows.sort_by_key(|row| Reverse(row.updated_at));
-            rows
+                .collect()
         };
         self.rows = rows;
         self.clamp_cursor();
     }
 
-    /// Returns whether one summary survives the current filter.
+    /// Returns whether one summary survives the current tab and filter.
     fn matches(&self, summary: &SessionSummaryDto) -> bool {
+        // `Current Folder` selects by the durable binding: a session belongs to
+        // the front end's folder only when its own workspace root is that root.
+        if self.tab == BrowserTab::CurrentFolder
+            && self.workspace_root.as_ref() != Some(summary.workspace_root())
+        {
+            return false;
+        }
         // @todo(core): the filter runs over the placeholder title and the mode;
         // durable session titles would let a user search by name.
         let candidate = format!(

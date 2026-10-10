@@ -23,7 +23,7 @@ mod tests;
 
 pub use action::{
     Action, BrowserCursorMove, ConnectionStatus, Effect, InputCursorMove, InputHistoryMove,
-    StreamStatus, TranscriptScroll,
+    RunPhase, StreamStatus, TranscriptScroll,
 };
 pub use browser::{BrowserRow, BrowserTab};
 pub use commands::{
