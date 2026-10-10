@@ -103,10 +103,11 @@ impl View for RevueView<'_> {
     fn render(&self, ctx: &mut RenderContext) {
         ctx.fill_box_background(palette::of(self.state.effective_theme()).canvas);
         let window = ctx.area;
-        // @todo(hack): a view built without a cache - the test constructor -
-        // allocates a throwaway layout cache on every render so both
-        // constructors paint the same rows; the cache should be one
-        // type-level state, not an `Option` with a per-frame fallback.
+        // @todo(revue): `View::render` takes `&self`, so the layout cache must
+        // live behind a `RefCell`, and a view built without one - the test
+        // constructor - allocates a throwaway cache on every render to paint
+        // the same rows; render-time mutable state in the trait would remove
+        // the fallback and the `Option`.
         let fresh = RefCell::new(TranscriptLayoutCache::new());
         let cache = self.cache.unwrap_or(&fresh);
         let panel = (self.state.screen() == Screen::Sessions)

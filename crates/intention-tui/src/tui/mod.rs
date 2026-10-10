@@ -703,9 +703,11 @@ mod tests {
     fn wheel_events_scroll_the_transcript_and_other_mouse_events_do_not() {
         let state = RefCell::new(AppState::new(None));
         let mut app = wheel_app(&state, 80, 24);
-        // `TestApp::scroll_up`/`scroll_down` build the same wheel events the
-        // terminal delivers to `handle_event`; `Pilot::scroll_up` reaches a
-        // test-only integer channel instead (see the lane report).
+        // @todo(revue): revue's testing surface is inconsistent - `TestApp`'s
+        // `scroll_up`/`scroll_down` build the same wheel events the terminal
+        // delivers to `handle_event`, while `Pilot::scroll_up` reaches a
+        // test-only integer channel instead, so the wheel path is drivable only
+        // through `TestApp`.
         app.scroll_up(1, 1);
         assert_eq!(state.borrow().scroll(), 3, "one notch moves three rows");
         app.scroll_down(1, 1);

@@ -284,6 +284,10 @@ const fn sub_blocks(palette: &'static Palette) -> [SubBlock; 4] {
 }
 
 /// Returns the leading sub-blocks that fit in `width` columns, in order.
+// @todo(revue): revue has no wrap-and-clip container, so the overview's chips
+// are measured one by one and the first that does not fit ends the row - a
+// hand-written `flex-wrap: nowrap; overflow: hidden`, as in the sessions
+// legend.
 fn fitted(width: usize, palette: &'static Palette) -> Vec<SubBlock> {
     let mut fitted = Vec::new();
     let mut used = 0;

@@ -198,10 +198,9 @@ pub(super) struct Geometry {
 /// rows_needed, 6, window_height / 2)`. A window too small to keep the chat
 /// and the panel apart returns `None`, and the chat keeps the whole window
 /// instead of a broken frame.
-// @todo(hack): the panel's height is a stack of magic minimums (frame, chrome,
-// footer, data rows) and a half-window clamp because revue cannot express a
-// content-sized, bounded split; the bounds should become one layout
-// constraint.
+// @todo(revue): revue has no constraint layout, so a content-sized, bounded
+// split cannot be expressed: the panel's height is a stack of magic minimums
+// (frame, chrome, footer, data rows) and a half-window clamp instead.
 pub(super) fn geometry(state: &AppState, window: Rect) -> Option<Geometry> {
     if window.width <= PANEL_FRAME {
         return None;
@@ -480,6 +479,9 @@ fn footer(state: &AppState, data_rows: usize, width: usize, palette: &'static Pa
 }
 
 /// Returns the legend runs that fit in `limit` columns.
+// @todo(revue): revue cannot wrap or clip a row, so the legend is measured run
+// by run and every hint that does not fit is dropped whole - a hand-written
+// `flex-wrap: nowrap; overflow: hidden`.
 fn legend_runs(limit: usize, palette: &'static Palette) -> Vec<Run> {
     let mut runs = Vec::new();
     let mut used = 0;

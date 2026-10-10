@@ -458,6 +458,9 @@ impl RowBuilder {
 ///
 /// Returns the runs before the dropped byte and the runs after it, the latter
 /// re-based so they index the text that moves to the next row.
+// @todo(revue): revue carries styled runs but no width-aware text engine, so
+// the wrap splits a run list at the dropped space and re-bases every tail
+// run's byte range here; a wrapping text engine would own this.
 fn split_runs(runs: Vec<Run>, space: usize) -> (Vec<Run>, Vec<Run>) {
     let mut head = Vec::new();
     let mut tail = Vec::new();
@@ -712,6 +715,10 @@ pub(in crate::tui) fn display_width(text: &str) -> usize {
 /// The cache is what keeps a frame cheap: typing into the input line and the
 /// turn timer's ticks never touch the transcript, so the key still matches and
 /// a frame materialises the visible window without laying anything out.
+// @todo(revue): revue has no dirty tracking or virtualised rendering of its
+// own, so the invalidation is built here: the key carries the width, the
+// theme, the transcript epoch, the reasoning-expansion epoch, and the paired
+// tool-result count, and an append fast path keeps the cached prefix.
 pub(in crate::tui) struct TranscriptLayoutCache {
     /// The content width the cached rows were laid out at.
     width: usize,

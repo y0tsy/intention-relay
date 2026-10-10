@@ -235,6 +235,9 @@ fn input_row(
 /// columns revue renders it in. The cursor carries one column of its own; when
 /// the text before it does not fit, the window starts so that the cursor is the
 /// last column of the window.
+// @todo(revue): revue has no editable text surface, so this window - which
+// characters of the line before and after the cursor fit, measured in display
+// columns - is computed by hand here instead of by a text widget.
 fn cursor_window(line: &str, cursor: usize, columns: usize) -> (String, String) {
     let characters: Vec<char> = line.chars().collect();
     let cursor = cursor.min(characters.len());
