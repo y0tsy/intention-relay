@@ -24,12 +24,13 @@ use crate::{
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorCategoryDto, ErrorDto,
-    ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId, RemoveTurnCommandDto, RunId,
-    SessionId, SessionSnapshotDto, TimestampDto, ToolCallId, TurnId, UsageDto, WorkspaceId,
+    ErrorRetryDto, FinishReasonDto, IdempotencyKey, MessageId, ProjectId, RemoveTurnCommandDto,
+    RunId, SessionId, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, ThemeDto,
+    TimestampDto, ToolCallId, TurnId, UsageDto, WorkspaceBindingDto, WorkspaceId,
 };
 use intention_proto::{
-    MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, RunModeDto, RunProjectionDto,
-    RunStatusDto, SessionProjectionDto, WorkspaceRootDto, run_status_is_terminal,
+    MessageKindDto, MessageProjectionDto, NewMessageDto, PendingTurnProjectionDto, RunModeDto,
+    RunProjectionDto, RunStatusDto, SessionProjectionDto, WorkspaceRootDto, run_status_is_terminal,
     validate_run_status_transition,
 };
 use sqlite::OptionalExtension;
@@ -38,9 +39,10 @@ use sqlite::OptionalExtension;
 const TERMINAL_STATUSES: &str = "'completed','failed','interrupted'";
 
 /// The transcript projection columns in their canonical decode order.
-const MESSAGE_COLUMNS: &str = "session_id, run_id, kind, text, reasoning, tool_call_id, tool_id";
+const MESSAGE_COLUMNS: &str =
+    "id, session_id, run_id, kind, text, reasoning, tool_call_id, tool_id";
 
-/// The complete current storage schema (logical version 1): the eight
+/// The complete current storage schema (logical version 1): the nine
 /// current-state tables created directly on open. There is no migration chain,
 /// and no event log, snapshot, cursor, or journal table exists under the single
 /// live schema. `SCHEMA_STAMP` records the version this text implements.
@@ -119,6 +121,10 @@ CREATE TABLE IF NOT EXISTS configuration_revisions (
   snapshot_json TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tui_settings (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  theme TEXT NOT NULL
+);
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_session ON runs(session_id)
   WHERE status NOT IN ('completed','failed','interrupted');
 CREATE INDEX IF NOT EXISTS messages_session_id_id ON messages(session_id, id);
@@ -132,7 +138,7 @@ CREATE INDEX IF NOT EXISTS messages_session_run_id_id ON messages(session_id, ru
 /// column changes: the next open discards the whole database file and its
 /// rollback journal and recreates the current schema from scratch. That discard
 /// is the only version gate; there is no migration path.
-const SCHEMA_STAMP: i32 = 2;
+const SCHEMA_STAMP: i32 = 3;
 
 /// Returns whether the open database already carries the current schema stamp.
 /// A database written under any other stamp is discarded by its opener.
@@ -443,12 +449,16 @@ impl SqliteStorageRepository {
         .map(|projection| projection.with_pending_turns_omitted(pending_turns_omitted))
     }
 
-    /// Inserts one committed transcript row with its external commit time.
+    /// Inserts one transcript row with its external commit time and returns it
+    /// as committed.
+    ///
+    /// The durable identity is the `messages.id` this insert assigned, so the
+    /// returned projection is the only committed value that carries it.
     fn insert_message(
         connection: &sqlite::Connection,
-        message: &MessageProjectionDto,
+        message: &NewMessageDto,
         created_at: i64,
-    ) -> DtoResult<()> {
+    ) -> DtoResult<MessageProjectionDto> {
         connection
             .execute(
                 "INSERT INTO messages(session_id, run_id, kind, text, reasoning, tool_call_id, tool_id, created_at) \
@@ -465,7 +475,17 @@ impl SqliteStorageRepository {
                 ],
             )
             .map_err(storage_error)?;
-        Ok(())
+        let message_id = MessageId::new(connection.last_insert_rowid()).map_err(codec_error)?;
+        MessageProjectionDto::new(
+            message_id,
+            message.session_id(),
+            message.run_id(),
+            message.kind(),
+            message.text(),
+            message.reasoning().map(str::to_owned),
+            message.tool_call_id(),
+            message.tool_id().map(str::to_owned),
+        )
     }
 
     /// Inserts one accepted turn row in its recorded durable state.
@@ -683,7 +703,7 @@ impl SqliteStorageRepository {
                 ],
             )
             .map_err(storage_error)?;
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             session_id,
             Some(run_id),
             MessageKindDto::User,
@@ -692,7 +712,7 @@ impl SqliteStorageRepository {
             None,
             None,
         )?;
-        Self::insert_message(connection, &message, created_at)?;
+        let message = Self::insert_message(connection, &message, created_at)?;
         let run = RunProjectionDto::new(
             session_id,
             run_id,
@@ -915,7 +935,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             let occurred_at = occurred_at.unix_seconds();
             let mut messages = Vec::with_capacity(pending.len());
             for turn in pending {
-                let message = MessageProjectionDto::new(
+                let message = NewMessageDto::new(
                     session_id,
                     Some(run_id),
                     MessageKindDto::User,
@@ -924,7 +944,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     None,
                     None,
                 )?;
-                Self::insert_message(transaction, &message, occurred_at)?;
+                let message = Self::insert_message(transaction, &message, occurred_at)?;
                 transaction
                     .execute(
                         "UPDATE turns SET state='appended' WHERE session_id=?1 AND id=?2",
@@ -1027,7 +1047,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
 
     fn append_message(
         &self,
-        message: MessageProjectionDto,
+        message: NewMessageDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<MessageProjectionDto> {
         let session_id = message.session_id();
@@ -1036,17 +1056,18 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             if let Some(run_id) = message.run_id() {
                 require_active_run(transaction, session_id, run_id)?;
             }
-            Self::insert_message(transaction, &message, occurred_at.unix_seconds())?;
+            let committed =
+                Self::insert_message(transaction, &message, occurred_at.unix_seconds())?;
             self.fault(FaultPoint::Message)?;
-            Ok(message)
+            Ok(committed)
         })
     }
 
     fn write_tool_result(
         &self,
         evidence: ToolResultEvidenceDto,
-        message: MessageProjectionDto,
-    ) -> DtoResult<ToolResultEvidenceDto> {
+        message: NewMessageDto,
+    ) -> DtoResult<MessageProjectionDto> {
         if message.kind() != MessageKindDto::ToolResult
             || message.session_id() != evidence.session_id()
             || message.run_id() != Some(evidence.run_id())
@@ -1093,9 +1114,10 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     ],
                 )
                 .map_err(storage_error)?;
-            Self::insert_message(transaction, &message, evidence.occurred_at().unix_seconds())?;
+            let committed =
+                Self::insert_message(transaction, &message, evidence.occurred_at().unix_seconds())?;
             self.fault(FaultPoint::ToolResult)?;
-            Ok(evidence)
+            Ok(committed)
         })
     }
 
@@ -1240,6 +1262,39 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         Ok(projection)
     }
 
+    fn list_sessions(&self, limit: u32) -> DtoResult<SessionSummariesDto> {
+        let connection = self.connection()?;
+        let total: u32 = connection
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .map_err(storage_error)?;
+        let sessions = session_summaries(&connection, limit)?;
+        drop(connection);
+        // The window returns at most `limit` rows, so every session above that
+        // many is reported as omitted.
+        SessionSummariesDto::new(sessions, total.saturating_sub(limit))
+    }
+
+    fn workspace_binding(&self, root: &WorkspaceRootDto) -> DtoResult<Option<WorkspaceBindingDto>> {
+        let connection = self.connection()?;
+        let binding = connection
+            .query_row(
+                "SELECT project_id, id FROM workspace_roots WHERE root=?1",
+                [root.as_str()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        drop(connection);
+        binding
+            .map(|(project, workspace)| {
+                Ok(WorkspaceBindingDto::new(
+                    ProjectId::parse(&project).map_err(codec_error)?,
+                    WorkspaceId::parse(&workspace).map_err(codec_error)?,
+                ))
+            })
+            .transpose()
+    }
+
     fn load_recent_messages(
         &self,
         session_id: SessionId,
@@ -1352,6 +1407,32 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         })
     }
 
+    fn load_tui_theme(&self) -> DtoResult<Option<ThemeDto>> {
+        let stored = {
+            let connection = self.connection()?;
+            connection
+                .query_row("SELECT theme FROM tui_settings WHERE id=1", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .optional()
+                .map_err(storage_error)?
+        };
+        stored.map(|theme| ThemeDto::parse(&theme)).transpose()
+    }
+
+    fn save_tui_theme(&self, theme: ThemeDto) -> DtoResult<()> {
+        self.with_immediate_transaction(|transaction| {
+            transaction
+                .execute(
+                    "INSERT INTO tui_settings(id, theme) VALUES (1, ?1) \
+                     ON CONFLICT(id) DO UPDATE SET theme=excluded.theme",
+                    [theme.as_str()],
+                )
+                .map_err(storage_error)?;
+            Ok(())
+        })
+    }
+
     fn accept_configuration_revision(&self, snapshot: ConfigSnapshotDto) -> DtoResult<()> {
         self.with_immediate_transaction(|transaction| {
             Self::store_config(transaction, &snapshot)?;
@@ -1363,6 +1444,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
 
 /// The committed rows of one transcript query.
 type RawMessageRow = (
+    i64,
     String,
     Option<String>,
     String,
@@ -1382,27 +1464,116 @@ fn raw_message_row(row: &sqlite::Row<'_>) -> sqlite::Result<RawMessageRow> {
         row.get(4)?,
         row.get(5)?,
         row.get(6)?,
+        row.get(7)?,
     ))
 }
 
 fn decode_message(row: RawMessageRow) -> DtoResult<MessageProjectionDto> {
     MessageProjectionDto::new(
-        SessionId::parse(&row.0).map_err(codec_error)?,
-        row.1
+        MessageId::new(row.0).map_err(codec_error)?,
+        SessionId::parse(&row.1).map_err(codec_error)?,
+        row.2
             .as_deref()
             .map(RunId::parse)
             .transpose()
             .map_err(codec_error)?,
-        MessageKindDto::parse(&row.2)?,
-        row.3,
+        MessageKindDto::parse(&row.3)?,
         row.4,
-        row.5
+        row.5,
+        row.6
             .as_deref()
             .map(ToolCallId::parse)
             .transpose()
             .map_err(codec_error)?,
-        row.6,
+        row.7,
     )
+}
+
+/// Returns one bounded newest-first window of current session summaries.
+///
+/// Sessions are ordered by their last durable update with their identity
+/// breaking ties, and one row carries at most one active run: the current
+/// schema admits a single non-terminal run per session. Each row also carries
+/// the session's durable creation time, its bound workspace root, and its
+/// committed message count.
+fn session_summaries(
+    connection: &sqlite::Connection,
+    limit: u32,
+) -> DtoResult<Vec<SessionSummaryDto>> {
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT sessions.id, sessions.project_id, sessions.workspace_id, sessions.mode, \
+             sessions.created_at, sessions.updated_at, workspace_roots.root, \
+             (SELECT COUNT(*) FROM messages WHERE messages.session_id=sessions.id), \
+             runs.id, runs.turn_id, runs.status, runs.config_revision_id \
+             FROM sessions JOIN workspace_roots ON workspace_roots.id=sessions.workspace_id \
+             LEFT JOIN runs ON runs.session_id=sessions.id \
+             AND runs.status NOT IN ({TERMINAL_STATUSES}) \
+             ORDER BY sessions.updated_at DESC, sessions.id ASC LIMIT ?1"
+        ))
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([i64::from(limit)], raw_session_summary_row)
+        .map_err(storage_error)?;
+    rows.map(|row| decode_session_summary(row.map_err(storage_error)?))
+        .collect()
+}
+
+/// The committed columns of one session-list row: the session's own columns
+/// followed by its sole non-terminal run's columns, absent together when the
+/// session has no active run.
+type RawSessionSummaryRow = (
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    String,
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+fn raw_session_summary_row(row: &sqlite::Row<'_>) -> sqlite::Result<RawSessionSummaryRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
+        row.get(10)?,
+        row.get(11)?,
+    ))
+}
+
+fn decode_session_summary(row: RawSessionSummaryRow) -> DtoResult<SessionSummaryDto> {
+    let session_id = SessionId::parse(&row.0).map_err(codec_error)?;
+    let active_run = match (row.8, row.9, row.10, row.11) {
+        (None, None, None, None) => None,
+        (Some(run), Some(turn), Some(status), Some(revision)) => {
+            Some(run_projection(session_id, &run, &turn, &status, &revision)?)
+        }
+        _ => return Err(codec_error("the durable active run columns are incomplete")),
+    };
+    Ok(SessionSummaryDto::new(
+        session_id,
+        ProjectId::parse(&row.1).map_err(codec_error)?,
+        WorkspaceId::parse(&row.2).map_err(codec_error)?,
+        RunModeDto::parse(&row.3)?,
+        TimestampDto::from_unix_seconds(row.4).map_err(codec_error)?,
+        TimestampDto::from_unix_seconds(row.5).map_err(codec_error)?,
+        WorkspaceRootDto::parse(row.6).map_err(codec_error)?,
+        u64::try_from(row.7).map_err(codec_error)?,
+        active_run,
+    ))
 }
 
 /// Loads the raw durable columns of one scoped run, or `None` when the run row
@@ -2536,7 +2707,7 @@ mod tests {
         let repository = SqliteStorageRepository::open(location.clone()).expect("database opens");
         let session_id = create_fixture_session(&repository);
         let run = accept_fixture_turn(&repository, session_id, "active");
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             session_id,
             Some(run.run_id()),
             MessageKindDto::Assistant,
@@ -2636,7 +2807,7 @@ mod tests {
             fixture_time(3),
         )
         .expect("fixture evidence is valid");
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             session_id,
             Some(run.run_id()),
             MessageKindDto::ToolResult,
@@ -2707,7 +2878,7 @@ mod tests {
         let run = accept_fixture_turn(&repository, session_id, "active");
         repository
             .append_message(
-                MessageProjectionDto::new(
+                NewMessageDto::new(
                     session_id,
                     Some(run.run_id()),
                     MessageKindDto::Assistant,
@@ -2735,7 +2906,7 @@ mod tests {
         repository
             .write_tool_result(
                 evidence,
-                MessageProjectionDto::new(
+                NewMessageDto::new(
                     session_id,
                     Some(run.run_id()),
                     MessageKindDto::ToolResult,

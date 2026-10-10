@@ -20,7 +20,7 @@ A DTO is a stable contract, not merely any serializable struct.
 | Query DTO | Requested read model or snapshot. | `GetSessionSnapshotQueryDto`. |
 | Persistence DTO | Storage-safe representation of a record or projection. | `RunProjectionDto`, `MessageProjectionDto`. |
 | Provider DTO | Provider-neutral model request/stream/error contract, including advertised tool definitions and the transient same-run reasoning attachment. | `ModelRequestDto`, `ModelToolDefinitionDto`, `AssistantReasoningDto`, `ModelEventDto`. |
-| Runtime execution DTO | Immutable selected execution input, safe terminal outcome, and provider-neutral time port over injected provider/storage contracts. | `ModelRunExecutionInputDto`, `ModelRunExecutionOutcomeDto`, `ModelTimePort`. |
+| Runtime execution DTO | Immutable selected execution input, safe terminal outcome, and provider-neutral time and transient text-delta ports over injected provider/storage contracts. | `ModelRunExecutionInputDto`, `ModelRunExecutionOutcomeDto`, `ModelTimePort`, `ModelTextDeltaPort`. |
 | Tool DTO | Typed tool invocation, bounded result and interruption outcome, and durable result evidence. | `ToolInput`, `ToolResult`, `ToolResultEvidenceDto`. |
 | Config DTO | Parsed, validated, resolved, and revisioned TOML configuration. | `ResolvedConfigDto`, `ConfigSnapshotDto`. |
 | Presentation DTO | Explicit adapter projection, if transport DTO is not appropriate for display. | None today; adapters render transport projections directly. |
@@ -54,9 +54,12 @@ WorkspaceId
 ToolCallId
 ConfigRevisionId
 IdempotencyKey
+MessageId
 ```
 
-IDs must have a defined generation owner, parse/validation behavior, serialization representation, and error DTO. The
+IDs must have a defined generation owner, parse/validation behavior, serialization representation, and error DTO.
+`MessageId` is the transcript row identity and the one non-UUID member: its durable value is the positive SQLite
+`messages.id` the single durable writer assigned, and it serializes as a JSON number. The
 tool loop addresses model steps and tool groups by plain indices within their containing records rather than by
 newtypes; provider-native tool-call identifiers remain private implementation state.
 
@@ -227,9 +230,11 @@ shape. This section records the landed model; the rules above are the live polic
 - JSON only for tool payloads. Tool inputs and outputs are JSON objects validated at runtime against the tool's
   declared JSON Schema, and they are the only schemaless JSON values in the system. `serde_json::Value` stays
   prohibited everywhere else, including errors, configuration, and storage.
-- Eight identifiers. `SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`, and
-  `IdempotencyKey` are the complete identity newtype set. `EventId`, `AssistantTurnId`, `PlanId`, `PlanRevisionId`,
-  `ModelStepId`, and `ToolGroupId` are removed: model steps and tool groups are addressed by plain indices within their
-  containing records, and mutating operations carry an `IdempotencyKey` instead of an operational ID.
+- Nine identifiers. `SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`,
+  `IdempotencyKey`, and `MessageId` are the complete identity newtype set. `MessageId` is the durable transcript row
+  identity, assigned by the storage boundary from the SQLite `messages.id` row id. `EventId`, `AssistantTurnId`,
+  `PlanId`, `PlanRevisionId`, `ModelStepId`, and `ToolGroupId` are removed: model steps and tool groups are addressed
+  by plain indices within their containing records, and mutating operations carry an `IdempotencyKey` instead of an
+  operational ID.
 - Publication follows the commit. A live frame is emitted once the durable commit succeeds, carrying the values the
   commit recorded; the scoped durable reread proof is removed.

@@ -7,12 +7,18 @@
 //! become one `assistant` row per completed model step; a crash mid-step loses
 //! the in-flight step text.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, ProviderErrorDto, RunId,
     SessionId, TimestampDto, ToolCallDto, UsageDto,
 };
-use intention_proto::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
+use intention_proto::{
+    MessageKindDto, MessageProjectionDto, NewMessageDto, RunProjectionDto, RunStatusDto,
+    TextDeltaChannelDto,
+};
 pub use intention_providers::{
     AssistantReasoningDto, ModelCancellationSignal, ModelCancelledFuture, ModelEventDto,
     ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
@@ -97,6 +103,20 @@ pub trait ModelTimePort {
 /// Provider-neutral delay future owned by a [`ModelTimePort`].
 pub type ModelSleepFuture<'a> =
     std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
+
+/// Best-effort observation of one uncommitted provider text chunk.
+///
+/// The model-run executor reports every provider text chunk here together with
+/// the 0-based index of the model step that produced it and the step's text
+/// channel the chunk belongs to: the reasoning the step thinks through, or the
+/// answer it commits. The observation is transient: it never becomes durable
+/// state, never fails a run, and never changes the assistant row the step
+/// commits when it closes. A run without an attached port behaves exactly like
+/// one whose port ignores every call.
+pub trait ModelTextDeltaPort: Send + Sync {
+    /// Observes one streamed text chunk of `channel` at the model step `step`.
+    fn text_delta(&self, step: u32, channel: TextDeltaChannelDto, text: &str);
+}
 
 /// Safe terminal outcome of one tool call returned by the execution port.
 ///
@@ -198,10 +218,20 @@ pub trait ToolExecutionPort: Send + Sync {
 /// the synchronous signal. The engine's interruption boundaries reset the
 /// handle, so the same run observes the next interrupt with fresh state and no
 /// per-invocation registration exists.
+///
+/// The handle also carries the run's **interruption notice budget**: one
+/// interruption signal offers exactly one notice, which the first interruption
+/// boundary to reach it takes with
+/// [`RunCancellation::take_interrupt_notice`]. However many boundaries observe
+/// the sticky signal - a round that ends while a tool batch is in flight, a
+/// retry wait that re-enters a boundary, or two boundaries racing on a loaded
+/// host - the run records one durable notice per interruption, and
+/// [`RunCancellation::reset`] re-arms the budget for the next one.
 #[derive(Clone, Default)]
 pub struct RunCancellation {
     model: ModelCancellationSignal,
     tool: ToolCancellationSignal,
+    notice_taken: Arc<AtomicBool>,
 }
 
 /// The cancellation handle carries interior shared state with no safe debug
@@ -223,15 +253,35 @@ impl RunCancellation {
     }
 
     /// Requests cancellation of the run's in-flight operation.
+    ///
+    /// One signal offers exactly one interruption notice.
     pub fn cancel(&self) {
         self.model.cancel();
         self.tool.cancel();
     }
 
     /// Clears the request so the continuing run observes the next interrupt.
+    ///
+    /// Re-arms the notice budget with the signal: the next interruption offers
+    /// its own notice.
     pub fn reset(&self) {
         self.model.reset();
         self.tool.reset();
+        self.notice_taken.store(false, Ordering::Release);
+    }
+
+    /// Takes the interruption notice this run's current signal still owes.
+    ///
+    /// Returns `true` exactly once per interruption, so the boundary that takes
+    /// it records the run's durable notice while a later boundary continues the
+    /// run with the context it already carries. A clear signal owes nothing, so
+    /// a path that resets without taking cannot leave a stale notice behind.
+    #[must_use]
+    pub fn take_interrupt_notice(&self) -> bool {
+        if !self.is_cancelled() {
+            return false;
+        }
+        !self.notice_taken.swap(true, Ordering::AcqRel)
     }
 
     /// Returns whether cancellation has been requested for this run.
@@ -378,7 +428,7 @@ pub trait ModelRunCommitObserver: Send + Sync {
 }
 
 /// DTO-only executor over injected storage, selected driver, time port,
-/// commit observer, and tool executor.
+/// commit observer, tool executor, and an optional text-delta port.
 ///
 /// Every collaborator is shared behind a `Sync` reference: the execution
 /// lifecycle hands its futures to a scheduling runtime, so each returned
@@ -389,6 +439,8 @@ pub struct ModelRunExecutionService<'a, Repository, Driver: ?Sized, Time> {
     time: &'a Time,
     observer: &'a dyn ModelRunCommitObserver,
     tool_executor: &'a dyn ToolExecutionPort,
+    /// Unattached by default, so a run observes nothing that is not wired.
+    text_delta: Option<&'a dyn ModelTextDeltaPort>,
 }
 
 impl<'a, Repository, Driver, Time> ModelRunExecutionService<'a, Repository, Driver, Time>
@@ -402,7 +454,8 @@ where
     /// Provider-emitted tool calls always execute through the supplied
     /// `ToolExecutionPort`, and every committed value is handed to the
     /// supplied [`ModelRunCommitObserver`]; neither collaborator has a
-    /// fallback.
+    /// fallback. The transient text-delta observation starts unattached and is
+    /// added with [`Self::with_text_delta_port`].
     #[must_use]
     pub const fn new(
         repository: &'a Repository,
@@ -417,7 +470,20 @@ where
             time,
             observer,
             tool_executor,
+            text_delta: None,
         }
+    }
+
+    /// Attaches the transient text-delta observation port.
+    ///
+    /// The port receives every provider text chunk of the run, tagged with the
+    /// model step and the text channel that produced it; it cannot return a
+    /// value or an error, so its presence never changes the run's state or its
+    /// commits.
+    #[must_use]
+    pub const fn with_text_delta_port(mut self, port: &'a dyn ModelTextDeltaPort) -> Self {
+        self.text_delta = Some(port);
+        self
     }
 
     /// Performs one bounded model execution lifecycle.
@@ -465,6 +531,10 @@ where
         let mut pending_text = String::new();
         let mut usage: Option<UsageDto> = None;
         let mut durable_output = false;
+        // The run's 0-based model-step sequence. One provider round is one
+        // model step, and the sequence continues across retried attempts and
+        // tool rounds, so every round of the run carries its own step index.
+        let mut next_step = 0u32;
         // Context additions that must survive a retryable attempt boundary:
         // joined pending user messages and interruption notices. The live
         // context of the run stays continuous across provider attempts.
@@ -484,6 +554,7 @@ where
                     &input,
                     policy.attempt_timeout_seconds(),
                     RoundState::new(
+                        &mut next_step,
                         &mut pending_text,
                         &mut usage,
                         &mut durable_output,
@@ -560,9 +631,17 @@ where
                     // continues instead of completing. An interruption that
                     // raced the finish is answered with its notice first.
                     if input.cancellation.is_cancelled() {
-                        self.record_interrupt_notice(input)?;
-                        messages.push(interrupt_notice_message()?);
-                        extra_messages.push(interrupt_notice_message()?);
+                        // The request's one notice goes to the boundary that
+                        // takes the budget: a round that finished while the
+                        // signal was already being observed continues without a
+                        // second row.
+                        if input.cancellation.take_interrupt_notice() {
+                            self.record_interrupt_notice(input)?;
+                            messages.push(interrupt_notice_message()?);
+                            extra_messages.push(interrupt_notice_message()?);
+                        } else {
+                            input.cancellation.reset();
+                        }
                         state.apply_window(&mut messages, &reasoning_attachments)?;
                         request = continuation_request(input, &messages, &reasoning_attachments)?;
                         continue;
@@ -583,6 +662,13 @@ where
                 }
                 RoundOutcome::Interrupted { assistant } => {
                     state.record_step_commit(assistant.as_ref());
+                    // A round that ended stopped is its own interruption event,
+                    // so it records the notice even when no host request caused
+                    // it - a stream the provider ended stopped. It spends the
+                    // request's budget first, so a boundary that observes the
+                    // same sticky signal later cannot record a second row for
+                    // one interruption.
+                    let _ = input.cancellation.take_interrupt_notice();
                     self.record_interrupt_notice(input)?;
                     messages.push(interrupt_notice_message()?);
                     extra_messages.push(interrupt_notice_message()?);
@@ -683,12 +769,19 @@ where
                     // model step; every other in-flight batch position gets
                     // the explicit context notice.
                     if input.cancellation.is_cancelled() {
+                        // A partial tool result already carries the
+                        // stopped-call notice of this request, so the batch
+                        // spends the request's notice here instead of letting a
+                        // later boundary record a second row for it.
                         if state.interrupted_tool() {
+                            let _ = input.cancellation.take_interrupt_notice();
                             input.cancellation.reset();
-                        } else {
+                        } else if input.cancellation.take_interrupt_notice() {
                             self.record_interrupt_notice(input)?;
                             messages.push(interrupt_notice_message()?);
                             extra_messages.push(interrupt_notice_message()?);
+                        } else {
+                            input.cancellation.reset();
                         }
                     }
                     self.consume_pending_user_turns(input, &mut messages, extra_messages)?;
@@ -699,7 +792,8 @@ where
         }
     }
 
-    /// Commits one durable interruption notice and clears the run's signal.
+    /// Commits the interruption notice one request owes and clears the run's
+    /// signal.
     ///
     /// The notice tells the model that its current call was stopped before a
     /// final result; the run stays `Running` and continues with the next step.
@@ -713,7 +807,7 @@ where
         input: &ModelRunExecutionInputDto,
     ) -> DtoResult<MessageProjectionDto> {
         input.cancellation.reset();
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             input.session_id,
             Some(input.run_id),
             MessageKindDto::Notice,
@@ -777,6 +871,9 @@ where
         let mut lifecycle = ModelStreamLifecycleDto::new();
         let request_characters = ContextWindowState::request_characters(&request);
         state.begin_round();
+        // The round claims its step index before its stream starts, so every
+        // chunk of the round publishes the same step.
+        let step = state.begin_step();
         let mut stream = self
             .driver
             .execute(request, input.cancellation.model_signal());
@@ -873,9 +970,17 @@ where
             match event {
                 ModelEventDto::Started => {}
                 ModelEventDto::TextDelta { content } => {
+                    self.publish_text_delta(step, TextDeltaChannelDto::Answer, &content);
                     state.push_text(&content);
                 }
                 ModelEventDto::ReasoningDelta { content } => {
+                    // The reasoning channel is published like the answer, so a
+                    // live observer can render the step's thinking as it
+                    // streams. A textless presence marker carries no text and
+                    // is not published: the port observes text.
+                    if !content.is_empty() {
+                        self.publish_text_delta(step, TextDeltaChannelDto::Reasoning, &content);
+                    }
                     // The accumulated echo is bounded per round at the
                     // attachment's representable bound: a round that crosses it
                     // is marked unrepresentable and never truncated, and empty
@@ -934,9 +1039,13 @@ where
         use futures_util::{FutureExt, future::Either};
 
         if input.cancellation.is_cancelled() {
-            let message = interrupt_notice_message()?;
-            self.record_interrupt_notice(input)?;
-            extra_messages.push(message);
+            if input.cancellation.take_interrupt_notice() {
+                let message = interrupt_notice_message()?;
+                self.record_interrupt_notice(input)?;
+                extra_messages.push(message);
+            } else {
+                input.cancellation.reset();
+            }
             return Ok(());
         }
         let delay = self.time.sleep(RETRY_DELAY).fuse();
@@ -944,9 +1053,13 @@ where
         futures_util::pin_mut!(delay, cancelled);
         match futures_util::future::select(cancelled, delay).await {
             Either::Left(((), _)) => {
-                let message = interrupt_notice_message()?;
-                self.record_interrupt_notice(input)?;
-                extra_messages.push(message);
+                if input.cancellation.take_interrupt_notice() {
+                    let message = interrupt_notice_message()?;
+                    self.record_interrupt_notice(input)?;
+                    extra_messages.push(message);
+                } else {
+                    input.cancellation.reset();
+                }
                 Ok(())
             }
             Either::Right(((), _)) => Ok(()),
@@ -972,7 +1085,7 @@ where
             pending_text.clear();
             return Ok(None);
         }
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             input.session_id,
             Some(input.run_id),
             MessageKindDto::Assistant,
@@ -1050,6 +1163,16 @@ where
         Ok(ModelRunExecutionOutcomeDto::Failed { run, error })
     }
 
+    /// Publishes one streamed provider text chunk as a transient observation.
+    ///
+    /// The chunk is uncommitted step text, so the publication is best-effort:
+    /// it never fails the run and never touches run state.
+    fn publish_text_delta(&self, step: u32, channel: TextDeltaChannelDto, text: &str) {
+        if let Some(port) = self.text_delta {
+            port.text_delta(step, channel, text);
+        }
+    }
+
     /// Publishes one committed transcript row.
     fn publish_content(&self, message: &MessageProjectionDto) {
         self.observer
@@ -1074,6 +1197,8 @@ where
 /// the loop flags belong to the attempt's current round, and every round
 /// observes them through the transitions below instead of raw fields.
 struct RoundState<'a> {
+    /// The run's next 0-based model-step index.
+    next_step: &'a mut u32,
     /// Accumulated uncommitted assistant text of the current model step.
     pending_text: &'a mut String,
     /// The last reported provider usage of the run.
@@ -1093,12 +1218,14 @@ struct RoundState<'a> {
 impl<'a> RoundState<'a> {
     /// Creates one attempt's state over the run's live step state.
     const fn new(
+        next_step: &'a mut u32,
         pending_text: &'a mut String,
         usage: &'a mut Option<UsageDto>,
         durable_output: &'a mut bool,
         context_window: ContextWindowState,
     ) -> Self {
         Self {
+            next_step,
             pending_text,
             usage,
             durable_output,
@@ -1114,6 +1241,18 @@ impl<'a> RoundState<'a> {
         self.reasoning_channel_seen = false;
         self.reasoning_echo_exceeds_round_bound = false;
         self.interrupted_tool = false;
+    }
+
+    /// Takes the run's next model-step index and advances the sequence.
+    ///
+    /// One provider round is one model step: it issues exactly one provider
+    /// request and commits at most one assistant transcript row. The counter
+    /// belongs to the run rather than the attempt, so a retried attempt and a
+    /// tool round continue the sequence instead of repeating an index.
+    const fn begin_step(&mut self) -> u32 {
+        let step = *self.next_step;
+        *self.next_step = step + 1;
+        step
     }
 
     /// Appends one provider text delta to the uncommitted step text.

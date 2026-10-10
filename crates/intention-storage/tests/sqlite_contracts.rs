@@ -16,11 +16,11 @@ use intention_config::{
 };
 use intention_proto::{
     ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId,
-    RunId, SchemaVersionDto, SessionId, ToolCallId, UsageDto, WorkspaceId,
+    RunId, SchemaVersionDto, SessionId, ThemeDto, ToolCallId, UsageDto, WorkspaceId,
 };
 use intention_proto::{
-    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
-    RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
+    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, NewMessageDto,
+    PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
 };
 use intention_storage::{
     AcceptedTurnOutcomeDto, RunOutcomeDto, SqliteStorageRepository, StorageRepositoryDto,
@@ -63,6 +63,35 @@ fn create(store: &SqliteStorageRepository) -> SessionId {
     create_session(store, &SessionId::new().to_string())
 }
 
+/// Creates one durable session whose last durable update is `updated_at`.
+fn create_at(store: &SqliteStorageRepository, updated_at: i64) -> SessionId {
+    let session_id = SessionId::new();
+    store
+        .create_session(
+            CreateSessionCommandDto::new(
+                ProjectId::new(),
+                session_id,
+                WorkspaceId::new(),
+                workspace_root(&session_id.to_string()),
+                RunModeDto::Build,
+            ),
+            time(updated_at),
+        )
+        .expect("session creates");
+    session_id
+}
+
+/// Returns the session identities of one session-list window in durable order.
+fn listed(store: &SqliteStorageRepository, limit: u32) -> Vec<SessionId> {
+    store
+        .list_sessions(limit)
+        .expect("sessions list")
+        .sessions()
+        .iter()
+        .map(|summary| summary.session_id())
+        .collect()
+}
+
 fn accept(
     store: &SqliteStorageRepository,
     session: SessionId,
@@ -91,7 +120,7 @@ fn pending(outcome: AcceptedTurnOutcomeDto) -> PendingTurnProjectionDto {
 
 fn append(
     store: &SqliteStorageRepository,
-    message: MessageProjectionDto,
+    message: NewMessageDto,
     event_time: i64,
 ) -> MessageProjectionDto {
     store
@@ -124,17 +153,28 @@ fn current_database_reopen_preserves_committed_rows() {
     let run = RunId::new();
     let (_, message) = started(accept(&store, session, IdempotencyKey::new(), run, "kept"));
     assert_eq!(message.text(), "kept");
+    assert!(
+        message.id().value() > 0,
+        "the committed row carries the durable row id the commit assigned"
+    );
     drop(store);
 
     let reopened = reopen(&directory);
+    let rows = reopened
+        .load_run_messages(session, run, 10)
+        .expect("transcript loads after reopen");
     assert_eq!(
-        reopened
-            .load_run_messages(session, run, 10)
-            .expect("transcript loads after reopen")
-            .iter()
+        rows.iter()
             .map(MessageProjectionDto::text)
             .collect::<Vec<_>>(),
         vec!["kept"]
+    );
+    assert_eq!(
+        rows.iter()
+            .map(MessageProjectionDto::id)
+            .collect::<Vec<_>>(),
+        vec![message.id()],
+        "a reread projects the same durable row identity"
     );
     assert_eq!(
         reopened
@@ -652,7 +692,7 @@ fn append_message_and_transcript_reads_obey_bounds_and_order() {
     let call_id = ToolCallId::new();
     let _ = append(
         &store,
-        MessageProjectionDto::new(
+        NewMessageDto::new(
             session,
             Some(run),
             MessageKindDto::Assistant,
@@ -666,7 +706,7 @@ fn append_message_and_transcript_reads_obey_bounds_and_order() {
     );
     let _ = append(
         &store,
-        MessageProjectionDto::new(
+        NewMessageDto::new(
             session,
             Some(run),
             MessageKindDto::ToolCall,
@@ -696,6 +736,14 @@ fn append_message_and_transcript_reads_obey_bounds_and_order() {
     assert_eq!(all.len(), 3);
     assert_eq!(all[0].text(), "start");
     assert_eq!(all[1].reasoning(), Some("why"));
+    assert!(
+        all.iter()
+            .map(MessageProjectionDto::id)
+            .collect::<Vec<_>>()
+            .windows(2)
+            .all(|pair| pair[0] < pair[1]),
+        "insertion order is durable row identity order"
+    );
     assert_eq!(
         store
             .load_run_messages(session, run, 10)
@@ -742,7 +790,7 @@ fn append_message_and_transcript_reads_obey_bounds_and_order() {
     assert_eq!(
         store
             .append_message(
-                MessageProjectionDto::new(
+                NewMessageDto::new(
                     other,
                     Some(run),
                     MessageKindDto::User,
@@ -781,7 +829,7 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
         time(4),
     )
     .expect("tool result evidence is valid");
-    let message = MessageProjectionDto::new(
+    let message = NewMessageDto::new(
         session,
         Some(run),
         MessageKindDto::ToolResult,
@@ -792,7 +840,7 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
     )
     .expect("answering row is valid");
     for mismatched in [
-        MessageProjectionDto::new(
+        NewMessageDto::new(
             session,
             Some(run),
             MessageKindDto::Assistant,
@@ -802,7 +850,7 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
             None,
         )
         .expect("assistant row is valid"),
-        MessageProjectionDto::new(
+        NewMessageDto::new(
             SessionId::new(),
             Some(run),
             MessageKindDto::ToolResult,
@@ -812,7 +860,7 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
             Some("read".to_owned()),
         )
         .expect("cross-session row is structurally valid"),
-        MessageProjectionDto::new(
+        NewMessageDto::new(
             session,
             Some(RunId::new()),
             MessageKindDto::ToolResult,
@@ -822,7 +870,7 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
             Some("read".to_owned()),
         )
         .expect("cross-run row is structurally valid"),
-        MessageProjectionDto::new(
+        NewMessageDto::new(
             session,
             Some(run),
             MessageKindDto::ToolResult,
@@ -832,7 +880,7 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
             Some("read".to_owned()),
         )
         .expect("cross-call row is structurally valid"),
-        MessageProjectionDto::new(
+        NewMessageDto::new(
             session,
             Some(run),
             MessageKindDto::ToolResult,
@@ -854,21 +902,24 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
     let committed = store
         .write_tool_result(evidence.clone(), message.clone())
         .expect("evidence and its transcript row commit atomically");
-    assert_eq!(committed, evidence);
+    assert_eq!(committed.kind(), MessageKindDto::ToolResult);
+    assert_eq!(committed.tool_call_id(), Some(call_id));
+    assert_eq!(committed.text(), evidence.content());
     assert_eq!(
         store
             .load_tool_result(session, run, call_id)
             .expect("typed evidence rereads"),
         evidence
     );
-    assert!(
+    assert_eq!(
         store
             .load_run_messages(session, run, 10)
             .expect("transcript loads")
             .iter()
-            .any(|row| row.kind() == MessageKindDto::ToolResult
-                && row.tool_call_id() == Some(call_id)
-                && row.text() == evidence.content())
+            .find(|row| row.kind() == MessageKindDto::ToolResult)
+            .map(MessageProjectionDto::id),
+        Some(committed.id()),
+        "the committed row carries the durable row identity the commit assigned"
     );
     assert_eq!(
         store
@@ -1197,6 +1248,46 @@ fn canonical_config_revision_binds_one_snapshot_across_both_entry_points() {
 }
 
 #[test]
+fn the_workspace_binding_reads_the_association_a_creation_established() {
+    let (_directory, store) = repository();
+    let root = workspace_root("binding-read");
+    assert_eq!(
+        store
+            .workspace_binding(&root)
+            .expect("an unbound root reads as absent"),
+        None,
+        "a root with no session carries no binding yet"
+    );
+    let project_id = ProjectId::new();
+    let workspace_id = WorkspaceId::new();
+    store
+        .create_session(
+            CreateSessionCommandDto::new(
+                project_id,
+                SessionId::new(),
+                workspace_id,
+                root.clone(),
+                RunModeDto::Build,
+            ),
+            time(1),
+        )
+        .expect("the first session establishes the binding");
+    let binding = store
+        .workspace_binding(&root)
+        .expect("the bound root reads")
+        .expect("the root is bound");
+    assert_eq!(binding.project_id(), project_id);
+    assert_eq!(binding.workspace_id(), workspace_id);
+    assert_eq!(
+        store
+            .workspace_binding(&workspace_root("binding-read-other"))
+            .expect("an unrelated root reads as absent"),
+        None,
+        "the binding belongs to its exact root"
+    );
+}
+
+#[test]
 fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
     let (_directory, store) = repository();
     let workspace_id = WorkspaceId::new();
@@ -1394,7 +1485,7 @@ fn messages_transcript_indexes_and_stamp_are_current() {
     let stamp: i32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("the schema stamp reads");
-    assert_eq!(stamp, 2, "the created database carries the current stamp");
+    assert_eq!(stamp, 3, "the created database carries the current stamp");
     let mut statement = connection
         .prepare("SELECT name FROM sqlite_master WHERE type='index' ORDER BY name")
         .expect("index catalogue prepares");
@@ -1449,7 +1540,7 @@ fn messages_transcript_indexes_and_stamp_are_current() {
     let stamp: i32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("the recreated stamp reads");
-    assert_eq!(stamp, 2, "the recreated database carries the current stamp");
+    assert_eq!(stamp, 3, "the recreated database carries the current stamp");
 }
 
 #[test]
@@ -1681,7 +1772,7 @@ fn terminal_runs_reject_pending_turns_messages_and_tool_results() {
     assert_eq!(
         store
             .append_message(
-                MessageProjectionDto::new(
+                NewMessageDto::new(
                     session,
                     Some(run),
                     MessageKindDto::Assistant,
@@ -1713,7 +1804,7 @@ fn terminal_runs_reject_pending_turns_messages_and_tool_results() {
         store
             .write_tool_result(
                 evidence,
-                MessageProjectionDto::new(
+                NewMessageDto::new(
                     session,
                     Some(run),
                     MessageKindDto::ToolResult,
@@ -1759,7 +1850,7 @@ fn session_snapshot_reads_projection_and_transcript_in_one_call() {
     let _ = accept(&store, session, IdempotencyKey::new(), run, "start");
     let _ = append(
         &store,
-        MessageProjectionDto::new(
+        NewMessageDto::new(
             session,
             Some(run),
             MessageKindDto::Assistant,
@@ -1852,4 +1943,316 @@ fn accept_user_turn_rejects_content_over_the_durable_turn_bound() {
     );
     assert_eq!(message.run_id(), Some(run.run_id()));
     assert_eq!(message.text().len(), bound);
+}
+
+#[test]
+fn session_list_orders_by_its_last_update_and_breaks_ties_by_identity() {
+    let (directory, store) = repository();
+    let oldest = create_at(&store, 10);
+    let middle = create_at(&store, 20);
+    let newest = create_at(&store, 30);
+    let tie_left = create_at(&store, 40);
+    let tie_right = create_at(&store, 40);
+    let mut tied = [tie_left, tie_right];
+    tied.sort_unstable();
+
+    assert_eq!(
+        listed(&store, 10),
+        vec![tied[0], tied[1], newest, middle, oldest],
+        "newest-first order with the durable identity breaking an update-time tie"
+    );
+
+    // A later durable update is what moves a session to the front: the list
+    // reflects `updated_at`, not the order the sessions were created in.
+    drop(store);
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for the update");
+    connection
+        .execute(
+            "UPDATE sessions SET updated_at=?1 WHERE id=?2",
+            sqlite::params![50, oldest.to_string()],
+        )
+        .expect("the session update applies");
+    drop(connection);
+
+    assert_eq!(
+        listed(&reopen(&directory), 10),
+        vec![oldest, tied[0], tied[1], newest, middle],
+        "the updated session leads the list"
+    );
+
+    // The order follows the update time, not the creation time: the leading
+    // session keeps the creation time it was created with.
+    let summaries = reopen(&directory).list_sessions(10).expect("sessions list");
+    let leading = &summaries.sessions()[0];
+    assert_eq!(leading.session_id(), oldest);
+    assert_eq!(
+        leading.created_at().unix_seconds(),
+        10,
+        "the durable creation time does not move with a later update"
+    );
+    assert_eq!(
+        leading.updated_at().unix_seconds(),
+        50,
+        "the later durable update is the fact that leads the list"
+    );
+}
+
+#[test]
+fn session_list_reports_its_window_and_the_omitted_count() {
+    let (_directory, store) = repository();
+    let empty = store.list_sessions(1).expect("an empty store lists");
+    assert!(empty.sessions().is_empty());
+    assert_eq!(empty.omitted(), 0, "an empty store omits nothing");
+
+    let oldest = create_at(&store, 10);
+    let middle = create_at(&store, 20);
+    let newest = create_at(&store, 30);
+
+    // A zero limit reports the whole list as omitted instead of silently
+    // returning nothing.
+    let none = store.list_sessions(0).expect("a zero limit lists");
+    assert!(none.sessions().is_empty());
+    assert_eq!(none.omitted(), 3);
+
+    let single = store.list_sessions(1).expect("a one-row window lists");
+    assert_eq!(
+        single
+            .sessions()
+            .iter()
+            .map(|summary| summary.session_id())
+            .collect::<Vec<_>>(),
+        vec![newest]
+    );
+    assert_eq!(single.omitted(), 2);
+
+    let exact = store.list_sessions(3).expect("an exact window lists");
+    assert_eq!(exact.sessions().len(), 3);
+    assert_eq!(exact.omitted(), 0);
+
+    let wider = store.list_sessions(10).expect("an over-wide window lists");
+    assert_eq!(wider.sessions().len(), 3);
+    assert_eq!(wider.omitted(), 0);
+    assert_eq!(listed(&store, 10), vec![newest, middle, oldest]);
+}
+
+#[test]
+fn session_list_maps_every_durable_session_column() {
+    let (_directory, store) = repository();
+    let project = ProjectId::new();
+    let workspace = WorkspaceId::new();
+    let session = SessionId::new();
+    let root = workspace_root(&session.to_string());
+    store
+        .create_session(
+            CreateSessionCommandDto::new(
+                project,
+                session,
+                workspace,
+                root.clone(),
+                RunModeDto::Plan,
+            ),
+            time(7),
+        )
+        .expect("session creates");
+    for (text, event_time) in [("first row", 8), ("second row", 9)] {
+        let _ = append(
+            &store,
+            NewMessageDto::new(
+                session,
+                None,
+                MessageKindDto::Notice,
+                text,
+                None,
+                None,
+                None,
+            )
+            .expect("notice row is valid"),
+            event_time,
+        );
+    }
+
+    let summaries = store.list_sessions(10).expect("sessions list");
+    assert_eq!(summaries.sessions().len(), 1);
+    let summary = &summaries.sessions()[0];
+    assert_eq!(summary.session_id(), session);
+    assert_eq!(summary.project_id(), project);
+    assert_eq!(summary.workspace_id(), workspace);
+    assert_eq!(summary.mode(), RunModeDto::Plan);
+    assert_eq!(summary.created_at().unix_seconds(), 7);
+    assert_eq!(summary.updated_at().unix_seconds(), 7);
+    assert_eq!(summary.workspace_root(), &root);
+    assert_eq!(
+        summary.message_count(),
+        2,
+        "the summary counts the session's committed transcript rows"
+    );
+    assert!(summary.active_run().is_none());
+}
+
+#[test]
+fn session_list_maps_the_active_run_of_each_session() {
+    let (_directory, store) = repository();
+    let idle = create_at(&store, 10);
+    let starting = create_at(&store, 20);
+    let starting_run = RunId::new();
+    let _ = accept(
+        &store,
+        starting,
+        IdempotencyKey::new(),
+        starting_run,
+        "starting",
+    );
+    let running = create_at(&store, 30);
+    let running_run = RunId::new();
+    let _ = accept(
+        &store,
+        running,
+        IdempotencyKey::new(),
+        running_run,
+        "running",
+    );
+    store
+        .transition_run(running, running_run, RunStatusDto::Running, time(50))
+        .expect("run starts");
+    let finished = create_at(&store, 40);
+    let finished_run = RunId::new();
+    let _ = accept(
+        &store,
+        finished,
+        IdempotencyKey::new(),
+        finished_run,
+        "finished",
+    );
+    store
+        .transition_run(finished, finished_run, RunStatusDto::Running, time(60))
+        .expect("run starts");
+    store
+        .finish_run(
+            finished,
+            finished_run,
+            outcome(
+                RunStatusDto::Completed,
+                Some(UsageDto::NotReported),
+                Some(FinishReasonDto::Stop),
+                None,
+            ),
+            time(70),
+        )
+        .expect("run completes");
+
+    let summaries = store.list_sessions(10).expect("sessions list");
+    assert_eq!(
+        summaries
+            .sessions()
+            .iter()
+            .map(|summary| summary.session_id())
+            .collect::<Vec<_>>(),
+        vec![finished, running, starting, idle]
+    );
+    let summary_of = |session: SessionId| {
+        summaries
+            .sessions()
+            .iter()
+            .find(|summary| summary.session_id() == session)
+            .expect("every created session is listed")
+    };
+    assert!(
+        summary_of(idle).active_run().is_none(),
+        "an idle session carries no active run"
+    );
+    assert!(
+        summary_of(finished).active_run().is_none(),
+        "a terminal run is not active"
+    );
+    let starting_run_dto = summary_of(starting)
+        .active_run()
+        .expect("a starting run is active");
+    assert_eq!(starting_run_dto.session_id(), starting);
+    assert_eq!(starting_run_dto.run_id(), starting_run);
+    assert_eq!(starting_run_dto.status(), RunStatusDto::Starting);
+    let running_run_dto = summary_of(running)
+        .active_run()
+        .expect("a running run is active");
+    assert_eq!(running_run_dto.session_id(), running);
+    assert_eq!(running_run_dto.run_id(), running_run);
+    assert_eq!(running_run_dto.status(), RunStatusDto::Running);
+}
+
+#[test]
+fn tui_theme_round_trips_absent_is_none_and_survives_a_reopen() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    let store = open(&directory);
+    assert_eq!(
+        store.load_tui_theme().expect("absent theme reads"),
+        None,
+        "no stored override answers None"
+    );
+    store
+        .save_tui_theme(ThemeDto::Dark)
+        .expect("the theme commits");
+    assert_eq!(
+        store.load_tui_theme().expect("stored theme reads"),
+        Some(ThemeDto::Dark)
+    );
+    drop(store);
+
+    let reopened = reopen(&directory);
+    assert_eq!(
+        reopened
+            .load_tui_theme()
+            .expect("stored theme reads after reopen"),
+        Some(ThemeDto::Dark),
+        "the committed override survives a reopen"
+    );
+
+    // The settings row is a singleton: a later set replaces its value.
+    reopened
+        .save_tui_theme(ThemeDto::Light)
+        .expect("the theme updates");
+    assert_eq!(
+        reopened.load_tui_theme().expect("updated theme reads"),
+        Some(ThemeDto::Light)
+    );
+    drop(reopened);
+
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for inspection");
+    let table: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tui_settings'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("table lookup runs");
+    assert_eq!(table, 1, "the current schema declares the settings table");
+    let rows: i64 = connection
+        .query_row("SELECT COUNT(*) FROM tui_settings", [], |row| row.get(0))
+        .expect("settings row count reads");
+    assert_eq!(rows, 1, "the settings table holds exactly one row");
+}
+
+#[test]
+fn saving_a_tui_theme_creates_no_configuration_revision() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    let store = open(&directory);
+    store
+        .accept_configuration_revision(snapshot())
+        .expect("configuration revision accepts");
+    store
+        .save_tui_theme(ThemeDto::Dark)
+        .expect("the theme commits");
+    drop(store);
+
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for inspection");
+    let revisions: i64 = connection
+        .query_row("SELECT COUNT(*) FROM configuration_revisions", [], |row| {
+            row.get(0)
+        })
+        .expect("revision count reads");
+    assert_eq!(
+        revisions, 1,
+        "a theme set records no configuration revision"
+    );
 }

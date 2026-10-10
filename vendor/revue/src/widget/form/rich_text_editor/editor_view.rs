@@ -1,0 +1,163 @@
+//! Editor view rendering for RichTextEditor
+
+use super::{BlockType, RichTextEditor};
+use crate::render::{Cell, Modifier};
+use crate::widget::traits::RenderContext;
+
+impl RichTextEditor {
+    /// Render editor
+    pub(crate) fn render_editor(
+        &self,
+        ctx: &mut RenderContext,
+        x: u16,
+        y: u16,
+        width: u16,
+        height: u16,
+    ) {
+        // The heading, quote and link colors mark up the *content*, so a
+        // `color` rule cannot have them. The body text is the base.
+        let bg = self
+            .bg
+            .unwrap_or_else(|| ctx.css_background(super::core::EDITOR_BG));
+        let fg = self
+            .fg
+            .unwrap_or_else(|| ctx.css_color(super::core::EDITOR_FG));
+
+        // Fill editor background
+        for row in 0..height {
+            for col in 0..width {
+                ctx.set(x + col, y + row, Cell::new(' ').bg(bg));
+            }
+        }
+
+        // Render visible blocks
+        for (row, block_idx) in (self.scroll..).take(height as usize).enumerate() {
+            if block_idx >= self.blocks.len() {
+                break;
+            }
+
+            let block = &self.blocks[block_idx];
+            let row_y = y + row as u16;
+
+            // Block type indicator
+            let prefix = match block.block_type {
+                BlockType::Heading1 => "# ",
+                BlockType::Heading2 => "## ",
+                BlockType::Heading3 => "### ",
+                BlockType::Heading4 => "#### ",
+                BlockType::Heading5 => "##### ",
+                BlockType::Heading6 => "###### ",
+                BlockType::Quote => "> ",
+                BlockType::BulletList => "• ",
+                BlockType::NumberedList => "1. ",
+                BlockType::CodeBlock => "` ",
+                BlockType::HorizontalRule => "──",
+                BlockType::Paragraph => "",
+            };
+
+            let prefix_fg = match block.block_type {
+                BlockType::Heading1
+                | BlockType::Heading2
+                | BlockType::Heading3
+                | BlockType::Heading4
+                | BlockType::Heading5
+                | BlockType::Heading6 => self.heading_fg,
+                BlockType::Quote => self.quote_fg,
+                BlockType::CodeBlock => self.code_bg,
+                _ => fg,
+            };
+
+            // Render prefix
+            let mut col = x;
+            for ch in prefix.chars() {
+                let cw = crate::utils::char_width(ch) as u16;
+                if col + cw > x + width {
+                    break;
+                }
+                ctx.set(col, row_y, Cell::new(ch).fg(prefix_fg).bg(bg));
+                col += cw;
+            }
+
+            // Links keep their markdown in the editor; they are told apart
+            // by color. A code block is literal text and has none.
+            let links = if block.block_type == BlockType::CodeBlock {
+                Vec::new()
+            } else {
+                super::link::link_char_ranges(&block.text())
+            };
+
+            // Render block content with per-span formatting
+            let mut char_idx = 0;
+            for span in &block.spans {
+                for ch in span.text.chars() {
+                    if col >= x + width {
+                        break;
+                    }
+
+                    let is_cursor =
+                        self.focused && block_idx == self.cursor.0 && char_idx == self.cursor.1;
+
+                    let is_selected = self.anchor.is_some_and(|anchor| {
+                        let (start, end) = if anchor < self.cursor {
+                            (anchor, self.cursor)
+                        } else {
+                            (self.cursor, anchor)
+                        };
+                        block_idx >= start.0
+                            && block_idx <= end.0
+                            && (block_idx > start.0 || char_idx >= start.1)
+                            && (block_idx < end.0 || char_idx < end.1)
+                    });
+
+                    let cell_bg = if is_cursor {
+                        self.cursor_bg
+                    } else if is_selected {
+                        self.selection_bg
+                    } else {
+                        bg
+                    };
+
+                    // Build cell with span formatting
+                    let text_fg = if links.iter().any(|r| r.contains(&char_idx)) {
+                        self.link_fg
+                    } else {
+                        fg
+                    };
+                    let mut cell = Cell::new(ch).fg(text_fg).bg(cell_bg);
+
+                    // Apply text formatting modifiers
+                    if span.format.bold {
+                        cell.modifier |= Modifier::BOLD;
+                    }
+                    if span.format.italic {
+                        cell.modifier |= Modifier::ITALIC;
+                    }
+                    if span.format.underline {
+                        cell.modifier |= Modifier::UNDERLINE;
+                    }
+                    if span.format.strikethrough {
+                        cell.modifier |= Modifier::CROSSED_OUT;
+                    }
+                    if span.format.code {
+                        cell.modifier |= Modifier::DIM;
+                    }
+
+                    let cw = crate::utils::char_width(ch) as u16;
+                    ctx.set(col, row_y, cell);
+                    col += cw;
+                    char_idx += 1;
+                }
+            }
+
+            // Render cursor at end of line
+            let text_len = block.char_count();
+            if self.focused
+                && block_idx == self.cursor.0
+                && self.cursor.1 >= text_len
+                && col < x + width
+            {
+                ctx.set(col, row_y, Cell::new(' ').bg(self.cursor_bg));
+            }
+        }
+    }
+}

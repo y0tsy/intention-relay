@@ -1,0 +1,298 @@
+//! Terminal backend core implementation using crossterm
+
+use crossterm::{
+    cursor::{Hide, MoveTo, Show},
+    event::{DisableMouseCapture, EnableMouseCapture},
+    execute, queue,
+    style::{Attribute, ResetColor, SetAttribute},
+    terminal::{
+        self, disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen,
+        LeaveAlternateScreen,
+    },
+};
+use std::io::Write;
+
+use super::super::{diff, Buffer};
+use crate::layout::Rect;
+use crate::Result;
+
+use super::types::Terminal;
+
+impl<W: Write> Terminal<W> {
+    /// Create a new terminal with the given writer
+    pub fn new(writer: W) -> Result<Self> {
+        let (width, height) = terminal::size()?;
+        Ok(Self::with_size(writer, width, height))
+    }
+
+    /// Create a terminal with an explicit size, without querying the OS.
+    ///
+    /// Unlike [`new`](Self::new) this never touches the controlling terminal,
+    /// so it works in headless environments (tests, CI, snapshot rendering).
+    /// The returned terminal is *not* initialized - [`init`](Self::init) is
+    /// what enables raw mode and the alternate screen.
+    pub fn with_size(writer: W, width: u16, height: u16) -> Self {
+        Self {
+            writer,
+            current: Buffer::new(width, height),
+            raw_mode: false,
+            mouse_capture: false,
+        }
+    }
+
+    /// Initialize the terminal for TUI mode with mouse capture
+    pub fn init(&mut self) -> Result<()> {
+        self.init_with_mouse(true)
+    }
+
+    /// Initialize the terminal for TUI mode with optional mouse capture
+    ///
+    /// When `mouse_capture` is false, text selection in terminal works normally.
+    /// Use this for keyboard-only applications.
+    pub fn init_with_mouse(&mut self, mouse_capture: bool) -> Result<()> {
+        enable_raw_mode()?;
+        self.raw_mode = true;
+        // `Drop` does not run on abort, and the release profile aborts on panic.
+        // The hook is what actually restores the terminal - see `panic_hook`.
+        super::install_panic_hook();
+        self.mouse_capture = mouse_capture;
+        if mouse_capture {
+            execute!(
+                self.writer,
+                EnterAlternateScreen,
+                EnableMouseCapture,
+                Hide,
+                Clear(ClearType::All)
+            )?;
+        } else {
+            execute!(
+                self.writer,
+                EnterAlternateScreen,
+                Hide,
+                Clear(ClearType::All)
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Restore the terminal to normal mode
+    ///
+    /// Restores at most once per TUI session. If the panic hook or
+    /// [`restore_terminal`](super::restore_terminal) already restored it, this
+    /// writes nothing: leaving the alternate screen a second time moves the
+    /// cursor back over whatever was printed in between, such as a panic
+    /// message.
+    pub fn restore(&mut self) -> Result<()> {
+        if self.raw_mode {
+            self.raw_mode = false;
+            if !super::panic_hook::claim_restore() {
+                return Ok(());
+            }
+            let written = if self.mouse_capture {
+                super::panic_hook::restore_each!(
+                    self.writer,
+                    DisableMouseCapture,
+                    ResetColor,
+                    Show,
+                    LeaveAlternateScreen,
+                )
+            } else {
+                super::panic_hook::restore_each!(
+                    self.writer,
+                    ResetColor,
+                    Show,
+                    LeaveAlternateScreen
+                )
+            };
+            // There is no second attempt, so leave raw mode even if the
+            // writer refused the sequence.
+            let raw = disable_raw_mode();
+            written?;
+            raw?;
+        }
+        Ok(())
+    }
+
+    /// Borrow the underlying writer.
+    ///
+    /// Mainly useful with an in-memory writer (`Vec<u8>`) to assert on exactly
+    /// what was emitted - e.g. that an unchanged frame writes nothing.
+    pub fn writer(&self) -> &W {
+        &self.writer
+    }
+
+    /// Get terminal size
+    pub fn size(&self) -> (u16, u16) {
+        (self.current.width(), self.current.height())
+    }
+
+    /// Resize the terminal buffer
+    pub fn resize(&mut self, width: u16, height: u16) {
+        self.current.resize(width, height);
+    }
+
+    /// Render a buffer to the terminal using diff-based updates
+    ///
+    /// This performs a full-screen diff. For optimized rendering with dirty regions,
+    /// use [`render_dirty`](Self::render_dirty) instead.
+    pub fn render(&mut self, buffer: &Buffer) -> Result<()> {
+        let changes = diff::diff(&self.current, buffer, &[]);
+
+        self.draw_changes(changes, buffer)
+    }
+
+    /// Render a buffer with dirty-rect tracking for optimized updates
+    ///
+    /// Only cells within the specified dirty regions will be compared and updated.
+    /// This significantly reduces CPU usage for mostly-static UIs where only
+    /// specific regions change each frame.
+    ///
+    /// # Arguments
+    ///
+    /// * `buffer` - The new buffer state to render
+    /// * `dirty_rects` - Regions that may have changed since last render
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use revue::layout::Rect;
+    ///
+    /// // Only diff the area where a widget was updated
+    /// let dirty = [Rect::new(10, 5, 20, 3)];
+    /// terminal.render_dirty(&buffer, &dirty)?;
+    /// ```
+    pub fn render_dirty(&mut self, buffer: &Buffer, dirty_rects: &[Rect]) -> Result<()> {
+        let changes = diff::diff(&self.current, buffer, dirty_rects);
+        self.draw_changes(changes, buffer)
+    }
+
+    /// Force a full redraw
+    pub fn force_redraw(&mut self, buffer: &Buffer) -> Result<()> {
+        queue!(self.writer, Clear(ClearType::All))?;
+
+        let mut state = super::types::RenderState::default();
+
+        for (x, y, cell) in buffer.iter_cells() {
+            if !cell.is_continuation() {
+                let hyperlink_url = cell.hyperlink_id.and_then(|id| buffer.get_hyperlink(id));
+                let escape_sequence = cell.sequence_id.and_then(|id| buffer.get_sequence(id));
+                self.draw_cell_stateful(x, y, cell, hyperlink_url, escape_sequence, &mut state)?;
+            }
+            // Update current buffer (Cell is Copy, no allocation)
+            self.current.set(x, y, *cell);
+        }
+
+        // Close any open hyperlink at end of frame
+        if state.hyperlink_id.is_some() {
+            self.write_hyperlink_end()?;
+        }
+
+        // Reset state at end of frame
+        if state.fg.is_some() || state.bg.is_some() || !state.modifier.is_empty() {
+            queue!(self.writer, SetAttribute(Attribute::Reset))?;
+        }
+
+        self.writer.flush()?;
+        Ok(())
+    }
+
+    /// Clear the screen
+    pub fn clear(&mut self) -> Result<()> {
+        execute!(self.writer, Clear(ClearType::All))?;
+        self.current.clear();
+        Ok(())
+    }
+
+    /// Show the cursor
+    pub fn show_cursor(&mut self) -> Result<()> {
+        execute!(self.writer, Show)?;
+        Ok(())
+    }
+
+    /// Hide the cursor
+    pub fn hide_cursor(&mut self) -> Result<()> {
+        execute!(self.writer, Hide)?;
+        Ok(())
+    }
+
+    /// Move cursor to position
+    pub fn set_cursor(&mut self, x: u16, y: u16) -> Result<()> {
+        execute!(self.writer, MoveTo(x, y))?;
+        Ok(())
+    }
+}
+
+impl<W: Write> Drop for Terminal<W> {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
+}
+
+#[cfg(test)]
+mod restore_tests {
+    use super::*;
+    use crate::render::terminal::panic_hook::{
+        claim_restore, install_panic_hook, restores_performed,
+    };
+    use serial_test::serial;
+
+    #[cfg(not(windows))]
+    const LEAVE_ALT_SCREEN: &str = "\x1b[?1049l";
+
+    /// A terminal in the state `init_with_mouse` leaves it, minus the parts
+    /// that need a real TTY: in raw mode as far as `Terminal` knows, and the
+    /// session armed for restoring.
+    fn live_terminal() -> Terminal<Vec<u8>> {
+        let mut terminal = Terminal::with_size(Vec::new(), 10, 4);
+        terminal.raw_mode = true;
+        install_panic_hook();
+        terminal
+    }
+
+    #[cfg(not(windows))]
+    fn leaves(terminal: &Terminal<Vec<u8>>) -> usize {
+        String::from_utf8_lossy(terminal.writer())
+            .matches(LEAVE_ALT_SCREEN)
+            .count()
+    }
+
+    #[test]
+    #[serial]
+    fn restore_leaves_the_alternate_screen_once() {
+        let mut terminal = live_terminal();
+        let before = restores_performed();
+
+        // Raw mode is only faked here, and Windows refuses to leave a raw mode
+        // that was never entered, so the result is not what is under test.
+        let _ = terminal.restore();
+        let _ = terminal.restore();
+
+        assert_eq!(restores_performed() - before, 1);
+        // Where crossterm speaks ANSI, the bytes agree. On Windows it drives
+        // the console through WinAPI and writes nothing to count.
+        #[cfg(not(windows))]
+        assert_eq!(leaves(&terminal), 1);
+    }
+
+    /// The panic hook restores first; the unwinding `Drop` that follows must
+    /// not leave the alternate screen again, or the cursor jumps back over
+    /// the panic message and the shell prompt overwrites it.
+    #[test]
+    #[serial]
+    fn restore_after_the_panic_hook_writes_nothing() {
+        let mut terminal = live_terminal();
+
+        // What the panic hook does before it writes the restore sequence.
+        assert!(claim_restore());
+        let before = restores_performed();
+
+        // Raw mode is only faked here, and Windows refuses to leave a raw mode
+        // that was never entered, so the result is not what is under test.
+        let _ = terminal.restore();
+
+        assert_eq!(restores_performed() - before, 0);
+        #[cfg(not(windows))]
+        assert_eq!(leaves(&terminal), 0, "{:?}", terminal.writer());
+        assert!(!terminal.raw_mode);
+    }
+}

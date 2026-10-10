@@ -352,7 +352,7 @@ deferred.
 
 The model-tool-loop executor requires a tool executor, and provider tool calls execute through the one durable tool
 path. A row carries no synthetic tool collection, tool-loop, child, MCP, Skill, policy, or execution-kind state
-beyond the eight identity newtypes and the plain step and group indices.
+beyond the nine identity newtypes and the plain step and group indices.
 
 ## Dependencies and non-goals
 

@@ -9,11 +9,11 @@ use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-use common::{FakeRepository, RecordingCommitObserver, workspace_root};
+use common::{FakeRepository, RecordingCommitObserver, row_id, workspace_root};
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
-    ApplicationService, ModelRunCommitDto, ModelRunCommitObserver, RunCancellation,
-    ToolInvocationRequestDto, ToolResultOutcomeDto,
+    ApplicationService, ModelMessageDto, ModelRoleDto, ModelRunCommitDto, ModelRunCommitObserver,
+    RunCancellation, ToolInvocationRequestDto, ToolResultOutcomeDto,
 };
 use intention_proto::{
     CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
@@ -22,7 +22,7 @@ use intention_proto::{
 };
 use intention_proto::{
     ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, TimestampDto, ToolCallId, TurnId,
-    WorkspaceId,
+    WorkspaceBindingDto, WorkspaceId,
 };
 use intention_storage::{StartingRunModelContextDto, ToolResultStatusDto};
 use intention_test_support::fixture_snapshot;
@@ -361,6 +361,270 @@ fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection
     assert!(!request.tools().is_empty());
 }
 
+/// Builds one committed tool row of a previous run in the fixture session.
+fn tool_row_fixture(
+    session_id: SessionId,
+    run_id: RunId,
+    kind: MessageKindDto,
+    text: &str,
+    call_id: ToolCallId,
+) -> MessageProjectionDto {
+    MessageProjectionDto::new(
+        row_id(),
+        session_id,
+        Some(run_id),
+        kind,
+        text,
+        None,
+        Some(call_id),
+        Some("read".to_owned()),
+    )
+    .expect("fixture tool row is valid")
+}
+
+/// Asserts that every replayed assistant tool-call message stays answered by
+/// the tool-role messages that immediately follow it.
+fn assert_tool_calls_stay_answered(messages: &[ModelMessageDto]) {
+    for (index, message) in messages.iter().enumerate() {
+        let Some(calls) = message.tool_calls() else {
+            continue;
+        };
+        let replies = messages[index + 1..]
+            .iter()
+            .take_while(|reply| reply.role() == ModelRoleDto::Tool)
+            .collect::<Vec<_>>();
+        assert_eq!(replies.len(), calls.len(), "every tool call stays answered");
+        assert!(
+            calls
+                .iter()
+                .zip(&replies)
+                .all(|(call, reply)| reply.tool_call_id() == Some(call.call_id())),
+            "each tool reply answers its own call"
+        );
+    }
+}
+
+#[test]
+fn starting_run_context_rebuilds_the_committed_tool_exchange() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let previous_run = RunId::new();
+    let config = fixture_snapshot();
+    let call_id = ToolCallId::new();
+    let context = StartingRunModelContextDto::new(
+        session_id,
+        run_id,
+        config,
+        vec![
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                None,
+                MessageKindDto::User,
+                "Read hello.txt",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolCall,
+                r#"{"path":"hello.txt"}"#,
+                call_id,
+            ),
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolResult,
+                "hello world",
+                call_id,
+            ),
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                None,
+                MessageKindDto::Assistant,
+                "done",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                Some(run_id),
+                MessageKindDto::User,
+                "latest",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+        ],
+    )
+    .expect("fixture context is valid");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .starting_context
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(context);
+
+    let scheduled = ApplicationService::new(&repository)
+        .schedule_starting_run(session_id, run_id, RunCancellation::new())
+        .expect("a committed tool exchange schedules the next run");
+    let messages = scheduled.request().messages();
+    assert_eq!(
+        messages.len(),
+        5,
+        "every committed row becomes its model message"
+    );
+    assert_eq!(messages[0].role(), ModelRoleDto::User);
+    assert_eq!(messages[0].content(), "Read hello.txt");
+    assert_eq!(messages[1].role(), ModelRoleDto::Assistant);
+    let calls = messages[1]
+        .tool_calls()
+        .expect("the call row carries its tool call");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].call_id(), call_id);
+    assert_eq!(calls[0].name(), "read");
+    assert_eq!(calls[0].arguments_json(), r#"{"path":"hello.txt"}"#);
+    assert_eq!(messages[2].role(), ModelRoleDto::Tool);
+    assert_eq!(messages[2].tool_call_id(), Some(call_id));
+    assert_eq!(messages[2].content(), "hello world");
+    assert_eq!(messages[3].role(), ModelRoleDto::Assistant);
+    assert_eq!(messages[3].content(), "done");
+    assert_eq!(messages[4].role(), ModelRoleDto::User);
+    assert_eq!(messages[4].content(), "latest");
+    assert_tool_calls_stay_answered(messages);
+}
+
+#[test]
+fn starting_run_context_omits_unpaired_tool_rows() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let previous_run = RunId::new();
+    let config = fixture_snapshot();
+    let unanswered = ToolCallId::new();
+    let orphaned = ToolCallId::new();
+    let answered = ToolCallId::new();
+    let context = StartingRunModelContextDto::new(
+        session_id,
+        run_id,
+        config,
+        vec![
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                None,
+                MessageKindDto::User,
+                "first",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            // A committed call whose result never committed: the crash window.
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolCall,
+                r#"{"path":"unanswered.txt"}"#,
+                unanswered,
+            ),
+            // A committed result whose call row does not exist.
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolResult,
+                "orphan result",
+                orphaned,
+            ),
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolCall,
+                r#"{"path":"hello.txt"}"#,
+                answered,
+            ),
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolResult,
+                "hello world",
+                answered,
+            ),
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                None,
+                MessageKindDto::Assistant,
+                "done",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                Some(run_id),
+                MessageKindDto::User,
+                "latest",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+        ],
+    )
+    .expect("fixture context is valid");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .starting_context
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(context);
+
+    let scheduled = ApplicationService::new(&repository)
+        .schedule_starting_run(session_id, run_id, RunCancellation::new())
+        .expect("unpaired tool rows never fail the schedule");
+    let messages = scheduled.request().messages();
+    assert_eq!(
+        messages
+            .iter()
+            .map(ModelMessageDto::role)
+            .collect::<Vec<_>>(),
+        vec![
+            ModelRoleDto::User,
+            ModelRoleDto::Assistant,
+            ModelRoleDto::Tool,
+            ModelRoleDto::Assistant,
+            ModelRoleDto::User,
+        ],
+        "only the paired exchange replays, in durable order"
+    );
+    let calls = messages[1]
+        .tool_calls()
+        .expect("the paired call replays as an assistant tool call");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].call_id(), answered);
+    assert_eq!(messages[2].tool_call_id(), Some(answered));
+    assert_eq!(messages[2].content(), "hello world");
+    assert_tool_calls_stay_answered(messages);
+    assert!(
+        messages.iter().all(|message| {
+            message.tool_call_id() != Some(unanswered)
+                && message.tool_call_id() != Some(orphaned)
+                && message
+                    .tool_calls()
+                    .is_none_or(|calls| calls.iter().all(|call| call.call_id() == answered))
+        }),
+        "no unpaired row survives into the model context"
+    );
+}
+
 #[test]
 fn interrupt_run_workflow_maps_durable_results() {
     let session_id = SessionId::new();
@@ -450,6 +714,95 @@ fn create_and_remove_workflows_map_committed_results() {
         .expect("removal maps");
     assert_eq!(removed.session_id(), session_id);
     assert_eq!(removed.turn_id(), pending_turn);
+}
+
+#[test]
+fn session_creation_joins_the_durable_binding_of_its_workspace_root() {
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+    let bound_project = ProjectId::new();
+    let bound_workspace = WorkspaceId::new();
+    *repository
+        .workspace_binding
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) =
+        Some(WorkspaceBindingDto::new(bound_project, bound_workspace));
+    let create = CreateSessionCommandDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        workspace_root(),
+        RunModeDto::Build,
+    );
+
+    ApplicationService::new(&repository)
+        .create_session(create, fixture_time())
+        .expect("create maps");
+
+    let forwarded = repository
+        .create_commands
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(forwarded.len(), 1, "one creation reaches the repository");
+    assert_eq!(
+        forwarded[0].project_id(),
+        bound_project,
+        "the durable project binding replaces the proposed identity"
+    );
+    assert_eq!(
+        forwarded[0].workspace_id(),
+        bound_workspace,
+        "the durable workspace binding replaces the proposed identity"
+    );
+    assert_eq!(
+        forwarded[0].session_id(),
+        session_id,
+        "the requested session identity is kept: every creation is a fresh session"
+    );
+    assert_eq!(forwarded[0].workspace_root(), &workspace_root());
+    assert_eq!(forwarded[0].mode(), RunModeDto::Build);
+}
+
+#[test]
+fn session_creation_keeps_its_identities_for_an_unbound_workspace_root() {
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+    let project_id = ProjectId::new();
+    let workspace_id = WorkspaceId::new();
+    let create = CreateSessionCommandDto::new(
+        project_id,
+        session_id,
+        workspace_id,
+        workspace_root(),
+        RunModeDto::Plan,
+    );
+
+    ApplicationService::new(&repository)
+        .create_session(create, fixture_time())
+        .expect("create maps");
+
+    let forwarded = repository
+        .create_commands
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(forwarded.len(), 1);
+    assert_eq!(
+        forwarded[0].project_id(),
+        project_id,
+        "an unbound root establishes the proposed binding"
+    );
+    assert_eq!(forwarded[0].workspace_id(), workspace_id);
+    assert_eq!(forwarded[0].mode(), RunModeDto::Plan);
 }
 
 #[test]
@@ -856,6 +1209,7 @@ fn starting_context(
         config.clone(),
         vec![
             MessageProjectionDto::new(
+                row_id(),
                 session_id,
                 None,
                 MessageKindDto::User,
@@ -866,6 +1220,7 @@ fn starting_context(
             )
             .expect("context message is valid"),
             MessageProjectionDto::new(
+                row_id(),
                 session_id,
                 None,
                 MessageKindDto::Assistant,
@@ -876,6 +1231,7 @@ fn starting_context(
             )
             .expect("context message is valid"),
             MessageProjectionDto::new(
+                row_id(),
                 session_id,
                 Some(run_id),
                 MessageKindDto::User,

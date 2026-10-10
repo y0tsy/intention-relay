@@ -126,7 +126,10 @@ the compile and test contracts are already covered.
 
 `make deps` and blocking CI run `cargo metadata --locked` as the authoritative lockfile check; `make notices-check`,
 which regenerates `THIRD_PARTY_NOTICES.md` from `Cargo.lock`, `quality/about.toml`, and the notice template through
-pinned `cargo-about` and fails on drift; `cargo deny check` for advisories, licenses, banned crates, allowed sources,
+pinned `cargo-about` and compares it byte for byte, falling back to comparing which license every crate reference is
+rendered under when the bytes differ only because the local registry cache grouped or attributed identical license texts
+differently, so the check does not depend on which machine ran it while a changed graph, version, or license name still
+fails; `cargo deny check` for advisories, licenses, banned crates, allowed sources,
 and duplicate-version policy, using the policy expression in `deny.toml`; `cargo audit` as an independent advisory
 source; `cargo udeps` for unused dependencies; `cargo machete` for manifest hygiene; and `cargo outdated` for stale
 direct dependencies under the policy in `quality/outdated.toml`.
@@ -134,6 +137,21 @@ direct dependencies under the policy in `quality/outdated.toml`.
 `THIRD_PARTY_NOTICES.md` is a checked-in generated disclosure artifact, not a hand-maintained license inventory; private
 `publish = false` workspace packages stay project-owned code and are excluded. A failed or stale notice generation is a
 blocking supply-chain failure, not an inferred pass.
+
+`revue` 3.9.1 is vendored at `vendor/revue` and selected through the root `[patch.crates-io]` entry, because the
+released crate quits the `App` event loop on Ctrl+C with no builder option. The vendored copy is 3.9.1 upstream source
+with `tests/`, `benches/`, `examples/`, and `docs/` dropped and their manifest targets stripped, plus two changes: an
+`AppBuilder::quit_key(Option<KeyEvent>)` option whose default, Ctrl+C, is the pre-patch behavior, and the removal of
+the unmaintained `unic-emoji-char` probe, which only produced the configurable emoji width while `unicode-width`
+already reports that default width; the advisory policy resolves advisories instead of acknowledging them, and that
+probe was their only path into the graph. The copy is
+excluded from the workspace, so format, lint, coverage, and architecture policy stay scoped to `crates/`, and
+`quality/check_architecture.py` skips `vendor/` in its raw-text scans; `vendor/revue/PATCH.md` records the patch, its
+files, and how to drop the vendored copy once upstream offers the option.
+
+The terminal binary takes `mimalloc` as its process-wide global allocator, because a terminal frame allocates many
+short-lived small strings; it is an ordinary crates.io dependency under the MIT license, disclosed like every other
+dependency through the generated `THIRD_PARTY_NOTICES.md`.
 
 ## Required quality-gate failure tests
 
@@ -176,7 +194,7 @@ mutating, networked, and opt-in, and it is never part of the blocking gate. The 
 
 Slice 1.5 (the current-state core) changes the evidence base without lowering it:
 
-- the storage contract suite is rebuilt for the eight-table current-state schema and the one-transaction rule, and the
+- the storage contract suite is rebuilt for the nine-table current-state schema and the one-transaction rule, and the
   event/snapshot/replay contract blocks are deleted with their surfaces;
 - the engine tests cover commit-and-publish without events or replays, and tool tests cover one transaction per call and
   the pre-effect identity rejection;

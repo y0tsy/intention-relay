@@ -26,7 +26,8 @@ use intention_proto::{
     InterruptRunAcceptedDto, InterruptRunCommandDto, ProtocolResultDto, RemoveTurnAcceptedDto,
     RemoveTurnCommandDto, RunId, RunProjectionDto, SchemaVersionDto, SendUserTurnAcceptedDto,
     SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId, SessionProjectionDto,
-    SessionSnapshotDto, TimestampDto,
+    SessionSnapshotDto, SessionSummariesDto, ThemeDto, TimestampDto, TuiSettingsDto,
+    TuiThemeAcceptedDto,
 };
 #[cfg(test)]
 use intention_proto::{ProjectId, RunModeDto, WorkspaceId, WorkspaceRootDto};
@@ -53,6 +54,12 @@ const DATABASE_FILENAME: &str = "intention-relay.sqlite";
 /// The row bound is additionally held to `MAX_TRANSCRIPT_SNAPSHOT_BYTES`, the
 /// representation budget derived from the single transport envelope cap.
 pub const SESSION_SNAPSHOT_MESSAGES: u32 = 256;
+
+/// The retained bounded window of one current session list.
+///
+/// The storage read reports every session beyond this window as its explicit
+/// `omitted` count, so a bounded list is never a silent truncation.
+pub const SESSION_LIST_ROWS: u32 = 256;
 
 /// The one daemon composition root.
 ///
@@ -325,6 +332,20 @@ impl DaemonApplicationFacade {
         SessionSnapshotDto::with_projection(session_id, projection, messages)
     }
 
+    /// Lists the current durable sessions newest-first in one bounded window.
+    ///
+    /// This is the one session list: it reports which sessions exist, with the
+    /// newest durable update first and the durable identity breaking ties, and
+    /// how many sessions exist beyond the window. A session a client selects is
+    /// then read through the full session snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when durable storage cannot be read.
+    pub fn list_sessions(&self, limit: u32) -> DtoResult<SessionSummariesDto> {
+        self.inner.repository.list_sessions(limit)
+    }
+
     /// Creates one durable session and assembles its typed reply evidence.
     ///
     /// # Errors
@@ -399,6 +420,40 @@ impl DaemonApplicationFacade {
         Ok(ProtocolResultDto::RunInterrupted(
             InterruptRunAcceptedDto::new(run.session_id(), run.run_id()),
         ))
+    }
+
+    /// Returns the effective terminal settings a client renders with.
+    ///
+    /// The stored override wins; without one the answer is the resolved
+    /// configuration's `[tui]` theme, which the configuration document already
+    /// resolved to light when no section was declared. Reading the theme is
+    /// presentation-only: it touches no configuration revision and no run
+    /// selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when the stored override cannot be read.
+    pub fn tui_settings(&self) -> DtoResult<TuiSettingsDto> {
+        let theme = self
+            .inner
+            .repository
+            .load_tui_theme()?
+            .unwrap_or_else(|| self.inner.config_snapshot.resolved().tui().theme());
+        Ok(TuiSettingsDto::new(theme))
+    }
+
+    /// Commits one terminal theme override and answers the accepted theme.
+    ///
+    /// The override lives in the settings row alone: it records no
+    /// configuration revision and never enters the immutable configuration
+    /// snapshot, so a run selection captured before the set stays valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when the override cannot be committed.
+    pub fn set_tui_theme(&self, theme: ThemeDto) -> DtoResult<TuiThemeAcceptedDto> {
+        self.inner.repository.save_tui_theme(theme)?;
+        Ok(TuiThemeAcceptedDto::new(theme))
     }
 
     fn recover_before_ready(&self) -> DtoResult<()> {
@@ -633,7 +688,9 @@ mod tests {
     use super::*;
 
     use intention_engine::{ModelRunCommitDto, RunCancellation};
-    use intention_proto::{MessageKindDto, MessageProjectionDto, SendUserTurnCommandDto};
+    use intention_proto::{
+        MessageId, MessageKindDto, MessageProjectionDto, NewMessageDto, SendUserTurnCommandDto,
+    };
     use intention_storage::ToolResultStatusDto;
     use tempfile::TempDir;
 
@@ -658,6 +715,11 @@ mod tests {
     }
 
     fn fixture_config_snapshot() -> ConfigSnapshotDto {
+        fixture_config_snapshot_with_tui("")
+    }
+
+    /// Builds the fixture configuration snapshot with one optional `[tui]` section.
+    fn fixture_config_snapshot_with_tui(tui: &str) -> ConfigSnapshotDto {
         let source = ConfigSourceDto::Explicit(
             ConfigPathDto::parse(
                 std::env::temp_dir()
@@ -668,7 +730,9 @@ mod tests {
             .expect("fixture configuration source is absolute"),
         );
         let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"",
+            format!(
+                "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"\n{tui}"
+            ),
             source,
         ))
         .expect("fixture configuration resolves");
@@ -830,9 +894,153 @@ mod tests {
     }
 
     #[test]
+    fn every_created_session_joins_the_one_binding_of_its_workspace_root() {
+        let (_directory, facade) = test_facade();
+        let first = SessionId::new();
+        create(&facade, first);
+        let binding = facade
+            .list_sessions(SESSION_LIST_ROWS)
+            .expect("sessions list")
+            .sessions()
+            .first()
+            .map(|summary| (summary.project_id(), summary.workspace_id()))
+            .expect("the first session is listed");
+
+        // Every later creation proposes a fresh project and workspace identity
+        // for the same root, exactly as the terminal client does; the facade
+        // resolves them to the durable binding of the root instead of rejecting
+        // the second identity, so one root holds an unbounded number of
+        // sessions.
+        let second = SessionId::new();
+        create(&facade, second);
+        let third = SessionId::new();
+        create(&facade, third);
+
+        let listed = facade
+            .list_sessions(SESSION_LIST_ROWS)
+            .expect("sessions list");
+        let created = listed
+            .sessions()
+            .iter()
+            .map(|summary| summary.session_id())
+            .collect::<Vec<_>>();
+        assert_eq!(created.len(), 3, "every created session is listed");
+        for expected in [first, second, third] {
+            assert!(
+                created.contains(&expected),
+                "the created session {} is listed",
+                expected
+            );
+        }
+        assert!(
+            listed
+                .sessions()
+                .iter()
+                .all(|summary| (summary.project_id(), summary.workspace_id()) == binding),
+            "one root keeps one durable project and workspace identity"
+        );
+    }
+
+    #[test]
+    fn tui_settings_come_from_configuration_and_the_override_survives_a_reopen() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let path = directory.path().join("tui-settings.sqlite");
+        let facade = DaemonApplicationFacade::open_for_test_support(
+            &path,
+            fixture_config_snapshot_with_tui("[tui]\ntheme = \"dark\"\n"),
+        )
+        .expect("durable facade opens");
+
+        // Before any set the answer is the configuration document's theme.
+        assert_eq!(
+            facade.tui_settings().expect("settings read").theme(),
+            ThemeDto::Dark
+        );
+
+        let accepted = facade
+            .set_tui_theme(ThemeDto::Light)
+            .expect("the theme commits");
+        assert_eq!(accepted.theme(), ThemeDto::Light);
+        assert_eq!(
+            facade.tui_settings().expect("settings read").theme(),
+            ThemeDto::Light
+        );
+        drop(facade);
+
+        // A restarted daemon answers the stored override, not the document.
+        let reopened = DaemonApplicationFacade::open_for_test_support(
+            &path,
+            fixture_config_snapshot_with_tui("[tui]\ntheme = \"dark\"\n"),
+        )
+        .expect("durable facade reopens");
+        assert_eq!(
+            reopened
+                .tui_settings()
+                .expect("settings read after the reopen")
+                .theme(),
+            ThemeDto::Light,
+            "the stored override wins after a restart"
+        );
+    }
+
+    #[test]
+    fn setting_the_theme_creates_no_configuration_revision() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test_support(
+            directory.path().join("tui-revision.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        let snapshot = facade.inner.config_snapshot.clone();
+
+        let before_session = SessionId::new();
+        create(&facade, before_session);
+        let before_run = started_run(&facade, before_session, "before the theme change");
+
+        facade
+            .set_tui_theme(ThemeDto::Dark)
+            .expect("the theme commits");
+
+        // A run started before the theme change keeps the exact immutable
+        // selection it captured, so its validation inputs are unchanged.
+        assert_eq!(
+            facade
+                .inner
+                .repository
+                .load_run_config_snapshot(before_session, before_run)
+                .expect("the started run selection reads"),
+            snapshot,
+            "a theme change never rewrites a captured run selection"
+        );
+
+        // A later run carries the same configuration revision identity.
+        let after_session = SessionId::new();
+        create(&facade, after_session);
+        let accepted = send_user_turn(&facade, after_session, "after the theme change")
+            .expect("a later turn is accepted");
+        let ProtocolResultDto::TurnAccepted(turn) = accepted else {
+            unreachable!("a user turn answers with turn evidence")
+        };
+        let SendUserTurnOutcomeDto::Started {
+            config_revision_id, ..
+        } = turn.outcome()
+        else {
+            unreachable!("the first turn of a new session starts a run")
+        };
+        assert_eq!(
+            config_revision_id,
+            snapshot.revision_id(),
+            "a theme set records no new configuration revision"
+        );
+    }
+
+    #[test]
     fn an_over_budget_newest_row_is_kept_and_the_projection_is_charged() {
-        let row = |text: String| {
+        let mut next_id = 0;
+        let mut row = |text: String| {
+            next_id += 1;
             MessageProjectionDto::new(
+                MessageId::new(next_id).expect("fixture row identity is valid"),
                 SessionId::new(),
                 None,
                 MessageKindDto::User,
@@ -1123,7 +1331,7 @@ mod tests {
         run_id: RunId,
         text: &str,
     ) {
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             session_id,
             Some(run_id),
             MessageKindDto::Assistant,

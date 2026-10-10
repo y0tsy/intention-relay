@@ -2,9 +2,11 @@
 //!
 //! Adapters use this crate instead of direct daemon, runtime, storage, or
 //! transport implementation access. It exposes typed operations over domain
-//! identifiers and retains only the committed run projection and transcript
-//! rows the daemon reports; daemon authority remains remote.
+//! identifiers and retains only the committed run projection, the committed
+//! transcript rows, and the transient provisional text the daemon reports;
+//! daemon authority remains remote.
 
+use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -14,11 +16,13 @@ use std::time::{Duration, Instant};
 use intention_proto::{
     ClientRequestDto, CreateSessionAcceptedDto, CreateSessionCommandDto, DaemonHealthDto,
     DtoResult, ErrorCategoryDto, ErrorDto, GetSessionSnapshotQueryDto, IdempotencyKey,
-    InterruptRunAcceptedDto, InterruptRunCommandDto, MessageProjectionDto, ProtocolResultDto,
-    RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunId, RunProjectionDto, RunStatusDto,
-    RunStreamFrameDto, RunSubscriptionSnapshotDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto,
-    SessionId, SessionSnapshotDto, SubscribeRunCommandDto, TurnId, decode_response, encode_request,
-    parse_run_frame,
+    InterruptRunAcceptedDto, InterruptRunCommandDto, MessageId, MessageKindDto,
+    MessageProjectionDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunId,
+    RunProjectionDto, RunStatusDto, RunStreamFrameDto, RunSubscriptionSnapshotDto,
+    SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto,
+    SessionSummariesDto, SetTuiThemeCommandDto, SubscribeRunCommandDto, TextDeltaChannelDto,
+    TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId, decode_response,
+    encode_request, parse_run_frame, run_status_is_terminal,
 };
 use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncMessageSender, LocalEndpoint,
@@ -274,6 +278,79 @@ impl IntentionClient {
         }
     }
 
+    /// Lists the current durable sessions in their durable order.
+    ///
+    /// This is a bounded read: the reply carries an explicit omitted count, so
+    /// a caller renders the window as partial instead of reading it as the
+    /// complete list. Like the session snapshot, this is not a retained
+    /// connection and re-listing re-reads current state.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection, a typed transport or timeout error,
+    /// or an invalid-response error when the reply is not a session list.
+    pub async fn list_sessions(&self) -> DtoResult<SessionSummariesDto> {
+        match self.request(ClientRequestDto::ListSessions).await? {
+            ProtocolResultDto::SessionsListed(summaries) => Ok(summaries),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Returns the session a continuation reads, if any session exists.
+    ///
+    /// The daemon's session list is ordered by the recency contract: newest
+    /// durable update first, then session identity ascending. The first
+    /// summary is therefore the continue target, and a caller never re-derives
+    /// the maximum update time from the summaries it reads.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection, a typed transport or timeout error,
+    /// or an invalid-response error when the reply is not a session list.
+    pub async fn most_recent_session(&self) -> DtoResult<Option<SessionId>> {
+        Ok(self
+            .list_sessions()
+            .await?
+            .sessions()
+            .first()
+            .map(|summary| summary.session_id()))
+    }
+
+    /// Reads the effective terminal settings.
+    ///
+    /// The daemon answers its stored theme override or, before any set, the
+    /// theme the resolved configuration selected.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection, a typed transport or timeout error,
+    /// or an invalid-response error when the reply is not terminal settings.
+    pub async fn tui_settings(&self) -> DtoResult<TuiSettingsDto> {
+        match self.request(ClientRequestDto::GetTuiSettings).await? {
+            ProtocolResultDto::TuiSettings(settings) => Ok(settings),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Selects and stores the terminal theme.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection, a typed transport or timeout error,
+    /// or an invalid-response error when the reply is not the acceptance of the
+    /// requested theme.
+    pub async fn set_tui_theme(&self, theme: ThemeDto) -> DtoResult<TuiThemeAcceptedDto> {
+        match self
+            .request(ClientRequestDto::SetTuiTheme(SetTuiThemeCommandDto::new(
+                theme,
+            )))
+            .await?
+        {
+            ProtocolResultDto::TuiThemeSet(accepted) if accepted.theme() == theme => Ok(accepted),
+            _ => Err(invalid_response()),
+        }
+    }
+
     async fn connect_ready(&self) -> DtoResult<DaemonHealthDto> {
         let link = self.connect().await?;
         match Self::request_on(link, ClientRequestDto::GetDaemonHealth).await? {
@@ -434,18 +511,28 @@ pub const RETAINED_TRANSCRIPT_MESSAGES: usize = 256;
 /// The subscription reply is the current run snapshot, and every later frame
 /// carries the committed value of its own scope: a content frame appends its
 /// committed transcript row and a status frame replaces the committed run
-/// projection. There are no cursors and no positions, so no merge machine is
-/// needed: a status frame is idempotent because it replaces the whole run, and
-/// a content frame is idempotent only for the newest accepted row — the wire
-/// carries no row identity, so the daemon-side watermark remains the authority
-/// for a row the snapshot already carried. The retained transcript keeps the
-/// newest [`RETAINED_TRANSCRIPT_MESSAGES`] rows.
+/// projection. There are no cursors and no positions: a status frame is
+/// idempotent because it replaces the whole run, and a content frame is
+/// idempotent for the newest accepted row by the durable row identity it
+/// carries, so no accepted row is shown twice. The retained transcript keeps
+/// the newest [`RETAINED_TRANSCRIPT_MESSAGES`] rows, and
+/// [`RunStreamState::missing_rows`] reconciles another read of the same durable
+/// transcript with this one. Transient provisional text is not committed
+/// state: each of the current model step's two text channels is held in its
+/// own buffer for that step only and is dropped as soon as the step's assistant
+/// row commits.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunStreamState {
     session_id: SessionId,
     run_id: RunId,
     run: Option<RunProjectionDto>,
     messages: Vec<MessageProjectionDto>,
+    /// The model step the provisional buffers currently belong to, if any.
+    provisional_step: Option<u32>,
+    /// The transient answer text of the current model step.
+    provisional_text: String,
+    /// The transient reasoning text of the current model step.
+    provisional_reasoning: String,
 }
 
 impl RunStreamState {
@@ -457,12 +544,16 @@ impl RunStreamState {
             run_id,
             run: None,
             messages: Vec::new(),
+            provisional_step: None,
+            provisional_text: String::new(),
+            provisional_reasoning: String::new(),
         }
     }
 
     /// Applies the correlated first reply for this subscription.
     ///
-    /// A snapshot replaces every value held before it.
+    /// A snapshot replaces every value held before it, including any transient
+    /// provisional text.
     ///
     /// # Errors
     ///
@@ -478,7 +569,33 @@ impl RunStreamState {
         Ok(())
     }
 
-    /// Applies one uncorrelated committed frame.
+    /// Returns the rows of this snapshot that `existing` does not already
+    /// carry, in order.
+    ///
+    /// A run subscription and a session read read the same durable transcript,
+    /// so one may carry committed rows the other already shows. Rows are
+    /// matched by their durable identity, so two rows with equal content but
+    /// distinct identities (a user sending the same text twice) are never
+    /// conflated.
+    #[must_use]
+    pub fn missing_rows(&self, existing: &[MessageProjectionDto]) -> Vec<MessageProjectionDto> {
+        let known = existing
+            .iter()
+            .map(MessageProjectionDto::id)
+            .collect::<BTreeSet<MessageId>>();
+        self.messages
+            .iter()
+            .filter(|row| !known.contains(&row.id()))
+            .cloned()
+            .collect()
+    }
+
+    /// Applies one uncorrelated run-stream frame.
+    ///
+    /// A provisional text delta is best-effort advance notice: it mutates only
+    /// the transient buffer of the channel it names and never the committed run
+    /// or transcript. A terminal status frame ends the run and drops both
+    /// buffers with it.
     ///
     /// # Errors
     ///
@@ -489,20 +606,53 @@ impl RunStreamState {
         match frame {
             RunStreamFrameDto::Content(message) => self.apply_content(message),
             RunStreamFrameDto::Status(run) => self.apply_status(run),
+            RunStreamFrameDto::TextDelta(delta) => self.apply_text_delta(delta),
         }
     }
 
     fn apply_content(&mut self, message: MessageProjectionDto) -> DtoResult<()> {
         self.ensure_scope(message.session_id(), message.run_id())?;
-        // A content frame repeating the newest accepted row is the frame the
-        // subscription snapshot already carried: re-appending it would show the
-        // same committed row twice.
-        if self.messages.last() == Some(&message) {
+        // The committed assistant row of a step supersedes both its channels'
+        // provisional text, so neither buffer outlives its own step.
+        if message.kind() == MessageKindDto::Assistant {
+            self.clear_provisional();
+        }
+        // A content frame repeating the newest accepted row carries the
+        // identity of the row the subscription snapshot already carried:
+        // re-appending it would show the same committed row twice.
+        if self.messages.last().map(MessageProjectionDto::id) == Some(message.id()) {
             return Ok(());
         }
         self.messages.push(message);
         self.retain_newest();
         Ok(())
+    }
+
+    fn apply_text_delta(&mut self, delta: TextDeltaFrameDto) -> DtoResult<()> {
+        self.ensure_scope(delta.session_id(), Some(delta.run_id()))?;
+        // A delta for a new step replaces both buffers: the previous step's
+        // advance notice is stale once the run moves on.
+        if self.provisional_step != Some(delta.step()) {
+            self.provisional_step = Some(delta.step());
+            self.provisional_text.clear();
+            self.provisional_reasoning.clear();
+        }
+        // The channel is what keeps the reasoning a step thinks through apart
+        // from the answer it commits: each buffer grows on its own, so no
+        // reasoning chunk ever becomes answer text.
+        match delta.channel() {
+            TextDeltaChannelDto::Answer => self.provisional_text.push_str(delta.text()),
+            TextDeltaChannelDto::Reasoning => self.provisional_reasoning.push_str(delta.text()),
+        }
+        Ok(())
+    }
+
+    /// Drops the transient provisional text of every channel of the current
+    /// model step.
+    fn clear_provisional(&mut self) {
+        self.provisional_step = None;
+        self.provisional_text.clear();
+        self.provisional_reasoning.clear();
     }
 
     /// Drops the oldest retained rows past [`RETAINED_TRANSCRIPT_MESSAGES`].
@@ -517,6 +667,11 @@ impl RunStreamState {
         self.ensure_scope(run.session_id(), Some(run.run_id()))?;
         if self.run.is_none() {
             return Err(invalid_response());
+        }
+        // A terminal status ends the run: the daemon discards its unpublished
+        // delta windows, so no advance notice may outlive the run.
+        if run_status_is_terminal(run.status()) {
+            self.clear_provisional();
         }
         self.run = Some(run);
         Ok(())
@@ -561,6 +716,30 @@ impl RunStreamState {
     #[must_use]
     pub fn messages(&self) -> &[MessageProjectionDto] {
         &self.messages
+    }
+
+    /// Returns the transient provisional answer text of the current model step.
+    ///
+    /// The text is best-effort advance notice, never committed state: it is
+    /// empty until the first delta of a step arrives and is cleared once that
+    /// step's committed assistant row arrives or the run reaches a terminal
+    /// status. Only the answer channel grows this buffer; the reasoning the
+    /// step precedes it with is buffered separately.
+    #[must_use]
+    pub fn provisional_text(&self) -> &str {
+        &self.provisional_text
+    }
+
+    /// Returns the transient provisional reasoning text of the current model
+    /// step.
+    ///
+    /// The reasoning channel is advance notice exactly like the answer text,
+    /// with the same lifetime: it is empty until the first reasoning delta of a
+    /// step arrives and is cleared with the answer once that step's committed
+    /// assistant row arrives or the run reaches a terminal status.
+    #[must_use]
+    pub fn provisional_reasoning(&self) -> &str {
+        &self.provisional_reasoning
     }
 }
 

@@ -12,14 +12,17 @@ pub use composition::DaemonApplicationFacade;
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
 use intention_engine::{
     ApplicationService, ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionService,
-    ModelSleepFuture, ModelTimePort, RunCancellation, ToolExecutionPort, ToolInvocationRequestDto,
-    ToolResultOutcomeDto, fail_starting_run,
+    ModelSleepFuture, ModelTextDeltaPort, ModelTimePort, RunCancellation, ToolExecutionPort,
+    ToolInvocationRequestDto, ToolResultOutcomeDto, fail_starting_run,
 };
 use intention_proto::{
     ClientRequestDto, DtoResult, ErrorDto, InterruptRunCommandDto, RunId,
@@ -27,7 +30,8 @@ use intention_proto::{
     TimestampDto, ToolCallDto,
 };
 use intention_proto::{
-    ProtocolDaemonMessageDto, ProtocolResultDto, RunStreamFrameDto, decode_request_line,
+    ProtocolDaemonMessageDto, ProtocolResultDto, RunStreamFrameDto, TextDeltaChannelDto,
+    TextDeltaFrameDto, decode_request_line,
 };
 use intention_proto::{RunStatusDto, run_status_is_terminal};
 use intention_storage::{RunOutcomeDto, StorageRepositoryDto};
@@ -261,8 +265,17 @@ impl HostState {
         self.recorder.register(key);
         let host = Arc::clone(self);
         let task = tokio::spawn(async move {
+            // The run's provisional text has one window per channel, one
+            // cadence task, and one commit observer, and all three are dropped
+            // with the run.
+            let deltas = Arc::new(RunTextDeltas::new(Arc::clone(&host), key));
+            host.recorder
+                .track(tokio::spawn(publish_text_deltas_at_cadence(Arc::clone(
+                    &deltas,
+                ))));
             let observer = HostCommitObserver {
                 host: Arc::clone(&host),
+                deltas: Arc::clone(&deltas),
             };
             // The model-run executor and the tool-invocation path share this
             // one commit sink, this one per-run cancellation handle, and the
@@ -280,8 +293,10 @@ impl HostState {
                 &observer,
                 &executor,
             )
+            .with_text_delta_port(deltas.as_ref())
             .execute(input)
             .await;
+            deltas.finish();
             // An executor error must never leave a non-terminal durable run
             // without an owner (PR24-012/013): a still-active run is
             // terminalized as `Failed` with the executor's stable error code.
@@ -557,6 +572,16 @@ impl HostState {
         drop(removed);
     }
 
+    /// Returns whether any live subscriber is registered for one run.
+    ///
+    /// Transient publication asks this before it retains anything, so a run
+    /// nobody follows keeps no provisional text at all.
+    fn has_subscribers(&self, key: RunKey) -> bool {
+        self.data
+            .lock()
+            .is_ok_and(|data| data.subscribers.contains_key(&key))
+    }
+
     /// Removes one connection's subscription from one run.
     ///
     /// Removal is by the connection's own channel identity: the guard that owns
@@ -695,6 +720,200 @@ impl HostState {
     }
 }
 
+/// The publication cadence of one run's coalesced provisional text.
+const RUN_TEXT_DELTA_INTERVAL: Duration = Duration::from_millis(50);
+
+/// The retained bound of one run's pending provisional text.
+///
+/// The pending window is uncommitted, best-effort display state, so an over-long
+/// step loses the rest of its provisional text instead of growing without
+/// limit, and its committed row still carries the whole step. The bound stays
+/// far below the single transport envelope cap, so a coalesced frame is always
+/// writable. It bounds each channel's window on its own, because a step
+/// publishes its two channels independently.
+const RUN_TEXT_DELTA_MAX_BYTES: usize = 8 * 1024;
+
+/// The pending provisional text window of one run and channel.
+///
+/// One window belongs to one model step: the first chunk of another step
+/// replaces it, so a window never mixes two steps' text.
+struct PendingText {
+    step: u32,
+    text: String,
+    /// The current step crossed [`RUN_TEXT_DELTA_MAX_BYTES`].
+    dropped: bool,
+}
+
+/// The pending provisional text windows of one run: one per text channel.
+///
+/// The reasoning and the answer of a step arrive as two independent channels
+/// of the same step, so each keeps its own step index and its own bound: the
+/// answer's buffer never absorbs the reasoning that precedes it.
+struct PendingWindow {
+    reasoning: PendingText,
+    answer: PendingText,
+}
+
+impl PendingWindow {
+    /// Creates the empty pending windows of one run.
+    const fn new() -> Self {
+        Self {
+            reasoning: PendingText::new(),
+            answer: PendingText::new(),
+        }
+    }
+
+    /// Returns the pending window of one channel.
+    const fn of(&mut self, channel: TextDeltaChannelDto) -> &mut PendingText {
+        match channel {
+            TextDeltaChannelDto::Answer => &mut self.answer,
+            TextDeltaChannelDto::Reasoning => &mut self.reasoning,
+        }
+    }
+
+    /// Discards whatever neither channel had published yet.
+    fn clear(&mut self) {
+        self.reasoning.clear();
+        self.answer.clear();
+    }
+}
+
+/// The transient text publication of one admitted run.
+///
+/// The engine's text-delta port fills one bounded window per channel, this
+/// run's cadence task publishes them at [`RUN_TEXT_DELTA_INTERVAL`], and this
+/// run's commit observer drains them before it publishes the committed row that
+/// supersedes them, so a subscriber never receives committed text behind its
+/// own provisional text. Every step of this path is best-effort: text is never
+/// persisted, a run without subscribers retains nothing, a slow subscriber's
+/// bounded queue drops what it cannot hold, and no failure here can reach the
+/// run's durable state.
+struct RunTextDeltas {
+    host: Arc<HostState>,
+    key: RunKey,
+    /// The two windows; its lock also orders a cadence publication against the
+    /// flush that precedes one commit's publication.
+    pending: Mutex<PendingWindow>,
+    /// Set when the run's execution returned, ending its cadence task.
+    finished: AtomicBool,
+}
+
+impl RunTextDeltas {
+    /// Creates the empty transient publication of one run.
+    const fn new(host: Arc<HostState>, key: RunKey) -> Self {
+        Self {
+            host,
+            key,
+            pending: Mutex::new(PendingWindow::new()),
+            finished: AtomicBool::new(false),
+        }
+    }
+
+    /// Publishes the pending text of every channel, leaving the windows empty.
+    ///
+    /// The windows are drained and published under one lock acquisition, so the
+    /// cadence task and this flush can never interleave: whatever the cadence
+    /// task published is published before the flush that follows it. The
+    /// reasoning is published before the answer it precedes, which is the order
+    /// the provider streamed them in; each channel keeps its own order.
+    fn flush(&self) {
+        let Ok(mut pending) = self.pending.lock() else {
+            return;
+        };
+        for channel in [TextDeltaChannelDto::Reasoning, TextDeltaChannelDto::Answer] {
+            let window = pending.of(channel);
+            if window.text.trim().is_empty() {
+                // A step that produced only whitespace never becomes
+                // provisional text, because a text delta must carry text.
+                window.text.clear();
+                continue;
+            }
+            let step = window.step;
+            let text = std::mem::take(&mut window.text);
+            if let Ok(delta) = TextDeltaFrameDto::new(self.key.0, self.key.1, step, channel, text) {
+                self.host.broadcast(
+                    self.key,
+                    ProtocolDaemonMessageDto::frame(RunStreamFrameDto::TextDelta(delta)),
+                );
+            }
+        }
+    }
+
+    /// Reports that the run's execution returned, ending its cadence task.
+    ///
+    /// Whatever the run's last step had not published is discarded with it, so
+    /// no transient frame follows the run's committed terminal state.
+    fn finish(&self) {
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.clear();
+        }
+        self.finished.store(true, Ordering::Release);
+    }
+
+    /// Returns whether the run's execution returned.
+    fn is_finished(&self) -> bool {
+        self.finished.load(Ordering::Acquire)
+    }
+}
+
+impl PendingText {
+    /// Creates the empty pending window of one run channel.
+    const fn new() -> Self {
+        Self {
+            step: 0,
+            text: String::new(),
+            dropped: false,
+        }
+    }
+
+    /// Discards the pending text and its over-bound marker.
+    fn clear(&mut self) {
+        self.text.clear();
+        self.dropped = false;
+    }
+}
+
+impl ModelTextDeltaPort for RunTextDeltas {
+    fn text_delta(&self, step: u32, channel: TextDeltaChannelDto, text: &str) {
+        // Provisional text nobody follows is dropped instead of retained, so a
+        // run keeps exactly the durable path it would have without this port.
+        if text.is_empty() || !self.host.has_subscribers(self.key) {
+            return;
+        }
+        let Ok(mut pending) = self.pending.lock() else {
+            return;
+        };
+        let window = pending.of(channel);
+        if window.step != step {
+            window.step = step;
+            window.text.clear();
+            window.dropped = false;
+        }
+        if window.dropped {
+            return;
+        }
+        if window.text.len() + text.len() > RUN_TEXT_DELTA_MAX_BYTES {
+            // The over-long step loses its pending window and the rest of its
+            // provisional text; its committed row still carries the whole step.
+            window.text.clear();
+            window.dropped = true;
+            return;
+        }
+        window.text.push_str(text);
+    }
+}
+
+/// Publishes one run's coalesced provisional text at its cadence.
+///
+/// The task ends on the first tick after the run's execution returned, so it
+/// never outlives its run by more than one cadence.
+async fn publish_text_deltas_at_cadence(run: Arc<RunTextDeltas>) {
+    while !run.is_finished() {
+        tokio::time::sleep(RUN_TEXT_DELTA_INTERVAL).await;
+        run.flush();
+    }
+}
+
 /// The typed rejection one connection receives when it cannot be registered.
 fn subscriber_unavailable(request_id: u64) -> ProtocolDaemonMessageDto {
     ProtocolDaemonMessageDto::rejection(
@@ -763,16 +982,26 @@ async fn retry_bounded(
 /// The one commit sink serves both the model-run executor and the
 /// tool-invocation path: a content frame carries the row the commit returned,
 /// and a status frame carries the committed run projection the transition just
-/// wrote, so no frame ever carries an uncommitted value.
+/// wrote, so no frame ever carries an uncommitted value. A content frame is
+/// preceded by the provisional text of the run, which that committed row
+/// supersedes.
 #[derive(Clone)]
 struct HostCommitObserver {
     host: Arc<HostState>,
+    /// The transient text of the one run this observer commits for.
+    deltas: Arc<RunTextDeltas>,
 }
 
 impl ModelRunCommitObserver for HostCommitObserver {
     fn observe_model_run_commit(&self, committed: &ModelRunCommitDto) {
         match committed {
-            ModelRunCommitDto::Content(message) => self.host.publish_content(message),
+            ModelRunCommitDto::Content(message) => {
+                // Provisional text is published strictly before the committed
+                // row of its step, so a subscriber replaces its provisional
+                // text with the committed value and never the reverse.
+                self.deltas.flush();
+                self.host.publish_content(message);
+            }
             ModelRunCommitDto::Status {
                 session_id,
                 run_id,
@@ -1155,6 +1384,18 @@ fn dispatch_request(
             .facade
             .session_snapshot(query.session_id())
             .map(ProtocolResultDto::SessionSnapshot),
+        ClientRequestDto::ListSessions => host
+            .facade
+            .list_sessions(composition::SESSION_LIST_ROWS)
+            .map(ProtocolResultDto::SessionsListed),
+        ClientRequestDto::GetTuiSettings => host
+            .facade
+            .tui_settings()
+            .map(ProtocolResultDto::TuiSettings),
+        ClientRequestDto::SetTuiTheme(command) => host
+            .facade
+            .set_tui_theme(command.theme())
+            .map(ProtocolResultDto::TuiThemeSet),
         ClientRequestDto::CreateSession(command) => host.facade.create_session(command),
         ClientRequestDto::SendUserTurn(command) => {
             let result = host.facade.send_user_turn(command)?;
@@ -1356,9 +1597,10 @@ mod tests {
     };
     use intention_proto::{
         ClientRequestDto, ConfigRevisionId, CreateSessionCommandDto, DaemonReadinessDto,
-        GetSessionSnapshotQueryDto, IdempotencyKey, MessageKindDto, MessageProjectionDto,
-        ProtocolDaemonMessageDto, ProtocolResultDto, RunModeDto, SendUserTurnCommandDto,
-        SendUserTurnOutcomeDto, SessionId, SubscribeRunCommandDto, WorkspaceId, WorkspaceRootDto,
+        GetSessionSnapshotQueryDto, IdempotencyKey, MessageId, MessageKindDto,
+        MessageProjectionDto, NewMessageDto, ProtocolDaemonMessageDto, ProtocolResultDto,
+        RunModeDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId,
+        SetTuiThemeCommandDto, SubscribeRunCommandDto, ThemeDto, WorkspaceId, WorkspaceRootDto,
         decode_response, encode_request,
     };
     use intention_proto::{ProjectId, RunId, SchemaVersionDto, TimestampDto};
@@ -1385,6 +1627,11 @@ mod tests {
     }
 
     fn fixture_snapshot() -> ConfigSnapshotDto {
+        fixture_snapshot_with_tui("")
+    }
+
+    /// Builds the fixture configuration snapshot with one optional `[tui]` section.
+    fn fixture_snapshot_with_tui(tui: &str) -> ConfigSnapshotDto {
         let source = ConfigSourceDto::Explicit(
             ConfigPathDto::parse(
                 std::env::temp_dir()
@@ -1395,7 +1642,9 @@ mod tests {
             .expect("fixture configuration path is absolute"),
         );
         let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"",
+            format!(
+                "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"\n{tui}"
+            ),
             source,
         ))
         .expect("fixture configuration resolves");
@@ -1571,6 +1820,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tui_settings_dispatch_answers_configuration_then_the_stored_override() {
+        let directory = TempDir::new().expect("temporary fixture directory exists");
+        let facade = DaemonApplicationFacade::open_for_test_support_with_driver(
+            directory.path().join("tui-dispatch.sqlite"),
+            fixture_snapshot_with_tui("[tui]\ntheme = \"dark\"\n"),
+            Arc::new(EmptyDriver),
+        )
+        .expect("fixture facade opens");
+        let endpoint = endpoint();
+        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+        let server = tokio::spawn(serve_one_test_connection(listener, facade));
+
+        let (mut requests, mut messages) = connect_fixture(&endpoint).await;
+        requests
+            .send_message(&encode_request(1, ClientRequestDto::GetTuiSettings))
+            .await
+            .expect("settings request sends");
+        let line = messages
+            .receive_line()
+            .await
+            .expect("settings reply arrives");
+        let settings = match decode_response(&line, 1).expect("settings reply decodes") {
+            ProtocolResultDto::TuiSettings(settings) => settings,
+            other => panic!("a settings read answers with terminal settings: {other:?}"),
+        };
+        assert_eq!(
+            settings.theme(),
+            ThemeDto::Dark,
+            "the configuration document answers before any set"
+        );
+
+        requests
+            .send_message(&encode_request(
+                2,
+                ClientRequestDto::SetTuiTheme(SetTuiThemeCommandDto::new(ThemeDto::Light)),
+            ))
+            .await
+            .expect("theme request sends");
+        let line = messages.receive_line().await.expect("theme reply arrives");
+        let accepted = match decode_response(&line, 2).expect("theme reply decodes") {
+            ProtocolResultDto::TuiThemeSet(accepted) => accepted,
+            other => panic!("a theme set answers with its acceptance: {other:?}"),
+        };
+        assert_eq!(accepted.theme(), ThemeDto::Light);
+
+        requests
+            .send_message(&encode_request(3, ClientRequestDto::GetTuiSettings))
+            .await
+            .expect("settings request sends");
+        let line = messages
+            .receive_line()
+            .await
+            .expect("settings reply arrives");
+        let settings = match decode_response(&line, 3).expect("settings reply decodes") {
+            ProtocolResultDto::TuiSettings(settings) => settings,
+            other => panic!("a settings read answers with terminal settings: {other:?}"),
+        };
+        assert_eq!(
+            settings.theme(),
+            ThemeDto::Light,
+            "the stored override answers after the set"
+        );
+
+        drop((requests, messages));
+        server.await.expect("host serves the settings connection");
+    }
+
+    #[tokio::test]
     async fn a_closed_connection_leaves_no_subscriber_registered() {
         // The guard owns the registration: the graceful close path must remove
         // the subscriber exactly once, without any explicit removal in the loop.
@@ -1643,7 +1960,7 @@ mod tests {
         facade
             .repository()
             .append_message(
-                MessageProjectionDto::new(
+                NewMessageDto::new(
                     session_id,
                     Some(run_id),
                     MessageKindDto::Assistant,
@@ -2037,6 +2354,7 @@ mod tests {
         let (session_id, run_id) = create_and_start(&facade);
         let host = new_host(facade);
         let message = MessageProjectionDto::new(
+            MessageId::new(1).expect("fixture row identity is valid"),
             session_id,
             Some(run_id),
             MessageKindDto::Assistant,
@@ -2123,7 +2441,7 @@ mod tests {
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
         let (session_id, run_id) = create_and_start(&facade);
         let host = new_host(facade);
-        let snapshot_row = MessageProjectionDto::new(
+        let snapshot_row = NewMessageDto::new(
             session_id,
             Some(run_id),
             MessageKindDto::Assistant,
@@ -2133,10 +2451,11 @@ mod tests {
             None,
         )
         .expect("fixture transcript row is valid");
-        host.facade
+        let snapshot_row = host
+            .facade
             .repository()
             .append_message(
-                snapshot_row.clone(),
+                snapshot_row,
                 TimestampDto::from_unix_seconds(2).expect("fixture timestamp is valid"),
             )
             .expect("fixture snapshot row commits");
@@ -2162,6 +2481,7 @@ mod tests {
 
         host.publish_content(&snapshot_row);
         let distinct = MessageProjectionDto::new(
+            MessageId::new(1).expect("fixture row identity is valid"),
             session_id,
             Some(run_id),
             MessageKindDto::Assistant,

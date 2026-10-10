@@ -50,14 +50,11 @@
     reason = "Opt-in live-provider end-to-end fixtures use assertion conveniences and one stderr diagnostic on the unwind path for precise failures."
 )]
 
-mod common;
-
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{config_path, spawn_daemon, unique_endpoint, write_config_document};
 use intention_client::{IntentionClient, ProcessDaemonLauncher, RunStreamClient};
 use intention_config::{
     ConfigPathDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto,
@@ -68,6 +65,9 @@ use intention_proto::{
 };
 use intention_proto::{IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId};
 use intention_proto::{SendUserTurnOutcomeDto, SessionSnapshotDto, SubscribeRunCommandDto};
+use intention_test_support::daemon_process::{
+    config_path, spawn_daemon, unique_endpoint, write_config_document,
+};
 use intention_transport::LocalEndpoint;
 use tempfile::TempDir;
 
@@ -457,7 +457,9 @@ impl Drop for LiveE2eHost {
     fn drop(&mut self) {
         self.kill_daemon();
         #[cfg(unix)]
-        if let Some(path) = common::endpoint_socket_path(&self.endpoint) {
+        if let Some(path) =
+            intention_test_support::daemon_process::endpoint_socket_path(&self.endpoint)
+        {
             let _ = std::fs::remove_file(path);
         }
     }

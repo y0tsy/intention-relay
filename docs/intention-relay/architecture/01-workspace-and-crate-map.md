@@ -113,7 +113,7 @@ flowchart BT
 
 Slice 1.5 collapsed the workspace to nine production crates, shown below together with what each absorbed. The table
 below is the live crate map, and the exact permitted edges and coverage tiers are declared
-by `quality/architecture.toml` under phase `slice15`.
+by `quality/architecture.toml` under phase `slice2`.
 
 | Target crate | Absorbs | Owns |
 | --- | --- | --- |
@@ -127,9 +127,10 @@ by `quality/architecture.toml` under phase `slice15`.
 | `intention-client` | `intention-client` | Bootstrap, connection, dispatch, subscriptions, and reconnect, fully asynchronous and covering every protocol command and query. |
 | `intention-daemon` | `intention` (the composition facade library) | One composition holder that selects and connects configuration, SQLite storage, and the provider driver, plus the daemon host and binary. |
 
-Retained outside the nine production crates: the `intention-tui` proof adapter and the non-production
-`intention-test-support` fixture crate. The future crates are created at their milestones: `intention-tauri` (M6),
-`intention-plans` (M7), and `intention-vfr` and `intention-headroom` (M8).
+Retained outside the nine production crates: the `intention-tui` adapter crate — since Slice 2 the terminal
+application, one binary with a fullscreen revue UI, an interactive REPL, and a headless prompt mode over the shared
+client — and the non-production `intention-test-support` fixture crate. The future crates are created at their
+milestones: `intention-tauri` (M6), `intention-plans` (M7), and `intention-vfr` and `intention-headroom` (M8).
 
 Rules the target map fixes:
 
@@ -211,10 +212,12 @@ No other crate chooses a concrete SQLite driver, OpenRouter client, or adapter i
 
 ## Binaries
 
-Planned binaries are thin:
+Binaries are thin:
 
 - `intention-daemon`: starts a configured daemon host.
-- `intention-tui`: starts a terminal client and invokes shared bootstrap.
+- `intention-tui`: the terminal application; one command line selects the fullscreen revue UI (the bare command or
+  `tui`), the interactive `repl`, or the headless `run <PROMPT>` mode, every mode reaches the daemon only through
+  `intention-client`, and the process ends with one of the closed typed exit statuses.
 - a future administrative CLI may use `intention-client`, not daemon internals.
 
 The future `intention-tauri` crate (created at M6) is a desktop integration crate/binary host, not a second daemon

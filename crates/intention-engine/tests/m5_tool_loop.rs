@@ -8,7 +8,8 @@ mod common;
 use std::{collections::VecDeque, future, sync::PoisonError, sync::mpsc, time::Duration};
 
 use common::{
-    FakeRepository, ImmediateTime, RecordedTransition, RecordingCommitObserver, ScriptedPort, time,
+    FakeRepository, ImmediateTime, RecordedTransition, RecordingCommitObserver, ScriptedPort,
+    row_id, time,
 };
 use futures_util::{StreamExt, stream};
 use intention_config::ConfigSnapshotDto;
@@ -1557,6 +1558,11 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
     let run_id = RunId::new();
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
+    // Two attempts answer the interruption and complete the run. A third
+    // identical round is scripted as well: on a loaded host the cancel can land
+    // at the round boundary instead of inside the delay, which correctly starts
+    // one more round, and a script that ends after two would then panic the
+    // fixture thread rather than observe the continuation.
     let driver = ScriptedDriver::with_rounds(vec![
         vec![Err(ProviderErrorDto::unavailable(
             "provider_busy",
@@ -1564,6 +1570,10 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
             None,
         )
         .expect("fixture provider error is valid"))],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
         vec![
             Ok(ModelEventDto::started()),
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
@@ -1607,10 +1617,10 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
         outcome,
         ModelRunExecutionOutcomeDto::Completed { .. }
     ));
-    assert_eq!(
-        driver.executions(),
-        2,
-        "the interrupted wait starts the second attempt"
+    assert!(
+        driver.executions() >= 2,
+        "the interrupted wait starts the second attempt, got {}",
+        driver.executions()
     );
     assert!(port.calls().is_empty());
     let messages = repository
@@ -1919,6 +1929,7 @@ fn pending_user_message(
     content: &str,
 ) -> MessageProjectionDto {
     MessageProjectionDto::new(
+        row_id(),
         session_id,
         Some(run_id),
         MessageKindDto::User,

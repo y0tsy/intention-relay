@@ -19,11 +19,18 @@ use intention_proto::{
     ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto,
     RunProjectionDto, RunStatusDto, RunStreamFrameDto, RunSubscriptionSnapshotDto,
     SendUserTurnAcceptedDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionSnapshotDto,
-    SubscribeRunCommandDto, decode_request_line, decode_response, encode_reply, encode_request,
-    parse_daemon_message, parse_run_frame, run_status_is_terminal, validate_run_status_transition,
+    SessionSummariesDto, SessionSummaryDto, SetTuiThemeCommandDto, SubscribeRunCommandDto,
+    TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto,
+    decode_request_line, decode_response, encode_reply, encode_request, parse_daemon_message,
+    parse_run_frame, run_status_is_terminal, validate_run_status_transition,
 };
 use intention_proto::{ConfigRevisionId, IdempotencyKey, MessageKindDto, ProjectId, RunId};
-use intention_proto::{RunModeDto, SessionId, TurnId, WorkspaceId};
+use intention_proto::{RunModeDto, SessionId, TimestampDto, TurnId, WorkspaceId};
+
+/// Returns one valid fixture timestamp in whole Unix seconds.
+fn timestamp(seconds: i64) -> TimestampDto {
+    TimestampDto::from_unix_seconds(seconds).expect("fixture timestamp is valid")
+}
 
 fn fixture_run(session_id: SessionId, run_id: RunId) -> RunProjectionDto {
     RunProjectionDto::new(
@@ -52,6 +59,25 @@ fn fixture_run_snapshot(session_id: SessionId, run_id: RunId) -> RunSubscription
     .expect("fixture run snapshot is valid")
 }
 
+fn fixture_session_summary(session_id: SessionId, run_id: RunId) -> SessionSummaryDto {
+    SessionSummaryDto::new(
+        session_id,
+        ProjectId::new(),
+        WorkspaceId::new(),
+        RunModeDto::Build,
+        timestamp(1_726_000_000),
+        timestamp(1_726_000_100),
+        fixture_workspace_root(),
+        2,
+        Some(fixture_run(session_id, run_id)),
+    )
+}
+
+fn fixture_session_summaries(session_id: SessionId, run_id: RunId) -> SessionSummariesDto {
+    SessionSummariesDto::new(vec![fixture_session_summary(session_id, run_id)], 3)
+        .expect("fixture session summaries are valid")
+}
+
 /// Returns the wire kind one request is answered with.
 ///
 /// The match is deliberately wildcard-free: adding a request variant fails to
@@ -65,6 +91,9 @@ const fn result_kind(request: &ClientRequestDto) -> &'static str {
         ClientRequestDto::InterruptRun(_) => "run_interrupted",
         ClientRequestDto::GetSessionSnapshot(_) => "session_snapshot",
         ClientRequestDto::GetDaemonHealth => "daemon_health",
+        ClientRequestDto::ListSessions => "sessions_listed",
+        ClientRequestDto::GetTuiSettings => "tui_settings",
+        ClientRequestDto::SetTuiTheme(_) => "tui_theme_set",
         ClientRequestDto::SubscribeRun(_) => "run_subscribed",
     }
 }
@@ -86,6 +115,9 @@ fn fixture_requests(session_id: SessionId, run_id: RunId) -> Vec<ClientRequestDt
         ClientRequestDto::InterruptRun(InterruptRunCommandDto::new(session_id, run_id)),
         ClientRequestDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id)),
         ClientRequestDto::GetDaemonHealth,
+        ClientRequestDto::ListSessions,
+        ClientRequestDto::GetTuiSettings,
+        ClientRequestDto::SetTuiTheme(SetTuiThemeCommandDto::new(ThemeDto::Dark)),
         ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, run_id)),
     ]
 }
@@ -106,6 +138,9 @@ fn fixture_results(session_id: SessionId, run_id: RunId) -> Vec<ProtocolResultDt
         ProtocolResultDto::RunInterrupted(InterruptRunAcceptedDto::new(session_id, run_id)),
         ProtocolResultDto::SessionSnapshot(fixture_snapshot(session_id, run_id)),
         ProtocolResultDto::DaemonHealth(DaemonHealthDto::ready()),
+        ProtocolResultDto::SessionsListed(fixture_session_summaries(session_id, run_id)),
+        ProtocolResultDto::TuiSettings(TuiSettingsDto::new(ThemeDto::Dark)),
+        ProtocolResultDto::TuiThemeSet(TuiThemeAcceptedDto::new(ThemeDto::Dark)),
         ProtocolResultDto::RunSubscribed(fixture_run_snapshot(session_id, run_id)),
     ]
 }
@@ -152,7 +187,7 @@ fn every_request_round_trips_with_its_named_result_kind() {
     }
     assert_eq!(
         kinds.len(),
-        7,
+        10,
         "the wire implements exactly one request kind per operation"
     );
 }
@@ -238,6 +273,247 @@ fn frames_carry_committed_values_without_positions() {
             "a frame is never accepted as a correlated reply"
         );
     }
+}
+
+#[test]
+fn session_lists_round_trip_with_their_omitted_count() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let summaries = fixture_session_summaries(session_id, run_id);
+    assert_eq!(summaries.omitted(), 3);
+    let summary = &summaries.sessions()[0];
+    assert_eq!(summary.session_id(), session_id);
+    assert_eq!(summary.mode(), RunModeDto::Build);
+    assert_eq!(summary.created_at(), timestamp(1_726_000_000));
+    assert_eq!(summary.updated_at(), timestamp(1_726_000_100));
+    assert_eq!(summary.workspace_root(), &fixture_workspace_root());
+    assert_eq!(summary.message_count(), 2);
+    assert_eq!(
+        summary.active_run().map(RunProjectionDto::run_id),
+        Some(run_id)
+    );
+
+    let line = serde_json::to_string(&encode_request(9, ClientRequestDto::ListSessions))
+        .expect("session list request serializes");
+    let value: serde_json::Value = serde_json::from_str(&line).expect("request line is JSON");
+    assert_eq!(value["request"]["kind"], "list_sessions");
+    assert_eq!(
+        decode_request_line(&line)
+            .expect("request decodes")
+            .request(),
+        &ClientRequestDto::ListSessions
+    );
+
+    let reply = encode_reply(9, ProtocolResultDto::SessionsListed(summaries.clone()));
+    let line = serde_json::to_string(&reply).expect("session list reply serializes");
+    let value: serde_json::Value = serde_json::from_str(&line).expect("reply line is JSON");
+    assert_eq!(value["data"]["result"]["kind"], "sessions_listed");
+    assert_eq!(
+        decode_response(&line, 9).expect("the correlated reply decodes"),
+        ProtocolResultDto::SessionsListed(summaries.clone())
+    );
+    assert_eq!(
+        serde_json::from_str::<SessionSummariesDto>(
+            &serde_json::to_string(&summaries).expect("session summaries serialize")
+        )
+        .expect("session summaries deserialize"),
+        summaries
+    );
+}
+
+#[test]
+fn tui_settings_and_theme_commands_round_trip_with_presentation_spelling() {
+    let settings = TuiSettingsDto::new(ThemeDto::Dark);
+    assert_eq!(settings.theme(), ThemeDto::Dark);
+    let command = SetTuiThemeCommandDto::new(ThemeDto::Light);
+    assert_eq!(command.theme(), ThemeDto::Light);
+    let accepted = TuiThemeAcceptedDto::new(ThemeDto::Light);
+    assert_eq!(accepted.theme(), ThemeDto::Light);
+
+    let request = ClientRequestDto::SetTuiTheme(command);
+    let line =
+        serde_json::to_string(&encode_request(4, request.clone())).expect("request serializes");
+    let value: serde_json::Value = serde_json::from_str(&line).expect("request line is JSON");
+    assert_eq!(value["request"]["kind"], "set_tui_theme");
+    assert_eq!(value["request"]["data"]["theme"], "light");
+    assert_eq!(
+        decode_request_line(&line)
+            .expect("request decodes")
+            .request(),
+        &request
+    );
+
+    let request = ClientRequestDto::GetTuiSettings;
+    let line =
+        serde_json::to_string(&encode_request(5, request.clone())).expect("request serializes");
+    let value: serde_json::Value = serde_json::from_str(&line).expect("request line is JSON");
+    assert_eq!(value["request"]["kind"], "get_tui_settings");
+    assert!(
+        value["request"]["data"].is_null(),
+        "a settings read carries no payload"
+    );
+    assert_eq!(
+        decode_request_line(&line)
+            .expect("request decodes")
+            .request(),
+        &request
+    );
+
+    let reply = encode_reply(4, ProtocolResultDto::TuiSettings(settings));
+    let line = serde_json::to_string(&reply).expect("settings reply serializes");
+    let value: serde_json::Value = serde_json::from_str(&line).expect("reply line is JSON");
+    assert_eq!(value["data"]["result"]["kind"], "tui_settings");
+    assert_eq!(value["data"]["result"]["data"]["theme"], "dark");
+    assert_eq!(
+        decode_response(&line, 4).expect("the correlated reply decodes"),
+        ProtocolResultDto::TuiSettings(settings)
+    );
+
+    let reply = encode_reply(5, ProtocolResultDto::TuiThemeSet(accepted));
+    let line = serde_json::to_string(&reply).expect("theme reply serializes");
+    let value: serde_json::Value = serde_json::from_str(&line).expect("reply line is JSON");
+    assert_eq!(value["data"]["result"]["kind"], "tui_theme_set");
+    assert_eq!(value["data"]["result"]["data"]["theme"], "light");
+    assert_eq!(
+        decode_response(&line, 5).expect("the correlated reply decodes"),
+        ProtocolResultDto::TuiThemeSet(accepted)
+    );
+
+    // An undeclared or absent spelling is not a current theme in either direction.
+    for malformed in [
+        r#"{"kind":"set_tui_theme","data":{"theme":"midnight"}}"#,
+        r#"{"kind":"set_tui_theme","data":{}}"#,
+        r#"{"kind":"tui_settings","data":{"theme":"midnight"}}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<ClientRequestDto>(malformed).is_err(),
+            "{malformed} is not a current request"
+        );
+        assert!(
+            serde_json::from_str::<ProtocolResultDto>(malformed).is_err(),
+            "{malformed} is not a current result"
+        );
+    }
+}
+
+#[test]
+fn text_delta_frames_round_trip_as_transient_chunks() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let delta = TextDeltaFrameDto::new(
+        session_id,
+        run_id,
+        2,
+        TextDeltaChannelDto::Answer,
+        "partial output",
+    )
+    .expect("fixture text delta is valid");
+    assert_eq!(delta.session_id(), session_id);
+    assert_eq!(delta.run_id(), run_id);
+    assert_eq!(delta.step(), 2);
+    assert_eq!(delta.channel(), TextDeltaChannelDto::Answer);
+    assert_eq!(delta.text(), "partial output");
+    assert_eq!(TextDeltaChannelDto::Answer.as_str(), "answer");
+    assert_eq!(TextDeltaChannelDto::Reasoning.as_str(), "reasoning");
+
+    let frame = RunStreamFrameDto::TextDelta(delta);
+    let message = ProtocolDaemonMessageDto::frame(frame.clone());
+    let line = serde_json::to_string(&message).expect("text delta frame serializes");
+    let value: serde_json::Value = serde_json::from_str(&line).expect("frame line is JSON");
+    assert_eq!(value["data"]["kind"], "text_delta");
+    assert_eq!(value["data"]["data"]["step"], 2);
+    assert_eq!(value["data"]["data"]["channel"], "answer");
+    assert_eq!(value["data"]["data"]["text"], "partial output");
+    assert!(
+        !line.contains("cursor") && !line.contains("sequence"),
+        "a text delta carries no stream position"
+    );
+    assert_eq!(parse_run_frame(&line).expect("frame parses"), frame);
+    assert!(
+        decode_response(&line, 1).is_err(),
+        "a text delta is never accepted as a correlated reply"
+    );
+
+    // The reasoning channel is the same frame with another discriminator: one
+    // shape, two channels, and no second kind of transient frame.
+    let reasoning = RunStreamFrameDto::TextDelta(
+        TextDeltaFrameDto::new(
+            session_id,
+            run_id,
+            2,
+            TextDeltaChannelDto::Reasoning,
+            "weighing the options",
+        )
+        .expect("fixture reasoning delta is valid"),
+    );
+    let line = serde_json::to_string(&ProtocolDaemonMessageDto::frame(reasoning.clone()))
+        .expect("serializes");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&line).expect("frame line is JSON")["data"]["data"]
+            ["channel"],
+        "reasoning"
+    );
+    assert_eq!(
+        parse_run_frame(&line).expect("the reasoning frame parses"),
+        reasoning
+    );
+    assert!(
+        serde_json::from_str::<RunStreamFrameDto>(
+            r#"{"kind":"text_delta","data":{"session_id":"11111111-1111-4111-8111-111111111111","run_id":"22222222-2222-4222-8222-222222222222","step":0,"text":"no channel"}}"#
+        )
+        .is_err(),
+        "a delta without a channel is not a current frame"
+    );
+}
+
+#[test]
+fn session_summaries_and_text_deltas_validate_their_required_shape() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    assert_eq!(
+        SessionSummariesDto::new(
+            vec![SessionSummaryDto::new(
+                SessionId::new(),
+                ProjectId::new(),
+                WorkspaceId::new(),
+                RunModeDto::Build,
+                timestamp(1_726_000_000),
+                timestamp(1_726_000_000),
+                fixture_workspace_root(),
+                0,
+                Some(fixture_run(session_id, run_id)),
+            )],
+            0,
+        )
+        .expect_err("an active run must belong to its summary session")
+        .code(),
+        "invalid_session_summaries"
+    );
+    assert_eq!(
+        SessionSummariesDto::new(
+            vec![
+                fixture_session_summary(session_id, run_id),
+                fixture_session_summary(session_id, run_id),
+            ],
+            0,
+        )
+        .expect_err("a session list carries each session once")
+        .code(),
+        "invalid_session_summaries"
+    );
+    assert_eq!(
+        TextDeltaFrameDto::new(session_id, run_id, 0, TextDeltaChannelDto::Answer, "")
+            .expect_err("an empty text delta is rejected")
+            .code(),
+        "invalid_text_delta"
+    );
+    assert!(
+        serde_json::from_str::<RunStreamFrameDto>(
+            r#"{"kind":"text_delta","data":{"session_id":"11111111-1111-4111-8111-111111111111","run_id":"11111111-1111-4111-8111-111111111111","step":0,"text":""}}"#
+        )
+        .is_err(),
+        "an empty text delta fails closed on the wire"
+    );
 }
 
 #[test]
@@ -344,6 +620,14 @@ fn durable_enum_spellings_match_their_wire_spelling() {
             "the wire spelling of {kind:?} is its durable spelling"
         );
         assert_eq!(MessageKindDto::parse(kind.as_str()).ok(), Some(kind));
+    }
+    for theme in [ThemeDto::Light, ThemeDto::Dark] {
+        assert_eq!(
+            serde_json::to_value(theme).expect("theme serializes"),
+            serde_json::json!(theme.as_str()),
+            "the wire spelling of {theme:?} is its durable spelling"
+        );
+        assert_eq!(ThemeDto::parse(theme.as_str()).ok(), Some(theme));
     }
 }
 

@@ -104,7 +104,8 @@ fallback.
 outside that plan's directory.
 5.  VFR and Headroom can be enabled independently as ordinary calls, preserve typed observability, and expose their
 supporting tools.
-6. State visible to an adapter was committed before its corresponding live frame was published.
+6.  State visible to an adapter was committed before its corresponding live frame was published; provisional text
+deltas are transient, never authoritative, and are replaced by the committed row.
 7.  Provider secrets cannot appear in transport frames, persisted state, diagnostics, or normal UI output.
 8.  `make verify` proves the applicable formatting, lint, feature, test, documentation, architecture, coverage, and
 supply-chain gates before an implementation slice is accepted.

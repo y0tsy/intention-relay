@@ -28,8 +28,10 @@ requires exact
 persisted/current safe-selection equality before execution, owns cancellation late-event suppression, deadlines, and
 retries, and commits only current-state rows (assistant transcript rows, run status, usage, finish, and failure) through
 the DTO-only storage contract. Its `ModelTimePort` exposes fresh
-provider-neutral delay futures and safe timestamps, never Tokio. The service does not select a provider or own a Tokio
-runtime; the daemon-owned composition host supplies those private execution resources.
+provider-neutral delay futures and safe timestamps, never Tokio, and its transient `ModelTextDeltaPort` observes every
+streamed text chunk with its model-step index and text channel on a best-effort, infallible path that never affects run
+state. The service does not select a provider or own a Tokio runtime; the daemon-owned composition host supplies those
+private execution resources.
 
 Core DTO families:
 
@@ -99,7 +101,7 @@ events;
 
 ### Generic Chat Completion
 
-`intention-providers` supports compatible Chat Completion-style endpoints using `async-openai` 0.42.0
+`intention-providers` supports compatible Chat Completion-style endpoints using `async-openai` 0.42.2
 privately with its configured-base-URL streaming support. It does not implement a custom HTTP or SSE parser: the adapter
 enables the pinned SDK's `byot` feature and drives the stream through `create_stream_byot` with crate-private typed
 request and chunk structs, so the SDK still owns HTTP, SSE, TLS, and error mapping while the adapter privately owns the
@@ -150,6 +152,10 @@ immutable snapshot selected at startup.
 
 Provider/model selection changes do not mutate an already-started run. They apply to a later run, except if a future
 explicit, tested runtime transition is introduced.
+
+A terminal theme is not provider selection. The `[tui] theme` its resolved configuration carries and the daemon's
+single-row `tui_settings` override are presentation-only: a theme change records no configuration revision and never
+mutates an already-started run's immutable snapshot or its validated selection.
 
 ## Streaming and tool calls
 

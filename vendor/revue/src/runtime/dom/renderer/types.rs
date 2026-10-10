@@ -1,0 +1,146 @@
+//! Core types for DOM renderer
+
+use crate::dom::{DomId, DomTree};
+use crate::layout::Rect;
+use crate::style::{Style, StyleSheet};
+
+/// DOM-aware renderer
+///
+/// Manages the widget tree, computes styles via CSS cascade,
+/// and renders widgets with proper styling context.
+pub struct DomRenderer {
+    /// The DOM tree
+    pub(crate) tree: DomTree,
+    /// The stylesheet, owned by the renderer
+    pub(crate) stylesheet: StyleSheet,
+    /// Computed styles cache
+    pub(crate) styles: std::collections::HashMap<DomId, Style>,
+    /// Cached parsed selectors (selector, rule_index)
+    /// Cached to avoid reparsing selectors on every style computation
+    pub(crate) cached_selectors: Option<Vec<(crate::dom::Selector, usize)>>,
+    /// Focused node
+    pub(crate) focused: Option<DomId>,
+    /// Hovered node
+    pub(crate) hovered: Option<DomId>,
+    /// Did the last `build` add, remove or reorder any node?
+    ///
+    /// Reconciliation runs every frame once enabled, but the layout tree only
+    /// has to be rebuilt when the *shape* of the DOM changed. Rebuilding it
+    /// unconditionally would make per-frame reconciliation cost more than the
+    /// full rebuild it replaces.
+    pub(crate) structure_dirty: bool,
+    /// Build the DOM from the render traversal instead of `View::children`.
+    pub(crate) dom_from_render: bool,
+    /// Apply each node's specified CSS box properties during the paint pass.
+    pub(crate) css_layout: bool,
+    /// Does the stylesheet use `+` or `~` anywhere?
+    ///
+    /// Invalidation walks up and down; a sibling combinator matches *sideways*,
+    /// so a change on one node can restyle the ones after it. Chasing that on
+    /// every change would cost every application, so it is only done for the
+    /// ones whose stylesheet can actually match that way. Computed with
+    /// `cached_selectors` and cleared with it.
+    pub(crate) has_sibling_combinators: bool,
+    /// Where each node was painted, in paint order.
+    ///
+    /// Recorded by the paint pass, which is the only place that knows both a
+    /// node's identity and the area it was actually given. The layout engine
+    /// cannot answer this today - containers do their own arithmetic, so its
+    /// rects describe a layout nobody requested (see
+    /// `docs/refactor/findings-layout.md`). What the user clicks on is what was
+    /// painted, so that is what this records.
+    ///
+    /// Reused across frames; `render` clears it rather than reallocating.
+    pub(crate) hit_map: Vec<(DomId, Rect)>,
+}
+
+impl DomRenderer {
+    /// Create a new DOM renderer with minimal fields
+    pub(crate) fn new_internal() -> Self {
+        Self {
+            tree: DomTree::new(),
+            stylesheet: StyleSheet::new(),
+            styles: std::collections::HashMap::new(),
+            cached_selectors: None,
+            focused: None,
+            hovered: None,
+            structure_dirty: false,
+            dom_from_render: false,
+            css_layout: false,
+            has_sibling_combinators: false,
+            hit_map: Vec::new(),
+        }
+    }
+
+    /// Get the DOM tree
+    pub fn tree(&self) -> &DomTree {
+        &self.tree
+    }
+
+    /// Get mutable DOM tree
+    pub fn tree_mut(&mut self) -> &mut DomTree {
+        &mut self.tree
+    }
+
+    /// Consume the "structure changed" flag set by the last [`build`](Self::build).
+    ///
+    /// Returns `true` if any node was added, removed or reordered, which is
+    /// exactly when the layout tree has to be rebuilt.
+    /// Build the DOM from the render traversal instead of `View::children`.
+    pub(crate) fn set_dom_from_render(&mut self, enabled: bool) {
+        self.dom_from_render = enabled;
+    }
+
+    /// Is the DOM built from the render traversal?
+    pub fn dom_from_render(&self) -> bool {
+        self.dom_from_render
+    }
+
+    /// Apply each node's specified CSS box properties during the paint pass.
+    ///
+    /// Inert without [`dom_from_render`](Self::dom_from_render): the box
+    /// properties are read from the node the paint pass is holding, and
+    /// without the render traversal there is no such node below the root.
+    pub(crate) fn set_css_layout(&mut self, enabled: bool) {
+        self.css_layout = enabled;
+    }
+
+    /// Are CSS box properties applied during the paint pass?
+    pub fn css_layout(&self) -> bool {
+        self.css_layout
+    }
+
+    pub(crate) fn take_structure_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.structure_dirty)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dom_renderer_tree() {
+        // Can't directly create DomRenderer since new_internal is pub(crate)
+        // But we can test the public API through other constructors
+        let renderer = DomRenderer::with_stylesheet(crate::style::StyleSheet::new());
+        let tree = renderer.tree();
+        assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn test_dom_renderer_tree_mut() {
+        let mut renderer = DomRenderer::with_stylesheet(crate::style::StyleSheet::new());
+        let tree = renderer.tree_mut();
+        assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn test_dom_renderer_tree_and_tree_mut_different() {
+        let mut renderer = DomRenderer::with_stylesheet(crate::style::StyleSheet::new());
+        let tree_ref = renderer.tree() as *const DomTree;
+        let tree_mut = renderer.tree_mut() as *const DomTree;
+        // Both should point to the same tree
+        assert_eq!(tree_ref, tree_mut);
+    }
+}

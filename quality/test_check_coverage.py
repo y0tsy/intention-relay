@@ -14,7 +14,7 @@ CHECKER = ROOT / "quality" / "check_coverage.py"
 
 POLICY = """\
 [policy]
-phase = "slice15"
+phase = "slice2"
 
 [tiers]
 core = 75.0

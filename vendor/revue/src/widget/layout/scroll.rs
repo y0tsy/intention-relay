@@ -1,0 +1,528 @@
+//! ScrollView widget for scrollable content
+
+use crate::layout::Rect;
+use crate::render::{Buffer, Cell};
+use crate::style::Color;
+use crate::widget::traits::{RenderContext, View, WidgetProps};
+use crate::{impl_props_builders, impl_styled_view};
+
+/// A scrollable view widget
+#[derive(Clone)]
+pub struct ScrollView {
+    content_height: u16,
+    scroll_offset: u16,
+    show_scrollbar: bool,
+    scrollbar_fg: Option<Color>,
+    scrollbar_bg: Option<Color>,
+    /// Minimum width constraint (0 = no constraint)
+    min_width: u16,
+    /// Minimum height constraint (0 = no constraint)
+    min_height: u16,
+    /// Maximum width constraint (0 = no constraint)
+    max_width: u16,
+    /// Maximum height constraint (0 = no constraint)
+    max_height: u16,
+    /// CSS styling properties (id, classes)
+    props: WidgetProps,
+}
+
+impl ScrollView {
+    /// Create a new scroll view
+    pub fn new() -> Self {
+        Self {
+            content_height: 0,
+            scroll_offset: 0,
+            show_scrollbar: true,
+            // `None` means the builder said nothing, which is what lets a rule
+            // fill it in; the defaults are applied at paint time.
+            scrollbar_fg: None,
+            scrollbar_bg: None,
+            min_width: 0,
+            min_height: 0,
+            max_width: 0,
+            max_height: 0,
+            props: WidgetProps::new(),
+        }
+    }
+
+    /// Set the total content height
+    pub fn content_height(mut self, height: u16) -> Self {
+        self.content_height = height;
+        self
+    }
+
+    /// Set the scroll offset
+    pub fn scroll_offset(mut self, offset: u16) -> Self {
+        self.scroll_offset = offset;
+        self
+    }
+
+    /// Enable/disable scrollbar
+    pub fn show_scrollbar(mut self, show: bool) -> Self {
+        self.show_scrollbar = show;
+        self
+    }
+
+    /// Set scrollbar colors
+    pub fn scrollbar_style(mut self, fg: Color, bg: Color) -> Self {
+        self.scrollbar_fg = Some(fg);
+        self.scrollbar_bg = Some(bg);
+        self
+    }
+
+    /// Set minimum width constraint
+    pub fn min_width(mut self, width: u16) -> Self {
+        self.min_width = width;
+        self
+    }
+
+    /// Set minimum height constraint
+    pub fn min_height(mut self, height: u16) -> Self {
+        self.min_height = height;
+        self
+    }
+
+    /// Set maximum width constraint (0 = no limit)
+    pub fn max_width(mut self, width: u16) -> Self {
+        self.max_width = width;
+        self
+    }
+
+    /// Set maximum height constraint (0 = no limit)
+    pub fn max_height(mut self, height: u16) -> Self {
+        self.max_height = height;
+        self
+    }
+
+    /// Set both min width and height
+    pub fn min_size(self, width: u16, height: u16) -> Self {
+        self.min_width(width).min_height(height)
+    }
+
+    /// Set both max width and height (0 = no limit)
+    pub fn max_size(self, width: u16, height: u16) -> Self {
+        self.max_width(width).max_height(height)
+    }
+
+    /// Set all size constraints at once
+    pub fn constrain(self, min_w: u16, min_h: u16, max_w: u16, max_h: u16) -> Self {
+        self.min_width(min_w)
+            .min_height(min_h)
+            .max_width(max_w)
+            .max_height(max_h)
+    }
+
+    /// Apply size constraints to the available area
+    fn apply_constraints(&self, area: Rect) -> Rect {
+        let eff_max_w = if self.max_width > 0 {
+            self.max_width.max(self.min_width)
+        } else {
+            u16::MAX
+        };
+        let eff_max_h = if self.max_height > 0 {
+            self.max_height.max(self.min_height)
+        } else {
+            u16::MAX
+        };
+        let width = area.width.clamp(self.min_width, eff_max_w);
+        let height = area.height.clamp(self.min_height, eff_max_h);
+
+        Rect::new(area.x, area.y, width, height)
+    }
+
+    /// Get current scroll offset
+    pub fn offset(&self) -> u16 {
+        self.scroll_offset
+    }
+
+    /// The offset as drawn in a viewport `viewport_height` rows tall.
+    ///
+    /// The stored offset is clamped against the viewport of the last scroll
+    /// call; after the viewport grows it can lie past the end, which would
+    /// leave blank rows under the content.
+    fn offset_for(&self, viewport_height: u16) -> u16 {
+        self.scroll_offset
+            .min(self.content_height.saturating_sub(viewport_height))
+    }
+
+    /// Set scroll offset with bounds checking
+    pub fn set_offset(&mut self, offset: u16, viewport_height: u16) {
+        let max_offset = self.content_height.saturating_sub(viewport_height);
+        self.scroll_offset = offset.min(max_offset);
+    }
+
+    /// Scroll down by lines
+    pub fn scroll_down(&mut self, lines: u16, viewport_height: u16) {
+        let max_offset = self.content_height.saturating_sub(viewport_height);
+        self.scroll_offset = (self.scroll_offset + lines).min(max_offset);
+    }
+
+    /// Scroll up by lines
+    pub fn scroll_up(&mut self, lines: u16) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+    }
+
+    /// Scroll to top
+    pub fn scroll_to_top(&mut self) {
+        self.scroll_offset = 0;
+    }
+
+    /// Scroll to bottom
+    pub fn scroll_to_bottom(&mut self, viewport_height: u16) {
+        let max_offset = self.content_height.saturating_sub(viewport_height);
+        self.scroll_offset = max_offset;
+    }
+
+    /// Page down
+    pub fn page_down(&mut self, viewport_height: u16) {
+        self.scroll_down(viewport_height.saturating_sub(1), viewport_height);
+    }
+
+    /// Page up
+    pub fn page_up(&mut self, viewport_height: u16) {
+        self.scroll_up(viewport_height.saturating_sub(1));
+    }
+
+    /// Handle mouse events, returns true if scroll changed
+    pub fn handle_mouse(&mut self, event: &crate::event::MouseEvent, viewport_height: u16) -> bool {
+        use crate::event::MouseEventKind;
+        // The viewport may have grown since the last scroll
+        self.scroll_offset = self.offset_for(viewport_height);
+        let old_offset = self.scroll_offset;
+        match event.kind {
+            MouseEventKind::ScrollUp => {
+                self.scroll_up(3);
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_down(3, viewport_height);
+            }
+            _ => {}
+        }
+        old_offset != self.scroll_offset
+    }
+
+    /// Handle key input, returns true if scroll changed
+    pub fn handle_key(&mut self, key: &crate::event::Key, viewport_height: u16) -> bool {
+        use crate::event::Key;
+
+        // The viewport may have grown since the last scroll
+        self.scroll_offset = self.offset_for(viewport_height);
+        let old_offset = self.scroll_offset;
+
+        match key {
+            Key::Up | Key::Char('k') => {
+                self.scroll_up(1);
+            }
+            Key::Down | Key::Char('j') => {
+                self.scroll_down(1, viewport_height);
+            }
+            Key::PageUp => {
+                self.page_up(viewport_height);
+            }
+            Key::PageDown => {
+                self.page_down(viewport_height);
+            }
+            Key::Home => {
+                self.scroll_to_top();
+            }
+            Key::End => {
+                self.scroll_to_bottom(viewport_height);
+            }
+            _ => {}
+        }
+
+        old_offset != self.scroll_offset
+    }
+
+    /// Check if content is scrollable
+    pub fn is_scrollable(&self, viewport_height: u16) -> bool {
+        self.content_height > viewport_height
+    }
+
+    /// Get scroll percentage (0.0 - 1.0)
+    pub fn scroll_percentage(&self, viewport_height: u16) -> f32 {
+        let max_offset = self.content_height.saturating_sub(viewport_height);
+        if max_offset == 0 {
+            0.0
+        } else {
+            self.scroll_offset as f32 / max_offset as f32
+        }
+    }
+
+    /// Render scrollbar
+    pub fn render_scrollbar(&self, ctx: &mut RenderContext) {
+        if !self.show_scrollbar {
+            return;
+        }
+
+        let area = self.apply_constraints(ctx.area);
+        if area.width < 1 || area.height < 1 {
+            return;
+        }
+
+        let viewport_height = area.height;
+        if self.content_height <= viewport_height {
+            return; // No scrollbar needed
+        }
+
+        let scrollbar_x = area.width - 1;
+
+        // Calculate scrollbar thumb position and size
+        let thumb_height = ((viewport_height as f32 / self.content_height as f32)
+            * viewport_height as f32)
+            .max(1.0) as u16;
+        let thumb_height = thumb_height.max(1).min(viewport_height);
+
+        let max_offset = self.content_height.saturating_sub(viewport_height);
+        let scroll_ratio = if max_offset > 0 {
+            self.offset_for(viewport_height) as f32 / max_offset as f32
+        } else {
+            0.0
+        };
+
+        let thumb_position = ((viewport_height - thumb_height) as f32 * scroll_ratio)
+            .max(0.0)
+            .min((viewport_height - thumb_height) as f32) as u16;
+
+        // Draw scrollbar track
+        for y in 0..viewport_height {
+            let mut cell = Cell::new('│');
+            cell.fg = Some(
+                self.scrollbar_bg
+                    .unwrap_or_else(|| ctx.css_background(Color::rgb(64, 64, 64))),
+            );
+            ctx.set(scrollbar_x, y, cell);
+        }
+
+        // Draw scrollbar thumb
+        for y in thumb_position..(thumb_position + thumb_height).min(viewport_height) {
+            let mut cell = Cell::new('█');
+            cell.fg = Some(
+                self.scrollbar_fg
+                    .unwrap_or_else(|| ctx.css_color(Color::WHITE)),
+            );
+            ctx.set(scrollbar_x, y, cell);
+        }
+    }
+
+    /// Get the visible area for content (excludes scrollbar)
+    pub fn content_area(&self, area: Rect) -> Rect {
+        if self.show_scrollbar && self.content_height > area.height {
+            Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width.saturating_sub(1),
+                height: area.height,
+            }
+        } else {
+            area
+        }
+    }
+
+    /// Create a clipped buffer for scrolled content
+    pub fn create_content_buffer(&self, width: u16) -> Buffer {
+        Buffer::new(width, self.content_height)
+    }
+
+    /// Render scrolled content from a pre-rendered buffer
+    pub fn render_content(&self, ctx: &mut RenderContext, content_buffer: &Buffer) {
+        let area = self.content_area(self.apply_constraints(ctx.area));
+        let viewport_height = area.height;
+        let offset = self.offset_for(viewport_height);
+
+        for y in 0..viewport_height {
+            let content_y = offset + y;
+            if content_y >= self.content_height {
+                break;
+            }
+
+            for x in 0..area.width {
+                if let Some(cell) = content_buffer.get(x, content_y) {
+                    ctx.set(x, y, *cell);
+                }
+            }
+        }
+
+        self.render_scrollbar(ctx);
+    }
+}
+
+impl Default for ScrollView {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl View for ScrollView {
+    crate::impl_view_meta!("ScrollView");
+
+    fn render(&self, ctx: &mut RenderContext) {
+        // ScrollView alone just renders the scrollbar
+        // Content should be rendered via render_content method
+        self.render_scrollbar(ctx);
+    }
+}
+
+impl_styled_view!(ScrollView);
+impl_props_builders!(ScrollView);
+
+/// Helper function to create a scroll view
+pub fn scroll_view() -> ScrollView {
+    ScrollView::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_scroll_view_new() {
+        let s = ScrollView::new();
+        assert_eq!(s.offset(), 0);
+        assert_eq!(s.content_height, 0);
+        assert!(s.show_scrollbar);
+    }
+
+    #[test]
+    fn test_scroll_view_scroll_down_up() {
+        let mut s = ScrollView::new().content_height(100);
+        s.scroll_down(10, 20);
+        assert_eq!(s.offset(), 10);
+        s.scroll_up(5);
+        assert_eq!(s.offset(), 5);
+    }
+
+    #[test]
+    fn test_scroll_view_scroll_bounds() {
+        let mut s = ScrollView::new().content_height(50);
+        s.scroll_down(100, 20); // Can't scroll past max
+        assert_eq!(s.offset(), 30); // 50 - 20
+        s.scroll_up(100); // Can't scroll before 0
+        assert_eq!(s.offset(), 0);
+    }
+
+    #[test]
+    fn test_scroll_view_page_down_up() {
+        let mut s = ScrollView::new().content_height(100);
+        s.page_down(20);
+        assert_eq!(s.offset(), 19); // viewport - 1
+        s.page_up(20);
+        assert_eq!(s.offset(), 0);
+    }
+
+    #[test]
+    fn test_scroll_view_scroll_to_top_bottom() {
+        let mut s = ScrollView::new().content_height(100);
+        s.scroll_to_bottom(20);
+        assert_eq!(s.offset(), 80);
+        s.scroll_to_top();
+        assert_eq!(s.offset(), 0);
+    }
+
+    #[test]
+    fn test_scroll_view_set_offset() {
+        let mut s = ScrollView::new().content_height(50);
+        s.set_offset(25, 20);
+        assert_eq!(s.offset(), 25);
+        s.set_offset(100, 20); // Clamped to max
+        assert_eq!(s.offset(), 30);
+    }
+
+    #[test]
+    fn test_scroll_view_is_scrollable() {
+        let s = ScrollView::new().content_height(50);
+        assert!(s.is_scrollable(20));
+        assert!(!s.is_scrollable(50));
+        assert!(!s.is_scrollable(60));
+    }
+
+    #[test]
+    fn test_scroll_view_percentage() {
+        let mut s = ScrollView::new().content_height(100);
+        assert_eq!(s.scroll_percentage(20), 0.0);
+        s.scroll_to_bottom(20);
+        assert_eq!(s.scroll_percentage(20), 1.0);
+    }
+
+    #[test]
+    fn test_scroll_view_handle_key() {
+        use crate::event::Key;
+        let mut s = ScrollView::new().content_height(100);
+
+        assert!(s.handle_key(&Key::Down, 20));
+        assert_eq!(s.offset(), 1);
+
+        assert!(s.handle_key(&Key::PageDown, 20));
+        assert!(s.offset() > 1);
+
+        assert!(s.handle_key(&Key::Home, 20));
+        assert_eq!(s.offset(), 0);
+
+        assert!(!s.handle_key(&Key::Char('x'), 20));
+    }
+
+    #[test]
+    fn test_scroll_view_content_area() {
+        let s = ScrollView::new().content_height(50);
+        let area = Rect::new(0, 0, 40, 20);
+        let content = s.content_area(area);
+        // Scrollbar takes 1 column
+        assert_eq!(content.width, 39);
+    }
+
+    #[test]
+    fn test_scroll_view_content_area_no_scrollbar_needed() {
+        let s = ScrollView::new().content_height(10);
+        let area = Rect::new(0, 0, 40, 20);
+        let content = s.content_area(area);
+        assert_eq!(content.width, 40); // No scrollbar needed
+    }
+
+    #[test]
+    fn test_scroll_view_render_no_panic() {
+        let mut buf = Buffer::new(40, 20);
+        let area = Rect::new(0, 0, 40, 20);
+        let mut ctx = RenderContext::new(&mut buf, area);
+        let s = ScrollView::new().content_height(50);
+        s.render(&mut ctx);
+    }
+
+    #[test]
+    fn test_scroll_view_default() {
+        let s = ScrollView::default();
+        assert_eq!(s.offset(), 0);
+    }
+
+    #[test]
+    fn test_scroll_view_helper_fn() {
+        let s = scroll_view();
+        assert_eq!(s.offset(), 0);
+    }
+
+    // Found by tests/event_sequences.rs: the shrunk sequence was
+    // `Ctrl+End [80x24]` - scrolled to the bottom of a 10-row viewport, then
+    // the viewport grew to 24 rows. The stored offset (40) was drawn as is,
+    // leaving blank rows under the content, and Up needed many presses
+    // before anything moved.
+    #[test]
+    fn test_scroll_view_offset_after_the_viewport_grows() {
+        let mut s = ScrollView::new().content_height(50);
+        s.handle_key(&crate::event::Key::End, 10);
+        assert_eq!(s.offset(), 40);
+
+        let mut content = s.create_content_buffer(10);
+        for y in 0..50u16 {
+            content.put_str(0, y, &format!("{y:02}"));
+        }
+        let mut buffer = Buffer::new(10, 24);
+        let mut ctx = RenderContext::new(&mut buffer, Rect::new(0, 0, 10, 24));
+        s.render_content(&mut ctx, &content);
+        // The last 24 rows of the content fill the viewport
+        assert_eq!(buffer.get(0, 0).unwrap().symbol, '2');
+        assert_eq!(buffer.get(1, 0).unwrap().symbol, '6');
+        assert_eq!(buffer.get(1, 23).unwrap().symbol, '9');
+
+        s.handle_key(&crate::event::Key::Up, 24);
+        assert_eq!(s.offset(), 25);
+    }
+}

@@ -18,12 +18,14 @@
 
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
-    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
-    RemoveTurnCommandDto, RunProjectionDto, RunStatusDto, SessionProjectionDto, SessionSnapshotDto,
+    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, NewMessageDto,
+    PendingTurnProjectionDto, RemoveTurnCommandDto, RunProjectionDto, RunStatusDto,
+    SessionProjectionDto, SessionSnapshotDto, SessionSummariesDto, WorkspaceBindingDto,
+    WorkspaceRootDto,
 };
 use intention_proto::{
     DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, RunId,
-    SessionId, TimestampDto, ToolCallId, UsageDto, run_status_is_terminal,
+    SessionId, ThemeDto, TimestampDto, ToolCallId, UsageDto, run_status_is_terminal,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
@@ -549,6 +551,9 @@ pub trait StorageRepositoryDto {
 
     /// Appends one transcript row and returns it as committed.
     ///
+    /// The commit assigns the row's durable identity, so the committed row
+    /// carries it and the caller publishes from that returned value.
+    ///
     /// # Errors
     ///
     /// Returns a validation, not-found, or conflict error when the row cannot be
@@ -556,11 +561,12 @@ pub trait StorageRepositoryDto {
     /// fails.
     fn append_message(
         &self,
-        message: MessageProjectionDto,
+        message: NewMessageDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<MessageProjectionDto>;
 
-    /// Commits one tool result with its answering transcript row in one transaction.
+    /// Commits one tool result with its answering transcript row in one
+    /// transaction and returns the committed row.
     ///
     /// # Errors
     ///
@@ -571,8 +577,8 @@ pub trait StorageRepositoryDto {
     fn write_tool_result(
         &self,
         evidence: ToolResultEvidenceDto,
-        message: MessageProjectionDto,
-    ) -> DtoResult<ToolResultEvidenceDto>;
+        message: NewMessageDto,
+    ) -> DtoResult<MessageProjectionDto>;
 
     /// Loads typed evidence durably recorded for one tool call.
     ///
@@ -644,6 +650,30 @@ pub trait StorageRepositoryDto {
     /// an unavailable error when storage cannot be read.
     fn load_session_projection(&self, session_id: SessionId) -> DtoResult<SessionProjectionDto>;
 
+    /// Lists the current durable sessions newest-first in one bounded window.
+    ///
+    /// Returns at most `limit` sessions ordered by their last durable update,
+    /// newest first, with the durable session identity breaking ties, and
+    /// reports how many sessions exist beyond the returned window instead of
+    /// silently truncating the list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when durable storage cannot be read.
+    fn list_sessions(&self, limit: u32) -> DtoResult<SessionSummariesDto>;
+
+    /// Returns the durable project and workspace identity bound to one root.
+    ///
+    /// `None` means the root carries no binding yet: the next creation for it
+    /// establishes one. A bound root resolves to exactly the pair an earlier
+    /// creation committed, so a caller joins the durable association instead of
+    /// proposing a second identity the association would reject.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when durable storage cannot be read.
+    fn workspace_binding(&self, root: &WorkspaceRootDto) -> DtoResult<Option<WorkspaceBindingDto>>;
+
     /// Loads the most recent committed transcript rows of one session.
     ///
     /// # Errors
@@ -704,6 +734,26 @@ pub trait StorageRepositoryDto {
         let messages = self.load_recent_messages(session_id, message_limit)?;
         SessionSnapshotDto::with_projection(session_id, projection, messages)
     }
+
+    /// Loads the durable terminal theme override.
+    ///
+    /// `None` means no override was ever stored: the caller answers from the
+    /// resolved configuration instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when durable storage cannot be read.
+    fn load_tui_theme(&self) -> DtoResult<Option<ThemeDto>>;
+
+    /// Commits the durable terminal theme override in exactly one transaction.
+    ///
+    /// The settings row is a singleton, so a later set replaces the earlier
+    /// value instead of recording a second row.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the override cannot be committed.
+    fn save_tui_theme(&self, theme: ThemeDto) -> DtoResult<()>;
 
     /// Records an already credential-free configuration revision snapshot.
     ///

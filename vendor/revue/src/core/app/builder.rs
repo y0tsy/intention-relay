@@ -1,0 +1,711 @@
+//! Application builder
+
+use super::App;
+use crate::constants::MAX_CSS_FILE_SIZE;
+use crate::event::{Key, KeyEvent};
+use crate::plugin::{Plugin, PluginRegistry};
+use crate::style::{parse_css, StyleSheet};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+#[cfg(feature = "hot-reload")]
+use super::style_sources::StyleSources;
+#[cfg(feature = "hot-reload")]
+use super::{HotReload, HotReloadConfig};
+
+/// Builder for configuring and creating an App
+pub struct AppBuilder {
+    stylesheet: StyleSheet,
+    // To keep track of file paths for hot reload
+    style_paths: Vec<PathBuf>,
+    hot_reload: bool,
+    /// What `stylesheet` was built from, in order, so hot reload can rebuild it
+    #[cfg(feature = "hot-reload")]
+    style_sources: StyleSources,
+    devtools: bool,
+    mouse_capture: bool,
+    plugins: PluginRegistry,
+    /// Explicit initial size; when None the size is queried from the terminal
+    size: Option<(u16, u16)>,
+    /// Reconcile the DOM against the view on every frame
+    incremental_dom: bool,
+    tab_navigation: bool,
+    /// Key that quits the app; `None` leaves quitting to the app handler
+    quit_key: Option<KeyEvent>,
+    /// Build the DOM from the render traversal instead of `View::children`
+    dom_from_render: bool,
+    css_layout: bool,
+}
+
+impl AppBuilder {
+    /// Create a new application builder
+    pub fn new() -> Self {
+        Self {
+            stylesheet: StyleSheet::new(),
+            style_paths: Vec::new(),
+            hot_reload: false,
+            #[cfg(feature = "hot-reload")]
+            style_sources: StyleSources::default(),
+            devtools: cfg!(feature = "devtools"),
+            mouse_capture: true,
+            plugins: PluginRegistry::new(),
+            size: None,
+            incremental_dom: false,
+            tab_navigation: false,
+            quit_key: Some(KeyEvent::ctrl(Key::Char('c'))),
+            dom_from_render: true,
+            css_layout: true,
+        }
+    }
+
+    /// Build the DOM from the render traversal instead of `View::children`.
+    ///
+    /// **On by default** since 3.0. The frame renders twice - once to discover
+    /// the tree, once to paint it - and every widget rendered through
+    /// [`RenderContext::render_child`](crate::widget::RenderContext::render_child)
+    /// gets a DOM node and its own computed style. That is what makes CSS reach
+    /// widgets below the root, and what lets the mouse find a widget for
+    /// `:hover` and click-to-focus. A node's `background` fills its whole box,
+    /// under whatever the widget painted.
+    ///
+    /// Turn it off to get the 2.x behavior: the DOM only contains widgets
+    /// exposed through [`View::children`](crate::widget::View::children), which
+    /// almost nothing implements, so a stylesheet reaches the root widget and
+    /// nothing below it. Turning it off also makes
+    /// [`css_layout`](Self::css_layout) inert.
+    ///
+    /// Implies per-frame reconciliation, so `incremental_dom` has no additional
+    /// effect when this is on.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Opt out: 2.x behavior, CSS reaches only the root widget.
+    /// let app = App::builder()
+    ///     .dom_from_render(false)
+    ///     .css_layout(false)
+    ///     .build();
+    /// ```
+    pub fn dom_from_render(mut self, enabled: bool) -> Self {
+        self.dom_from_render = enabled;
+        self
+    }
+
+    /// Let CSS box properties override the geometry a container computed.
+    ///
+    /// **On by default** since 3.0, and inert unless
+    /// [`dom_from_render`](Self::dom_from_render) is also on - the properties
+    /// are read from the node the paint pass is holding, and without the render
+    /// traversal there is no such node below the root.
+    ///
+    /// Container widgets keep deciding the *flow*: `vstack()` still stacks, and
+    /// its `gap` and per-child sizes still apply. On top of that, a node's own
+    /// specified `display`, `width`, `height`, `margin` and the `min`/`max`
+    /// constraints adjust the box the container handed it. That is what makes
+    /// `#sidebar { width: 20; }` and `.hidden { display: none; }` do something.
+    ///
+    /// Not applied: `padding`, which insets a widget's content and would move
+    /// the border of a widget that draws one, and `flex-*` / `grid-*`, which
+    /// describe flow and belong to the container. `gap` is read by the
+    /// container itself.
+    ///
+    /// Turn it off to keep paint properties (colors, `text-align`, borders)
+    /// while ignoring box properties, as 2.x did.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // CSS colors apply, but CSS never moves or resizes a widget.
+    /// let app = App::builder()
+    ///     .css_layout(false)
+    ///     .build();
+    /// ```
+    pub fn css_layout(mut self, enabled: bool) -> Self {
+        self.css_layout = enabled;
+        self
+    }
+
+    /// Reconcile the DOM against the view on every frame.
+    ///
+    /// **Off by default.** Without it the DOM is built once and then stops
+    /// following the view, so a widget added after the first frame is invisible
+    /// to CSS matching, to layout and to devtools. With it on, every frame
+    /// reconciles: nodes that still match keep their `DomId`, their state
+    /// (focus, hover, selection) and their cached style, and only the parts
+    /// that actually changed are marked dirty.
+    ///
+    /// Widgets in a dynamic collection should implement
+    /// [`View::key`](crate::widget::View::key) so they are matched by identity
+    /// rather than by position.
+    ///
+    /// It only matters with [`dom_from_render`](Self::dom_from_render) turned
+    /// off: the render-built DOM, the default, reconciles every frame on its
+    /// own.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let app = App::builder()
+    ///     .incremental_dom(true)
+    ///     .build();
+    /// ```
+    pub fn incremental_dom(mut self, enabled: bool) -> Self {
+        self.incremental_dom = enabled;
+        self
+    }
+
+    /// Let Tab and Shift+Tab move `:focus` between focusable widgets.
+    ///
+    /// **Off by default.** Until now the only thing that produced focus was a
+    /// click, so an app with no mouse had no `:focus` at all and every rule
+    /// naming it was dead. This walks the DOM in document order - the order the
+    /// reader meets things - skipping `disabled` nodes and wrapping at both
+    /// ends.
+    ///
+    /// It is off by default because Tab is a key an existing app may already
+    /// handle itself; the runtime taking it would be a silent behavior change.
+    /// The app's own handler runs first either way.
+    ///
+    /// This sets `NodeState.focused` and nothing else. Widgets still read their
+    /// own `focused` field, so no widget *behavior* changes - what changes is
+    /// that `:focus` rules finally match without a mouse.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let app = App::builder()
+    ///     .tab_navigation(true)
+    ///     .build();
+    /// ```
+    pub fn tab_navigation(mut self, enabled: bool) -> Self {
+        self.tab_navigation = enabled;
+        self
+    }
+
+    /// Set the key that stops the event loop.
+    ///
+    /// **Ctrl+C by default**, the behavior before this option existed. `None`
+    /// disables the built-in quit key, so the app's own handler sees the key and
+    /// can implement its own semantics - for example quitting on a second press
+    /// while the first press clears the input.
+    ///
+    /// The default and any other Ctrl+C binding keep the historical predicate:
+    /// Ctrl+C with an extra Alt or Shift still quits. Every other configured key
+    /// matches its exact chord, so `Alt+X` does not fire on a plain `X`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // The app handles Ctrl+C itself.
+    /// let app = App::builder()
+    ///     .quit_key(None)
+    ///     .build();
+    /// ```
+    pub fn quit_key(mut self, key: Option<KeyEvent>) -> Self {
+        self.quit_key = key;
+        self
+    }
+
+    /// Set an explicit initial size instead of querying the terminal.
+    ///
+    /// Required for headless use (tests, snapshots, CI) where
+    /// `crossterm::terminal::size()` is unavailable or non-deterministic.
+    pub fn size(mut self, width: u16, height: u16) -> Self {
+        self.size = Some((width.max(1), height.max(1)));
+        self
+    }
+
+    /// Register a plugin
+    ///
+    /// Plugins are initialized when the app is built and can hook into
+    /// the application lifecycle.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use revue::plugin::LoggerPlugin;
+    ///
+    /// let app = App::builder()
+    ///     .plugin(LoggerPlugin::new())
+    ///     .build();
+    /// ```
+    pub fn plugin<P: Plugin + 'static>(mut self, plugin: P) -> Self {
+        self.plugins.register(plugin);
+        self
+    }
+
+    /// Add a CSS stylesheet from file
+    pub fn style(mut self, path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        self.style_paths.push(path.clone());
+
+        let loaded = load_css_file(&path);
+        if let Some((_, sheet)) = &loaded {
+            self.stylesheet.merge(sheet.clone());
+        }
+        #[cfg(feature = "hot-reload")]
+        self.style_sources.push_file(path, loaded);
+
+        self
+    }
+
+    /// Add inline CSS styles
+    pub fn css(mut self, css: impl Into<String>) -> Self {
+        let css = css.into();
+        match parse_css(&css) {
+            Ok(sheet) => {
+                #[cfg(feature = "hot-reload")]
+                self.style_sources.push_fixed(sheet.clone());
+                self.stylesheet.merge(sheet);
+            }
+            Err(e) => log_warn!("Failed to parse inline CSS: {}", e),
+        }
+        self
+    }
+
+    /// Reload the stylesheet files added with [`style`](Self::style) when
+    /// they change on disk, without restarting the app.
+    ///
+    /// Needs the `hot-reload` cargo feature; without it this is a no-op, so a
+    /// production build carries no file watcher. With the feature compiled
+    /// in, setting the `REVUE_HOT_RELOAD` environment variable (to anything
+    /// but empty, `0`, `false`, `no` or `off`) turns hot reload on even when
+    /// this was not called - that is how `revue dev` enables it for an app
+    /// it runs. Inline [`css`](Self::css) is not watched.
+    pub fn hot_reload(mut self, enabled: bool) -> Self {
+        self.hot_reload = enabled;
+        self
+    }
+
+    /// Enable devtools
+    pub fn devtools(mut self, enabled: bool) -> Self {
+        self.devtools = enabled;
+        self
+    }
+
+    /// Enable/disable mouse capture
+    pub fn mouse_capture(mut self, enabled: bool) -> Self {
+        self.mouse_capture = enabled;
+        self
+    }
+
+    /// Build the application
+    pub fn build(mut self) -> App {
+        let initial_size = match self.size {
+            Some(size) => size,
+            None => {
+                let (w, h) = crossterm::terminal::size().unwrap_or((80, 24));
+                // Clamp to a sane minimum to avoid 0x0 buffers on some environments
+                (w.max(1), h.max(1))
+            }
+        };
+
+        // Collect and merge plugin styles
+        let plugin_css = self.plugins.collect_styles();
+        if !plugin_css.is_empty() {
+            if let Ok(sheet) = parse_css(&plugin_css) {
+                #[cfg(feature = "hot-reload")]
+                self.style_sources.push_fixed(sheet.clone());
+                self.stylesheet.merge(sheet);
+            }
+        }
+
+        // Initialize plugins
+        if let Err(e) = self.plugins.init() {
+            log_warn!("Plugin initialization failed: {}", e);
+        }
+
+        // Set up hot reload if enabled (by the builder or by `REVUE_HOT_RELOAD`)
+        // and there are style paths
+        #[cfg(feature = "hot-reload")]
+        let hot_reload_on =
+            self.hot_reload || env_requests_hot_reload(std::env::var_os(HOT_RELOAD_ENV).as_deref());
+        #[cfg(feature = "hot-reload")]
+        let hot_reload = if hot_reload_on && !self.style_paths.is_empty() {
+            // Watch each file's directory rather than the file: an editor that
+            // saves by writing a new file and renaming it over the old one
+            // replaces the inode a file watch is attached to.
+            let config = HotReloadConfig {
+                recursive: false,
+                ..HotReloadConfig::default()
+            };
+            match HotReload::with_config(config) {
+                Ok(mut hr) => {
+                    let mut dirs: Vec<PathBuf> = Vec::new();
+                    for path in &self.style_paths {
+                        let dir = match path.parent() {
+                            Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+                            _ => PathBuf::from("."),
+                        };
+                        if dirs.contains(&dir) {
+                            continue;
+                        }
+                        if let Err(e) = hr.watch(&dir) {
+                            log_warn!("Failed to watch {:?} for hot reload: {}", &dir, e);
+                        }
+                        dirs.push(dir);
+                    }
+                    Some(hr)
+                }
+                Err(e) => {
+                    log_warn!("Failed to initialize hot reload: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let incremental_dom = self.incremental_dom;
+        let tab_navigation = self.tab_navigation;
+        let quit_key = self.quit_key;
+        let dom_from_render = self.dom_from_render;
+        let css_layout = self.css_layout;
+
+        #[cfg(feature = "hot-reload")]
+        let mut app = App::new_with_hot_reload(
+            initial_size,
+            self.stylesheet,
+            self.mouse_capture,
+            self.plugins,
+            self.devtools,
+            hot_reload,
+            self.style_sources,
+        );
+
+        #[cfg(not(feature = "hot-reload"))]
+        let mut app = App::new_with_plugins(
+            initial_size,
+            self.stylesheet,
+            self.mouse_capture,
+            self.plugins,
+            self.devtools,
+        );
+
+        app.set_incremental_dom(incremental_dom);
+        app.set_tab_navigation(tab_navigation);
+        app.set_quit_key(quit_key);
+        app.set_dom_from_render(dom_from_render);
+        app.set_css_layout(css_layout);
+        app
+    }
+}
+
+/// Read and parse a stylesheet file, logging (not failing) on a file that is
+/// missing, too large or invalid. Returns the text with what it parsed to.
+fn load_css_file(path: &Path) -> Option<(String, StyleSheet)> {
+    // Check file size to prevent DoS
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.len() > MAX_CSS_FILE_SIZE => {
+            log_warn!(
+                "CSS file too large ({} bytes, max {}): {:?}",
+                metadata.len(),
+                MAX_CSS_FILE_SIZE,
+                path
+            );
+            return None;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            log_warn!("Failed to read CSS file metadata {:?}: {}", path, e);
+            return None;
+        }
+    }
+
+    // Capped: the metadata length is not the read length for a FIFO or a
+    // file still being written.
+    let content = match crate::utils::read_capped(path, MAX_CSS_FILE_SIZE).and_then(|bytes| {
+        String::from_utf8(bytes)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }) {
+        Ok(c) => c,
+        Err(e) => {
+            log_warn!("Failed to read CSS file {:?}: {}", path, e);
+            return None;
+        }
+    };
+
+    match parse_css(&content) {
+        Ok(sheet) => Some((content, sheet)),
+        Err(e) => {
+            log_warn!("Failed to parse CSS from {:?}: {}", path, e);
+            None
+        }
+    }
+}
+
+/// Environment variable that turns stylesheet hot reload on without code
+/// changes (see [`AppBuilder::hot_reload`]). `revue dev` sets it.
+#[cfg(feature = "hot-reload")]
+const HOT_RELOAD_ENV: &str = "REVUE_HOT_RELOAD";
+
+/// Does this value of `REVUE_HOT_RELOAD` ask for hot reload?
+///
+/// Unset, empty, `0`, `false`, `no` and `off` (any case) mean no.
+#[cfg(feature = "hot-reload")]
+fn env_requests_hot_reload(value: Option<&std::ffi::OsStr>) -> bool {
+    let Some(value) = value.and_then(|v| v.to_str()) else {
+        // Unset; a value that is not UTF-8 is still "set".
+        return value.is_some();
+    };
+    let value = value.trim();
+    !(value.is_empty()
+        || value == "0"
+        || ["false", "no", "off"]
+            .iter()
+            .any(|off| value.eq_ignore_ascii_case(off)))
+}
+
+impl Default for AppBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// KEEP HERE - Private implementation tests (accesses private fields: style_paths, hot_reload, etc.)
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_builder_new() {
+        let builder = AppBuilder::new();
+        assert!(builder.style_paths.is_empty());
+        assert!(!builder.hot_reload);
+        assert!(builder.mouse_capture);
+    }
+
+    #[test]
+    fn test_builder_default_trait() {
+        let builder = AppBuilder::default();
+        assert!(builder.style_paths.is_empty());
+        assert!(!builder.hot_reload);
+        assert!(builder.mouse_capture);
+    }
+
+    #[test]
+    fn test_builder_hot_reload_enabled() {
+        let builder = AppBuilder::new().hot_reload(true);
+        assert!(builder.hot_reload);
+    }
+
+    #[test]
+    fn test_builder_hot_reload_disabled() {
+        let builder = AppBuilder::new().hot_reload(false);
+        assert!(!builder.hot_reload);
+    }
+
+    #[test]
+    fn test_builder_devtools_enabled() {
+        let builder = AppBuilder::new().devtools(true);
+        assert!(builder.devtools);
+    }
+
+    #[test]
+    fn test_builder_devtools_disabled() {
+        let builder = AppBuilder::new().devtools(false);
+        assert!(!builder.devtools);
+    }
+
+    #[test]
+    fn test_builder_mouse_capture_enabled() {
+        let builder = AppBuilder::new().mouse_capture(true);
+        assert!(builder.mouse_capture);
+    }
+
+    #[test]
+    fn test_builder_mouse_capture_disabled() {
+        let builder = AppBuilder::new().mouse_capture(false);
+        assert!(!builder.mouse_capture);
+    }
+
+    #[test]
+    fn test_builder_css_valid() {
+        let builder = AppBuilder::new().css("div { color: red; }");
+        // Should parse without error; stylesheet gets updated
+        assert!(!builder.stylesheet.rules.is_empty());
+    }
+
+    #[test]
+    fn test_builder_css_empty() {
+        let builder = AppBuilder::new().css("");
+        // Empty CSS is valid, stylesheet remains empty
+        assert!(builder.stylesheet.rules.is_empty());
+    }
+
+    #[test]
+    fn test_builder_css_invalid() {
+        // Invalid CSS should log warning but not panic
+        let builder = AppBuilder::new().css("not { valid {{{ css");
+        // Should still return a builder (with warning logged)
+        assert!(builder.style_paths.is_empty());
+    }
+
+    #[test]
+    fn test_builder_multiple_css() {
+        let builder = AppBuilder::new()
+            .css("div { color: red; }")
+            .css("span { color: blue; }");
+        // Both should be merged
+        assert!(!builder.stylesheet.rules.is_empty());
+    }
+
+    #[test]
+    fn test_builder_chaining() {
+        let builder = AppBuilder::new()
+            .hot_reload(true)
+            .devtools(true)
+            .mouse_capture(false)
+            .css("div { display: flex; }");
+
+        assert!(builder.hot_reload);
+        assert!(builder.devtools);
+        assert!(!builder.mouse_capture);
+        assert!(!builder.stylesheet.rules.is_empty());
+    }
+
+    #[test]
+    fn test_builder_style_nonexistent_file() {
+        // Should handle missing file gracefully with warning
+        let builder = AppBuilder::new().style("/nonexistent/path/style.css");
+        assert_eq!(builder.style_paths.len(), 1);
+        // File doesn't exist but path is tracked
+    }
+
+    #[test]
+    fn test_builder_build() {
+        let app = AppBuilder::new()
+            .mouse_capture(false)
+            .css("div { color: red; }")
+            .build();
+        assert!(!app.is_running());
+        assert!(!app.mouse_capture);
+    }
+
+    #[test]
+    fn test_builder_build_with_defaults() {
+        let app = AppBuilder::new().build();
+        assert!(!app.is_running());
+        assert!(app.mouse_capture); // Default is true
+    }
+
+    #[test]
+    fn test_builder_quit_key() {
+        // Default keeps the historical Ctrl+C
+        let app = AppBuilder::new().build();
+        assert_eq!(app.quit_key, Some(KeyEvent::ctrl(Key::Char('c'))));
+
+        // A configured key replaces it
+        let quit_key = KeyEvent::alt(Key::Char('q'));
+        let app = AppBuilder::new().quit_key(Some(quit_key.clone())).build();
+        assert_eq!(app.quit_key, Some(quit_key));
+
+        // None disables the built-in quit key
+        let app = AppBuilder::new().quit_key(None).build();
+        assert_eq!(app.quit_key, None);
+    }
+
+    #[test]
+    #[ignore = "flaky: crossterm::terminal::size() returns (0,0) in parallel test environment"]
+    fn test_builder_build_initializes_buffers() {
+        let app = AppBuilder::new().build();
+        // Should have initialized buffers
+        assert!(app.buffers[0].width() > 0 || app.buffers[0].height() > 0);
+    }
+
+    #[test]
+    fn test_builder_devtools_actually_enables() {
+        // Build with devtools enabled
+        let app = AppBuilder::new().devtools(true).build();
+
+        // Verify devtools was enabled by build()
+        assert!(
+            app.is_devtools_enabled(),
+            "devtools should be enabled after build() with devtools(true)"
+        );
+    }
+
+    #[test]
+    fn test_builder_devtools_disabled_by_default_when_feature_off() {
+        // Build with devtools explicitly disabled
+        let app = AppBuilder::new().devtools(false).build();
+
+        // Verify devtools is disabled
+        assert!(
+            !app.is_devtools_enabled(),
+            "devtools should be disabled when devtools(false)"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "hot-reload")]
+    #[ignore = "HotReload::new() blocks for extended time on Windows CI (24+ minutes)"]
+    fn test_builder_hot_reload_with_style_path() {
+        use std::io::Write;
+
+        // Create a temporary CSS file
+        let temp_dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(_) => return, // Skip test if tempdir creation fails
+        };
+        let css_path = temp_dir.path().join("test.css");
+        let mut file = match std::fs::File::create(&css_path) {
+            Ok(f) => f,
+            Err(_) => return, // Skip test if file creation fails
+        };
+        let _ = writeln!(file, "div {{ color: red; }}");
+
+        // Build with hot reload enabled
+        let app = AppBuilder::new().hot_reload(true).style(&css_path).build();
+
+        // Verify hot reload is set up (app has hot_reload field)
+        assert!(app.hot_reload.is_some(), "hot_reload should be initialized");
+    }
+
+    #[test]
+    #[cfg(feature = "hot-reload")]
+    fn test_builder_hot_reload_disabled_no_watcher() {
+        // Build with hot reload disabled
+        let app = AppBuilder::new().hot_reload(false).build();
+
+        // Verify hot reload is not set up
+        assert!(
+            app.hot_reload.is_none(),
+            "hot_reload should be None when disabled"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "hot-reload")]
+    fn test_env_requests_hot_reload() {
+        use std::ffi::OsStr;
+
+        assert!(!env_requests_hot_reload(None));
+        for off in ["", " ", "0", "false", "FALSE", "no", "Off"] {
+            assert!(
+                !env_requests_hot_reload(Some(OsStr::new(off))),
+                "{off:?} should not enable hot reload"
+            );
+        }
+        for on in ["1", "true", "yes", "on", "anything"] {
+            assert!(
+                env_requests_hot_reload(Some(OsStr::new(on))),
+                "{on:?} should enable hot reload"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "hot-reload")]
+    fn test_builder_hot_reload_no_style_paths() {
+        // Build with hot reload enabled but no style paths
+        let app = AppBuilder::new().hot_reload(true).build();
+
+        // hot_reload should be None because there are no style paths to watch
+        assert!(
+            app.hot_reload.is_none(),
+            "hot_reload should be None when no style paths"
+        );
+    }
+}
