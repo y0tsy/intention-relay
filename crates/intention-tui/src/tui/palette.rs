@@ -14,7 +14,7 @@
 //! | [`ROW_SELECTED_BG`] | `#FADFC0` | the cursor row's wash |
 //! | [`ROW_ALT_BG`] | `#FBF5EC` | every second row's zebra tint |
 //! | [`STUB_BG`] | `#FBE4DF` | the `@todo(core)` empty state and welcome sub-blocks |
-//! | [`INPUT_BG`] | `#FFF4E2` | the chat input line |
+//! | [`INPUT_BG`] | `#FFF4E2` | the chat input buffer rows |
 //! | [`BADGE_BG`] | `#EFE0C8` | the badge wash of the input header and the welcome version |
 //! | [`BADGE_INK`] | `#5C4632` | the label ink of a badge |
 //! | [`USER_SURFACE`] | `#EDF1F5` | the wash of a user message card |

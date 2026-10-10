@@ -9,6 +9,7 @@
 mod action;
 mod browser;
 mod ctrl_c;
+mod escape;
 mod input;
 mod run;
 mod sessions;

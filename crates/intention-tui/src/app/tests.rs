@@ -937,6 +937,51 @@ fn cursor_movement_stops_at_both_ends_of_the_line() {
 }
 
 #[test]
+fn home_and_end_stay_inside_the_cursor_line() {
+    let mut state = AppState::new(None);
+    type_text(&mut state, "ab\ncdef");
+    state.update(Action::MoveInputCursor(InputCursorMove::Home));
+    assert_eq!(state.cursor(), 3, "Home reaches the line's first character");
+    state.update(Action::MoveInputCursor(InputCursorMove::Left));
+    assert_eq!(state.cursor(), 2, "Left steps across the line break");
+    state.update(Action::MoveInputCursor(InputCursorMove::End));
+    assert_eq!(state.cursor(), 2, "End stops at the break ending the line");
+    state.update(Action::MoveInputCursor(InputCursorMove::Right));
+    assert_eq!(state.cursor(), 3);
+    state.update(Action::MoveInputCursor(InputCursorMove::End));
+    assert_eq!(
+        state.cursor(),
+        7,
+        "End reaches the last line's last character"
+    );
+}
+
+#[test]
+fn a_backslash_before_enter_inserts_a_line_break_instead_of_submitting() {
+    let session_id = SessionId::new();
+    let mut state = opened_session(session_id, Vec::new());
+    type_text(&mut state, "line one\\");
+    let effects = state.update(Action::InputSubmitted);
+    assert!(effects.is_empty(), "the break does not submit the prompt");
+    assert_eq!(state.input(), "line one\n");
+    assert!(
+        !state.input().contains('\\'),
+        "the escape itself never reaches the buffer"
+    );
+    type_text(&mut state, "line two");
+    assert_eq!(state.input(), "line one\nline two");
+    let effects = state.update(Action::InputSubmitted);
+    assert_eq!(
+        effects,
+        vec![Effect::SendTurn {
+            session_id,
+            content: "line one\nline two".to_owned(),
+        }],
+        "submitting sends every line unchanged"
+    );
+}
+
+#[test]
 fn backspace_deletes_the_character_before_the_cursor() {
     let mut state = AppState::new(None);
     type_text(&mut state, "abc");
@@ -1418,6 +1463,110 @@ fn ctrl_q_stays_the_immediate_exit_while_the_ctrl_c_exit_is_armed() {
     let effects = state.update(Action::Quit);
     assert!(effects.is_empty());
     assert!(state.should_quit(), "Ctrl+Q needs no second press");
+}
+
+#[test]
+fn a_live_run_is_cancelled_by_one_esc_press_with_no_arming() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    let effects = state.update(Action::EscapePressed);
+    assert_eq!(
+        effects,
+        vec![Effect::Interrupt { session_id, run_id }],
+        "one press cancels the live run"
+    );
+    assert!(!state.should_quit(), "a cancel never exits");
+}
+
+#[test]
+fn one_esc_press_arms_the_clear_and_the_second_clears_the_line() {
+    let session_id = SessionId::new();
+    let mut state = opened_session(session_id, Vec::new());
+    type_text(&mut state, "typed");
+    let effects = state.update(Action::EscapePressed);
+    assert!(effects.is_empty(), "one press only arms the clear");
+    assert_eq!(state.notice(), Some("press Esc again to clear the input"));
+    assert_eq!(state.input(), "typed", "a single Esc never clears");
+    assert!(!state.should_quit(), "a typed line is not an exit");
+    let effects = state.update(Action::EscapePressed);
+    assert!(effects.is_empty(), "the clear asks for no client work");
+    assert_eq!(state.input(), "");
+    assert_eq!(state.cursor(), 0);
+    assert_eq!(state.notice(), None, "the clear shows no notice");
+    state.update(Action::NavigateInputHistory(InputHistoryMove::Previous));
+    assert_eq!(state.input(), "typed", "the cleared line stays recallable");
+}
+
+#[test]
+fn esc_exits_an_idle_front_end_with_an_empty_line() {
+    let session_id = SessionId::new();
+    let mut state = opened_session(session_id, Vec::new());
+    let effects = state.update(Action::EscapePressed);
+    assert!(effects.is_empty());
+    assert!(
+        state.should_quit(),
+        "an empty line leaves on a single press"
+    );
+}
+
+#[test]
+fn any_other_user_action_disarms_the_esc_clear() {
+    let session_id = SessionId::new();
+    let mut state = opened_session(session_id, Vec::new());
+    type_text(&mut state, "typed");
+    state.update(Action::EscapePressed);
+    state.update(Action::ScrollTranscript(TranscriptScroll::Older));
+    let effects = state.update(Action::EscapePressed);
+    assert!(
+        effects.is_empty(),
+        "the scroll disarmed the clear and re-armed it"
+    );
+    assert_eq!(
+        state.input(),
+        "typed",
+        "the clear still needs its second press"
+    );
+    assert_eq!(state.notice(), Some("press Esc again to clear the input"));
+}
+
+#[test]
+fn the_two_layered_keys_do_not_share_an_arm() {
+    let session_id = SessionId::new();
+    let mut state = opened_session(session_id, Vec::new());
+    type_text(&mut state, "typed");
+    state.update(Action::EscapePressed);
+    // Ctrl+C is another user action: it disarms the Esc clear and clears the
+    // line itself, exactly as one press of it always does.
+    state.update(Action::CtrlCPressed);
+    assert_eq!(state.input(), "");
+    type_text(&mut state, "typed");
+    let effects = state.update(Action::EscapePressed);
+    assert!(
+        effects.is_empty(),
+        "the Esc clear did not survive the Ctrl+C press"
+    );
+    assert_eq!(state.notice(), Some("press Esc again to clear the input"));
+}
+
+#[test]
+fn the_esc_cancel_disarms_the_ctrl_c_arm() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    state.update(Action::CtrlCPressed);
+    let effects = state.update(Action::EscapePressed);
+    assert_eq!(effects, vec![Effect::Interrupt { session_id, run_id }]);
+    let effects = state.update(Action::CtrlCPressed);
+    assert!(
+        effects.is_empty(),
+        "the interrupt arm did not survive the Esc press"
+    );
+    let expected = format!(
+        "press Ctrl+C again to interrupt run {}",
+        super::short_identifier(run_id)
+    );
+    assert_eq!(state.notice(), Some(expected.as_str()));
 }
 
 #[test]

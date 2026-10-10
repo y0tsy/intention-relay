@@ -37,12 +37,20 @@ impl AppState {
         Vec::new()
     }
 
-    /// Moves the cursor one character, stopping at either end of the line.
+    /// Moves the cursor one character, one line boundary, or one line end.
+    ///
+    /// The cursor counts characters of the whole buffer, so `Left` and `Right`
+    /// step across a line break like any other character. `Home` and `End` stay
+    /// inside the line the cursor is on: `Home` reaches its first character and
+    /// `End` its last, whether the line ends at a break or at the buffer's end.
     pub(super) fn apply_input_cursor_move(&mut self, movement: InputCursorMove) {
-        let characters = self.input.chars().count();
+        let characters: Vec<char> = self.input.chars().collect();
+        self.cursor = self.cursor.min(characters.len());
         self.cursor = match movement {
             InputCursorMove::Left => self.cursor.saturating_sub(1),
-            InputCursorMove::Right => self.cursor.saturating_add(1).min(characters),
+            InputCursorMove::Right => self.cursor.saturating_add(1).min(characters.len()),
+            InputCursorMove::Home => line_start(&characters, self.cursor),
+            InputCursorMove::End => line_end(&characters, self.cursor),
         };
     }
 
@@ -89,13 +97,21 @@ impl AppState {
         self.set_input(draft);
     }
 
-    /// Sends the input line as a user turn, or runs the slash command it names.
+    /// Sends the input buffer as a user turn, or runs the slash command it names.
+    ///
+    /// A backslash immediately before the cursor escapes the Enter press: this
+    /// action removes it and inserts a line break in its place, so a multi-line
+    /// prompt is typed without being submitted and the backslash itself never
+    /// reaches the submitted buffer.
     ///
     /// A prompt with no open session starts the session it needs instead of
     /// being rejected: the state asks for a session creation and remembers the
     /// prompt, and the snapshot that opens the created session sends it as the
     /// first turn.
     pub(super) fn submit_input(&mut self) -> Vec<Effect> {
+        if self.insert_line_break() {
+            return Vec::new();
+        }
         let content = self.input.trim().to_owned();
         if content.is_empty() {
             self.notice = Some("type a message before sending it".to_owned());
@@ -120,6 +136,27 @@ impl AppState {
             session_id,
             content,
         }]
+    }
+
+    /// Replaces the backslash before the cursor with a line break, if one is
+    /// there.
+    ///
+    /// Returns whether the Enter press inserted a line break instead of
+    /// submitting the buffer. The backslash is the escape for that one press:
+    /// the same action removes it and inserts the break, so no backslash ever
+    /// reaches the submitted prompt, while a backslash not followed by Enter
+    /// stays literal. The replacement keeps the character count, so the cursor
+    /// stays after the break it just inserted.
+    fn insert_line_break(&mut self) -> bool {
+        let Some(before) = self.cursor.checked_sub(1) else {
+            return false;
+        };
+        let offset = self.input_byte_offset(before);
+        if !self.input[offset..].starts_with('\\') {
+            return false;
+        }
+        self.input.replace_range(offset..offset + 1, "\n");
+        true
     }
 
     /// Starts the session one submitted prompt needs.
@@ -216,4 +253,23 @@ impl AppState {
             }
         }
     }
+}
+
+/// Returns the index of the first character of the line holding `cursor`.
+fn line_start(characters: &[char], cursor: usize) -> usize {
+    characters[..cursor]
+        .iter()
+        .rposition(|character| *character == '\n')
+        .map_or(0, |index| index + 1)
+}
+
+/// Returns the index of the line break ending the line holding `cursor`.
+///
+/// A cursor on the buffer's last line reaches the buffer's end instead, which
+/// is that line's end.
+fn line_end(characters: &[char], cursor: usize) -> usize {
+    characters[cursor..]
+        .iter()
+        .position(|character| *character == '\n')
+        .map_or(characters.len(), |index| cursor + index)
 }

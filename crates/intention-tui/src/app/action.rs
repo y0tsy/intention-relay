@@ -39,13 +39,17 @@ pub enum TranscriptScroll {
     Newer,
 }
 
-/// One cursor move inside the input line.
+/// One cursor move inside the input buffer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputCursorMove {
-    /// Move the cursor one character towards the line's start.
+    /// Move the cursor one character towards the buffer's start.
     Left,
-    /// Move the cursor one character towards the line's end.
+    /// Move the cursor one character towards the buffer's end.
     Right,
+    /// Move the cursor to the first character of the line it is on.
+    Home,
+    /// Move the cursor to the end of the line it is on.
+    End,
 }
 
 /// One step through the history of submitted and abandoned input lines.
@@ -157,6 +161,15 @@ pub enum Action {
     /// live run, abandons a typed line into the history, and arms or fires the
     /// exit. See `super::ctrl_c`.
     CtrlCPressed,
+    /// The user pressed Esc on the chat screen: cancel, clear, or exit.
+    ///
+    /// The core decides what the press means from the state it finds and from
+    /// the arm the previous press left: a live run is interrupted immediately,
+    /// a typed line needs two consecutive presses to be abandoned into the
+    /// history, and an empty line leaves the front end. The sessions browser
+    /// maps Esc to its own close action, so the two meanings never meet. See
+    /// `super::escape`.
+    EscapePressed,
     /// The user asked to interrupt the active run.
     InterruptRequested,
     /// The user asked to re-read current state from the daemon.

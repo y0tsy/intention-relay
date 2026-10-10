@@ -86,6 +86,14 @@ pub struct AppState {
     /// still empty and no run is live, so a state the press no longer matches
     /// starts a fresh sequence instead of firing a stale one.
     pub(super) ctrl_c_arm: Option<ctrl_c::CtrlCArm>,
+    /// Whether the last Esc press armed the clear for the next consecutive one.
+    ///
+    /// The clear is two consecutive Esc presses over a non-empty line and no
+    /// live run: the first press arms it with a notice and the second abandons
+    /// the line into the history, exactly as one Ctrl+C press does. Only its
+    /// own key and client reports leave the arm standing, so any other user
+    /// action starts a fresh sequence.
+    pub(super) escape_arm: bool,
     pub(super) notice: Option<String>,
     pub(super) error: Option<String>,
     pub(super) scroll: u16,
@@ -144,6 +152,7 @@ impl AppState {
             history_position: None,
             history_draft: None,
             ctrl_c_arm: None,
+            escape_arm: false,
             notice: None,
             error: None,
             scroll: 0,
@@ -179,16 +188,21 @@ impl AppState {
     /// failure carried by an action becomes the error line instead of an error
     /// return, so a front end never has to recover from a state transition.
     ///
-    /// The one cross-cutting rule lives here: the layered Ctrl+C arm is
-    /// consecutive over the user's own actions, so any other action the user
-    /// asks for disarms it at its entry point, and `Action::is_client_report`
-    /// leaves it standing.
+    /// The one cross-cutting rule lives here: each layered arm - the Ctrl+C
+    /// arm and the Esc clear arm - is consecutive over the user's own actions,
+    /// so any other action the user asks for disarms it at its entry point, and
+    /// `Action::is_client_report` leaves it standing.
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
-        // The layered Ctrl+C arm is consecutive over the user's own actions:
-        // any other action the user asks for clears it, while a client report
-        // leaves it standing for the second press.
-        if !matches!(action, Action::CtrlCPressed) && !action.is_client_report() {
-            self.ctrl_c_arm = None;
+        // Each layered arm is consecutive over the user's own actions: any
+        // other user action clears it - including the other key - while a
+        // client report leaves it standing for the second press.
+        if !action.is_client_report() {
+            if !matches!(action, Action::CtrlCPressed) {
+                self.ctrl_c_arm = None;
+            }
+            if !matches!(action, Action::EscapePressed) {
+                self.escape_arm = false;
+            }
         }
         match action {
             Action::Bootstrapped(health) => self.apply_bootstrapped(health.readiness()),
@@ -233,6 +247,7 @@ impl AppState {
             Action::BrowserTreeRequested => self.request_session_tree(),
             Action::NewSessionRequested => self.request_new_session(),
             Action::CtrlCPressed => self.apply_ctrl_c(),
+            Action::EscapePressed => self.apply_escape(),
             Action::InterruptRequested => self.request_interrupt(),
             Action::ReconnectRequested => self.request_reconnect(),
             Action::SelectTranscriptRows { anchor, extent } => self.apply_selection(anchor, extent),

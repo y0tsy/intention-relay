@@ -21,10 +21,6 @@ const PANEL_FRAME: u16 = 2;
 /// The columns the panel pads its content with.
 const PANEL_PADDING: u16 = 1;
 
-/// The rows the input block occupies: its frame, the badge header, the input
-/// line, and the run status row under it.
-const INPUT_BLOCK_ROWS: u16 = input::BLOCK_ROWS;
-
 /// The rows the notice or error line occupies under the input block.
 const DETAIL_ROWS: u16 = 1;
 
@@ -45,6 +41,10 @@ struct Panel {
     rows: u16,
     /// The rows the transcript pane occupies inside the panel.
     transcript_rows: u16,
+    /// The rows the input block occupies inside the panel.
+    input_rows: u16,
+    /// The rows the notice or error line occupies.
+    detail_rows: u16,
     /// The columns the panel's content has.
     content_columns: u16,
 }
@@ -52,15 +52,30 @@ struct Panel {
 /// Returns the geometry of the chat panel in one window.
 ///
 /// The panel sits on the canvas with a one-cell margin, so the window's own
-/// background stays visible around it. The input block and the detail line sit
-/// at the bottom, and the transcript takes every row they leave.
-const fn panel(window: Rect) -> Panel {
+/// background stays visible around it. The input block takes the rows its
+/// buffer needs - one per line beside its fixed chrome - the detail line keeps
+/// its one row under it, and the transcript takes every row that leaves; the
+/// three inside the frame sum to the panel's body exactly, so no child
+/// overflows the panel. A buffer taller than the panel can hold is bounded by
+/// the rows left after the detail line, and the block windows it.
+const fn panel(window: Rect, wanted_input_rows: u16) -> Panel {
     let columns = window.width.saturating_sub(PANEL_MARGIN * 2);
     let rows = window.height.saturating_sub(PANEL_MARGIN * 2);
+    let body = rows.saturating_sub(PANEL_FRAME);
+    let detail_rows = if body > 0 { DETAIL_ROWS } else { 0 };
+    let available = body.saturating_sub(detail_rows);
+    let input_rows = if wanted_input_rows < available {
+        wanted_input_rows
+    } else {
+        available
+    };
+    let transcript_rows = body.saturating_sub(detail_rows).saturating_sub(input_rows);
     Panel {
         columns,
         rows,
-        transcript_rows: rows.saturating_sub(PANEL_FRAME + INPUT_BLOCK_ROWS + DETAIL_ROWS),
+        transcript_rows,
+        input_rows,
+        detail_rows,
         content_columns: columns.saturating_sub(PANEL_FRAME + PANEL_PADDING * 2),
     }
 }
@@ -78,7 +93,7 @@ pub(super) fn chat_screen(
     window: Rect,
     cache: &RefCell<TranscriptLayoutCache>,
 ) -> Stack {
-    let panel = panel(window);
+    let panel = panel(window, input::block_rows(state));
     let bottom = window
         .height
         .saturating_sub(PANEL_MARGIN + panel.rows + PANEL_MARGIN);
@@ -143,10 +158,53 @@ fn panel_widget(
                 .body(
                     content
                         .child_sized(
-                            input::input_block(state, panel.content_columns),
-                            INPUT_BLOCK_ROWS,
+                            input::input_block(state, panel.content_columns, panel.input_rows),
+                            panel.input_rows,
                         )
-                        .child_sized(status::status_detail(state), DETAIL_ROWS),
+                        .child_sized(status::status_detail(state), panel.detail_rows),
                 ),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use revue::layout::Rect;
+
+    use super::{DETAIL_ROWS, PANEL_FRAME, panel};
+
+    #[test]
+    fn the_panel_spends_its_body_on_the_transcript_the_input_block_and_the_detail_line() {
+        let window = Rect::new(0, 0, 80, 24);
+        let one = panel(window, 5);
+        assert_eq!(one.detail_rows, DETAIL_ROWS);
+        assert_eq!(one.transcript_rows, 14, "a one-line buffer keeps its rows");
+        assert_eq!(
+            one.transcript_rows + one.input_rows + one.detail_rows,
+            20,
+            "the body is spent exactly"
+        );
+
+        let two = panel(window, 6);
+        assert_eq!(two.input_rows, 6, "the block takes one row per buffer line");
+        assert_eq!(
+            two.transcript_rows + 1,
+            one.transcript_rows,
+            "the transcript gives up exactly the row the line added"
+        );
+        assert_eq!(two.transcript_rows + two.input_rows + two.detail_rows, 20);
+
+        let tall = panel(window, 100);
+        assert_eq!(tall.input_rows, 19, "the detail line's row is kept first");
+        assert_eq!(tall.transcript_rows, 0);
+        assert_eq!(
+            tall.transcript_rows + tall.input_rows + tall.detail_rows,
+            20
+        );
+    }
+
+    #[test]
+    fn a_window_with_no_body_spends_no_rows() {
+        let tiny = panel(Rect::new(0, 0, 80, PANEL_FRAME), 5);
+        assert_eq!(tiny.transcript_rows + tiny.input_rows + tiny.detail_rows, 0);
+    }
 }

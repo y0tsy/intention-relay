@@ -9,8 +9,13 @@
 //! The transcript is moved by the mouse wheel, not by keys: `PageUp` and
 //! `PageDown` map to nothing here because they never reached a real terminal's
 //! application, and the wheel is handled in [`super::handle_event`]. `Ctrl+E`
-//! is the one chat binding beside the two control keys: it expands the newest
+//! is the one chat binding beside the control keys: it expands the newest
 //! collapsed reasoning block, exactly as a click on that block's marker does.
+//!
+//! `Esc` is the chat's cancel/exit key: a live run is interrupted by a single
+//! press, a typed line needs two consecutive presses to be abandoned, and an
+//! empty line leaves the front end. The sessions browser is a separate keymap
+//! and keeps `Esc` as its close key, so the two meanings never meet.
 //!
 //! The transcript's pointer path - selection, drag-scroll, and the marker click
 //! - lives in [`super`], because it needs the frame's published geometry.
@@ -38,8 +43,11 @@ const fn chat_action(key: &KeyEvent) -> Option<Action> {
         Key::Backspace => Some(Action::InputBackspace),
         Key::Left => Some(Action::MoveInputCursor(InputCursorMove::Left)),
         Key::Right => Some(Action::MoveInputCursor(InputCursorMove::Right)),
+        Key::Home => Some(Action::MoveInputCursor(InputCursorMove::Home)),
+        Key::End => Some(Action::MoveInputCursor(InputCursorMove::End)),
         Key::Up => Some(Action::NavigateInputHistory(InputHistoryMove::Previous)),
         Key::Down => Some(Action::NavigateInputHistory(InputHistoryMove::Next)),
+        Key::Escape => Some(Action::EscapePressed),
         _ => None,
     }
 }
@@ -106,9 +114,22 @@ mod tests {
             "the transcript moves on the mouse wheel, not on a page key"
         );
         assert_eq!(
+            key_action(&KeyEvent::new(Key::Home), Screen::Chat),
+            Some(Action::MoveInputCursor(InputCursorMove::Home))
+        );
+        assert_eq!(
+            key_action(&KeyEvent::new(Key::End), Screen::Chat),
+            Some(Action::MoveInputCursor(InputCursorMove::End))
+        );
+        assert_eq!(
             key_action(&KeyEvent::new(Key::Escape), Screen::Chat),
-            None,
-            "the chat screen binds no escape key"
+            Some(Action::EscapePressed),
+            "the chat's Esc is the cancel, clear, and exit key"
+        );
+        assert_eq!(
+            key_action(&KeyEvent::new(Key::Escape), Screen::Sessions),
+            Some(Action::SessionsBrowserClosed),
+            "the browser keeps Esc as its own close key"
         );
     }
 
