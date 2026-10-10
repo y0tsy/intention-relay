@@ -198,6 +198,10 @@ pub(super) struct Geometry {
 /// rows_needed, 6, window_height / 2)`. A window too small to keep the chat
 /// and the panel apart returns `None`, and the chat keeps the whole window
 /// instead of a broken frame.
+// @todo(hack): the panel's height is a stack of magic minimums (frame, chrome,
+// footer, data rows) and a half-window clamp because revue cannot express a
+// content-sized, bounded split; the bounds should become one layout
+// constraint.
 pub(super) fn geometry(state: &AppState, window: Rect) -> Option<Geometry> {
     if window.width <= PANEL_FRAME {
         return None;
@@ -346,6 +350,10 @@ fn tabs_row(state: &AppState, width: usize, palette: &'static Palette) -> RichTe
 /// squeezed proportionally when it overflows, which shreds every word into a
 /// stump, while rich text keeps each run whole and clips the row at the card's
 /// edge.
+// @todo(revue): rows collapse into one `RichText` because revue squeezes
+// overflowing children proportionally instead of clipping them, and the footer
+// below drops legend hints that do not fit for the same reason; proper overflow
+// handling would let a row and the legend keep their structure.
 fn runs_text(runs: Vec<Run>) -> RichText {
     let mut text = RichText::new();
     for run in runs {

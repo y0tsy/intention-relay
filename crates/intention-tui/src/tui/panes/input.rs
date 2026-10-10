@@ -29,6 +29,10 @@ const CONTINUATION_INDENT: &str = "  ";
 /// `RichText` styles one run at a time, so the cursor is a block glyph rather
 /// than a reversed cell: `█` occupies the character cell the cursor points at,
 /// and the cell after the last character at the line's end.
+// @todo(revue): revue has no editable text surface - no cell cursor, no buffer
+// scrolling, no clipping - so this pane hand-rolls the block-glyph cursor, the
+// horizontal window around it, and the row arithmetic; a real text widget
+// would own all three.
 const CURSOR: char = '█';
 
 /// The columns and rows the block's own frame takes.

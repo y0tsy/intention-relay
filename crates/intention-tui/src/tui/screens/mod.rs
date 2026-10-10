@@ -103,8 +103,10 @@ impl View for RevueView<'_> {
     fn render(&self, ctx: &mut RenderContext) {
         ctx.fill_box_background(palette::of(self.state.effective_theme()).canvas);
         let window = ctx.area;
-        // A view built without a cache lays the transcript out through a fresh
-        // one, so both constructors render exactly the same rows.
+        // @todo(hack): a view built without a cache - the test constructor -
+        // allocates a throwaway layout cache on every render so both
+        // constructors paint the same rows; the cache should be one
+        // type-level state, not an `Option` with a per-frame fallback.
         let fresh = RefCell::new(TranscriptLayoutCache::new());
         let cache = self.cache.unwrap_or(&fresh);
         let panel = (self.state.screen() == Screen::Sessions)
@@ -114,6 +116,10 @@ impl View for RevueView<'_> {
             chat::chat_screen(self.state, window, cache).render(ctx);
             return;
         };
+        // @todo(revue): revue has no docking or overlay primitive, so this view
+        // slices the window into the chat area and the panel's rows by hand,
+        // with a blank `vstack` child as the gap; a dock or overlay layout
+        // would express the same frame directly.
         // The chat container keeps every row the panel does not use, and its
         // own bottom canvas margin row is the one gap row above the panel.
         let chat_rows = window.height.saturating_sub(geometry.rows);

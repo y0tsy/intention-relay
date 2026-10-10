@@ -189,6 +189,9 @@ pub(in crate::tui) fn block(
     width: usize,
     palette: &'static Palette,
 ) -> Option<Vec<LaidOutRow>> {
+    // @todo(hack): the wire's missing `tool_id` silently becomes an empty
+    // string here and in `Exchange::of`; the absent case should be handled
+    // explicitly instead of defaulting to an id no tool carries.
     let kind = ToolKind::of(row.tool_id().unwrap_or_default());
     // An `execute` result is never rendered, in any form: it is the command's
     // raw output, and this check runs before every per-type renderer so none of

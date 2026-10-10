@@ -28,6 +28,10 @@ use crate::cli::{ExitStatus, Format, Options};
 
 /// The bounded wait after a deadline interrupt before the process ends with the
 /// timeout status, letting the daemon publish the effect of the interrupt.
+// @todo(hack): the interrupt is best-effort: nothing on the wire tells the front
+// end that the daemon applied it, so the run gets a fixed two-second grace and
+// whatever the grace observes is discarded. An acknowledged interrupt would let
+// the timeout status name the real outcome.
 const INTERRUPT_GRACE: Duration = Duration::from_secs(2);
 
 /// Runs one prompt and returns the process status the command ends with.
@@ -209,6 +213,9 @@ impl Deadline {
     /// Returns the deadline `timeout` after `now`, or `None` for no bound.
     ///
     /// A timeout the monotonic clock cannot represent means no bounded wait.
+    // @todo(hack): an unrepresentable `--timeout` silently degrades into an
+    // unbounded wait, which weakens the user's own bound instead of reporting
+    // it; the caller should hear that the deadline could not be armed.
     #[must_use]
     pub fn after(timeout: Option<Duration>, now: Instant) -> Option<Self> {
         timeout
@@ -316,6 +323,10 @@ impl Driver {
     /// Returns the failure a session that did not open reports.
     #[must_use]
     pub fn session_failure(&self) -> ErrorDto {
+        // @todo(hack): the front end composes protocol errors for states the
+        // core never reports - `session_not_open` here, `no_sessions_to_continue`
+        // in `no_sessions_error`, and `run_stream_closed` in `pump_failure`;
+        // the client should carry these conditions as typed failures.
         self.last_failure
             .clone()
             .unwrap_or_else(|| ErrorDto::validation("session_not_open", "no session is open"))
@@ -384,6 +395,9 @@ impl Driver {
     }
 
     /// Sends one prompt as a user turn through the core.
+    // @todo(hack): the prompt is replayed as input characters so this driver can
+    // reuse the input path; the core should expose one typed turn submission so
+    // a scripted prompt is not simulated typing.
     pub async fn send_turn(&mut self, content: &str) {
         self.last_failure = None;
         for character in content.chars() {
@@ -421,6 +435,9 @@ impl Driver {
         events: &mut impl Report,
         deadline: Option<Deadline>,
     ) -> Result<Option<RunOutcome>, PumpFailure> {
+        // @todo(hack): a closed or empty stream is recoverable exactly once; the
+        // budget and the decision to fail after it live here because the run
+        // stream has no resume of its own. Kept as is by owner decision.
         let mut reconnects = 0;
         loop {
             self.report_pending(events)?;
@@ -714,6 +731,10 @@ impl<W: Write> Report for TextReport<W> {
             // row would echo the input instead of reporting the run.
             return Ok(());
         }
+        // @todo(hack): streamed text is matched to its committed row by string
+        // equality because the wire carries no row identity, so a committed row
+        // that repeats the streamed text for another reason is suppressed too;
+        // the client should mark the row a stream supersedes.
         let supersedes = row.kind() == MessageKindDto::Assistant
             && !self.streamed.is_empty()
             && row.text() == self.streamed;

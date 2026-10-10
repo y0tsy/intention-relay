@@ -31,6 +31,9 @@ const DETAIL_ROWS: u16 = 1;
 ///
 /// The transcript publishes this row with the rest of its window, so a mouse
 /// event hit-tests exactly the display rows the frame painted.
+// @todo(revue): revue does not report where a child landed, so this screen row
+// is recomputed from layout constants and the panel's body rows are divided by
+// hand; a child-geometry report would let the hit-test read the real origin.
 const TRANSCRIPT_TOP_ROWS: u16 = PANEL_MARGIN + 1 + PANEL_PADDING + 1;
 
 /// The geometry of the chat panel in one window.

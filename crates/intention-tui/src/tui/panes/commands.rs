@@ -97,6 +97,10 @@ pub(in crate::tui) fn menu_block(
     let Some(menu) = state.command_menu() else {
         return vstack();
     };
+    // @todo(hack): the band recomputes the panel's row arithmetic and refuses
+    // to paint on a mismatch because revue squeezes an oversized child instead
+    // of negotiating a height; the guard exists only to keep the two
+    // arithmetic paths in lockstep.
     if rows != band_rows(menu.len()) {
         return vstack();
     }

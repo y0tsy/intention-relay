@@ -26,6 +26,14 @@
 //!
 //! A run resolves to a [`Style`] once when a visible row is materialised; the
 //! per-character `Style` clone the glyph model used is gone.
+// @todo(revue): revue offers no clippable container (a nested `Border` cannot be
+// windowed mid-block), no fixed-column or table layout, no text-measure or
+// truncation helper, and no child geometry, so this module hand-draws block
+// frames as flat rows, hand-rolls wrapping and truncation, and computes the
+// screen rows a pointer hit-tests from the window the pane published; the
+// pane's scroll arithmetic is duplicated here for drag-scrolling. One shared
+// container, measurement, and geometry surface in revue would delete this
+// whole class.
 
 use std::ops::Range;
 
@@ -102,6 +110,10 @@ pub(in crate::tui) enum RowStyleId {
     Divider(Modifier),
     /// A parsed segment colour this module does not configure: revue's callout
     /// banner, kept exactly as the parser carries it.
+    // @todo(revue): the markdown parser hands this module raw colours instead of
+    // role ids, so one segment cannot be expressed as a palette role and this
+    // variant is the only colour the view carries unresolved; a parser that
+    // reports roles would keep the palette the single source of colour.
     Callout(Color, Modifier),
     /// A committed reasoning block's body row.
     Reasoning,

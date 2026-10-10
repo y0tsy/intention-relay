@@ -131,6 +131,9 @@ impl AppState {
     ///
     /// A drain drops rows in front of the transcript, so it is a replacement
     /// and never an append: the epoch moves and the append-only run ends here.
+    // @todo(hack): the client's retention bound is re-applied here because the
+    // front end's mirror can hold more rows than the client keeps; the bound
+    // should be enforced in one layer.
     fn trim_transcript(&mut self) {
         if self.transcript.len() > RETAINED_TRANSCRIPT_MESSAGES {
             let excess = self.transcript.len() - RETAINED_TRANSCRIPT_MESSAGES;

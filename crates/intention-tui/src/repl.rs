@@ -50,12 +50,18 @@ async fn converse<W: Write, E: Write>(
     {
         return crate::startup_failure(&error, err);
     }
+    // @todo(hack): `select` reports only connection failures, so a selected
+    // session that did not open is detected by re-inspecting the state and
+    // synthesizing its failure; the driver should return the open failure.
     if options.session().is_some() && driver.state().session_id().is_none() {
         return crate::startup_failure(&driver.session_failure(), err);
     }
 
     let mut line = String::new();
     loop {
+        // @todo(hack): every REPL write is best-effort - a failed prompt, error,
+        // or notice write is silently dropped and the loop continues as if the
+        // user saw the line; one reporter should record the suppressed failure.
         let _ = write!(out, "> ");
         let _ = out.flush();
         line.clear();
@@ -151,6 +157,9 @@ async fn stream_active_turn<W: Write, E: Write>(driver: &mut Driver, out: &mut W
 /// still be streaming. The front end owns one run at a time, so the loop waits
 /// for that run's terminal status before it returns, and a script's output
 /// stays complete instead of racing the process exit.
+// @todo(hack): the line loop must block on the live run before it returns so a
+// piped script's output is not truncated by the process exit; the run's
+// completion should own the process lifetime instead of the loop draining it.
 async fn drain_active_turn<W: Write, E: Write>(driver: &mut Driver, out: &mut W, err: &mut E) {
     let live = driver
         .state()

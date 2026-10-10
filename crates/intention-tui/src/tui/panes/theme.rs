@@ -137,6 +137,10 @@ fn legend(palette: &'static Palette) -> RichText {
 }
 
 /// Returns the display width of one piece of text.
+// @todo(hack): this width/truncate/pad trio is re-rolled per pane - the same
+// three live in `panes/commands.rs`, `panes/input.rs`, and
+// `screens/sessions.rs` - although `layout.rs` already exports one display
+// width; one shared measurement helper should serve every pane.
 fn display_width(text: &str) -> usize {
     text.chars()
         .map(|character| usize::from(char_width(character)))

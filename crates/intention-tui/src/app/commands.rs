@@ -93,6 +93,9 @@ pub enum CommandAction {
 /// The spellings and descriptions are the theme's own vocabulary, so the
 /// command surface and the picker panel can never disagree about what the two
 /// themes are called or which surface each one paints.
+// @todo(hack): the values are re-spelled here from `Theme::as_str`, and only a
+// `debug_assert!` in `input.rs` keeps the two vocabularies in sync; the
+// registry should derive its values from the theme vocabulary itself.
 static THEME_VALUES: [ValueSpec; 2] = [
     ValueSpec {
         value: Theme::Light.as_str(),

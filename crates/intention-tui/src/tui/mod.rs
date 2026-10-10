@@ -105,12 +105,31 @@ pub fn run_blocking(
     let front_end = FrontEnd::new(options.session(), options.continue_session(), driver);
     front_end.start();
     App::builder()
+        // @todo(revue): revue has no text-selection model, so the front end
+        // turns capture on and implements transcript selection, drag-scroll,
+        // and marker hit-testing itself; capture is all-or-nothing, which costs
+        // the terminal its own drag-selection (Shift must be held to select
+        // text) and leaves copying to the terminal emulator. A library
+        // selection surface would remove the trade-off.
         .mouse_capture(true)
         // Ctrl+C is the shared core's layered action, so revue must not
         // consume it as the framework's own quit key first.
+        // @todo(revue): revue 3.9.1 hardcodes Ctrl+C as its quit key and its
+        // event loop quits right after the app handler runs, so on the default
+        // configuration a single press during a live run tears the front end
+        // down before the layered interrupt can arm or notice anything. This
+        // argument and the repository's vendored patch (`AppBuilder::quit_key`,
+        // `vendor/revue/PATCH.md`, the root `[patch.crates-io]` entry) exist
+        // only for this option; drop both once upstream exposes it. The
+        // argument and the Ctrl+C arms in `keymap.rs` must go together: without
+        // the argument revue silently resumes quitting on the first press, and
+        // without the arms Ctrl+C silently does nothing.
         .quit_key(None)
         .build()
         .run(front_end, handle_event)
+        // @todo(revue): revue's `run` failure carries no typed cause, so every
+        // terminal-startup failure collapses into this one unavailable error
+        // and the real reason is unobservable from here.
         .map_err(|_| {
             ErrorDto::unavailable(
                 "revue_terminal_unavailable",
@@ -336,6 +355,9 @@ struct FrontEnd {
     /// `View::render` takes `&self`, so the cache a render fills sits behind a
     /// [`RefCell`]: the pane borrows it for the length of one frame, and the
     /// frame publishes the transcript window into it for the next event.
+    // @todo(revue): the interior mutability is a revue trait boundary, not a
+    // design choice: `View::render` takes `&self`, so the cache a frame fills
+    // and publishes cannot be a plain field.
     cache: RefCell<TranscriptLayoutCache>,
 }
 
@@ -468,6 +490,10 @@ const MILLIS_PER_TENTH: u64 = 100;
 /// It measures from the instant the front end dispatches `SendTurn` to the
 /// instant the run reports a terminal status, and reports changed tenths while
 /// the turn is live - the one granularity a running status row shows.
+// @todo(hack): the application core is deliberately clock-free, so this front
+// end measures the turn and feeds the value back as `Action::ElapsedReported`;
+// the live tenths must stay local, but the committed duration belongs to the
+// core, which knows the run's start and end.
 struct TurnTimer {
     /// The instant the current turn was dispatched, while one is in flight.
     started: Option<Instant>,

@@ -140,6 +140,9 @@ impl Driver {
     /// A closed queue means the front end is leaving, so the effect is dropped
     /// instead of reported.
     pub(super) fn dispatch(&self, effect: Effect) {
+        // @todo(hack): a closed queue silently drops the effect because the
+        // driver carries no closed signal; a typed driver failure would let the
+        // front end stop instead of losing the request.
         let _ = self.effects.send(effect);
     }
 
@@ -177,6 +180,9 @@ async fn drive(
                 // The task owns the one live subscription, so the front end
                 // unsubscribes by asking for the drop instead of holding a
                 // stream the core would only discard frames from.
+                // @todo(hack): the effect vocabulary carries no unsubscribe, so
+                // the driver models one by dropping the subscription it owns;
+                // give the core a typed unsubscribe instead.
                 live = None;
                 None
             }

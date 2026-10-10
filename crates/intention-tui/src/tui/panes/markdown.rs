@@ -34,6 +34,10 @@
 //! highlighter is off and its neutral grid tone maps onto the pane's divider
 //! ink; the colours the parser carries are the ones this module configured,
 //! plus the widget's own callout banner.
+// @todo(revue): the `Markdown` widget draws fixed lines and clips anything
+// wider than its area, so this module re-wraps every parsed line at the
+// caller's width and sniffs box-drawing grid lines by their first glyph; a
+// width-aware widget that reports a parsed line kind would remove both.
 
 use revue::style::Color;
 use revue::text::char_width;

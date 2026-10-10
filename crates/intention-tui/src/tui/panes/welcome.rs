@@ -193,6 +193,10 @@ fn logo_row(width: usize, palette: &'static Palette) -> RichText {
 ///
 /// Tracking is the size cue this front end has: every letter is still one
 /// cell wide, and the spaced word reads as the smaller half of the lockup.
+// @todo(revue): revue has no font sizes, so the lockup fakes a type scale with
+// letter tracking, and the welcome region budgets and fits its sub-blocks by
+// hand; a size or scale surface would let the lockup and the region be
+// expressed directly.
 fn tracked(word: &str) -> String {
     word.chars()
         .map(|character| character.to_string())

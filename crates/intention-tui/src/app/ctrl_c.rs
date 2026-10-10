@@ -14,6 +14,14 @@
 //! clears it for every other action the user asks for, while a client report
 //! (`Action::is_client_report`) leaves it standing, because a live run's
 //! frames and the front end's elapsed reports arrive between two presses.
+// @todo(hack): this layered gesture is a workaround for revue's quit key (see
+// `tui/mod.rs`), and its arming rule has two sharp edges a redesign should
+// settle: the two-press semantics is non-standard, so the first press only
+// shows a notice, and an arm outlives the state it was armed for - a run that
+// ends between the two presses leaves the second press arming the exit instead
+// of interrupting, which the tests pin deliberately. The arm also survives
+// every client report, so it is the only user gesture whose sequence spans
+// unrelated state changes.
 
 use intention_proto::run_status_is_terminal;
 

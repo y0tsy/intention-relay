@@ -100,6 +100,10 @@ const TRANSCRIPT_FRAME_ROWS: u16 = 2;
 /// the window: the wrap width then never changes when the transcript crosses
 /// the window's height, and revue's own scrollbar paints the column only while
 /// there is content beyond the window.
+// @todo(hack): revue's `ScrollView` is stateless - the core owns the transcript
+// offset - so the pane reserves this gutter permanently and repaints a
+// scrollbar the widget only draws; a scrollbar bound to the core's offset would
+// remove both the reservation and the stateless use.
 const SCROLLBAR_COLUMNS: usize = 1;
 
 /// Returns the transcript pane: the committed blocks, then the provisional tail.
@@ -133,6 +137,10 @@ pub(in crate::tui) fn transcript_pane(
     // The provisional tail is one more block: the gap rule puts one blank row
     // between it and the committed rows, exactly as it would between two
     // committed blocks.
+    // @todo(hack): the tail is laid out outside the cache, so this window is
+    // assembled from two sources - the cached committed rows and the per-frame
+    // tail - and the gap row and the live marker row are recomputed here; one
+    // row-vector path would let the window count a single list.
     let tail_offset = committed_len + usize::from(committed_len > 0 && !provisional.is_empty());
     let total = tail_offset + provisional.len();
     let visible = usize::from(height.saturating_sub(TRANSCRIPT_FRAME_ROWS));
