@@ -22,7 +22,7 @@ use intention_proto::{
 };
 use intention_proto::{
     ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, TimestampDto, ToolCallId, TurnId,
-    WorkspaceId,
+    WorkspaceBindingDto, WorkspaceId,
 };
 use intention_storage::{StartingRunModelContextDto, ToolResultStatusDto};
 use intention_test_support::fixture_snapshot;
@@ -707,6 +707,95 @@ fn create_and_remove_workflows_map_committed_results() {
         .expect("removal maps");
     assert_eq!(removed.session_id(), session_id);
     assert_eq!(removed.turn_id(), pending_turn);
+}
+
+#[test]
+fn session_creation_joins_the_durable_binding_of_its_workspace_root() {
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+    let bound_project = ProjectId::new();
+    let bound_workspace = WorkspaceId::new();
+    *repository
+        .workspace_binding
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) =
+        Some(WorkspaceBindingDto::new(bound_project, bound_workspace));
+    let create = CreateSessionCommandDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        workspace_root(),
+        RunModeDto::Build,
+    );
+
+    ApplicationService::new(&repository)
+        .create_session(create, fixture_time())
+        .expect("create maps");
+
+    let forwarded = repository
+        .create_commands
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(forwarded.len(), 1, "one creation reaches the repository");
+    assert_eq!(
+        forwarded[0].project_id(),
+        bound_project,
+        "the durable project binding replaces the proposed identity"
+    );
+    assert_eq!(
+        forwarded[0].workspace_id(),
+        bound_workspace,
+        "the durable workspace binding replaces the proposed identity"
+    );
+    assert_eq!(
+        forwarded[0].session_id(),
+        session_id,
+        "the requested session identity is kept: every creation is a fresh session"
+    );
+    assert_eq!(forwarded[0].workspace_root(), &workspace_root());
+    assert_eq!(forwarded[0].mode(), RunModeDto::Build);
+}
+
+#[test]
+fn session_creation_keeps_its_identities_for_an_unbound_workspace_root() {
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+    let project_id = ProjectId::new();
+    let workspace_id = WorkspaceId::new();
+    let create = CreateSessionCommandDto::new(
+        project_id,
+        session_id,
+        workspace_id,
+        workspace_root(),
+        RunModeDto::Plan,
+    );
+
+    ApplicationService::new(&repository)
+        .create_session(create, fixture_time())
+        .expect("create maps");
+
+    let forwarded = repository
+        .create_commands
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(forwarded.len(), 1);
+    assert_eq!(
+        forwarded[0].project_id(),
+        project_id,
+        "an unbound root establishes the proposed binding"
+    );
+    assert_eq!(forwarded[0].workspace_id(), workspace_id);
+    assert_eq!(forwarded[0].mode(), RunModeDto::Plan);
 }
 
 #[test]

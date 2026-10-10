@@ -850,6 +850,54 @@ mod tests {
     }
 
     #[test]
+    fn every_created_session_joins_the_one_binding_of_its_workspace_root() {
+        let (_directory, facade) = test_facade();
+        let first = SessionId::new();
+        create(&facade, first);
+        let binding = facade
+            .list_sessions(SESSION_LIST_ROWS)
+            .expect("sessions list")
+            .sessions()
+            .first()
+            .map(|summary| (summary.project_id(), summary.workspace_id()))
+            .expect("the first session is listed");
+
+        // Every later creation proposes a fresh project and workspace identity
+        // for the same root, exactly as the terminal client does; the facade
+        // resolves them to the durable binding of the root instead of rejecting
+        // the second identity, so one root holds an unbounded number of
+        // sessions.
+        let second = SessionId::new();
+        create(&facade, second);
+        let third = SessionId::new();
+        create(&facade, third);
+
+        let listed = facade
+            .list_sessions(SESSION_LIST_ROWS)
+            .expect("sessions list");
+        let created = listed
+            .sessions()
+            .iter()
+            .map(|summary| summary.session_id())
+            .collect::<Vec<_>>();
+        assert_eq!(created.len(), 3, "every created session is listed");
+        for expected in [first, second, third] {
+            assert!(
+                created.contains(&expected),
+                "the created session {} is listed",
+                expected
+            );
+        }
+        assert!(
+            listed
+                .sessions()
+                .iter()
+                .all(|summary| (summary.project_id(), summary.workspace_id()) == binding),
+            "one root keeps one durable project and workspace identity"
+        );
+    }
+
+    #[test]
     fn an_over_budget_newest_row_is_kept_and_the_projection_is_charged() {
         let row = |text: String| {
             MessageProjectionDto::new(

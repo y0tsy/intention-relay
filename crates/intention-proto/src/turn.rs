@@ -8,6 +8,11 @@ use crate::{
 use crate::{RunModeDto, WorkspaceRootDto};
 
 /// A command requesting a new durable session.
+///
+/// The project and workspace identities are the daemon-owned identities of the
+/// declared workspace root: a root with no durable binding establishes one from
+/// these values, while a bound root keeps its binding and treats them as
+/// advisory, so any number of sessions can join one root.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CreateSessionCommandDto {
     project_id: ProjectId,
@@ -36,7 +41,7 @@ impl CreateSessionCommandDto {
         }
     }
 
-    /// Returns the session's owning project identity.
+    /// Returns the proposed project identity of the declared workspace root.
     #[must_use]
     pub const fn project_id(&self) -> ProjectId {
         self.project_id
@@ -48,7 +53,10 @@ impl CreateSessionCommandDto {
         self.session_id
     }
 
-    /// Returns the daemon-owned stable workspace identity.
+    /// Returns the proposed workspace identity of the declared workspace root.
+    ///
+    /// The value is advisory once the root carries a durable binding: the
+    /// daemon resolves the command to the binding before creation.
     #[must_use]
     pub const fn workspace_id(&self) -> WorkspaceId {
         self.workspace_id

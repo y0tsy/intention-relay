@@ -1,4 +1,5 @@
-//! Session, pending-turn, and transcript projections shared across boundaries.
+//! Session, workspace-binding, pending-turn, and transcript projections shared
+//! across boundaries.
 
 use std::collections::BTreeSet;
 
@@ -238,6 +239,42 @@ impl SessionProjectionDto {
     #[must_use]
     pub fn pending_turns(&self) -> &[PendingTurnProjectionDto] {
         &self.pending_turns
+    }
+}
+
+/// The durable identities one workspace root is bound to.
+///
+/// A root is bound to exactly one project and workspace identity for the life
+/// of the database: the first session created for the root establishes the
+/// binding, and every later session joins it. Reading the binding is what lets
+/// a creation command name an already-bound root without proposing a second
+/// identity the durable association would reject.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkspaceBindingDto {
+    project_id: ProjectId,
+    workspace_id: WorkspaceId,
+}
+
+impl WorkspaceBindingDto {
+    /// Creates one binding from the durable identities of a workspace root.
+    #[must_use]
+    pub const fn new(project_id: ProjectId, workspace_id: WorkspaceId) -> Self {
+        Self {
+            project_id,
+            workspace_id,
+        }
+    }
+
+    /// Returns the project identity the root is bound to.
+    #[must_use]
+    pub const fn project_id(self) -> ProjectId {
+        self.project_id
+    }
+
+    /// Returns the workspace identity the root is bound to.
+    #[must_use]
+    pub const fn workspace_id(self) -> WorkspaceId {
+        self.workspace_id
     }
 }
 

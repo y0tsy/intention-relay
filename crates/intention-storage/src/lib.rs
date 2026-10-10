@@ -20,7 +20,7 @@ use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
     RemoveTurnCommandDto, RunProjectionDto, RunStatusDto, SessionProjectionDto, SessionSnapshotDto,
-    SessionSummariesDto,
+    SessionSummariesDto, WorkspaceBindingDto, WorkspaceRootDto,
 };
 use intention_proto::{
     DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, RunId,
@@ -656,6 +656,18 @@ pub trait StorageRepositoryDto {
     ///
     /// Returns an unavailable error when durable storage cannot be read.
     fn list_sessions(&self, limit: u32) -> DtoResult<SessionSummariesDto>;
+
+    /// Returns the durable project and workspace identity bound to one root.
+    ///
+    /// `None` means the root carries no binding yet: the next creation for it
+    /// establishes one. A bound root resolves to exactly the pair an earlier
+    /// creation committed, so a caller joins the durable association instead of
+    /// proposing a second identity the association would reject.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when durable storage cannot be read.
+    fn workspace_binding(&self, root: &WorkspaceRootDto) -> DtoResult<Option<WorkspaceBindingDto>>;
 
     /// Loads the most recent committed transcript rows of one session.
     ///

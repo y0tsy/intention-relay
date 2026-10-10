@@ -334,15 +334,48 @@ where
 
     /// Creates a durable session and returns its committed projection.
     ///
+    /// A workspace root is bound to exactly one project and workspace identity
+    /// for the life of the database, so a command proposing another identity
+    /// for an already-bound root joins the durable binding instead: the
+    /// proposed identities are advisory, and an unbounded number of sessions
+    /// can be created under one root. A root with no binding keeps the
+    /// command's identities and establishes the association.
+    ///
     /// # Errors
     ///
-    /// Returns the typed repository error when durable session creation fails.
+    /// Returns the typed repository error when the binding cannot be read or
+    /// when durable session creation fails.
     pub fn create_session(
         &self,
         command: CreateSessionCommandDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<SessionProjectionDto> {
+        let command = self.join_workspace_binding(command)?;
         self.repository.create_session(command, occurred_at)
+    }
+
+    /// Returns `command` carrying the durable identity binding of its root.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed repository error when the binding cannot be read.
+    fn join_workspace_binding(
+        &self,
+        command: CreateSessionCommandDto,
+    ) -> DtoResult<CreateSessionCommandDto> {
+        let Some(binding) = self
+            .repository
+            .workspace_binding(command.workspace_root())?
+        else {
+            return Ok(command);
+        };
+        Ok(CreateSessionCommandDto::new(
+            binding.project_id(),
+            command.session_id(),
+            binding.workspace_id(),
+            command.workspace_root().clone(),
+            command.mode(),
+        ))
     }
 
     /// Accepts a user turn and returns its committed durable outcome.

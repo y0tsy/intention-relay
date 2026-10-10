@@ -21,6 +21,7 @@ mod workspace;
 pub use model::{FinishReasonDto, ProviderErrorDto, ToolCallDto, UsageDto};
 pub use projection::{
     MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, SessionProjectionDto,
+    WorkspaceBindingDto,
 };
 pub use protocol::{
     ClientRequestDto, CreateSessionAcceptedDto, DaemonHealthDto, DaemonReadinessDto,

@@ -1226,6 +1226,46 @@ fn canonical_config_revision_binds_one_snapshot_across_both_entry_points() {
 }
 
 #[test]
+fn the_workspace_binding_reads_the_association_a_creation_established() {
+    let (_directory, store) = repository();
+    let root = workspace_root("binding-read");
+    assert_eq!(
+        store
+            .workspace_binding(&root)
+            .expect("an unbound root reads as absent"),
+        None,
+        "a root with no session carries no binding yet"
+    );
+    let project_id = ProjectId::new();
+    let workspace_id = WorkspaceId::new();
+    store
+        .create_session(
+            CreateSessionCommandDto::new(
+                project_id,
+                SessionId::new(),
+                workspace_id,
+                root.clone(),
+                RunModeDto::Build,
+            ),
+            time(1),
+        )
+        .expect("the first session establishes the binding");
+    let binding = store
+        .workspace_binding(&root)
+        .expect("the bound root reads")
+        .expect("the root is bound");
+    assert_eq!(binding.project_id(), project_id);
+    assert_eq!(binding.workspace_id(), workspace_id);
+    assert_eq!(
+        store
+            .workspace_binding(&workspace_root("binding-read-other"))
+            .expect("an unrelated root reads as absent"),
+        None,
+        "the binding belongs to its exact root"
+    );
+}
+
+#[test]
 fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
     let (_directory, store) = repository();
     let workspace_id = WorkspaceId::new();

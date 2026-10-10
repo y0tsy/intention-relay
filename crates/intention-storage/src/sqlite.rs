@@ -26,7 +26,7 @@ use intention_proto::{
     ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorCategoryDto, ErrorDto,
     ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId, RemoveTurnCommandDto, RunId,
     SessionId, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TimestampDto,
-    ToolCallId, TurnId, UsageDto, WorkspaceId,
+    ToolCallId, TurnId, UsageDto, WorkspaceBindingDto, WorkspaceId,
 };
 use intention_proto::{
     MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, RunModeDto, RunProjectionDto,
@@ -1251,6 +1251,27 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         // The window returns at most `limit` rows, so every session above that
         // many is reported as omitted.
         SessionSummariesDto::new(sessions, total.saturating_sub(limit))
+    }
+
+    fn workspace_binding(&self, root: &WorkspaceRootDto) -> DtoResult<Option<WorkspaceBindingDto>> {
+        let connection = self.connection()?;
+        let binding = connection
+            .query_row(
+                "SELECT project_id, id FROM workspace_roots WHERE root=?1",
+                [root.as_str()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        drop(connection);
+        binding
+            .map(|(project, workspace)| {
+                Ok(WorkspaceBindingDto::new(
+                    ProjectId::parse(&project).map_err(codec_error)?,
+                    WorkspaceId::parse(&workspace).map_err(codec_error)?,
+                ))
+            })
+            .transpose()
     }
 
     fn load_recent_messages(
