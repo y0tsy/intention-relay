@@ -22,7 +22,7 @@ use intention_proto::{
     TurnId, WorkspaceId, WorkspaceRootDto,
 };
 use intention_tui::app::{
-    Action, AppState, BrowserCursorMove, InputCursorMove, MenuMove, TranscriptScroll,
+    Action, AppState, BrowserCursorMove, InputCursorMove, MenuMove, Theme, TranscriptScroll,
     short_identifier,
 };
 use intention_tui::tui::RevueView;
@@ -1927,4 +1927,59 @@ fn a_launch_that_lists_sessions_shows_the_welcome_until_a_session_is_asked_for()
         app.find_text("transcript").is_none(),
         "a listed session the launch did not ask for draws no transcript"
     );
+}
+
+#[test]
+fn the_same_screen_paints_its_characters_under_both_themes() {
+    for theme in [Theme::Light, Theme::Dark] {
+        // The welcome surface: its lockup and its overview are the two
+        // theme-sensitive blocks it carries.
+        let welcome = welcome_state().with_theme(theme);
+        let welcome_app = TestApp::with_size(RevueView::new(&welcome), WINDOW_WIDTH, WINDOW_HEIGHT);
+        let welcome_text = welcome_app.screen_text();
+        assert!(
+            welcome_text.contains("INTENTION") && welcome_text.contains("R E L A Y"),
+            "the welcome lockup paints under {theme:?}: {welcome_text}"
+        );
+        assert!(
+            welcome_text.contains(&format!("Version {}", env!("CARGO_PKG_VERSION"))),
+            "the welcome overview paints under {theme:?}: {welcome_text}"
+        );
+
+        // The chat surface with a committed transcript - a user card, a tool
+        // block, and an answer - and the command band open above the input.
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let mut messages = vec![row(
+            session_id,
+            run_id,
+            MessageKindDto::User,
+            "what is the plan?",
+        )];
+        messages.extend(tool_exchange(
+            session_id,
+            run_id,
+            "read",
+            r#"{"path":"src/lib.rs"}"#,
+            "line one\nline two",
+        ));
+        messages.push(row(
+            session_id,
+            run_id,
+            MessageKindDto::Assistant,
+            "the committed answer",
+        ));
+        let mut state = open_state(session_id, messages).with_theme(theme);
+        for character in "/se".chars() {
+            state.update(Action::InputChar(character));
+        }
+        let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, 40);
+        let pilot = Pilot::new(&mut app);
+        pilot.assert_contains("❯ you");
+        pilot.assert_contains("▸ read · src/lib.rs");
+        pilot.assert_contains("line one");
+        pilot.assert_contains("the committed answer");
+        pilot.assert_contains("╭─ commands");
+        pilot.assert_contains("> /sessions");
+    }
 }
