@@ -133,9 +133,12 @@ delivers one window — the chat panel and the sessions panel docked to the wind
 one palette that is the sole colour system, with a welcome surface (the product lockup and the
 version/`AGENTS.md`/`MCPs`/`Skills` overview) while no session is open — a launch opens no session, not even the most
 recent one — a multi-line input block that grows a row per buffer line, user cards and assistant answers rendered as
-markdown, committed reasoning as its own block, a committed transcript laid out once and cached per pane width and
-transcript version, a wheel-driven transcript, and layered `Ctrl+C` and `Esc` (an arming press, then a consecutive
-interrupting, history-pushing, or quitting press; a single `Esc` cancels a live run). Session creation resolves the
+markdown, committed reasoning as its own block, the leading-slash command registry with the hint band it feeds above
+the input block (a ranked, filtered list of `/new` and `/sessions`, the input history and `Tab` returning to the line
+only once the band is closed, and the band as `Esc`'s innermost layer), a committed transcript laid out once and cached
+per pane width and transcript version, a wheel-driven transcript, and layered `Ctrl+C` and `Esc` (an arming press, then
+a consecutive interrupting, history-pushing, or quitting press; a single `Esc` cancels a live run). Session creation
+resolves the
 durable workspace binding of its root, so one root carries an unbounded number of sessions. The slice also froze the
 terminal client contract: TUI, REPL, and headless modes are contract-equivalent over one `intention-client` surface,
 the headless exit-status set is closed and typed (0 completed, 1 usage, 2 daemon or transport, 3 typed rejection or

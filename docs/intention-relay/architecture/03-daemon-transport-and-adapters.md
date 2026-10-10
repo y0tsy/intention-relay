@@ -397,11 +397,19 @@ text above is the live policy.
   the removed debug vocabulary (`connected`, `run none`, `stream idle`, `stream closed`) is gone: the stream is this
   front end's own plumbing, and a run is described by what it is doing. The elapsed value is the front end's own
   measurement, reported to the core as `Action::ElapsedReported` so the view stays a pure function of state.
-- Interaction. A command is a submitted line beginning with `/`, never a bare letter: `/new` creates a session and
-  `/sessions` opens the browser panel, and an unknown command answers with the known set. The keymap is one mapping per
+- Interaction. A command is a submitted line beginning with `/` as its first character, never a bare letter: `/new`
+  creates a session and `/sessions` opens the browser panel, and an unknown command answers with the known set. One
+  registry is the single source for that submission path, for the hint band, and for the unknown-command notice; while
+  the input's first character is `/` and the caret sits in or immediately after that word, the band opens directly above
+  the input block, listing the registered commands the word selects, ranked by a name prefix before an ordered
+  subsequence and then by registry order, at most five rows with an overflow report for the rest. `Up` and `Down` move
+  the band's highlight while it is open and walk the input history only once it is closed, `Tab` or `Enter` completes
+  the highlighted name and closes the band, and the band closes when the slash is removed, on `Esc`, when a space ends
+  the word, or when nothing matches. The keymap is one mapping per
   screen: `Enter` submits the line or selects the browser row, `Tab` and `Shift+Tab` switch the browser tab, `Ctrl+R`,
   `Ctrl+X`, and `Ctrl+F` show the rename, archive, and tree notices whose core support does not exist yet, `Esc` closes
-  the browser, and `Ctrl+Q` always exits immediately. `Esc` on the chat is the cancel, clear, and exit key: a live run is
+  the browser, and `Ctrl+Q` always exits immediately. `Esc` on the chat closes the command hint band first while it is
+  open and touches nothing else; with the band closed it is the cancel, clear, and exit key: a live run is
   cancelled by a single press with no arming, a non-empty line arms the clear on the first press and needs a second
   consecutive press to abandon the line into the recallable history, exactly as one `Ctrl+C` press does, and an empty
   line exits. `Ctrl+C` is layered: with an active run, the first press arms the

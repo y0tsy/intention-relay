@@ -223,7 +223,7 @@ fresh subscription clears both. Daemon tests prove `ListSessions` dispatch, per-
 two channels, and that the step's pending deltas flush before its committed frames.
 
 The terminal crate itself carries a render suite and a process end-to-end suite. `tests/tui_render.rs` renders the
-render-free `AppState` through revue's own test app in sixty-one cases: the welcome surface (the lockup and the
+render-free `AppState` through revue's own test app in sixty-five cases: the welcome surface (the lockup and the
 overview, gone once a session opens, the launch that lists sessions but opens none, and the state that never covers a
 reported row), the chat panel, the transcript blocks (the
 labelled user card and the markdown inside it, the markdown answer, the heading, the bold phrase, the aligned table,
@@ -231,7 +231,9 @@ the committed reasoning block with its collapsed marker and its chunked expansio
 tail laid out row for row like the committed answer block it becomes, the live reasoning segment laid out like the
 committed reasoning block it becomes, the framed tool blocks for `read`, `glob`, `grep`, `write`, `edit`, `execute`, and an unknown
 `tool_id`, the call-without-result degradation, and the notice blocks streamed live and restored by a snapshot), the
-input line and its badges, a two-line buffer growing the input block and shrinking the transcript, the armed `Esc`
+input line and its badges, the command hint band (its own frame and title, the three columns, a narrowed filter,
+a moved highlight, a slash that is not the first character opening nothing, and a window too short for the band
+keeping the input's rows), a two-line buffer growing the input block and shrinking the transcript, the armed `Esc`
 clear and the `Ctrl+C` clear, exit, and interrupt notices, the human status row, transcript scrolling, and the docked
 sessions panel (its frame and embedded title, the tab radio row, the search bar, the table header, columns, cursor
 marker, and resize reflow, the footer legend and row counter, and the stub tabs' `@todo` empty state).
@@ -243,13 +245,14 @@ continuation that reuses its session instead of creating one, every `/new` run c
 workspace root, a multi-line prompt reaching the session unchanged, the timeout interrupt with exit 4, and a typed
 unknown-session rejection with exit 3. The binary's own unit tests cover the command
 grammar, the exit-status mapping, the workspace-root resolution, the REPL line loop, and the headless formats, drivers,
-and wait deadlines. The crate's inline unit tests cover the `AppState` transitions, the keymap, the palette roles, the
+and wait deadlines. The crate's inline unit tests cover the `AppState` transitions, the command registry and its ranking and menu
+transitions, the hint band's row arithmetic and columns, the keymap, the palette roles, the
 wheel mapping, the left-button pointer's press, drag, release, marker expansion, and edge scrolling, the turn clock, the
 browser geometry and row helpers, the markdown layout, the per-tool block dispatch, the marker and notice layout, the
 transcript layout cache's append-only fast path, width change, replacement, reasoning expansion, paired-result, and
 front-trim replays, and the clipboard-free source audit. A run of
-`cargo nextest run -p intention-tui` observed 275 tests across four binaries, all passing: 172 library unit tests,
-61 `tui_render` cases, 31 binary unit tests, and 11 `terminal_e2e` cases.
+`cargo nextest run -p intention-tui` observed 297 tests across four binaries, all passing: 190 library unit tests,
+65 `tui_render` cases, 31 binary unit tests, and 11 `terminal_e2e` cases.
 
 The per-crate self-checks are `cargo fmt -p intention-tui`, `cargo nextest run -p intention-tui`, and
 `cargo clippy -p intention-tui --all-targets`; the slice's acceptance gate is `make quick` during delivery and

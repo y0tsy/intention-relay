@@ -7,8 +7,9 @@ the revue fullscreen UI (`tui`), the interactive `repl`, and the headless
 ## Module map
 
 - `src/app/` — `action.rs` (`Action`/`Effect` vocabulary), `state.rs` (state,
-  accessors, `update`), `sessions.rs`/`browser.rs`/`run.rs`/`input.rs` and the
-  layered `ctrl_c.rs`/`escape.rs` (transitions), `tests.rs`.
+  accessors, `update`), `commands.rs` (the one command registry, the command
+  word, and the menu's filter and ranking), `sessions.rs`/`browser.rs`/`run.rs`/
+  `input.rs` and the layered `ctrl_c.rs`/`escape.rs` (transitions), `tests.rs`.
 - `src/client_task.rs` — the one async `Effect` to client-call mapper.
 - `src/tui/` — `mod.rs` (`run_blocking`, event handler, wheel mapping, wiring,
   the turn clock), `layout.rs` (the neutral row model and the transcript layout
@@ -16,8 +17,8 @@ the revue fullscreen UI (`tui`), the interactive `repl`, and the headless
   (`RevueView`, one file per surface: `chat.rs` and the `sessions.rs` docked
   browser panel), `keymap.rs` (one mapping per state), `driver.rs` (thread,
   runtime, select loop), and `panes/` (one file per chat pane: `transcript.rs`,
-  `welcome.rs`, `input.rs`, `status.rs`, the `markdown.rs` content layout, and
-  the `tools.rs` per-tool block dispatch).
+  `welcome.rs`, `input.rs`, `status.rs`, the `commands.rs` hint band, the
+  `markdown.rs` content layout, and the `tools.rs` per-tool block dispatch).
 - `src/main.rs`, `src/cli.rs`, `src/headless.rs`, `src/repl.rs` — the binary.
 
 ## One window
@@ -35,9 +36,11 @@ lockup over a version/`AGENTS.md`/`MCPs`/`Skills` overview - and the interactive
 front ends open no session at all at launch, not even the most recent one: a
 session appears only for an explicit `--session`/`--continue`, `/new`, a selected
 browser row, or the first prompt, which creates the session it needs. In the
-chat `Esc` cancels a live run in one press, clears a typed line into the
-recallable history on a second consecutive press, and exits when the line is
-empty; `Ctrl+C` keeps its layered interrupt, recall, and exit behavior.
+chat the command hint band is `Esc`'s innermost layer: while it is open one
+press closes it and touches nothing else. With the band closed, `Esc` cancels a
+live run in one press, clears a typed line into the recallable history on a
+second consecutive press, and exits when the line is empty; `Ctrl+C` keeps its
+layered interrupt, recall, and exit behavior.
 
 Sessions are reachable only through `/sessions`: the chat has no sidebar, and
 the docked panel carries the whole browser - the frame with the `Sessions` title,
@@ -59,6 +62,31 @@ core as `Action::ElapsedReported`, so the view stays a pure function of state.
 A `\` immediately before `Enter` inserts a line break instead of submitting, and
 the backslash never reaches the buffer; the block grows a row per buffer line
 while the transcript gives up exactly those rows, with no line cap.
+
+The command surface is one registry (`src/app/commands.rs`) and the hint band it
+feeds: `/new` (Session) and `/sessions` (Navigation) are the two registered
+commands, each carrying its name, one-line description, category, and action,
+and the registry is the single source for the submission path, the band, and the
+unknown-command notice. A slash is a command only as a line's *first* character:
+a slash anywhere else is ordinary text, and a line whose first character is a
+blank is a turn. While the input's first character is `/` and the caret sits in
+or immediately after that word, the band opens directly above the input block as
+one more row region of the one chat panel - its own rounded frame titled
+`commands`, the three columns `[Command] [Description] [Category]`, its
+highlighted row marked with the sessions browser's own `> ` cursor and selected
+wash, at most five rows, and an explicit `… and N more commands` row when the
+filter matches more. The band spends the transcript's rows and no other's: the
+input block and the detail line never move, and a window too short for both the
+band and the input shows no band rather than taking the input's rows. The filter
+ranks a name that starts with the typed text above one whose characters appear
+in order (`/ssn` finds `/sessions`), ordered by rank and then by registry order
+so the list never reorders while typing, and an empty filter matches everything.
+`Up`/`Down` move the highlight while the band is open; the input history walks
+only once it is closed. `Tab` or `Enter` commits the highlighted command: the
+word from the slash through its end becomes the full name plus one trailing
+space and the band closes, so a line that already spells a complete command
+needs a second `Enter` to run. The band closes when the slash is removed, on
+`Esc`, when a space ends the word, or when nothing matches.
 
 The wheel moves both surfaces: in the chat it moves the transcript three display
 rows a notch, and in the sessions browser it moves the cursor one row with the
@@ -105,7 +133,10 @@ Rules the panes keep:
   each activation of that marker - or of `Ctrl+E` - reveals a hundred more.
 - A value the wire does not carry is an explicit `@todo(core)` placeholder
   (`mode`, `model`, `ctx`, and the welcome overview's `AGENTS.md`, `MCPs`, and
-  `Skills` chips), never a fabricated one.
+  `Skills` chips), never a fabricated one. The command hint band is the one
+  surface with no placeholder at all: every row it shows - name, description,
+  and category - is a front-end registry fact, so nothing in it can be a
+  `@todo(core)`.
 
 ## Palette
 
@@ -233,8 +264,10 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
 
 1. Add or reuse an `Action` in `src/app/action.rs` and handle it in
    `src/app/state.rs::update`.
-2. Name it in the `submit_command` dispatch in `src/app/input.rs` and in the
-   `KNOWN_COMMANDS` notice an unknown command shows.
+2. Add one `CommandSpec` entry to `COMMANDS` in `src/app/commands.rs` with its
+   name, description, category, and action. The registry is the single source
+   for the submission path, the hint band, and the unknown-command notice, so
+   nothing else spells the name.
 3. Advertise it in `src/tui/panes/status.rs::DEFAULT_HINT`.
 
 ### A new client-backed behavior
