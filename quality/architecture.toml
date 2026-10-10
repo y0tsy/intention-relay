@@ -1,6 +1,6 @@
 [policy]
-phase = "slice15"
-active_milestone = "slice15"
+phase = "slice2"
+active_milestone = "slice2"
 non_production_test_crates = ["intention-test-support"]
 active_production_crates = [
   "intention-proto",
@@ -66,8 +66,8 @@ test_targets = ["bounded_contracts", "tool_contracts", "tool_coverage", "workspa
 
 [crate_declarations."intention-tui"]
 role = "adapter"
-responsibility = "Minimal terminal-facing proof adapter over the shared client."
-test_targets = ["tui_contract"]
+responsibility = "The revue-based terminal application over the shared client: the fullscreen UI, the interactive REPL, and the headless prompt command in one binary."
+test_targets = ["terminal_e2e", "tui_render"]
 
 [crate_declarations."intention-test-support"]
 role = "test-support"
@@ -122,16 +122,16 @@ test_only_source_patterns = [
 # Dependency edges of the non-production test crates, compared for equality
 # like the active production edges above.
 [non_production_test_dependencies]
-"intention-test-support" = ["intention-config", "intention-daemon", "intention-proto", "intention-providers", "intention-transport"]
+"intention-test-support" = ["intention-client", "intention-config", "intention-daemon", "intention-proto", "intention-providers", "intention-transport"]
 
 [non_production_test_external_dependencies]
-"intention-test-support" = ["futures-executor", "futures-util", "tempfile", "tokio"]
+"intention-test-support" = ["futures-executor", "futures-util", "serde_json", "tempfile", "tokio"]
 
 [adapter_boundaries]
 packages = ["intention-tui"]
 allowed_workspace_dependencies = ["intention-client", "intention-transport", "intention-proto"]
 allowed_test_workspace_dependencies = ["intention-daemon", "intention-test-support"]
-allowed_external_dependencies = ["serde_json", "tokio"]
+allowed_external_dependencies = ["lexopt", "mimalloc", "revue", "serde_json", "tempfile", "tokio"]
 forbidden_source_patterns = [
   "intention_engine::",
   "intention_storage::",
