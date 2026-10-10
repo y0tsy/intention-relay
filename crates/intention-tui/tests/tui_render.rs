@@ -305,6 +305,16 @@ fn open_state(session_id: SessionId, messages: Vec<MessageProjectionDto>) -> App
     state
 }
 
+/// Returns a connected state that listed no sessions: the chat's empty state.
+fn welcome_state() -> AppState {
+    let mut state = AppState::new(None);
+    state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
+    state.update(Action::SessionsListed(
+        SessionSummariesDto::new(Vec::new(), 0).expect("the empty session list is coherent"),
+    ));
+    state
+}
+
 /// Applies the opened-subscription action for one run of `status` to `state`.
 fn subscribe(state: &mut AppState, session_id: SessionId, run_id: RunId, status: RunStatusDto) {
     let subscription = RunSubscriptionSnapshotDto::new(run(session_id, run_id, status), Vec::new())
@@ -1514,4 +1524,122 @@ fn scrolling_the_transcript_reveals_older_rows_and_cuts_the_newest() {
     let pilot = Pilot::new(&mut app);
     pilot.assert_contains("row 29");
     pilot.assert_not_contains("row 24");
+}
+
+#[test]
+fn the_welcome_state_shows_the_lockup_and_the_overview_while_no_session_is_open() {
+    let state = welcome_state();
+    let app = TestApp::with_size(
+        RevueView::with_now(&state, NOW),
+        WINDOW_WIDTH,
+        WINDOW_HEIGHT,
+    );
+    find_text(&app, "INTENTION");
+    find_text(&app, "R E L A Y");
+    find_text(&app, &format!("Version {}", env!("CARGO_PKG_VERSION")));
+    find_text(&app, "AGENTS.md @todo(core)");
+    find_text(&app, "MCPs @todo(core)");
+    find_text(&app, "Skills @todo(core)");
+    assert!(
+        app.find_text("transcript").is_none(),
+        "the welcome replaces the transcript pane"
+    );
+
+    // The lockup is centred in the 74-column content: its 20 columns leave 27
+    // columns on either side, and the card's content starts at column 3.
+    let (product_x, product_row) = find_text(&app, "INTENTION");
+    let (trailing_x, trailing_row) = find_text(&app, "R E L A Y");
+    assert_eq!(product_x, 30, "the lockup is centred in the chat");
+    assert_eq!(trailing_row, product_row, "the lockup is one line");
+    assert_eq!(
+        trailing_x,
+        product_x + 9 + 2,
+        "the trailing word follows INTENTION and the documented two-column gap"
+    );
+    let product = app
+        .buffer()
+        .get(product_x, product_row)
+        .expect("the product word paints a cell");
+    assert!(
+        product.modifier.contains(Modifier::BOLD),
+        "the product word is the bold half of the lockup"
+    );
+    let trailing = app
+        .buffer()
+        .get(trailing_x, trailing_row)
+        .expect("the trailing word paints a cell");
+    assert!(
+        !trailing.modifier.contains(Modifier::BOLD),
+        "the trailing word is the muted, tracked half"
+    );
+
+    let (_, overview_row) = find_text(&app, "AGENTS.md @todo(core)");
+    let (_, input_row) = find_text(&app, "model @todo(core)");
+    assert!(
+        product_row < overview_row,
+        "the overview sits below the lockup"
+    );
+    assert!(
+        overview_row < input_row,
+        "the overview sits above the input block"
+    );
+    find_text(&app, "> █");
+    find_text(&app, "enter sends | /new session | /sessions switch");
+}
+
+#[test]
+fn the_welcome_state_is_gone_once_a_session_is_open() {
+    let state = open_state(fixture_session(FIRST_SESSION), Vec::new());
+    let app = TestApp::with_size(
+        RevueView::with_now(&state, NOW),
+        WINDOW_WIDTH,
+        WINDOW_HEIGHT,
+    );
+    assert!(
+        app.find_text("INTENTION").is_none(),
+        "an open session keeps the transcript pane"
+    );
+    assert!(app.find_text("Skills @todo(core)").is_none());
+    let (_, transcript_row) = find_text(&app, "transcript");
+    let (_, input_row) = find_text(&app, "model @todo(core)");
+    assert!(transcript_row < input_row, "the pane keeps its region");
+}
+
+#[test]
+fn the_welcome_state_never_covers_a_row_the_core_reports() {
+    // A run subscription can append committed rows before any session snapshot
+    // opens, so the transcript with rows wins even with no open session.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = AppState::new(None);
+    state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
+    let subscription = RunSubscriptionSnapshotDto::new(
+        run(session_id, run_id, RunStatusDto::Running),
+        vec![row(
+            session_id,
+            run_id,
+            MessageKindDto::Assistant,
+            "the committed row",
+        )],
+    )
+    .expect("the fixture run snapshot is coherent");
+    let mut stream = RunStreamState::new(session_id, run_id);
+    stream
+        .apply_initial(subscription)
+        .expect("the fixture run snapshot applies to its own scope");
+    state.update(Action::RunStreamOpened(stream));
+    assert!(state.session_id().is_none(), "no session snapshot arrived");
+    assert_eq!(state.transcript().len(), 1, "one committed row is present");
+
+    let app = TestApp::with_size(
+        RevueView::with_now(&state, NOW),
+        WINDOW_WIDTH,
+        WINDOW_HEIGHT,
+    );
+    find_text(&app, "the committed row");
+    assert!(
+        app.find_text("INTENTION").is_none(),
+        "a reported row keeps the transcript pane"
+    );
+    assert!(app.find_text("Skills @todo(core)").is_none());
 }

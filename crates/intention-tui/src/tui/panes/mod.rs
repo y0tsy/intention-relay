@@ -10,3 +10,4 @@ pub(super) mod markdown;
 pub(super) mod status;
 pub(super) mod tools;
 pub(super) mod transcript;
+pub(super) mod welcome;

@@ -1,5 +1,6 @@
-//! The chat screen: the transcript, the input block, and the notice or error
-//! line, inside the framed panel the whole window is built from.
+//! The chat screen: the transcript - or the welcome pane while no session is
+//! open - the input block, and the notice or error line, inside the framed
+//! panel the whole window is built from.
 
 use std::cell::RefCell;
 
@@ -9,7 +10,7 @@ use revue::widget::{Border, Card, Stack, Text, hstack, vstack};
 use crate::app::AppState;
 use crate::tui::layout::TranscriptLayoutCache;
 use crate::tui::palette;
-use crate::tui::panes::{input, status, transcript};
+use crate::tui::panes::{input, status, transcript, welcome};
 
 /// The columns and rows the window keeps around the chat panel.
 const PANEL_MARGIN: u16 = 1;
@@ -98,8 +99,10 @@ pub(super) fn chat_screen(
 /// Returns the framed panel: one rounded frame whose card carries the chat.
 ///
 /// The card draws no border of its own, so the frame reads as a single
-/// container with the panel's padding inside it: the transcript on top, the
-/// input block under it, and the notice or error line last.
+/// container with the panel's padding inside it: the transcript - or the
+/// welcome pane while no session is open - on top, the input block under it,
+/// and the notice or error line last. The welcome keeps the same region, so
+/// the input block and the detail line never move between the two states.
 ///
 /// `top` is the screen row the transcript pane's content starts at, which the
 /// pane publishes with the rest of its window for the next mouse event.
@@ -109,6 +112,24 @@ fn panel_widget(
     top: u16,
     cache: &RefCell<TranscriptLayoutCache>,
 ) -> Border {
+    let mut content = vstack();
+    content = if welcome::is_welcome(state) {
+        content.child_sized(
+            welcome::welcome_pane(panel.transcript_rows, panel.content_columns),
+            panel.transcript_rows,
+        )
+    } else {
+        content.child_sized(
+            transcript::transcript_pane(
+                state,
+                top,
+                panel.transcript_rows,
+                panel.content_columns,
+                cache,
+            ),
+            panel.transcript_rows,
+        )
+    };
     Border::rounded()
         .min_size(panel.columns, panel.rows)
         .max_size(panel.columns, panel.rows)
@@ -120,17 +141,7 @@ fn panel_widget(
                 .padding(PANEL_PADDING)
                 .background(palette::PANEL)
                 .body(
-                    vstack()
-                        .child_sized(
-                            transcript::transcript_pane(
-                                state,
-                                top,
-                                panel.transcript_rows,
-                                panel.content_columns,
-                                cache,
-                            ),
-                            panel.transcript_rows,
-                        )
+                    content
                         .child_sized(
                             input::input_block(state, panel.content_columns),
                             INPUT_BLOCK_ROWS,

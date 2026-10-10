@@ -13,10 +13,10 @@
 //! | [`TAB_ACTIVE_BG`] | `#FCE2C4` | the active tab's wash |
 //! | [`ROW_SELECTED_BG`] | `#FADFC0` | the cursor row's wash |
 //! | [`ROW_ALT_BG`] | `#FBF5EC` | every second row's zebra tint |
-//! | [`STUB_BG`] | `#FBE4DF` | the `@todo(core)` empty state |
+//! | [`STUB_BG`] | `#FBE4DF` | the `@todo(core)` empty state and welcome sub-blocks |
 //! | [`INPUT_BG`] | `#FFF4E2` | the chat input line |
-//! | [`BADGE_BG`] | `#EFE0C8` | the badge wash of the input header |
-//! | [`BADGE_INK`] | `#5C4632` | the label ink of an input-header badge |
+//! | [`BADGE_BG`] | `#EFE0C8` | the badge wash of the input header and the welcome version |
+//! | [`BADGE_INK`] | `#5C4632` | the label ink of a badge |
 //! | [`USER_SURFACE`] | `#EDF1F5` | the wash of a user message card |
 //! | [`USER_BORDER`] | `#A9BCD0` | the frame of a user message card |
 //! | [`USER_LABEL`] | `#2F5D7C` | the `you` label of a user message card |
@@ -32,7 +32,7 @@
 //! | [`DIVIDER_TINT`] | `#EFE6D8` | the divider bands between blocks |
 //! | [`BORDER`] | `#DCCFBB` | the neutral frames (chat, panes) |
 //! | [`ACCENT`] | `#F97316` | the primary accent: the focused frame, hotkeys |
-//! | [`ACCENT_DEEP`] | `#C2410C` | accent text on an accent wash |
+//! | [`ACCENT_DEEP`] | `#C2410C` | accent text on an accent wash, the welcome lockup's product word |
 //! | [`SCARLET`] | `#DC2626` | the secondary accent: active runs, failures |
 //! | [`MARKDOWN_HEADING`] | `#9A3412` | an assistant heading line |
 //! | [`MARKDOWN_CODE`] | `#7C2D12` | inline code and code blocks in an answer |
@@ -43,7 +43,7 @@
 //! | [`TIMER_INK`] | `#A16207` | the measured elapsed value |
 //! | [`TODO_INK`] | `#8B7AA8` | the `@todo(core)` placeholder tone |
 //! | [`INK`] | `#2A211A` | body text |
-//! | [`INK_MUTED`] | `#7A6A58` | secondary text and hints |
+//! | [`INK_MUTED`] | `#7A6A58` | secondary text, hints, and the welcome lockup's trailing word |
 //! | [`INK_FAINT`] | `#A8967F` | dividers and separators |
 //! | [`SUCCESS`] | `#2F7D4F` | completed runs |
 //! | [`WARNING`] | `#B45309` | queued or interrupted work |
