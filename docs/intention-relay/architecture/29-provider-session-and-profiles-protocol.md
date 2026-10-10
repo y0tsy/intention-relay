@@ -69,7 +69,7 @@ rerouted to a current default or new revision. Usage is keyed by exact profile i
 profile into one bounded entry per `(revision, model)` identity and separately by revision/model, with no price,
 currency, or estimated cost; different profiles sharing all safe fields remain independent clients, selection
 identities, and usage groups. The fork override fields on `ForkSessionCommandDto` and `StartForkRunCommandDto` and their
-resolution service belong to this not-activated layer; the fork wire commands remain Slice 4.
+resolution service belong to this not-activated layer; the fork wire commands remain Slice 6.
 
 ## Public protocol and presentation
 
@@ -138,7 +138,7 @@ Non-goals: a `responses` SDK/driver, user-kind parser, catalog database, profile
 presentation, credential entry/keychain, health test, discovery, pricing, telemetry, live reload, multimodal or
 structured output, plugin drivers, remote continuation, and production behavior. The catalog database, the single
 current storage schema (logical version 1), credential rotation, health checks, discovery, pricing, controlled live
-reload, and typed header policy belong to the not-activated Slice 2; the typed server-side-parser and
+reload, and typed header policy belong to the not-activated Slice 4; the typed server-side-parser and
 preservation-control contracts were removed as unconsumed by the unconsumed-surface audit (2026-09), so no
 parser-configuration surface is activated.
 

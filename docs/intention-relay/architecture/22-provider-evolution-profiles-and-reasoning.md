@@ -157,7 +157,7 @@ capability meaning, or credential transport requires a new major; every executab
 and fixtures, and same family/major is insufficient. Composition alone resolves private driver entries by exact profile
 revision, descriptor revision, and driver contract; no SDK/client/credential resource crosses a boundary.
 
-The Slice 2 option seam applies validated, credential-free driver options (`OpenRouterDriverOptions`
+The Slice 4 option seam applies validated, credential-free driver options (`OpenRouterDriverOptions`
 and `GenericChatDriverOptions`) only through the composition's single seam translation at startup selected-provider
 construction, at every catalog activation through the composition driver factory, and on credential-driven rebuilds, so
 a declared option is never silently defaulted or ignored. Its closed declaration vocabulary is the profile's
@@ -165,7 +165,7 @@ credential transport (bearer, or one descriptor-selected safe header whose compl
 empty reasoning-effort slot (no declaration surface; RSN-011); a declaration the executing adapter cannot
 apply fails closed at the seam with the adapter's typed error, live `SafeHeader` wire injection is not activated,
 and adapter applicability remains adapter-owned. The option seam and every declaration belong to the not-activated
-Slice 2 and must be implemented under an activating specification.
+Slice 4 and must be implemented under an activating specification.
 
 The catalog is startup-only, and acceptance is all-or-nothing: the auto-accept path builds and pre-validates the
 replacement registry and its admissions map before durable acceptance, so a build or validation failure leaves the
@@ -199,7 +199,7 @@ activation leaves `activation_recovery_required`, a changed current file cannot 
 readiness is unavailable until exact recovery succeeds. Catalog/default/enablement changes affect fresh selection
 only: they neither rewrite stored selection nor revoke an already admitted run, and explicit Run cancellation
 remains the stopping authority. No private binding survives restart. The catalog, its tables, and the
-configuration-audit vocabulary belong to the not-activated Slice 2: the closed audit taxonomy listed below is written
+configuration-audit vocabulary belong to the not-activated Slice 4: the closed audit taxonomy listed below is written
 by the storage path and carried by no wire DTO. Numeric catalog/parser/page bounds must be explicitly classified as
 intrinsic representation bounds, protocol bounds, or actual capacity, never admission quotas.
 
@@ -231,10 +231,10 @@ round's own accepted reasoning to the assistant tool-call message of that in-fli
 ([architecture 08](08-model-protocol-and-providers.md)); prior-run, cross-turn, and fork reasoning injection remains
 forbidden.
 
-The future normalized stream carries text, reasoning, summaries, tool calls, usage, and terminal events. The Slice 2
+The future normalized stream carries text, reasoning, summaries, tool calls, usage, and terminal events. The Slice 4
 provider-neutral reasoning DTO surface is owned by `intention-providers`; the
 closed fragment category and the summary delta do not exist yet, and the live
-normalized reasoning event is the M4 `ModelEventDto::ReasoningDelta { content }`. The Slice 2 shape is:
+normalized reasoning event is the M4 `ModelEventDto::ReasoningDelta { content }`. The Slice 4 shape is:
 
 ```text
 ReasoningFragmentCategoryDto
@@ -402,10 +402,10 @@ Each accepted fragment maps to the future normalized reasoning path. No encrypte
 vLLM/SGLang parser config, raw provider JSON, or generic request templates. Cross-turn policy is limited to the explicit
 typed textual history contract; provider-native `preserve_thinking`, `thinking.keep`, remote continuation identifiers,
 and non-fitting assistant-history requirements are excluded. Arbitrary authentication headers are an accepted post-M5
-direction for M5+ Slice 2:
+direction for M5+ Slice 4:
 a closed code-owned typed header policy (the provider-owned `AuthenticationHeaderPolicyV1` consumed by both
 provider adapters; the protocol-only duplicate was removed by the unconsumed-surface audit (2026-09)). That policy
-belongs to the not-activated Slice 2, so the direction is documentation-only until an activating
+belongs to the not-activated Slice 4, so the direction is documentation-only until an activating
 specification. The typed provider-native preservation-control and server-side-parser contracts were removed by the
 unconsumed-surface audit (2026-09): no preservation-control or parser-configuration surface is activated. Live wire
 header injection (`SafeHeader`) and provider-native live extraction beyond the declared paths remain not activated. The
@@ -419,7 +419,7 @@ parsing, or provider SDK data outside its owner adapter.
 
 ## Catalog lifecycle detail: limits, tombstones, and audit
 
-The Slice 2 fixed catalog caps (profile/kind/display-name lengths, catalog and registry counts, candidate
+The Slice 4 fixed catalog caps (profile/kind/display-name lengths, catalog and registry counts, candidate
 and page sizes, validation-issue counts, pending-removal lifetime, and its queue-promotion and reconciliation pages) are
 not part of the direction: the limits-by-precedent rule ([architecture
 09](09-configuration-security-and-observability.md), [architecture 15](15-tool-registry-and-model-tool-loop.md)) removes
@@ -471,7 +471,7 @@ created for historical runs.
 
 The provider session-selection layer (session default, per-turn/fork overrides, profile-keyed usage, and pending-removal
 accept/reject) is owned by [architecture 29](29-provider-session-and-profiles-protocol.md); it belongs to the
-not-activated Slice 2.
+not-activated Slice 4.
 
 ## Child, MCP, bridge, kernel, context, and compatibility boundaries
 
@@ -492,7 +492,7 @@ This document depends on architectures 15 and 21. It does not define a
 Responses SDK/driver, user-kind parser, profile picker/editor presentation, credential entry/keychain,
 telemetry, multimodal or structured output, plugin drivers, or remote continuation. The catalog database, the single
 current storage schema (logical version 1), credential rotation, health checks, discovery, pricing, controlled live
-reload, and typed header policy belong to the not-activated Slice 2; the typed preservation-control and
+reload, and typed header policy belong to the not-activated Slice 4; the typed preservation-control and
 server-side-parser contracts were removed as unconsumed by the unconsumed-surface audit (2026-09), and no
 parser-configuration surface is activated.
 Semantic content inspection of reasoning or provider content is an accepted post-M5 future direction,
@@ -500,7 +500,7 @@ bound to Milestone 5+; it is not activated here, never substitutes for central r
 records. The profile picker/editor, credential rotation, health test, discovery, pricing, telemetry, and live reload
 items are accepted post-M5 directions owned by [architecture 25](25-configuration-provider-control-plane.md) under
 [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment) and belong to the
-not-activated Slice 2, so they are documentation-only; the profile picker/editor presentation and telemetry remain not
+not-activated Slice 4, so they are documentation-only; the profile picker/editor presentation and telemetry remain not
 activated. Architecture 23 owns forks and lineage and architecture 29 owns session defaults/overrides and the profiles
 protocol. UI, Cargo, Makefile/CI, or production activation beyond the accepted directions remain outside this document.
 

@@ -10,7 +10,7 @@ architecture checks, and supply-chain gates live in [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md); test-first and outcome-verification rules live in [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md).
 
-The systems of documents 15 and 18-30 and of Slices 2-5 are not activated, and each activation requires an accepted
+The systems of documents 15 and 18-30 and of Slices 2-6 are not activated, and each activation requires an accepted
 activating specification ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ## Closed milestones (M0-M5)
@@ -75,14 +75,15 @@ The coverage policy is the per-crate tiers declared in `quality/coverage.toml`
 
 **Activation home for the complete post-M5 stack; hard prerequisite for M6-M9.** It does not renumber, replace, or claim
 delivery of Milestones 6-9; it is their declared prerequisite in the dependency graph and activates only preparatory
-foundation work, never direct M6-M9 boundary implementation. The remaining post-M4 package implementations are not part
+foundation work, including the terminal presentation foundation, never direct M6-M9 boundary implementation. The
+remaining post-M4 package implementations are not part
 of its slices: they are delivered by Milestones 11 and 12, which consume this milestone's foundation.
 The activation decision is the Milestone 5+ package, extended by [architecture
-30](30-instruction-sources-and-system-context.md) for the fifth slice.
+30](30-instruction-sources-and-system-context.md) for the third slice.
 
 ### Slices
 
-The six slices are approved together as one package and delivered in this order; no slice ships half-ready, and later
+The seven slices are approved together as one package and delivered in this order; no slice ships half-ready, and later
 slices consume only contracts activated by earlier slices. Every direction stays bound to its slice,
 and every retrospective change to M0-M5 code required by those directions activates inside its slice with its own
 contract, transaction, and outcome test. Each direction's activating specification is accepted at the start of the
@@ -123,24 +124,15 @@ end-to-end suite drives that client (`client_e2e`) instead of the low-level tran
 sequence of identity check, durable call row, workspace binding, dispatch, and durable terminal row; the nine-production-crate consolidation and the removal of the composition facade landed, so
 the daemon host calls the engine directly; and the single storage schema is created on open under one integer stamp,
 where a stamp bump discards and recreates the database with no migration or compatibility path.
--  **Slice 2 — Control plane — not activated.** The cluster and provider session selection (architectures 25/29/22):
-controlled live reload, credential rotation, provider health checks, model discovery, pricing policy, provider profile
-UI and raw-TOML/configuration editing, arbitrary authentication headers, session defaults and per-turn/fork overrides,
-the provider profiles protocol, pending-removal and degraded recovery, and the provider reasoning/catalog surface. The
-unconsumed-surface audit (2026-09) removed the unconsumed
-typed preservation-control, server-side-parser, Responses reasoning-mode, reasoning-usage, and model-capability-envelope
-contracts, the protocol-only reasoning/header/parser duplicates, the eight producer-less control-plane event DTOs, and
-the `provider_profile_tombstoned` wire code.
--  **Slice 3 — Goal domain — not activated.** The Goal domain (architecture 28). The slice also activates the
-tool-descriptor, tool-registry, and model-tool-loop contracts as amended under [architecture
-15](15-tool-registry-and-model-tool-loop.md), the bridge-invocation and
-MCP-method-catalog selections (architectures 19/18), and work/requeue after client disconnection.
--  **Slice 4 — UI foundation — not activated.** Session branching, reasoning/catalog delivery, and adapter boundaries
-(architectures 23/22 plus architecture 03's flat activity journal and notification list): `session_fork_v1`;
-normalized reasoning delivery; and the exact typed client/protocol surface M6 consumes. It also carries cross-workspace
-clone/rebind (architecture 23) and the physical deletion/GC retention policy for historical work under architecture 04's
-retention rules.
--  **Slice 5 — Instruction sources and system context — last slice; not activated.** The instruction channel of
+-  **Slice 2 — Terminal UX — not activated.** The terminal application over the existing typed client and daemon
+([architecture 03](03-daemon-transport-and-adapters.md)): one `intention-tui` binary with three modes — a full-screen
+TUI (session list, create/open session, send a turn, stream the response, status, reconnect), a mandatory interactive
+REPL, and a headless command that invokes one prompt with model, prompt text, system prompt, workspace, provider
+profile, session continuation, streaming output, timeout, and a script-friendly output format. The slice also freezes
+the terminal client contract: TUI and headless modes are contract-equivalent over one `intention-client` surface,
+headless exit codes and safe errors are typed, and no presentation logic enters the daemon. Session branching and
+forks remain Slice 6 work; desktop presentation remains Milestone 6 work.
+-  **Slice 3 — Instruction sources and system context — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
 deployment instruction profile adapted from the legacy Antibusy static prompt set, user-editable fragments at user,
 project, and session scope, workspace `AGENTS.md` project instructions read through the `WorkspaceRoot` anchor, and the
@@ -149,6 +141,23 @@ identity; deterministic assembly and the effective instruction projection, froze
 existing `system_context` channel, materialized into fork, plan, and handoff records, and recorded as safe usage
 provenance; closed safe failures, channel closure, and safe observability. Its activating specification declares the
 instruction contract families as typed serde JSON contracts and changes no earlier slice.
+-  **Slice 4 — Control plane — not activated.** The cluster and provider session selection (architectures 25/29/22):
+controlled live reload, credential rotation, provider health checks, model discovery, pricing policy, provider profile
+UI and raw-TOML/configuration editing, arbitrary authentication headers, session defaults and per-turn/fork overrides,
+the provider profiles protocol, pending-removal and degraded recovery, and the provider reasoning/catalog surface. The
+unconsumed-surface audit (2026-09) removed the unconsumed
+typed preservation-control, server-side-parser, Responses reasoning-mode, reasoning-usage, and model-capability-envelope
+contracts, the protocol-only reasoning/header/parser duplicates, the eight producer-less control-plane event DTOs, and
+the `provider_profile_tombstoned` wire code.
+-  **Slice 5 — Goal domain — not activated.** The Goal domain (architecture 28). The slice also activates the
+tool-descriptor, tool-registry, and model-tool-loop contracts as amended under [architecture
+15](15-tool-registry-and-model-tool-loop.md), the bridge-invocation and
+MCP-method-catalog selections (architectures 19/18), and work/requeue after client disconnection.
+-  **Slice 6 — UI foundation — last slice; not activated.** Session branching, reasoning/catalog delivery, and adapter
+boundaries (architectures 23/22 plus architecture 03's flat activity journal and notification list): `session_fork_v1`;
+normalized reasoning delivery; and the exact typed client/protocol surface M6 consumes. It also carries cross-workspace
+clone/rebind (architecture 23) and the physical deletion/GC retention policy for historical work under architecture 04's
+retention rules.
 
 ### Exit criteria
 
@@ -159,7 +168,7 @@ SQLite storage is the single live schema created directly on open.
 -  Slice 1.5 preserves durable meaning: the single storage schema is created on open under one integer stamp, where a
 stamp bump discards and recreates the database with no migration or compatibility layer, and tool and lifecycle
 semantics keep their recorded law.
--  The Slice 2 health, discovery, and pricing surfaces are non-authorizing: they create no RunId, tool
+-  The Slice 4 health, discovery, and pricing surfaces are non-authorizing: they create no RunId, tool
 permission, MCP capability, bridge grant, kernel epoch, context projection, or branch, and the activating
 specification must prove that non-authority.
 -  Applicable crates meet their declared tier floors without excluding policy or boundary logic; every activated slice
@@ -168,7 +177,7 @@ passes `make quick`, `make verify`, and Linux/Windows CI.
 storage/schema treatment, and evidence together.
 -  No M6-M9 boundary behavior is implemented, and no second runtime, registry, persistence authority, or sandbox is
 introduced.
--  The fifth slice proves instruction text is advisory-only, typed, and materialized for frozen context, with no
+-  The third slice proves instruction text is advisory-only, typed, and materialized for frozen context, with no
 untrusted material entering the instruction channel and no authority created
 ([architecture 30](30-instruction-sources-and-system-context.md)).
 -  Milestones 11 and 12 are this milestone's successors for the remaining post-M4 packages; their activating
