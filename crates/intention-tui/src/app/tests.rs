@@ -9,12 +9,12 @@ use intention_proto::{
     RunId, RunModeDto, RunProjectionDto, RunStatusDto, RunStreamFrameDto,
     RunSubscriptionSnapshotDto, SendUserTurnOutcomeDto, SessionId, SessionProjectionDto,
     SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto,
-    TextDeltaFrameDto, TurnId, WorkspaceId, WorkspaceRootDto,
+    TextDeltaFrameDto, ThemeDto, TurnId, WorkspaceId, WorkspaceRootDto,
 };
 
 use super::{
     Action, AppState, BrowserCursorMove, BrowserTab, COMMANDS, ConnectionStatus, Effect,
-    InputCursorMove, InputHistoryMove, MenuMove, Screen, StreamStatus, TRANSCRIPT_DRAG_ROWS,
+    InputCursorMove, InputHistoryMove, MenuMove, Screen, StreamStatus, TRANSCRIPT_DRAG_ROWS, Theme,
     TranscriptScroll,
 };
 
@@ -224,6 +224,17 @@ fn run_command(state: &mut AppState) -> Vec<Effect> {
     state.update(Action::InputSubmitted)
 }
 
+/// Opens the theme picker the way `/theme` does.
+fn open_picker(state: &mut AppState) {
+    type_text(state, "/theme");
+    let effects = run_command(state);
+    assert!(
+        effects.is_empty(),
+        "opening the picker asks for no client work"
+    );
+    assert_eq!(state.screen(), Screen::Theme);
+}
+
 /// Types `text` into the sessions browser filter, one character action each.
 fn type_browser_filter(state: &mut AppState, text: &str) {
     for character in text.chars() {
@@ -296,7 +307,11 @@ fn bootstrap_lists_sessions_and_opens_the_selected_session() {
     let effects = state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
     assert_eq!(
         effects,
-        vec![Effect::ListSessions, Effect::OpenSession(session_id)],
+        vec![
+            Effect::ListSessions,
+            Effect::LoadSettings,
+            Effect::OpenSession(session_id)
+        ],
         "an explicitly selected session is opened without waiting for the list"
     );
     assert_eq!(
@@ -318,6 +333,81 @@ fn bootstrap_failure_is_reported_without_client_work() {
             .is_some_and(|error| error.starts_with("fixture_failure:")),
         "the error line names the failure code"
     );
+}
+
+#[test]
+fn the_settings_load_records_the_daemons_theme_on_startup() {
+    let mut state = AppState::new(None);
+    let effects = state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
+    assert_eq!(
+        effects,
+        vec![Effect::ListSessions, Effect::LoadSettings],
+        "a ready connection reads the daemon's terminal settings"
+    );
+    assert_eq!(
+        state.theme(),
+        Theme::Light,
+        "the terminal's own default holds until the daemon answers"
+    );
+
+    let effects = state.update(Action::SettingsReceived(ThemeDto::Dark));
+    assert!(
+        effects.is_empty(),
+        "the settings reply asks for no more work"
+    );
+    assert_eq!(
+        state.theme(),
+        Theme::Dark,
+        "the daemon's theme becomes the committed one"
+    );
+    assert_eq!(state.effective_theme(), Theme::Dark);
+}
+
+#[test]
+fn only_the_accepted_reply_moves_the_committed_theme_and_a_rejection_notices() {
+    let mut state = AppState::new(None);
+    let effects = state.update(Action::ThemeSelected(Theme::Dark));
+    assert_eq!(
+        effects,
+        vec![Effect::PersistTheme(Theme::Dark)],
+        "a selection asks the daemon to persist it"
+    );
+    assert_eq!(
+        state.theme(),
+        Theme::Light,
+        "a selection never commits optimistically"
+    );
+    assert_eq!(
+        state.effective_theme(),
+        Theme::Dark,
+        "the candidate previews while the daemon confirms"
+    );
+
+    let effects = state.update(Action::SettingsFailed(failure()));
+    assert!(effects.is_empty());
+    assert_eq!(
+        state.theme(),
+        Theme::Light,
+        "a rejected selection leaves the committed theme"
+    );
+    assert_eq!(
+        state.effective_theme(),
+        Theme::Light,
+        "a rejected selection drops the preview it showed"
+    );
+    assert!(
+        state
+            .error()
+            .is_some_and(|error| error.starts_with("fixture_failure:")),
+        "the rejection reaches the error line"
+    );
+
+    // The accepted reply is the only thing that moves the committed theme.
+    let mut state = AppState::new(None);
+    state.update(Action::ThemeSelected(Theme::Dark));
+    state.update(Action::SettingsReceived(ThemeDto::Dark));
+    assert_eq!(state.theme(), Theme::Dark);
+    assert_eq!(state.effective_theme(), Theme::Dark);
 }
 
 #[test]
@@ -374,7 +464,11 @@ fn listing_never_auto_opens_over_an_explicitly_selected_session() {
     let mut state = AppState::new(Some(selected));
     assert_eq!(
         state.update(Action::Bootstrapped(DaemonHealthDto::ready())),
-        vec![Effect::ListSessions, Effect::OpenSession(selected)],
+        vec![
+            Effect::ListSessions,
+            Effect::LoadSettings,
+            Effect::OpenSession(selected)
+        ],
         "the selected session is opened without waiting for the list"
     );
     // The list reply can overtake the selected session's snapshot, so the list
@@ -616,7 +710,7 @@ fn an_unknown_slash_command_lists_the_known_commands() {
     assert_eq!(state.input(), "");
     assert_eq!(
         state.notice(),
-        Some("unknown command /watch; known commands: /new /sessions")
+        Some("unknown command /watch; known commands: /new /sessions /theme")
     );
 }
 
@@ -677,13 +771,15 @@ fn the_hint_menu_opens_on_a_leading_slash_and_stays_closed_otherwise() {
     let menu = state
         .command_menu()
         .expect("a leading slash opens the menu");
-    assert_eq!(menu.len(), 2, "a bare slash offers every command");
+    assert_eq!(menu.len(), 3, "a bare slash offers every command");
     assert_eq!(menu.highlight(), 0, "the best match starts highlighted");
     assert_eq!(
-        menu.commands()
-            .map(|command| command.typed_name())
-            .collect::<Vec<_>>(),
-        vec!["/new".to_owned(), "/sessions".to_owned()],
+        menu.rows().map(|row| row.label()).collect::<Vec<_>>(),
+        vec![
+            "/new".to_owned(),
+            "/sessions".to_owned(),
+            "/theme".to_owned()
+        ],
         "a bare slash lists the registry in registry order"
     );
 }
@@ -696,9 +792,7 @@ fn the_hint_menu_filters_as_the_word_grows() {
         .command_menu()
         .expect("a prefix match keeps the menu open");
     assert_eq!(
-        menu.commands()
-            .map(|command| command.typed_name())
-            .collect::<Vec<_>>(),
+        menu.rows().map(|row| row.label()).collect::<Vec<_>>(),
         vec!["/sessions".to_owned()],
         "s narrows the list to the command that starts with it"
     );
@@ -716,8 +810,8 @@ fn the_hint_menu_filters_as_the_word_grows() {
         state
             .command_menu()
             .expect("an ordered subsequence matches")
-            .commands()
-            .map(|command| command.typed_name())
+            .rows()
+            .map(|row| row.label())
             .collect::<Vec<_>>(),
         vec!["/sessions".to_owned()],
         "sns is an ordered subsequence of sessions"
@@ -754,9 +848,17 @@ fn the_hint_menu_highlight_moves_with_the_arrows_while_the_history_waits() {
     state.update(Action::MenuMove(MenuMove::Down));
     assert_eq!(
         state.command_menu().map(|menu| menu.highlight()),
-        Some(1),
+        Some(2),
+        "Down keeps walking the three registered commands"
+    );
+    state.update(Action::MenuMove(MenuMove::Down));
+    assert_eq!(
+        state.command_menu().map(|menu| menu.highlight()),
+        Some(2),
         "the highlight stops at the list's last row"
     );
+    state.update(Action::MenuMove(MenuMove::Up));
+    assert_eq!(state.command_menu().map(|menu| menu.highlight()), Some(1));
     state.update(Action::MenuMove(MenuMove::Up));
     assert_eq!(state.command_menu().map(|menu| menu.highlight()), Some(0));
 
@@ -890,6 +992,111 @@ fn the_hint_menu_closes_on_every_close_rule() {
 }
 
 #[test]
+fn the_band_lists_a_declared_arguments_values_and_completes_one() {
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/theme ");
+    let menu = state
+        .command_menu()
+        .expect("a declared argument opens the band");
+    assert_eq!(
+        menu.rows().map(|row| row.label()).collect::<Vec<_>>(),
+        vec!["light".to_owned(), "dark".to_owned()],
+        "an empty filter lists every value in declaration order"
+    );
+    assert_eq!(menu.highlight(), 0, "the best match starts highlighted");
+
+    // Tab completes the empty word: the band has nothing to replace, so the
+    // value it highlights becomes the word and one trailing space follows. The
+    // band has nothing to complete for Enter either - but Enter runs the
+    // command instead, which is what opens the picker.
+    state.update(Action::MenuAccept);
+    assert_eq!(state.input(), "/theme light ");
+    assert_eq!(state.cursor(), "/theme light ".chars().count());
+    assert!(
+        state.command_menu().is_none(),
+        "a complete value closes the band"
+    );
+    assert_eq!(
+        state.update(Action::InputSubmitted),
+        vec![Effect::PersistTheme(Theme::Light)],
+        "the completed line runs on the next Enter"
+    );
+
+    // A typed prefix narrows the band, and Enter completes it the same way.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/theme d");
+    let menu = state.command_menu().expect("d selects dark");
+    assert_eq!(
+        menu.rows().map(|row| row.label()).collect::<Vec<_>>(),
+        vec!["dark".to_owned()],
+        "the value filter narrows the band"
+    );
+    assert_eq!(
+        menu.rows().next().expect("the row is shown").trailing(),
+        "theme",
+        "the third cell names the argument the value fills"
+    );
+
+    // Enter completes the value and appends one trailing space; the completed
+    // line is then what the next Enter runs.
+    let completing = state.update(Action::InputSubmitted);
+    assert!(completing.is_empty(), "the completing press runs nothing");
+    assert_eq!(state.input(), "/theme dark ");
+    assert_eq!(state.cursor(), "/theme dark ".chars().count());
+    assert!(
+        state.command_menu().is_none(),
+        "a space after a complete value closes the band"
+    );
+
+    let submitting = state.update(Action::InputSubmitted);
+    assert_eq!(submitting, vec![Effect::PersistTheme(Theme::Dark)]);
+}
+
+#[test]
+fn the_band_close_rule_follows_the_commands_declared_arguments() {
+    // A space after a command that declares no argument closes the band.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/new ");
+    assert!(
+        state.command_menu().is_none(),
+        "/new declares no argument, so its blank closes the band"
+    );
+
+    // A space after a command that declares one reopens it on the argument
+    // word: the caret is in a word the command has, even before any character
+    // of it is typed.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/theme ");
+    assert!(
+        state.command_menu().is_some(),
+        "/theme declares an argument, so its blank opens that word"
+    );
+
+    // A complete argument value closes the band once the blank after it is
+    // typed, and a word past the declared argument closes it too.
+    type_text(&mut state, "dark ");
+    assert!(
+        state.command_menu().is_none(),
+        "the blank after a complete value closes the band"
+    );
+    type_text(&mut state, "now");
+    assert!(
+        state.command_menu().is_none(),
+        "a word past the declared argument fills none"
+    );
+
+    // Removing the slash still closes it, exactly as it did before the command
+    // grew a word model.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/theme ");
+    for _ in 0.."/theme ".chars().count() {
+        state.update(Action::InputBackspace);
+    }
+    assert!(state.input().is_empty());
+    assert!(state.command_menu().is_none(), "no slash, no band");
+}
+
+#[test]
 fn the_registry_answers_for_both_submission_and_the_menu() {
     let mut state = AppState::new(None);
     type_text(&mut state, "/");
@@ -897,8 +1104,8 @@ fn the_registry_answers_for_both_submission_and_the_menu() {
         state
             .command_menu()
             .expect("a bare slash offers the registry")
-            .commands()
-            .map(|command| command.typed_name())
+            .rows()
+            .map(|row| row.label())
             .collect::<Vec<_>>(),
         COMMANDS
             .iter()
@@ -917,7 +1124,7 @@ fn the_registry_answers_for_both_submission_and_the_menu() {
         );
         let effects = run_command(&mut state);
         assert!(
-            !effects.is_empty(),
+            !effects.is_empty() || state.screen() != Screen::Chat,
             "/{} is dispatched by the submission path",
             command.name
         );
@@ -935,7 +1142,7 @@ fn the_registry_answers_for_both_submission_and_the_menu() {
     state.update(Action::InputSubmitted);
     assert_eq!(
         state.notice(),
-        Some("unknown command /nothing; known commands: /new /sessions"),
+        Some("unknown command /nothing; known commands: /new /sessions /theme"),
         "the unknown-command notice answers from the registry"
     );
 }
@@ -975,6 +1182,191 @@ fn the_sessions_command_opens_the_browser_and_refreshes_the_list() {
     );
     assert_eq!(state.browser_filter(), "");
     assert_eq!(state.input(), "", "a command never stays in the input line");
+}
+
+#[test]
+fn the_theme_command_opens_the_picker_without_an_argument() {
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/theme");
+    let completing = state.update(Action::InputSubmitted);
+    assert!(completing.is_empty(), "the completing press runs nothing");
+    assert_eq!(state.input(), "/theme ");
+    assert!(
+        state.command_menu().is_some(),
+        "the blank after a declared argument opens its word"
+    );
+
+    // The empty argument word has nothing to complete, so Enter runs the
+    // command itself instead of writing the value its highlight points at.
+    let effects = state.update(Action::InputSubmitted);
+    assert!(
+        effects.is_empty(),
+        "the picker needs no client work to open"
+    );
+    assert_eq!(state.screen(), Screen::Theme);
+    assert_eq!(state.input(), "", "a command never stays in the input line");
+    assert_eq!(
+        state.effective_theme(),
+        Theme::Light,
+        "the picker opens on the committed theme"
+    );
+}
+
+#[test]
+fn the_theme_command_applies_a_theme_name_however_it_is_spelled() {
+    for (typed, theme) in [
+        ("dark", Theme::Dark),
+        ("DARK", Theme::Dark),
+        ("Light", Theme::Light),
+    ] {
+        let mut state = AppState::new(None);
+        type_text(&mut state, &format!("/theme {typed}"));
+        let effects = run_command(&mut state);
+        assert_eq!(
+            effects,
+            vec![Effect::PersistTheme(theme)],
+            "/theme {typed} asks the daemon to persist {theme:?}"
+        );
+        assert_eq!(
+            state.screen(),
+            Screen::Chat,
+            "a spelled-out theme never opens the picker"
+        );
+        assert_eq!(
+            state.theme(),
+            Theme::Light,
+            "the committed theme waits for the accepted reply"
+        );
+        assert_eq!(
+            state.effective_theme(),
+            theme,
+            "the selection previews while the daemon confirms"
+        );
+    }
+}
+
+#[test]
+fn the_theme_command_notices_an_unknown_value_and_an_extra_word() {
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/theme purple");
+    let effects = state.update(Action::InputSubmitted);
+    assert!(effects.is_empty(), "a bad value asks for no client work");
+    assert_eq!(
+        state.notice(),
+        Some("unknown theme \"purple\" - expected light or dark")
+    );
+    assert_eq!(state.screen(), Screen::Chat, "a bad value opens no picker");
+
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/theme dark now");
+    let effects = state.update(Action::InputSubmitted);
+    assert!(effects.is_empty());
+    assert_eq!(state.notice(), Some("unexpected argument \"now\""));
+    assert_eq!(
+        state.theme(),
+        Theme::Light,
+        "a malformed line selects nothing"
+    );
+}
+
+#[test]
+fn the_picker_moves_the_highlight_and_previews_the_candidate_without_persisting() {
+    let mut state = AppState::new(None);
+    open_picker(&mut state);
+
+    let effects = state.update(Action::ThemePreviewed(Theme::Dark));
+    assert!(
+        effects.is_empty(),
+        "a preview asks the daemon for nothing: it is never persisted"
+    );
+    assert_eq!(
+        state.effective_theme(),
+        Theme::Dark,
+        "the whole window repaints through the candidate"
+    );
+    assert_eq!(
+        state.theme(),
+        Theme::Light,
+        "the committed theme stays what the daemon carries"
+    );
+
+    // The picker walks its two rows from the effective theme, so the last row
+    // is where Down stops and the first is where Up stops.
+    assert_eq!(
+        state.effective_theme().next(),
+        Theme::Dark,
+        "Down from light reaches dark"
+    );
+    state.update(Action::ThemePreviewed(Theme::Light));
+    assert_eq!(
+        state.effective_theme(),
+        Theme::Light,
+        "Up walks back to the committed row"
+    );
+}
+
+#[test]
+fn the_picker_commits_the_highlighted_theme_through_the_daemon_and_closes() {
+    let mut state = AppState::new(None);
+    open_picker(&mut state);
+    state.update(Action::ThemePreviewed(Theme::Dark));
+
+    let effects = state.update(Action::ThemeSelected(Theme::Dark));
+    assert_eq!(
+        effects,
+        vec![Effect::PersistTheme(Theme::Dark)],
+        "Enter asks the daemon to persist the highlighted theme"
+    );
+    assert_eq!(
+        state.screen(),
+        Screen::Chat,
+        "the picker closes on its commit"
+    );
+    assert_eq!(
+        state.theme(),
+        Theme::Light,
+        "the committed theme moves only on the accepted reply"
+    );
+    assert_eq!(
+        state.effective_theme(),
+        Theme::Dark,
+        "the candidate stays on screen while the daemon confirms"
+    );
+
+    let effects = state.update(Action::SettingsReceived(ThemeDto::Dark));
+    assert!(effects.is_empty());
+    assert_eq!(state.theme(), Theme::Dark);
+    assert_eq!(state.effective_theme(), Theme::Dark);
+}
+
+#[test]
+fn escaping_the_picker_restores_the_committed_theme() {
+    let mut state = AppState::new(None);
+    open_picker(&mut state);
+    state.update(Action::ThemePreviewed(Theme::Dark));
+    assert_eq!(state.effective_theme(), Theme::Dark);
+
+    let effects = state.update(Action::ThemePreviewCleared);
+    assert!(effects.is_empty(), "the revert asks for no client work");
+    assert_eq!(
+        state.effective_theme(),
+        Theme::Light,
+        "Esc restores the committed theme"
+    );
+    assert_eq!(state.theme(), Theme::Light);
+    assert_eq!(state.screen(), Screen::Chat, "Esc closes the picker");
+
+    // The picker's Esc is its own layer: it never cancels a run, arms a clear,
+    // or exits, because the screen owns the key while it is open. A reopened
+    // picker starts from the committed theme again.
+    let mut state = AppState::new(None);
+    open_picker(&mut state);
+    state.update(Action::ThemePreviewed(Theme::Dark));
+    state.update(Action::ThemePreviewCleared);
+    open_picker(&mut state);
+    assert_eq!(state.effective_theme(), Theme::Light);
+    assert!(!state.should_quit());
+    assert_eq!(state.notice(), None);
 }
 
 #[test]
@@ -2093,8 +2485,12 @@ fn reconnect_clears_transient_state_and_re_reads_the_session() {
     let effects = state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
     assert_eq!(
         effects,
-        vec![Effect::ListSessions, Effect::OpenSession(session_id)],
-        "a reconnect re-reads the session it was showing"
+        vec![
+            Effect::ListSessions,
+            Effect::LoadSettings,
+            Effect::OpenSession(session_id)
+        ],
+        "a reconnect re-reads the session it was showing and the daemon's settings"
     );
 }
 

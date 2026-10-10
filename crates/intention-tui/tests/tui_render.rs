@@ -22,8 +22,8 @@ use intention_proto::{
     TurnId, WorkspaceId, WorkspaceRootDto,
 };
 use intention_tui::app::{
-    Action, AppState, BrowserCursorMove, InputCursorMove, MenuMove, Theme, TranscriptScroll,
-    short_identifier,
+    Action, AppState, BrowserCursorMove, InputCursorMove, MenuMove, Screen, Theme,
+    TranscriptScroll, short_identifier,
 };
 use intention_tui::tui::RevueView;
 use revue::runtime::render::Modifier;
@@ -1173,8 +1173,14 @@ fn the_hint_menu_renders_its_three_columns_above_the_input_block() {
     pilot.assert_line_contains(band_row + 2, "/sessions");
     pilot.assert_line_contains(band_row + 2, "browse, filter, and switch sessions");
     pilot.assert_line_contains(band_row + 2, "Navigation");
-    pilot.assert_cell(band_x, band_row + 3, '╰');
-    pilot.assert_cell(band_x, band_row + 4, '╭');
+    pilot.assert_line_contains(band_row + 3, "/theme");
+    pilot.assert_line_contains(
+        band_row + 3,
+        "pick the colour theme the terminal paints with",
+    );
+    pilot.assert_line_contains(band_row + 3, "Appearance");
+    pilot.assert_cell(band_x, band_row + 4, '╰');
+    pilot.assert_cell(band_x, band_row + 5, '╭');
 
     // The band takes its rows out of the transcript: the committed answer is
     // still shown, and the input block and the detail line keep their rows.
@@ -1251,6 +1257,106 @@ fn a_window_too_short_for_the_band_keeps_the_input_and_shows_no_band() {
     let pilot = Pilot::new(&mut app);
     pilot.assert_not_contains("╭─ commands");
     pilot.assert_contains("> /█");
+    pilot.assert_contains("enter sends | /new session | /sessions switch");
+}
+
+/// Returns the chat state whose theme picker is open.
+fn picker_state() -> AppState {
+    let mut state = typed_state("/theme");
+    state.update(Action::InputSubmitted);
+    state.update(Action::InputSubmitted);
+    assert_eq!(
+        state.screen(),
+        Screen::Theme,
+        "the picker screen owns the window"
+    );
+    state
+}
+
+#[test]
+fn the_band_lists_an_arguments_values_in_its_own_three_cells() {
+    let state = typed_state("/theme ");
+    let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, WINDOW_HEIGHT);
+    let (band_x, band_row) = find_text(&app, "╭─ arguments");
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_line_contains(band_row + 1, "> light");
+    pilot.assert_line_contains(band_row + 1, Theme::Light.description());
+    pilot.assert_line_contains(band_row + 1, "theme");
+    pilot.assert_line_contains(band_row + 2, "dark");
+    pilot.assert_line_contains(band_row + 2, Theme::Dark.description());
+    pilot.assert_line_contains(band_row + 2, "theme");
+    pilot.assert_cell(band_x, band_row + 3, '╰');
+    pilot.assert_contains("the committed answer");
+    pilot.assert_contains("enter sends");
+}
+
+#[test]
+fn the_theme_picker_renders_its_rows_and_legend_above_the_input_block() {
+    let closed = typed_state("");
+    let mut opened = picker_state();
+    opened.update(Action::ThemePreviewed(Theme::Dark));
+    let mut app = TestApp::with_size(RevueView::new(&opened), WINDOW_WIDTH, WINDOW_HEIGHT);
+    let (panel_x, panel_row) = find_text(&app, "╭─ Theme");
+    let (_, cursor_row) = find_text(&app, "█");
+    assert!(
+        panel_row < cursor_row,
+        "the picker sits above the input block, not over it: {panel_row} < {cursor_row}"
+    );
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_cell(panel_x, panel_row + 4, '╰');
+    pilot.assert_line_contains(panel_row + 1, "Light");
+    pilot.assert_line_contains(panel_row + 1, Theme::Light.description());
+    pilot.assert_line_contains(panel_row + 2, "> Dark");
+    pilot.assert_line_contains(panel_row + 2, Theme::Dark.description());
+    pilot.assert_line_contains(panel_row + 3, "enter apply | esc revert");
+    pilot.assert_contains("the committed answer");
+
+    // The panel spends the transcript's rows and no other's: the input block
+    // and the detail line stay exactly where the closed state puts them.
+    let closed = TestApp::with_size(RevueView::new(&closed), WINDOW_WIDTH, WINDOW_HEIGHT);
+    let (_, closed_cursor) = find_text(&closed, "█");
+    let (_, closed_detail) = find_text(&closed, "enter sends");
+    let (_, opened_detail) = find_text(&app, "enter sends");
+    assert_eq!(
+        (cursor_row, opened_detail),
+        (closed_cursor, closed_detail),
+        "the picker never moves the input block or the detail line"
+    );
+}
+
+#[test]
+fn the_theme_picker_marks_the_committed_row_until_the_preview_moves_it() {
+    let committed = picker_state();
+    let mut app = TestApp::with_size(RevueView::new(&committed), WINDOW_WIDTH, WINDOW_HEIGHT);
+    let (_, row) = find_text(&app, "> Light");
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_not_contains("> Dark");
+    assert!(
+        row > 0,
+        "the committed theme's row is inside the panel: {row}"
+    );
+
+    let mut previewed = picker_state();
+    previewed.update(Action::ThemePreviewed(Theme::Dark));
+    assert_eq!(
+        previewed.theme(),
+        Theme::Light,
+        "a preview never commits the theme it shows"
+    );
+    let mut app = TestApp::with_size(RevueView::new(&previewed), WINDOW_WIDTH, WINDOW_HEIGHT);
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_contains("> Dark");
+    pilot.assert_not_contains("> Light");
+}
+
+#[test]
+fn a_window_too_short_for_the_theme_picker_keeps_the_input_and_shows_no_panel() {
+    let state = picker_state();
+    let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, 12);
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_not_contains("╭─ Theme");
+    pilot.assert_not_contains("enter apply | esc revert");
+    pilot.assert_contains("> █");
     pilot.assert_contains("enter sends | /new session | /sessions switch");
 }
 
