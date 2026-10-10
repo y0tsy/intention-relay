@@ -1413,3 +1413,39 @@ fn an_unattached_text_delta_port_keeps_the_run_behavior_unchanged() {
         "the attached port observed both model steps of the unchanged run"
     );
 }
+
+#[test]
+fn one_interrupt_request_offers_exactly_one_notice_to_the_run_boundaries() {
+    let cancellation = RunCancellation::new();
+
+    assert!(
+        !cancellation.take_interrupt_notice(),
+        "an active run owes no notice"
+    );
+
+    cancellation.cancel();
+    assert!(
+        cancellation.take_interrupt_notice(),
+        "the first boundary to reach the request takes its notice"
+    );
+    assert!(
+        !cancellation.take_interrupt_notice(),
+        "however many boundaries observe the sticky signal, one request offers one notice"
+    );
+    assert!(
+        cancellation.is_cancelled(),
+        "the sticky signal still tells every in-flight observer the run was interrupted"
+    );
+
+    cancellation.reset();
+    assert!(
+        !cancellation.is_cancelled(),
+        "the boundary that ends the interruption clears it for the continuation round"
+    );
+
+    cancellation.cancel();
+    assert!(
+        cancellation.take_interrupt_notice(),
+        "the next request records its own notice"
+    );
+}

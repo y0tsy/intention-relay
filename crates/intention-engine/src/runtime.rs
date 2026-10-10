@@ -7,6 +7,9 @@
 //! become one `assistant` row per completed model step; a crash mid-step loses
 //! the in-flight step text.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, ProviderErrorDto, RunId,
@@ -214,10 +217,19 @@ pub trait ToolExecutionPort: Send + Sync {
 /// the synchronous signal. The engine's interruption boundaries reset the
 /// handle, so the same run observes the next interrupt with fresh state and no
 /// per-invocation registration exists.
+///
+/// The handle also carries the run's **interruption notice budget**: one
+/// [`RunCancellation::cancel`] offers exactly one notice, which the first
+/// interruption boundary to reach it takes with
+/// [`RunCancellation::take_interrupt_notice`]. However many boundaries observe
+/// the sticky signal - a round that ends while a tool batch is in flight, a
+/// retry that re-enters a boundary, or two boundaries racing on a loaded host -
+/// the run records one durable notice per interrupt request.
 #[derive(Clone, Default)]
 pub struct RunCancellation {
     model: ModelCancellationSignal,
     tool: ToolCancellationSignal,
+    pending_notice: Arc<AtomicUsize>,
 }
 
 /// The cancellation handle carries interior shared state with no safe debug
@@ -239,15 +251,30 @@ impl RunCancellation {
     }
 
     /// Requests cancellation of the run's in-flight operation.
+    ///
+    /// One request offers exactly one interruption notice.
     pub fn cancel(&self) {
         self.model.cancel();
         self.tool.cancel();
+        self.pending_notice.fetch_add(1, Ordering::AcqRel);
     }
 
     /// Clears the request so the continuing run observes the next interrupt.
     pub fn reset(&self) {
         self.model.reset();
         self.tool.reset();
+    }
+
+    /// Takes the interruption notice this run's interrupt request still owes.
+    ///
+    /// Returns `true` exactly once per [`RunCancellation::cancel`], so the
+    /// boundary that takes it records the run's durable notice while a later
+    /// boundary continues the run with the context it already carries. Every
+    /// path that resets without taking found an empty budget, so a reset never
+    /// leaves a stale notice behind.
+    #[must_use]
+    pub fn take_interrupt_notice(&self) -> bool {
+        self.pending_notice.swap(0, Ordering::AcqRel) > 0
     }
 
     /// Returns whether cancellation has been requested for this run.
@@ -597,9 +624,17 @@ where
                     // continues instead of completing. An interruption that
                     // raced the finish is answered with its notice first.
                     if input.cancellation.is_cancelled() {
-                        self.record_interrupt_notice(input)?;
-                        messages.push(interrupt_notice_message()?);
-                        extra_messages.push(interrupt_notice_message()?);
+                        // The request's one notice goes to the boundary that
+                        // takes the budget: a round that finished while the
+                        // signal was already being observed continues without a
+                        // second row.
+                        if input.cancellation.take_interrupt_notice() {
+                            self.record_interrupt_notice(input)?;
+                            messages.push(interrupt_notice_message()?);
+                            extra_messages.push(interrupt_notice_message()?);
+                        } else {
+                            input.cancellation.reset();
+                        }
                         state.apply_window(&mut messages, &reasoning_attachments)?;
                         request = continuation_request(input, &messages, &reasoning_attachments)?;
                         continue;
@@ -620,6 +655,13 @@ where
                 }
                 RoundOutcome::Interrupted { assistant } => {
                     state.record_step_commit(assistant.as_ref());
+                    // A round that ended stopped is its own interruption event,
+                    // so it records the notice even when no host request caused
+                    // it - a stream the provider ended stopped. It spends the
+                    // request's budget first, so a boundary that observes the
+                    // same sticky signal later cannot record a second row for
+                    // one interruption.
+                    let _ = input.cancellation.take_interrupt_notice();
                     self.record_interrupt_notice(input)?;
                     messages.push(interrupt_notice_message()?);
                     extra_messages.push(interrupt_notice_message()?);
@@ -720,12 +762,19 @@ where
                     // model step; every other in-flight batch position gets
                     // the explicit context notice.
                     if input.cancellation.is_cancelled() {
+                        // A partial tool result already carries the
+                        // stopped-call notice of this request, so the batch
+                        // spends the request's notice here instead of letting a
+                        // later boundary record a second row for it.
                         if state.interrupted_tool() {
+                            let _ = input.cancellation.take_interrupt_notice();
                             input.cancellation.reset();
-                        } else {
+                        } else if input.cancellation.take_interrupt_notice() {
                             self.record_interrupt_notice(input)?;
                             messages.push(interrupt_notice_message()?);
                             extra_messages.push(interrupt_notice_message()?);
+                        } else {
+                            input.cancellation.reset();
                         }
                     }
                     self.consume_pending_user_turns(input, &mut messages, extra_messages)?;
@@ -736,7 +785,8 @@ where
         }
     }
 
-    /// Commits one durable interruption notice and clears the run's signal.
+    /// Commits the interruption notice one request owes and clears the run's
+    /// signal.
     ///
     /// The notice tells the model that its current call was stopped before a
     /// final result; the run stays `Running` and continues with the next step.
