@@ -319,3 +319,133 @@ This section records the landed model; the text above is the live policy.
 - Fully asynchronous client. `intention-client` exposes one asynchronous API covering every typed operation plus the
   committed `run.frame` stream, and its blocking API is removed. Daemon end-to-end tests drive the real client instead of
   the low-level transport, and the TUI proof adapter migrates mechanically without rework.
+
+## Slice 2 terminal model (activated)
+
+Slice 2 turned the terminal adapter into the delivered terminal application. This section records the landed model; the
+text above is the live policy.
+
+- One binary, three modes. `intention-tui` carries one command grammar and selects exactly one front end: the bare
+  command or `tui` starts the fullscreen UI (TTY-only, revue-based, the only renderer — no `--renderer` flag and no
+  Cargo feature), `repl` starts the interactive line loop, and `run <PROMPT>` invokes one headless prompt. Every mode
+  takes `--workspace PATH`, `--session ID`, `--continue`, and `--mode plan|build`; `--timeout SECS` and
+  `--format text|json` belong to `run` alone, and `--session` with `--continue` is a usage rejection. The three modes
+  are contract-equivalent over one `intention-client` surface, and no presentation logic enters the daemon: the daemon
+  exposes no terminal mode, no output format, and no renderer state.
+- Closed typed process status. Every mode ends with one of the closed statuses — 0 completed, 1 usage, 2 daemon or
+  transport, 3 typed rejection or failed run, 4 timeout after an interrupt, 5 interrupted run — and the binary writes
+  its output through explicit writers, never through printing macros.
+- One window. The fullscreen front end draws one frame: the chat panel on the canvas and, while the core's screen
+  carries the browser, the sessions panel docked as a layout row to the window's bottom rows. The panel is no overlay —
+  the chat container reflows into the rows the panel leaves, its own bottom canvas margin row is the one blank gap row
+  above the panel, the panel's bottom edge is the window's last row, and the hotkey legend sits on the panel's own last
+  inner row, so a tall window never separates the panel from its legend. The panel spans the window's width and is
+  content-sized up to half the window, so the transcript keeps the majority of it; the core's `screen` names which
+  surface owns the keyboard, never which window is drawn. Sessions are reachable only through the `/sessions` command:
+  the chat has no sidebar, and no command opens a second window.
+- The transcript block model. A committed `user` row is a labelled, framed markdown card whose frame opens with `❯ you`;
+  a committed `assistant` row is its committed reasoning block — collapsed beyond fifteen display rows and closed by an
+  accent rule — plus the markdown answer. A committed `tool_call`/`tool_result` pair, paired by `tool_call_id`, is one
+  framed block dispatched by its `tool_id`: `read`, `glob`, and `grep` are parsed in full, as the arguments' field
+  summary plus a bounded twelve-display-row preview closed by its `… N more rows` marker, on the block's own tool
+  surface, border, badge ink, and muted result ink; `write`, `edit`, and `execute` show the badge plus the visible
+  `@todo(core)` plate, and none of the three prints its result row's text, with an `execute` result refused before the
+  per-type dispatch and never rendered in any form. An object, a raw string, malformed JSON, a missing result row, an
+  orphan result, and an unknown `tool_id` all degrade to a block or a plate, never a panic. A committed `notice` row
+  renders as its own block through a dedicated path: its marker rides the notice's first line with the answer's hanging
+  indent, on the notice surface and ink, and never through the markdown pipeline. Exactly one blank row separates two
+  consecutive blocks, and the display-row window counts those gap rows like any other row.
+- Markers. The assistant answer and the text before a tool call carry the monochrome `∷` (U+2237) riding the answer's own
+  first line with a hanging indent and no title; the user card carries `❯`, the reasoning header `∴`, the notice `※`, and
+  the expand affordance and tool badge `▸`. Every marker separates its glyph from the text it opens by one shared
+  application-wide glyph-to-text gap constant (`MARKER_GAP`, one blank column); no coloured emoji is used anywhere, and
+  no glyph needs a text-presentation selector.
+- Reasoning expansion. A collapsed reasoning block (beyond fifteen display rows) expands in 100-row chunks — by clicking
+  its marker or pressing `Ctrl+E` — until every row is shown. The state is keyed by the committed transcript row it
+  belongs to, so it survives appends and clears when the transcript is replaced (a snapshot, a front trim, or a session
+  switch), and the window is anchored so the screen does not move when rows are revealed.
+- Markdown. An answer and a user card both go through revue's own `Markdown` parser (the `markdown` feature) with the
+  palette inks for headings, code, and links, `syntax_highlight` off, and FIGlet headings off on purpose: big art would
+  multiply a heading's display rows and make the transcript's row budget lie, so a heading keeps the parser's `#`
+  marker and the heading ink. A table keeps the parser's own atomic box-drawing grid — a grid line is clipped, never
+  wrapped, because wrapping it would shred the alignment the table exists to show.
+- One colour system. `src/tui/palette.rs` is the single source of colours: truecolour roles for the canvas, the panel
+  washes, the user card, the selection fill, the tool family — a warm light-orange veil drawn from the existing warm
+  scale, with no green and no new hue — the notice pair, the scrollbar track and thumb, the accents, the markdown inks,
+  the reasoning block and its expand marker, the measured timer, and the `@todo` placeholder tone, and no pane constructs
+  a colour of its own. Colours degrade, words do not: a terminal without truecolor maps each role to its nearest ANSI
+  colour, so the tool and notice washes fall back towards the canvas while each block's frame, badge, and plate still
+  carry the meaning, and no state is carried by colour alone. Every use pairs its colour with a glyph, a border, or a
+  modifier — the cursor row carries `> ` and bold, the active tab carries `⦿` and bold, a failure carries its status
+  word.
+- Input block and status vocabulary. The input block is one focused frame around a badge header carrying the session's
+  durable mode (the `mode @todo(core)` placeholder until a snapshot names it) beside the `model @todo(core)`
+  placeholder, the input line with its `█` block cursor and a window that keeps the cursor visible, and the run status
+  row under it. The status row reads in words — `Ready · session … · build · Thinking… 3.2s · ctx @todo(core)` — and
+  the removed debug vocabulary (`connected`, `run none`, `stream idle`, `stream closed`) is gone: the stream is this
+  front end's own plumbing, and a run is described by what it is doing. The elapsed value is the front end's own
+  measurement, reported to the core as `Action::ElapsedReported` so the view stays a pure function of state.
+- Interaction. A command is a submitted line beginning with `/`, never a bare letter: `/new` creates a session and
+  `/sessions` opens the browser panel, and an unknown command answers with the known set. The keymap is one mapping per
+  screen: `Enter` submits the line or selects the browser row, `Tab` and `Shift+Tab` switch the browser tab, `Ctrl+R`,
+  `Ctrl+X`, and `Ctrl+F` show the rename, archive, and tree notices whose core support does not exist yet, `Esc` closes
+  the browser, and `Ctrl+Q` always exits immediately. `Ctrl+C` is layered: with an active run, the first press arms the
+  interrupt and shows its notice while a second consecutive press interrupts the run; with no run and a non-empty
+  input, the press pushes the line into the recallable history and clears it; with no run and an empty input, the first
+  press arms the exit and a second consecutive press quits; any other user action disarms, while a live run's own
+  reports — committed rows, transient deltas, and elapsed ticks — leave an armed interrupt standing, so an armed
+  interrupt whose run ended by itself re-arms as the exit instead of quitting. The mouse wheel is the scrolling
+  and navigation input, and mouse capture is on so a notch reaches the front end: in the chat it moves the transcript
+  window three display rows, and in the browser it moves the cursor one row with the virtualized window following it.
+  No key moves the transcript. In the chat the left button is a selection pointer: a press anchors a selection at the
+  display row it hits, a drag extends it, and a release keeps it painted on the selection role; a press and release
+  without a drag is a hit-test only, except that a click on a collapsed reasoning block's marker expands that block. A
+  drag past the transcript's top or bottom edge scrolls the window one fast step — five wheel notches — while extending
+  the selection to the row the pointer reaches, and a wheel notch while the button is held adds the same fast step. The
+  transcript reserves a one-column gutter for revue's vendored scroll view, which renders a native scrollbar, so content
+  above the window stays visible natively. The application performs no clipboard work of any kind: copying is the
+  terminal emulator's business, and the crate carries no copy path. The trade-off is the terminal's own drag-selection:
+  while capture is on, selecting text with the mouse needs Shift held.
+- Session listing. `ListSessions` returns `SessionsListed` with the recency-ordered summary window
+  (`SESSION_LIST_ROWS`) and an `omitted` count, so the list is never silently truncated; storage owns the ordering and
+  the count, and the daemon passes the result through unchanged. Tree and branching views remain Slice 6 work.
+- Transient delta semantics. The run stream also carries `RunStreamFrameDto::TextDelta` frames, whose
+  `TextDeltaFrameDto` names its session, run, model step, and one coalesced chunk of that step's uncommitted text. A
+  delta is never persisted and never replayed: a re-subscribing client receives committed state only. A step's pending
+  deltas flush before that step's committed
+  `content` frames, a committed assistant row replaces the provisional text in the client, and a run without
+  subscribers drops its deltas — the committed transcript row stays the only authority.
+
+### The `@todo(core)` boundary
+
+Every fact the core does not carry is a stub the terminal shows as a stub, and a placeholder is never replaced by a
+fabricated value. The table below names each one, taken from the markers in the terminal source.
+
+| The terminal shows | The core fact this stub lacks |
+| --- | --- |
+| the `Current Folder` tab's empty state and the `Path` column | a session working directory |
+| the `Created` column's missing value | a session `created_at` |
+| the `Size` column's missing value | a step or message count |
+| the `Exec` tab's empty state | an execute-call fact on the session summary |
+| the title column, the filter, and the `Ctrl+R` notice | a durable session title and its rename command |
+| the `Favorites` tab's empty state | a durable favorite flag |
+| the `Archived` tab's empty state and the `Ctrl+X` notice | a durable archive flag and its command |
+| the row counter's `+N omitted (core: paged list @todo)` | a session list that can be paged past its bounded window |
+| the `ctx @todo(core)` status run | token usage on the run projection |
+| the `model @todo(core)` badge | the provider model on the session projection |
+| committed reasoning only | live reasoning frames on the wire |
+| the `Ctrl+F` tree notice | session forks (Slice 6) |
+| the `write`, `edit`, and `execute` plates | a typed projection of each result |
+| the read preview, which can only repeat the tool's own `[truncated]` line | typed result metadata (for example a read truncation flag) |
+| an unknown `tool_id`'s plate | a closed set of wire tool ids |
+| a `notice` block's text-only body | a notice code or severity |
+
+### Frame cost
+
+The committed transcript is laid out once into neutral rows and cached per (pane width, transcript epoch), with an
+append-only fast path that lays out only the appended tail; a width change, a replacement, a front trim, a session
+switch, a reasoning expansion, or a newly committed tool result that pairs an earlier call lays the whole transcript out
+again. Only the visible window is materialised into widgets, the layout works on
+text slices carrying style ids instead of a style per character, and the live provisional tail is laid out per frame and
+never cached. The binary takes `mimalloc` as its process-wide global allocator, because a frame allocates many
+short-lived small strings.

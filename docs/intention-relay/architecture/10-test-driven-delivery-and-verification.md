@@ -208,6 +208,44 @@ and the durable terminal row. Protocol contract fixtures cover the reduced
 current-state surface with no resync, cursor, or event DTOs. Tests of deleted surfaces are deleted without replacement,
 and the per-crate coverage tiers in `quality/coverage.toml` are unchanged.
 
+### Slice 2 evidence
+
+Slice 2 delivers the terminal application as one `intention-tui` binary over the shared client, and its evidence follows
+the same contract-first shape. Protocol and storage contract tests cover the new `ListSessions` request and
+`SessionsListed` result: recency order, the bounded session window, and the `omitted` count instead of a silent
+truncation. Protocol contract tests cover the transient `TextDelta` frame and reject empty text on the wire. Engine
+tests prove the `ModelTextDeltaPort` observes every provider text chunk with its model-step index, persists nothing,
+and leaves run behavior unchanged when unattached. Client tests prove `list_sessions` and the `RunStreamState`
+provisional buffer: a delta for a new step replaces the previous step's buffer, and a committed assistant row or a fresh
+subscription clears it. Daemon tests prove `ListSessions` dispatch, delta coalescing, and that the step's pending
+deltas flush before its committed frames.
+
+The terminal crate itself carries a render suite and a process end-to-end suite. `tests/tui_render.rs` renders the
+render-free `AppState` through revue's own test app in fifty-four cases: the chat panel, the transcript blocks (the
+labelled user card and the markdown inside it, the markdown answer, the heading, the bold phrase, the aligned table,
+the committed reasoning block with its collapsed marker and its chunked expansion, the blank gap row, the marked
+provisional tail, the framed tool blocks for `read`, `glob`, `grep`, `write`, `edit`, `execute`, and an unknown
+`tool_id`, the call-without-result degradation, and the notice blocks streamed live and restored by a snapshot), the
+input line and its badges, the human status row, transcript scrolling, and the docked sessions panel
+(its frame and embedded title, the tab radio row, the search bar, the table header, columns, cursor marker, and resize
+reflow, the footer legend and row counter, and the stub tabs' `@todo` empty state). `tests/terminal_e2e.rs` spawns the
+real binary against a real daemon and the scripted fake provider in six cases: NDJSON transient deltas before the
+committed row, progressive text output and completion, both REPL paths (a piped turn and input EOF), the timeout
+interrupt with exit 4, and a typed unknown-session rejection with exit 3. The binary's own unit tests cover the command
+grammar, the exit-status mapping, the workspace-root resolution, the REPL line loop, and the headless formats, drivers,
+and wait deadlines. The crate's inline unit tests cover the `AppState` transitions, the keymap, the palette roles, the
+wheel mapping, the left-button pointer's press, drag, release, marker expansion, and edge scrolling, the turn clock, the
+browser geometry and row helpers, the markdown layout, the per-tool block dispatch, the marker and notice layout, the
+transcript layout cache's append-only fast path, width change, replacement, reasoning expansion, paired-result, and
+front-trim replays, and the clipboard-free source audit. A run of
+`cargo nextest run -p intention-tui` observed 230 tests across four binaries, all passing: 140 library unit tests,
+54 `tui_render` cases, 30 binary unit tests, and 6 `terminal_e2e` cases.
+
+The per-crate self-checks are `cargo fmt -p intention-tui`, `cargo nextest run -p intention-tui`, and
+`cargo clippy -p intention-tui --all-targets`; the slice's acceptance gate is `make quick` during delivery and
+`make verify` before merge. Tests of deleted surfaces are deleted without replacement, the crate keeps its declared
+`edge` tier, and the per-crate coverage policy in `quality/coverage.toml` is otherwise unchanged.
+
 ### Future package evidence
 
 Evidence obligations for systems that are not activated are owned by their documents; this document keeps only the
