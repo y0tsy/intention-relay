@@ -1157,8 +1157,8 @@ async fn listing_sessions_answers_with_the_ordered_window_and_its_omitted_count(
     // The window is newest-first with the durable identity breaking an update
     // time tie, and it is a coherent window of distinct durable sessions.
     for pair in summaries.sessions().windows(2) {
-        let newer = pair[0];
-        let older = pair[1];
+        let newer = &pair[0];
+        let older = &pair[1];
         assert!(
             newer.updated_at() > older.updated_at()
                 || (newer.updated_at() == older.updated_at()

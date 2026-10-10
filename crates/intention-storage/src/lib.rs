@@ -18,9 +18,10 @@
 
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
-    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
-    RemoveTurnCommandDto, RunProjectionDto, RunStatusDto, SessionProjectionDto, SessionSnapshotDto,
-    SessionSummariesDto, WorkspaceBindingDto, WorkspaceRootDto,
+    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, NewMessageDto,
+    PendingTurnProjectionDto, RemoveTurnCommandDto, RunProjectionDto, RunStatusDto,
+    SessionProjectionDto, SessionSnapshotDto, SessionSummariesDto, WorkspaceBindingDto,
+    WorkspaceRootDto,
 };
 use intention_proto::{
     DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, RunId,
@@ -550,6 +551,9 @@ pub trait StorageRepositoryDto {
 
     /// Appends one transcript row and returns it as committed.
     ///
+    /// The commit assigns the row's durable identity, so the committed row
+    /// carries it and the caller publishes from that returned value.
+    ///
     /// # Errors
     ///
     /// Returns a validation, not-found, or conflict error when the row cannot be
@@ -557,11 +561,12 @@ pub trait StorageRepositoryDto {
     /// fails.
     fn append_message(
         &self,
-        message: MessageProjectionDto,
+        message: NewMessageDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<MessageProjectionDto>;
 
-    /// Commits one tool result with its answering transcript row in one transaction.
+    /// Commits one tool result with its answering transcript row in one
+    /// transaction and returns the committed row.
     ///
     /// # Errors
     ///
@@ -572,8 +577,8 @@ pub trait StorageRepositoryDto {
     fn write_tool_result(
         &self,
         evidence: ToolResultEvidenceDto,
-        message: MessageProjectionDto,
-    ) -> DtoResult<ToolResultEvidenceDto>;
+        message: NewMessageDto,
+    ) -> DtoResult<MessageProjectionDto>;
 
     /// Loads typed evidence durably recorded for one tool call.
     ///

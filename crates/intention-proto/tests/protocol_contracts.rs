@@ -25,7 +25,12 @@ use intention_proto::{
     parse_run_frame, run_status_is_terminal, validate_run_status_transition,
 };
 use intention_proto::{ConfigRevisionId, IdempotencyKey, MessageKindDto, ProjectId, RunId};
-use intention_proto::{RunModeDto, SessionId, TurnId, WorkspaceId};
+use intention_proto::{RunModeDto, SessionId, TimestampDto, TurnId, WorkspaceId};
+
+/// Returns one valid fixture timestamp in whole Unix seconds.
+fn timestamp(seconds: i64) -> TimestampDto {
+    TimestampDto::from_unix_seconds(seconds).expect("fixture timestamp is valid")
+}
 
 fn fixture_run(session_id: SessionId, run_id: RunId) -> RunProjectionDto {
     RunProjectionDto::new(
@@ -60,7 +65,10 @@ fn fixture_session_summary(session_id: SessionId, run_id: RunId) -> SessionSumma
         ProjectId::new(),
         WorkspaceId::new(),
         RunModeDto::Build,
-        1_726_000_000,
+        timestamp(1_726_000_000),
+        timestamp(1_726_000_100),
+        fixture_workspace_root(),
+        2,
         Some(fixture_run(session_id, run_id)),
     )
 }
@@ -273,10 +281,13 @@ fn session_lists_round_trip_with_their_omitted_count() {
     let run_id = RunId::new();
     let summaries = fixture_session_summaries(session_id, run_id);
     assert_eq!(summaries.omitted(), 3);
-    let summary = summaries.sessions()[0];
+    let summary = &summaries.sessions()[0];
     assert_eq!(summary.session_id(), session_id);
     assert_eq!(summary.mode(), RunModeDto::Build);
-    assert_eq!(summary.updated_at(), 1_726_000_000);
+    assert_eq!(summary.created_at(), timestamp(1_726_000_000));
+    assert_eq!(summary.updated_at(), timestamp(1_726_000_100));
+    assert_eq!(summary.workspace_root(), &fixture_workspace_root());
+    assert_eq!(summary.message_count(), 2);
     assert_eq!(
         summary.active_run().map(RunProjectionDto::run_id),
         Some(run_id)
@@ -466,7 +477,10 @@ fn session_summaries_and_text_deltas_validate_their_required_shape() {
                 ProjectId::new(),
                 WorkspaceId::new(),
                 RunModeDto::Build,
-                1_726_000_000,
+                timestamp(1_726_000_000),
+                timestamp(1_726_000_000),
+                fixture_workspace_root(),
+                0,
                 Some(fixture_run(session_id, run_id)),
             )],
             0,

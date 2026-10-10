@@ -6,6 +6,7 @@
 //! transcript rows, and the transient provisional text the daemon reports;
 //! daemon authority remains remote.
 
+use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -15,13 +16,13 @@ use std::time::{Duration, Instant};
 use intention_proto::{
     ClientRequestDto, CreateSessionAcceptedDto, CreateSessionCommandDto, DaemonHealthDto,
     DtoResult, ErrorCategoryDto, ErrorDto, GetSessionSnapshotQueryDto, IdempotencyKey,
-    InterruptRunAcceptedDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
-    ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunId, RunProjectionDto,
-    RunStatusDto, RunStreamFrameDto, RunSubscriptionSnapshotDto, SendUserTurnCommandDto,
-    SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
-    SetTuiThemeCommandDto, SubscribeRunCommandDto, TextDeltaChannelDto, TextDeltaFrameDto,
-    ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId, decode_response, encode_request,
-    parse_run_frame, run_status_is_terminal,
+    InterruptRunAcceptedDto, InterruptRunCommandDto, MessageId, MessageKindDto,
+    MessageProjectionDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunId,
+    RunProjectionDto, RunStatusDto, RunStreamFrameDto, RunSubscriptionSnapshotDto,
+    SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto,
+    SessionSummariesDto, SetTuiThemeCommandDto, SubscribeRunCommandDto, TextDeltaChannelDto,
+    TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId, decode_response,
+    encode_request, parse_run_frame, run_status_is_terminal,
 };
 use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncMessageSender, LocalEndpoint,
@@ -295,6 +296,26 @@ impl IntentionClient {
         }
     }
 
+    /// Returns the session a continuation reads, if any session exists.
+    ///
+    /// The daemon's session list is ordered by the recency contract: newest
+    /// durable update first, then session identity ascending. The first
+    /// summary is therefore the continue target, and a caller never re-derives
+    /// the maximum update time from the summaries it reads.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection, a typed transport or timeout error,
+    /// or an invalid-response error when the reply is not a session list.
+    pub async fn most_recent_session(&self) -> DtoResult<Option<SessionId>> {
+        Ok(self
+            .list_sessions()
+            .await?
+            .sessions()
+            .first()
+            .map(|summary| summary.session_id()))
+    }
+
     /// Reads the effective terminal settings.
     ///
     /// The daemon answers its stored theme override or, before any set, the
@@ -490,15 +511,16 @@ pub const RETAINED_TRANSCRIPT_MESSAGES: usize = 256;
 /// The subscription reply is the current run snapshot, and every later frame
 /// carries the committed value of its own scope: a content frame appends its
 /// committed transcript row and a status frame replaces the committed run
-/// projection. There are no cursors and no positions, so no merge machine is
-/// needed: a status frame is idempotent because it replaces the whole run, and
-/// a content frame is idempotent only for the newest accepted row — the wire
-/// carries no row identity, so the daemon-side watermark remains the authority
-/// for a row the snapshot already carried. The retained transcript keeps the
-/// newest [`RETAINED_TRANSCRIPT_MESSAGES`] rows. Transient provisional text is
-/// not committed state: each of the current model step's two text channels is
-/// held in its own buffer for that step only and is dropped as soon as the
-/// step's assistant row commits.
+/// projection. There are no cursors and no positions: a status frame is
+/// idempotent because it replaces the whole run, and a content frame is
+/// idempotent for the newest accepted row by the durable row identity it
+/// carries, so no accepted row is shown twice. The retained transcript keeps
+/// the newest [`RETAINED_TRANSCRIPT_MESSAGES`] rows, and
+/// [`RunStreamState::missing_rows`] reconciles another read of the same durable
+/// transcript with this one. Transient provisional text is not committed
+/// state: each of the current model step's two text channels is held in its
+/// own buffer for that step only and is dropped as soon as the step's assistant
+/// row commits.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunStreamState {
     session_id: SessionId,
@@ -547,6 +569,27 @@ impl RunStreamState {
         Ok(())
     }
 
+    /// Returns the rows of this snapshot that `existing` does not already
+    /// carry, in order.
+    ///
+    /// A run subscription and a session read read the same durable transcript,
+    /// so one may carry committed rows the other already shows. Rows are
+    /// matched by their durable identity, so two rows with equal content but
+    /// distinct identities (a user sending the same text twice) are never
+    /// conflated.
+    #[must_use]
+    pub fn missing_rows(&self, existing: &[MessageProjectionDto]) -> Vec<MessageProjectionDto> {
+        let known = existing
+            .iter()
+            .map(MessageProjectionDto::id)
+            .collect::<BTreeSet<MessageId>>();
+        self.messages
+            .iter()
+            .filter(|row| !known.contains(&row.id()))
+            .cloned()
+            .collect()
+    }
+
     /// Applies one uncorrelated run-stream frame.
     ///
     /// A provisional text delta is best-effort advance notice: it mutates only
@@ -574,10 +617,10 @@ impl RunStreamState {
         if message.kind() == MessageKindDto::Assistant {
             self.clear_provisional();
         }
-        // A content frame repeating the newest accepted row is the frame the
-        // subscription snapshot already carried: re-appending it would show the
-        // same committed row twice.
-        if self.messages.last() == Some(&message) {
+        // A content frame repeating the newest accepted row carries the
+        // identity of the row the subscription snapshot already carried:
+        // re-appending it would show the same committed row twice.
+        if self.messages.last().map(MessageProjectionDto::id) == Some(message.id()) {
             return Ok(());
         }
         self.messages.push(message);

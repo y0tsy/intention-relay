@@ -18,7 +18,7 @@ use intention_proto::{
     ConfigRevisionId, FinishReasonDto, IdempotencyKey, RunId, SchemaVersionDto, SessionId,
     ToolCallId, UsageDto,
 };
-use intention_proto::{MessageKindDto, MessageProjectionDto, RunStatusDto};
+use intention_proto::{MessageKindDto, MessageProjectionDto, NewMessageDto, RunStatusDto};
 use intention_storage::{
     AcceptedTurnOutcomeDto, RunOutcomeDto, SqliteStorageRepository, StorageRepositoryDto,
 };
@@ -233,7 +233,7 @@ fn append(
     tool_id: Option<&str>,
     event_time: i64,
 ) {
-    let message = MessageProjectionDto::new(
+    let message = NewMessageDto::new(
         session_id,
         run_id,
         kind,

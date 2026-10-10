@@ -14,7 +14,7 @@ use crate::{
     ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorCategoryDto, ErrorDto,
     ErrorRetryDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageProjectionDto,
     ProjectId, RemoveTurnCommandDto, RunId, RunModeDto, RunProjectionDto, SendUserTurnCommandDto,
-    SessionId, SessionProjectionDto, TurnId, WorkspaceId,
+    SessionId, SessionProjectionDto, TimestampDto, TurnId, WorkspaceId, WorkspaceRootDto,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -466,27 +466,39 @@ impl SessionSnapshotDto {
 ///
 /// A summary carries no transcript rows: the list reports which sessions
 /// exist, and a client reads the session it selects through a full session
-/// read.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// read. It carries the durable facts a list renders — the session's creation
+/// and last update times, its bound workspace root, and how many committed
+/// transcript rows it holds — beside the sole active run, if one exists.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SessionSummaryDto {
     session_id: SessionId,
     project_id: ProjectId,
     workspace_id: WorkspaceId,
     mode: RunModeDto,
-    updated_at: i64,
+    created_at: TimestampDto,
+    updated_at: TimestampDto,
+    workspace_root: WorkspaceRootDto,
+    message_count: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     active_run: Option<RunProjectionDto>,
 }
 
 impl SessionSummaryDto {
     /// Creates the bounded public summary of one durable session.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "This public wire constructor preserves the established nine-field session summary contract."
+    )]
     #[must_use]
     pub const fn new(
         session_id: SessionId,
         project_id: ProjectId,
         workspace_id: WorkspaceId,
         mode: RunModeDto,
-        updated_at: i64,
+        created_at: TimestampDto,
+        updated_at: TimestampDto,
+        workspace_root: WorkspaceRootDto,
+        message_count: u64,
         active_run: Option<RunProjectionDto>,
     ) -> Self {
         Self {
@@ -494,44 +506,65 @@ impl SessionSummaryDto {
             project_id,
             workspace_id,
             mode,
+            created_at,
             updated_at,
+            workspace_root,
+            message_count,
             active_run,
         }
     }
 
     /// Returns the durable session identity.
     #[must_use]
-    pub const fn session_id(self) -> SessionId {
+    pub const fn session_id(&self) -> SessionId {
         self.session_id
     }
 
     /// Returns the owning project identity.
     #[must_use]
-    pub const fn project_id(self) -> ProjectId {
+    pub const fn project_id(&self) -> ProjectId {
         self.project_id
     }
 
     /// Returns the daemon-owned workspace identity.
     #[must_use]
-    pub const fn workspace_id(self) -> WorkspaceId {
+    pub const fn workspace_id(&self) -> WorkspaceId {
         self.workspace_id
     }
 
     /// Returns the session run policy mode.
     #[must_use]
-    pub const fn mode(self) -> RunModeDto {
+    pub const fn mode(&self) -> RunModeDto {
         self.mode
+    }
+
+    /// Returns when the durable session was created in whole Unix seconds.
+    #[must_use]
+    pub const fn created_at(&self) -> TimestampDto {
+        self.created_at
     }
 
     /// Returns the last durable session update in whole Unix seconds.
     #[must_use]
-    pub const fn updated_at(self) -> i64 {
+    pub const fn updated_at(&self) -> TimestampDto {
         self.updated_at
+    }
+
+    /// Returns the workspace root the session is durably bound to.
+    #[must_use]
+    pub const fn workspace_root(&self) -> &WorkspaceRootDto {
+        &self.workspace_root
+    }
+
+    /// Returns how many committed transcript rows the session holds.
+    #[must_use]
+    pub const fn message_count(&self) -> u64 {
+        self.message_count
     }
 
     /// Returns the sole active run, if one exists.
     #[must_use]
-    pub const fn active_run(self) -> Option<RunProjectionDto> {
+    pub const fn active_run(&self) -> Option<RunProjectionDto> {
         self.active_run
     }
 }
@@ -541,6 +574,11 @@ impl SessionSummaryDto {
 /// The omitted count is always explicit: a bounded read reports how many
 /// sessions exist beyond the returned window instead of silently truncating
 /// the list.
+///
+/// The order is a contract, not a suggestion: the newest durable update comes
+/// first, with the durable session identity ascending as the tie-break. This
+/// is the order a continuation reads — the first summary of the list is its
+/// continue target — and it is exactly the daemon's list order.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SessionSummariesDto {
     sessions: Vec<SessionSummaryDto>,
@@ -586,7 +624,8 @@ impl SessionSummariesDto {
         Ok(Self { sessions, omitted })
     }
 
-    /// Returns the bounded session summaries in their durable order.
+    /// Returns the bounded session summaries in the list's contract order:
+    /// newest durable update first, then session identity ascending.
     #[must_use]
     pub fn sessions(&self) -> &[SessionSummaryDto] {
         &self.sessions
@@ -1085,6 +1124,7 @@ mod tests {
 
     fn fixture_message(session_id: SessionId, run_id: RunId) -> MessageProjectionDto {
         MessageProjectionDto::new(
+            crate::MessageId::new(1).expect("fixture row identity is valid"),
             session_id,
             Some(run_id),
             MessageKindDto::Notice,

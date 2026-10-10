@@ -16,7 +16,8 @@ use intention_proto::{
     SessionId, TimestampDto, ToolCallDto, UsageDto,
 };
 use intention_proto::{
-    MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto, TextDeltaChannelDto,
+    MessageKindDto, MessageProjectionDto, NewMessageDto, RunProjectionDto, RunStatusDto,
+    TextDeltaChannelDto,
 };
 pub use intention_providers::{
     AssistantReasoningDto, ModelCancellationSignal, ModelCancelledFuture, ModelEventDto,
@@ -806,7 +807,7 @@ where
         input: &ModelRunExecutionInputDto,
     ) -> DtoResult<MessageProjectionDto> {
         input.cancellation.reset();
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             input.session_id,
             Some(input.run_id),
             MessageKindDto::Notice,
@@ -1084,7 +1085,7 @@ where
             pending_text.clear();
             return Ok(None);
         }
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             input.session_id,
             Some(input.run_id),
             MessageKindDto::Assistant,

@@ -15,8 +15,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
-    PendingTurnProjectionDto, RemoveTurnCommandDto, RunProjectionDto, SendUserTurnCommandDto,
-    SessionProjectionDto,
+    NewMessageDto, PendingTurnProjectionDto, RemoveTurnCommandDto, RunProjectionDto,
+    SendUserTurnCommandDto, SessionProjectionDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
 use intention_proto::{ToolCallDto, ToolCallId};
@@ -228,7 +228,7 @@ where
         occurred_at: TimestampDto,
         publisher: &P,
     ) -> DtoResult<MessageProjectionDto> {
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             session_id,
             Some(run_id),
             MessageKindDto::ToolCall,
@@ -310,7 +310,7 @@ where
             metadata,
             occurred_at,
         )?;
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             session_id,
             Some(run_id),
             MessageKindDto::ToolResult,
@@ -321,9 +321,9 @@ where
         )?;
         let committed = self
             .repository
-            .write_tool_result(evidence, message.clone())?;
-        publisher.observe_model_run_commit(&ModelRunCommitDto::Content(message));
-        Ok(committed)
+            .write_tool_result(evidence.clone(), message)?;
+        publisher.observe_model_run_commit(&ModelRunCommitDto::Content(committed));
+        Ok(evidence)
     }
 
     /// Creates an application facade around a DTO-only durable repository.

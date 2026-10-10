@@ -18,7 +18,7 @@ use intention_engine::{
     ToolResultOutcomeDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TextDeltaChannelDto};
-use intention_proto::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
+use intention_proto::{MessageKindDto, RunProjectionDto, RunStatusDto};
 use intention_providers::{
     FinishReasonDto, ModelEventDto, ModelMessageDto, ModelRequestDto, ModelRoleDto,
     ProviderErrorDto, ToolCallDto, UsageDto,
@@ -174,21 +174,14 @@ fn observer_receives_only_committed_transcript_rows_and_statuses() {
             status: RunStatusDto::Running,
         }
     );
-    assert_eq!(
-        commits[1],
-        ModelRunCommitDto::Content(
-            MessageProjectionDto::new(
-                session_id,
-                Some(run_id),
-                MessageKindDto::Assistant,
-                "complete",
-                None,
-                None,
-                None,
-            )
-            .expect("fixture message is valid")
-        )
-    );
+    let committed = repository.committed_messages();
+    assert_eq!(committed.len(), 1);
+    assert_eq!(commits[1], ModelRunCommitDto::Content(committed[0].clone()));
+    assert_eq!(committed[0].session_id(), session_id);
+    assert_eq!(committed[0].run_id(), Some(run_id));
+    assert_eq!(committed[0].kind(), MessageKindDto::Assistant);
+    assert_eq!(committed[0].text(), "complete");
+    assert!(committed[0].id().value() > 0);
     assert_eq!(
         commits[2],
         ModelRunCommitDto::Status {
@@ -298,26 +291,18 @@ fn streams_commit_one_assistant_step_with_reasoning_and_complete() {
         unreachable!("a stop reason completes the run");
     };
     assert_eq!(run.status(), RunStatusDto::Completed);
-    let messages = repository
-        .messages
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone();
+    let messages = repository.committed_messages();
     assert_eq!(
-        messages.as_slice(),
-        &[MessageProjectionDto::new(
-            session_id,
-            Some(run_id),
-            MessageKindDto::Assistant,
-            content,
-            Some("why".to_owned()),
-            None,
-            None,
-        )
-        .expect("fixture message is valid")],
+        messages.len(),
+        1,
         "the whole step commits as one row with its reasoning"
     );
-    drop(messages);
+    assert_eq!(messages[0].session_id(), session_id);
+    assert_eq!(messages[0].run_id(), Some(run_id));
+    assert_eq!(messages[0].kind(), MessageKindDto::Assistant);
+    assert_eq!(messages[0].text(), content);
+    assert_eq!(messages[0].reasoning(), Some("why"));
+    assert!(messages[0].id().value() > 0);
     let finishes = repository
         .finishes
         .lock()

@@ -6,8 +6,8 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
-    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, ProjectId, RunId,
-    SessionId, ToolCallId, TurnId, WorkspaceId,
+    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, MessageId, ProjectId,
+    RunId, SessionId, ToolCallId, TurnId, WorkspaceId,
 };
 use crate::{RunModeDto, RunProjectionDto, WorkspaceRootDto};
 
@@ -333,13 +333,13 @@ impl MessageKindDto {
     }
 }
 
-/// One committed transcript row, in durable insertion order.
+/// One transcript row to commit, before its durable identity is assigned.
 ///
-/// The transcript is the canonical record of user, assistant, tool-call,
-/// tool-result, and notice content; a row carries no event position, no
-/// projection identity, and no provider resource.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct MessageProjectionDto {
+/// The durable `messages.id` belongs to the storage boundary's one writer, so
+/// a caller commits through this shape and receives the committed
+/// [`MessageProjectionDto`] carrying the identity that commit recorded.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NewMessageDto {
     session_id: SessionId,
     run_id: Option<RunId>,
     kind: MessageKindDto,
@@ -349,42 +349,8 @@ pub struct MessageProjectionDto {
     tool_id: Option<String>,
 }
 
-impl<'de> Deserialize<'de> for MessageProjectionDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawMessageProjectionDto {
-            session_id: SessionId,
-            #[serde(default)]
-            run_id: Option<RunId>,
-            kind: MessageKindDto,
-            text: String,
-            #[serde(default)]
-            reasoning: Option<String>,
-            #[serde(default)]
-            tool_call_id: Option<ToolCallId>,
-            #[serde(default)]
-            tool_id: Option<String>,
-        }
-
-        let raw = RawMessageProjectionDto::deserialize(deserializer)?;
-        Self::new(
-            raw.session_id,
-            raw.run_id,
-            raw.kind,
-            raw.text,
-            raw.reasoning,
-            raw.tool_call_id,
-            raw.tool_id,
-        )
-        .map_err(de::Error::custom)
-    }
-}
-
-impl MessageProjectionDto {
-    /// Creates one coherent committed transcript row.
+impl NewMessageDto {
+    /// Creates one coherent transcript row for commit.
     ///
     /// A user, assistant, or notice row carries non-blank content and no tool
     /// identity; a tool-call row carries its call identity, its wire tool name,
@@ -406,39 +372,13 @@ impl MessageProjectionDto {
         tool_id: Option<String>,
     ) -> DtoResult<Self> {
         let text = text.into();
-        if text.contains('\0')
-            || reasoning
-                .as_deref()
-                .is_some_and(|value| value.contains('\0'))
-        {
-            return Err(ErrorDto::validation(
-                "invalid_message",
-                "transcript content must be free of NUL bytes",
-            ));
-        }
-        let tool_identity =
-            tool_call_id.is_some() && tool_id.as_ref().is_some_and(|id| !id.trim().is_empty());
-        let shape_valid = match kind {
-            MessageKindDto::User | MessageKindDto::Notice => {
-                !text.trim().is_empty()
-                    && reasoning.is_none()
-                    && tool_call_id.is_none()
-                    && tool_id.is_none()
-            }
-            MessageKindDto::Assistant => {
-                !text.trim().is_empty() && tool_call_id.is_none() && tool_id.is_none()
-            }
-            MessageKindDto::ToolCall => tool_identity && reasoning.is_none(),
-            MessageKindDto::ToolResult => {
-                tool_identity && reasoning.is_none() && !text.trim().is_empty()
-            }
-        };
-        if !shape_valid {
-            return Err(ErrorDto::validation(
-                "invalid_message",
-                "transcript rows must satisfy their closed kind shape",
-            ));
-        }
+        validate_message_row(
+            kind,
+            &text,
+            reasoning.as_deref(),
+            tool_call_id,
+            tool_id.as_deref(),
+        )?;
         Ok(Self {
             session_id,
             run_id,
@@ -491,6 +431,200 @@ impl MessageProjectionDto {
     pub fn tool_id(&self) -> Option<&str> {
         self.tool_id.as_deref()
     }
+}
+
+/// One committed transcript row, in durable insertion order.
+///
+/// The transcript is the canonical record of user, assistant, tool-call,
+/// tool-result, and notice content; a row carries its durable row identity, no
+/// event position, no projection identity, and no provider resource.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MessageProjectionDto {
+    id: MessageId,
+    session_id: SessionId,
+    run_id: Option<RunId>,
+    kind: MessageKindDto,
+    text: String,
+    reasoning: Option<String>,
+    tool_call_id: Option<ToolCallId>,
+    tool_id: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for MessageProjectionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawMessageProjectionDto {
+            id: MessageId,
+            session_id: SessionId,
+            #[serde(default)]
+            run_id: Option<RunId>,
+            kind: MessageKindDto,
+            text: String,
+            #[serde(default)]
+            reasoning: Option<String>,
+            #[serde(default)]
+            tool_call_id: Option<ToolCallId>,
+            #[serde(default)]
+            tool_id: Option<String>,
+        }
+
+        let raw = RawMessageProjectionDto::deserialize(deserializer)?;
+        Self::new(
+            raw.id,
+            raw.session_id,
+            raw.run_id,
+            raw.kind,
+            raw.text,
+            raw.reasoning,
+            raw.tool_call_id,
+            raw.tool_id,
+        )
+        .map_err(de::Error::custom)
+    }
+}
+
+impl MessageProjectionDto {
+    /// Creates one coherent committed transcript row.
+    ///
+    /// A user, assistant, or notice row carries non-blank content and no tool
+    /// identity; a tool-call row carries its call identity, its wire tool name,
+    /// and the canonical arguments document; a tool-result row carries its call
+    /// identity, its wire tool name, and non-blank content. Only assistant rows
+    /// may carry reasoning text.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the row violates those rules or any
+    /// carried value contains a NUL byte.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "This public wire constructor keeps the whole transcript row in one validating call."
+    )]
+    pub fn new(
+        message_id: MessageId,
+        session_id: SessionId,
+        run_id: Option<RunId>,
+        kind: MessageKindDto,
+        text: impl Into<String>,
+        reasoning: Option<String>,
+        tool_call_id: Option<ToolCallId>,
+        tool_id: Option<String>,
+    ) -> DtoResult<Self> {
+        let text = text.into();
+        validate_message_row(
+            kind,
+            &text,
+            reasoning.as_deref(),
+            tool_call_id,
+            tool_id.as_deref(),
+        )?;
+        Ok(Self {
+            id: message_id,
+            session_id,
+            run_id,
+            kind,
+            text,
+            reasoning,
+            tool_call_id,
+            tool_id,
+        })
+    }
+
+    /// Returns the durable row identity.
+    #[must_use]
+    pub const fn id(&self) -> MessageId {
+        self.id
+    }
+
+    /// Returns the owning durable session identity.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the owning run identity, when the row is bound to one run.
+    #[must_use]
+    pub const fn run_id(&self) -> Option<RunId> {
+        self.run_id
+    }
+
+    /// Returns the closed transcript kind.
+    #[must_use]
+    pub const fn kind(&self) -> MessageKindDto {
+        self.kind
+    }
+
+    /// Returns the committed content or canonical arguments document.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Returns the whole reasoning text of one assistant step, when recorded.
+    #[must_use]
+    pub fn reasoning(&self) -> Option<&str> {
+        self.reasoning.as_deref()
+    }
+
+    /// Returns the tool-call identity carried by a tool row.
+    #[must_use]
+    pub const fn tool_call_id(&self) -> Option<ToolCallId> {
+        self.tool_call_id
+    }
+
+    /// Returns the wire tool name carried by a tool row.
+    #[must_use]
+    pub fn tool_id(&self) -> Option<&str> {
+        self.tool_id.as_deref()
+    }
+}
+
+/// Validates the closed kind shape shared by a row to commit and its committed
+/// counterpart.
+///
+/// # Errors
+///
+/// Returns a validation error when the row violates its kind shape or a carried
+/// value contains a NUL byte.
+fn validate_message_row(
+    kind: MessageKindDto,
+    text: &str,
+    reasoning: Option<&str>,
+    tool_call_id: Option<ToolCallId>,
+    tool_id: Option<&str>,
+) -> DtoResult<()> {
+    if text.contains('\0') || reasoning.is_some_and(|value| value.contains('\0')) {
+        return Err(ErrorDto::validation(
+            "invalid_message",
+            "transcript content must be free of NUL bytes",
+        ));
+    }
+    let tool_identity = tool_call_id.is_some() && tool_id.is_some_and(|id| !id.trim().is_empty());
+    let shape_valid = match kind {
+        MessageKindDto::User | MessageKindDto::Notice => {
+            !text.trim().is_empty()
+                && reasoning.is_none()
+                && tool_call_id.is_none()
+                && tool_id.is_none()
+        }
+        MessageKindDto::Assistant => {
+            !text.trim().is_empty() && tool_call_id.is_none() && tool_id.is_none()
+        }
+        MessageKindDto::ToolCall => tool_identity && reasoning.is_none(),
+        MessageKindDto::ToolResult => {
+            tool_identity && reasoning.is_none() && !text.trim().is_empty()
+        }
+    };
+    if !shape_valid {
+        return Err(ErrorDto::validation(
+            "invalid_message",
+            "transcript rows must satisfy their closed kind shape",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

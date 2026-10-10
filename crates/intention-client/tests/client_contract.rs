@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use intention_client::{DaemonLauncher, IntentionClient, ProcessDaemonLauncher, RunStreamState};
+use intention_proto::TimestampDto;
 use intention_proto::{
     ClientRequestDto, ConfigRevisionId, CreateSessionCommandDto, DaemonHealthDto,
     DaemonReadinessDto, InterruptRunAcceptedDto, ProtocolDaemonMessageDto, ProtocolResultDto,
@@ -28,6 +29,22 @@ use intention_proto::{
 use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, ProjectId, WorkspaceId};
 use intention_proto::{MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto};
 use intention_transport::{AsyncLocalDaemonConnection, AsyncLocalListener, LocalEndpoint};
+
+/// Returns one valid fixture timestamp in whole Unix seconds.
+fn timestamp(seconds: i64) -> TimestampDto {
+    TimestampDto::from_unix_seconds(seconds).expect("fixture timestamp is valid")
+}
+
+/// Returns the fixture workspace root shared by the session fixtures.
+fn fixture_workspace_root() -> intention_proto::WorkspaceRootDto {
+    intention_proto::WorkspaceRootDto::parse(
+        std::env::temp_dir()
+            .join("intention-client-fixture-workspace")
+            .to_string_lossy()
+            .into_owned(),
+    )
+    .expect("fixture workspace root is valid")
+}
 
 fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
     SessionProjectionDto::new(
@@ -208,7 +225,10 @@ fn fixture_summary(session_id: SessionId, updated_at: i64) -> SessionSummaryDto 
         ProjectId::new(),
         WorkspaceId::new(),
         RunModeDto::Build,
-        updated_at,
+        timestamp(updated_at),
+        timestamp(updated_at),
+        fixture_workspace_root(),
+        0,
         None,
     )
 }
@@ -605,7 +625,10 @@ async fn list_sessions_round_trips_and_validates_the_reply() {
                 ProjectId::new(),
                 WorkspaceId::new(),
                 RunModeDto::Build,
-                2_000,
+                timestamp(2_000),
+                timestamp(2_000),
+                fixture_workspace_root(),
+                3,
                 Some(fixture_run(newest, run_id, RunStatusDto::Running)),
             ),
             fixture_summary(SessionId::new(), 1_000),
@@ -666,6 +689,60 @@ async fn list_sessions_round_trips_and_validates_the_reply() {
         "invalid_local_protocol_response"
     );
     server.await.expect("invalid list fixture server completes");
+}
+
+#[tokio::test]
+async fn most_recent_session_takes_the_first_listed_session() {
+    let _guard = fixture_guard();
+    let newest = SessionId::new();
+    let older = SessionId::new();
+    let summaries = SessionSummariesDto::new(
+        vec![
+            fixture_summary(newest, 2_000),
+            fixture_summary(older, 1_000),
+        ],
+        0,
+    )
+    .expect("fixture session summaries are valid");
+    let list_endpoint = endpoint();
+    let server = start_fixture_server(
+        list_endpoint.clone(),
+        FixtureResponse::Result(ProtocolResultDto::SessionsListed(summaries.clone())),
+    );
+    let target = client(
+        list_endpoint,
+        FixtureResponse::Result(ProtocolResultDto::SessionsListed(summaries)),
+        Arc::new(AtomicUsize::new(0)),
+    )
+    .most_recent_session()
+    .await
+    .expect("a session list reply is a successful read");
+    assert_eq!(
+        target,
+        Some(newest),
+        "the continue target is the first session of the daemon's order"
+    );
+    server.await.expect("session list fixture server completes");
+
+    let empty_endpoint = endpoint();
+    let empty = SessionSummariesDto::new(Vec::new(), 0).expect("an empty session list is coherent");
+    let server = start_fixture_server(
+        empty_endpoint.clone(),
+        FixtureResponse::Result(ProtocolResultDto::SessionsListed(empty.clone())),
+    );
+    assert_eq!(
+        client(
+            empty_endpoint,
+            FixtureResponse::Result(ProtocolResultDto::SessionsListed(empty)),
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .most_recent_session()
+        .await
+        .expect("an empty session list is not a failure"),
+        None,
+        "no listed session means no continue target"
+    );
+    server.await.expect("empty list fixture server completes");
 }
 
 #[tokio::test]

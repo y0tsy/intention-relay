@@ -688,7 +688,9 @@ mod tests {
     use super::*;
 
     use intention_engine::{ModelRunCommitDto, RunCancellation};
-    use intention_proto::{MessageKindDto, MessageProjectionDto, SendUserTurnCommandDto};
+    use intention_proto::{
+        MessageId, MessageKindDto, MessageProjectionDto, NewMessageDto, SendUserTurnCommandDto,
+    };
     use intention_storage::ToolResultStatusDto;
     use tempfile::TempDir;
 
@@ -1034,8 +1036,11 @@ mod tests {
 
     #[test]
     fn an_over_budget_newest_row_is_kept_and_the_projection_is_charged() {
-        let row = |text: String| {
+        let mut next_id = 0;
+        let mut row = |text: String| {
+            next_id += 1;
             MessageProjectionDto::new(
+                MessageId::new(next_id).expect("fixture row identity is valid"),
                 SessionId::new(),
                 None,
                 MessageKindDto::User,
@@ -1326,7 +1331,7 @@ mod tests {
         run_id: RunId,
         text: &str,
     ) {
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             session_id,
             Some(run_id),
             MessageKindDto::Assistant,

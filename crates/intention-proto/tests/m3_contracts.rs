@@ -12,7 +12,7 @@ mod common;
 use common::{fixture_message, fixture_projection};
 
 use intention_proto::{
-    ConfigRevisionId, CreateSessionAcceptedDto, InterruptRunAcceptedDto, MessageKindDto,
+    ConfigRevisionId, CreateSessionAcceptedDto, InterruptRunAcceptedDto, MessageId, MessageKindDto,
     MessageProjectionDto, PendingTurnProjectionDto, ProtocolResultDto, RemoveTurnAcceptedDto,
     RunId, RunModeDto, RunProjectionDto, RunStatusDto, SendUserTurnAcceptedDto,
     SendUserTurnOutcomeDto, SessionProjectionDto, SessionSnapshotDto, ToolCallId, TurnId,
@@ -366,12 +366,14 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let call_id = ToolCallId::new();
+    let message_id = MessageId::new(7).expect("fixture row identity is valid");
     let row = |kind: MessageKindDto,
                text: &str,
                reasoning: Option<&str>,
                tool_call_id: Option<ToolCallId>,
                tool_id: Option<&str>| {
         MessageProjectionDto::new(
+            message_id,
             session_id,
             Some(run_id),
             kind,
@@ -497,6 +499,7 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
     );
     assert!(
         MessageProjectionDto::new(
+            message_id,
             session_id,
             None,
             MessageKindDto::Notice,
@@ -520,6 +523,7 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
         serde_json::from_str(&serde_json::to_string(&round_trip).expect("row serializes"))
             .expect("row decodes");
     assert_eq!(decoded, round_trip);
+    assert_eq!(decoded.id(), message_id);
     assert_eq!(decoded.kind(), MessageKindDto::ToolCall);
     assert_eq!(decoded.tool_call_id(), Some(call_id));
     assert_eq!(decoded.tool_id(), Some("read"));
@@ -532,6 +536,7 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
     // This wire form omits the optional run_id and reasoning fields and relies on their defaults.
     assert!(
         serde_json::from_value::<MessageProjectionDto>(serde_json::json!({
+            "id": 7,
             "session_id": session_id,
             "kind": "tool_result",
             "text": "contents",
@@ -542,6 +547,7 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
     );
 
     let notice = MessageProjectionDto::new(
+        message_id,
         session_id,
         None,
         MessageKindDto::Notice,
@@ -559,6 +565,7 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
 
     assert!(
         serde_json::from_value::<MessageProjectionDto>(serde_json::json!({
+            "id": 7,
             "session_id": session_id,
             "kind": "system",
             "text": "unsupported kind"

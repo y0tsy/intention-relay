@@ -8,7 +8,8 @@ mod common;
 use std::{collections::VecDeque, future, sync::PoisonError, sync::mpsc, time::Duration};
 
 use common::{
-    FakeRepository, ImmediateTime, RecordedTransition, RecordingCommitObserver, ScriptedPort, time,
+    FakeRepository, ImmediateTime, RecordedTransition, RecordingCommitObserver, ScriptedPort,
+    row_id, time,
 };
 use futures_util::{StreamExt, stream};
 use intention_config::ConfigSnapshotDto;
@@ -1928,6 +1929,7 @@ fn pending_user_message(
     content: &str,
 ) -> MessageProjectionDto {
     MessageProjectionDto::new(
+        row_id(),
         session_id,
         Some(run_id),
         MessageKindDto::User,

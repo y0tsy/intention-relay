@@ -14,7 +14,7 @@
 
 use std::collections::VecDeque;
 use std::future;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
@@ -24,9 +24,9 @@ use intention_engine::{
     ToolExecutionPort, ToolResultOutcomeDto,
 };
 use intention_proto::{
-    CreateSessionCommandDto, DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey,
-    MessageProjectionDto, PendingTurnProjectionDto, ProjectId, RemoveTurnCommandDto, RunId,
-    RunModeDto, RunProjectionDto, RunStatusDto, SessionId, SessionProjectionDto,
+    CreateSessionCommandDto, DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, MessageId,
+    MessageProjectionDto, NewMessageDto, PendingTurnProjectionDto, ProjectId, RemoveTurnCommandDto,
+    RunId, RunModeDto, RunProjectionDto, RunStatusDto, SessionId, SessionProjectionDto,
     SessionSummariesDto, ThemeDto, TimestampDto, ToolCallId, TurnId, UsageDto, WorkspaceBindingDto,
     WorkspaceId, WorkspaceRootDto,
 };
@@ -40,6 +40,12 @@ use intention_test_support::fixture_snapshot;
 /// Returns the exact fixture timestamp for one Unix second value.
 pub fn time(value: i64) -> TimestampDto {
     TimestampDto::from_unix_seconds(value).expect("fixture timestamp is valid")
+}
+
+/// Returns one fresh durable row identity for a committed fixture row.
+pub fn row_id() -> MessageId {
+    static NEXT: AtomicI64 = AtomicI64::new(0);
+    MessageId::new(NEXT.fetch_add(1, Ordering::Relaxed) + 1).expect("fixture row identity is valid")
 }
 
 /// Returns native absolute workspace root for the engine fixtures.
@@ -180,6 +186,8 @@ pub struct FakeRepository {
     pub append_failure_at: Mutex<Option<(usize, ErrorDto)>>,
     pub cancel_after_append: Mutex<Option<(usize, RunCancellation)>>,
     pub append_count: Mutex<usize>,
+    /// The newest durable row identity this fixture assigned.
+    pub next_message_id: Mutex<i64>,
     pub config_error: Mutex<Option<ErrorDto>>,
     /// Pending user messages committed by the next context boundary.
     pub pending: Mutex<VecDeque<MessageProjectionDto>>,
@@ -217,6 +225,7 @@ impl FakeRepository {
             append_failure_at: Mutex::new(None),
             cancel_after_append: Mutex::new(None),
             append_count: Mutex::new(0),
+            next_message_id: Mutex::new(0),
             config_error: Mutex::new(None),
             pending: Mutex::new(VecDeque::new()),
             pending_consumes: Mutex::new(0),
@@ -302,6 +311,34 @@ impl FakeRepository {
             .unwrap_or_else(PoisonError::into_inner);
         *count += 1;
         *count
+    }
+
+    /// Returns the next durable row identity this fixture assigns.
+    fn assign_message_id(&self) -> MessageId {
+        let mut next = self
+            .next_message_id
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *next += 1;
+        MessageId::new(*next).expect("fixture row identity is positive")
+    }
+
+    /// Returns one row to commit as the committed row carrying `message_id`.
+    fn committed_row(
+        &self,
+        message_id: MessageId,
+        message: &NewMessageDto,
+    ) -> DtoResult<MessageProjectionDto> {
+        MessageProjectionDto::new(
+            message_id,
+            message.session_id(),
+            message.run_id(),
+            message.kind(),
+            message.text(),
+            message.reasoning().map(str::to_owned),
+            message.tool_call_id(),
+            message.tool_id().map(str::to_owned),
+        )
     }
 
     /// Returns the next one-based commit ordinal, or the selected injected failure.
@@ -485,7 +522,7 @@ impl StorageRepositoryDto for FakeRepository {
 
     fn append_message(
         &self,
-        message: MessageProjectionDto,
+        message: NewMessageDto,
         _occurred_at: TimestampDto,
     ) -> DtoResult<MessageProjectionDto> {
         self.next_commit()?;
@@ -523,29 +560,31 @@ impl StorageRepositoryDto for FakeRepository {
         {
             signal.cancel();
         }
+        let committed = self.committed_row(self.assign_message_id(), &message)?;
         self.messages
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(message.clone());
-        Ok(message)
+            .push(committed.clone());
+        Ok(committed)
     }
 
     fn write_tool_result(
         &self,
         evidence: ToolResultEvidenceDto,
-        message: MessageProjectionDto,
-    ) -> DtoResult<ToolResultEvidenceDto> {
+        message: NewMessageDto,
+    ) -> DtoResult<MessageProjectionDto> {
         self.next_commit()?;
+        let committed = self.committed_row(self.assign_message_id(), &message)?;
         self.messages
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(message);
+            .push(committed.clone());
         self.tool_results
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(evidence.clone());
+            .push(evidence);
         self.committed_result_rows.fetch_add(1, Ordering::SeqCst);
-        Ok(evidence)
+        Ok(committed)
     }
 
     fn load_tool_result(

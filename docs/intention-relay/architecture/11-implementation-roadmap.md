@@ -112,9 +112,10 @@ crates passing domain types, and makes schema-validated JSON tool inputs and out
 system. The current-state core has already landed on this branch: the event log, snapshots, cursors, and resync are
 replaced by the nine current-state tables (`projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`,
 `tool_results`, `configuration_revisions`, `tui_settings`); `messages` and `tool_results` are the transcript; identity
-is the eight newtypes (`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`,
-`IdempotencyKey`), with model steps and tool groups addressed by plain indices and mutating operations by
-`IdempotencyKey`; every state change commits in one SQLite transaction and the daemon publishes `run.frame`
+is the nine newtypes (`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`,
+`IdempotencyKey`, and the durable transcript row `MessageId`), with model steps and tool groups addressed by plain
+indices and mutating operations by `IdempotencyKey`; every state change commits in one SQLite transaction and the
+daemon publishes `run.frame`
 notifications built from the committed values; the single live wire version is a byte in the endpoint name with no
 cursors, and a re-subscribing client receives current run state and bounded recent messages, then continues live;
 `intention-client` is an asynchronous client with its blocking API removed that covers connect/health, session

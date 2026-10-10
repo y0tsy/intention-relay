@@ -1597,10 +1597,11 @@ mod tests {
     };
     use intention_proto::{
         ClientRequestDto, ConfigRevisionId, CreateSessionCommandDto, DaemonReadinessDto,
-        GetSessionSnapshotQueryDto, IdempotencyKey, MessageKindDto, MessageProjectionDto,
-        ProtocolDaemonMessageDto, ProtocolResultDto, RunModeDto, SendUserTurnCommandDto,
-        SendUserTurnOutcomeDto, SessionId, SetTuiThemeCommandDto, SubscribeRunCommandDto, ThemeDto,
-        WorkspaceId, WorkspaceRootDto, decode_response, encode_request,
+        GetSessionSnapshotQueryDto, IdempotencyKey, MessageId, MessageKindDto,
+        MessageProjectionDto, NewMessageDto, ProtocolDaemonMessageDto, ProtocolResultDto,
+        RunModeDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId,
+        SetTuiThemeCommandDto, SubscribeRunCommandDto, ThemeDto, WorkspaceId, WorkspaceRootDto,
+        decode_response, encode_request,
     };
     use intention_proto::{ProjectId, RunId, SchemaVersionDto, TimestampDto};
     use intention_providers::{
@@ -1959,7 +1960,7 @@ mod tests {
         facade
             .repository()
             .append_message(
-                MessageProjectionDto::new(
+                NewMessageDto::new(
                     session_id,
                     Some(run_id),
                     MessageKindDto::Assistant,
@@ -2353,6 +2354,7 @@ mod tests {
         let (session_id, run_id) = create_and_start(&facade);
         let host = new_host(facade);
         let message = MessageProjectionDto::new(
+            MessageId::new(1).expect("fixture row identity is valid"),
             session_id,
             Some(run_id),
             MessageKindDto::Assistant,
@@ -2439,7 +2441,7 @@ mod tests {
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
         let (session_id, run_id) = create_and_start(&facade);
         let host = new_host(facade);
-        let snapshot_row = MessageProjectionDto::new(
+        let snapshot_row = NewMessageDto::new(
             session_id,
             Some(run_id),
             MessageKindDto::Assistant,
@@ -2449,10 +2451,11 @@ mod tests {
             None,
         )
         .expect("fixture transcript row is valid");
-        host.facade
+        let snapshot_row = host
+            .facade
             .repository()
             .append_message(
-                snapshot_row.clone(),
+                snapshot_row,
                 TimestampDto::from_unix_seconds(2).expect("fixture timestamp is valid"),
             )
             .expect("fixture snapshot row commits");
@@ -2478,6 +2481,7 @@ mod tests {
 
         host.publish_content(&snapshot_row);
         let distinct = MessageProjectionDto::new(
+            MessageId::new(1).expect("fixture row identity is valid"),
             session_id,
             Some(run_id),
             MessageKindDto::Assistant,

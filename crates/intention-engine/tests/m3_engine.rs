@@ -9,7 +9,7 @@ use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-use common::{FakeRepository, RecordingCommitObserver, workspace_root};
+use common::{FakeRepository, RecordingCommitObserver, row_id, workspace_root};
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
     ApplicationService, ModelMessageDto, ModelRoleDto, ModelRunCommitDto, ModelRunCommitObserver,
@@ -370,6 +370,7 @@ fn tool_row_fixture(
     call_id: ToolCallId,
 ) -> MessageProjectionDto {
     MessageProjectionDto::new(
+        row_id(),
         session_id,
         Some(run_id),
         kind,
@@ -416,6 +417,7 @@ fn starting_run_context_rebuilds_the_committed_tool_exchange() {
         config,
         vec![
             MessageProjectionDto::new(
+                row_id(),
                 session_id,
                 None,
                 MessageKindDto::User,
@@ -440,6 +442,7 @@ fn starting_run_context_rebuilds_the_committed_tool_exchange() {
                 call_id,
             ),
             MessageProjectionDto::new(
+                row_id(),
                 session_id,
                 None,
                 MessageKindDto::Assistant,
@@ -450,6 +453,7 @@ fn starting_run_context_rebuilds_the_committed_tool_exchange() {
             )
             .expect("context message is valid"),
             MessageProjectionDto::new(
+                row_id(),
                 session_id,
                 Some(run_id),
                 MessageKindDto::User,
@@ -512,6 +516,7 @@ fn starting_run_context_omits_unpaired_tool_rows() {
         config,
         vec![
             MessageProjectionDto::new(
+                row_id(),
                 session_id,
                 None,
                 MessageKindDto::User,
@@ -552,6 +557,7 @@ fn starting_run_context_omits_unpaired_tool_rows() {
                 answered,
             ),
             MessageProjectionDto::new(
+                row_id(),
                 session_id,
                 None,
                 MessageKindDto::Assistant,
@@ -562,6 +568,7 @@ fn starting_run_context_omits_unpaired_tool_rows() {
             )
             .expect("context message is valid"),
             MessageProjectionDto::new(
+                row_id(),
                 session_id,
                 Some(run_id),
                 MessageKindDto::User,
@@ -1202,6 +1209,7 @@ fn starting_context(
         config.clone(),
         vec![
             MessageProjectionDto::new(
+                row_id(),
                 session_id,
                 None,
                 MessageKindDto::User,
@@ -1212,6 +1220,7 @@ fn starting_context(
             )
             .expect("context message is valid"),
             MessageProjectionDto::new(
+                row_id(),
                 session_id,
                 None,
                 MessageKindDto::Assistant,
@@ -1222,6 +1231,7 @@ fn starting_context(
             )
             .expect("context message is valid"),
             MessageProjectionDto::new(
+                row_id(),
                 session_id,
                 Some(run_id),
                 MessageKindDto::User,

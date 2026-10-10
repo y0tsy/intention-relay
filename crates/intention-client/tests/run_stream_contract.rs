@@ -206,13 +206,41 @@ fn state_dedupes_the_newest_row_and_bounds_the_transcript() {
         ))
         .expect("fixture snapshot applies");
 
+    let repeated = MessageProjectionDto::new(
+        snapshot_row.id(),
+        session_id,
+        Some(run_id),
+        MessageKindDto::Assistant,
+        "the row the snapshot already carried",
+        None,
+        None,
+        None,
+    )
+    .expect("fixture repeated row is valid");
     state
-        .apply_frame(RunStreamFrameDto::Content(snapshot_row))
+        .apply_frame(RunStreamFrameDto::Content(repeated))
         .expect("a frame repeating the newest accepted row applies once");
     assert_eq!(
         state.messages().len(),
         1,
-        "a content frame the snapshot already carried is not appended twice"
+        "a content frame carrying the newest row identity is not appended twice"
+    );
+
+    // Equal content with a distinct durable identity is a distinct row, so it
+    // is a committed row the snapshot never carried.
+    let equal_content = message(
+        session_id,
+        Some(run_id),
+        MessageKindDto::Assistant,
+        "the row the snapshot already carried",
+    );
+    state
+        .apply_frame(RunStreamFrameDto::Content(equal_content))
+        .expect("a distinct row with equal content applies");
+    assert_eq!(
+        state.messages().len(),
+        2,
+        "rows match by durable identity, never by value"
     );
 
     for index in 0..RETAINED_TRANSCRIPT_MESSAGES + 4 {
@@ -231,6 +259,51 @@ fn state_dedupes_the_newest_row_and_bounds_the_transcript() {
         format!("row {}", RETAINED_TRANSCRIPT_MESSAGES + 3),
         "the retained transcript keeps the newest rows"
     );
+}
+
+#[test]
+fn state_merges_another_read_of_the_same_transcript_by_row_identity() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = RunStreamState::new(session_id, run_id);
+    let first = message(session_id, Some(run_id), MessageKindDto::User, "build it");
+    let second = message(
+        session_id,
+        Some(run_id),
+        MessageKindDto::Assistant,
+        "working",
+    );
+    let third = message(session_id, Some(run_id), MessageKindDto::Notice, "stopped");
+    state
+        .apply_initial(snapshot(
+            session_id,
+            run_id,
+            RunStatusDto::Running,
+            vec![first.clone(), second.clone(), third.clone()],
+        ))
+        .expect("fixture snapshot applies");
+
+    // A session read carrying the outer rows leaves exactly the row it never
+    // carried.
+    assert_eq!(
+        state.missing_rows(&[first.clone(), third.clone()]),
+        vec![second.clone()]
+    );
+
+    // Equal content with a distinct durable identity is still missing.
+    let equal_content = message(
+        session_id,
+        Some(run_id),
+        MessageKindDto::Assistant,
+        "working",
+    );
+    assert_eq!(
+        state.missing_rows(&[first, equal_content]),
+        vec![second, third]
+    );
+
+    // A read that already carries every row leaves nothing to merge.
+    assert!(state.missing_rows(state.messages()).is_empty());
 }
 
 #[tokio::test]
