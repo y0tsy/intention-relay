@@ -9,6 +9,7 @@ pub(super) mod commands;
 pub(super) mod input;
 pub(super) mod markdown;
 pub(super) mod status;
+pub(super) mod theme;
 pub(super) mod tools;
 pub(super) mod transcript;
 pub(super) mod welcome;

@@ -912,6 +912,49 @@ mod tests {
     }
 
     #[test]
+    fn a_preview_change_lays_the_whole_transcript_out_again_without_committing_it() {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let mut state = fixture_state(session_id, run_id);
+        let mut cache = TranscriptLayoutCache::new();
+        let light: Vec<_> = cache
+            .rows(&state, WIDTH, LIGHT, |range, width| {
+                committed_blocks(&state, range, width, LIGHT)
+            })
+            .iter()
+            .map(|row| row.surface)
+            .collect();
+        assert_eq!(
+            light[0], LIGHT.user_surface,
+            "the fixture opens on a user card"
+        );
+
+        state.update(Action::ThemePreviewed(Theme::Dark));
+        assert_eq!(
+            state.theme(),
+            Theme::Light,
+            "a preview is local: the committed theme did not move"
+        );
+        let dark: Vec<_> = cache
+            .rows(&state, WIDTH, DARK, |range, width| {
+                committed_blocks(&state, range, width, DARK)
+            })
+            .iter()
+            .map(|row| row.surface)
+            .collect();
+        assert_eq!(
+            cache.layout_count(),
+            2,
+            "a preview replays: the cached rows carry the committed theme's surfaces"
+        );
+        assert_eq!(
+            dark[0], DARK.user_surface,
+            "the replay paints the dark card"
+        );
+        assert_ne!(light[0], dark[0]);
+    }
+
+    #[test]
     fn a_session_snapshot_lays_the_whole_transcript_out_again() {
         let session_id = SessionId::new();
         let run_id = RunId::new();

@@ -1,24 +1,28 @@
-//! The input's command hint menu: the commands the first word selects.
+//! The input's command hint band: the commands the first word selects, or the
+//! values of the argument word the caret sits in.
 //!
-//! The menu is one band of the chat panel directly above the input block, and
-//! the transcript gives up exactly the rows it takes: the panel's body still
-//! sums to transcript plus menu plus input plus detail, so nothing is painted
-//! over anything and the one window never grows a second surface.
+//! The band is one region of the chat panel directly above the input block,
+//! and the transcript gives up exactly the rows it takes: the panel's body
+//! still sums to transcript plus band plus input plus detail, so nothing is
+//! painted over anything and the one window never grows a second surface.
 //!
 //! The band is its own rounded frame on the header wash, with the three columns
-//! `[Command] [Description] [Category]` in that order. The highlighted row
-//! carries the sessions browser's own cursor vocabulary - the `> ` marker and
-//! the selected wash - so the two lists read the same way, and the command
-//! column keeps the accent ink the input line's own prompt uses.
+//! `[Command] [Description] [Category]` in that order while it ranks the
+//! registry, and `[Value] [Description] [Argument]` while it ranks one
+//! declared argument's values: the same three cells carry a value, that value's
+//! one line, and the name of the argument it fills. The highlighted row carries
+//! the sessions browser's own cursor vocabulary - the `> ` marker and the
+//! selected wash - so the three lists read the same way, and the first column
+//! keeps the accent ink the input line's own prompt uses.
 
 use revue::style::Color;
 use revue::text::char_width;
 use revue::widget::{RichText, Span, Stack, Style, vstack};
 
-use crate::app::{AppState, COMMANDS, CommandSpec};
+use crate::app::{AppState, ArgumentSpec, COMMANDS, MenuKind, MenuRow};
 use crate::tui::palette::Palette;
 
-/// The most command rows the band shows before it reports the rest.
+/// The most rows the band shows before it reports the rest.
 pub(in crate::tui) const MAX_COMMAND_ROWS: usize = 5;
 
 /// The rows the band's own frame takes.
@@ -40,37 +44,46 @@ const CURSOR_MARKER: &str = "> ";
 /// The marker every other row starts with, keeping the columns aligned.
 const ROW_MARKER: &str = "  ";
 
-/// The label the band's top border carries.
-const TITLE: &str = "commands";
+/// The label the band's top border carries while it ranks the registry.
+const COMMAND_TITLE: &str = "commands";
 
-/// Returns the rows the menu occupies for the state's current word, or `0`
-/// while no menu is open.
+/// The label the band's top border carries while it ranks one argument.
+const ARGUMENT_TITLE: &str = "arguments";
+
+/// The noun the overflow row counts while the band ranks the registry.
+const COMMAND_NOUN: &str = "commands";
+
+/// The noun the overflow row counts while the band ranks one argument.
+const VALUE_NOUN: &str = "values";
+
+/// Returns the rows the band occupies for the state's current word, or `0`
+/// while no band is open.
 #[must_use]
 pub(in crate::tui) fn menu_rows(state: &AppState) -> u16 {
     state.command_menu().map_or(0, |menu| band_rows(menu.len()))
 }
 
-/// Returns the rows a band of `commands` commands occupies: its own frame, the
-/// rows it shows, and the one row its overflow report takes.
+/// Returns the rows a band of `rows` rows occupies: its own frame, the rows it
+/// shows, and the one row its overflow report takes.
 #[must_use]
-const fn band_rows(commands: usize) -> u16 {
-    let shown = if commands > MAX_COMMAND_ROWS {
+const fn band_rows(rows: usize) -> u16 {
+    let shown = if rows > MAX_COMMAND_ROWS {
         MAX_COMMAND_ROWS
     } else {
-        commands
+        rows
     };
     let shown = if shown > u16::MAX as usize {
         u16::MAX
     } else {
         shown as u16
     };
-    let overflow = if commands > MAX_COMMAND_ROWS { 1 } else { 0 };
+    let overflow = if rows > MAX_COMMAND_ROWS { 1 } else { 0 };
     BAND_FRAME_ROWS
         .saturating_add(shown)
         .saturating_add(overflow)
 }
 
-/// Returns the band: the menu's framed rows, exactly `rows` display rows tall.
+/// Returns the band: the word's framed rows, exactly `rows` display rows tall.
 ///
 /// `rows` is [`menu_rows`] for the same state, so the band and the panel's
 /// arithmetic agree by construction - and a panel too small to hold the band
@@ -87,97 +100,103 @@ pub(in crate::tui) fn menu_block(
     if rows != band_rows(menu.len()) {
         return vstack();
     }
-    let commands = menu.commands().map(Row::of).collect::<Vec<_>>();
+    let band_rows = menu.rows().map(Row::of).collect::<Vec<_>>();
     band(
-        &commands,
+        &band_rows,
         menu.highlight(),
+        menu.kind(),
         usize::from(width),
         rows,
         palette,
     )
 }
 
-/// One row of the band: the three cells one command contributes.
-struct Row<'a> {
-    /// The command's name, spelled without its leading slash.
-    name: &'a str,
-    /// The command's one-line description.
-    description: &'a str,
-    /// The command's category.
-    category: &'a str,
+/// One row of the band: the three cells one command or value contributes.
+struct Row {
+    /// The first cell, exactly as the band paints it.
+    label: String,
+    /// The row's one-line description.
+    description: &'static str,
+    /// The command's category or the argument's name.
+    trailing: &'static str,
 }
 
-impl<'a> Row<'a> {
-    /// Returns the row one registered command contributes.
-    const fn of(command: CommandSpec) -> Self {
+impl Row {
+    /// Returns the row one menu row contributes.
+    fn of(row: MenuRow) -> Self {
         Self {
-            name: command.name,
-            description: command.description,
-            category: command.category,
+            label: row.label(),
+            description: row.description(),
+            trailing: row.trailing(),
         }
     }
-
-    /// Returns the name as a user writes it, with its leading slash.
-    fn typed_name(&self) -> String {
-        format!("/{}", self.name)
-    }
 }
 
-/// Returns the band of one command list with one row highlighted.
+/// Returns the band of one row list with one row highlighted.
 fn band(
-    commands: &[Row],
+    rows: &[Row],
     highlight: usize,
+    kind: MenuKind,
     width: usize,
-    rows: u16,
+    height: u16,
     palette: &'static Palette,
 ) -> Stack {
     let wash = palette.header_bg;
-    let columns = Columns::of(width.saturating_sub(BAND_CHROME_COLUMNS));
-    let mut band = vstack().child_sized(frame_row(width, wash, true, palette), 1);
-    for (row, command) in commands.iter().take(MAX_COMMAND_ROWS).enumerate() {
+    let columns = Columns::of(kind, width.saturating_sub(BAND_CHROME_COLUMNS));
+    let (title, noun) = match kind {
+        MenuKind::Command => (COMMAND_TITLE, COMMAND_NOUN),
+        MenuKind::Argument(_) => (ARGUMENT_TITLE, VALUE_NOUN),
+    };
+    let mut band = vstack().child_sized(frame_row(width, wash, title, true, palette), 1);
+    for (row, entry) in rows.iter().take(MAX_COMMAND_ROWS).enumerate() {
         band = band.child_sized(
-            command_row(command, row == highlight, &columns, wash, palette),
+            command_row(entry, row == highlight, &columns, wash, palette),
             1,
         );
     }
-    if let Some(hidden) = commands.len().checked_sub(MAX_COMMAND_ROWS) {
-        band = band.child_sized(overflow_row(hidden, width, wash, palette), 1);
+    if let Some(hidden) = rows.len().checked_sub(MAX_COMMAND_ROWS) {
+        band = band.child_sized(overflow_row(hidden, noun, width, wash, palette), 1);
     }
     debug_assert_eq!(
-        band_rows(commands.len()),
-        rows,
+        band_rows(rows.len()),
+        height,
         "the band paints exactly the rows the panel gave it"
     );
-    band.child_sized(frame_row(width, wash, false, palette), 1)
+    band.child_sized(frame_row(width, wash, title, false, palette), 1)
 }
 
 /// The columns one band's rows are laid out in.
 struct Columns {
-    /// The columns the command cell takes.
-    command: usize,
+    /// The columns the first cell takes: a command name or an argument value.
+    label: usize,
     /// The columns the description cell takes; `0` hides the column.
     description: usize,
-    /// The columns the category cell takes; `0` hides the column.
-    category: usize,
+    /// The columns the trailing cell takes: a category or an argument name;
+    /// `0` hides the column.
+    trailing: usize,
 }
 
 impl Columns {
     /// Returns the column widths of one band inside `inner` columns.
     ///
-    /// The command and category columns are wide enough for every registered
-    /// command, so the list never shifts as the filter narrows, and the
-    /// description takes whatever is left over: a cell that drops out never
-    /// leaves a hole beside the border, so every row fills exactly `inner`
-    /// columns and never paints past its band. A band narrower than its own
-    /// marker is degenerate everywhere, and the marker keeps its columns there
-    /// rather than a cell that could not be read anyway.
-    fn of(inner: usize) -> Self {
-        let command = command_columns();
-        let category = category_columns();
+    /// The first and trailing columns are wide enough for every row the word
+    /// can show - every registered command and category, or every value the
+    /// argument declares and the argument's name - so the list never shifts as
+    /// the filter narrows, and the description takes whatever is left over: a
+    /// cell that drops out never leaves a hole beside the border, so every row
+    /// fills exactly `inner` columns and never paints past its band. A band
+    /// narrower than its own marker is degenerate everywhere, and the marker
+    /// keeps its columns there rather than a cell that could not be read
+    /// anyway.
+    fn of(kind: MenuKind, inner: usize) -> Self {
+        let (label, trailing) = match kind {
+            MenuKind::Command => (command_columns(), category_columns()),
+            MenuKind::Argument(argument) => (value_columns(argument), display_width(argument.name)),
+        };
         let fixed = Self {
-            command,
+            label,
             description: 0,
-            category,
+            trailing,
         };
         // The description needs its own gap and at least one column of its own.
         if inner > fixed.used() + COLUMN_GAP {
@@ -186,12 +205,12 @@ impl Columns {
                 ..fixed
             };
         }
-        // Too narrow for the description: the category goes first, and the
-        // command cell then takes whatever the marker leaves.
+        // Too narrow for the description: the trailing cell goes first, and the
+        // first cell then takes whatever the marker leaves.
         Self {
-            command: inner.saturating_sub(MARKER_COLUMNS),
+            label: inner.saturating_sub(MARKER_COLUMNS),
             description: 0,
-            category: 0,
+            trailing: 0,
         }
     }
 
@@ -202,16 +221,16 @@ impl Columns {
         } else {
             0
         };
-        let category = if self.category > 0 {
-            COLUMN_GAP + self.category
+        let trailing = if self.trailing > 0 {
+            COLUMN_GAP + self.trailing
         } else {
             0
         };
-        MARKER_COLUMNS + self.command + description + category
+        MARKER_COLUMNS + self.label + description + trailing
     }
 }
 
-/// Returns the columns the command column is wide enough for: every registered
+/// Returns the columns the first cell is wide enough for: every registered
 /// command.
 fn command_columns() -> usize {
     COMMANDS
@@ -221,7 +240,7 @@ fn command_columns() -> usize {
         .unwrap_or_default()
 }
 
-/// Returns the columns the category column is wide enough for: every registered
+/// Returns the columns the trailing cell is wide enough for: every registered
 /// category.
 fn category_columns() -> usize {
     COMMANDS
@@ -231,10 +250,21 @@ fn category_columns() -> usize {
         .unwrap_or_default()
 }
 
-/// Returns one command row: its marker, its name, its description, and its
-/// category.
+/// Returns the columns the first cell is wide enough for: every value the
+/// argument declares.
+fn value_columns(argument: ArgumentSpec) -> usize {
+    argument
+        .values
+        .iter()
+        .map(|value| display_width(value.value))
+        .max()
+        .unwrap_or_default()
+}
+
+/// Returns one band row: its marker, its first cell, its description, and its
+/// trailing cell.
 fn command_row(
-    command: &Row,
+    row: &Row,
     highlighted: bool,
     columns: &Columns,
     wash: Color,
@@ -246,7 +276,7 @@ fn command_row(
         wash
     };
     let border = border_style(row_wash, palette);
-    let command_ink = {
+    let label_ink = {
         let mut style = Style::new().fg(palette.accent_deep).bg(row_wash);
         style.bold = highlighted;
         style
@@ -260,36 +290,39 @@ fn command_row(
         (ROW_MARKER, Style::new().bg(row_wash))
     };
     let trailing = border_style(row_wash, palette);
-    let mut row = RichText::new()
+    let mut line = RichText::new()
         .default_style(Style::new().bg(row_wash))
         .span(Span::styled("│ ", border))
         .span(Span::styled(marker.0, marker.1))
-        .span(Span::styled(
-            cell(&command.typed_name(), columns.command),
-            command_ink,
-        ));
+        .span(Span::styled(cell(&row.label, columns.label), label_ink));
     if columns.description > 0 {
-        row = row
+        line = line
             .span(Span::styled(" ", Style::new().bg(row_wash)))
             .span(Span::styled(
-                cell(command.description, columns.description),
+                cell(row.description, columns.description),
                 Style::new().fg(palette.ink).bg(row_wash),
             ));
     }
-    if columns.category > 0 {
-        row = row
+    if columns.trailing > 0 {
+        line = line
             .span(Span::styled(" ", Style::new().bg(row_wash)))
             .span(Span::styled(
-                cell(command.category, columns.category),
+                cell(row.trailing, columns.trailing),
                 Style::new().fg(palette.ink_muted).bg(row_wash),
             ));
     }
-    row.span(Span::styled(" │", trailing))
+    line.span(Span::styled(" │", trailing))
 }
 
-/// Returns the row that reports the commands the band does not show.
-fn overflow_row(hidden: usize, width: usize, wash: Color, palette: &'static Palette) -> RichText {
-    let report = format!("… and {hidden} more commands");
+/// Returns the row that reports the rows the band does not show.
+fn overflow_row(
+    hidden: usize,
+    noun: &str,
+    width: usize,
+    wash: Color,
+    palette: &'static Palette,
+) -> RichText {
+    let report = format!("… and {hidden} more {noun}");
     let columns = width.saturating_sub(BAND_CHROME_COLUMNS + MARKER_COLUMNS);
     RichText::new()
         .default_style(Style::new().bg(wash))
@@ -312,7 +345,13 @@ fn border_style(wash: Color, palette: &'static Palette) -> Style {
 /// The top row carries the band's title between its corners, exactly like the
 /// transcript's framed blocks; the bottom row is its plain counterpart. A band
 /// too narrow for the title keeps its corners and fills the row instead.
-fn frame_row(width: usize, wash: Color, top: bool, palette: &'static Palette) -> RichText {
+fn frame_row(
+    width: usize,
+    wash: Color,
+    title: &str,
+    top: bool,
+    palette: &'static Palette,
+) -> RichText {
     let mut row = RichText::new().default_style(Style::new().bg(wash));
     if !top {
         return row
@@ -323,7 +362,7 @@ fn frame_row(width: usize, wash: Color, top: bool, palette: &'static Palette) ->
             ))
             .span(Span::styled("╯", border_style(wash, palette)));
     }
-    let label = format!(" {TITLE} ");
+    let label = format!(" {title} ");
     let labelled = display_width("╭─") + display_width(&label);
     if labelled + 1 > width {
         return row
@@ -394,6 +433,7 @@ mod tests {
         BAND_FRAME_ROWS, Columns, MARKER_COLUMNS, MAX_COMMAND_ROWS, Row, band, band_rows,
         display_width,
     };
+    use crate::app::{ArgumentSpec, MenuKind, ValueSpec};
     use crate::tui::palette::Palette;
 
     /// The light palette every fixture renders with.
@@ -414,14 +454,45 @@ mod tests {
     /// The columns every band in these tests is drawn in.
     const BAND_WIDTH: u16 = 72;
 
+    /// Two synthetic values for the argument-band fixture.
+    static VALUES: [ValueSpec; 2] = [
+        ValueSpec {
+            value: "round",
+            description: "the round fixture shape",
+        },
+        ValueSpec {
+            value: "square",
+            description: "the square fixture shape",
+        },
+    ];
+
+    /// The synthetic argument the value-band fixture ranks.
+    static ARGUMENT: [ArgumentSpec; 1] = [ArgumentSpec {
+        name: "shape",
+        values: &VALUES,
+        required: false,
+    }];
+
     /// Returns the rows of the synthetic command list.
-    fn filler_rows() -> Vec<Row<'static>> {
+    fn filler_rows() -> Vec<Row> {
         FILLER
             .iter()
             .map(|(name, description, category)| Row {
-                name,
+                label: format!("/{name}"),
                 description,
-                category,
+                trailing: category,
+            })
+            .collect()
+    }
+
+    /// Returns the rows of the synthetic value list.
+    fn value_rows() -> Vec<Row> {
+        VALUES
+            .iter()
+            .map(|value| Row {
+                label: value.value.to_owned(),
+                description: value.description,
+                trailing: ARGUMENT[0].name,
             })
             .collect()
     }
@@ -434,54 +505,73 @@ mod tests {
         assert_eq!(
             band_rows(MAX_COMMAND_ROWS + 1),
             BAND_FRAME_ROWS + 6,
-            "the first hidden command costs one row: the report"
+            "the first hidden row costs one row: the report"
         );
         assert_eq!(
             band_rows(FILLER.len()),
             BAND_FRAME_ROWS + 6,
-            "every further hidden command is reported on that same row"
+            "every further hidden row is reported on that same row"
         );
     }
 
     #[test]
     fn the_columns_and_their_gaps_fill_the_band_exactly() {
-        for inner in [MARKER_COLUMNS, MARKER_COLUMNS + 1, 12, 13, 20, 21, 40, 100] {
-            assert_eq!(
-                Columns::of(inner).used(),
-                inner,
-                "the cells and their gaps fill {inner} columns exactly"
-            );
+        for modifier in [MenuKind::Command, MenuKind::Argument(ARGUMENT[0])] {
+            for inner in [MARKER_COLUMNS, MARKER_COLUMNS + 1, 12, 13, 20, 21, 40, 100] {
+                assert_eq!(
+                    Columns::of(modifier, inner).used(),
+                    inner,
+                    "the cells and their gaps fill {inner} columns exactly for {modifier:?}"
+                );
+            }
         }
     }
 
     #[test]
     fn a_wide_band_shows_all_three_columns_and_a_narrow_one_drops_them_whole() {
-        let wide = Columns::of(80);
+        let wide = Columns::of(MenuKind::Command, 80);
         assert!(
-            wide.command >= display_width("/sessions"),
-            "the command column fits every registered command"
+            wide.label >= display_width("/sessions"),
+            "the first column fits every registered command"
         );
         assert!(wide.description > 0, "a wide band shows the description");
-        assert!(wide.category > 0, "a wide band shows the category");
+        assert!(wide.trailing > 0, "a wide band shows the trailing column");
 
-        let two_columns = Columns::of(MARKER_COLUMNS + wide.command);
+        let two_columns = Columns::of(MenuKind::Command, MARKER_COLUMNS + wide.label);
         assert_eq!(
-            two_columns.category, 0,
-            "the category is the first column a narrow band drops"
+            two_columns.trailing, 0,
+            "the trailing cell is the first column a narrow band drops"
         );
         assert_eq!(
             two_columns.description, 0,
             "a band with no room for the description drops it whole"
         );
         assert_eq!(
-            two_columns.command, wide.command,
-            "the command column keeps every registered command visible"
+            two_columns.label, wide.label,
+            "the first column keeps every registered command visible"
         );
 
-        let degenerate = Columns::of(MARKER_COLUMNS - 1);
+        let degenerate = Columns::of(MenuKind::Command, MARKER_COLUMNS - 1);
         assert_eq!(
-            degenerate.command, 0,
+            degenerate.label, 0,
             "below the marker's own width no cell can be shown"
+        );
+    }
+
+    #[test]
+    fn an_argument_band_sizes_its_cells_from_the_declared_values() {
+        let columns = Columns::of(MenuKind::Argument(ARGUMENT[0]), 80);
+        assert!(
+            columns.label >= display_width("square"),
+            "the first column fits every declared value"
+        );
+        assert!(
+            columns.trailing >= display_width("shape"),
+            "the trailing column names the argument"
+        );
+        assert!(
+            columns.label < display_width("/sessions"),
+            "a value band does not reserve the command vocabulary's columns"
         );
     }
 
@@ -491,6 +581,7 @@ mod tests {
         let band = band(
             rows,
             0,
+            MenuKind::Command,
             usize::from(BAND_WIDTH),
             band_rows(rows.len()),
             LIGHT,
@@ -514,6 +605,7 @@ mod tests {
         let band = band(
             &rows,
             1,
+            MenuKind::Command,
             usize::from(BAND_WIDTH),
             band_rows(rows.len()),
             LIGHT,
@@ -538,7 +630,7 @@ mod tests {
             text.contains("the first synthetic command"),
             "the description column"
         );
-        assert!(text.contains("Fixture"), "the category column");
+        assert!(text.contains("Fixture"), "the trailing column");
         assert_eq!(
             text.matches("> ").count(),
             1,
@@ -551,6 +643,39 @@ mod tests {
         assert!(
             !app.get_line(1).contains("> "),
             "the other rows keep the aligned blank marker"
+        );
+    }
+
+    #[test]
+    fn a_value_band_lists_the_arguments_values_in_its_own_three_cells() {
+        let rows = value_rows();
+        let band = band(
+            &rows,
+            1,
+            MenuKind::Argument(ARGUMENT[0]),
+            usize::from(BAND_WIDTH),
+            band_rows(rows.len()),
+            LIGHT,
+        );
+        let app = TestApp::with_size(band, BAND_WIDTH, band_rows(rows.len()));
+        let text = app.screen_text();
+        assert!(
+            text.contains("arguments"),
+            "the frame titles the argument band"
+        );
+        assert!(text.contains("round"), "the first value is shown");
+        assert!(text.contains("square"), "the second value is shown");
+        assert!(
+            text.contains("the round fixture shape"),
+            "the description column"
+        );
+        assert!(
+            text.contains("shape"),
+            "the trailing column names the argument"
+        );
+        assert!(
+            app.get_line(2).contains("> square"),
+            "the highlight follows the state"
         );
     }
 }
