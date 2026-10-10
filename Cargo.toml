@@ -16,6 +16,10 @@ default-members = [
   "crates/intention-proto",
   "crates/intention-config",
 ]
+# `vendor/revue` is a locally patched third-party crate consumed through
+# `[patch.crates-io]`; excluding it keeps it out of the workspace so workspace
+# lint, format, coverage, and architecture policy stay scoped to our crates.
+exclude = ["vendor/revue"]
 resolver = "3"
 
 [workspace.package]
@@ -61,3 +65,9 @@ debug = 1
 # coverage, and fixture passes in CI.
 [profile.dev.package."*"]
 opt-level = 2
+
+# `revue` is patched to a locally vendored 3.9.1 copy whose only behavioral
+# change is a configurable quit key (`AppBuilder::quit_key`); see
+# `vendor/revue/PATCH.md`. Drop the patch once upstream offers the option.
+[patch.crates-io]
+revue = { path = "vendor/revue" }

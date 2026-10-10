@@ -1,0 +1,272 @@
+//! Zen Mode widget for distraction-free content viewing
+//!
+//! Provides a fullscreen overlay that hides all other UI elements,
+//! focusing only on the wrapped content with optional padding and styling.
+//!
+//! Inspired by eilmeldung's ArticleContentDistractionFree mode.
+
+use crate::style::Color;
+use crate::widget::traits::{RenderContext, View, WidgetProps};
+use crate::{impl_props_builders, impl_styled_view};
+
+/// Zen Mode wrapper for distraction-free content display
+///
+/// Wraps any View and provides a toggle between normal and fullscreen modes.
+/// In zen mode, the content fills the entire screen with configurable padding.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use revue::widget::{zen, text, Text};
+///
+/// let content = Text::new("Focus on this content...");
+/// let mut zen_view = zen(content)
+///     .padding(4)
+///     .bg(Color::rgb(20, 20, 30));
+///
+/// // Toggle zen mode
+/// zen_view.toggle();
+///
+/// // Check state
+/// if zen_view.is_enabled() {
+///     // Renders fullscreen
+/// }
+/// ```
+pub struct ZenMode {
+    /// Child content view
+    content: Box<dyn View>,
+    /// Whether zen mode is active
+    enabled: bool,
+    /// Horizontal padding in zen mode
+    padding_x: u16,
+    /// Vertical padding in zen mode
+    padding_y: u16,
+    /// Background color in zen mode
+    /// The color the builder named, if it named one - see #656.
+    bg_color: Option<Color>,
+    /// Optional overlay opacity (0.0-1.0) for dimming
+    dim_opacity: f32,
+    /// Whether to center content vertically
+    center_vertical: bool,
+    /// Widget properties
+    props: WidgetProps,
+}
+
+/// The fill a zen-mode wrapper uses when nothing says otherwise.
+///
+/// Named so `background_or` can tell "the builder set this" from "the builder
+/// said nothing" - the two are the same value in a plain `Color` field.
+const ZEN_BG: Color = Color::rgb(15, 15, 25);
+
+impl ZenMode {
+    /// Create a new zen mode wrapper
+    pub fn new(content: impl View + 'static) -> Self {
+        Self {
+            content: Box::new(content),
+            enabled: false,
+            padding_x: 4,
+            padding_y: 2,
+            bg_color: None,
+            dim_opacity: 0.0,
+            center_vertical: false,
+            props: WidgetProps::new(),
+        }
+    }
+
+    /// Set horizontal and vertical padding
+    pub fn padding(mut self, padding: u16) -> Self {
+        self.padding_x = padding;
+        self.padding_y = padding;
+        self
+    }
+
+    /// Set horizontal padding
+    pub fn padding_x(mut self, padding: u16) -> Self {
+        self.padding_x = padding;
+        self
+    }
+
+    /// Set vertical padding
+    pub fn padding_y(mut self, padding: u16) -> Self {
+        self.padding_y = padding;
+        self
+    }
+
+    /// Set background color
+    pub fn bg(mut self, color: Color) -> Self {
+        self.bg_color = Some(color);
+        self
+    }
+
+    /// Set dim opacity for transition effect (0.0 = no dim, 1.0 = full dim)
+    #[deprecated(
+        since = "3.7.0",
+        note = "never read: zen mode fills its whole area and draws only its content, so there is nothing around it to dim"
+    )]
+    pub fn dim(mut self, opacity: f32) -> Self {
+        self.dim_opacity = opacity.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Center content vertically in zen mode
+    ///
+    /// The content gets the height it [`measure`](View::measure)s at; a
+    /// content that does not measure fills the padded area as before.
+    pub fn center(mut self) -> Self {
+        self.center_vertical = true;
+        self
+    }
+
+    /// Enable zen mode
+    pub fn enable(&mut self) {
+        self.enabled = true;
+    }
+
+    /// Disable zen mode
+    pub fn disable(&mut self) {
+        self.enabled = false;
+    }
+
+    /// Toggle zen mode
+    pub fn toggle(&mut self) {
+        self.enabled = !self.enabled;
+    }
+
+    /// Check if zen mode is enabled
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Set enabled state
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    /// Get reference to inner content
+    pub fn content(&self) -> &dyn View {
+        self.content.as_ref()
+    }
+
+    /// Get mutable reference to inner content
+    pub fn content_mut(&mut self) -> &mut dyn View {
+        self.content.as_mut()
+    }
+
+    // Getters for testing
+    #[doc(hidden)]
+    pub fn get_padding_x(&self) -> u16 {
+        self.padding_x
+    }
+
+    #[doc(hidden)]
+    pub fn get_padding_y(&self) -> u16 {
+        self.padding_y
+    }
+
+    #[doc(hidden)]
+    pub fn get_bg_color(&self) -> Option<Color> {
+        self.bg_color
+    }
+
+    #[deprecated(
+        since = "3.7.0",
+        note = "never read: zen mode fills its whole area and draws only its content, so there is nothing around it to dim"
+    )]
+    #[doc(hidden)]
+    pub fn get_dim_opacity(&self) -> f32 {
+        self.dim_opacity
+    }
+
+    #[doc(hidden)]
+    pub fn get_center_vertical(&self) -> bool {
+        self.center_vertical
+    }
+}
+
+impl Default for ZenMode {
+    fn default() -> Self {
+        Self::new(super::text(""))
+    }
+}
+
+impl View for ZenMode {
+    /// Off, it is just its content and measures as that. On, it paints its
+    /// background over the whole area, so it fills.
+    fn measure(&self, max_width: u16, max_height: u16) -> Option<(u16, u16)> {
+        if self.enabled {
+            None
+        } else {
+            self.content.measure(max_width, max_height)
+        }
+    }
+
+    /// Off, what its content fills; on, everything.
+    fn fills(&self) -> crate::widget::Fill {
+        if self.enabled {
+            crate::widget::Fill::BOTH
+        } else {
+            self.content.fills()
+        }
+    }
+
+    fn render(&self, ctx: &mut RenderContext) {
+        let area = ctx.area;
+
+        if self.enabled {
+            // Zen mode: fill background and render content with padding
+            let bg = self.bg_color.unwrap_or_else(|| ctx.css_background(ZEN_BG));
+            ctx.fill_box_background(bg);
+
+            // Calculate padded area
+            let content_width = area.width.saturating_sub(self.padding_x * 2);
+            let content_height = area.height.saturating_sub(self.padding_y * 2);
+
+            if content_width > 0 && content_height > 0 {
+                // Centered, the content gets the height it measures at, in the
+                // middle of the padded area. A content that does not measure
+                // keeps the whole area.
+                let (offset_y, height) = if self.center_vertical {
+                    match self.content.measure(content_width, content_height) {
+                        Some((_, h)) if h < content_height => ((content_height - h) / 2, h),
+                        _ => (0, content_height),
+                    }
+                } else {
+                    (0, content_height)
+                };
+                let content_area = ctx.sub_area(
+                    self.padding_x,
+                    self.padding_y + offset_y,
+                    content_width,
+                    height,
+                );
+
+                ctx.render_child(self.content.as_ref(), content_area);
+            }
+        } else {
+            // Normal mode: just render content in full area
+            self.content.render(ctx);
+        }
+    }
+
+    crate::impl_view_meta!("ZenMode");
+}
+
+impl_styled_view!(ZenMode);
+impl_props_builders!(ZenMode);
+
+/// Helper function to create a zen mode wrapper
+pub fn zen(content: impl View + 'static) -> ZenMode {
+    ZenMode::new(content)
+}
+
+/// Helper function to create a zen mode wrapper with dark theme
+pub fn zen_dark(content: impl View + 'static) -> ZenMode {
+    ZenMode::new(content).bg(Color::rgb(15, 15, 25)).padding(4)
+}
+
+/// Helper function to create a zen mode wrapper with light theme
+pub fn zen_light(content: impl View + 'static) -> ZenMode {
+    ZenMode::new(content)
+        .bg(Color::rgb(250, 250, 250))
+        .padding(4)
+}

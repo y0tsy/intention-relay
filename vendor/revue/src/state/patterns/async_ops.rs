@@ -1,0 +1,468 @@
+//! Async operation patterns using mpsc channels
+//!
+//! Provides patterns for handling background operations in TUI apps.
+//! Uses standard library threads and channels (no async runtime needed).
+//!
+//! # Example
+//!
+//! ```
+//! use revue::patterns::AsyncTask;
+//!
+//! #[derive(Clone)]
+//! struct Client;
+//!
+//! impl Client {
+//!     fn fetch_items(&self) -> Result<Vec<String>, String> {
+//!         Ok(vec!["one".into(), "two".into()])
+//!     }
+//! }
+//!
+//! struct App {
+//!     client: Client,
+//!     items: Vec<String>,
+//!     error: Option<String>,
+//!     loading: bool,
+//!     fetch_task: Option<AsyncTask<Result<Vec<String>, String>>>,
+//! }
+//!
+//! impl App {
+//!     fn start_fetch(&mut self) {
+//!         let client = self.client.clone();
+//!         let task = AsyncTask::spawn(move || client.fetch_items());
+//!
+//!         self.fetch_task = Some(task);
+//!         self.loading = true;
+//!     }
+//!
+//!     fn poll(&mut self) -> bool {
+//!         let mut needs_redraw = false;
+//!
+//!         if let Some(task) = &mut self.fetch_task {
+//!             if let Some(result) = task.try_recv() {
+//!                 match result {
+//!                     Ok(items) => self.items = items,
+//!                     Err(e) => self.error = Some(format!("Error: {}", e)),
+//!                 }
+//!                 self.fetch_task = None;
+//!                 self.loading = false;
+//!                 needs_redraw = true;
+//!             }
+//!         }
+//!
+//!         needs_redraw
+//!     }
+//! }
+//!
+//! let mut app = App {
+//!     client: Client,
+//!     items: Vec::new(),
+//!     error: None,
+//!     loading: false,
+//!     fetch_task: None,
+//! };
+//! app.start_fetch();
+//! while !app.poll() {
+//!     std::thread::sleep(std::time::Duration::from_millis(1));
+//! }
+//! assert_eq!(app.items, ["one", "two"]);
+//! ```
+
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::thread::{self, JoinHandle};
+
+/// Async task with non-blocking result polling
+///
+/// Wraps a background thread operation with a channel receiver.
+/// Call `try_recv()` in your poll/animation loop to check for results.
+pub struct AsyncTask<T> {
+    rx: Receiver<T>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl<T: Send + 'static> AsyncTask<T> {
+    /// Spawn a new background task
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use revue::patterns::AsyncTask;
+    ///
+    /// # fn fetch_data_from_api() -> String { String::new() }
+    /// let task = AsyncTask::spawn(|| {
+    ///     // Heavy computation or I/O
+    ///     fetch_data_from_api()
+    /// });
+    /// ```
+    pub fn spawn<F>(f: F) -> Self
+    where
+        F: FnOnce() -> T + Send + 'static,
+    {
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let result = f();
+            let _ = tx.send(result);
+        });
+
+        Self {
+            rx,
+            handle: Some(handle),
+        }
+    }
+
+    /// Try to receive result (non-blocking)
+    ///
+    /// Returns `Some(result)` if task completed, `None` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use revue::patterns::AsyncTask;
+    ///
+    /// let mut task = AsyncTask::spawn(|| 42);
+    ///
+    /// // On each tick:
+    /// if let Some(result) = task.try_recv() {
+    ///     // Task completed!
+    ///     println!("got {}", result);
+    /// }
+    /// ```
+    pub fn try_recv(&mut self) -> Option<T> {
+        match self.rx.try_recv() {
+            Ok(result) => Some(result),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => None,
+        }
+    }
+
+    /// Check if task is still running
+    ///
+    /// Once this returns `false`, the result (if the task did not panic) is
+    /// ready for [`try_recv`](Self::try_recv) or [`wait`](Self::wait).
+    /// Checking does not take the result.
+    pub fn is_running(&self) -> bool {
+        self.handle.as_ref().is_some_and(|h| !h.is_finished())
+    }
+
+    /// Wait for task to complete (blocking)
+    ///
+    /// Only use this if you know the task will complete quickly.
+    pub fn wait(self) -> Option<T> {
+        self.rx.recv().ok()
+    }
+
+    /// Cancel the task
+    ///
+    /// Drops the receiver and waits for the background thread to finish, so
+    /// this blocks until the task's closure returns.
+    pub fn cancel(mut self) {
+        drop(self.rx);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+// Removed AsyncPoller trait - just implement poll() directly in your App
+
+/// Spinner frames for loading indicators
+pub const SPINNER_FRAMES: &[&str] = &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+
+/// Get spinner character for current frame
+///
+/// # Example
+///
+/// ```
+/// use revue::patterns::spinner_char;
+///
+/// // Advance the frame on each tick; it wraps around
+/// assert_eq!(spinner_char(0), "⣾");
+/// assert_eq!(spinner_char(8), spinner_char(0));
+/// ```
+pub fn spinner_char(frame: usize) -> &'static str {
+    SPINNER_FRAMES[frame % SPINNER_FRAMES.len()]
+}
+
+/// Helper to run a function in background and get a channel
+///
+/// Returns `(Receiver, JoinHandle)` for manual management.
+///
+/// # Example
+///
+/// ```
+/// use revue::patterns::async_ops::spawn_task;
+///
+/// let (rx, handle) = spawn_task(|| 6 * 7);
+/// assert_eq!(rx.recv(), Ok(42));
+/// handle.join().unwrap();
+/// ```
+pub fn spawn_task<T, F>(f: F) -> (Receiver<T>, JoinHandle<()>)
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let result = f();
+        let _ = tx.send(result);
+    });
+    (rx, handle)
+}
+
+/// Helper for spawning task with sender access
+///
+/// Useful when you need to send multiple updates.
+///
+/// # Example
+///
+/// ```
+/// use revue::patterns::async_ops::spawn_with_sender;
+/// use std::{thread, time::Duration};
+///
+/// let rx = spawn_with_sender(|tx| {
+///     for i in 0..10 {
+///         tx.send(i).unwrap();
+///         thread::sleep(Duration::from_millis(1));
+///     }
+/// });
+/// // Progress updates arrive as they are sent
+/// assert_eq!(rx.iter().sum::<i32>(), 45);
+/// ```
+pub fn spawn_with_sender<T, F>(f: F) -> Receiver<T>
+where
+    T: Send + 'static,
+    F: FnOnce(Sender<T>) + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        f(tx);
+    });
+    rx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    // AsyncTask tests
+    #[test]
+    fn test_async_task_spawn_and_wait() {
+        let task = AsyncTask::spawn(|| 42);
+        assert_eq!(task.wait(), Some(42));
+    }
+
+    #[test]
+    fn test_async_task_spawn_string() {
+        let task = AsyncTask::spawn(|| "hello".to_string());
+        assert_eq!(task.wait(), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn test_async_task_spawn_vec() {
+        let task = AsyncTask::spawn(|| vec![1, 2, 3]);
+        assert_eq!(task.wait(), Some(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn test_async_task_try_recv_completed() {
+        let mut task = AsyncTask::spawn(|| 42);
+        // Wait for completion
+        thread::sleep(Duration::from_millis(10));
+        // May or may not be ready, but shouldn't panic
+        let _ = task.try_recv();
+    }
+
+    #[test]
+    fn test_async_task_cancel() {
+        let task = AsyncTask::spawn(|| {
+            thread::sleep(Duration::from_millis(1000));
+            42
+        });
+        // Cancel should not panic
+        task.cancel();
+    }
+
+    #[test]
+    fn test_async_task_timing() {
+        let task = AsyncTask::spawn(|| {
+            thread::sleep(Duration::from_millis(5));
+            42
+        });
+
+        // Poll with timeout instead of fixed sleep
+        let mut task = task;
+        let mut result = None;
+        for _ in 0..100 {
+            if let Some(r) = task.try_recv() {
+                result = Some(r);
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        assert_eq!(result, Some(42));
+    }
+
+    #[test]
+    fn test_async_task_is_running() {
+        use std::sync::{Arc, Barrier};
+
+        // Two barriers: one to signal task started, one to signal task can finish
+        let started = Arc::new(Barrier::new(2));
+        let finish = Arc::new(Barrier::new(2));
+        let started_clone = started.clone();
+        let finish_clone = finish.clone();
+
+        let task = AsyncTask::spawn(move || {
+            started_clone.wait(); // Signal: task has started
+            finish_clone.wait(); // Wait: main thread allows finish
+            42
+        });
+
+        // Wait until task has started
+        started.wait();
+
+        // Now task is blocked at finish barrier, so it's definitely running
+        assert!(task.is_running(), "Task should be running while blocked");
+
+        // Allow task to finish
+        finish.wait();
+
+        // Wait for completion deterministically
+        let result = task.wait();
+        assert_eq!(result, Some(42));
+    }
+
+    // Spinner tests
+    #[test]
+    fn test_spinner_frames_count() {
+        assert_eq!(SPINNER_FRAMES.len(), 8);
+    }
+
+    #[test]
+    fn test_spinner_char_first() {
+        assert_eq!(spinner_char(0), "⣾");
+    }
+
+    #[test]
+    fn test_spinner_char_second() {
+        assert_eq!(spinner_char(1), "⣽");
+    }
+
+    #[test]
+    fn test_spinner_char_all_frames() {
+        assert_eq!(spinner_char(0), "⣾");
+        assert_eq!(spinner_char(1), "⣽");
+        assert_eq!(spinner_char(2), "⣻");
+        assert_eq!(spinner_char(3), "⢿");
+        assert_eq!(spinner_char(4), "⡿");
+        assert_eq!(spinner_char(5), "⣟");
+        assert_eq!(spinner_char(6), "⣯");
+        assert_eq!(spinner_char(7), "⣷");
+    }
+
+    #[test]
+    fn test_spinner_char_wraps() {
+        assert_eq!(spinner_char(8), "⣾"); // wraps to 0
+        assert_eq!(spinner_char(9), "⣽"); // wraps to 1
+        assert_eq!(spinner_char(16), "⣾"); // wraps to 0
+    }
+
+    #[test]
+    fn test_spinner_char_large_number() {
+        // Should not panic with large frame numbers
+        let _ = spinner_char(1000);
+        let _ = spinner_char(usize::MAX);
+    }
+
+    // spawn_task tests
+    #[test]
+    fn test_spawn_task_int() {
+        let (rx, handle) = spawn_task(|| 42);
+        assert_eq!(rx.recv().unwrap(), 42);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_spawn_task_string() {
+        let (rx, handle) = spawn_task(|| "result".to_string());
+        assert_eq!(rx.recv().unwrap(), "result");
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_spawn_task_result() {
+        let (rx, handle) = spawn_task(|| -> Result<i32, &str> { Ok(42) });
+        assert_eq!(rx.recv().unwrap(), Ok(42));
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_spawn_task_computation() {
+        let (rx, _) = spawn_task(|| {
+            let mut sum = 0;
+            for i in 0..100 {
+                sum += i;
+            }
+            sum
+        });
+        assert_eq!(rx.recv().unwrap(), 4950);
+    }
+
+    // spawn_with_sender tests
+    #[test]
+    fn test_spawn_with_sender_single() {
+        let rx = spawn_with_sender(|tx| {
+            tx.send(42).unwrap();
+        });
+        assert_eq!(rx.recv().unwrap(), 42);
+    }
+
+    #[test]
+    fn test_spawn_with_sender_multiple() {
+        let rx = spawn_with_sender(|tx| {
+            tx.send(1).unwrap();
+            tx.send(2).unwrap();
+            tx.send(3).unwrap();
+        });
+
+        assert_eq!(rx.recv().unwrap(), 1);
+        assert_eq!(rx.recv().unwrap(), 2);
+        assert_eq!(rx.recv().unwrap(), 3);
+    }
+
+    #[test]
+    fn test_spawn_with_sender_collect() {
+        let rx = spawn_with_sender(|tx| {
+            for i in 0..5 {
+                tx.send(i).unwrap();
+            }
+        });
+
+        let results: Vec<i32> = rx.iter().collect();
+        assert_eq!(results, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_spawn_with_sender_strings() {
+        let rx = spawn_with_sender(|tx| {
+            tx.send("hello".to_string()).unwrap();
+            tx.send("world".to_string()).unwrap();
+        });
+
+        assert_eq!(rx.recv().unwrap(), "hello");
+        assert_eq!(rx.recv().unwrap(), "world");
+    }
+
+    #[test]
+    fn test_spawn_with_sender_channel_closes() {
+        let rx = spawn_with_sender(|tx| {
+            tx.send(1).unwrap();
+            // Channel closes when tx is dropped
+        });
+
+        assert_eq!(rx.recv().unwrap(), 1);
+        // After sender is dropped, recv returns error
+        assert!(rx.recv().is_err());
+    }
+}

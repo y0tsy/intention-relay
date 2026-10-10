@@ -1,0 +1,482 @@
+//! Widget traits and common types for Revue components
+//!
+//! This module defines the core traits that all widgets implement, along with
+//! supporting types for rendering, events, and state management.
+//!
+//! # Core Traits
+//!
+//! | Trait | Description | Use Case |
+//! |-------|-------------|----------|
+//! | [`View`] | Core rendering trait | All renderable widgets |
+//! | [`StyledView`] | View with CSS styling | Styled widgets |
+//! | [`Interactive`] | Handle keyboard/mouse | Interactive widgets |
+//! | [`Draggable`] | Drag and drop support | Draggable widgets |
+//!
+//! # View Trait
+//!
+//! The [`View`] trait is the foundation of all widgets:
+//!
+//! ```rust,ignore
+//! use revue::widget::View;
+//!
+//! pub struct MyWidget;
+//!
+//! impl View for MyWidget {
+//!     fn render(&self, ctx: &mut RenderContext) {
+//!         // Render widget to context
+//!         Text::new("Hello").render(ctx);
+//!     }
+//! }
+//! ```
+//!
+//! # StyledView Trait
+//!
+//! [`StyledView`] extends View with CSS styling support:
+//!
+//! ```rust,ignore
+//! use revue::widget::StyledView;
+//!
+//! impl StyledView for MyWidget {
+//!     // Inherit CSS styling support
+//!     fn style(&self) -> Style {
+//!         Style::default()
+//!     }
+//! }
+//! ```
+//!
+//! # Interactive Trait
+//!
+//! [`Interactive`] enables keyboard and mouse event handling:
+//!
+//! ```rust,ignore
+//! use revue::widget::Interactive;
+//!
+//! impl Interactive for MyWidget {
+//!     fn handle_key(&mut self, key: &KeyEvent) -> EventResult {
+//!         match key.key {
+//!             Key::Enter => EventResult::Consumed,
+//!             _ => EventResult::Ignored,
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! # Common Types
+//!
+//! | Type | Description |
+//! |------|-------------|
+//! | [`Element`] | Widget element container |
+//! | [`RenderContext`] | Rendering context and utilities |
+//! | [`WidgetState`] | Common widget state (focus, disabled, colors) |
+//! | [`EventResult`] | Event handling result |
+//! | [`FocusStyle`] | Focus indicator style |
+//!
+//! # Builder Macros
+//!
+//! The `impl_state_builders!` macro generates builder methods for widgets:
+//!
+//! ```rust,ignore
+//! struct MyWidget {
+//!     state: WidgetState,
+//! }
+//!
+//! impl_state_builders!(MyWidget);
+//!
+//! // Now available:
+//! let widget = MyWidget { state: WidgetState::default() }
+//!     .focused(true)
+//!     .disabled(false)
+//!     .fg(Color::Blue)
+//!     .bg(Color::Black);
+//! ```
+
+mod draggable;
+mod element;
+mod event;
+mod interactive;
+pub(crate) mod render_context;
+mod styled_view;
+mod symbols;
+mod timeout;
+mod view;
+mod widget_state;
+
+// Re-export all public types
+pub use draggable::Draggable;
+pub use element::Element;
+pub use event::{EventResult, FocusStyle};
+pub use interactive::{Interactive, ToggleWidget};
+pub use render_context::{OverlayEntry, OverlayQueue, ProgressBarConfig, RenderContext};
+pub use styled_view::StyledView;
+pub use symbols::Symbols;
+pub use timeout::Timeout;
+pub use view::{Fill, View};
+pub use widget_state::{WidgetProps, WidgetState, DISABLED_BG, DISABLED_FG};
+
+// =============================================================================
+// Builder Macros
+// =============================================================================
+
+/// Generate builder methods for widgets with `state: WidgetState` field.
+///
+/// This macro generates the following methods:
+/// - `focused(self, bool) -> Self` - Set focused state
+/// - `disabled(self, bool) -> Self` - Set disabled state
+/// - `fg(self, Color) -> Self` - Set foreground color
+/// - `bg(self, Color) -> Self` - Set background color
+/// - `is_focused(&self) -> bool` - Check if focused
+/// - `is_disabled(&self) -> bool` - Check if disabled
+/// - `set_focused(&mut self, bool)` - Mutably set focused state
+///
+/// # Example
+/// ```rust,ignore
+/// struct MyWidget {
+///     state: WidgetState,
+///     props: WidgetProps,
+/// }
+///
+/// impl_state_builders!(MyWidget);
+/// ```
+#[macro_export]
+macro_rules! impl_state_builders {
+    ($widget:ty) => {
+        impl $widget {
+            /// Set focused state
+            pub fn focused(mut self, focused: bool) -> Self {
+                self.state.focused = focused;
+                self
+            }
+
+            /// Set disabled state
+            pub fn disabled(mut self, disabled: bool) -> Self {
+                self.state.disabled = disabled;
+                self
+            }
+
+            /// Set foreground color
+            pub fn fg(mut self, color: $crate::style::Color) -> Self {
+                self.state.fg = Some(color);
+                self
+            }
+
+            /// Set background color
+            pub fn bg(mut self, color: $crate::style::Color) -> Self {
+                self.state.bg = Some(color);
+                self
+            }
+
+            /// Check if widget is focused
+            pub fn is_focused(&self) -> bool {
+                self.state.focused
+            }
+
+            /// Check if widget is disabled
+            pub fn is_disabled(&self) -> bool {
+                self.state.disabled
+            }
+
+            /// Set focused state (mutable)
+            pub fn set_focused(&mut self, focused: bool) {
+                self.state.focused = focused;
+            }
+        }
+    };
+}
+
+/// Generate builder methods for widgets with `props: WidgetProps` field.
+///
+/// This macro generates the following methods:
+/// - `element_id(self, impl Into<String>) -> Self` - Set CSS element ID
+/// - `keyed(self, impl Into<WidgetKey>) -> Self` - Set the reconciliation key
+/// - `class(self, impl Into<String>) -> Self` - Add a CSS class
+/// - `classes(self, IntoIterator<Item=S>) -> Self` - Add multiple CSS classes
+///
+/// # Example
+/// ```rust,ignore
+/// struct MyWidget {
+///     props: WidgetProps,
+/// }
+///
+/// impl_props_builders!(MyWidget);
+/// ```
+#[macro_export]
+macro_rules! impl_props_builders {
+    ($widget:ty) => {
+        impl $widget {
+            /// Set element ID for CSS selector (#id)
+            pub fn element_id(mut self, id: impl Into<String>) -> Self {
+                self.props.id = Some(id.into());
+                self
+            }
+
+            /// Set the reconciliation key - this widget's identity across frames
+            ///
+            /// Give it the identity of the *data*, never the loop index. See
+            /// [`WidgetKey`](crate::dom::WidgetKey).
+            ///
+            /// Named `keyed` rather than `key` because `StatusBar::key`
+            /// already means "keyboard shortcut"; two inherent methods of the
+            /// same name cannot coexist.
+            pub fn keyed(mut self, key: impl Into<$crate::dom::WidgetKey>) -> Self {
+                self.props.key = Some(key.into());
+                self
+            }
+
+            /// Add a CSS class
+            pub fn class(mut self, class: impl Into<String>) -> Self {
+                let class_str = class.into();
+                if !self.props.classes.contains(&class_str) {
+                    self.props.classes.push(class_str);
+                }
+                self
+            }
+
+            /// Add multiple CSS classes
+            pub fn classes<I, S>(mut self, classes: I) -> Self
+            where
+                I: IntoIterator<Item = S>,
+                S: Into<String>,
+            {
+                for class in classes {
+                    let class_str = class.into();
+                    if !self.props.classes.contains(&class_str) {
+                        self.props.classes.push(class_str);
+                    }
+                }
+                self
+            }
+        }
+    };
+}
+
+/// Generate all common builder methods for widgets with both `state: WidgetState`
+/// and `props: WidgetProps` fields.
+///
+/// This is a convenience macro that combines `impl_state_builders!` and
+/// `impl_props_builders!`.
+///
+/// Generated methods:
+/// - State: `focused`, `disabled`, `fg`, `bg`, `is_focused`, `is_disabled`, `set_focused`
+/// - Props: `element_id`, `keyed`, `class`, `classes`
+///
+/// # Example
+/// ```rust,ignore
+/// struct MyWidget {
+///     label: String,
+///     state: WidgetState,
+///     props: WidgetProps,
+/// }
+///
+/// impl MyWidget {
+///     pub fn new(label: impl Into<String>) -> Self {
+///         Self {
+///             label: label.into(),
+///             state: WidgetState::new(),
+///             props: WidgetProps::new(),
+///         }
+///     }
+/// }
+///
+/// // Generates: focused, disabled, fg, bg, is_focused, is_disabled,
+/// //            set_focused, element_id, class, classes
+/// impl_widget_builders!(MyWidget);
+/// ```
+#[macro_export]
+macro_rules! impl_widget_builders {
+    ($widget:ty) => {
+        $crate::impl_state_builders!($widget);
+        $crate::impl_props_builders!($widget);
+    };
+}
+
+/// Generate View trait id(), classes(), key(), and meta() methods for widgets
+/// with props.
+///
+/// This macro generates the id(), classes(), key(), inline_style() and meta()
+/// methods for the View trait that delegate to WidgetProps.
+///
+/// # Example
+/// ```rust,ignore
+/// impl View for MyWidget {
+///     fn render(&self, ctx: &mut RenderContext) {
+///         // ... rendering logic
+///     }
+///
+///     crate::impl_view_meta!("MyWidget");
+/// }
+/// ```
+#[macro_export]
+macro_rules! impl_view_meta {
+    // The widget can hold keyboard focus, and its declared `disabled` lives on
+    // its `state: WidgetState` field.
+    ($name:expr, focusable, disabled: state) => {
+        $crate::impl_view_meta!(@common);
+        fn meta(&self) -> $crate::dom::WidgetMeta {
+            self.props.build_meta($name, true, self.state.disabled)
+        }
+    };
+    // Focusable, with `disabled` as a field on the widget itself.
+    ($name:expr, focusable, disabled: direct) => {
+        $crate::impl_view_meta!(@common);
+        fn meta(&self) -> $crate::dom::WidgetMeta {
+            self.props.build_meta($name, true, self.disabled)
+        }
+    };
+    // Focusable, with no notion of being disabled.
+    ($name:expr, focusable) => {
+        $crate::impl_view_meta!(@common);
+        fn meta(&self) -> $crate::dom::WidgetMeta {
+            self.props.build_meta($name, true, false)
+        }
+    };
+    ($name:expr) => {
+        $crate::impl_view_meta!(@common);
+        fn meta(&self) -> $crate::dom::WidgetMeta {
+            self.props.build_meta($name, false, false)
+        }
+    };
+    // Each arm writes its own `meta` rather than delegating, because a `self.…`
+    // path cannot be captured as a fragment and passed to another arm - `self`
+    // resolves against the arm that wrote it, not the impl it lands in.
+    (@common) => {
+        fn id(&self) -> Option<&str> {
+            self.props.id.as_deref()
+        }
+
+        fn classes(&self) -> &[String] {
+            &self.props.classes
+        }
+
+        fn key(&self) -> Option<$crate::dom::WidgetKey> {
+            self.props.key.clone()
+        }
+
+        fn inline_style(&self) -> Option<$crate::style::Style> {
+            self.props.inline_style.clone()
+        }
+    };
+}
+
+/// Generate View trait implementation for StyledView widgets.
+///
+/// This macro generates View trait methods that delegate to WidgetProps
+/// for id() and classes() methods.
+///
+/// # Example
+/// ```rust,ignore
+/// struct MyWidget {
+///     props: WidgetProps,
+/// }
+///
+/// impl View for MyWidget {
+///     fn render(&self, ctx: &mut RenderContext) {
+///         // ... rendering logic
+///     }
+/// }
+///
+/// impl_styled_view!(MyWidget);
+/// ```
+#[macro_export]
+macro_rules! impl_styled_view {
+    ($widget:ty) => {
+        impl $crate::widget::traits::StyledView for $widget {
+            fn set_id(&mut self, id: impl Into<String>) {
+                self.props.id = Some(id.into());
+            }
+
+            fn add_class(&mut self, class: impl Into<String>) {
+                let class_str = class.into();
+                if !self.props.classes.contains(&class_str) {
+                    self.props.classes.push(class_str);
+                }
+            }
+
+            fn remove_class(&mut self, class: &str) {
+                self.props.classes.retain(|c| c != class);
+            }
+
+            fn toggle_class(&mut self, class: &str) {
+                if self.props.classes.contains(&class.to_string()) {
+                    self.remove_class(class);
+                } else {
+                    self.add_class(class);
+                }
+            }
+
+            fn has_class(&self, class: &str) -> bool {
+                self.props.classes.contains(&class.to_string())
+            }
+        }
+    };
+}
+
+/// Generate standard `Interactive` focus management methods for widgets.
+///
+/// Use inside an `impl Interactive` block. Generates `focusable()`,
+/// `on_focus()`, and `on_blur()` methods.
+///
+/// # Variants
+///
+/// - `impl_focus_handlers!(state)` — for widgets with `state: WidgetState`
+/// - `impl_focus_handlers!(direct)` — for widgets with direct `disabled`/`focused` fields
+/// - `impl_focus_handlers!(state, no_blur)` / `impl_focus_handlers!(direct, no_blur)` —
+///   same but omits `on_blur()` so you can provide a custom implementation
+///
+/// # Example
+/// ```rust,ignore
+/// impl Interactive for MyWidget {
+///     fn handle_key(&mut self, event: &KeyEvent) -> EventResult { /* ... */ }
+///     crate::impl_focus_handlers!(state);
+/// }
+///
+/// // With custom on_blur:
+/// impl Interactive for MyDropdown {
+///     fn handle_key(&mut self, event: &KeyEvent) -> EventResult { /* ... */ }
+///     crate::impl_focus_handlers!(direct, no_blur);
+///     fn on_blur(&mut self) {
+///         self.focused = false;
+///         self.close_dropdown();
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! impl_focus_handlers {
+    (state) => {
+        fn focusable(&self) -> bool {
+            !self.state.disabled
+        }
+        fn on_focus(&mut self) {
+            self.state.focused = true;
+        }
+        fn on_blur(&mut self) {
+            self.state.focused = false;
+        }
+    };
+    (direct) => {
+        fn focusable(&self) -> bool {
+            !self.disabled
+        }
+        fn on_focus(&mut self) {
+            self.focused = true;
+        }
+        fn on_blur(&mut self) {
+            self.focused = false;
+        }
+    };
+    (state, no_blur) => {
+        fn focusable(&self) -> bool {
+            !self.state.disabled
+        }
+        fn on_focus(&mut self) {
+            self.state.focused = true;
+        }
+    };
+    (direct, no_blur) => {
+        fn focusable(&self) -> bool {
+            !self.disabled
+        }
+        fn on_focus(&mut self) {
+            self.focused = true;
+        }
+    };
+}

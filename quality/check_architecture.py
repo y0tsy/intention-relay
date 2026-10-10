@@ -60,7 +60,9 @@ def packages_by_name(metadata: dict[str, object]) -> dict[str, dict[str, object]
 
 
 def source_files(root: Path) -> list[Path]:
-    ignored = {"target", ".git", "fixtures", "__pycache__"}
+    # `vendor/` holds a third-party crate vendored under `[patch.crates-io]`;
+    # the raw-text scans below cover source this repository authors.
+    ignored = {"target", ".git", "fixtures", "__pycache__", "vendor"}
     return [
         path
         for path in root.rglob("*.rs")
@@ -421,7 +423,7 @@ def check_phase_policy(
     if not isinstance(state, dict):
         fail("missing [policy] table")
     phase = state.get("phase")
-    if phase != "slice15" or state.get("active_milestone") != phase:
+    if phase != "slice2" or state.get("active_milestone") != phase:
         fail("policy phase and active_milestone must name the live slice")
 
     active = string_list(state, "active_production_crates")

@@ -1,0 +1,147 @@
+//! Visual-related style property structures
+
+use super::types::{BorderStyle, Color, FontWeight, Overflow, TextAlign, TextDecoration};
+
+/// Visual style properties
+///
+/// Contains colors, border, opacity, and visibility properties.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VisualStyle {
+    /// Border style
+    ///
+    /// `None` is "the stylesheet said nothing"; `Some(BorderStyle::None)` is a
+    /// stylesheet asking for no border. A plain enum could not tell those
+    /// apart, so `border-style: none` could not remove a border the builder
+    /// drew. Same shape `gap` had before it became an `Option`.
+    pub border_style: Option<BorderStyle>,
+    /// Border color
+    pub border_color: Color,
+    /// Text/foreground color (INHERITED)
+    pub color: Color,
+    /// Background color
+    pub background: Color,
+    /// Opacity (0.0 to 1.0, INHERITED)
+    pub opacity: f32,
+    /// Visibility flag (INHERITED)
+    pub visible: bool,
+    /// Z-index for stacking order
+    pub z_index: i16,
+    /// Text alignment (INHERITED)
+    pub text_align: TextAlign,
+    /// Font weight (INHERITED)
+    pub font_weight: FontWeight,
+    /// Text decoration (not inherited)
+    pub text_decoration: TextDecoration,
+    /// Overflow behavior
+    pub overflow: Overflow,
+}
+
+impl VisualStyle {
+    /// Check if opacity is effectively full (1.0)
+    pub fn is_fully_opaque(&self) -> bool {
+        self.opacity >= 1.0
+    }
+
+    /// Check if opacity is effectively invisible (0.0)
+    pub fn is_invisible(&self) -> bool {
+        self.opacity <= 0.0
+    }
+}
+
+/// Apply opacity to a cell modifier. Returns true if the cell should be visible.
+pub fn apply_opacity(opacity: f32, modifier: &mut crate::render::Modifier) -> bool {
+    if opacity <= 0.0 || opacity < 0.5 {
+        return false;
+    }
+    if opacity < 1.0 {
+        *modifier |= crate::render::Modifier::DIM;
+    }
+    true
+}
+
+impl Default for VisualStyle {
+    fn default() -> Self {
+        Self {
+            border_style: None,
+            border_color: Color::default(),
+            color: Color::default(),
+            background: Color::default(),
+            opacity: 1.0,
+            visible: true,
+            z_index: 0,
+            text_align: TextAlign::default(),
+            font_weight: FontWeight::default(),
+            text_decoration: TextDecoration::default(),
+            overflow: Overflow::default(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_visual_style_default() {
+        let style = VisualStyle::default();
+        assert_eq!(style.border_style, None);
+        assert_eq!(style.border_color, Color::default());
+        assert_eq!(style.color, Color::default());
+        assert_eq!(style.background, Color::default());
+        assert_eq!(style.opacity, 1.0);
+        assert!(style.visible);
+        assert_eq!(style.z_index, 0);
+    }
+
+    #[test]
+    fn test_visual_style_clone() {
+        let style = VisualStyle {
+            opacity: 0.5,
+            ..Default::default()
+        };
+        let cloned = style;
+        assert_eq!(cloned.opacity, 0.5);
+    }
+
+    #[test]
+    fn test_visual_style_partial_eq() {
+        let style1 = VisualStyle::default();
+        let style2 = VisualStyle::default();
+        assert_eq!(style1, style2);
+    }
+
+    #[test]
+    fn test_visual_style_not_equal() {
+        let style1 = VisualStyle {
+            opacity: 0.5,
+            ..Default::default()
+        };
+        let style2 = VisualStyle::default();
+        assert_ne!(style1, style2);
+    }
+
+    #[test]
+    fn test_visual_style_copy_trait() {
+        let style1 = VisualStyle {
+            opacity: 0.5,
+            ..Default::default()
+        };
+        let style2 = style1;
+        assert_eq!(style2.opacity, 0.5);
+    }
+
+    #[test]
+    fn test_visual_style_debug() {
+        let style = VisualStyle::default();
+        let debug_str = format!("{:?}", style);
+        assert!(debug_str.contains("VisualStyle"));
+    }
+
+    #[test]
+    fn test_visual_style_default_values() {
+        let style = VisualStyle::default();
+        assert_eq!(style.opacity, 1.0);
+        assert!(style.visible);
+        assert_eq!(style.z_index, 0);
+    }
+}

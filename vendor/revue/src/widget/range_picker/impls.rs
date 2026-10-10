@@ -1,0 +1,956 @@
+//! Range picker builder methods, getters, setters, and helpers
+
+use super::core::RangePicker;
+use super::types::{PresetRange, RangeFocus};
+use crate::style::Color;
+use crate::widget::data::calendar::{Date, FirstDayOfWeek};
+use crate::widget::datetime_picker::{DateTime, Time};
+
+impl RangePicker {
+    // =========================================================================
+    // Builder Methods
+    // =========================================================================
+
+    /// Set start date (clamped to `min_date`/`max_date`)
+    pub fn start_date(mut self, date: Date) -> Self {
+        self.start.date = date;
+        self.start_cursor_day = date.day;
+        self.active_preset = Some(PresetRange::Custom);
+        self.enforce_limits();
+        self
+    }
+
+    /// Set end date (clamped to `min_date`/`max_date`)
+    pub fn end_date(mut self, date: Date) -> Self {
+        self.end.date = date;
+        self.end_cursor_day = date.day;
+        self.active_preset = Some(PresetRange::Custom);
+        self.enforce_limits();
+        self.swap_if_needed();
+        self
+    }
+
+    /// Set start time
+    pub fn start_time(mut self, time: Time) -> Self {
+        self.start.time = time;
+        self
+    }
+
+    /// Set end time
+    pub fn end_time(mut self, time: Time) -> Self {
+        self.end.time = time;
+        self
+    }
+
+    /// Set date range (clamped to `min_date`/`max_date`)
+    pub fn range(mut self, start: Date, end: Date) -> Self {
+        self.start.date = start;
+        self.end.date = end;
+        self.start_cursor_day = start.day;
+        self.end_cursor_day = end.day;
+        self.active_preset = Some(PresetRange::Custom);
+        self.enforce_limits();
+        self.swap_if_needed();
+        self
+    }
+
+    /// Set first day of week
+    pub fn first_day(mut self, first: FirstDayOfWeek) -> Self {
+        self.first_day = first;
+        self
+    }
+
+    /// Show or hide time selection
+    pub fn show_time(mut self, show: bool) -> Self {
+        self.show_time = show;
+        self
+    }
+
+    /// Show or hide presets panel
+    pub fn with_presets(mut self, show: bool) -> Self {
+        self.show_presets = show;
+        self
+    }
+
+    /// Set available presets
+    pub fn presets(mut self, presets: Vec<PresetRange>) -> Self {
+        self.presets = presets;
+        self
+    }
+
+    /// Set minimum date constraint
+    ///
+    /// Days before `date` are drawn dimmed and cannot be selected: the
+    /// calendar cursor stops at `date`, and a start or end date set earlier
+    /// (by a builder, setter or preset) is moved up to it.
+    pub fn min_date(mut self, date: Date) -> Self {
+        self.min_date = Some(date);
+        self.enforce_limits();
+        self
+    }
+
+    /// Set maximum date constraint
+    ///
+    /// Days after `date` are drawn dimmed and cannot be selected: the
+    /// calendar cursor stops at `date`, and a start or end date set later
+    /// (by a builder, setter or preset) is moved back to it.
+    pub fn max_date(mut self, date: Date) -> Self {
+        self.max_date = Some(date);
+        self.enforce_limits();
+        self
+    }
+
+    /// Set range colors
+    pub fn range_color(mut self, color: Color) -> Self {
+        self.range_bg = color;
+        self
+    }
+
+    // =========================================================================
+    // Getters
+    // =========================================================================
+
+    /// Get the selected date range
+    pub fn get_range(&self) -> (Date, Date) {
+        (self.start.date, self.end.date)
+    }
+
+    /// Get the selected datetime range
+    pub fn get_datetime_range(&self) -> (DateTime, DateTime) {
+        (self.start, self.end)
+    }
+
+    /// Get start date
+    pub fn get_start(&self) -> Date {
+        self.start.date
+    }
+
+    /// Get end date
+    pub fn get_end(&self) -> Date {
+        self.end.date
+    }
+
+    /// Get active preset (if any)
+    pub fn get_active_preset(&self) -> Option<PresetRange> {
+        self.active_preset
+    }
+
+    /// Check if a date is within the selected range
+    pub fn is_in_range(&self, date: &Date) -> bool {
+        date >= &self.start.date && date <= &self.end.date
+    }
+
+    /// Get the current focus area
+    pub fn get_focus(&self) -> RangeFocus {
+        self.focus
+    }
+
+    // =========================================================================
+    // Setters
+    // =========================================================================
+
+    /// Set the start date (clamped to `min_date`/`max_date`)
+    pub fn set_start(&mut self, date: Date) {
+        self.start.date = date;
+        self.start_cursor_day = date.day;
+        self.active_preset = Some(PresetRange::Custom);
+        self.enforce_limits();
+        self.swap_if_needed();
+    }
+
+    /// Set the end date (clamped to `min_date`/`max_date`)
+    pub fn set_end(&mut self, date: Date) {
+        self.end.date = date;
+        self.end_cursor_day = date.day;
+        self.active_preset = Some(PresetRange::Custom);
+        self.enforce_limits();
+        self.swap_if_needed();
+    }
+
+    /// Apply a preset range (clamped to `min_date`/`max_date`)
+    pub fn apply_preset(&mut self, preset: PresetRange) {
+        let today = Date::today();
+        let (start, end) = preset.calculate(today);
+        self.start.date = start;
+        self.end.date = end;
+        self.start_cursor_day = start.day;
+        self.end_cursor_day = end.day;
+        self.active_preset = Some(preset);
+        self.enforce_limits();
+    }
+
+    /// Whether `date` lies within `min_date`/`max_date` (inclusive)
+    pub(crate) fn is_date_allowed(&self, date: &Date) -> bool {
+        self.min_date.is_none_or(|min| *date >= min) && self.max_date.is_none_or(|max| *date <= max)
+    }
+
+    /// Move the start and end dates into `min_date`/`max_date`
+    pub(crate) fn enforce_limits(&mut self) {
+        let start = clamp_date(self.start.date, self.min_date, self.max_date);
+        if start != self.start.date {
+            self.start.date = start;
+            self.start_cursor_day = start.day;
+        }
+        let end = clamp_date(self.end.date, self.min_date, self.max_date);
+        if end != self.end.date {
+            self.end.date = end;
+            self.end_cursor_day = end.day;
+        }
+    }
+
+    /// Ensure end >= start, swap if needed
+    pub(crate) fn swap_if_needed(&mut self) {
+        if self.end.date < self.start.date {
+            std::mem::swap(&mut self.start.date, &mut self.end.date);
+            std::mem::swap(&mut self.start_cursor_day, &mut self.end_cursor_day);
+        }
+    }
+}
+
+// =============================================================================
+// Helper functions
+// =============================================================================
+
+/// Clamp `date` into `[min, max]`; when `min > max`, `max` wins.
+pub(crate) fn clamp_date(date: Date, min: Option<Date>, max: Option<Date>) -> Date {
+    let date = min.map_or(date, |min| date.max(min));
+    max.map_or(date, |max| date.min(max))
+}
+
+/// Helper function to get month name
+pub(crate) fn month_name(month: u32) -> &'static str {
+    match month {
+        1 => "Jan",
+        2 => "Feb",
+        3 => "Mar",
+        4 => "Apr",
+        5 => "May",
+        6 => "Jun",
+        7 => "Jul",
+        8 => "Aug",
+        9 => "Sep",
+        10 => "Oct",
+        11 => "Nov",
+        12 => "Dec",
+        _ => "???",
+    }
+}
+
+/// Create a basic range picker
+pub fn range_picker() -> RangePicker {
+    RangePicker::new()
+}
+
+/// Create a date-only range picker (no time)
+pub fn date_range_picker() -> RangePicker {
+    RangePicker::new().show_time(false)
+}
+
+/// Create an analytics-style range picker with common presets
+pub fn analytics_range_picker() -> RangePicker {
+    RangePicker::new().with_presets(true).presets(vec![
+        PresetRange::Today,
+        PresetRange::Yesterday,
+        PresetRange::Last7Days,
+        PresetRange::Last30Days,
+        PresetRange::ThisMonth,
+        PresetRange::LastMonth,
+        PresetRange::ThisYear,
+    ])
+}
+
+// KEEP HERE - Private implementation tests (accesses private fields: start.date, end.date, start_cursor_day, end_cursor_day, active_preset, start.time, end.time)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // Builder method tests - start_date
+    // =========================================================================
+
+    #[test]
+    fn test_start_date_sets_date() {
+        let picker = RangePicker::new().start_date(Date::new(2024, 6, 15));
+        assert_eq!(picker.start.date, Date::new(2024, 6, 15));
+    }
+
+    #[test]
+    fn test_start_date_updates_cursor() {
+        let picker = RangePicker::new().start_date(Date::new(2024, 6, 20));
+        assert_eq!(picker.start_cursor_day, 20);
+    }
+
+    #[test]
+    fn test_start_date_sets_custom_preset() {
+        let picker = RangePicker::new().start_date(Date::new(2024, 6, 15));
+        assert_eq!(picker.active_preset, Some(PresetRange::Custom));
+    }
+
+    // =========================================================================
+    // Builder method tests - end_date
+    // =========================================================================
+
+    #[test]
+    fn test_end_date_sets_date() {
+        let picker = RangePicker::new()
+            .start_date(Date::new(2024, 6, 1))
+            .end_date(Date::new(2024, 6, 30));
+        assert_eq!(picker.end.date, Date::new(2024, 6, 30));
+    }
+
+    #[test]
+    fn test_end_date_updates_cursor() {
+        let picker = RangePicker::new()
+            .start_date(Date::new(2024, 6, 1))
+            .end_date(Date::new(2024, 6, 25));
+        assert_eq!(picker.end_cursor_day, 25);
+    }
+
+    #[test]
+    fn test_end_date_sets_custom_preset() {
+        let picker = RangePicker::new().end_date(Date::new(2024, 6, 30));
+        assert_eq!(picker.active_preset, Some(PresetRange::Custom));
+    }
+
+    #[test]
+    fn test_end_date_swaps_if_needed() {
+        let picker = RangePicker::new()
+            .start_date(Date::new(2024, 6, 20))
+            .end_date(Date::new(2024, 6, 10));
+        // Should swap to maintain start <= end
+        assert!(picker.start.date <= picker.end.date);
+    }
+
+    // =========================================================================
+    // Builder method tests - start_time
+    // =========================================================================
+
+    #[test]
+    fn test_start_time_sets_hour() {
+        let picker = RangePicker::new().start_time(Time::new(10, 0, 0));
+        assert_eq!(picker.start.time.hour, 10);
+    }
+
+    #[test]
+    fn test_start_time_sets_minute() {
+        let picker = RangePicker::new().start_time(Time::new(10, 30, 0));
+        assert_eq!(picker.start.time.minute, 30);
+    }
+
+    #[test]
+    fn test_start_time_sets_second() {
+        let picker = RangePicker::new().start_time(Time::new(10, 0, 45));
+        assert_eq!(picker.start.time.second, 45);
+    }
+
+    // =========================================================================
+    // Builder method tests - end_time
+    // =========================================================================
+
+    #[test]
+    fn test_end_time_sets_hour() {
+        let picker = RangePicker::new().end_time(Time::new(23, 0, 0));
+        assert_eq!(picker.end.time.hour, 23);
+    }
+
+    #[test]
+    fn test_end_time_sets_minute() {
+        let picker = RangePicker::new().end_time(Time::new(23, 30, 0));
+        assert_eq!(picker.end.time.minute, 30);
+    }
+
+    #[test]
+    fn test_end_time_sets_second() {
+        let picker = RangePicker::new().end_time(Time::new(23, 0, 59));
+        assert_eq!(picker.end.time.second, 59);
+    }
+
+    // =========================================================================
+    // Builder method tests - range
+    // =========================================================================
+
+    #[test]
+    fn test_range_sets_start_and_end() {
+        let picker = RangePicker::new().range(Date::new(2024, 1, 1), Date::new(2024, 12, 31));
+        assert_eq!(picker.start.date, Date::new(2024, 1, 1));
+        assert_eq!(picker.end.date, Date::new(2024, 12, 31));
+    }
+
+    #[test]
+    fn test_range_updates_cursors() {
+        let picker = RangePicker::new().range(Date::new(2024, 6, 10), Date::new(2024, 6, 20));
+        assert_eq!(picker.start_cursor_day, 10);
+        assert_eq!(picker.end_cursor_day, 20);
+    }
+
+    #[test]
+    fn test_range_sets_custom_preset() {
+        let picker = RangePicker::new().range(Date::new(2024, 1, 1), Date::new(2024, 12, 31));
+        assert_eq!(picker.active_preset, Some(PresetRange::Custom));
+    }
+
+    #[test]
+    fn test_range_swaps_if_reversed() {
+        let picker = RangePicker::new().range(Date::new(2024, 12, 31), Date::new(2024, 1, 1));
+        assert!(picker.start.date <= picker.end.date);
+    }
+
+    // =========================================================================
+    // Builder method tests - first_day
+    // =========================================================================
+
+    #[test]
+    fn test_first_day_sunday() {
+        let picker = RangePicker::new().first_day(FirstDayOfWeek::Sunday);
+        assert_eq!(picker.first_day, FirstDayOfWeek::Sunday);
+    }
+
+    #[test]
+    fn test_first_day_monday() {
+        let picker = RangePicker::new().first_day(FirstDayOfWeek::Monday);
+        assert_eq!(picker.first_day, FirstDayOfWeek::Monday);
+    }
+
+    // =========================================================================
+    // Builder method tests - show_time
+    // =========================================================================
+
+    #[test]
+    fn test_show_time_true() {
+        let picker = RangePicker::new().show_time(true);
+        assert!(picker.show_time);
+    }
+
+    #[test]
+    fn test_show_time_false() {
+        let picker = RangePicker::new().show_time(false);
+        assert!(!picker.show_time);
+    }
+
+    // =========================================================================
+    // Builder method tests - with_presets
+    // =========================================================================
+
+    #[test]
+    fn test_with_presets_true() {
+        let picker = RangePicker::new().with_presets(true);
+        assert!(picker.show_presets);
+    }
+
+    #[test]
+    fn test_with_presets_false() {
+        let picker = RangePicker::new().with_presets(false);
+        assert!(!picker.show_presets);
+    }
+
+    // =========================================================================
+    // Builder method tests - presets
+    // =========================================================================
+
+    #[test]
+    fn test_presets_custom_list() {
+        let custom = vec![
+            PresetRange::Today,
+            PresetRange::Yesterday,
+            PresetRange::Last7Days,
+        ];
+        let picker = RangePicker::new().presets(custom.clone());
+        assert_eq!(picker.presets, custom);
+    }
+
+    #[test]
+    fn test_presets_empty_list() {
+        let picker = RangePicker::new().presets(vec![]);
+        assert!(picker.presets.is_empty());
+    }
+
+    // =========================================================================
+    // Builder method tests - min_date
+    // =========================================================================
+
+    #[test]
+    fn test_min_date_sets_constraint() {
+        let picker = RangePicker::new().min_date(Date::new(2024, 1, 1));
+        assert_eq!(picker.min_date, Some(Date::new(2024, 1, 1)));
+    }
+
+    // =========================================================================
+    // Builder method tests - max_date
+    // =========================================================================
+
+    #[test]
+    fn test_max_date_sets_constraint() {
+        let picker = RangePicker::new().max_date(Date::new(2024, 12, 31));
+        assert_eq!(picker.max_date, Some(Date::new(2024, 12, 31)));
+    }
+
+    // =========================================================================
+    // Builder method tests - range_color
+    // =========================================================================
+
+    #[test]
+    fn test_range_color_sets_color() {
+        let picker = RangePicker::new().range_color(Color::RED);
+        assert_eq!(picker.range_bg, Color::RED);
+    }
+
+    // =========================================================================
+    // Getter tests - get_range
+    // =========================================================================
+
+    #[test]
+    fn test_get_range_returns_tuple() {
+        let picker = RangePicker::new()
+            .start_date(Date::new(2024, 1, 1))
+            .end_date(Date::new(2024, 12, 31));
+        let (start, end) = picker.get_range();
+        assert_eq!(start, Date::new(2024, 1, 1));
+        assert_eq!(end, Date::new(2024, 12, 31));
+    }
+
+    // =========================================================================
+    // Getter tests - get_datetime_range
+    // =========================================================================
+
+    #[test]
+    fn test_get_datetime_range_includes_time() {
+        let picker = RangePicker::new()
+            .start_time(Time::new(10, 0, 0))
+            .end_time(Time::new(18, 0, 0));
+        let (start, end) = picker.get_datetime_range();
+        assert_eq!(start.time.hour, 10);
+        assert_eq!(end.time.hour, 18);
+    }
+
+    // =========================================================================
+    // Getter tests - get_start
+    // =========================================================================
+
+    #[test]
+    fn test_get_start_returns_start_date() {
+        let picker = RangePicker::new().start_date(Date::new(2024, 6, 15));
+        assert_eq!(picker.get_start(), Date::new(2024, 6, 15));
+    }
+
+    // =========================================================================
+    // Getter tests - get_end
+    // =========================================================================
+
+    #[test]
+    fn test_get_end_returns_end_date() {
+        let picker = RangePicker::new()
+            .start_date(Date::new(2024, 6, 1))
+            .end_date(Date::new(2024, 6, 30));
+        assert_eq!(picker.get_end(), Date::new(2024, 6, 30));
+    }
+
+    // =========================================================================
+    // Getter tests - get_active_preset
+    // =========================================================================
+
+    #[test]
+    fn test_get_active_preset_today() {
+        let picker = RangePicker::new();
+        assert_eq!(picker.get_active_preset(), Some(PresetRange::Today));
+    }
+
+    #[test]
+    fn test_get_active_preset_custom() {
+        let picker = RangePicker::new().start_date(Date::new(2024, 6, 15));
+        assert_eq!(picker.get_active_preset(), Some(PresetRange::Custom));
+    }
+
+    // =========================================================================
+    // Getter tests - is_in_range
+    // =========================================================================
+
+    #[test]
+    fn test_is_in_range_inside() {
+        let picker = RangePicker::new().range(Date::new(2024, 6, 10), Date::new(2024, 6, 20));
+        assert!(picker.is_in_range(&Date::new(2024, 6, 15)));
+    }
+
+    #[test]
+    fn test_is_in_range_on_start() {
+        let picker = RangePicker::new().range(Date::new(2024, 6, 10), Date::new(2024, 6, 20));
+        assert!(picker.is_in_range(&Date::new(2024, 6, 10)));
+    }
+
+    #[test]
+    fn test_is_in_range_on_end() {
+        let picker = RangePicker::new().range(Date::new(2024, 6, 10), Date::new(2024, 6, 20));
+        assert!(picker.is_in_range(&Date::new(2024, 6, 20)));
+    }
+
+    #[test]
+    fn test_is_in_range_before_start() {
+        let picker = RangePicker::new().range(Date::new(2024, 6, 10), Date::new(2024, 6, 20));
+        assert!(!picker.is_in_range(&Date::new(2024, 6, 5)));
+    }
+
+    #[test]
+    fn test_is_in_range_after_end() {
+        let picker = RangePicker::new().range(Date::new(2024, 6, 10), Date::new(2024, 6, 20));
+        assert!(!picker.is_in_range(&Date::new(2024, 6, 25)));
+    }
+
+    #[test]
+    fn test_is_in_range_same_day() {
+        let picker = RangePicker::new().range(Date::new(2024, 6, 15), Date::new(2024, 6, 15));
+        assert!(picker.is_in_range(&Date::new(2024, 6, 15)));
+        assert!(!picker.is_in_range(&Date::new(2024, 6, 14)));
+        assert!(!picker.is_in_range(&Date::new(2024, 6, 16)));
+    }
+
+    // =========================================================================
+    // Getter tests - get_focus
+    // =========================================================================
+
+    #[test]
+    fn test_get_focus_returns_start() {
+        let picker = RangePicker::new();
+        assert_eq!(picker.get_focus(), RangeFocus::Start);
+    }
+
+    // =========================================================================
+    // Setter tests - set_start
+    // =========================================================================
+
+    #[test]
+    fn test_set_start_updates_date() {
+        let mut picker = RangePicker::new();
+        picker.set_start(Date::new(2024, 6, 20));
+        assert_eq!(picker.start.date, Date::new(2024, 6, 20));
+    }
+
+    #[test]
+    fn test_set_start_updates_cursor() {
+        let mut picker = RangePicker::new();
+        picker.set_start(Date::new(2024, 6, 25));
+        assert_eq!(picker.start_cursor_day, 25);
+    }
+
+    #[test]
+    fn test_set_start_sets_custom_preset() {
+        let mut picker = RangePicker::new();
+        picker.set_start(Date::new(2024, 6, 15));
+        assert_eq!(picker.active_preset, Some(PresetRange::Custom));
+    }
+
+    #[test]
+    fn test_set_start_swaps_if_needed() {
+        let mut picker = RangePicker::new()
+            .start_date(Date::new(2024, 6, 10))
+            .end_date(Date::new(2024, 6, 20));
+        picker.set_start(Date::new(2024, 6, 25));
+        // Should swap to maintain start <= end
+        assert!(picker.start.date <= picker.end.date);
+    }
+
+    // =========================================================================
+    // Setter tests - set_end
+    // =========================================================================
+
+    #[test]
+    fn test_set_end_updates_date() {
+        let mut picker = RangePicker::new();
+        picker.set_start(Date::new(2024, 6, 1));
+        picker.set_end(Date::new(2024, 6, 30));
+        assert_eq!(picker.end.date, Date::new(2024, 6, 30));
+    }
+
+    #[test]
+    fn test_set_end_updates_cursor() {
+        let mut picker = RangePicker::new();
+        picker.set_start(Date::new(2024, 6, 1));
+        picker.set_end(Date::new(2024, 6, 25));
+        assert_eq!(picker.end_cursor_day, 25);
+    }
+
+    #[test]
+    fn test_set_end_sets_custom_preset() {
+        let mut picker = RangePicker::new();
+        picker.set_start(Date::new(2024, 6, 1));
+        picker.set_end(Date::new(2024, 6, 30));
+        assert_eq!(picker.active_preset, Some(PresetRange::Custom));
+    }
+
+    // =========================================================================
+    // Setter tests - apply_preset
+    // =========================================================================
+
+    #[test]
+    fn test_apply_preset_today() {
+        let mut picker = RangePicker::new();
+        picker.apply_preset(PresetRange::Today);
+        let today = Date::today();
+        assert_eq!(picker.start.date, today);
+        assert_eq!(picker.end.date, today);
+        assert_eq!(picker.active_preset, Some(PresetRange::Today));
+    }
+
+    #[test]
+    fn test_apply_preset_yesterday() {
+        let mut picker = RangePicker::new();
+        picker.apply_preset(PresetRange::Yesterday);
+        let today = Date::today();
+        let yesterday = today.prev_day();
+        assert_eq!(picker.start.date, yesterday);
+        assert_eq!(picker.end.date, yesterday);
+        assert_eq!(picker.active_preset, Some(PresetRange::Yesterday));
+    }
+
+    #[test]
+    fn test_apply_preset_last_7_days() {
+        let mut picker = RangePicker::new();
+        picker.apply_preset(PresetRange::Last7Days);
+        let today = Date::today();
+        let expected_start = today.subtract_days(6);
+        assert_eq!(picker.start.date, expected_start);
+        assert_eq!(picker.end.date, today);
+        assert_eq!(picker.active_preset, Some(PresetRange::Last7Days));
+    }
+
+    #[test]
+    fn test_apply_preset_updates_cursors() {
+        let mut picker = RangePicker::new();
+        picker.apply_preset(PresetRange::Today);
+        let today = Date::today();
+        assert_eq!(picker.start_cursor_day, today.day);
+        assert_eq!(picker.end_cursor_day, today.day);
+    }
+
+    // =========================================================================
+    // swap_if_needed tests
+    // =========================================================================
+
+    #[test]
+    fn test_swap_if_needed_already_ordered() {
+        let mut picker = RangePicker::new()
+            .start_date(Date::new(2024, 1, 1))
+            .end_date(Date::new(2024, 12, 31));
+        picker.swap_if_needed();
+        assert_eq!(picker.start.date, Date::new(2024, 1, 1));
+        assert_eq!(picker.end.date, Date::new(2024, 12, 31));
+    }
+
+    #[test]
+    fn test_swap_if_needed_reversed() {
+        let mut picker = RangePicker::new()
+            .start_date(Date::new(2024, 12, 31))
+            .end_date(Date::new(2024, 1, 1));
+        picker.swap_if_needed();
+        assert_eq!(picker.start.date, Date::new(2024, 1, 1));
+        assert_eq!(picker.end.date, Date::new(2024, 12, 31));
+    }
+
+    #[test]
+    fn test_swap_if_needed_same_day() {
+        let mut picker = RangePicker::new()
+            .start_date(Date::new(2024, 6, 15))
+            .end_date(Date::new(2024, 6, 15));
+        picker.swap_if_needed();
+        // Should not swap equal dates
+        assert_eq!(picker.start.date, Date::new(2024, 6, 15));
+        assert_eq!(picker.end.date, Date::new(2024, 6, 15));
+    }
+
+    #[test]
+    fn test_swap_if_needed_swaps_cursor_days() {
+        let mut picker = RangePicker::new();
+        // Set dates directly without swap (manually)
+        picker.start.date = Date::new(2024, 12, 31);
+        picker.end.date = Date::new(2024, 1, 1);
+        picker.start_cursor_day = 31;
+        picker.end_cursor_day = 1;
+        picker.swap_if_needed();
+        // After swap: start = Jan 1 (cursor_day 1), end = Dec 31 (cursor_day 31)
+        assert_eq!(picker.start_cursor_day, 1);
+        assert_eq!(picker.end_cursor_day, 31);
+    }
+
+    // =========================================================================
+    // Month name helper tests
+    // =========================================================================
+
+    #[test]
+    fn test_month_name_january() {
+        assert_eq!(month_name(1), "Jan");
+    }
+
+    #[test]
+    fn test_month_name_february() {
+        assert_eq!(month_name(2), "Feb");
+    }
+
+    #[test]
+    fn test_month_name_march() {
+        assert_eq!(month_name(3), "Mar");
+    }
+
+    #[test]
+    fn test_month_name_april() {
+        assert_eq!(month_name(4), "Apr");
+    }
+
+    #[test]
+    fn test_month_name_may() {
+        assert_eq!(month_name(5), "May");
+    }
+
+    #[test]
+    fn test_month_name_june() {
+        assert_eq!(month_name(6), "Jun");
+    }
+
+    #[test]
+    fn test_month_name_july() {
+        assert_eq!(month_name(7), "Jul");
+    }
+
+    #[test]
+    fn test_month_name_august() {
+        assert_eq!(month_name(8), "Aug");
+    }
+
+    #[test]
+    fn test_month_name_september() {
+        assert_eq!(month_name(9), "Sep");
+    }
+
+    #[test]
+    fn test_month_name_october() {
+        assert_eq!(month_name(10), "Oct");
+    }
+
+    #[test]
+    fn test_month_name_november() {
+        assert_eq!(month_name(11), "Nov");
+    }
+
+    #[test]
+    fn test_month_name_december() {
+        assert_eq!(month_name(12), "Dec");
+    }
+
+    #[test]
+    fn test_month_name_invalid() {
+        assert_eq!(month_name(0), "???");
+        assert_eq!(month_name(13), "???");
+    }
+
+    // =========================================================================
+    // Builder chaining tests
+    // =========================================================================
+
+    #[test]
+    fn test_builder_chain_start_end_range() {
+        let picker = RangePicker::new()
+            .start_date(Date::new(2024, 1, 1))
+            .end_date(Date::new(2024, 12, 31))
+            .first_day(FirstDayOfWeek::Monday)
+            .show_time(true)
+            .with_presets(true);
+        assert_eq!(picker.start.date, Date::new(2024, 1, 1));
+        assert_eq!(picker.end.date, Date::new(2024, 12, 31));
+        assert_eq!(picker.first_day, FirstDayOfWeek::Monday);
+        assert!(picker.show_time);
+        assert!(picker.show_presets);
+    }
+
+    #[test]
+    fn test_builder_chain_times() {
+        let picker = RangePicker::new()
+            .start_time(Time::new(0, 0, 0))
+            .end_time(Time::new(23, 59, 59));
+        assert_eq!(picker.start.time.hour, 0);
+        assert_eq!(picker.end.time.hour, 23);
+    }
+
+    #[test]
+    fn test_builder_chain_constraints() {
+        let picker = RangePicker::new()
+            .min_date(Date::new(2024, 1, 1))
+            .max_date(Date::new(2024, 12, 31));
+        assert_eq!(picker.min_date, Some(Date::new(2024, 1, 1)));
+        assert_eq!(picker.max_date, Some(Date::new(2024, 12, 31)));
+    }
+
+    #[test]
+    fn test_builder_chain_presets() {
+        let custom_presets = vec![PresetRange::Today, PresetRange::Yesterday];
+        let picker = RangePicker::new()
+            .presets(custom_presets.clone())
+            .with_presets(true);
+        assert_eq!(picker.presets, custom_presets);
+        assert!(picker.show_presets);
+    }
+
+    // =========================================================================
+    // Edge cases and integration tests
+    // =========================================================================
+
+    #[test]
+    fn test_set_start_and_end_maintains_order() {
+        let mut picker = RangePicker::new();
+        picker.set_start(Date::new(2024, 6, 20));
+        picker.set_end(Date::new(2024, 6, 10));
+        // Should swap to maintain start <= end
+        assert!(picker.start.date <= picker.end.date);
+    }
+
+    #[test]
+    fn test_range_with_swapped_values() {
+        let picker = RangePicker::new().range(Date::new(2024, 12, 31), Date::new(2024, 1, 1));
+        // Builder should swap
+        assert!(picker.start.date <= picker.end.date);
+    }
+
+    #[test]
+    fn test_apply_preset_then_set_start_becomes_custom() {
+        let mut picker = RangePicker::new();
+        picker.apply_preset(PresetRange::Today);
+        assert_eq!(picker.active_preset, Some(PresetRange::Today));
+
+        picker.set_start(Date::new(2024, 6, 15));
+        assert_eq!(picker.active_preset, Some(PresetRange::Custom));
+    }
+
+    #[test]
+    fn test_is_in_range_with_time_components() {
+        let picker = RangePicker::new()
+            .start_time(Time::new(10, 0, 0))
+            .end_time(Time::new(18, 0, 0))
+            .range(Date::new(2024, 6, 10), Date::new(2024, 6, 20));
+        // is_in_range only checks dates, not times
+        assert!(picker.is_in_range(&Date::new(2024, 6, 15)));
+    }
+
+    #[test]
+    fn test_builder_all_options() {
+        let picker = RangePicker::new()
+            .start_date(Date::new(2024, 1, 1))
+            .end_date(Date::new(2024, 12, 31))
+            .start_time(Time::new(0, 0, 0))
+            .end_time(Time::new(23, 59, 59))
+            .first_day(FirstDayOfWeek::Monday)
+            .show_time(true)
+            .with_presets(true)
+            .presets(vec![PresetRange::Today])
+            .min_date(Date::new(2024, 1, 1))
+            .max_date(Date::new(2024, 12, 31))
+            .range_color(Color::BLUE);
+
+        assert_eq!(picker.start.date, Date::new(2024, 1, 1));
+        assert_eq!(picker.end.date, Date::new(2024, 12, 31));
+        assert_eq!(picker.start.time.hour, 0);
+        assert_eq!(picker.end.time.hour, 23);
+        assert_eq!(picker.first_day, FirstDayOfWeek::Monday);
+        assert!(picker.show_time);
+        assert!(picker.show_presets);
+        assert_eq!(picker.presets.len(), 1);
+        assert_eq!(picker.min_date, Some(Date::new(2024, 1, 1)));
+        assert_eq!(picker.max_date, Some(Date::new(2024, 12, 31)));
+        assert_eq!(picker.range_bg, Color::BLUE);
+    }
+}
