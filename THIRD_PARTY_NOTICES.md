@@ -13,7 +13,7 @@ the root `Cargo.toml`.
 
 ## License index
 
-- [Apache License 2.0](#Apache-2.0), used by 128 dependency entries
+- [Apache License 2.0](#Apache-2.0), used by 132 dependency entries
 - [MIT License](#MIT), used by 57 dependency entries
 - [Unicode License v3](#Unicode-3.0), used by 23 dependency entries
 - [ISC License](#ISC), used by 5 dependency entries
@@ -288,7 +288,11 @@ PERFORMANCE OF THIS SOFTWARE.
 #### Used by
 
 - [windows-link 0.2.1](https://github.com/microsoft/windows-rs)
+- [windows-sys 0.52.0](https://github.com/microsoft/windows-rs)
 - [windows-sys 0.61.2](https://github.com/microsoft/windows-rs)
+- [windows-targets 0.52.6](https://github.com/microsoft/windows-rs)
+- [windows_x86_64_gnu 0.52.6](https://github.com/microsoft/windows-rs)
+- [windows_x86_64_msvc 0.52.6](https://github.com/microsoft/windows-rs)
 
 ```text
                                  Apache License
@@ -4344,7 +4348,7 @@ limitations under the License.
 - [dyn-clone 1.0.20](https://github.com/dtolnay/dyn-clone)
 - [eventsource-stream 0.2.3](https://github.com/jpopesculian/eventsource-stream)
 - [ident_case 1.0.1](https://github.com/TedDriggs/ident_case)
-- [interprocess 2.4.4](https://github.com/kotauskas/interprocess)
+- [interprocess 2.4.5](https://github.com/kotauskas/interprocess)
 - [itoa 1.0.18](https://github.com/dtolnay/itoa)
 - [libc 0.2.190](https://github.com/rust-lang/libc)
 - [litrs 1.0.0](https://github.com/LukasKalbertodt/litrs)
@@ -4361,7 +4365,7 @@ limitations under the License.
 - [serde_core 1.0.229](https://github.com/serde-rs/serde)
 - [serde_derive 1.0.229](https://github.com/serde-rs/serde)
 - [serde_derive_internals 0.30.0](https://github.com/serde-rs/serde)
-- [serde_json 1.0.151](https://github.com/serde-rs/json)
+- [serde_json 1.0.152](https://github.com/serde-rs/json)
 - [serde_urlencoded 0.7.1](https://github.com/nox/serde_urlencoded)
 - [shlex 2.0.1](https://github.com/comex/rust-shlex)
 - [syn 2.0.119](https://github.com/dtolnay/syn)
