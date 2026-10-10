@@ -194,7 +194,7 @@ mutating, networked, and opt-in, and it is never part of the blocking gate. The 
 
 Slice 1.5 (the current-state core) changes the evidence base without lowering it:
 
-- the storage contract suite is rebuilt for the eight-table current-state schema and the one-transaction rule, and the
+- the storage contract suite is rebuilt for the nine-table current-state schema and the one-transaction rule, and the
   event/snapshot/replay contract blocks are deleted with their surfaces;
 - the engine tests cover commit-and-publish without events or replays, and tool tests cover one transaction per call and
   the pre-effect identity rejection;

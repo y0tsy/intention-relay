@@ -110,9 +110,9 @@ feature crates are created at their milestones. The target
 keeps DTOs only at the three physical boundaries — the IPC wire, SQLite persistence, and provider SDKs — with internal
 crates passing domain types, and makes schema-validated JSON tool inputs and outputs the only JSON payloads in the
 system. The current-state core has already landed on this branch: the event log, snapshots, cursors, and resync are
-replaced by the eight current-state tables (`projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`,
-`tool_results`, `configuration_revisions`); `messages` and `tool_results` are the transcript; identity is the eight
-newtypes (`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`,
+replaced by the nine current-state tables (`projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`,
+`tool_results`, `configuration_revisions`, `tui_settings`); `messages` and `tool_results` are the transcript; identity
+is the eight newtypes (`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`,
 `IdempotencyKey`), with model steps and tool groups addressed by plain indices and mutating operations by
 `IdempotencyKey`; every state change commits in one SQLite transaction and the daemon publishes `run.frame`
 notifications built from the committed values; the single live wire version is a byte in the endpoint name with no
@@ -130,13 +130,20 @@ full-screen revue-based TUI, a mandatory interactive REPL, and a headless comman
 text, workspace, session continuation, run mode, streaming output, timeout, and a script-friendly output format; the
 model, system-prompt, and provider-profile parameters are deliberately absent and arrive with Slices 3 and 4. The TUI
 delivers one window — the chat panel and the sessions panel docked to the window's bottom rows, never an overlay — over
-one palette that is the sole colour system, with a welcome surface (the product lockup and the
+one light/dark palette system that is the sole colour system, with a welcome surface (the product lockup and the
 version/`AGENTS.md`/`MCPs`/`Skills` overview) while no session is open — a launch opens no session, not even the most
 recent one — a multi-line input block that grows a row per buffer line, user cards and assistant answers rendered as
 markdown, committed reasoning as its own block, the leading-slash command registry with the hint band it feeds above
-the input block (a ranked, filtered list of `/new` and `/sessions`, the input history and `Tab` returning to the line
-only once the band is closed, and the band as `Esc`'s innermost layer), a committed transcript laid out once and cached
-per pane width and transcript version, a wheel-driven transcript, and layered `Ctrl+C` and `Esc` (an arming press, then
+the input block (a ranked, filtered `/new`, `/sessions`, and `/theme` list whose registry declares each command's
+arguments, so the argument word lists the declared `light`/`dark` values in the same three columns; the input history
+and `Tab` returning to the line only once the band is closed; and the band as `Esc`'s innermost layer), the theme
+picker (which `/theme` opens with no argument: a panel in the chat panel's band region whose rows carry each theme's
+name and description, the committed row marked with the browser's `> ` cursor, live `Up`/`Down` previews of the whole
+window, `Enter` committing through the daemon, and `Esc` reverting), the daemon-owned effective theme (the optional
+`[tui] theme` configuration default and the single-row `tui_settings` override, neither of which records a
+configuration revision), a committed transcript laid out once and cached per pane width, theme, and transcript
+version, a
+wheel-driven transcript, and layered `Ctrl+C` and `Esc` (an arming press, then
 a consecutive interrupting, history-pushing, or quitting press; a single `Esc` cancels a live run). Session creation
 resolves the
 durable workspace binding of its root, so one root carries an unbounded number of sessions. The slice also froze the

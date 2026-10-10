@@ -222,8 +222,18 @@ buffers, one per channel: a delta for a new step replaces the previous step's bu
 fresh subscription clears both. Daemon tests prove `ListSessions` dispatch, per-channel delta coalescing, the order of the
 two channels, and that the step's pending deltas flush before its committed frames.
 
+The presentation-only theme surface carries its own contract evidence. Protocol contract tests cover the
+`GetTuiSettings`/`SetTuiTheme` request and result pair and the `ThemeDto`, `TuiSettingsDto`, and `TuiThemeAcceptedDto`
+durable spellings, with an undeclared or absent theme spelling rejected in either direction. Configuration contract
+tests cover the absent, `light`, and `dark` `[tui]` sections and the typed `invalid_tui_theme` rejection of an unknown
+spelling. Storage contract tests cover the single-row `tui_settings` override, its absent read, its reopen, the fact
+that a theme set records no configuration revision, and the schema stamp 3 the new table carries, with a database from
+the previous stamp discarded and recreated. Client tests validate a settings reply and reject an acceptance that names
+another theme. Daemon tests prove the effective-theme rule (the stored override, else the resolved configuration, else
+light) and that a stored theme survives a daemon restart.
+
 The terminal crate itself carries a render suite and a process end-to-end suite. `tests/tui_render.rs` renders the
-render-free `AppState` through revue's own test app in sixty-five cases: the welcome surface (the lockup and the
+render-free `AppState` through revue's own test app in seventy cases: the welcome surface (the lockup and the
 overview, gone once a session opens, the launch that lists sessions but opens none, and the state that never covers a
 reported row), the chat panel, the transcript blocks (the
 labelled user card and the markdown inside it, the markdown answer, the heading, the bold phrase, the aligned table,
@@ -233,7 +243,11 @@ committed reasoning block it becomes, the framed tool blocks for `read`, `glob`,
 `tool_id`, the call-without-result degradation, and the notice blocks streamed live and restored by a snapshot), the
 input line and its badges, the command hint band (its own frame and title, the three columns, a narrowed filter,
 a moved highlight, a slash that is not the first character opening nothing, and a window too short for the band
-keeping the input's rows), a two-line buffer growing the input block and shrinking the transcript, the armed `Esc`
+keeping the input's rows), the argument band (a declared argument's two values in the same three cells with the
+argument's name in the trailing column), the theme picker panel (its `Theme` title, one row per theme with the theme's
+description, the committed row's `> ` marker moving to the previewed row, its `enter apply | esc revert` legend, and a
+window too short for the panel keeping the input's rows), the same chat and welcome screens painted under both themes,
+a two-line buffer growing the input block and shrinking the transcript, the armed `Esc`
 clear and the `Ctrl+C` clear, exit, and interrupt notices, the human status row, transcript scrolling, and the docked
 sessions panel (its frame and embedded title, the tab radio row, the search bar, the table header, columns, cursor
 marker, and resize reflow, the footer legend and row counter, and the stub tabs' `@todo` empty state).
@@ -245,14 +259,20 @@ continuation that reuses its session instead of creating one, every `/new` run c
 workspace root, a multi-line prompt reaching the session unchanged, the timeout interrupt with exit 4, and a typed
 unknown-session rejection with exit 3. The binary's own unit tests cover the command
 grammar, the exit-status mapping, the workspace-root resolution, the REPL line loop, and the headless formats, drivers,
-and wait deadlines. The crate's inline unit tests cover the `AppState` transitions, the command registry and its ranking and menu
-transitions, the hint band's row arithmetic and columns, the keymap, the palette roles, the
+and wait deadlines. The crate's inline unit tests cover the `AppState` transitions, the settings load and theme
+selection and rejection paths, the picker's preview, commit, and revert transitions, the theme vocabulary and its
+parser, the command registry with its declared arguments and a submitted line's argument resolution and notices, the
+ranking and menu
+transitions, the hint band's row arithmetic and columns, the keymap, both themes' palette roles and the documented
+opacity, distinctness, `error`/`scarlet` alias, and cross-theme rules, the
 wheel mapping, the left-button pointer's press, drag, release, marker expansion, and edge scrolling, the turn clock, the
 browser geometry and row helpers, the markdown layout, the per-tool block dispatch, the marker and notice layout, the
-transcript layout cache's append-only fast path, width change, replacement, reasoning expansion, paired-result, and
+transcript layout cache's append-only fast path, width change, theme change, replacement, reasoning expansion,
+paired-result, and
 front-trim replays, and the clipboard-free source audit. A run of
-`cargo nextest run -p intention-tui` observed 297 tests across four binaries, all passing: 190 library unit tests,
-65 `tui_render` cases, 31 binary unit tests, and 11 `terminal_e2e` cases.
+`cargo nextest run -p intention-tui` observed 338 tests across four binaries, all passing: 226 library unit tests,
+70 `tui_render` cases, 31 binary unit tests, and 11 `terminal_e2e` cases. A run of `cargo nextest run --workspace`
+observed 717 tests run, 717 passed, and 2 skipped.
 
 The per-crate self-checks are `cargo fmt -p intention-tui`, `cargo nextest run -p intention-tui`, and
 `cargo clippy -p intention-tui --all-targets`; the slice's acceptance gate is `make quick` during delivery and

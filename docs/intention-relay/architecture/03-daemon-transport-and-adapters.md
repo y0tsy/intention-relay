@@ -51,7 +51,15 @@ table: a request variant is the operation, and the reply variant is its typed re
 | `InterruptRun` | `InterruptRunCommandDto` | `RunInterrupted` |
 | `GetSessionSnapshot` | `GetSessionSnapshotQueryDto` | `SessionSnapshot` |
 | `GetDaemonHealth` | none | `DaemonHealth` |
+| `ListSessions` | none | `SessionsListed` |
+| `GetTuiSettings` | none | `TuiSettings` |
+| `SetTuiTheme` | `SetTuiThemeCommandDto` | `TuiThemeSet` |
 | `SubscribeRun` | `SubscribeRunCommandDto` | `RunSubscribed` |
+
+The terminal theme is a presentation-only wire value: `ThemeDto` is the durable `light`/`dark` spelling,
+`TuiSettingsDto` is the daemon's effective theme a client renders with, and `TuiThemeAcceptedDto` is the stored
+selection's acceptance evidence. A theme selection enters no run's immutable configuration selection and records no
+configuration revision.
 
 Errors travel on exactly one channel: a rejection carrying the structured `ErrorDto` with its stable code, category,
 retry guidance, and safe message. A request line that cannot be decoded is answered with a typed identity-less
@@ -377,15 +385,19 @@ text above is the live policy.
   multiply a heading's display rows and make the transcript's row budget lie, so a heading keeps the parser's `#`
   marker and the heading ink. A table keeps the parser's own atomic box-drawing grid — a grid line is clipped, never
   wrapped, because wrapping it would shred the alignment the table exists to show.
-- One colour system. `src/tui/palette.rs` is the single source of colours: truecolour roles for the canvas, the panel
-  washes, the user card, the selection fill, the tool family — a warm light-orange veil drawn from the existing warm
-  scale, with no green and no new hue — the notice pair, the scrollbar track and thumb, the accents, the markdown inks,
-  the reasoning block and its expand marker, the measured timer, and the `@todo` placeholder tone, and no pane constructs
-  a colour of its own. Colours degrade, words do not: a terminal without truecolor maps each role to its nearest ANSI
-  colour, so the tool and notice washes fall back towards the canvas while each block's frame, badge, and plate still
-  carry the meaning, and no state is carried by colour alone. Every use pairs its colour with a glyph, a border, or a
-  modifier — the cursor row carries `> ` and bold, the active tab carries `⦿` and bold, a failure carries its status
-  word.
+- One colour system, two themes. `src/tui/palette.rs` is the single source of colours: `palette::of(theme)` resolves
+  one `Palette` value once per frame from the state's effective theme, and every pane reads the roles of the reference
+  it was handed, so no pane constructs a colour of its own. The light theme is the warm off-white surface the terminal
+  has always drawn; the dark theme is the same warm family read on a warm charcoal canvas, keeping every role's hue and
+  lifting its value far enough to read. The module's own role table pairs each role's light and dark value. Within one
+  theme no two roles share a value — the one documented alias is `error`, which spells `scarlet` exactly — every role
+  is fully opaque, and every role differs between the two themes, so a frame is wholly one theme and never a
+  half-switched surface. Colours degrade, words do not: a terminal without truecolor maps each role of the active theme
+  to its nearest ANSI colour, so the tool and notice washes fall back towards the canvas while each block's frame,
+  badge, and plate still carry the meaning, and no state is carried by colour alone. Every use pairs its colour with a
+  glyph, a border, or a modifier — the cursor row carries `> ` and bold, the active tab carries `⦿` and bold, a failure
+  carries its status word. The transcript's layout cache is keyed by the theme like the pane width, so a theme change
+  replays the whole transcript exactly as a resize does.
 - Input block and status vocabulary. The input block is one focused frame around a badge header carrying the session's
   durable mode (the `mode @todo(core)` placeholder until a snapshot names it) beside the `model @todo(core)`
   placeholder, one display row per buffer line with the `█` block cursor and a window that keeps the cursor's line and
@@ -397,18 +409,50 @@ text above is the live policy.
   the removed debug vocabulary (`connected`, `run none`, `stream idle`, `stream closed`) is gone: the stream is this
   front end's own plumbing, and a run is described by what it is doing. The elapsed value is the front end's own
   measurement, reported to the core as `Action::ElapsedReported` so the view stays a pure function of state.
+- Terminal settings. `config.toml` supplies the default through its optional `[tui] theme` key (`light` or `dark`; an
+  absent section and an absent key both mean light, and an unknown spelling is the typed `invalid_tui_theme` validation
+  error, so nothing silently falls back). The daemon owns the runtime value as a single-row `tui_settings` override in
+  the state database and answers the effective theme — the stored override, else the configuration default, else light
+  — through `GetTuiSettings`; `SetTuiTheme` commits the override in one transaction and answers the accepted theme. A
+  theme is presentation-only: a change records no configuration revision, never enters a run's immutable captured
+  selection, and the daemon never rewrites the credential-bearing configuration file. The committed theme is the
+  daemon's value, never the terminal's guess: a selection previews locally while the round trip is in flight, and only
+  the accepted reply moves the committed value.
+- Theme picker. `/theme` with no argument opens the picker as `Screen::Theme`, a small panel in the chat panel's own
+  band region — the region above the input block the command band uses — so the input block and the detail line keep
+  their rows rather than the panel docking at the window's bottom. Its rounded frame carries the `Theme` title, one row
+  per theme with the theme's name and one-line description, the effective theme's row marked with the sessions
+  browser's `> ` cursor and selected wash, and its own last inner row carries the `enter apply | esc revert` legend.
+  `Up` and `Down` preview the row they land on: the whole window, transcript included, repaints through the candidate
+  and nothing is persisted. `Enter` commits the highlighted theme through the daemon and closes the picker; `Esc`
+  drops the preview, restores the committed theme, and closes. The picker's `Esc` is its own keymap layer, so the
+  chat's cancel, clear, and exit arms are unreachable while it is open; the Esc layering is the open band, then the
+  picker, then a live run's cancel, then the input-clear arm, then the exit.
 - Interaction. A command is a submitted line beginning with `/` as its first character, never a bare letter: `/new`
-  creates a session and `/sessions` opens the browser panel, and an unknown command answers with the known set. One
-  registry is the single source for that submission path, for the hint band, and for the unknown-command notice; while
-  the input's first character is `/` and the caret sits in or immediately after that word, the band opens directly above
-  the input block, listing the registered commands the word selects, ranked by a name prefix before an ordered
-  subsequence and then by registry order, at most five rows with an overflow report for the rest. `Up` and `Down` move
-  the band's highlight while it is open and walk the input history only once it is closed, `Tab` or `Enter` completes
-  the highlighted name and closes the band, and the band closes when the slash is removed, on `Esc`, when a space ends
-  the word, or when nothing matches. The keymap is one mapping per
-  screen: `Enter` submits the line or selects the browser row, `Tab` and `Shift+Tab` switch the browser tab, `Ctrl+R`,
-  `Ctrl+X`, and `Ctrl+F` show the rename, archive, and tree notices whose core support does not exist yet, `Esc` closes
-  the browser, and `Ctrl+Q` always exits immediately. `Esc` on the chat closes the command hint band first while it is
+  creates a session, `/sessions` opens the browser panel, and `/theme` selects the theme its optional `theme` argument
+  names (`light` or `dark`; a declared value matches however it is spelled) or opens the picker when the argument is
+  omitted. An unknown
+  command answers with the known set, an unknown value answers `unknown theme "purple" - expected light or dark`, and a
+  word past the last declared argument answers `unexpected argument "now"`. One registry is the single source for every
+  command's name, description, category, action, and declared arguments — their values, value descriptions, order, and
+  whether they are required — so the submission path, the band, and every notice are built from the one declaration and
+  nothing outside it spells a command name or value. While the input's first character is `/` and the caret sits in or
+  immediately after a word, the band opens directly above the input block. It ranks the registered commands while the
+  caret is in the command word, and the declared values of the argument word the caret is in — `[Value] [Description]
+  [Argument]` in the same three columns — with the same rule: a prefix beats an ordered subsequence, then registry or
+  declaration order, at most five rows with an overflow report for the rest, and an empty filter lists every row. `Up`
+  and `Down` move the band's highlight while it is open and walk the input history only once it is closed. `Tab`
+  completes the highlighted row — the name or the value plus one trailing space — while `Enter` completes it too,
+  except on the empty argument word an omitted optional argument opens: that band has nothing to complete, so `Enter`
+  runs the command itself (`/theme` opens the picker) while `Tab` still completes the highlighted value. A space after
+  a complete command name closes the band only for a command that declares no arguments, while a command with a
+  declared argument reopens the band on its argument word; a space after a complete value closes it; and the band
+  closes when the slash is removed, on `Esc`, or when nothing matches. The keymap is one mapping per
+  screen: `Enter` submits the line, selects the browser row, or commits the picker's highlighted theme, `Up` and `Down`
+  preview the picker's rows, `Tab` and `Shift+Tab` switch the browser tab, `Ctrl+R`, `Ctrl+X`, and `Ctrl+F` show the
+  rename, archive, and tree notices whose core support does not exist yet, `Esc` closes the browser, reverts the
+  picker's preview, or layers the chat's band, cancel, clear, and exit meanings, and `Ctrl+Q` always exits immediately.
+  `Esc` on the chat closes the command hint band first while it is
   open and touches nothing else; with the band closed it is the cancel, clear, and exit key: a live run is
   cancelled by a single press with no arming, a non-empty line arms the clear on the first press and needs a second
   consecutive press to abandon the line into the recallable history, exactly as one `Ctrl+C` press does, and an empty
@@ -476,10 +520,11 @@ fabricated value. The table below names each one, taken from the markers in the 
 
 ### Frame cost
 
-The committed transcript is laid out once into neutral rows and cached per (pane width, transcript epoch), with an
-append-only fast path that lays out only the appended tail; a width change, a replacement, a front trim, a session
-switch, a reasoning expansion, or a newly committed tool result that pairs an earlier call lays the whole transcript out
-again. Only the visible window is materialised into widgets, the layout works on
+The committed transcript is laid out once into neutral rows and cached per (pane width, theme, transcript epoch,
+reasoning-expansion epoch, paired tool-result count), with an
+append-only fast path that lays out only the appended tail; a width change, a theme change, a replacement, a front
+trim, a session switch, a reasoning expansion, or a newly committed tool result that pairs an earlier call lays the
+whole transcript out again. Only the visible window is materialised into widgets, the layout works on
 text slices carrying style ids instead of a style per character, and the live tail a step is streaming — its reasoning
 segment and its answer segment — is laid out per frame through the same block functions the committed rows use, never
 cached and never styled apart from the rows it becomes. The binary takes `mimalloc` as its process-wide global

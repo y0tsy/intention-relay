@@ -153,6 +153,10 @@ immutable snapshot selected at startup.
 Provider/model selection changes do not mutate an already-started run. They apply to a later run, except if a future
 explicit, tested runtime transition is introduced.
 
+A terminal theme is not provider selection. The `[tui] theme` its resolved configuration carries and the daemon's
+single-row `tui_settings` override are presentation-only: a theme change records no configuration revision and never
+mutates an already-started run's immutable snapshot or its validated selection.
+
 ## Streaming and tool calls
 
 The model stream can emit content, reasoning, tool-call, usage, and terminal events. Runtime owns ordering,

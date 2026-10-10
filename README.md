@@ -35,9 +35,10 @@ compatibility is neither required nor in demand (see `AGENTS.md`).
   `write`, `edit`, `execute`, `glob`, `grep`) with one deterministic typed
   tool sequence and durable, redacted tool-result evidence.
 - **SQLite-first durable state.** One composition crate selects the SQLite
-  adapter; the durable store is eight current-state tables (`projects`,
+  adapter; the durable store is nine current-state tables (`projects`,
   `workspace_roots`, `sessions`, `runs`, `turns`, `messages`, `tool_results`,
-  `configuration_revisions`) in a single-version schema, `messages` plus
+  `configuration_revisions`, `tui_settings`) in a single-version schema,
+  `messages` plus
   `tool_results` are the transcript, and every state change commits in one
   SQLite transaction before publication, with recovery-before-readiness on
   daemon start.
@@ -61,7 +62,7 @@ of each.
 | M3 SQLite sessions, transcript, queue | Closed | Durable SQLite-backed sessions, runs, turns, and transcript rows; turn queueing; canonical credential-free config revisions; recovery-before-ready. |
 | M4 Model contract, providers, one streaming run | Closed | Provider-neutral model contracts and validated stream facts; private OpenRouter and generic Chat Completions drivers; durable model evidence in the transcript; one daemon-owned streaming run with reconnect to current state and run-scoped delivery. |
 | M5 Typed tools and workspace | Closed | Production model-tool loop hosted by the real daemon binary: six executable tools, fail-closed `WorkspaceRoot` resolution, one deterministic typed tool sequence, durable and redacted tool-result evidence, daemon-host end-to-end tests on Linux and Windows. |
-| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (defined in the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md); the instruction sources slice is owned by [architecture 30](docs/intention-relay/architecture/30-instruction-sources-and-system-context.md)) delivered as seven slices: 1) contracts and versions, 1.5) core simplification, 2) terminal UX (TUI, REPL, and headless CLI in one `intention-tui` binary), 3) instruction sources and system context, 4) control plane, 5) Goal domain, 6) UI foundation. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slice 1.5 is activated and its current-state core is merged into `main`: it froze a current-state core where the nine production crates stay, DTOs remain only at the IPC wire, SQLite, and provider-SDK boundaries, tool inputs and outputs are schema-validated JSON, identity reduces to eight newtypes, the event log, snapshots, cursors, and resync gave way to the eight current-state tables written in one SQLite transaction per state change with publication from the committed values, the typed hook plane was removed, hello/version negotiation gave way to one typed wire, and `intention-client` is fully asynchronous. Slice 2 is activated: `intention-tui` is the terminal application — one binary with a revue-based fullscreen UI, an interactive REPL, and a headless prompt command, all contract-equivalent over the shared client, with session listing, the answer and reasoning channels of transient text deltas, and a closed typed exit-status set; the fullscreen UI shows a welcome surface (the product lockup and a version/`AGENTS.md`/`MCPs`/`Skills` overview) until a session is asked for and opens no session at launch, draws one window (the chat panel with markdown answers, a multi-line input block, and the registry-driven command hint band above it, and the sessions panel docked to the window's bottom rows over one palette), caches the committed transcript layout, streams the live tail through the same block functions as the committed rows, and layers `Ctrl+C` and `Esc` into consecutive-press arms for interrupting, history-pushing, and quitting, with a single `Esc` cancelling a live run. Slices 3-6 are defined and not implemented. |
+| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (defined in the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md); the instruction sources slice is owned by [architecture 30](docs/intention-relay/architecture/30-instruction-sources-and-system-context.md)) delivered as seven slices: 1) contracts and versions, 1.5) core simplification, 2) terminal UX (TUI, REPL, and headless CLI in one `intention-tui` binary), 3) instruction sources and system context, 4) control plane, 5) Goal domain, 6) UI foundation. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slice 1.5 is activated and its current-state core is merged into `main`: it froze a current-state core where the nine production crates stay, DTOs remain only at the IPC wire, SQLite, and provider-SDK boundaries, tool inputs and outputs are schema-validated JSON, identity reduces to eight newtypes, the event log, snapshots, cursors, and resync gave way to the nine current-state tables written in one SQLite transaction per state change with publication from the committed values, the typed hook plane was removed, hello/version negotiation gave way to one typed wire, and `intention-client` is fully asynchronous. Slice 2 is activated: `intention-tui` is the terminal application — one binary with a revue-based fullscreen UI, an interactive REPL, and a headless prompt command, all contract-equivalent over the shared client, with session listing, the answer and reasoning channels of transient text deltas, and a closed typed exit-status set; the fullscreen UI shows a welcome surface (the product lockup and a version/`AGENTS.md`/`MCPs`/`Skills` overview) until a session is asked for and opens no session at launch, draws one window (the chat panel with markdown answers, a multi-line input block, and the registry-driven command hint band above it, and the sessions panel docked to the window's bottom rows over one light/dark palette system, with a `/theme` command, its argument band, and the theme picker panel), caches the committed transcript layout, streams the live tail through the same block functions as the committed rows, and layers `Ctrl+C` and `Esc` into consecutive-press arms for interrupting, history-pushing, and quitting, with a single `Esc` cancelling a live run. Slices 3-6 are defined and not implemented. |
 | M6-M9 | Planned | M6 Tauri bridge and primary desktop UI; M7 Plan/Build policies, physical plans, and Build Autopilot; M8 VFR and Headroom; M9 hardening and acceptance verification. See the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md). |
 
 Everything beyond M5 outside the activated M5+ slices is roadmap direction
@@ -170,10 +171,22 @@ interactive modes open no session at launch: the fullscreen UI starts on its
 welcome surface, and a session appears only for an explicit
 `--session`/`--continue`, `/new`, a browser row, or the first prompt, which
 creates the session it needs. The fullscreen UI carries the whole command
-surface in one registry — `/new` and `/sessions` are the two registered
+surface in one registry — `/new`, `/sessions`, and `/theme` are the registered
 commands — and a leading-slash word opens a hint band above the input block that
 filters, ranks, and completes them, with `Tab` or `Enter` committing the
-highlighted one and `Esc` closing the band before it means anything else.
+highlighted one and `Esc` closing the band before it means anything else. The
+registry also declares each command's arguments: `/theme` takes an optional
+`light` or `dark` value, and while the caret is in that argument word the band
+lists those values in the same three columns, completing one with a trailing
+space. A theme is the terminal's warm off-white light palette or its warm
+charcoal dark palette, resolved once per frame so a theme change replays the
+transcript exactly as a resize does. The daemon owns the effective theme:
+`config.toml` supplies the default through `[tui] theme` (absent means light),
+and the stored single-row override in the state database wins over it. `/theme`
+with a value selects that theme through the daemon; with no value it opens a
+picker panel in the chat panel's band region — so the input block keeps its
+rows — where `Up`/`Down` preview the whole window live without persisting
+anything, `Enter` commits through the daemon, and `Esc` reverts the preview.
 
 ## Configuration
 
@@ -194,6 +207,9 @@ kind = "generic-chat-completion-api"  # or "openrouter"
 model = "<model-id>"
 endpoint = "https://<provider>/v1"    # required for generic-chat-completion-api
 credential = "<your-api-key>"
+
+[tui]
+theme = "light"  # optional; "dark" selects the dark palette
 ```
 
 Notes:
@@ -202,6 +218,13 @@ Notes:
   `generic-chat-completion-api`; anything else is rejected with a typed safe
   error. `endpoint` is optional for `openrouter` (the driver uses the
   OpenRouter API default).
+- The optional `[tui] theme` selects the terminal palette: `light` (the
+  default when the section or key is absent) or `dark`. An unknown spelling is
+  rejected with the typed `invalid_tui_theme` validation error, so nothing
+  silently falls back. The daemon answers the effective theme over the typed
+  wire — the state database's single-row override, else this default, else
+  light — and a theme selection records no configuration revision and never
+  rewrites this credential-bearing file.
 - By explicit product decision the credential is open text in this private
   file. Keep the file readable only by your user (e.g. mode `0600` on Unix);
   never commit it. The configuration crate keeps raw text opaque: after
@@ -307,7 +330,7 @@ What `main` does not yet provide (all of it is documented roadmap work):
   delivers as agent-authored modules persisted through the frozen tool
   descriptors ([architecture 20](docs/intention-relay/architecture/20-ipython-kernel-lifecycle.md)).
 - Slice 1.5 core simplification is activated: the event log, snapshots,
-  cursors, and resync are replaced by the eight current-state tables written in
+  cursors, and resync are replaced by the nine current-state tables written in
   one SQLite transaction per state change, and the nine-production-crate
   consolidation and the composition-facade removal are merged on `main`.
 - Slice 2 terminal UX is activated: one `intention-tui` binary carries the
@@ -318,7 +341,9 @@ What `main` does not yet provide (all of it is documented roadmap work):
   version/`AGENTS.md`/`MCPs`/`Skills` overview) while no session is open, opens
   no session at launch, draws one window — the chat panel with markdown answers,
   a multi-line input block, and the registry-driven command hint band above it,
-  and the sessions panel docked to the window's bottom rows — over one palette,
+  and the sessions panel docked to the window's bottom rows — over one light/dark
+  palette system, with `/theme` (`light` or `dark`, or no argument for the
+  previewing picker panel) and the daemon-owned effective theme,
   caches the committed transcript layout,
   streams the live tail through the same block functions as the committed rows,
   and layers `Ctrl+C` and `Esc` into consecutive-press arms for interrupting,
