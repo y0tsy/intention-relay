@@ -8,7 +8,7 @@
 //! the in-flight step text.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
@@ -219,17 +219,18 @@ pub trait ToolExecutionPort: Send + Sync {
 /// per-invocation registration exists.
 ///
 /// The handle also carries the run's **interruption notice budget**: one
-/// [`RunCancellation::cancel`] offers exactly one notice, which the first
-/// interruption boundary to reach it takes with
+/// interruption signal offers exactly one notice, which the first interruption
+/// boundary to reach it takes with
 /// [`RunCancellation::take_interrupt_notice`]. However many boundaries observe
 /// the sticky signal - a round that ends while a tool batch is in flight, a
-/// retry that re-enters a boundary, or two boundaries racing on a loaded host -
-/// the run records one durable notice per interrupt request.
+/// retry wait that re-enters a boundary, or two boundaries racing on a loaded
+/// host - the run records one durable notice per interruption, and
+/// [`RunCancellation::reset`] re-arms the budget for the next one.
 #[derive(Clone, Default)]
 pub struct RunCancellation {
     model: ModelCancellationSignal,
     tool: ToolCancellationSignal,
-    pending_notice: Arc<AtomicUsize>,
+    notice_taken: Arc<AtomicBool>,
 }
 
 /// The cancellation handle carries interior shared state with no safe debug
@@ -252,29 +253,34 @@ impl RunCancellation {
 
     /// Requests cancellation of the run's in-flight operation.
     ///
-    /// One request offers exactly one interruption notice.
+    /// One signal offers exactly one interruption notice.
     pub fn cancel(&self) {
         self.model.cancel();
         self.tool.cancel();
-        self.pending_notice.fetch_add(1, Ordering::AcqRel);
     }
 
     /// Clears the request so the continuing run observes the next interrupt.
+    ///
+    /// Re-arms the notice budget with the signal: the next interruption offers
+    /// its own notice.
     pub fn reset(&self) {
         self.model.reset();
         self.tool.reset();
+        self.notice_taken.store(false, Ordering::Release);
     }
 
-    /// Takes the interruption notice this run's interrupt request still owes.
+    /// Takes the interruption notice this run's current signal still owes.
     ///
-    /// Returns `true` exactly once per [`RunCancellation::cancel`], so the
-    /// boundary that takes it records the run's durable notice while a later
-    /// boundary continues the run with the context it already carries. Every
-    /// path that resets without taking found an empty budget, so a reset never
-    /// leaves a stale notice behind.
+    /// Returns `true` exactly once per interruption, so the boundary that takes
+    /// it records the run's durable notice while a later boundary continues the
+    /// run with the context it already carries. A clear signal owes nothing, so
+    /// a path that resets without taking cannot leave a stale notice behind.
     #[must_use]
     pub fn take_interrupt_notice(&self) -> bool {
-        self.pending_notice.swap(0, Ordering::AcqRel) > 0
+        if !self.is_cancelled() {
+            return false;
+        }
+        !self.notice_taken.swap(true, Ordering::AcqRel)
     }
 
     /// Returns whether cancellation has been requested for this run.
@@ -1032,9 +1038,13 @@ where
         use futures_util::{FutureExt, future::Either};
 
         if input.cancellation.is_cancelled() {
-            let message = interrupt_notice_message()?;
-            self.record_interrupt_notice(input)?;
-            extra_messages.push(message);
+            if input.cancellation.take_interrupt_notice() {
+                let message = interrupt_notice_message()?;
+                self.record_interrupt_notice(input)?;
+                extra_messages.push(message);
+            } else {
+                input.cancellation.reset();
+            }
             return Ok(());
         }
         let delay = self.time.sleep(RETRY_DELAY).fuse();
@@ -1042,9 +1052,13 @@ where
         futures_util::pin_mut!(delay, cancelled);
         match futures_util::future::select(cancelled, delay).await {
             Either::Left(((), _)) => {
-                let message = interrupt_notice_message()?;
-                self.record_interrupt_notice(input)?;
-                extra_messages.push(message);
+                if input.cancellation.take_interrupt_notice() {
+                    let message = interrupt_notice_message()?;
+                    self.record_interrupt_notice(input)?;
+                    extra_messages.push(message);
+                } else {
+                    input.cancellation.reset();
+                }
                 Ok(())
             }
             Either::Right(((), _)) => Ok(()),
