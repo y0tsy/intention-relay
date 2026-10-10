@@ -1,5 +1,8 @@
 //! Non-production fixtures for durable integration tests.
 
+pub mod daemon_process;
+pub mod fake_provider;
+
 mod model_fixtures;
 
 use std::path::Path;
