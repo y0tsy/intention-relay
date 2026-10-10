@@ -79,16 +79,45 @@ impl SubscribeRunCommandDto {
     }
 }
 
+/// The channel one transient delta chunk belongs to.
+///
+/// One model step streams two independent text channels before it commits: the
+/// reasoning it thinks the answer through, and the answer that becomes its
+/// assistant row. The channel is the only thing that tells them apart, so a
+/// client can buffer the reasoning without ever merging it into the answer.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextDeltaChannelDto {
+    /// The answer text the step commits as the text of its assistant row.
+    Answer,
+    /// The reasoning the step precedes its answer with.
+    Reasoning,
+}
+
+impl TextDeltaChannelDto {
+    /// Returns the stable wire name of the channel.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Answer => "answer",
+            Self::Reasoning => "reasoning",
+        }
+    }
+}
+
 /// One transient provisional text delta from a running model step.
 ///
 /// A text delta is best-effort advance notice: it is never persisted and never
 /// replayed after a reconnect, so a client renders it only until the committed
-/// assistant row of the same step arrives.
+/// assistant row of the same step arrives. It names the step it belongs to and
+/// which of that step's two text channels it carries, so the answer and the
+/// reasoning it precedes stay separate from the first chunk on.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TextDeltaFrameDto {
     session_id: SessionId,
     run_id: RunId,
     step: u32,
+    channel: TextDeltaChannelDto,
     text: String,
 }
 
@@ -102,11 +131,13 @@ impl<'de> Deserialize<'de> for TextDeltaFrameDto {
             session_id: SessionId,
             run_id: RunId,
             step: u32,
+            channel: TextDeltaChannelDto,
             text: String,
         }
 
         let raw = RawTextDeltaFrameDto::deserialize(deserializer)?;
-        Self::new(raw.session_id, raw.run_id, raw.step, raw.text).map_err(serde::de::Error::custom)
+        Self::new(raw.session_id, raw.run_id, raw.step, raw.channel, raw.text)
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -120,6 +151,7 @@ impl TextDeltaFrameDto {
         session_id: SessionId,
         run_id: RunId,
         step: u32,
+        channel: TextDeltaChannelDto,
         text: impl Into<String>,
     ) -> DtoResult<Self> {
         let text = text.into();
@@ -133,6 +165,7 @@ impl TextDeltaFrameDto {
                 session_id,
                 run_id,
                 step,
+                channel,
                 text,
             })
         }
@@ -156,6 +189,12 @@ impl TextDeltaFrameDto {
         self.step
     }
 
+    /// Returns the step's text channel this chunk belongs to.
+    #[must_use]
+    pub const fn channel(&self) -> TextDeltaChannelDto {
+        self.channel
+    }
+
     /// Returns the provisional text chunk.
     #[must_use]
     pub fn text(&self) -> &str {
@@ -168,9 +207,10 @@ impl TextDeltaFrameDto {
 /// The wire tag is `kind` with `content` for one committed transcript row,
 /// `status` for one committed run projection, and `text_delta` for one
 /// transient provisional model chunk; the payload travels in `data`. No frame
-/// carries an event position: a text delta names only its model step. A status
-/// frame carries the committed projection itself, never a status delta a client
-/// would have to merge.
+/// carries an event position: a text delta names its model step and the
+/// channel of that step the chunk belongs to. A status frame carries the
+/// committed projection itself, never a status delta a client would have to
+/// merge.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum RunStreamFrameDto {

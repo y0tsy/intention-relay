@@ -17,7 +17,7 @@ use intention_engine::{
     ModelRunExecutionService, ModelTextDeltaPort, RunCancellation, ToolExecutionPort,
     ToolResultOutcomeDto,
 };
-use intention_proto::{DtoResult, ErrorDto, RunId, SessionId};
+use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TextDeltaChannelDto};
 use intention_proto::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
 use intention_providers::{
     FinishReasonDto, ModelEventDto, ModelMessageDto, ModelRequestDto, ModelRoleDto,
@@ -63,7 +63,7 @@ impl ToolExecutionPort for NeverInvokedToolExecutor {
 
 /// Captures every transient text-delta observation of one execution.
 struct CapturingTextDeltaPort {
-    deltas: Mutex<Vec<(u32, String)>>,
+    deltas: Mutex<Vec<(u32, TextDeltaChannelDto, String)>>,
 }
 
 impl CapturingTextDeltaPort {
@@ -74,9 +74,10 @@ impl CapturingTextDeltaPort {
         }
     }
 
-    /// Returns every observed `(step, text)` pair in publication order.
+    /// Returns every observed `(step, channel, text)` triple in publication
+    /// order.
     #[must_use]
-    fn deltas(&self) -> Vec<(u32, String)> {
+    fn deltas(&self) -> Vec<(u32, TextDeltaChannelDto, String)> {
         self.deltas
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -85,11 +86,11 @@ impl CapturingTextDeltaPort {
 }
 
 impl ModelTextDeltaPort for CapturingTextDeltaPort {
-    fn text_delta(&self, step: u32, text: &str) {
+    fn text_delta(&self, step: u32, channel: TextDeltaChannelDto, text: &str) {
         self.deltas
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push((step, text.to_owned()));
+            .push((step, channel, text.to_owned()));
     }
 }
 
@@ -1239,7 +1240,7 @@ fn a_persisted_window_policy_disagreement_fails_the_run_before_provider_work() {
 }
 
 #[test]
-fn text_delta_port_observes_every_chunk_with_its_model_step_index() {
+fn text_delta_port_observes_both_channels_with_their_model_step_index() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = fixture_snapshot_with_model("fixture");
@@ -1291,11 +1292,13 @@ fn text_delta_port_observes_every_chunk_with_its_model_step_index() {
     assert_eq!(
         deltas.deltas(),
         vec![
-            (0, "partial ".to_owned()),
-            (0, "answer".to_owned()),
-            (1, "final answer".to_owned()),
+            (0, TextDeltaChannelDto::Reasoning, "why".to_owned()),
+            (0, TextDeltaChannelDto::Answer, "partial ".to_owned()),
+            (0, TextDeltaChannelDto::Answer, "answer".to_owned()),
+            (1, TextDeltaChannelDto::Answer, "final answer".to_owned()),
         ],
-        "every text chunk is published once with its own step, and reasoning is never text"
+        "every chunk is published once with its own step and channel, and the \
+         reasoning channel never becomes answer text"
     );
     let messages = repository
         .messages
@@ -1404,8 +1407,8 @@ fn an_unattached_text_delta_port_keeps_the_run_behavior_unchanged() {
     assert_eq!(
         observed.deltas(),
         vec![
-            (0, "partial answer".to_owned()),
-            (1, "final answer".to_owned()),
+            (0, TextDeltaChannelDto::Answer, "partial answer".to_owned()),
+            (1, TextDeltaChannelDto::Answer, "final answer".to_owned()),
         ],
         "the attached port observed both model steps of the unchanged run"
     );

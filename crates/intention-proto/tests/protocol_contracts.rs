@@ -19,9 +19,9 @@ use intention_proto::{
     ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto,
     RunProjectionDto, RunStatusDto, RunStreamFrameDto, RunSubscriptionSnapshotDto,
     SendUserTurnAcceptedDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionSnapshotDto,
-    SessionSummariesDto, SessionSummaryDto, SubscribeRunCommandDto, TextDeltaFrameDto,
-    decode_request_line, decode_response, encode_reply, encode_request, parse_daemon_message,
-    parse_run_frame, run_status_is_terminal, validate_run_status_transition,
+    SessionSummariesDto, SessionSummaryDto, SubscribeRunCommandDto, TextDeltaChannelDto,
+    TextDeltaFrameDto, decode_request_line, decode_response, encode_reply, encode_request,
+    parse_daemon_message, parse_run_frame, run_status_is_terminal, validate_run_status_transition,
 };
 use intention_proto::{ConfigRevisionId, IdempotencyKey, MessageKindDto, ProjectId, RunId};
 use intention_proto::{RunModeDto, SessionId, TurnId, WorkspaceId};
@@ -307,12 +307,21 @@ fn session_lists_round_trip_with_their_omitted_count() {
 fn text_delta_frames_round_trip_as_transient_chunks() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let delta = TextDeltaFrameDto::new(session_id, run_id, 2, "partial output")
-        .expect("fixture text delta is valid");
+    let delta = TextDeltaFrameDto::new(
+        session_id,
+        run_id,
+        2,
+        TextDeltaChannelDto::Answer,
+        "partial output",
+    )
+    .expect("fixture text delta is valid");
     assert_eq!(delta.session_id(), session_id);
     assert_eq!(delta.run_id(), run_id);
     assert_eq!(delta.step(), 2);
+    assert_eq!(delta.channel(), TextDeltaChannelDto::Answer);
     assert_eq!(delta.text(), "partial output");
+    assert_eq!(TextDeltaChannelDto::Answer.as_str(), "answer");
+    assert_eq!(TextDeltaChannelDto::Reasoning.as_str(), "reasoning");
 
     let frame = RunStreamFrameDto::TextDelta(delta);
     let message = ProtocolDaemonMessageDto::frame(frame.clone());
@@ -320,6 +329,7 @@ fn text_delta_frames_round_trip_as_transient_chunks() {
     let value: serde_json::Value = serde_json::from_str(&line).expect("frame line is JSON");
     assert_eq!(value["data"]["kind"], "text_delta");
     assert_eq!(value["data"]["data"]["step"], 2);
+    assert_eq!(value["data"]["data"]["channel"], "answer");
     assert_eq!(value["data"]["data"]["text"], "partial output");
     assert!(
         !line.contains("cursor") && !line.contains("sequence"),
@@ -329,6 +339,37 @@ fn text_delta_frames_round_trip_as_transient_chunks() {
     assert!(
         decode_response(&line, 1).is_err(),
         "a text delta is never accepted as a correlated reply"
+    );
+
+    // The reasoning channel is the same frame with another discriminator: one
+    // shape, two channels, and no second kind of transient frame.
+    let reasoning = RunStreamFrameDto::TextDelta(
+        TextDeltaFrameDto::new(
+            session_id,
+            run_id,
+            2,
+            TextDeltaChannelDto::Reasoning,
+            "weighing the options",
+        )
+        .expect("fixture reasoning delta is valid"),
+    );
+    let line = serde_json::to_string(&ProtocolDaemonMessageDto::frame(reasoning.clone()))
+        .expect("serializes");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&line).expect("frame line is JSON")["data"]["data"]
+            ["channel"],
+        "reasoning"
+    );
+    assert_eq!(
+        parse_run_frame(&line).expect("the reasoning frame parses"),
+        reasoning
+    );
+    assert!(
+        serde_json::from_str::<RunStreamFrameDto>(
+            r#"{"kind":"text_delta","data":{"session_id":"11111111-1111-4111-8111-111111111111","run_id":"22222222-2222-4222-8222-222222222222","step":0,"text":"no channel"}}"#
+        )
+        .is_err(),
+        "a delta without a channel is not a current frame"
     );
 }
 
@@ -365,7 +406,7 @@ fn session_summaries_and_text_deltas_validate_their_required_shape() {
         "invalid_session_summaries"
     );
     assert_eq!(
-        TextDeltaFrameDto::new(session_id, run_id, 0, "")
+        TextDeltaFrameDto::new(session_id, run_id, 0, TextDeltaChannelDto::Answer, "")
             .expect_err("an empty text delta is rejected")
             .code(),
         "invalid_text_delta"

@@ -12,7 +12,9 @@ use intention_proto::{
     DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, ProviderErrorDto, RunId,
     SessionId, TimestampDto, ToolCallDto, UsageDto,
 };
-use intention_proto::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
+use intention_proto::{
+    MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto, TextDeltaChannelDto,
+};
 pub use intention_providers::{
     AssistantReasoningDto, ModelCancellationSignal, ModelCancelledFuture, ModelEventDto,
     ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
@@ -101,13 +103,15 @@ pub type ModelSleepFuture<'a> =
 /// Best-effort observation of one uncommitted provider text chunk.
 ///
 /// The model-run executor reports every provider text chunk here together with
-/// the 0-based index of the model step that produced it. The observation is
-/// transient: it never becomes durable state, never fails a run, and never
-/// changes the assistant row the step commits when it closes. A run without an
-/// attached port behaves exactly like one whose port ignores every call.
+/// the 0-based index of the model step that produced it and the step's text
+/// channel the chunk belongs to: the reasoning the step thinks through, or the
+/// answer it commits. The observation is transient: it never becomes durable
+/// state, never fails a run, and never changes the assistant row the step
+/// commits when it closes. A run without an attached port behaves exactly like
+/// one whose port ignores every call.
 pub trait ModelTextDeltaPort: Send + Sync {
-    /// Observes one streamed text chunk of the model step at `step`.
-    fn text_delta(&self, step: u32, text: &str);
+    /// Observes one streamed text chunk of `channel` at the model step `step`.
+    fn text_delta(&self, step: u32, channel: TextDeltaChannelDto, text: &str);
 }
 
 /// Safe terminal outcome of one tool call returned by the execution port.
@@ -438,9 +442,10 @@ where
 
     /// Attaches the transient text-delta observation port.
     ///
-    /// The port receives every provider text chunk of the run; it cannot
-    /// return a value or an error, so its presence never changes the run's
-    /// state or its commits.
+    /// The port receives every provider text chunk of the run, tagged with the
+    /// model step and the text channel that produced it; it cannot return a
+    /// value or an error, so its presence never changes the run's state or its
+    /// commits.
     #[must_use]
     pub const fn with_text_delta_port(mut self, port: &'a dyn ModelTextDeltaPort) -> Self {
         self.text_delta = Some(port);
@@ -908,10 +913,17 @@ where
             match event {
                 ModelEventDto::Started => {}
                 ModelEventDto::TextDelta { content } => {
-                    self.publish_text_delta(step, &content);
+                    self.publish_text_delta(step, TextDeltaChannelDto::Answer, &content);
                     state.push_text(&content);
                 }
                 ModelEventDto::ReasoningDelta { content } => {
+                    // The reasoning channel is published like the answer, so a
+                    // live observer can render the step's thinking as it
+                    // streams. A textless presence marker carries no text and
+                    // is not published: the port observes text.
+                    if !content.is_empty() {
+                        self.publish_text_delta(step, TextDeltaChannelDto::Reasoning, &content);
+                    }
                     // The accumulated echo is bounded per round at the
                     // attachment's representable bound: a round that crosses it
                     // is marked unrepresentable and never truncated, and empty
@@ -1090,9 +1102,9 @@ where
     ///
     /// The chunk is uncommitted step text, so the publication is best-effort:
     /// it never fails the run and never touches run state.
-    fn publish_text_delta(&self, step: u32, text: &str) {
+    fn publish_text_delta(&self, step: u32, channel: TextDeltaChannelDto, text: &str) {
         if let Some(port) = self.text_delta {
-            port.text_delta(step, text);
+            port.text_delta(step, channel, text);
         }
     }
 
