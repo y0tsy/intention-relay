@@ -312,6 +312,8 @@ fn text(parser: &mut lexopt::Parser) -> Result<String, String> {
 /// # Errors
 ///
 /// Returns the usage message for a mode the grammar does not declare.
+// @todo(core): parse the value through the core's run-mode vocabulary
+// (`RunModeDto::parse`) instead of re-spelling the durable strings here.
 fn mode_value(value: &str) -> Result<RunModeDto, String> {
     match value {
         "plan" => Ok(RunModeDto::Plan),

@@ -53,6 +53,9 @@ impl AppState {
             RunStreamFrameDto::Content(message) => {
                 // A content frame repeating the newest accepted row is the row the
                 // snapshot already carried; the wire carries no row identity.
+                // @todo(core): reconcile committed transcript rows in the client
+                // (a durable row identity is a core fact) instead of comparing
+                // whole DTOs in the front end.
                 if self.transcript.last() != Some(&message) {
                     self.push_transcript_row(message);
                     self.trim_transcript();
@@ -142,6 +145,9 @@ impl AppState {
 /// The run subscription snapshot and the session snapshot read the same durable
 /// transcript, so one may carry rows the other already shows; the ordered match
 /// keeps repeated-but-distinct rows (a user sending the same text twice) apart.
+// @todo(core): merge the session read and the run-subscription read into one
+// ordered transcript in the client; the front end must not reconcile two reads
+// of the same store by matching rows in order.
 fn missing_rows(
     existing: &[MessageProjectionDto],
     rows: &[MessageProjectionDto],

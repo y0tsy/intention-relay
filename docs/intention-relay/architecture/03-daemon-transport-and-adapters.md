@@ -518,6 +518,19 @@ fabricated value. The table below names each one, taken from the markers in the 
 | an unknown `tool_id`'s plate | a closed set of wire tool ids |
 | a `notice` block's text-only body | a notice code or severity |
 
+A second marker class names work the terminal still performs that belongs to the core rather than a fact it
+lacks. Each site carries the same `@todo(core):` prefix and names what the core should own:
+
+| The terminal still | The core should own |
+| --- | --- |
+| matches a wire `tool_id` against the six tool names (`tui/panes/tools.rs`) | the closed set of tool ids and their typed kind |
+| decodes a tool call's arguments document and reads `path`, `offset`, `limit`, `pattern`, `scope`, `program`, and `args` (`tui/panes/tools.rs`) | typed tool-argument structs |
+| splits a tool result's text into a path list, a located hit, or a preview (`tui/panes/tools.rs`) | a typed tool result and its metadata |
+| picks the `--continue` session from list position or `updated_at` (`app/sessions.rs`, `app/browser.rs`, `headless.rs`) | the session recency order and the continue target |
+| de-duplicates and merges committed transcript rows by value (`app/run.rs`) | row identity and transcript reconciliation in the client |
+| parses `--mode` against hand-spelled `plan`/`build` (`cli.rs`) | the durable run-mode vocabulary |
+| runs civil-from-days arithmetic on a raw Unix second (`tui/screens/sessions.rs`) | a typed timestamp and its calendar reading |
+
 ### Frame cost
 
 The committed transcript is laid out once into neutral rows and cached per (pane width, theme, transcript epoch,

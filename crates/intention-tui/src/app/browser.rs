@@ -232,6 +232,8 @@ impl SessionsBrowserState {
                 .collect();
             // The daemon already orders by recency; sorting here makes the
             // browser's own contract explicit and survives any other source.
+            // @todo(core): the recency order of a session list is a core fact;
+            // read the core's order instead of re-sorting a raw `updated_at`.
             rows.sort_by_key(|row| Reverse(row.updated_at));
             rows
         };

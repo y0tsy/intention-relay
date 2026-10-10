@@ -617,6 +617,9 @@ fn relative_time(updated_at: i64, now: i64) -> String {
 /// The conversion is the civil-from-days algorithm: `days` counts from
 /// 1970-01-01, the epoch is shifted to 0000-03-01 so a leap day closes a
 /// 400-year era, and the era and the year inside it give the day of the year.
+// @todo(core): the wire carries `updated_at` as a raw Unix-second scalar; a
+// typed core timestamp should own the epoch and its calendar reading, so the
+// pane never does calendar arithmetic on a raw field.
 fn civil_month_day(unix_seconds: i64) -> (usize, u32) {
     let days = unix_seconds.div_euclid(DAY_SECONDS) + 719_468;
     let era = days.div_euclid(146_097);

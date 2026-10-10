@@ -148,6 +148,9 @@ fn terminal_outcome(status: Option<RunStatusDto>) -> Option<RunOutcome> {
 ///
 /// The daemon orders summaries by recency and then by session identity, so the
 /// first summary carrying the maximum update time is the continued session.
+// @todo(core): resolve the continue target in the core (the client or the
+// daemon) instead of re-deriving the maximum `updated_at` from a raw field in
+// the front end.
 fn most_recent(summaries: &[SessionSummaryDto]) -> Option<SessionId> {
     let mut newest: Option<SessionSummaryDto> = None;
     for summary in summaries {

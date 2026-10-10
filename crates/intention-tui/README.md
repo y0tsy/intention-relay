@@ -196,6 +196,14 @@ Rules the panes keep:
   description, and category, or value, description, and argument - is a
   front-end registry fact, and every picker row is a theme fact, so nothing in
   either can be a `@todo(core)`.
+- The same `@todo(core)` marker also names work the front end still performs
+  that belongs to the core rather than a fact it lacks: the tool arguments and
+  result payloads `src/tui/panes/tools.rs` parses, the session recency order
+  and continue target `src/app/sessions.rs`, `src/app/browser.rs`, and
+  `src/headless.rs` derive from raw fields, the transcript rows
+  `src/app/run.rs` reconciles by value, the `--mode` spelling `src/cli.rs`
+  repeats, and the calendar arithmetic `src/tui/screens/sessions.rs` runs on a
+  raw Unix second. Each marker names what the core should own.
 
 ## Palette
 

@@ -106,6 +106,8 @@ const NOTE_NO_CALL: &str =
     "the call row for this result is not committed, so its arguments are unknown";
 
 /// The one tool type a committed row names by its wire `tool_id`.
+// @todo(core): declare the closed set of tool ids in the core and map the wire
+// `tool_id` to a typed tool kind; the pane must not string-match tool names.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ToolKind {
     /// The `read` tool: a file's requested range.
@@ -303,6 +305,8 @@ impl<'a> Exchange<'a> {
 }
 
 /// One call's arguments document, read without trusting its shape.
+// @todo(core): decode the tool-arguments document into typed core argument
+// structs; the pane must not run `serde_json` or probe JSON field types.
 enum Arguments {
     /// A JSON object document, field by field.
     Object(Map<String, Value>),
@@ -410,9 +414,12 @@ fn read_only_content(
 /// read-only result is a file preview. A line the parser cannot read is kept
 /// whole in the result ink rather than dropped, and the whole list is bounded
 /// with a `… N more rows` marker.
-// @todo(core): the durable rows carry no typed result metadata - a read
-// result's `truncated` flag, for one - so a preview shows the content's own
-// `[truncated]` line where the tool wrote one and never invents the flag.
+// @todo(core): the durable rows carry no typed result: parsing a `glob` path
+// list, a `grep` hit's `path:line:column` location, or a read preview out of
+// the result text belongs to the core, as does the metadata a preview cannot
+// invent (a read result's `truncated` flag, for one), so a preview shows the
+// content's own `[truncated]` line where the tool wrote one and never invents
+// the flag.
 fn result_rows(
     kind: ToolKind,
     content: &str,
@@ -495,6 +502,9 @@ fn other_content(
 /// A document that is not one JSON object is never parsed into facts: the
 /// caller keeps its raw text muted and shows the same plate every such
 /// document shows.
+// @todo(core): derive the argument facts - `path`, `offset`, `limit`,
+// `pattern`, `scope`, `program`, `args`, and the joined command line - from
+// typed core argument structs; the pane must not read the document's keys.
 fn arguments_facts(tool_id: &str, arguments: &Arguments) -> (Vec<String>, Option<String>) {
     if arguments.raw().is_some() {
         return (Vec::new(), Some(PLATE_MALFORMED.to_owned()));
