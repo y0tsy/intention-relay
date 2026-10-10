@@ -130,7 +130,7 @@ pub fn run_blocking(
 fn handle_event(event: &Event, front_end: &mut FrontEnd, app: &mut App) -> bool {
     let mut changed = match event {
         Event::Key(key) => {
-            let action = key_action(key, front_end.state.screen());
+            let action = key_action(key, &front_end.state);
             let pressed = action.is_some();
             if let Some(action) = action {
                 front_end.apply(action);
@@ -1030,5 +1030,40 @@ mod tests {
             ],
             "a notch while the button is held adds the fast step"
         );
+    }
+
+    #[test]
+    fn the_keys_of_one_flow_drive_the_hint_menu_from_a_slash_to_the_command() {
+        use revue::event::{Key, KeyEvent};
+
+        use crate::app::Effect;
+        use crate::tui::key_action;
+        use crate::tui::panes::commands;
+
+        let mut state = AppState::new(None);
+        let mut rows = Vec::new();
+        let mut effects = Vec::new();
+        for key in [
+            KeyEvent::new(Key::Char('/')),
+            KeyEvent::new(Key::Char('n')),
+            KeyEvent::new(Key::Tab),
+            KeyEvent::new(Key::Enter),
+        ] {
+            let action = key_action(&key, &state).expect("each key of the flow asks for an action");
+            effects = state.update(action);
+            rows.push(commands::menu_rows(&state));
+        }
+        assert_eq!(
+            rows,
+            vec![4, 4, 0, 0],
+            "the slash opens the band, the narrowed list keeps it, and the commit closes it"
+        );
+        assert_eq!(
+            effects,
+            vec![Effect::CreateSession],
+            "the second Enter of the flow runs the command the menu completed"
+        );
+        assert_eq!(state.input(), "", "the command left the input line empty");
+        assert_eq!(state.notice(), Some("creating a session"));
     }
 }

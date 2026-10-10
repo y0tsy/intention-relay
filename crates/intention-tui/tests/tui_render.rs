@@ -22,7 +22,8 @@ use intention_proto::{
     TurnId, WorkspaceId, WorkspaceRootDto,
 };
 use intention_tui::app::{
-    Action, AppState, BrowserCursorMove, InputCursorMove, TranscriptScroll, short_identifier,
+    Action, AppState, BrowserCursorMove, InputCursorMove, MenuMove, TranscriptScroll,
+    short_identifier,
 };
 use intention_tui::tui::RevueView;
 use revue::runtime::render::Modifier;
@@ -1125,6 +1126,132 @@ fn markdown_inside_a_user_card_renders() {
     pilot.assert_contains("╭─ ❯ you");
     pilot.assert_contains("let x = 1;");
     pilot.assert_contains("│");
+}
+
+/// Returns the chat state of one committed answer with `typed` in the input.
+fn typed_state(typed: &str) -> AppState {
+    let session_id = fixture_session(FIRST_SESSION);
+    let run_id = RunId::new();
+    let mut state = open_state(
+        session_id,
+        vec![row(
+            session_id,
+            run_id,
+            MessageKindDto::Assistant,
+            "the committed answer",
+        )],
+    );
+    for character in typed.chars() {
+        state.update(Action::InputChar(character));
+    }
+    state
+}
+
+#[test]
+fn the_hint_menu_renders_its_three_columns_above_the_input_block() {
+    let without = typed_state("");
+    let with = typed_state("/");
+    let closed = TestApp::with_size(RevueView::new(&without), WINDOW_WIDTH, WINDOW_HEIGHT);
+    let mut opened = TestApp::with_size(RevueView::new(&with), WINDOW_WIDTH, WINDOW_HEIGHT);
+
+    let (band_x, band_row) = find_text(&opened, "╭─ commands");
+    let (_, cursor_row) = find_text(&opened, "█");
+    assert!(
+        band_row < cursor_row,
+        "the band sits above the input block, not over it: {band_row} < {cursor_row}"
+    );
+    assert!(
+        band_row > 0,
+        "the transcript keeps the rows above the band: {band_row}"
+    );
+
+    let pilot = Pilot::new(&mut opened);
+    pilot.assert_line_contains(band_row, "commands");
+    pilot.assert_line_contains(band_row + 1, "> /new");
+    pilot.assert_line_contains(band_row + 1, "create a new session in this workspace");
+    pilot.assert_line_contains(band_row + 1, "Session");
+    pilot.assert_line_contains(band_row + 2, "/sessions");
+    pilot.assert_line_contains(band_row + 2, "browse, filter, and switch sessions");
+    pilot.assert_line_contains(band_row + 2, "Navigation");
+    pilot.assert_cell(band_x, band_row + 3, '╰');
+    pilot.assert_cell(band_x, band_row + 4, '╭');
+
+    // The band takes its rows out of the transcript: the committed answer is
+    // still shown, and the input block and the detail line keep their rows.
+    pilot.assert_contains("the committed answer");
+    let (_, closed_cursor) = find_text(&closed, "█");
+    let (_, closed_detail) = find_text(&closed, "enter sends");
+    let (_, opened_detail) = find_text(&opened, "enter sends");
+    assert_eq!(
+        (cursor_row, opened_detail),
+        (closed_cursor, closed_detail),
+        "the menu never moves the input block or the detail line"
+    );
+}
+
+#[test]
+fn the_hint_menu_narrows_and_moves_its_highlight() {
+    let state = typed_state("/s");
+    let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, WINDOW_HEIGHT);
+    let (_, band_row) = find_text(&app, "╭─ commands");
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_line_contains(band_row + 1, "> /sessions");
+    assert!(
+        !pilot.line(band_row + 1).contains("/new"),
+        "the filter hides every command it does not select: {}",
+        pilot.line(band_row + 1)
+    );
+    pilot.assert_line_contains(band_row + 2, "╰");
+    let (_, badge_row) = find_text(&app, "build");
+    assert_eq!(
+        badge_row,
+        band_row + 4,
+        "one command row and a frame, and the input block follows immediately"
+    );
+
+    let mut state = typed_state("/");
+    let first_row = {
+        let app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, WINDOW_HEIGHT);
+        find_text(&app, "/new").1
+    };
+    state.update(Action::MenuMove(MenuMove::Down));
+    let second_row = {
+        let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, WINDOW_HEIGHT);
+        let pilot = Pilot::new(&mut app);
+        pilot.assert_contains("> /sessions");
+        pilot.assert_not_contains("> /new");
+        find_text(&app, "/new").1
+    };
+    assert_eq!(
+        first_row, second_row,
+        "the rows do not move when the highlight does"
+    );
+
+    state.update(Action::MenuMove(MenuMove::Up));
+    let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, WINDOW_HEIGHT);
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_contains("> /new");
+    pilot.assert_not_contains("> /sessions");
+}
+
+#[test]
+fn a_slash_that_is_not_the_first_character_opens_no_menu() {
+    let state = typed_state("read /new");
+    let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, WINDOW_HEIGHT);
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_not_contains("╭─ commands");
+    pilot.assert_not_contains("create a new session in this workspace");
+    pilot.assert_contains("read /new");
+}
+
+#[test]
+fn a_window_too_short_for_the_band_keeps_the_input_and_shows_no_band() {
+    let state = typed_state("/");
+    let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, 12);
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_not_contains("╭─ commands");
+    pilot.assert_contains("> /█");
+    pilot.assert_contains("enter sends | /new session | /sessions switch");
 }
 
 #[test]

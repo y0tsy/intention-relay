@@ -5,6 +5,7 @@
 //! screen's `chat_screen` function, so a new pane is a new module here plus its
 //! place in that list.
 
+pub(super) mod commands;
 pub(super) mod input;
 pub(super) mod markdown;
 pub(super) mod status;
