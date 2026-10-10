@@ -287,7 +287,7 @@ fn bootstrap_failure_is_reported_without_client_work() {
 }
 
 #[test]
-fn listing_without_a_selected_session_opens_the_most_recent_session() {
+fn listing_without_a_session_request_opens_nothing() {
     let recent = SessionId::new();
     let older = SessionId::new();
     let mut state = AppState::new(None);
@@ -296,10 +296,41 @@ fn listing_without_a_selected_session_opens_the_most_recent_session() {
         summary(recent, 20),
         summary(older, 10),
     ])));
-    assert_eq!(effects, vec![Effect::OpenSession(recent)]);
+    assert!(
+        effects.is_empty(),
+        "a launch that asked for no session opens none"
+    );
+    assert_eq!(state.session_id(), None);
     assert!(state.sessions_loaded());
     assert_eq!(state.sessions_omitted(), 0);
-    assert_eq!(state.sessions().len(), 2);
+    assert_eq!(state.sessions().len(), 2, "the list stays readable");
+}
+
+#[test]
+fn listing_opens_the_most_recent_session_when_the_caller_asked_to_continue() {
+    let recent = SessionId::new();
+    let older = SessionId::new();
+    let mut state = AppState::new(None).continuing(true);
+    state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
+    let effects = state.update(Action::SessionsListed(summaries(vec![
+        summary(recent, 20),
+        summary(older, 10),
+    ])));
+    assert_eq!(
+        effects,
+        vec![Effect::OpenSession(recent)],
+        "an explicit continuation opens the newest session the daemon reports"
+    );
+}
+
+#[test]
+fn a_continuation_with_no_sessions_to_continue_opens_nothing() {
+    let mut state = AppState::new(None).continuing(true);
+    state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
+    let effects = state.update(Action::SessionsListed(summaries(Vec::new())));
+    assert!(effects.is_empty());
+    assert_eq!(state.session_id(), None);
+    assert!(state.sessions_loaded());
 }
 
 #[test]
@@ -433,19 +464,90 @@ fn submitting_a_turn_sends_its_trimmed_content_and_clears_the_input() {
 }
 
 #[test]
-fn submitting_without_a_session_asks_for_one_instead_of_sending() {
+fn submitting_without_a_session_starts_one_for_the_prompt() {
     let mut state = AppState::new(None);
-    state.update(Action::InputChar('h'));
+    type_text(&mut state, "hello");
     let effects = state.update(Action::InputSubmitted);
-    assert!(effects.is_empty());
     assert_eq!(
-        state.input(),
-        "h",
-        "a turn that was never sent keeps its text"
+        effects,
+        vec![Effect::CreateSession],
+        "a prompt with no session starts the session it needs"
+    );
+    assert_eq!(state.input(), "");
+    assert_eq!(state.cursor(), 0);
+    assert_eq!(state.notice(), Some("creating a session"));
+}
+
+#[test]
+fn a_launch_with_no_session_request_keeps_the_welcome_and_the_first_prompt_creates_a_session() {
+    let listed = SessionId::new();
+    let mut state = AppState::new(None);
+    state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
+    // The daemon reports a session, and the launch opens none of it: no
+    // session request was made.
+    let effects = state.update(Action::SessionsListed(summaries(vec![summary(listed, 20)])));
+    assert!(effects.is_empty());
+    assert_eq!(state.session_id(), None);
+    assert!(state.transcript().is_empty());
+
+    // The first prompt starts the session it needs and is sent as its first
+    // turn once the created session opens.
+    type_text(&mut state, "hello");
+    assert_eq!(
+        state.update(Action::InputSubmitted),
+        vec![Effect::CreateSession]
+    );
+    let created = SessionId::new();
+    assert_eq!(
+        state.update(Action::SessionCreated(created)),
+        vec![Effect::OpenSession(created)]
     );
     assert_eq!(
-        state.notice(),
-        Some("no session is open; use /new to create one")
+        state.update(Action::SessionSnapshotLoaded(snapshot(
+            created,
+            None,
+            Vec::new(),
+        ))),
+        vec![
+            Effect::CloseStream,
+            Effect::SendTurn {
+                session_id: created,
+                content: "hello".to_owned(),
+            },
+        ],
+        "the created session carries the prompt as its first turn"
+    );
+}
+
+#[test]
+fn a_failed_session_creation_drops_the_prompt_it_was_starting() {
+    let mut state = AppState::new(None);
+    type_text(&mut state, "hello");
+    state.update(Action::InputSubmitted);
+    let effects = state.update(Action::SessionCreateFailed(failure()));
+    assert!(effects.is_empty());
+    assert!(
+        state.error().is_some(),
+        "the failure reaches the error line"
+    );
+    // The session a later snapshot opens is not the one the prompt asked for,
+    // so the prompt is gone and never fires against it.
+    let other = SessionId::new();
+    let effects = state.update(Action::SessionSnapshotLoaded(snapshot(
+        other,
+        None,
+        Vec::new(),
+    )));
+    assert_eq!(
+        effects,
+        vec![Effect::CloseStream],
+        "a session opened after the failure carries no prompt"
+    );
+    state.update(Action::NavigateInputHistory(InputHistoryMove::Previous));
+    assert_eq!(
+        state.input(),
+        "hello",
+        "the prompt stays recallable through the input history"
     );
 }
 

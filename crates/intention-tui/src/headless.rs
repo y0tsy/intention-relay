@@ -324,19 +324,25 @@ impl Driver {
 
     /// Opens the session a front end starts from.
     ///
-    /// A selected session is read by its own snapshot; with no selection the
-    /// core's bootstrap path reads the session list and opens the most recent
-    /// session the daemon reports.
+    /// A selected session is read by its own snapshot. With no selection, no
+    /// session is opened unless the caller explicitly asked to continue: the
+    /// core's bootstrap path then reads the session list and opens the newest
+    /// session the daemon reports, and a launch that asked for neither opens
+    /// nothing.
     ///
     /// # Errors
     ///
     /// Returns the typed client failure when the daemon cannot be reached.
-    pub async fn select(&mut self, session: Option<SessionId>) -> Result<(), ErrorDto> {
+    pub async fn select(
+        &mut self,
+        session: Option<SessionId>,
+        continue_session: bool,
+    ) -> Result<(), ErrorDto> {
         let health = self.client.connect_or_bootstrap().await?;
         match session {
             Some(session) => self.show(session).await,
             None => {
-                self.reset(None);
+                self.reset(None, continue_session);
                 self.apply(Action::Bootstrapped(health)).await;
             }
         }
@@ -346,7 +352,7 @@ impl Driver {
 
     /// Reads one known session's current snapshot into the core.
     pub async fn show(&mut self, session: SessionId) {
-        self.reset(Some(session));
+        self.reset(Some(session), false);
         if let Some(action) = self.perform(Effect::OpenSession(session)).await {
             self.apply(action).await;
         }
@@ -355,7 +361,7 @@ impl Driver {
 
     /// Creates a new session from the driver's workspace and mode through the core.
     pub async fn create(&mut self) {
-        self.reset(None);
+        self.reset(None, false);
         self.apply(Action::NewSessionRequested).await;
         self.reported_rows = self.state.transcript().len();
     }
@@ -555,8 +561,8 @@ impl Driver {
     }
 
     /// Drops every session-scoped value a new selection replaces.
-    fn reset(&mut self, session: Option<SessionId>) {
-        self.state = AppState::new(session);
+    fn reset(&mut self, session: Option<SessionId>, continue_session: bool) {
+        self.state = AppState::new(session).continuing(continue_session);
         self.subscription = None;
         self.last_failure = None;
         self.reported_rows = 0;

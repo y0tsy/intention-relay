@@ -44,7 +44,10 @@ async fn converse<W: Write, E: Write>(
         Err(error) => return crate::startup_failure(&error, err),
     };
     let mut driver = Driver::new(client, endpoint, workspace_root, options.mode());
-    if let Err(error) = driver.select(options.session()).await {
+    if let Err(error) = driver
+        .select(options.session(), options.continue_session())
+        .await
+    {
         return crate::startup_failure(&error, err);
     }
     if options.session().is_some() && driver.state().session_id().is_none() {
@@ -90,10 +93,9 @@ async fn converse<W: Write, E: Write>(
                 let _ = writeln!(err, "error: unknown command /{name}");
             }
             Line::Turn(turn) => {
-                if driver.state().session_id().is_none() {
-                    let _ = writeln!(err, "error: no session is open; use /new to create one");
-                    continue;
-                }
+                // A prompt with no session open starts the session it needs:
+                // the core creates and opens one, then sends the prompt as its
+                // first turn.
                 converse_turn(&mut driver, &turn, out, err).await;
             }
         }

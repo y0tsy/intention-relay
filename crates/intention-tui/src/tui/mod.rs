@@ -102,7 +102,7 @@ pub fn run_blocking(
         options.workspace_root().clone(),
         options.mode(),
     )?;
-    let front_end = FrontEnd::new(options.session(), driver);
+    let front_end = FrontEnd::new(options.session(), options.continue_session(), driver);
     front_end.start();
     App::builder()
         .mouse_capture(true)
@@ -341,9 +341,13 @@ struct FrontEnd {
 
 impl FrontEnd {
     /// Creates the front end of one session selection over one client task.
-    const fn new(session: Option<SessionId>, driver: Driver) -> Self {
+    ///
+    /// A launch with no selected session opens none unless the caller asked to
+    /// continue the newest one; either way the user can still ask for a session
+    /// later with `/new` or a row of the sessions browser.
+    const fn new(session: Option<SessionId>, continue_session: bool, driver: Driver) -> Self {
         Self {
-            state: AppState::new(session),
+            state: AppState::new(session).continuing(continue_session),
             driver,
             timer: TurnTimer::new(),
             pointer: Pointer { drag: None },

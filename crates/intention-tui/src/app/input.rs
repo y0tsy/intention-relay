@@ -90,6 +90,11 @@ impl AppState {
     }
 
     /// Sends the input line as a user turn, or runs the slash command it names.
+    ///
+    /// A prompt with no open session starts the session it needs instead of
+    /// being rejected: the state asks for a session creation and remembers the
+    /// prompt, and the snapshot that opens the created session sends it as the
+    /// first turn.
     pub(super) fn submit_input(&mut self) -> Vec<Effect> {
         let content = self.input.trim().to_owned();
         if content.is_empty() {
@@ -102,8 +107,7 @@ impl AppState {
             return self.submit_command(command);
         }
         let Some(session_id) = self.session_id else {
-            self.notice = Some("no session is open; use /new to create one".to_owned());
-            return Vec::new();
+            return self.start_session_for_prompt(content);
         };
         self.history.push(content.clone());
         self.clear_input();
@@ -116,6 +120,29 @@ impl AppState {
             session_id,
             content,
         }]
+    }
+
+    /// Starts the session one submitted prompt needs.
+    ///
+    /// The prompt is kept as the state's pending prompt and the session is
+    /// created and opened like `/new`; the snapshot that opens it sends the
+    /// prompt as its first turn. A second prompt arriving while the first is
+    /// still waiting for its session keeps its text on the input line instead
+    /// of replacing the pending one.
+    fn start_session_for_prompt(&mut self, content: String) -> Vec<Effect> {
+        if self.pending_prompt.is_some() {
+            self.notice = Some("a session is already being created".to_owned());
+            return Vec::new();
+        }
+        self.history.push(content.clone());
+        self.clear_input();
+        self.error = None;
+        // A new turn starts a new measurement: the previous turn's elapsed time
+        // never survives into the next run's status line.
+        self.elapsed_millis = None;
+        self.note("creating a session".to_owned());
+        self.pending_prompt = Some(content);
+        vec![Effect::CreateSession]
     }
 
     /// Runs one slash command, spelled without its leading `/`.

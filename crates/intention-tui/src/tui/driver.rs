@@ -23,13 +23,16 @@ pub struct TuiOptions {
     workspace_root: WorkspaceRootDto,
     mode: RunModeDto,
     session: Option<SessionId>,
+    continue_session: bool,
 }
 
 impl TuiOptions {
     /// Creates the front-end options for one workspace, run mode, and session.
     ///
-    /// `session` is the session the caller selected; `None` opens the most recent
-    /// session once the daemon reports the session list.
+    /// `session` is the session the caller selected; `None` opens nothing, so
+    /// the launch shows the welcome state until the user asks for a session. A
+    /// caller that wants the newest session opened asks for it explicitly with
+    /// [`TuiOptions::continuing`].
     #[must_use]
     pub const fn new(
         workspace_root: WorkspaceRootDto,
@@ -40,7 +43,18 @@ impl TuiOptions {
             workspace_root,
             mode,
             session,
+            continue_session: false,
         }
+    }
+
+    /// Returns these options asking to continue the newest session, or not.
+    ///
+    /// The request is explicit - the command line's `--continue` - and it is
+    /// the only launch request that opens a session the caller did not name.
+    #[must_use]
+    pub const fn continuing(mut self, continue_session: bool) -> Self {
+        self.continue_session = continue_session;
+        self
     }
 
     /// Returns the workspace root a new session is created with.
@@ -59,6 +73,12 @@ impl TuiOptions {
     #[must_use]
     pub const fn session(&self) -> Option<SessionId> {
         self.session
+    }
+
+    /// Returns whether the caller asked to continue the most recent session.
+    #[must_use]
+    pub const fn continue_session(&self) -> bool {
+        self.continue_session
     }
 }
 

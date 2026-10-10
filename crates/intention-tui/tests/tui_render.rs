@@ -1643,3 +1643,35 @@ fn the_welcome_state_never_covers_a_row_the_core_reports() {
     );
     assert!(app.find_text("Skills @todo(core)").is_none());
 }
+
+#[test]
+fn a_launch_that_lists_sessions_shows_the_welcome_until_a_session_is_asked_for() {
+    let listed = fixture_session(FIRST_SESSION);
+    let mut state = AppState::new(None);
+    state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
+    state.update(Action::SessionsListed(
+        SessionSummariesDto::new(vec![summary(listed)], 0)
+            .expect("the fixture session list is coherent"),
+    ));
+    assert_eq!(state.session_id(), None, "the launch opened no session");
+    assert!(state.transcript().is_empty());
+    assert_eq!(
+        state.sessions().len(),
+        1,
+        "the session exists and is listed"
+    );
+
+    let app = TestApp::with_size(
+        RevueView::with_now(&state, NOW),
+        WINDOW_WIDTH,
+        WINDOW_HEIGHT,
+    );
+    find_text(&app, "INTENTION");
+    find_text(&app, &format!("Version {}", env!("CARGO_PKG_VERSION")));
+    find_text(&app, "Skills @todo(core)");
+    find_text(&app, "> █");
+    assert!(
+        app.find_text("transcript").is_none(),
+        "a listed session the launch did not ask for draws no transcript"
+    );
+}

@@ -84,7 +84,8 @@ fn run_tui(
         Err(error) => return startup_failure(&error, err).code(),
     };
     let tui_options =
-        intention_tui::tui::TuiOptions::new(workspace_root, options.mode(), options.session());
+        intention_tui::tui::TuiOptions::new(workspace_root, options.mode(), options.session())
+            .continuing(options.continue_session());
     match intention_tui::tui::run_blocking(tui_options, client, endpoint) {
         Ok(()) => ExitStatus::Completed.code(),
         Err(error) => startup_failure(&error, err).code(),
