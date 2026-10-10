@@ -12,8 +12,8 @@ use std::sync::{Mutex, PoisonError};
 use common::{FakeRepository, RecordingCommitObserver, workspace_root};
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
-    ApplicationService, ModelRunCommitDto, ModelRunCommitObserver, RunCancellation,
-    ToolInvocationRequestDto, ToolResultOutcomeDto,
+    ApplicationService, ModelMessageDto, ModelRoleDto, ModelRunCommitDto, ModelRunCommitObserver,
+    RunCancellation, ToolInvocationRequestDto, ToolResultOutcomeDto,
 };
 use intention_proto::{
     CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
@@ -359,6 +359,263 @@ fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection
     assert_eq!(request.model(), "fixture");
     assert_eq!(request.messages().len(), 3);
     assert!(!request.tools().is_empty());
+}
+
+/// Builds one committed tool row of a previous run in the fixture session.
+fn tool_row_fixture(
+    session_id: SessionId,
+    run_id: RunId,
+    kind: MessageKindDto,
+    text: &str,
+    call_id: ToolCallId,
+) -> MessageProjectionDto {
+    MessageProjectionDto::new(
+        session_id,
+        Some(run_id),
+        kind,
+        text,
+        None,
+        Some(call_id),
+        Some("read".to_owned()),
+    )
+    .expect("fixture tool row is valid")
+}
+
+/// Asserts that every replayed assistant tool-call message stays answered by
+/// the tool-role messages that immediately follow it.
+fn assert_tool_calls_stay_answered(messages: &[ModelMessageDto]) {
+    for (index, message) in messages.iter().enumerate() {
+        let Some(calls) = message.tool_calls() else {
+            continue;
+        };
+        let replies = messages[index + 1..]
+            .iter()
+            .take_while(|reply| reply.role() == ModelRoleDto::Tool)
+            .collect::<Vec<_>>();
+        assert_eq!(replies.len(), calls.len(), "every tool call stays answered");
+        assert!(
+            calls
+                .iter()
+                .zip(&replies)
+                .all(|(call, reply)| reply.tool_call_id() == Some(call.call_id())),
+            "each tool reply answers its own call"
+        );
+    }
+}
+
+#[test]
+fn starting_run_context_rebuilds_the_committed_tool_exchange() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let previous_run = RunId::new();
+    let config = fixture_snapshot();
+    let call_id = ToolCallId::new();
+    let context = StartingRunModelContextDto::new(
+        session_id,
+        run_id,
+        config,
+        vec![
+            MessageProjectionDto::new(
+                session_id,
+                None,
+                MessageKindDto::User,
+                "Read hello.txt",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolCall,
+                r#"{"path":"hello.txt"}"#,
+                call_id,
+            ),
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolResult,
+                "hello world",
+                call_id,
+            ),
+            MessageProjectionDto::new(
+                session_id,
+                None,
+                MessageKindDto::Assistant,
+                "done",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            MessageProjectionDto::new(
+                session_id,
+                Some(run_id),
+                MessageKindDto::User,
+                "latest",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+        ],
+    )
+    .expect("fixture context is valid");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .starting_context
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(context);
+
+    let scheduled = ApplicationService::new(&repository)
+        .schedule_starting_run(session_id, run_id, RunCancellation::new())
+        .expect("a committed tool exchange schedules the next run");
+    let messages = scheduled.request().messages();
+    assert_eq!(
+        messages.len(),
+        5,
+        "every committed row becomes its model message"
+    );
+    assert_eq!(messages[0].role(), ModelRoleDto::User);
+    assert_eq!(messages[0].content(), "Read hello.txt");
+    assert_eq!(messages[1].role(), ModelRoleDto::Assistant);
+    let calls = messages[1]
+        .tool_calls()
+        .expect("the call row carries its tool call");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].call_id(), call_id);
+    assert_eq!(calls[0].name(), "read");
+    assert_eq!(calls[0].arguments_json(), r#"{"path":"hello.txt"}"#);
+    assert_eq!(messages[2].role(), ModelRoleDto::Tool);
+    assert_eq!(messages[2].tool_call_id(), Some(call_id));
+    assert_eq!(messages[2].content(), "hello world");
+    assert_eq!(messages[3].role(), ModelRoleDto::Assistant);
+    assert_eq!(messages[3].content(), "done");
+    assert_eq!(messages[4].role(), ModelRoleDto::User);
+    assert_eq!(messages[4].content(), "latest");
+    assert_tool_calls_stay_answered(messages);
+}
+
+#[test]
+fn starting_run_context_omits_unpaired_tool_rows() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let previous_run = RunId::new();
+    let config = fixture_snapshot();
+    let unanswered = ToolCallId::new();
+    let orphaned = ToolCallId::new();
+    let answered = ToolCallId::new();
+    let context = StartingRunModelContextDto::new(
+        session_id,
+        run_id,
+        config,
+        vec![
+            MessageProjectionDto::new(
+                session_id,
+                None,
+                MessageKindDto::User,
+                "first",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            // A committed call whose result never committed: the crash window.
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolCall,
+                r#"{"path":"unanswered.txt"}"#,
+                unanswered,
+            ),
+            // A committed result whose call row does not exist.
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolResult,
+                "orphan result",
+                orphaned,
+            ),
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolCall,
+                r#"{"path":"hello.txt"}"#,
+                answered,
+            ),
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolResult,
+                "hello world",
+                answered,
+            ),
+            MessageProjectionDto::new(
+                session_id,
+                None,
+                MessageKindDto::Assistant,
+                "done",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            MessageProjectionDto::new(
+                session_id,
+                Some(run_id),
+                MessageKindDto::User,
+                "latest",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+        ],
+    )
+    .expect("fixture context is valid");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .starting_context
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(context);
+
+    let scheduled = ApplicationService::new(&repository)
+        .schedule_starting_run(session_id, run_id, RunCancellation::new())
+        .expect("unpaired tool rows never fail the schedule");
+    let messages = scheduled.request().messages();
+    assert_eq!(
+        messages
+            .iter()
+            .map(ModelMessageDto::role)
+            .collect::<Vec<_>>(),
+        vec![
+            ModelRoleDto::User,
+            ModelRoleDto::Assistant,
+            ModelRoleDto::Tool,
+            ModelRoleDto::Assistant,
+            ModelRoleDto::User,
+        ],
+        "only the paired exchange replays, in durable order"
+    );
+    let calls = messages[1]
+        .tool_calls()
+        .expect("the paired call replays as an assistant tool call");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].call_id(), answered);
+    assert_eq!(messages[2].tool_call_id(), Some(answered));
+    assert_eq!(messages[2].content(), "hello world");
+    assert_tool_calls_stay_answered(messages);
+    assert!(
+        messages.iter().all(|message| {
+            message.tool_call_id() != Some(unanswered)
+                && message.tool_call_id() != Some(orphaned)
+                && message
+                    .tool_calls()
+                    .is_none_or(|calls| calls.iter().all(|call| call.call_id() == answered))
+        }),
+        "no unpaired row survives into the model context"
+    );
 }
 
 #[test]

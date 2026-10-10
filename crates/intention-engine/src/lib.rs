@@ -10,14 +10,16 @@ mod runtime;
 
 pub use crate::runtime::*;
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use intention_config::ConfigSnapshotDto;
-use intention_proto::ToolCallId;
 use intention_proto::{
     CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
     PendingTurnProjectionDto, RemoveTurnCommandDto, RunProjectionDto, SendUserTurnCommandDto,
     SessionProjectionDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
+use intention_proto::{ToolCallDto, ToolCallId};
 use intention_storage::{
     AcceptedTurnOutcomeDto, StorageRepositoryDto, ToolResultEvidenceDto,
     ToolResultMetadataEntryDto, ToolResultStatusDto,
@@ -466,27 +468,7 @@ fn schedule_from_context(
     run_id: RunId,
     cancellation: RunCancellation,
 ) -> DtoResult<ModelRunExecutionInputDto> {
-    let messages = context
-        .messages()
-        .iter()
-        .map(|message| {
-            ModelMessageDto::new(
-                match message.kind() {
-                    intention_proto::MessageKindDto::User => ModelRoleDto::User,
-                    intention_proto::MessageKindDto::Assistant => ModelRoleDto::Assistant,
-                    intention_proto::MessageKindDto::Notice => ModelRoleDto::Notice,
-                    intention_proto::MessageKindDto::ToolCall
-                    | intention_proto::MessageKindDto::ToolResult => {
-                        return Err(ErrorDto::validation(
-                            "invalid_model_context",
-                            "a starting run context carries no tool exchange rows",
-                        ));
-                    }
-                },
-                message.text(),
-            )
-        })
-        .collect::<DtoResult<Vec<_>>>()?;
+    let messages = model_context_messages(context.messages())?;
     let request = ModelRequestDto::new(
         context.run_id(),
         context.safe_config().resolved().provider().model(),
@@ -511,6 +493,85 @@ fn schedule_from_context(
         context.safe_config().clone(),
         cancellation,
     ))
+}
+
+/// Rebuilds the ordered model messages of one starting run from its committed
+/// transcript rows.
+///
+/// A `tool_call` row replays as the assistant tool-call message the in-run tool
+/// loop emits: that one call, with identity and wire name from the row and the
+/// committed arguments document. Its `tool_result` row replays as the tool-role
+/// message answering that call.
+///
+/// A call whose result never committed cannot replay: an assistant tool-call
+/// message whose answer is missing is not a valid model context, so the call is
+/// omitted. A result whose call was omitted for that reason, or that never had
+/// a committed call row, is omitted with it. An omitted row stays durable
+/// transcript evidence; the rebuild invents no content in its place.
+///
+/// # Errors
+///
+/// Returns a typed validation error when a tool row does not carry its call
+/// identity and wire tool name, or when a committed call's arguments document
+/// cannot form a model tool call.
+fn model_context_messages(rows: &[MessageProjectionDto]) -> DtoResult<Vec<ModelMessageDto>> {
+    // Only a call whose committed result follows it can replay, so no emitted
+    // assistant tool-call message stays unanswered.
+    let mut first_results: BTreeMap<ToolCallId, usize> = BTreeMap::new();
+    for (index, row) in rows.iter().enumerate() {
+        if row.kind() == MessageKindDto::ToolResult
+            && let Some(call_id) = row.tool_call_id()
+        {
+            first_results.entry(call_id).or_insert(index);
+        }
+    }
+    let mut awaiting_result: BTreeSet<ToolCallId> = BTreeSet::new();
+    let mut messages = Vec::with_capacity(rows.len());
+    for (index, row) in rows.iter().enumerate() {
+        match row.kind() {
+            MessageKindDto::User => {
+                messages.push(ModelMessageDto::new(ModelRoleDto::User, row.text())?);
+            }
+            MessageKindDto::Assistant => {
+                messages.push(ModelMessageDto::new(ModelRoleDto::Assistant, row.text())?);
+            }
+            MessageKindDto::Notice => {
+                messages.push(ModelMessageDto::new(ModelRoleDto::Notice, row.text())?);
+            }
+            MessageKindDto::ToolCall => {
+                let call_id = row.tool_call_id().ok_or_else(incomplete_tool_row)?;
+                if first_results
+                    .get(&call_id)
+                    .is_some_and(|result| *result > index)
+                {
+                    let call = ToolCallDto::new(
+                        call_id,
+                        row.tool_id().ok_or_else(incomplete_tool_row)?,
+                        row.text(),
+                    )?;
+                    messages.push(ModelMessageDto::assistant_tool_calls(None, vec![call])?);
+                    awaiting_result.insert(call_id);
+                }
+            }
+            MessageKindDto::ToolResult => {
+                let call_id = row.tool_call_id().ok_or_else(incomplete_tool_row)?;
+                // Exactly one tool-role message answers each replayed call.
+                if awaiting_result.remove(&call_id) {
+                    messages.push(ModelMessageDto::tool_result(call_id, row.text())?);
+                }
+            }
+        }
+    }
+    Ok(messages)
+}
+
+/// The typed rejection of a committed tool row without its call identity or
+/// wire tool name.
+fn incomplete_tool_row() -> ErrorDto {
+    ErrorDto::validation(
+        "invalid_model_context",
+        "a committed tool row carries its call identity and wire tool name",
+    )
 }
 
 /// Builds the model-visible tool definitions advertised with every scheduled run.
