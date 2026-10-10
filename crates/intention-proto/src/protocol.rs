@@ -11,10 +11,10 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorDto, GetSessionSnapshotQueryDto,
-    InterruptRunCommandDto, MessageProjectionDto, ProjectId, RemoveTurnCommandDto, RunId,
-    RunModeDto, RunProjectionDto, SendUserTurnCommandDto, SessionId, SessionProjectionDto, TurnId,
-    WorkspaceId,
+    ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorCategoryDto, ErrorDto,
+    ErrorRetryDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageProjectionDto,
+    ProjectId, RemoveTurnCommandDto, RunId, RunModeDto, RunProjectionDto, SendUserTurnCommandDto,
+    SessionId, SessionProjectionDto, TurnId, WorkspaceId,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -49,6 +49,112 @@ impl DaemonHealthDto {
     #[must_use]
     pub const fn readiness(self) -> DaemonReadinessDto {
         self.readiness
+    }
+}
+
+/// One presentation theme a client can read and select.
+///
+/// The theme is presentation-only: the daemon answers and stores it, and it
+/// never enters a run's immutable configuration selection.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeDto {
+    /// The light terminal palette.
+    Light,
+    /// The dark terminal palette.
+    Dark,
+}
+
+impl ThemeDto {
+    /// Returns the canonical durable string representation of this theme.
+    ///
+    /// The representation is persisted verbatim, so it must stay byte-identical
+    /// across releases.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    /// Parses the canonical durable string representation of a theme.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe internal error when `value` is not a declared durable theme.
+    pub fn parse(value: &str) -> DtoResult<Self> {
+        match value {
+            "light" => Ok(Self::Light),
+            "dark" => Ok(Self::Dark),
+            _ => Err(ErrorDto::new(
+                "invalid_theme",
+                ErrorCategoryDto::Internal,
+                "the durable theme is not declared",
+                ErrorRetryDto::Never,
+                None,
+            )?),
+        }
+    }
+}
+
+/// The effective terminal settings a client renders with.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TuiSettingsDto {
+    theme: ThemeDto,
+}
+
+impl TuiSettingsDto {
+    /// Creates one effective terminal settings value.
+    #[must_use]
+    pub const fn new(theme: ThemeDto) -> Self {
+        Self { theme }
+    }
+
+    /// Returns the effective terminal theme.
+    #[must_use]
+    pub const fn theme(self) -> ThemeDto {
+        self.theme
+    }
+}
+
+/// One command selecting the terminal theme.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SetTuiThemeCommandDto {
+    theme: ThemeDto,
+}
+
+impl SetTuiThemeCommandDto {
+    /// Creates one theme-selection command.
+    #[must_use]
+    pub const fn new(theme: ThemeDto) -> Self {
+        Self { theme }
+    }
+
+    /// Returns the requested theme.
+    #[must_use]
+    pub const fn theme(self) -> ThemeDto {
+        self.theme
+    }
+}
+
+/// Typed acceptance evidence for one stored theme.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TuiThemeAcceptedDto {
+    theme: ThemeDto,
+}
+
+impl TuiThemeAcceptedDto {
+    /// Creates the acceptance evidence for one stored theme.
+    #[must_use]
+    pub const fn new(theme: ThemeDto) -> Self {
+        Self { theme }
+    }
+
+    /// Returns the accepted theme.
+    #[must_use]
+    pub const fn theme(self) -> ThemeDto {
+        self.theme
     }
 }
 
@@ -511,6 +617,10 @@ pub enum ClientRequestDto {
     GetDaemonHealth,
     /// Obtains the bounded current session list.
     ListSessions,
+    /// Obtains the effective terminal settings.
+    GetTuiSettings,
+    /// Selects and stores the terminal theme.
+    SetTuiTheme(SetTuiThemeCommandDto),
     /// Begins a dedicated run-stream subscription.
     SubscribeRun(SubscribeRunCommandDto),
 }
@@ -566,6 +676,10 @@ pub enum ProtocolResultDto {
     DaemonHealth(DaemonHealthDto),
     /// A bounded current list of session summaries.
     SessionsListed(SessionSummariesDto),
+    /// The effective terminal settings.
+    TuiSettings(TuiSettingsDto),
+    /// A theme selection was stored.
+    TuiThemeSet(TuiThemeAcceptedDto),
     /// The current run state of a new subscription.
     RunSubscribed(RunSubscriptionSnapshotDto),
 }

@@ -25,7 +25,7 @@ use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorCategoryDto, ErrorDto,
     ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId, RemoveTurnCommandDto, RunId,
-    SessionId, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TimestampDto,
+    SessionId, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, ThemeDto, TimestampDto,
     ToolCallId, TurnId, UsageDto, WorkspaceBindingDto, WorkspaceId,
 };
 use intention_proto::{
@@ -41,7 +41,7 @@ const TERMINAL_STATUSES: &str = "'completed','failed','interrupted'";
 /// The transcript projection columns in their canonical decode order.
 const MESSAGE_COLUMNS: &str = "session_id, run_id, kind, text, reasoning, tool_call_id, tool_id";
 
-/// The complete current storage schema (logical version 1): the eight
+/// The complete current storage schema (logical version 1): the nine
 /// current-state tables created directly on open. There is no migration chain,
 /// and no event log, snapshot, cursor, or journal table exists under the single
 /// live schema. `SCHEMA_STAMP` records the version this text implements.
@@ -120,6 +120,10 @@ CREATE TABLE IF NOT EXISTS configuration_revisions (
   snapshot_json TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tui_settings (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  theme TEXT NOT NULL
+);
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_session ON runs(session_id)
   WHERE status NOT IN ('completed','failed','interrupted');
 CREATE INDEX IF NOT EXISTS messages_session_id_id ON messages(session_id, id);
@@ -133,7 +137,7 @@ CREATE INDEX IF NOT EXISTS messages_session_run_id_id ON messages(session_id, ru
 /// column changes: the next open discards the whole database file and its
 /// rollback journal and recreates the current schema from scratch. That discard
 /// is the only version gate; there is no migration path.
-const SCHEMA_STAMP: i32 = 2;
+const SCHEMA_STAMP: i32 = 3;
 
 /// Returns whether the open database already carries the current schema stamp.
 /// A database written under any other stamp is discarded by its opener.
@@ -1383,6 +1387,32 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 )
                 .map_err(storage_error)?;
             Ok(recovered)
+        })
+    }
+
+    fn load_tui_theme(&self) -> DtoResult<Option<ThemeDto>> {
+        let stored = {
+            let connection = self.connection()?;
+            connection
+                .query_row("SELECT theme FROM tui_settings WHERE id=1", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .optional()
+                .map_err(storage_error)?
+        };
+        stored.map(|theme| ThemeDto::parse(&theme)).transpose()
+    }
+
+    fn save_tui_theme(&self, theme: ThemeDto) -> DtoResult<()> {
+        self.with_immediate_transaction(|transaction| {
+            transaction
+                .execute(
+                    "INSERT INTO tui_settings(id, theme) VALUES (1, ?1) \
+                     ON CONFLICT(id) DO UPDATE SET theme=excluded.theme",
+                    [theme.as_str()],
+                )
+                .map_err(storage_error)?;
+            Ok(())
         })
     }
 

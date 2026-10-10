@@ -19,8 +19,9 @@ use intention_proto::{
     ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunId, RunProjectionDto,
     RunStatusDto, RunStreamFrameDto, RunSubscriptionSnapshotDto, SendUserTurnCommandDto,
     SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
-    SubscribeRunCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, TurnId, decode_response,
-    encode_request, parse_run_frame, run_status_is_terminal,
+    SetTuiThemeCommandDto, SubscribeRunCommandDto, TextDeltaChannelDto, TextDeltaFrameDto,
+    ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId, decode_response, encode_request,
+    parse_run_frame, run_status_is_terminal,
 };
 use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncMessageSender, LocalEndpoint,
@@ -290,6 +291,41 @@ impl IntentionClient {
     pub async fn list_sessions(&self) -> DtoResult<SessionSummariesDto> {
         match self.request(ClientRequestDto::ListSessions).await? {
             ProtocolResultDto::SessionsListed(summaries) => Ok(summaries),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Reads the effective terminal settings.
+    ///
+    /// The daemon answers its stored theme override or, before any set, the
+    /// theme the resolved configuration selected.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection, a typed transport or timeout error,
+    /// or an invalid-response error when the reply is not terminal settings.
+    pub async fn tui_settings(&self) -> DtoResult<TuiSettingsDto> {
+        match self.request(ClientRequestDto::GetTuiSettings).await? {
+            ProtocolResultDto::TuiSettings(settings) => Ok(settings),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Selects and stores the terminal theme.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection, a typed transport or timeout error,
+    /// or an invalid-response error when the reply is not the acceptance of the
+    /// requested theme.
+    pub async fn set_tui_theme(&self, theme: ThemeDto) -> DtoResult<TuiThemeAcceptedDto> {
+        match self
+            .request(ClientRequestDto::SetTuiTheme(SetTuiThemeCommandDto::new(
+                theme,
+            )))
+            .await?
+        {
+            ProtocolResultDto::TuiThemeSet(accepted) if accepted.theme() == theme => Ok(accepted),
             _ => Err(invalid_response()),
         }
     }

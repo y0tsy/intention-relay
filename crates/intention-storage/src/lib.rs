@@ -24,7 +24,7 @@ use intention_proto::{
 };
 use intention_proto::{
     DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, RunId,
-    SessionId, TimestampDto, ToolCallId, UsageDto, run_status_is_terminal,
+    SessionId, ThemeDto, TimestampDto, ToolCallId, UsageDto, run_status_is_terminal,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
@@ -729,6 +729,26 @@ pub trait StorageRepositoryDto {
         let messages = self.load_recent_messages(session_id, message_limit)?;
         SessionSnapshotDto::with_projection(session_id, projection, messages)
     }
+
+    /// Loads the durable terminal theme override.
+    ///
+    /// `None` means no override was ever stored: the caller answers from the
+    /// resolved configuration instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when durable storage cannot be read.
+    fn load_tui_theme(&self) -> DtoResult<Option<ThemeDto>>;
+
+    /// Commits the durable terminal theme override in exactly one transaction.
+    ///
+    /// The settings row is a singleton, so a later set replaces the earlier
+    /// value instead of recording a second row.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the override cannot be committed.
+    fn save_tui_theme(&self, theme: ThemeDto) -> DtoResult<()>;
 
     /// Records an already credential-free configuration revision snapshot.
     ///

@@ -19,6 +19,9 @@
     "context_window": {
       "window_tokens": 250000
     },
+    "tui": {
+      "theme": "light"
+    },
     "source_kind": "explicit"
   }
 }

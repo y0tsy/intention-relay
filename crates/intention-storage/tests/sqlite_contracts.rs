@@ -16,7 +16,7 @@ use intention_config::{
 };
 use intention_proto::{
     ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId,
-    RunId, SchemaVersionDto, SessionId, ToolCallId, UsageDto, WorkspaceId,
+    RunId, SchemaVersionDto, SessionId, ThemeDto, ToolCallId, UsageDto, WorkspaceId,
 };
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
@@ -1463,7 +1463,7 @@ fn messages_transcript_indexes_and_stamp_are_current() {
     let stamp: i32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("the schema stamp reads");
-    assert_eq!(stamp, 2, "the created database carries the current stamp");
+    assert_eq!(stamp, 3, "the created database carries the current stamp");
     let mut statement = connection
         .prepare("SELECT name FROM sqlite_master WHERE type='index' ORDER BY name")
         .expect("index catalogue prepares");
@@ -1518,7 +1518,7 @@ fn messages_transcript_indexes_and_stamp_are_current() {
     let stamp: i32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("the recreated stamp reads");
-    assert_eq!(stamp, 2, "the recreated database carries the current stamp");
+    assert_eq!(stamp, 3, "the recreated database carries the current stamp");
 }
 
 #[test]
@@ -2115,4 +2115,82 @@ fn session_list_maps_the_active_run_of_each_session() {
     assert_eq!(running_run_dto.session_id(), running);
     assert_eq!(running_run_dto.run_id(), running_run);
     assert_eq!(running_run_dto.status(), RunStatusDto::Running);
+}
+
+#[test]
+fn tui_theme_round_trips_absent_is_none_and_survives_a_reopen() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    let store = open(&directory);
+    assert_eq!(
+        store.load_tui_theme().expect("absent theme reads"),
+        None,
+        "no stored override answers None"
+    );
+    store
+        .save_tui_theme(ThemeDto::Dark)
+        .expect("the theme commits");
+    assert_eq!(
+        store.load_tui_theme().expect("stored theme reads"),
+        Some(ThemeDto::Dark)
+    );
+    drop(store);
+
+    let reopened = reopen(&directory);
+    assert_eq!(
+        reopened
+            .load_tui_theme()
+            .expect("stored theme reads after reopen"),
+        Some(ThemeDto::Dark),
+        "the committed override survives a reopen"
+    );
+
+    // The settings row is a singleton: a later set replaces its value.
+    reopened
+        .save_tui_theme(ThemeDto::Light)
+        .expect("the theme updates");
+    assert_eq!(
+        reopened.load_tui_theme().expect("updated theme reads"),
+        Some(ThemeDto::Light)
+    );
+    drop(reopened);
+
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for inspection");
+    let table: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tui_settings'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("table lookup runs");
+    assert_eq!(table, 1, "the current schema declares the settings table");
+    let rows: i64 = connection
+        .query_row("SELECT COUNT(*) FROM tui_settings", [], |row| row.get(0))
+        .expect("settings row count reads");
+    assert_eq!(rows, 1, "the settings table holds exactly one row");
+}
+
+#[test]
+fn saving_a_tui_theme_creates_no_configuration_revision() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    let store = open(&directory);
+    store
+        .accept_configuration_revision(snapshot())
+        .expect("configuration revision accepts");
+    store
+        .save_tui_theme(ThemeDto::Dark)
+        .expect("the theme commits");
+    drop(store);
+
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for inspection");
+    let revisions: i64 = connection
+        .query_row("SELECT COUNT(*) FROM configuration_revisions", [], |row| {
+            row.get(0)
+        })
+        .expect("revision count reads");
+    assert_eq!(
+        revisions, 1,
+        "a theme set records no configuration revision"
+    );
 }

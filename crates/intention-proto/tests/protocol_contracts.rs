@@ -19,9 +19,10 @@ use intention_proto::{
     ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto,
     RunProjectionDto, RunStatusDto, RunStreamFrameDto, RunSubscriptionSnapshotDto,
     SendUserTurnAcceptedDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionSnapshotDto,
-    SessionSummariesDto, SessionSummaryDto, SubscribeRunCommandDto, TextDeltaChannelDto,
-    TextDeltaFrameDto, decode_request_line, decode_response, encode_reply, encode_request,
-    parse_daemon_message, parse_run_frame, run_status_is_terminal, validate_run_status_transition,
+    SessionSummariesDto, SessionSummaryDto, SetTuiThemeCommandDto, SubscribeRunCommandDto,
+    TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto,
+    decode_request_line, decode_response, encode_reply, encode_request, parse_daemon_message,
+    parse_run_frame, run_status_is_terminal, validate_run_status_transition,
 };
 use intention_proto::{ConfigRevisionId, IdempotencyKey, MessageKindDto, ProjectId, RunId};
 use intention_proto::{RunModeDto, SessionId, TurnId, WorkspaceId};
@@ -83,6 +84,8 @@ const fn result_kind(request: &ClientRequestDto) -> &'static str {
         ClientRequestDto::GetSessionSnapshot(_) => "session_snapshot",
         ClientRequestDto::GetDaemonHealth => "daemon_health",
         ClientRequestDto::ListSessions => "sessions_listed",
+        ClientRequestDto::GetTuiSettings => "tui_settings",
+        ClientRequestDto::SetTuiTheme(_) => "tui_theme_set",
         ClientRequestDto::SubscribeRun(_) => "run_subscribed",
     }
 }
@@ -105,6 +108,8 @@ fn fixture_requests(session_id: SessionId, run_id: RunId) -> Vec<ClientRequestDt
         ClientRequestDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id)),
         ClientRequestDto::GetDaemonHealth,
         ClientRequestDto::ListSessions,
+        ClientRequestDto::GetTuiSettings,
+        ClientRequestDto::SetTuiTheme(SetTuiThemeCommandDto::new(ThemeDto::Dark)),
         ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, run_id)),
     ]
 }
@@ -126,6 +131,8 @@ fn fixture_results(session_id: SessionId, run_id: RunId) -> Vec<ProtocolResultDt
         ProtocolResultDto::SessionSnapshot(fixture_snapshot(session_id, run_id)),
         ProtocolResultDto::DaemonHealth(DaemonHealthDto::ready()),
         ProtocolResultDto::SessionsListed(fixture_session_summaries(session_id, run_id)),
+        ProtocolResultDto::TuiSettings(TuiSettingsDto::new(ThemeDto::Dark)),
+        ProtocolResultDto::TuiThemeSet(TuiThemeAcceptedDto::new(ThemeDto::Dark)),
         ProtocolResultDto::RunSubscribed(fixture_run_snapshot(session_id, run_id)),
     ]
 }
@@ -172,7 +179,7 @@ fn every_request_round_trips_with_its_named_result_kind() {
     }
     assert_eq!(
         kinds.len(),
-        8,
+        10,
         "the wire implements exactly one request kind per operation"
     );
 }
@@ -301,6 +308,81 @@ fn session_lists_round_trip_with_their_omitted_count() {
         .expect("session summaries deserialize"),
         summaries
     );
+}
+
+#[test]
+fn tui_settings_and_theme_commands_round_trip_with_presentation_spelling() {
+    let settings = TuiSettingsDto::new(ThemeDto::Dark);
+    assert_eq!(settings.theme(), ThemeDto::Dark);
+    let command = SetTuiThemeCommandDto::new(ThemeDto::Light);
+    assert_eq!(command.theme(), ThemeDto::Light);
+    let accepted = TuiThemeAcceptedDto::new(ThemeDto::Light);
+    assert_eq!(accepted.theme(), ThemeDto::Light);
+
+    let request = ClientRequestDto::SetTuiTheme(command);
+    let line =
+        serde_json::to_string(&encode_request(4, request.clone())).expect("request serializes");
+    let value: serde_json::Value = serde_json::from_str(&line).expect("request line is JSON");
+    assert_eq!(value["request"]["kind"], "set_tui_theme");
+    assert_eq!(value["request"]["data"]["theme"], "light");
+    assert_eq!(
+        decode_request_line(&line)
+            .expect("request decodes")
+            .request(),
+        &request
+    );
+
+    let request = ClientRequestDto::GetTuiSettings;
+    let line =
+        serde_json::to_string(&encode_request(5, request.clone())).expect("request serializes");
+    let value: serde_json::Value = serde_json::from_str(&line).expect("request line is JSON");
+    assert_eq!(value["request"]["kind"], "get_tui_settings");
+    assert!(
+        value["request"]["data"].is_null(),
+        "a settings read carries no payload"
+    );
+    assert_eq!(
+        decode_request_line(&line)
+            .expect("request decodes")
+            .request(),
+        &request
+    );
+
+    let reply = encode_reply(4, ProtocolResultDto::TuiSettings(settings));
+    let line = serde_json::to_string(&reply).expect("settings reply serializes");
+    let value: serde_json::Value = serde_json::from_str(&line).expect("reply line is JSON");
+    assert_eq!(value["data"]["result"]["kind"], "tui_settings");
+    assert_eq!(value["data"]["result"]["data"]["theme"], "dark");
+    assert_eq!(
+        decode_response(&line, 4).expect("the correlated reply decodes"),
+        ProtocolResultDto::TuiSettings(settings)
+    );
+
+    let reply = encode_reply(5, ProtocolResultDto::TuiThemeSet(accepted));
+    let line = serde_json::to_string(&reply).expect("theme reply serializes");
+    let value: serde_json::Value = serde_json::from_str(&line).expect("reply line is JSON");
+    assert_eq!(value["data"]["result"]["kind"], "tui_theme_set");
+    assert_eq!(value["data"]["result"]["data"]["theme"], "light");
+    assert_eq!(
+        decode_response(&line, 5).expect("the correlated reply decodes"),
+        ProtocolResultDto::TuiThemeSet(accepted)
+    );
+
+    // An undeclared or absent spelling is not a current theme in either direction.
+    for malformed in [
+        r#"{"kind":"set_tui_theme","data":{"theme":"midnight"}}"#,
+        r#"{"kind":"set_tui_theme","data":{}}"#,
+        r#"{"kind":"tui_settings","data":{"theme":"midnight"}}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<ClientRequestDto>(malformed).is_err(),
+            "{malformed} is not a current request"
+        );
+        assert!(
+            serde_json::from_str::<ProtocolResultDto>(malformed).is_err(),
+            "{malformed} is not a current result"
+        );
+    }
 }
 
 #[test]
@@ -524,6 +606,14 @@ fn durable_enum_spellings_match_their_wire_spelling() {
             "the wire spelling of {kind:?} is its durable spelling"
         );
         assert_eq!(MessageKindDto::parse(kind.as_str()).ok(), Some(kind));
+    }
+    for theme in [ThemeDto::Light, ThemeDto::Dark] {
+        assert_eq!(
+            serde_json::to_value(theme).expect("theme serializes"),
+            serde_json::json!(theme.as_str()),
+            "the wire spelling of {theme:?} is its durable spelling"
+        );
+        assert_eq!(ThemeDto::parse(theme.as_str()).ok(), Some(theme));
     }
 }
 

@@ -28,9 +28,10 @@ pub use protocol::{
     InterruptRunAcceptedDto, ProtocolDaemonMessageDto, ProtocolRejectionDto, ProtocolReplyDto,
     ProtocolRequestDto, ProtocolResultDto, RemoveTurnAcceptedDto, RunStreamFrameDto,
     RunSubscriptionSnapshotDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
-    SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, SubscribeRunCommandDto,
-    TextDeltaChannelDto, TextDeltaFrameDto, decode_request_line, decode_response, encode_reply,
-    encode_request, parse_daemon_message, parse_run_frame,
+    SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, SetTuiThemeCommandDto,
+    SubscribeRunCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TuiSettingsDto,
+    TuiThemeAcceptedDto, decode_request_line, decode_response, encode_reply, encode_request,
+    parse_daemon_message, parse_run_frame,
 };
 pub use run::{
     RunModeDto, RunProjectionDto, RunStatusDto, run_status_is_terminal,

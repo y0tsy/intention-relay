@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use intention_client::{RunStreamClient, RunStreamSubscription};
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunStatusDto,
-    RunStreamFrameDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto, WorkspaceRootDto,
+    RunStreamFrameDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto, ThemeDto, WorkspaceRootDto,
     run_status_is_terminal,
 };
 use intention_proto::{IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId};
@@ -503,5 +503,40 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
         messages[2].text(),
         "tool_read_failed",
         "the missing-file tool result is durable typed-failure evidence"
+    );
+}
+
+#[tokio::test]
+async fn tui_theme_survives_a_daemon_restart() {
+    let mut host = E2eHost::new(None, "{}");
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
+
+    // The fixture configuration document declares no [tui] section, so the
+    // first answer is the resolved light default.
+    assert_eq!(
+        client.tui_settings().await.expect("settings read").theme(),
+        ThemeDto::Light
+    );
+    let accepted = client
+        .set_tui_theme(ThemeDto::Dark)
+        .await
+        .expect("the daemon accepts the theme");
+    assert_eq!(accepted.theme(), ThemeDto::Dark);
+    assert_eq!(
+        client.tui_settings().await.expect("settings read").theme(),
+        ThemeDto::Dark
+    );
+
+    // The restarted process answers the durable override, not the document.
+    host.restart_daemon();
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
+    assert_eq!(
+        client
+            .tui_settings()
+            .await
+            .expect("settings read after the restart")
+            .theme(),
+        ThemeDto::Dark,
+        "the stored theme survives a daemon restart"
     );
 }

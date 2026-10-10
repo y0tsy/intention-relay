@@ -8,7 +8,9 @@
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
-use intention_proto::{ConfigRevisionId, DtoResult, ErrorDto, SchemaVersionDto, TimestampDto};
+use intention_proto::{
+    ConfigRevisionId, DtoResult, ErrorDto, SchemaVersionDto, ThemeDto, TimestampDto, TuiSettingsDto,
+};
 use serde::{Deserialize, Serialize};
 
 const CURRENT_SCHEMA_MAJOR: u16 = 1;
@@ -336,6 +338,7 @@ pub struct ResolvedConfigDto {
     provider: ProviderSelectionDto,
     provider_execution: ProviderExecutionPolicyDto,
     context_window: ContextWindowPolicyDto,
+    tui: TuiSettingsDto,
     source_kind: ConfigSourceKindDto,
 }
 
@@ -407,6 +410,11 @@ impl ResolvedConfigDto {
                 "configuration does not match the supported schema",
             )
         })?;
+        let RawV1Config {
+            _schema_version,
+            provider: raw_provider,
+            tui: raw_tui,
+        } = raw;
         let RawProviderConfig {
             kind,
             model,
@@ -414,7 +422,7 @@ impl ResolvedConfigDto {
             endpoint,
             execution,
             context_window_tokens,
-        } = raw.provider;
+        } = raw_provider;
         let credential = match credential {
             Some(credential) if !credential.trim().is_empty() => credential,
             Some(_) => {
@@ -436,6 +444,7 @@ impl ResolvedConfigDto {
             provider,
             provider_execution: ProviderExecutionPolicyDto::from_raw(execution)?,
             context_window,
+            tui: resolve_tui_settings(raw_tui)?,
             source_kind,
         };
         Ok((resolved, credential))
@@ -457,6 +466,12 @@ impl ResolvedConfigDto {
     #[must_use]
     pub const fn context_window(&self) -> &ContextWindowPolicyDto {
         &self.context_window
+    }
+
+    /// Returns the fully effective safe terminal settings.
+    #[must_use]
+    pub const fn tui(&self) -> &TuiSettingsDto {
+        &self.tui
     }
 
     /// Returns the safe source category without its local filesystem path.
@@ -666,6 +681,35 @@ struct RawV1Config {
     #[serde(rename = "schema_version")]
     _schema_version: u16,
     provider: RawProviderConfig,
+    tui: Option<RawTuiConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTuiConfig {
+    theme: Option<String>,
+}
+
+/// Resolves the optional `[tui]` section into its effective terminal settings.
+///
+/// An absent section and an absent theme both select the light theme. A theme
+/// spelling outside the declared set is a validation error naming the accepted
+/// values, so an unknown spelling never silently falls back.
+///
+/// # Errors
+///
+/// Returns a validation error when a declared theme is not a declared spelling.
+fn resolve_tui_settings(raw: Option<RawTuiConfig>) -> DtoResult<TuiSettingsDto> {
+    let Some(theme) = raw.and_then(|tui| tui.theme) else {
+        return Ok(TuiSettingsDto::new(ThemeDto::Light));
+    };
+    let theme = ThemeDto::parse(&theme).map_err(|_| {
+        ErrorDto::validation(
+            "invalid_tui_theme",
+            "tui theme must be \"light\" or \"dark\"",
+        )
+    })?;
+    Ok(TuiSettingsDto::new(theme))
 }
 
 #[derive(Deserialize)]
