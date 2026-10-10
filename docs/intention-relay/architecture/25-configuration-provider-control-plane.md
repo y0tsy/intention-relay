@@ -128,16 +128,6 @@ the candidate validates and commits without the credential ever crossing a wire,
 - edits affect fresh runs only and never expose credentials, private endpoint
 material, SDK objects, or raw provider payloads on durable/public surfaces.
 
-## Instruction-fragment editing and preview
-
-The instruction configuration surface of [architecture 30](30-instruction-sources-and-system-context.md) is edited
-through this control plane; architecture 30
-owns the fragment operations and the non-admitting preview, and the surface ships with the fifth Milestone 5+ slice and
-its activating specification. Validate an edit before it commits and reject an invalid, inconsistent, or over-bound edit
-with a typed failure, leaving the running daemon on its recorded profile revision; keep the surface credential-free,
-never echo a credential or private material through an edit response, and expose fragment text only where the user edits
-it.
-
 ## Compatibility and historical preservation
 
 No direction rewrites historical records, assigns new meaning to a closed variant, or reconstructs missing meaning
@@ -148,8 +138,9 @@ activating specification.
 
 This document depends on architectures 03, 09, and 22. Non-goals: a reload
 watcher/transport, keychain or secret store, standalone health-service or discovery topology, pricing engine, profile
-picker/editor implementation, OS notifications, remote transport, multi-user access, sandbox/container isolation, and
-production activation beyond the accepted directions. The daemon-facade serving surface for reload, rotation, health,
-discovery, pricing, and raw-TOML/typed editing does not exist in the tree.
+picker/editor implementation, instruction-fragment editing or preview (instruction configuration is filesystem-level,
+[architecture 30](30-instruction-sources-and-system-context.md)), OS notifications, remote transport, multi-user access,
+sandbox/container isolation, and production activation beyond the accepted directions. The daemon-facade serving
+surface for reload, rotation, health, discovery, pricing, and raw-TOML/typed editing does not exist in the tree.
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
