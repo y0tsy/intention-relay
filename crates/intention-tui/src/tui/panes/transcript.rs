@@ -11,8 +11,11 @@
 //! - a committed **tool** row is dispatched by its `tool_id` in [`super::tools`],
 //!   where the exchange a call and its result form is drawn once, at the call's
 //!   row, and its result row contributes no block;
-//! - a committed **notice** row and the live **provisional** tail stay plain
-//!   lines.
+//! - a committed **notice** row stays a plain line;
+//! - the live **provisional** tail is the answer block of the step in flight:
+//!   it is laid out through the same [`answer_block`] the committed assistant
+//!   row uses, marker included, so streaming text never looks provisional and
+//!   never changes when the commit arrives.
 //!
 //! The gap rule is one constant and one helper, so the user card is padded from
 //! the reasoning above the answer, the reasoning is padded from the answer, and
@@ -26,8 +29,9 @@
 //! the front end owns; this pane asks that cache for the rows of the current
 //! transcript version and materialises `RichText` for the visible window only.
 //! The provisional tail is laid out per frame (it is one or two rows) and never
-//! enters the cache. Every frame publishes the window it painted
-//! ([`TranscriptWindow`]) so the next mouse event can hit-test it.
+//! enters the cache; that is a caching decision, not a style one, because its
+//! rows are identical to the committed row's. Every frame publishes the window
+//! it painted ([`TranscriptWindow`]) so the next mouse event can hit-test it.
 
 use std::cell::RefCell;
 use std::ops::Range;
@@ -45,9 +49,6 @@ use crate::tui::layout::{
 };
 use crate::tui::palette;
 use crate::tui::panes::{markdown, tools};
-
-/// The marker a provisional delta tail carries until its committed row arrives.
-const PROVISIONAL_PREFIX: &str = "assistant (provisional)> ";
 
 /// The glyph and label a user card's frame carries.
 const USER_GLYPH: &str = "❯";
@@ -223,16 +224,17 @@ fn committed_blocks(state: &AppState, range: Range<usize>, width: usize) -> Vec<
 }
 
 /// Returns the rows of the live provisional tail, laid out for this frame.
+///
+/// The tail is an answer that has not been committed yet, so it is laid out
+/// through the very [`answer_block`] its committed row will use: same markdown
+/// pipeline, same marker, same hanging indent, same inks and wash. Nothing here
+/// knows it is streaming, and the text cannot change when the commit arrives.
 fn provisional_rows(state: &AppState, width: usize) -> Vec<LaidOutRow> {
     let provisional = state.provisional_text();
     if provisional.is_empty() {
         return Vec::new();
     }
-    plain_rows(
-        &format!("{PROVISIONAL_PREFIX}{provisional}"),
-        width,
-        RowStyleId::Accent,
-    )
+    answer_block(provisional, width)
 }
 
 /// Returns the blocks one committed row renders, one entry per block.
@@ -492,8 +494,9 @@ mod tests {
     use crate::tui::palette;
 
     use super::{
-        ANSWER_GLYPH, REASONING_GLYPH, USER_GLYPH, answer_block, committed_blocks,
-        provisional_rows, reasoning_block, text_row, transcript_pane, user_card, window_row,
+        ANSWER_GLYPH, REASONING_GLYPH, USER_GLYPH, answer_block, assistant_blocks,
+        committed_blocks, provisional_rows, reasoning_block, text_row, transcript_pane, user_card,
+        window_row,
     };
 
     /// A content width wide enough for the whole fixture set to lay out.
@@ -880,11 +883,11 @@ mod tests {
         )));
         let tail = provisional_rows(&state, WIDTH);
         assert_eq!(tail.len(), 1, "the tail is one wrapped line here");
-        assert_eq!(tail[0].text, "assistant (provisional)> partial");
+        assert_eq!(tail[0].text, format!("{ANSWER_GLYPH} partial"));
         assert_eq!(
             tail[0].styles(),
-            vec![RowStyleId::Accent],
-            "the tail keeps the accent ink"
+            vec![RowStyleId::Muted, RowStyleId::Body(Modifier::empty())],
+            "the tail carries the answer marker and the body ink, nothing of its own"
         );
         assert_eq!(
             cache.layout_count(),
@@ -894,9 +897,54 @@ mod tests {
     }
 
     #[test]
+    fn the_streaming_tail_lays_out_as_the_committed_answer_row_it_becomes() {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let mut state = fixture_state(session_id, run_id);
+        let rows = state.transcript().to_vec();
+        state.update(Action::RunStreamOpened(stream_state(
+            session_id, run_id, rows,
+        )));
+        let text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda";
+        state.update(Action::FrameReceived(RunStreamFrameDto::TextDelta(
+            TextDeltaFrameDto::new(session_id, run_id, 0, text)
+                .expect("the fixture delta is valid"),
+        )));
+
+        let tail = provisional_rows(&state, WIDTH);
+        assert!(tail.len() > 1, "the fixture tail wraps");
+        assert!(
+            tail[0].text.starts_with(&format!("{ANSWER_GLYPH} ")),
+            "the live tail opens with the answer's own marker: {:?}",
+            tail[0].text
+        );
+        assert!(
+            tail.iter().all(|row| row.surface == palette::PANEL),
+            "the live tail sits on the panel wash, like a committed answer"
+        );
+
+        let committed = assistant_blocks(
+            &state,
+            &assistant_row(session_id, run_id, text, None),
+            0,
+            WIDTH,
+        );
+        assert_eq!(
+            committed.len(),
+            1,
+            "an answer without reasoning is one block"
+        );
+        assert_eq!(
+            roles(&tail),
+            roles(&committed[0]),
+            "the live tail lays out exactly as the committed answer row it becomes"
+        );
+    }
+
+    #[test]
     fn the_window_counts_the_tail_gap_row_between_the_committed_rows_and_the_tail() {
         let committed = vec![plain("first"), plain("second")];
-        let provisional = vec![plain("assistant (provisional)> partial")];
+        let provisional = vec![plain("∷ partial")];
         let tail_offset =
             committed.len() + usize::from(!committed.is_empty() && !provisional.is_empty());
         assert_eq!(tail_offset, 3, "one gap row sits before the tail");
@@ -911,7 +959,7 @@ mod tests {
         );
         assert_eq!(
             window_row(&committed, &provisional, tail_offset, 3).map(|row| row.text.as_str()),
-            Some("assistant (provisional)> partial")
+            Some("∷ partial")
         );
         assert!(window_row(&committed, &provisional, tail_offset, 4).is_none());
     }

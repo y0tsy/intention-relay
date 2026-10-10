@@ -1015,11 +1015,12 @@ fn expanding_a_reasoning_block_above_the_window_keeps_the_visible_rows() {
 }
 
 #[test]
-fn the_provisional_tail_is_marked() {
+fn the_streaming_tail_renders_as_the_answer_row_it_becomes() {
     let state = streaming_state(Some("partial answer"));
     let mut app = TestApp::new(RevueView::new(&state));
     let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("assistant (provisional)> partial answer");
+    pilot.assert_contains("∷ partial answer");
+    pilot.assert_not_contains("(provisional)");
 }
 
 #[test]

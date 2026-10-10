@@ -113,7 +113,7 @@ pub(in crate::tui) enum RowStyleId {
     Muted,
     /// A daemon notice block's marker and text.
     Notice,
-    /// The accent ink: the provisional tail and the reasoning block's bar.
+    /// The accent ink: the bar that closes a reasoning block.
     Accent,
     /// The frame of a user message's card.
     UserBorder,
