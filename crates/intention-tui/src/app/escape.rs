@@ -18,8 +18,10 @@
 //! The clear is the Ctrl+C clear: same guard (no live run), same effect, and
 //! the same consecutive rule - [`AppState::update`] disarms it for every other
 //! user action, including Ctrl+C, while a client report leaves it standing.
-//! The sessions browser maps Esc to its own close action in its own keymap, so
-//! the two meanings never meet.
+//! The sessions browser maps Esc to its own close action and the theme picker
+//! maps it to dropping its preview, each in its own keymap, so the three
+//! meanings never meet: while either surface owns the keyboard, the chat's
+//! cancel, clear, and exit arms are unreachable.
 //!
 //! `Ctrl+Q` stays the one immediate exit; Esc exits only when there is no live
 //! run and nothing typed to clear first.

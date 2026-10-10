@@ -233,7 +233,7 @@ pub(super) fn geometry(state: &AppState, window: Rect) -> Option<Geometry> {
 /// The theme is resolved here, once per frame, and handed to every row the
 /// panel draws.
 pub(super) fn panel(state: &AppState, now: i64, geometry: Geometry) -> Border {
-    let palette = palette::of(state.theme());
+    let palette = palette::of(state.effective_theme());
     let width = geometry.content_columns;
     let columns = columns(width);
     let mut body = vstack()

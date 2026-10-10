@@ -9,11 +9,15 @@ use intention_proto::{
 use super::{AppState, ConnectionStatus, Effect, StreamStatus, short_identifier};
 
 impl AppState {
-    /// Records a ready daemon and asks for the list and the selected session.
+    /// Records a ready daemon and asks for the list, the settings, and the
+    /// selected session.
     pub(super) fn apply_bootstrapped(&mut self, readiness: DaemonReadinessDto) -> Vec<Effect> {
         self.connection = ConnectionStatus::Ready(readiness);
         self.error = None;
-        let mut effects = vec![Effect::ListSessions];
+        // The settings read answers once the connection is ready; its reply
+        // arrives as its own action, so the committed theme is the daemon's
+        // value and never a terminal guess.
+        let mut effects = vec![Effect::ListSessions, Effect::LoadSettings];
         if let Some(session_id) = self.session_id.or(self.initial_session) {
             effects.push(Effect::OpenSession(session_id));
         }

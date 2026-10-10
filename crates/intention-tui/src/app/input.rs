@@ -1,8 +1,10 @@
 //! The input transitions: the input line, its cursor, its history, the command
 //! hint menu, and submission.
 
-use super::commands::{self, CommandMenu};
-use super::{AppState, Effect, InputCursorMove, InputHistoryMove, MenuMove, TranscriptScroll};
+use super::commands::{self, CommandMenu, MenuRow};
+use super::{
+    AppState, Effect, InputCursorMove, InputHistoryMove, MenuMove, Theme, TranscriptScroll,
+};
 
 /// How many transcript display rows one mouse-wheel notch moves.
 const TRANSCRIPT_WHEEL_ROWS: u16 = 3;
@@ -56,21 +58,23 @@ impl AppState {
         self.refresh_menu();
     }
 
-    /// Recomputes the input's command hint menu from the line and the caret.
+    /// Recomputes the input's command hint band from the line and the caret.
     ///
     /// The open rule is one function of the two: the line's first character is
-    /// `/`, the caret sits in or immediately after that word, and at least one
-    /// registered command matches the text after the slash. Anything else -
-    /// the slash removed, the caret past the word, no match left - closes the
-    /// menu, and the same refresh reopens it as soon as the line matches again.
-    /// A menu whose filter did not change keeps the row the user highlighted, so
-    /// moving the caret inside the word it is already on never moves the
-    /// highlight; another character starts the highlight at the best match.
+    /// `/`, the caret sits in or immediately after a word of that line, and the
+    /// word's filter selects at least one row - the registry's commands for the
+    /// command word, and a declared argument's values for an argument word.
+    /// Anything else - the slash removed, the caret past the word, no match
+    /// left - closes the band, and the same refresh reopens it as soon as the
+    /// line matches again. A band whose word did not change keeps the row the
+    /// user highlighted, so moving the caret inside the word it is already on
+    /// never moves the highlight; another character starts the highlight at the
+    /// best match.
     pub(super) fn refresh_menu(&mut self) {
         let opened = commands::command_word(&self.input, self.cursor)
-            .and_then(|word| CommandMenu::opened(&word.filter));
+            .and_then(|word| CommandMenu::opened(&word));
         self.command_menu = match (self.command_menu.take(), opened) {
-            (Some(previous), Some(next)) if previous.filter() == next.filter() => Some(previous),
+            (Some(previous), Some(next)) if previous.ranks_the_same_word(&next) => Some(previous),
             (_, opened) => opened,
         };
     }
@@ -82,20 +86,21 @@ impl AppState {
         }
     }
 
-    /// Commits the hint menu's highlighted command into the input line.
+    /// Commits the band's highlighted row into the input line.
     ///
-    /// The word the menu was opened for - its leading slash through its last
-    /// character - is replaced by the command's full name and one trailing
-    /// space, so the caret lands ready for the command's arguments, and the
-    /// menu closes because the caret is now past the word it completed.
-    /// Completing a caret that sits inside the word replaces the whole word
-    /// rather than duplicating its tail, which is the same result the committed
-    /// range has whenever the caret already sits at the word's end.
+    /// The word the band was opened for - the command word's leading slash
+    /// through its last character, or an argument word's first through its
+    /// last - is replaced by the row's completion, which is its label and one
+    /// trailing space, so the caret lands ready for the argument after a
+    /// command or for the submission after a value. The band then follows the
+    /// same open rule: a command that declares an argument reopens it on the
+    /// argument word, and a complete command or value closes it.
     pub(super) fn accept_menu(&mut self) {
-        let Some(command) = self
+        let Some(completed) = self
             .command_menu
             .as_ref()
             .and_then(CommandMenu::highlighted)
+            .map(MenuRow::completion)
         else {
             return;
         };
@@ -103,9 +108,9 @@ impl AppState {
             self.command_menu = None;
             return;
         };
-        let completed = format!("{} ", command.typed_name());
+        let before = self.input[..word.start].chars().count();
         self.input.replace_range(word.start..word.end, &completed);
-        self.cursor = completed.chars().count();
+        self.cursor = before + completed.chars().count();
         self.refresh_menu();
     }
 
@@ -159,6 +164,10 @@ impl AppState {
     /// prompt is typed without being submitted and the backslash itself never
     /// reaches the submitted buffer.
     ///
+    /// An open band claims Enter for its completion, except for the empty
+    /// argument word an omitted optional argument opens: that band has nothing
+    /// to complete, so Enter runs the command itself.
+    ///
     /// A prompt with no open session starts the session it needs instead of
     /// being rejected: the state asks for a session creation and remembers the
     /// prompt, and the snapshot that opens the created session sends it as the
@@ -167,12 +176,17 @@ impl AppState {
         if self.insert_line_break() {
             return Vec::new();
         }
-        // The menu owns Enter while it is open: the press completes the word
+        // The band owns Enter while it is open: the press completes the word
         // the user is typing instead of running it, so a line that already
         // spells a complete command needs its second Enter to run, and the
         // caret always lands past the command with one space ready for its
-        // arguments.
-        if self.command_menu.is_some() {
+        // arguments. The one band that has nothing to complete is the empty
+        // argument word: the command is already complete and none of the
+        // argument is typed, so Enter runs the command - `/theme` opens the
+        // picker - while Tab still completes the value it highlights.
+        if let Some(menu) = self.command_menu.as_ref()
+            && !menu.completes_nothing()
+        {
             self.accept_menu();
             return Vec::new();
         }
@@ -257,18 +271,38 @@ impl AppState {
     /// runs is the one its entry names, so the submission path and the hint
     /// menu can never disagree about which commands exist. An unregistered name
     /// answers with the registry's own list.
+    ///
+    /// The line is resolved through the one registry, so the words after the
+    /// name are matched against the values the command declares and a line that
+    /// does not satisfy them answers the notice the declaration builds. The
+    /// transition a resolved line runs is the one its entry names.
     fn submit_command(&mut self, command: &str) -> Vec<Effect> {
-        let name = command.trim();
-        let Some(spec) = commands::command_named(name) else {
-            self.note(format!(
-                "unknown command /{name}; known commands: {}",
-                commands::known_commands()
-            ));
-            return Vec::new();
+        let invocation = match commands::resolve_command(command).into_invocation() {
+            Ok(invocation) => invocation,
+            Err(notice) => {
+                self.note(notice);
+                return Vec::new();
+            }
         };
-        match spec.action {
+        match invocation.spec().action {
             commands::CommandAction::NewSession => self.request_new_session(),
             commands::CommandAction::SessionsBrowser => self.request_sessions_browser(),
+            commands::CommandAction::Theme => {
+                // `/theme`'s one argument is the first the command declares: a
+                // value applies that theme, and its absence opens the picker.
+                // The declared values are the theme vocabulary itself, so the
+                // assertion names the invariant a registry edit would break.
+                let spelled = invocation.value(0);
+                let selected = spelled.and_then(Theme::from_str);
+                debug_assert!(
+                    spelled.is_none() || selected.is_some(),
+                    "every value /theme declares is a theme name"
+                );
+                match selected {
+                    Some(theme) => self.apply_theme_selected(theme),
+                    None => self.request_theme_picker(),
+                }
+            }
         }
     }
 

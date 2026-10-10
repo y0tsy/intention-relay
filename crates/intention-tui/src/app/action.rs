@@ -3,10 +3,10 @@
 use intention_client::RunStreamState;
 use intention_proto::{
     DaemonHealthDto, DaemonReadinessDto, ErrorDto, RunId, RunStreamFrameDto,
-    SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
+    SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto, SessionSummariesDto, ThemeDto,
 };
 
-use super::MenuMove;
+use super::{MenuMove, Theme};
 
 /// The readiness the client last reported for the local daemon.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,6 +95,22 @@ pub enum Action {
     SessionCreated(SessionId),
     /// Creating a session failed.
     SessionCreateFailed(ErrorDto),
+    /// The daemon answered its effective terminal settings.
+    ///
+    /// The same action answers the startup read and a theme selection: the
+    /// daemon is the authority for the committed theme, so the accepted value
+    /// is what moves it, and a selection that is still in flight has not
+    /// committed anything.
+    SettingsReceived(ThemeDto),
+    /// Reading the terminal settings or persisting a selected theme failed.
+    SettingsFailed(ErrorDto),
+    /// The user selected a theme: the daemon is asked to persist it.
+    ThemeSelected(Theme),
+    /// The user highlighted a theme in the picker: it previews until the
+    /// selection settles.
+    ThemePreviewed(Theme),
+    /// The user left the theme picker: the local preview is dropped.
+    ThemePreviewCleared,
     /// A run subscription opened with the daemon's current run state.
     RunStreamOpened(RunStreamState),
     /// Opening a run subscription failed.
@@ -128,12 +144,17 @@ pub enum Action {
     MoveInputCursor(InputCursorMove),
     /// The user walked the input line history.
     NavigateInputHistory(InputHistoryMove),
-    /// The user moved the input's command hint menu highlight.
+    /// The user moved the input's command hint band highlight.
     ///
-    /// The menu is a state machine value the core owns, so the same arrows move
-    /// it in a test, a renderer, and a live terminal.
+    /// The band is a state machine value the core owns, so the same arrows move
+    /// it in a test, a renderer, and a live terminal. Its rows are the commands
+    /// the command word selects, or the values of the argument word the caret
+    /// sits in.
     MenuMove(MenuMove),
-    /// The user committed the highlighted command of the input's hint menu.
+    /// The user committed the highlighted row of the input's hint band.
+    ///
+    /// The row is a command or one value of the argument the word fills, and
+    /// completing it writes its label and one trailing space into the line.
     MenuAccept,
     /// The user submitted the input line.
     InputSubmitted,
@@ -235,6 +256,8 @@ impl Action {
                 | Self::SessionSnapshotFailed(_)
                 | Self::SessionCreated(_)
                 | Self::SessionCreateFailed(_)
+                | Self::SettingsReceived(_)
+                | Self::SettingsFailed(_)
                 | Self::RunStreamOpened(_)
                 | Self::RunStreamFailed(_)
                 | Self::RunStreamEnded
@@ -256,6 +279,17 @@ impl Action {
 pub enum Effect {
     /// Bootstrap or re-bootstrap the shared local client.
     Connect,
+    /// Read the daemon's effective terminal settings.
+    ///
+    /// The settings are read once the connection is ready and whenever a
+    /// reconnect re-establishes it, so the committed theme starts from the
+    /// daemon's own value instead of a terminal guess.
+    LoadSettings,
+    /// Persist one selected theme through the daemon.
+    ///
+    /// The daemon stores the override and answers with the accepted theme;
+    /// only that reply moves the committed theme.
+    PersistTheme(Theme),
     /// Read the bounded current session list.
     ListSessions,
     /// Read the current snapshot of one session.

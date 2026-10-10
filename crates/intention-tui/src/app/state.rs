@@ -47,7 +47,17 @@ pub struct AppState {
     /// The theme is a value of the render-free core like the screen: a front
     /// end resolves its palette from this one field and never tracks a theme
     /// of its own, so the whole view stays a pure function of the state.
+    ///
+    /// This is the committed theme - what the daemon accepted and stored. A
+    /// selection or a picker row is not committed here: it lives in
+    /// [`AppState::theme_preview`] until the accepted reply arrives.
     pub(super) theme: Theme,
+    /// The theme the picker is previewing, while one is.
+    ///
+    /// The preview is local and never persisted: it is what makes the whole
+    /// window repaint through a candidate before the daemon has accepted it,
+    /// and dropping it is what restores the committed theme.
+    pub(super) theme_preview: Option<Theme>,
     pub(super) sessions: Vec<SessionSummaryDto>,
     pub(super) sessions_omitted: u32,
     pub(super) sessions_loaded: bool,
@@ -147,6 +157,7 @@ impl AppState {
             connection: ConnectionStatus::Connecting,
             screen: Screen::Chat,
             theme: Theme::Light,
+            theme_preview: None,
             sessions: Vec::new(),
             sessions_omitted: 0,
             sessions_loaded: false,
@@ -240,6 +251,11 @@ impl AppState {
             Action::SessionSnapshotFailed(error) => self.apply_session_open_failure(&error),
             Action::SessionCreated(session_id) => self.apply_session_created(session_id),
             Action::SessionCreateFailed(error) => self.apply_session_open_failure(&error),
+            Action::SettingsReceived(theme) => self.apply_settings_received(theme),
+            Action::SettingsFailed(error) => self.apply_settings_failed(&error),
+            Action::ThemeSelected(theme) => self.apply_theme_selected(theme),
+            Action::ThemePreviewed(theme) => self.apply_theme_previewed(theme),
+            Action::ThemePreviewCleared => self.apply_theme_preview_cleared(),
             Action::RunStreamOpened(state) => self.apply_run_stream_opened(state),
             Action::RunStreamFailed(error) => self.apply_run_stream_failed(&error),
             Action::RunStreamEnded => self.apply_run_stream_ended(),
@@ -315,9 +331,28 @@ impl AppState {
     }
 
     /// Returns the colour theme a front end renders the session through.
+    ///
+    /// This is the committed theme: the value the daemon accepted and stored.
+    /// A front end paints [`AppState::effective_theme`] instead, which is the
+    /// preview while one is active and this value at every other moment.
     #[must_use]
     pub const fn theme(&self) -> Theme {
         self.theme
+    }
+
+    /// Returns the theme a front end paints: the preview, else the committed
+    /// theme.
+    ///
+    /// The whole view resolves its palette from this one value, so a picker
+    /// preview repaints the window through the candidate - the transcript
+    /// layout cache included - while the committed theme stays what the daemon
+    /// carries.
+    #[must_use]
+    pub const fn effective_theme(&self) -> Theme {
+        match self.theme_preview {
+            Some(theme) => theme,
+            None => self.theme,
+        }
     }
 
     /// Returns the bounded session summaries the daemon reported.

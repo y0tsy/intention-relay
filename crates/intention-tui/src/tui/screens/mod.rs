@@ -6,8 +6,11 @@
 //! docked to the bottom of the same window: the chat container shrinks to the
 //! rows the browser leaves, its own bottom canvas margin row is the blank gap
 //! between the two, and the browser's bottom edge is the window's last row. No
-//! surface ever paints over another. Each module here owns the builders only
-//! its surface reads, so a new surface is a module beside them and one arm in
+//! surface ever paints over another. The theme picker is not a second docked
+//! surface: its screen keeps the one chat panel and spends the transcript's
+//! rows on a panel directly above the input block, so the input block and the
+//! detail line never move. Each module here owns the builders only its surface
+//! reads, so a new surface is a module beside them and one arm in
 //! [`RevueView::render`].
 
 pub(super) mod chat;
@@ -98,7 +101,7 @@ impl View for RevueView<'_> {
     /// its transcript, its input, and its session while it reflows into the
     /// rows the browser leaves.
     fn render(&self, ctx: &mut RenderContext) {
-        ctx.fill_box_background(palette::of(self.state.theme()).canvas);
+        ctx.fill_box_background(palette::of(self.state.effective_theme()).canvas);
         let window = ctx.area;
         // A view built without a cache lays the transcript out through a fresh
         // one, so both constructors render exactly the same rows.

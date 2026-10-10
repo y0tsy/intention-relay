@@ -26,7 +26,10 @@ pub use action::{
     StreamStatus, TranscriptScroll,
 };
 pub use browser::{BrowserRow, BrowserTab};
-pub use commands::{COMMANDS, CommandMenu, CommandSpec, MenuMove};
+pub use commands::{
+    ArgumentSpec, COMMANDS, CommandInvocation, CommandMenu, CommandResolution, CommandSpec,
+    MenuKind, MenuMove, MenuRow, ValueSpec,
+};
 pub use input::TRANSCRIPT_DRAG_ROWS;
 pub use state::AppState;
 pub use theme::Theme;
@@ -40,7 +43,10 @@ use intention_proto::ErrorDto;
 /// [`Screen::Sessions`] draws the sessions browser as a modal card over it.
 /// Selecting a session, creating one, or closing the browser returns the state
 /// to [`Screen::Chat`] without the window ever changing, so the chat keeps its
-/// transcript, its input line, and its session throughout.
+/// transcript, its input line, and its session throughout. [`Screen::Theme`]
+/// keeps the same window too: the theme picker is one more row region of the
+/// chat panel, directly above the input block, so the input block and the
+/// detail line never move while it is open.
 ///
 /// The screen is a value of the render-free core: a front end renders the one
 /// the state carries and never tracks a surface of its own.
@@ -50,6 +56,8 @@ pub enum Screen {
     Chat,
     /// The sessions browser card behind `/sessions`, over the chat.
     Sessions,
+    /// The theme picker behind `/theme`, above the chat's input block.
+    Theme,
 }
 
 /// How many leading characters of a durable identifier compact terminal text shows.

@@ -50,6 +50,16 @@ pub async fn perform(
             .await
             .map(Action::SessionSnapshotLoaded)
             .map_err(|error| (Action::SessionSnapshotFailed(error.clone()), error)),
+        Effect::LoadSettings => client
+            .tui_settings()
+            .await
+            .map(|settings| Action::SettingsReceived(settings.theme()))
+            .map_err(|error| (Action::SettingsFailed(error.clone()), error)),
+        Effect::PersistTheme(theme) => client
+            .set_tui_theme(theme.into())
+            .await
+            .map(|accepted| Action::SettingsReceived(accepted.theme()))
+            .map_err(|error| (Action::SettingsFailed(error.clone()), error)),
         Effect::CreateSession => {
             let command = CreateSessionCommandDto::new(
                 ProjectId::new(),

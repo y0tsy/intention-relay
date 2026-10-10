@@ -706,8 +706,9 @@ pub(in crate::tui) struct TranscriptLayoutCache {
     /// The colour theme the cached rows were laid out for.
     ///
     /// A laid-out row carries resolved surfaces, so a theme change makes every
-    /// cached row a value of the other theme: a moved theme replays the whole
-    /// transcript, exactly as a resize does.
+    /// cached row a value of the other theme: a moved theme - a picker preview
+    /// included, which is why the cache reads the effective theme - replays the
+    /// whole transcript, exactly as a resize does.
     theme: Theme,
     /// The transcript epoch the cached rows reflect.
     epoch: u64,
@@ -784,7 +785,7 @@ impl TranscriptLayoutCache {
         blocks: impl FnOnce(Range<usize>, usize) -> Vec<MessageBlocks>,
     ) -> &[LaidOutRow] {
         let width = width.max(1);
-        let theme = state.theme();
+        let theme = state.effective_theme();
         let epoch = state.transcript_epoch();
         let reasoning_epoch = state.reasoning_epoch();
         let tool_results = state.tool_result_count();

@@ -1055,7 +1055,7 @@ mod tests {
         }
         assert_eq!(
             rows,
-            vec![4, 4, 0, 0],
+            vec![5, 4, 0, 0],
             "the slash opens the band, the narrowed list keeps it, and the commit closes it"
         );
         assert_eq!(
