@@ -603,6 +603,80 @@ fn the_repl_streams_a_piped_turn_and_exits_on_quit() {
 }
 
 #[test]
+fn a_repl_prompt_creates_the_session_it_needs() {
+    let host = TerminalHost::new(ProviderEndpoint::scripted(), Some(WORKSPACE_FILE));
+    let workspace = host.workspace_root();
+    // No `/new`: with no session open, the prompt itself must start the
+    // session it needs.
+    let script = format!("{PROMPT}\n/quit\n");
+    let output = host.run(&["repl", "--workspace", &workspace], Some(&script));
+    assert_eq!(output.code, Some(0), "the REPL exits: {}", output.stderr);
+    assert!(
+        output.stdout.contains(COMMITTED_TEXT),
+        "the prompt streams its answer: {}",
+        output.stdout
+    );
+    assert!(
+        !output.stderr.contains("error:"),
+        "the prompt reports no failure: {}",
+        output.stderr
+    );
+    let sessions = block_on(host.client.list_sessions()).expect("the session list reads");
+    assert_eq!(
+        sessions.sessions().len(),
+        1,
+        "the prompt created exactly the session it needed"
+    );
+}
+
+#[test]
+fn an_explicit_continuation_reuses_the_session_instead_of_creating_one() {
+    let host = TerminalHost::new(ProviderEndpoint::scripted(), Some(WORKSPACE_FILE));
+    let workspace = host.workspace_root();
+    let created = host.run(&["repl", "--workspace", &workspace], Some("/new\n/quit\n"));
+    assert_eq!(created.code, Some(0), "the REPL exits: {}", created.stderr);
+    let session = block_on(host.client.list_sessions())
+        .expect("the session list reads")
+        .sessions()
+        .first()
+        .map(|summary| summary.session_id())
+        .expect("the created session is listed");
+
+    // `--continue` is an explicit request for the newest session: the prompt
+    // goes to that session instead of starting another one.
+    let script = format!("{PROMPT}\n/quit\n");
+    let continued = host.run(
+        &["repl", "--continue", "--workspace", &workspace],
+        Some(&script),
+    );
+    assert_eq!(
+        continued.code,
+        Some(0),
+        "the REPL exits: {}",
+        continued.stderr
+    );
+    assert!(
+        !continued.stderr.contains("error:"),
+        "the continuation reports no failure: {}",
+        continued.stderr
+    );
+    let after = block_on(host.client.list_sessions()).expect("the session list reads");
+    assert_eq!(
+        after.sessions().len(),
+        1,
+        "the continuation created no second session"
+    );
+    assert_eq!(after.sessions()[0].session_id(), session);
+    assert!(
+        host.snapshot(session)
+            .messages()
+            .iter()
+            .any(|message| message.kind() == MessageKindDto::User),
+        "the prompt reached the continued session"
+    );
+}
+
+#[test]
 fn every_new_command_creates_a_fresh_session_under_one_workspace_root() {
     let host = TerminalHost::new(ProviderEndpoint::scripted(), Some(WORKSPACE_FILE));
     let workspace = host.workspace_root();
