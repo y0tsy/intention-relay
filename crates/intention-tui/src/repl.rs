@@ -9,7 +9,7 @@
 use std::io::{BufRead, Write};
 
 use intention_client::IntentionClient;
-use intention_proto::{RunStatusDto, SessionId};
+use intention_proto::{RunStatusDto, SessionId, run_status_is_terminal};
 use intention_transport::LocalEndpoint;
 use intention_tui::app::short_identifier;
 
@@ -63,7 +63,10 @@ async fn converse<W: Write, E: Write>(
         // work between two lines, and a held console lock must not travel there.
         let read = std::io::stdin().lock().read_line(&mut line);
         match read {
-            Ok(0) => break,
+            Ok(0) => {
+                drain_active_turn(&mut driver, out, err).await;
+                break;
+            }
             Ok(_) => {}
             Err(_) => {
                 let _ = writeln!(err, "error: the input line could not be read");
@@ -72,7 +75,10 @@ async fn converse<W: Write, E: Write>(
         }
         match Line::parse(&line) {
             Line::Blank => {}
-            Line::Quit => break,
+            Line::Quit => {
+                drain_active_turn(&mut driver, out, err).await;
+                break;
+            }
             Line::New => {
                 driver.create().await;
                 report_session(&driver, out, err);
@@ -115,6 +121,11 @@ async fn converse_turn<W: Write, E: Write>(
         let _ = writeln!(err, "error: {} ({})", error.message(), error.code());
         return;
     }
+    stream_active_turn(driver, out, err).await;
+}
+
+/// Streams the run the core currently owns to its terminal status.
+async fn stream_active_turn<W: Write, E: Write>(driver: &mut Driver, out: &mut W, err: &mut E) {
     let mut report = TextReport::new(out);
     match driver.pump(&mut report, None).await {
         Ok(outcome) => {
@@ -131,6 +142,22 @@ async fn converse_turn<W: Write, E: Write>(
         Err(PumpFailure::Output(_error)) => {
             let _ = writeln!(err, "error: the run output could not be written");
         }
+    }
+}
+
+/// Waits for a live run before the line loop leaves.
+///
+/// A piped script ends with `/quit` or end-of-input while the turn it sent may
+/// still be streaming. The front end owns one run at a time, so the loop waits
+/// for that run's terminal status before it returns, and a script's output
+/// stays complete instead of racing the process exit.
+async fn drain_active_turn<W: Write, E: Write>(driver: &mut Driver, out: &mut W, err: &mut E) {
+    let live = driver
+        .state()
+        .run_status()
+        .is_some_and(|status| !run_status_is_terminal(status));
+    if live {
+        stream_active_turn(driver, out, err).await;
     }
 }
 
