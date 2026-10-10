@@ -1434,6 +1434,80 @@ fn a_ctrl_c_press_clears_the_typed_input_line() {
 }
 
 #[test]
+fn the_armed_esc_clear_asks_for_a_second_press() {
+    let session_id = SessionId::new();
+    let mut state = open_state(session_id, Vec::new());
+    for character in "typed".chars() {
+        state.update(Action::InputChar(character));
+    }
+    state.update(Action::EscapePressed);
+    let mut app = TestApp::new(RevueView::new(&state));
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_contains("press Esc again to clear the input");
+    pilot.assert_contains("> typed");
+}
+
+#[test]
+fn a_two_line_buffer_grows_the_input_block_and_shrinks_the_transcript() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = open_state(
+        session_id,
+        vec![row(
+            session_id,
+            run_id,
+            MessageKindDto::Assistant,
+            "the committed row",
+        )],
+    );
+    let (single_badge, single_hint) = {
+        let single = TestApp::with_size(
+            RevueView::with_now(&state, NOW),
+            WINDOW_WIDTH,
+            WINDOW_HEIGHT,
+        );
+        let (_, badge) = find_text(&single, "model @todo(core)");
+        let (_, hint) = find_text(&single, "enter sends | /new session | /sessions switch");
+        (badge, hint)
+    };
+
+    for character in "line one".chars() {
+        state.update(Action::InputChar(character));
+    }
+    state.update(Action::InputChar('\\'));
+    state.update(Action::InputSubmitted);
+    for character in "line two".chars() {
+        state.update(Action::InputChar(character));
+    }
+    assert_eq!(state.input(), "line one\nline two");
+
+    let double = TestApp::with_size(
+        RevueView::with_now(&state, NOW),
+        WINDOW_WIDTH,
+        WINDOW_HEIGHT,
+    );
+    let (_, first_line) = find_text(&double, "> line one");
+    let (_, second_line) = find_text(&double, "line two█");
+    assert_eq!(
+        second_line,
+        first_line + 1,
+        "one display row per buffer line, the cursor riding its own line"
+    );
+    let (_, double_badge) = find_text(&double, "model @todo(core)");
+    let (_, double_hint) = find_text(&double, "enter sends | /new session | /sessions switch");
+    assert_eq!(
+        double_badge + 1,
+        single_badge,
+        "the block grew by exactly the line the buffer added"
+    );
+    assert_eq!(
+        double_hint, single_hint,
+        "the detail line keeps its row: the transcript gave up the block's new row"
+    );
+    find_text(&double, "the committed row");
+}
+
+#[test]
 fn a_running_turn_shows_the_measured_elapsed_time() {
     let mut state = streaming_state(None);
     state.update(Action::ElapsedReported { millis: 3_200 });

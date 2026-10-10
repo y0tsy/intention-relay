@@ -563,6 +563,32 @@ fn the_text_run_streams_the_answer_and_reports_completion() {
 }
 
 #[test]
+fn a_multi_line_prompt_reaches_the_session_unchanged() {
+    let host = TerminalHost::new(ProviderEndpoint::scripted(), Some(WORKSPACE_FILE));
+    let workspace = host.workspace_root();
+    let prompt = "first line\nsecond line";
+    let output = host.run(&["run", prompt, "--workspace", &workspace], None);
+    assert_eq!(output.code, Some(0), "the run completes: {}", output.stderr);
+    let sessions = block_on(host.client.list_sessions()).expect("the session list reads");
+    let session = sessions
+        .sessions()
+        .first()
+        .map(|summary| summary.session_id())
+        .expect("the run created its session");
+    let snapshot = host.snapshot(session);
+    let user = snapshot
+        .messages()
+        .iter()
+        .find(|message| message.kind() == MessageKindDto::User)
+        .expect("the prompt committed its user row");
+    assert_eq!(
+        user.text(),
+        prompt,
+        "the prompt's lines reach the session unchanged"
+    );
+}
+
+#[test]
 fn the_repl_streams_a_piped_turn_and_exits_on_quit() {
     let host = TerminalHost::new(ProviderEndpoint::scripted(), Some(WORKSPACE_FILE));
     let workspace = host.workspace_root();
