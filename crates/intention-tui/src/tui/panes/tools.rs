@@ -9,11 +9,11 @@
 //! not committed draws its call alone with a muted note; a result whose call is
 //! not committed draws what it carries and says so, never inventing arguments.
 //!
-//! Every block is framed through the palette: [`palette::TOOL_SURFACE`] is its
-//! wash, [`palette::TOOL_BORDER`] draws the top border around the badge, the
-//! left and right rails, and the bottom border, [`palette::TOOL_LABEL`] writes
-//! the badge, and [`palette::TOOL_PREVIEW`] writes the result body - a muted
-//! warm ink, readably dimmer than an answer's body ink, so a tool result never
+//! Every block is framed through the palette: [`Palette::tool_surface`] is its
+//! wash, [`Palette::tool_border`] draws the top border around the badge, the
+//! left and right rails, and the bottom border, [`Palette::tool_label`] writes
+//! the badge, and [`Palette::tool_preview`] writes the result body - a muted
+//! warm ink, readably apart from an answer's body ink, so a tool result never
 //! reads as assistant prose.
 //!
 //! The read-only tools - `read`, `glob`, and `grep` - are parsed in full: the
@@ -43,7 +43,7 @@ use crate::tui::layout::{
     LaidOutRow, MARKER_GAP, RowBuilder, RowStyleId, box_bottom, box_content, box_top,
     display_width, marker_text,
 };
-use crate::tui::palette;
+use crate::tui::palette::Palette;
 use crate::tui::panes::transcript::{marked_row, plain_rows};
 
 /// The display rows one tool block previews before it bounds its content.
@@ -53,7 +53,7 @@ const TOOL_PREVIEW_ROWS: usize = 12;
 ///
 /// U+25B8 BLACK RIGHT-POINTING SMALL TRIANGLE: one column wide under
 /// `char_width`, and it has no emoji presentation, so every terminal draws it
-/// in [`palette::TOOL_LABEL`] instead of a colour. The transcript's whole
+/// in [`Palette::tool_label`] instead of a colour. The transcript's whole
 /// marker family stays monochrome text glyphs (`❯`, `∴`, `▸`, and the answer's
 /// `∷`).
 const TOOL_GLYPH: &str = "▸";
@@ -185,6 +185,7 @@ pub(in crate::tui) fn block(
     index: usize,
     pairing: &Pairing<'_>,
     width: usize,
+    palette: &'static Palette,
 ) -> Option<Vec<LaidOutRow>> {
     let kind = ToolKind::of(row.tool_id().unwrap_or_default());
     // An `execute` result is never rendered, in any form: it is the command's
@@ -204,14 +205,14 @@ pub(in crate::tui) fn block(
     let inner = width.saturating_sub(TOOL_CHROME_COLUMNS);
     let content = match kind {
         ToolKind::Read | ToolKind::Glob | ToolKind::Grep => {
-            read_only_content(&exchange, kind, missing, inner)
+            read_only_content(&exchange, kind, missing, inner, palette)
         }
-        ToolKind::Write => plate_content(&exchange, missing, PLATE_WRITE, inner),
-        ToolKind::Edit => plate_content(&exchange, missing, PLATE_EDIT, inner),
-        ToolKind::Execute => plate_content(&exchange, missing, PLATE_EXECUTE, inner),
-        ToolKind::Other => other_content(&exchange, missing, inner),
+        ToolKind::Write => plate_content(&exchange, missing, PLATE_WRITE, inner, palette),
+        ToolKind::Edit => plate_content(&exchange, missing, PLATE_EDIT, inner, palette),
+        ToolKind::Execute => plate_content(&exchange, missing, PLATE_EXECUTE, inner, palette),
+        ToolKind::Other => other_content(&exchange, missing, inner, palette),
     };
-    Some(framed(&badge, content, width))
+    Some(framed(&badge, content, width, palette))
 }
 
 /// Returns the framed block one tool exchange renders.
@@ -220,13 +221,18 @@ pub(in crate::tui) fn block(
 /// frame's left and right rails, and one bottom border closes the block, so a
 /// tool exchange is one boxed block a reader can tell from an answer at a
 /// glance.
-fn framed(badge: &str, content: Vec<LaidOutRow>, width: usize) -> Vec<LaidOutRow> {
+fn framed(
+    badge: &str,
+    content: Vec<LaidOutRow>,
+    width: usize,
+    palette: &'static Palette,
+) -> Vec<LaidOutRow> {
     let inner = width.saturating_sub(TOOL_CHROME_COLUMNS);
     let mut rows = vec![box_top(
         Some((badge, RowStyleId::ToolLabel)),
         width,
         RowStyleId::ToolBorder,
-        palette::TOOL_SURFACE,
+        palette.tool_surface,
     )];
     rows.extend(
         content
@@ -236,7 +242,7 @@ fn framed(badge: &str, content: Vec<LaidOutRow>, width: usize) -> Vec<LaidOutRow
     rows.push(box_bottom(
         width,
         RowStyleId::ToolBorder,
-        palette::TOOL_SURFACE,
+        palette.tool_surface,
     ));
     rows
 }
@@ -377,21 +383,22 @@ fn read_only_content(
     kind: ToolKind,
     missing: Option<String>,
     inner: usize,
+    palette: &'static Palette,
 ) -> Vec<LaidOutRow> {
     let mut content = Vec::new();
-    content.extend(raw_rows(&exchange.arguments, inner));
+    content.extend(raw_rows(&exchange.arguments, inner, palette));
     if exchange.call_committed {
         content.extend(
             missing
                 .into_iter()
-                .flat_map(|fact| plate_rows(&fact, inner)),
+                .flat_map(|fact| plate_rows(&fact, inner, palette)),
         );
     } else {
-        content.extend(note_rows(NOTE_NO_CALL, inner));
+        content.extend(note_rows(NOTE_NO_CALL, inner, palette));
     }
     match exchange.result {
-        Some(result) => content.extend(result_rows(kind, result, inner)),
-        None => content.extend(note_rows(NOTE_NO_RESULT, inner)),
+        Some(result) => content.extend(result_rows(kind, result, inner, palette)),
+        None => content.extend(note_rows(NOTE_NO_RESULT, inner, palette)),
     }
     content
 }
@@ -406,19 +413,24 @@ fn read_only_content(
 // @todo(core): the durable rows carry no typed result metadata - a read
 // result's `truncated` flag, for one - so a preview shows the content's own
 // `[truncated]` line where the tool wrote one and never invents the flag.
-fn result_rows(kind: ToolKind, content: &str, inner: usize) -> Vec<LaidOutRow> {
+fn result_rows(
+    kind: ToolKind,
+    content: &str,
+    inner: usize,
+    palette: &'static Palette,
+) -> Vec<LaidOutRow> {
     let rows = match kind {
         ToolKind::Glob => content
             .lines()
-            .flat_map(|path| list_rows(path, RowStyleId::ToolPreview, inner))
+            .flat_map(|path| list_rows(path, RowStyleId::ToolPreview, inner, palette))
             .collect(),
         ToolKind::Grep => content
             .lines()
-            .flat_map(|hit| hit_rows(hit, inner))
+            .flat_map(|hit| hit_rows(hit, inner, palette))
             .collect(),
-        _ => content_rows(content, inner, RowStyleId::ToolPreview),
+        _ => content_rows(content, inner, RowStyleId::ToolPreview, palette),
     };
-    bounded(rows, inner)
+    bounded(rows, inner, palette)
 }
 
 /// Returns the content rows of one `write`, `edit`, or `execute` exchange.
@@ -431,22 +443,23 @@ fn plate_content(
     missing: Option<String>,
     plate: &str,
     inner: usize,
+    palette: &'static Palette,
 ) -> Vec<LaidOutRow> {
     let mut content = Vec::new();
-    content.extend(raw_rows(&exchange.arguments, inner));
+    content.extend(raw_rows(&exchange.arguments, inner, palette));
     if exchange.call_committed {
         content.extend(
             missing
                 .into_iter()
-                .flat_map(|fact| plate_rows(&fact, inner)),
+                .flat_map(|fact| plate_rows(&fact, inner, palette)),
         );
         if exchange.result.is_none() {
-            content.extend(note_rows(NOTE_NO_RESULT, inner));
+            content.extend(note_rows(NOTE_NO_RESULT, inner, palette));
         }
     } else {
-        content.extend(note_rows(NOTE_NO_CALL, inner));
+        content.extend(note_rows(NOTE_NO_CALL, inner, palette));
     }
-    content.extend(plate_rows(plate, inner));
+    content.extend(plate_rows(plate, inner, palette));
     content
 }
 
@@ -459,19 +472,20 @@ fn other_content(
     exchange: &Exchange<'_>,
     missing: Option<String>,
     inner: usize,
+    palette: &'static Palette,
 ) -> Vec<LaidOutRow> {
     let mut content = Vec::new();
-    content.extend(raw_rows(&exchange.arguments, inner));
+    content.extend(raw_rows(&exchange.arguments, inner, palette));
     if exchange.call_committed {
         content.extend(
             missing
                 .into_iter()
-                .flat_map(|fact| plate_rows(&fact, inner)),
+                .flat_map(|fact| plate_rows(&fact, inner, palette)),
         );
     } else {
-        content.extend(note_rows(NOTE_NO_CALL, inner));
+        content.extend(note_rows(NOTE_NO_CALL, inner, palette));
     }
-    content.extend(plate_rows(PLATE_UNKNOWN, inner));
+    content.extend(plate_rows(PLATE_UNKNOWN, inner, palette));
     content
 }
 
@@ -585,13 +599,18 @@ fn execute_facts(arguments: &Arguments) -> (Vec<String>, Option<String>) {
 }
 
 /// Returns the wrapped rows of one content text in `ink` on the tool wash.
-fn content_rows(text: &str, width: usize, ink: RowStyleId) -> Vec<LaidOutRow> {
+fn content_rows(
+    text: &str,
+    width: usize,
+    ink: RowStyleId,
+    palette: &'static Palette,
+) -> Vec<LaidOutRow> {
     let mut rows = Vec::new();
     for line in text.lines() {
-        rows.extend(plain_rows(line, width, ink));
+        rows.extend(plain_rows(line, width, ink, palette));
     }
     rows.into_iter()
-        .map(|row| row.on_surface(palette::TOOL_SURFACE))
+        .map(|row| row.on_surface(palette.tool_surface))
         .collect()
 }
 
@@ -600,10 +619,15 @@ fn content_rows(text: &str, width: usize, ink: RowStyleId) -> Vec<LaidOutRow> {
 /// The rail glyph rides the entry's first display row, the shared marker gap
 /// separates it from the text, and the text keeps the same column on every
 /// wrapped row through the same hanging indent an answer uses.
-fn list_rows(text: &str, ink: RowStyleId, inner: usize) -> Vec<LaidOutRow> {
+fn list_rows(
+    text: &str,
+    ink: RowStyleId,
+    inner: usize,
+    palette: &'static Palette,
+) -> Vec<LaidOutRow> {
     let indent = display_width(TOOL_LIST_GLYPH) + MARKER_GAP;
     let width = inner.saturating_sub(indent);
-    plain_rows(text, width, ink)
+    plain_rows(text, width, ink, palette)
         .into_iter()
         .enumerate()
         .map(|(index, row)| {
@@ -614,7 +638,7 @@ fn list_rows(text: &str, ink: RowStyleId, inner: usize) -> Vec<LaidOutRow> {
                 indent,
                 width,
                 RowStyleId::ToolBorder,
-                palette::TOOL_SURFACE,
+                palette.tool_surface,
             )
         })
         .collect()
@@ -626,15 +650,15 @@ fn list_rows(text: &str, ink: RowStyleId, inner: usize) -> Vec<LaidOutRow> {
 /// written in the muted ink and the matched fragment in the result ink, so a
 /// hit reads as one structured row rather than as a line of prose. A line that
 /// does not name a location is kept whole in the result ink, never guessed at.
-fn hit_rows(hit: &str, inner: usize) -> Vec<LaidOutRow> {
+fn hit_rows(hit: &str, inner: usize, palette: &'static Palette) -> Vec<LaidOutRow> {
     let Some((location, fragment)) = hit.split_once(": ") else {
-        return list_rows(hit, RowStyleId::ToolPreview, inner);
+        return list_rows(hit, RowStyleId::ToolPreview, inner, palette);
     };
     let indent = display_width(TOOL_LIST_GLYPH) + MARKER_GAP;
     let prefix = display_width(location) + display_width(TOOL_SEPARATOR);
     let width = inner.saturating_sub(indent + prefix);
     let mut rows = Vec::new();
-    for (index, row) in plain_rows(fragment, width, RowStyleId::ToolPreview)
+    for (index, row) in plain_rows(fragment, width, RowStyleId::ToolPreview, palette)
         .into_iter()
         .enumerate()
     {
@@ -648,7 +672,7 @@ fn hit_rows(hit: &str, inner: usize) -> Vec<LaidOutRow> {
             builder.push(&" ".repeat(indent + prefix), RowStyleId::ToolBorder);
         }
         builder.push_clipped(&row, width);
-        rows.push(builder.finish(palette::TOOL_SURFACE));
+        rows.push(builder.finish(palette.tool_surface));
     }
     rows
 }
@@ -658,7 +682,7 @@ fn hit_rows(hit: &str, inner: usize) -> Vec<LaidOutRow> {
 /// A list longer than [`TOOL_PREVIEW_ROWS`] display rows keeps its first rows
 /// and is closed by a muted `… N more rows` marker naming what the bound left
 /// out.
-fn bounded(mut rows: Vec<LaidOutRow>, inner: usize) -> Vec<LaidOutRow> {
+fn bounded(mut rows: Vec<LaidOutRow>, inner: usize, palette: &'static Palette) -> Vec<LaidOutRow> {
     let hidden = rows.len().saturating_sub(TOOL_PREVIEW_ROWS);
     if hidden > 0 {
         rows.truncate(TOOL_PREVIEW_ROWS);
@@ -666,33 +690,35 @@ fn bounded(mut rows: Vec<LaidOutRow>, inner: usize) -> Vec<LaidOutRow> {
             &format!("… {hidden} more rows"),
             inner,
             RowStyleId::ToolNote,
+            palette,
         ));
     }
     rows
 }
 
 /// Returns the muted rows of one note about a fact the durable rows do not carry.
-fn note_rows(note: &str, width: usize) -> Vec<LaidOutRow> {
-    content_rows(note, width, RowStyleId::ToolNote)
+fn note_rows(note: &str, width: usize, palette: &'static Palette) -> Vec<LaidOutRow> {
+    content_rows(note, width, RowStyleId::ToolNote, palette)
 }
 
 /// Returns the muted rows of a raw arguments document, when there is one.
-fn raw_rows(arguments: &Arguments, width: usize) -> Vec<LaidOutRow> {
+fn raw_rows(arguments: &Arguments, width: usize, palette: &'static Palette) -> Vec<LaidOutRow> {
     arguments.raw().map_or_else(Vec::new, |raw| {
-        content_rows(raw, width, RowStyleId::ToolNote)
+        content_rows(raw, width, RowStyleId::ToolNote, palette)
     })
 }
 
 /// Returns the plate rows of one fact the wire cannot fill: `@todo(core): …`
 /// on the todo wash and ink.
-fn plate_rows(fact: &str, width: usize) -> Vec<LaidOutRow> {
+fn plate_rows(fact: &str, width: usize, palette: &'static Palette) -> Vec<LaidOutRow> {
     plain_rows(
         &format!("{TOOL_PLATE_PREFIX}{fact}"),
         width,
         RowStyleId::Todo,
+        palette,
     )
     .into_iter()
-    .map(|row| row.on_surface(palette::STUB_BG))
+    .map(|row| row.on_surface(palette.stub_bg))
     .collect()
 }
 
@@ -706,8 +732,12 @@ mod tests {
     use intention_proto::{MessageKindDto, MessageProjectionDto, RunId, SessionId, ToolCallId};
 
     use crate::tui::layout::MARKER_GAP;
+    use crate::tui::palette::Palette;
 
     use super::{Pairing, TOOL_GLYPH, ToolKind, block};
+
+    /// The light palette every fixture renders with.
+    const LIGHT: &Palette = &crate::tui::palette::LIGHT;
 
     /// Returns one committed tool row naming `tool_id` with `text`.
     fn tool_row(
@@ -756,7 +786,7 @@ mod tests {
     /// when the row renders nothing.
     fn rendered(rows: &[MessageProjectionDto], index: usize, width: usize) -> String {
         let pairing = Pairing::of(rows);
-        block(&rows[index], index, &pairing, width)
+        block(&rows[index], index, &pairing, width, LIGHT)
             .unwrap_or_default()
             .iter()
             .map(|row| row.text.as_str())
@@ -870,7 +900,7 @@ mod tests {
         );
         let pairing = Pairing::of(&rows);
         assert!(
-            block(&rows[1], 1, &pairing, 60).is_none(),
+            block(&rows[1], 1, &pairing, 60, LIGHT).is_none(),
             "an execute result row renders nothing"
         );
     }
@@ -880,7 +910,7 @@ mod tests {
         let (rows, _) = exchange("read", r#"{"path":"src/lib.rs"}"#, Some("the content"));
         let pairing = Pairing::of(&rows);
         assert!(
-            block(&rows[1], 1, &pairing, 60).is_none(),
+            block(&rows[1], 1, &pairing, 60, LIGHT).is_none(),
             "the exchange is drawn once, at the call"
         );
         assert!(rendered(&rows, 0, 60).contains("the content"));

@@ -14,7 +14,7 @@ use revue::text::char_width;
 use revue::widget::{Border, Card, RichText, Span, Stack, Style, vstack};
 
 use crate::app::AppState;
-use crate::tui::palette;
+use crate::tui::palette::Palette;
 use crate::tui::panes::status;
 
 /// The prompt the buffer's first line carries before its text.
@@ -80,42 +80,47 @@ pub(in crate::tui) fn block_rows(state: &AppState) -> u16 {
 /// `rows` is the block's exact row count, decided by the chat panel: one row
 /// per buffer line beside the fixed chrome. A buffer taller than the rows left
 /// for lines shows the window that keeps the cursor's line visible.
-pub(in crate::tui) fn input_block(state: &AppState, width: u16, rows: u16) -> Border {
+pub(in crate::tui) fn input_block(
+    state: &AppState,
+    width: u16,
+    rows: u16,
+    palette: &'static Palette,
+) -> Border {
     let content = usize::from(width.saturating_sub(BLOCK_FRAME + BLOCK_PADDING * 2));
     let line_rows = rows.saturating_sub(BLOCK_FRAME + BADGE_ROWS + STATUS_ROWS);
     Border::rounded()
         .min_size(width, rows)
         .max_size(width, rows)
-        .fg(palette::ACCENT)
-        .bg(palette::PANEL)
+        .fg(palette.accent)
+        .bg(palette.panel)
         .child(
             Card::new()
                 .flat()
                 .padding(BLOCK_PADDING)
-                .background(palette::PANEL)
+                .background(palette.panel)
                 .body(
                     vstack()
-                        .child_sized(badge_row(state, content), BADGE_ROWS)
+                        .child_sized(badge_row(state, content, palette), BADGE_ROWS)
                         .child_sized(
-                            input_lines(state, content, usize::from(line_rows)),
+                            input_lines(state, content, usize::from(line_rows), palette),
                             line_rows,
                         )
-                        .child_sized(status::status_row(state), STATUS_ROWS),
+                        .child_sized(status::status_row(state, palette), STATUS_ROWS),
                 ),
         )
 }
 
 /// Returns the badge header: the session's real run mode and the model
 /// placeholder, each on its own badge wash.
-fn badge_row(state: &AppState, width: usize) -> RichText {
+fn badge_row(state: &AppState, width: usize, palette: &'static Palette) -> RichText {
     let (mode, mode_ink) = state
         .session_mode()
-        .map_or((MODE_PLACEHOLDER, palette::TODO_INK), |mode| {
-            (mode.as_str(), palette::BADGE_INK)
+        .map_or((MODE_PLACEHOLDER, palette.todo_ink), |mode| {
+            (mode.as_str(), palette.badge_ink)
         });
     let mut text = RichText::new();
     let mut used = 0;
-    for (label, ink) in [(mode, mode_ink), (MODEL_PLACEHOLDER, palette::TODO_INK)] {
+    for (label, ink) in [(mode, mode_ink), (MODEL_PLACEHOLDER, palette.todo_ink)] {
         let chip = format!(" {label} ");
         let chip_width = display_width(&chip);
         let gap = usize::from(used > 0);
@@ -125,20 +130,20 @@ fn badge_row(state: &AppState, width: usize) -> RichText {
         if gap > 0 {
             text = text.span(Span::styled(
                 " ",
-                Style::new().fg(palette::INK).bg(palette::PANEL),
+                Style::new().fg(palette.ink).bg(palette.panel),
             ));
             used += 1;
         }
         text = text.span(Span::styled(
             chip,
-            Style::new().fg(ink).bg(palette::BADGE_BG),
+            Style::new().fg(ink).bg(palette.badge_bg),
         ));
         used += chip_width;
     }
     if used < width {
         text = text.span(Span::styled(
             " ".repeat(width - used),
-            Style::new().bg(palette::PANEL),
+            Style::new().bg(palette.panel),
         ));
     }
     text
@@ -146,13 +151,13 @@ fn badge_row(state: &AppState, width: usize) -> RichText {
 
 /// Returns the buffer's visible rows: one row per line, windowed so the
 /// cursor's line is always rendered.
-fn input_lines(state: &AppState, width: usize, visible: usize) -> Stack {
+fn input_lines(state: &AppState, width: usize, visible: usize, palette: &'static Palette) -> Stack {
     let buffer = BufferLines::of(state.input(), state.cursor());
     let start = window_start(buffer.cursor_line, visible);
     let mut body = vstack();
     for (index, line) in buffer.lines.iter().enumerate().skip(start).take(visible) {
         let cursor = (index == buffer.cursor_line).then_some(buffer.cursor_column);
-        body = body.child_sized(input_row(index, line, cursor, width), 1);
+        body = body.child_sized(input_row(index, line, cursor, width, palette), 1);
     }
     body
 }
@@ -165,17 +170,20 @@ fn input_lines(state: &AppState, width: usize, visible: usize) -> Stack {
 /// windowed horizontally when its line is longer than the block: the window
 /// ends at the cursor, so the cursor stays visible while the text before it
 /// scrolls off. A line without the cursor is clipped to the row.
-fn input_row(index: usize, line: &str, cursor: Option<usize>, width: usize) -> RichText {
+fn input_row(
+    index: usize,
+    line: &str,
+    cursor: Option<usize>,
+    width: usize,
+    palette: &'static Palette,
+) -> RichText {
     let first = index == 0;
     let prefix = if first { PROMPT } else { CONTINUATION_INDENT };
     let prefix_width = display_width(prefix);
     let prefix_style = if first {
-        Style::new()
-            .fg(palette::ACCENT)
-            .bg(palette::INPUT_BG)
-            .bold()
+        Style::new().fg(palette.accent).bg(palette.input_bg).bold()
     } else {
-        Style::new().bg(palette::INPUT_BG)
+        Style::new().bg(palette.input_bg)
     };
     let columns = width.saturating_sub(prefix_width);
     let mut text = RichText::new().span(Span::styled(prefix, prefix_style));
@@ -186,18 +194,15 @@ fn input_row(index: usize, line: &str, cursor: Option<usize>, width: usize) -> R
             text = text
                 .span(Span::styled(
                     before,
-                    Style::new().fg(palette::INK).bg(palette::INPUT_BG),
+                    Style::new().fg(palette.ink).bg(palette.input_bg),
                 ))
                 .span(Span::styled(
                     CURSOR.to_string(),
-                    Style::new()
-                        .fg(palette::ACCENT)
-                        .bg(palette::INPUT_BG)
-                        .bold(),
+                    Style::new().fg(palette.accent).bg(palette.input_bg).bold(),
                 ))
                 .span(Span::styled(
                     after,
-                    Style::new().fg(palette::INK).bg(palette::INPUT_BG),
+                    Style::new().fg(palette.ink).bg(palette.input_bg),
                 ));
             used
         }
@@ -206,7 +211,7 @@ fn input_row(index: usize, line: &str, cursor: Option<usize>, width: usize) -> R
             let used = prefix_width + clipped_width;
             text = text.span(Span::styled(
                 clipped,
-                Style::new().fg(palette::INK).bg(palette::INPUT_BG),
+                Style::new().fg(palette.ink).bg(palette.input_bg),
             ));
             used
         }
@@ -214,7 +219,7 @@ fn input_row(index: usize, line: &str, cursor: Option<usize>, width: usize) -> R
     if used < width {
         text = text.span(Span::styled(
             " ".repeat(width - used),
-            Style::new().bg(palette::INPUT_BG),
+            Style::new().bg(palette.input_bg),
         ));
     }
     text

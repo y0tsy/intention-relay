@@ -15,6 +15,7 @@ mod input;
 mod run;
 mod sessions;
 mod state;
+mod theme;
 mod transcript;
 
 #[cfg(test)]
@@ -28,6 +29,7 @@ pub use browser::{BrowserRow, BrowserTab};
 pub use commands::{COMMANDS, CommandMenu, CommandSpec, MenuMove};
 pub use input::TRANSCRIPT_DRAG_ROWS;
 pub use state::AppState;
+pub use theme::Theme;
 pub use transcript::TranscriptSelection;
 
 use intention_proto::ErrorDto;

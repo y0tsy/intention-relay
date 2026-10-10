@@ -16,7 +16,7 @@ use revue::text::char_width;
 use revue::widget::{RichText, Span, Stack, Style, vstack};
 
 use crate::app::{AppState, COMMANDS, CommandSpec};
-use crate::tui::palette;
+use crate::tui::palette::Palette;
 
 /// The most command rows the band shows before it reports the rest.
 pub(in crate::tui) const MAX_COMMAND_ROWS: usize = 5;
@@ -75,7 +75,12 @@ const fn band_rows(commands: usize) -> u16 {
 /// `rows` is [`menu_rows`] for the same state, so the band and the panel's
 /// arithmetic agree by construction - and a panel too small to hold the band
 /// paints nothing at all rather than a band in the input's rows.
-pub(in crate::tui) fn menu_block(state: &AppState, width: u16, rows: u16) -> Stack {
+pub(in crate::tui) fn menu_block(
+    state: &AppState,
+    width: u16,
+    rows: u16,
+    palette: &'static Palette,
+) -> Stack {
     let Some(menu) = state.command_menu() else {
         return vstack();
     };
@@ -83,7 +88,13 @@ pub(in crate::tui) fn menu_block(state: &AppState, width: u16, rows: u16) -> Sta
         return vstack();
     }
     let commands = menu.commands().map(Row::of).collect::<Vec<_>>();
-    band(&commands, menu.highlight(), usize::from(width), rows)
+    band(
+        &commands,
+        menu.highlight(),
+        usize::from(width),
+        rows,
+        palette,
+    )
 }
 
 /// One row of the band: the three cells one command contributes.
@@ -113,22 +124,31 @@ impl<'a> Row<'a> {
 }
 
 /// Returns the band of one command list with one row highlighted.
-fn band(commands: &[Row], highlight: usize, width: usize, rows: u16) -> Stack {
-    let wash = palette::HEADER_BG;
+fn band(
+    commands: &[Row],
+    highlight: usize,
+    width: usize,
+    rows: u16,
+    palette: &'static Palette,
+) -> Stack {
+    let wash = palette.header_bg;
     let columns = Columns::of(width.saturating_sub(BAND_CHROME_COLUMNS));
-    let mut band = vstack().child_sized(frame_row(width, wash, true), 1);
+    let mut band = vstack().child_sized(frame_row(width, wash, true, palette), 1);
     for (row, command) in commands.iter().take(MAX_COMMAND_ROWS).enumerate() {
-        band = band.child_sized(command_row(command, row == highlight, &columns, wash), 1);
+        band = band.child_sized(
+            command_row(command, row == highlight, &columns, wash, palette),
+            1,
+        );
     }
     if let Some(hidden) = commands.len().checked_sub(MAX_COMMAND_ROWS) {
-        band = band.child_sized(overflow_row(hidden, width, wash), 1);
+        band = band.child_sized(overflow_row(hidden, width, wash, palette), 1);
     }
     debug_assert_eq!(
         band_rows(commands.len()),
         rows,
         "the band paints exactly the rows the panel gave it"
     );
-    band.child_sized(frame_row(width, wash, false), 1)
+    band.child_sized(frame_row(width, wash, false, palette), 1)
 }
 
 /// The columns one band's rows are laid out in.
@@ -213,27 +233,33 @@ fn category_columns() -> usize {
 
 /// Returns one command row: its marker, its name, its description, and its
 /// category.
-fn command_row(command: &Row, highlighted: bool, columns: &Columns, wash: Color) -> RichText {
+fn command_row(
+    command: &Row,
+    highlighted: bool,
+    columns: &Columns,
+    wash: Color,
+    palette: &'static Palette,
+) -> RichText {
     let row_wash = if highlighted {
-        palette::ROW_SELECTED_BG
+        palette.row_selected_bg
     } else {
         wash
     };
-    let border = border_style(row_wash);
+    let border = border_style(row_wash, palette);
     let command_ink = {
-        let mut style = Style::new().fg(palette::ACCENT_DEEP).bg(row_wash);
+        let mut style = Style::new().fg(palette.accent_deep).bg(row_wash);
         style.bold = highlighted;
         style
     };
     let marker = if highlighted {
         (
             CURSOR_MARKER,
-            Style::new().fg(palette::ACCENT).bg(row_wash).bold(),
+            Style::new().fg(palette.accent).bg(row_wash).bold(),
         )
     } else {
         (ROW_MARKER, Style::new().bg(row_wash))
     };
-    let trailing = border_style(row_wash);
+    let trailing = border_style(row_wash, palette);
     let mut row = RichText::new()
         .default_style(Style::new().bg(row_wash))
         .span(Span::styled("│ ", border))
@@ -247,7 +273,7 @@ fn command_row(command: &Row, highlighted: bool, columns: &Columns, wash: Color)
             .span(Span::styled(" ", Style::new().bg(row_wash)))
             .span(Span::styled(
                 cell(command.description, columns.description),
-                Style::new().fg(palette::INK).bg(row_wash),
+                Style::new().fg(palette.ink).bg(row_wash),
             ));
     }
     if columns.category > 0 {
@@ -255,30 +281,30 @@ fn command_row(command: &Row, highlighted: bool, columns: &Columns, wash: Color)
             .span(Span::styled(" ", Style::new().bg(row_wash)))
             .span(Span::styled(
                 cell(command.category, columns.category),
-                Style::new().fg(palette::INK_MUTED).bg(row_wash),
+                Style::new().fg(palette.ink_muted).bg(row_wash),
             ));
     }
     row.span(Span::styled(" │", trailing))
 }
 
 /// Returns the row that reports the commands the band does not show.
-fn overflow_row(hidden: usize, width: usize, wash: Color) -> RichText {
+fn overflow_row(hidden: usize, width: usize, wash: Color, palette: &'static Palette) -> RichText {
     let report = format!("… and {hidden} more commands");
     let columns = width.saturating_sub(BAND_CHROME_COLUMNS + MARKER_COLUMNS);
     RichText::new()
         .default_style(Style::new().bg(wash))
-        .span(Span::styled("│ ", border_style(wash)))
+        .span(Span::styled("│ ", border_style(wash, palette)))
         .span(Span::styled(ROW_MARKER, Style::new().bg(wash)))
         .span(Span::styled(
             cell(&report, columns),
-            Style::new().fg(palette::INK_MUTED).bg(wash),
+            Style::new().fg(palette.ink_muted).bg(wash),
         ))
-        .span(Span::styled(" │", border_style(wash)))
+        .span(Span::styled(" │", border_style(wash, palette)))
 }
 
 /// Returns the ink of the band's frame and padding on one wash.
-fn border_style(wash: Color) -> Style {
-    Style::new().fg(palette::ACCENT).bg(wash)
+fn border_style(wash: Color, palette: &'static Palette) -> Style {
+    Style::new().fg(palette.accent).bg(wash)
 }
 
 /// Returns the band's own top or bottom frame row.
@@ -286,39 +312,39 @@ fn border_style(wash: Color) -> Style {
 /// The top row carries the band's title between its corners, exactly like the
 /// transcript's framed blocks; the bottom row is its plain counterpart. A band
 /// too narrow for the title keeps its corners and fills the row instead.
-fn frame_row(width: usize, wash: Color, top: bool) -> RichText {
+fn frame_row(width: usize, wash: Color, top: bool, palette: &'static Palette) -> RichText {
     let mut row = RichText::new().default_style(Style::new().bg(wash));
     if !top {
         return row
-            .span(Span::styled("╰", border_style(wash)))
+            .span(Span::styled("╰", border_style(wash, palette)))
             .span(Span::styled(
                 "─".repeat(width.saturating_sub(2)),
-                border_style(wash),
+                border_style(wash, palette),
             ))
-            .span(Span::styled("╯", border_style(wash)));
+            .span(Span::styled("╯", border_style(wash, palette)));
     }
     let label = format!(" {TITLE} ");
     let labelled = display_width("╭─") + display_width(&label);
     if labelled + 1 > width {
         return row
-            .span(Span::styled("╭─", border_style(wash)))
+            .span(Span::styled("╭─", border_style(wash, palette)))
             .span(Span::styled(
                 "─".repeat(width.saturating_sub(3)),
-                border_style(wash),
+                border_style(wash, palette),
             ))
-            .span(Span::styled("╮", border_style(wash)));
+            .span(Span::styled("╮", border_style(wash, palette)));
     }
     row = row
-        .span(Span::styled("╭─", border_style(wash)))
+        .span(Span::styled("╭─", border_style(wash, palette)))
         .span(Span::styled(
             label,
-            Style::new().fg(palette::ACCENT_DEEP).bg(wash).bold(),
+            Style::new().fg(palette.accent_deep).bg(wash).bold(),
         ));
     row.span(Span::styled(
         "─".repeat(width - labelled - 1),
-        border_style(wash),
+        border_style(wash, palette),
     ))
-    .span(Span::styled("╮", border_style(wash)))
+    .span(Span::styled("╮", border_style(wash, palette)))
 }
 
 /// Returns the display width of one piece of text.
@@ -368,6 +394,10 @@ mod tests {
         BAND_FRAME_ROWS, Columns, MARKER_COLUMNS, MAX_COMMAND_ROWS, Row, band, band_rows,
         display_width,
     };
+    use crate::tui::palette::Palette;
+
+    /// The light palette every fixture renders with.
+    const LIGHT: &Palette = &crate::tui::palette::LIGHT;
 
     /// Eight synthetic commands, so a band can outgrow its row cap.
     const FILLER: [(&str, &str, &str); 8] = [
@@ -458,7 +488,13 @@ mod tests {
     #[test]
     fn the_band_paints_exactly_the_rows_it_counts_and_fills_every_one() {
         let rows = &filler_rows()[..2];
-        let band = band(rows, 0, usize::from(BAND_WIDTH), band_rows(rows.len()));
+        let band = band(
+            rows,
+            0,
+            usize::from(BAND_WIDTH),
+            band_rows(rows.len()),
+            LIGHT,
+        );
         let app = TestApp::with_size(band, BAND_WIDTH, band_rows(rows.len()));
         let last = BAND_WIDTH - 1;
         assert_eq!(app.get_cell(0, 0), Some('╭'));
@@ -475,7 +511,13 @@ mod tests {
     #[test]
     fn the_band_highlights_one_row_and_marks_the_hidden_commands() {
         let rows = filler_rows();
-        let band = band(&rows, 1, usize::from(BAND_WIDTH), band_rows(rows.len()));
+        let band = band(
+            &rows,
+            1,
+            usize::from(BAND_WIDTH),
+            band_rows(rows.len()),
+            LIGHT,
+        );
         let app = TestApp::with_size(band, BAND_WIDTH, band_rows(rows.len()));
         let text = app.screen_text();
         assert!(text.contains("commands"), "the frame titles the band");

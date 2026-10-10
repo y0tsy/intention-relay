@@ -98,7 +98,7 @@ impl View for RevueView<'_> {
     /// its transcript, its input, and its session while it reflows into the
     /// rows the browser leaves.
     fn render(&self, ctx: &mut RenderContext) {
-        ctx.fill_box_background(palette::CANVAS);
+        ctx.fill_box_background(palette::of(self.state.theme()).canvas);
         let window = ctx.area;
         // A view built without a cache lays the transcript out through a fresh
         // one, so both constructors render exactly the same rows.

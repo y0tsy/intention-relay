@@ -28,7 +28,7 @@ use revue::widget::{Border, RichText, Span, Stack, Style, vstack};
 
 use crate::app::AppState;
 use crate::tui::layout::display_width;
-use crate::tui::palette;
+use crate::tui::palette::Palette;
 
 /// The product word of the lockup.
 const PRODUCT: &str = "INTENTION";
@@ -138,21 +138,21 @@ const fn layout(rows: u16) -> WelcomeLayout {
 
 /// Returns the welcome pane: the lockup and the overview, filling exactly the
 /// rows and columns of the transcript region it replaces.
-pub(in crate::tui) fn welcome_pane(rows: u16, columns: u16) -> Stack {
+pub(in crate::tui) fn welcome_pane(rows: u16, columns: u16, palette: &'static Palette) -> Stack {
     let layout = layout(rows);
     let width = usize::from(columns);
     let mut body = vstack();
     if layout.lead > 0 {
-        body = body.child_sized(blank_row(width), layout.lead);
+        body = body.child_sized(blank_row(width, palette), layout.lead);
     }
     if layout.logo > 0 {
-        body = body.child_sized(logo_row(width), layout.logo);
+        body = body.child_sized(logo_row(width, palette), layout.logo);
     }
     if layout.filler > 0 {
-        body = body.child_sized(blank_row(width), layout.filler);
+        body = body.child_sized(blank_row(width, palette), layout.filler);
     }
     if layout.overview > 0 {
-        body = body.child_sized(overview(layout.overview, width), layout.overview);
+        body = body.child_sized(overview(layout.overview, width, palette), layout.overview);
     }
     body
 }
@@ -162,29 +162,29 @@ pub(in crate::tui) fn welcome_pane(rows: u16, columns: u16) -> Stack {
 ///
 /// Every column is measured through `char_width`, so the lockup and its pads
 /// fill exactly `width` columns however a terminal renders the letters.
-fn logo_row(width: usize) -> RichText {
+fn logo_row(width: usize, palette: &'static Palette) -> RichText {
     let trailing = tracked(TRAILING);
     let lockup = display_width(PRODUCT) + LOGO_GAP + display_width(&trailing);
     let left = width.saturating_sub(lockup) / 2;
     let right = width.saturating_sub(lockup + left);
     let mut text = RichText::new();
     if left > 0 {
-        text = text.span(padding(left));
+        text = text.span(padding(left, palette));
     }
     text = text.span(Span::styled(
         PRODUCT,
         Style::new()
-            .fg(palette::ACCENT_DEEP)
-            .bg(palette::PANEL)
+            .fg(palette.accent_deep)
+            .bg(palette.panel)
             .bold(),
     ));
-    text = text.span(padding(LOGO_GAP));
+    text = text.span(padding(LOGO_GAP, palette));
     text = text.span(Span::styled(
         trailing,
-        Style::new().fg(palette::INK_MUTED).bg(palette::PANEL),
+        Style::new().fg(palette.ink_muted).bg(palette.panel),
     ));
     if right > 0 {
-        text = text.span(padding(right));
+        text = text.span(padding(right, palette));
     }
     text
 }
@@ -202,17 +202,17 @@ fn tracked(word: &str) -> String {
 
 /// Returns the overview: the sub-block row, framed while the region has room
 /// for the frame.
-fn overview(rows: u16, width: usize) -> Stack {
+fn overview(rows: u16, width: usize, palette: &'static Palette) -> Stack {
     let framed = rows >= OVERVIEW_ROWS;
     let content = width.saturating_sub(if framed { OVERVIEW_FRAME } else { 0 });
-    let chips = chips_row(content);
+    let chips = chips_row(content, palette);
     if framed {
         vstack().child_sized(
             Border::rounded()
                 .min_size(as_width(width), rows)
                 .max_size(as_width(width), rows)
-                .fg(palette::BORDER)
-                .bg(palette::PANEL)
+                .fg(palette.border)
+                .bg(palette.panel)
                 .child(chips),
             rows,
         )
@@ -227,14 +227,14 @@ fn overview(rows: u16, width: usize) -> Stack {
 /// The row is laid out left to right and a sub-block that does not fit ends the
 /// row whole, so a narrow welcome shows fewer sub-blocks instead of half of
 /// one. That is "up to four": the overview is one block, never a wrapped one.
-fn chips_row(width: usize) -> RichText {
+fn chips_row(width: usize, palette: &'static Palette) -> RichText {
     let mut text = RichText::new();
     let mut used = 0;
-    for sub_block in fitted(width) {
+    for sub_block in fitted(width, palette) {
         let chip = sub_block.chip();
         let chip_width = display_width(&chip);
         if used > 0 {
-            text = text.span(padding(1));
+            text = text.span(padding(1, palette));
             used += 1;
         }
         text = text.span(Span::styled(
@@ -244,46 +244,46 @@ fn chips_row(width: usize) -> RichText {
         used += chip_width;
     }
     if used < width {
-        text = text.span(padding(width - used));
+        text = text.span(padding(width - used, palette));
     }
     text
 }
 
 /// Returns the sub-blocks of the overview, in display order.
-const fn sub_blocks() -> [SubBlock; 4] {
+const fn sub_blocks(palette: &'static Palette) -> [SubBlock; 4] {
     [
         SubBlock {
             label: VERSION_LABEL,
             state: VERSION,
-            ink: palette::BADGE_INK,
-            wash: palette::BADGE_BG,
+            ink: palette.badge_ink,
+            wash: palette.badge_bg,
         },
         SubBlock {
             label: AGENTS_LABEL,
             state: STUB,
-            ink: palette::TODO_INK,
-            wash: palette::STUB_BG,
+            ink: palette.todo_ink,
+            wash: palette.stub_bg,
         },
         SubBlock {
             label: MCPS_LABEL,
             state: STUB,
-            ink: palette::TODO_INK,
-            wash: palette::STUB_BG,
+            ink: palette.todo_ink,
+            wash: palette.stub_bg,
         },
         SubBlock {
             label: SKILLS_LABEL,
             state: STUB,
-            ink: palette::TODO_INK,
-            wash: palette::STUB_BG,
+            ink: palette.todo_ink,
+            wash: palette.stub_bg,
         },
     ]
 }
 
 /// Returns the leading sub-blocks that fit in `width` columns, in order.
-fn fitted(width: usize) -> Vec<SubBlock> {
+fn fitted(width: usize, palette: &'static Palette) -> Vec<SubBlock> {
     let mut fitted = Vec::new();
     let mut used = 0;
-    for (index, sub_block) in sub_blocks().into_iter().enumerate() {
+    for (index, sub_block) in sub_blocks(palette).into_iter().enumerate() {
         let chip_width = display_width(&sub_block.chip());
         let gap = usize::from(index > 0);
         if used + gap + chip_width > width {
@@ -316,13 +316,13 @@ impl SubBlock {
 }
 
 /// Returns a blank run of `width` columns on the panel wash.
-fn padding(width: usize) -> Span {
-    Span::styled(" ".repeat(width), Style::new().bg(palette::PANEL))
+fn padding(width: usize, palette: &'static Palette) -> Span {
+    Span::styled(" ".repeat(width), Style::new().bg(palette.panel))
 }
 
 /// Returns one blank row of `width` columns on the panel wash.
-fn blank_row(width: usize) -> RichText {
-    RichText::new().span(padding(width))
+fn blank_row(width: usize, palette: &'static Palette) -> RichText {
+    RichText::new().span(padding(width, palette))
 }
 
 /// Returns one column count as the terminal's column type.
@@ -343,7 +343,10 @@ mod tests {
         LOGO_GAP, OVERVIEW_ROWS, PRODUCT, TRAILING, WelcomeLayout, chips_row, display_width,
         fitted, layout, sub_blocks, tracked,
     };
-    use crate::tui::palette;
+    use crate::tui::palette::Palette;
+
+    /// The light palette every fixture renders with.
+    const LIGHT: &Palette = &crate::tui::palette::LIGHT;
 
     /// Returns the rows one layout spends.
     const fn spent(layout: &WelcomeLayout) -> u16 {
@@ -394,8 +397,8 @@ mod tests {
 
     #[test]
     fn the_overview_shows_the_sub_blocks_in_order_and_drops_whole_ones() {
-        let blocks = sub_blocks();
-        let all = fitted(usize::MAX);
+        let blocks = sub_blocks(LIGHT);
+        let all = fitted(usize::MAX, LIGHT);
         assert_eq!(
             all.iter().map(|block| block.label).collect::<Vec<_>>(),
             vec!["Version", "AGENTS.md", "MCPs", "Skills"],
@@ -416,22 +419,30 @@ mod tests {
             .map(|block| display_width(&block.chip()))
             .collect();
         let total = chips.iter().sum::<usize>() + blocks.len() - 1;
-        assert_eq!(fitted(total).len(), 4, "the full row holds all four");
+        assert_eq!(fitted(total, LIGHT).len(), 4, "the full row holds all four");
         assert_eq!(
-            fitted(total - 1).len(),
+            fitted(total - 1, LIGHT).len(),
             3,
             "one column short drops the last sub-block whole"
         );
-        assert_eq!(fitted(chips[0]).len(), 1, "the first sub-block alone fits");
-        assert_eq!(fitted(chips[0] - 1).len(), 0, "nothing fits below it");
+        assert_eq!(
+            fitted(chips[0], LIGHT).len(),
+            1,
+            "the first sub-block alone fits"
+        );
+        assert_eq!(
+            fitted(chips[0] - 1, LIGHT).len(),
+            0,
+            "nothing fits below it"
+        );
     }
 
     #[test]
     fn the_version_carries_the_badge_surface_and_a_stub_carries_the_stub_plate() {
-        let app = TestApp::with_size(chips_row(80), 80, 1);
+        let app = TestApp::with_size(chips_row(80, LIGHT), 80, 1);
         let version = app.buffer().get(0, 0).expect("the version chip paints");
-        assert_eq!(version.fg, Some(palette::BADGE_INK));
-        assert_eq!(version.bg, Some(palette::BADGE_BG));
+        assert_eq!(version.fg, Some(LIGHT.badge_ink));
+        assert_eq!(version.bg, Some(LIGHT.badge_bg));
         let (stub_x, stub_row) = app
             .find_text("Skills @todo(core)")
             .expect("the skills stub renders");
@@ -439,10 +450,10 @@ mod tests {
             .buffer()
             .get(stub_x, stub_row)
             .expect("the stub chip paints");
-        assert_eq!(stub.fg, Some(palette::TODO_INK));
+        assert_eq!(stub.fg, Some(LIGHT.todo_ink));
         assert_eq!(
             stub.bg,
-            Some(palette::STUB_BG),
+            Some(LIGHT.stub_bg),
             "a stub carries the deliberate @todo plate, not a status wash"
         );
     }

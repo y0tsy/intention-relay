@@ -5,11 +5,11 @@
 //! feature), so code fences, bold, lists, and tables render in either place.
 //! Every line the parser produces becomes one or more [`LaidOutRow`] values:
 //!
-//! - a heading keeps the parser's `#` marker and takes [`palette::MARKDOWN_HEADING`],
+//! - a heading keeps the parser's `#` marker and takes [`Palette::markdown_heading`],
 //! - `**strong**` keeps the parser's bold modifier,
 //! - a table keeps the parser's box-drawing grid, laid out as an aligned block,
-//! - inline code and links keep [`palette::MARKDOWN_CODE`] and
-//!   [`palette::MARKDOWN_LINK`].
+//! - inline code and links keep [`Palette::markdown_code`] and
+//!   [`Palette::markdown_link`].
 //!
 //! The widget's FIGlet headings stay off on purpose: big art would multiply a
 //! heading's display rows and make the transcript's row budget lie. The `#`
@@ -41,7 +41,7 @@ use revue::widget::Markdown;
 use revue::widget::markdown::Line;
 
 use crate::tui::layout::{CONTINUATION_INDENT, LaidOutRow, RowBuilder, RowStyleId};
-use crate::tui::palette;
+use crate::tui::palette::Palette;
 
 /// The box-drawing glyphs that open an atomic grid or rule line.
 const GRID_OPENERS: [char; 4] = ['┌', '├', '└', '│'];
@@ -51,16 +51,22 @@ const GRID_OPENERS: [char; 4] = ['┌', '├', '└', '│'];
 ///
 /// The rows come from the parsed widget's own line inventory (
 /// [`Markdown::line_count`] lines, each laid out at `width`), so the transcript
-/// window counts the rows the block actually paints.
-pub(in crate::tui) fn rows(source: &str, width: usize, surface: Color) -> Vec<LaidOutRow> {
+/// window counts the rows the block actually paints. The parser is configured
+/// from the resolved `palette`, so the inks it carries are the theme's own.
+pub(in crate::tui) fn rows(
+    source: &str,
+    width: usize,
+    surface: Color,
+    palette: &'static Palette,
+) -> Vec<LaidOutRow> {
     let markdown = Markdown::new(source)
-        .heading_fg(palette::MARKDOWN_HEADING)
-        .code_fg(palette::MARKDOWN_CODE)
-        .link_fg(palette::MARKDOWN_LINK)
+        .heading_fg(palette.markdown_heading)
+        .code_fg(palette.markdown_code)
+        .link_fg(palette.markdown_link)
         .syntax_highlight(false);
     let mut rows = Vec::new();
     for line in &markdown.lines {
-        line_rows(line, width.max(1), surface, &mut rows);
+        line_rows(line, width.max(1), surface, &mut rows, palette);
     }
     rows
 }
@@ -69,16 +75,22 @@ pub(in crate::tui) fn rows(source: &str, width: usize, surface: Color) -> Vec<La
 ///
 /// An empty line stays one blank display row, so the pane's row window keeps
 /// matching the widget's own line inventory.
-fn line_rows(line: &Line, width: usize, surface: Color, rows: &mut Vec<LaidOutRow>) {
+fn line_rows(
+    line: &Line,
+    width: usize,
+    surface: Color,
+    rows: &mut Vec<LaidOutRow>,
+    palette: &'static Palette,
+) {
     if is_empty_line(line) {
         rows.push(LaidOutRow::blank(surface));
         return;
     }
     if is_grid_line(line) {
-        rows.push(grid_row(line, surface));
+        rows.push(grid_row(line, surface, palette));
         return;
     }
-    rows.extend(wrapped_rows(line, width, surface));
+    rows.extend(wrapped_rows(line, width, surface, palette));
 }
 
 /// Returns whether one parsed line paints no character.
@@ -96,12 +108,12 @@ fn is_grid_line(line: &Line) -> bool {
 }
 
 /// Returns one atomic grid row: the line laid out whole, never wrapped.
-fn grid_row(line: &Line, surface: Color) -> LaidOutRow {
+fn grid_row(line: &Line, surface: Color, palette: &'static Palette) -> LaidOutRow {
     let mut row = RowBuilder::new();
     for segment in &line.segments {
         row.push(
             &segment.text,
-            RowStyleId::of_parsed(segment.fg, segment.modifier),
+            RowStyleId::of_parsed(segment.fg, segment.modifier, palette),
         );
     }
     row.finish(surface)
@@ -109,11 +121,16 @@ fn grid_row(line: &Line, surface: Color) -> LaidOutRow {
 
 /// Returns the display rows of one wrapped line, with the continuation indent
 /// on every row after the first.
-fn wrapped_rows(line: &Line, width: usize, surface: Color) -> Vec<LaidOutRow> {
+fn wrapped_rows(
+    line: &Line,
+    width: usize,
+    surface: Color,
+    palette: &'static Palette,
+) -> Vec<LaidOutRow> {
     let mut wrapped: Vec<RowBuilder> = Vec::new();
     let mut row = RowBuilder::new();
     for segment in &line.segments {
-        let style = RowStyleId::of_parsed(segment.fg, segment.modifier);
+        let style = RowStyleId::of_parsed(segment.fg, segment.modifier, palette);
         let mut rest = segment.text.as_str();
         while !rest.is_empty() {
             if row.is_empty() {
@@ -195,7 +212,10 @@ mod tests {
 
     use super::{GRID_OPENERS, rows};
     use crate::tui::layout::{LaidOutRow, RowStyleId};
-    use crate::tui::palette;
+    use crate::tui::palette::Palette;
+
+    /// The light palette every fixture renders with.
+    const LIGHT: &Palette = &crate::tui::palette::LIGHT;
 
     /// Returns one row's text and run styles, for row-for-row comparison.
     fn roles(rows: &[LaidOutRow]) -> Vec<(String, Vec<RowStyleId>)> {
@@ -215,7 +235,7 @@ mod tests {
     #[test]
     fn a_long_paragraph_wraps_inside_the_pane_width() {
         let source = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
-        let wrapped = rows(source, 20, palette::PANEL);
+        let wrapped = rows(source, 20, LIGHT.panel, LIGHT);
         assert!(
             wrapped.len() > 1,
             "a paragraph wider than the pane becomes several rows"
@@ -232,7 +252,7 @@ mod tests {
     #[test]
     fn a_table_grid_stays_atomic_instead_of_wrapping() {
         let source = "| a | longer heading |\n|---|---|\n| b | c |";
-        let laid_out = rows(source, 4, palette::PANEL);
+        let laid_out = rows(source, 4, LIGHT.panel, LIGHT);
         assert!(
             laid_out.iter().any(|row| row.width() > 4),
             "a grid line is laid out whole and clipped, never wrapped"
@@ -241,7 +261,7 @@ mod tests {
 
     #[test]
     fn a_short_answer_stays_one_row() {
-        assert_eq!(rows("just one line", 40, palette::PANEL).len(), 1);
+        assert_eq!(rows("just one line", 40, LIGHT.panel, LIGHT).len(), 1);
     }
 
     #[test]
@@ -251,13 +271,18 @@ mod tests {
         // break itself opens, which carries the character that broke the row
         // before it. The deleted glyph pipeline did exactly this, so the span
         // walk does too.
-        let laid_out = rows("# Heading", 3, palette::PANEL);
+        let laid_out = rows("# Heading", 3, LIGHT.panel, LIGHT);
         assert_eq!(text(&laid_out), "#\n  He\n  a\n  d\n  i\n  n\n  g");
     }
 
     #[test]
     fn a_wrapped_paragraph_indents_every_row_after_the_first() {
-        let laid_out = rows("alpha beta gamma delta epsilon zeta", 14, palette::PANEL);
+        let laid_out = rows(
+            "alpha beta gamma delta epsilon zeta",
+            14,
+            LIGHT.panel,
+            LIGHT,
+        );
         assert!(laid_out.len() > 1);
         assert!(
             !laid_out[0].text.starts_with("  "),
@@ -281,7 +306,7 @@ mod tests {
     #[test]
     fn the_wrap_keeps_every_character_of_the_source_and_drops_only_break_spaces() {
         let source = "alpha beta gamma delta epsilon zeta eta theta";
-        let laid_out = rows(source, 12, palette::PANEL);
+        let laid_out = rows(source, 12, LIGHT.panel, LIGHT);
         let wrapped: String = laid_out
             .iter()
             .map(|row| row.text.replace(' ', ""))
@@ -296,7 +321,7 @@ mod tests {
 
     #[test]
     fn a_heading_keeps_its_marker_and_the_heading_ink() {
-        let laid_out = rows("# A heading", 40, palette::PANEL);
+        let laid_out = rows("# A heading", 40, LIGHT.panel, LIGHT);
         assert_eq!(text(&laid_out), "# A heading");
         assert_eq!(
             roles(&laid_out),
@@ -312,7 +337,7 @@ mod tests {
 
     #[test]
     fn a_bold_segment_keeps_the_parsers_bold_modifier() {
-        let laid_out = rows("plain **strong** plain", 40, palette::PANEL);
+        let laid_out = rows("plain **strong** plain", 40, LIGHT.panel, LIGHT);
         assert_eq!(text(&laid_out), "plain strong plain");
         assert_eq!(
             roles(&laid_out),
@@ -329,7 +354,7 @@ mod tests {
 
     #[test]
     fn a_list_item_keeps_its_bullet_and_inline_code_keeps_the_code_ink() {
-        let laid_out = rows("- one with `code`", 40, palette::PANEL);
+        let laid_out = rows("- one with `code`", 40, LIGHT.panel, LIGHT);
         assert_eq!(text(&laid_out), "• one with code");
         assert_eq!(
             roles(&laid_out),
@@ -345,7 +370,7 @@ mod tests {
 
     #[test]
     fn a_code_fence_stays_a_grid_of_atomic_rows_in_the_code_ink() {
-        let laid_out = rows("```\nlet x = 1;\n```", 8, palette::PANEL);
+        let laid_out = rows("```\nlet x = 1;\n```", 8, LIGHT.panel, LIGHT);
         assert!(
             laid_out.iter().all(|row| row.width() > 8),
             "the code frame stays as wide as its content and is never wrapped"
@@ -366,7 +391,7 @@ mod tests {
     #[test]
     fn a_table_keeps_its_aligned_grid_and_its_header_ink() {
         let source = "| a | longer heading |\n|---|---|\n| b | c |";
-        let laid_out = rows(source, 60, palette::PANEL);
+        let laid_out = rows(source, 60, LIGHT.panel, LIGHT);
         assert_eq!(
             laid_out.len(),
             5,
@@ -408,7 +433,7 @@ mod tests {
 
     #[test]
     fn a_rule_stays_one_blank_row() {
-        let laid_out = rows("before\n\n---\n\nafter", 40, palette::PANEL);
+        let laid_out = rows("before\n\n---\n\nafter", 40, LIGHT.panel, LIGHT);
         assert!(
             laid_out.iter().any(LaidOutRow::is_blank),
             "a horizontal rule paints one blank row"

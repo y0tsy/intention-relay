@@ -13,7 +13,7 @@ use intention_proto::{
 
 use super::{
     Action, BrowserRow, BrowserTab, CommandMenu, ConnectionStatus, Effect, Screen, StreamStatus,
-    TranscriptSelection, browser, ctrl_c, error_text, transcript,
+    Theme, TranscriptSelection, browser, ctrl_c, error_text, transcript,
 };
 
 /// Every value one terminal session holds, with no terminal attached.
@@ -42,6 +42,12 @@ pub struct AppState {
     pub(super) connection: ConnectionStatus,
     /// The screen a front end renders.
     pub(super) screen: Screen,
+    /// The colour theme a front end renders the session through.
+    ///
+    /// The theme is a value of the render-free core like the screen: a front
+    /// end resolves its palette from this one field and never tracks a theme
+    /// of its own, so the whole view stays a pure function of the state.
+    pub(super) theme: Theme,
     pub(super) sessions: Vec<SessionSummaryDto>,
     pub(super) sessions_omitted: u32,
     pub(super) sessions_loaded: bool,
@@ -140,6 +146,7 @@ impl AppState {
             pending_prompt: None,
             connection: ConnectionStatus::Connecting,
             screen: Screen::Chat,
+            theme: Theme::Light,
             sessions: Vec::new(),
             sessions_omitted: 0,
             sessions_loaded: false,
@@ -182,6 +189,17 @@ impl AppState {
     #[must_use]
     pub const fn continuing(mut self, continue_session: bool) -> Self {
         self.continue_session = continue_session;
+        self
+    }
+
+    /// Returns the same state rendering through `theme`.
+    ///
+    /// The theme is the terminal's own value, so a caller selects it directly
+    /// rather than through a wire action: the state carries it and a front end
+    /// resolves its palette from it once per frame.
+    #[must_use]
+    pub const fn with_theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
         self
     }
 
@@ -294,6 +312,12 @@ impl AppState {
     #[must_use]
     pub const fn screen(&self) -> Screen {
         self.screen
+    }
+
+    /// Returns the colour theme a front end renders the session through.
+    #[must_use]
+    pub const fn theme(&self) -> Theme {
+        self.theme
     }
 
     /// Returns the bounded session summaries the daemon reported.

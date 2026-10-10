@@ -16,7 +16,7 @@ use revue::style::Color;
 use revue::widget::{RichText, Span, Style, Text};
 
 use crate::app::{AppState, ConnectionStatus, short_identifier};
-use crate::tui::palette;
+use crate::tui::palette::Palette;
 
 /// The detail line this front end shows while no error or notice claims it.
 ///
@@ -60,49 +60,50 @@ const FAILED: &str = "Failed";
 const CONTEXT_USAGE: &str = "ctx @todo(core)";
 
 /// Returns the status row under the input: the human state of the session.
-pub(in crate::tui) fn status_row(state: &AppState) -> RichText {
+pub(in crate::tui) fn status_row(state: &AppState, palette: &'static Palette) -> RichText {
     let mut text = RichText::new();
     let (connection, ink) = match state.connection() {
-        ConnectionStatus::Connecting => (CONNECTING, palette::WARNING),
-        ConnectionStatus::Ready(_) => (READY, palette::SUCCESS),
-        ConnectionStatus::Failed => (OFFLINE, palette::ERROR),
+        ConnectionStatus::Connecting => (CONNECTING, palette.warning),
+        ConnectionStatus::Ready(_) => (READY, palette.success),
+        ConnectionStatus::Failed => (OFFLINE, palette.error),
     };
-    text = run(text, connection, ink);
-    text = run(text, SEPARATOR, palette::INK_FAINT);
+    text = run(text, connection, ink, palette);
+    text = run(text, SEPARATOR, palette.ink_faint, palette);
     text = match state.session_id() {
         Some(session_id) => run(
             text,
             &format!("session {}", short_identifier(session_id)),
-            palette::INK_MUTED,
+            palette.ink_muted,
+            palette,
         ),
-        None => run(text, "no session", palette::INK_FAINT),
+        None => run(text, "no session", palette.ink_faint, palette),
     };
     if let Some(mode) = state.session_mode() {
-        text = run(text, SEPARATOR, palette::INK_FAINT);
-        text = run(text, mode.as_str(), palette::INK_MUTED);
+        text = run(text, SEPARATOR, palette.ink_faint, palette);
+        text = run(text, mode.as_str(), palette.ink_muted, palette);
     }
     if let Some(status) = state.run_status() {
-        text = run(text, SEPARATOR, palette::INK_FAINT);
-        text = run_phrase(text, status, state.elapsed_millis());
+        text = run(text, SEPARATOR, palette.ink_faint, palette);
+        text = run_phrase(text, status, state.elapsed_millis(), palette);
     }
-    text = run(text, SEPARATOR, palette::INK_FAINT);
-    run(text, CONTEXT_USAGE, palette::TODO_INK)
+    text = run(text, SEPARATOR, palette.ink_faint, palette);
+    run(text, CONTEXT_USAGE, palette.todo_ink, palette)
 }
 
 /// Returns the detail line: the failure, the notice, or the idle hint.
-pub(in crate::tui) fn status_detail(state: &AppState) -> Text {
+pub(in crate::tui) fn status_detail(state: &AppState, palette: &'static Palette) -> Text {
     match (state.error(), state.notice()) {
-        (Some(error), _) => Text::new(error.to_owned()).fg(palette::ERROR).bold(),
-        (None, Some(notice)) => Text::new(notice.to_owned()).fg(palette::INK_MUTED),
-        (None, None) => Text::new(DEFAULT_HINT).fg(palette::INK_FAINT).dim(),
+        (Some(error), _) => Text::new(error.to_owned()).fg(palette.error).bold(),
+        (None, Some(notice)) => Text::new(notice.to_owned()).fg(palette.ink_muted),
+        (None, None) => Text::new(DEFAULT_HINT).fg(palette.ink_faint).dim(),
     }
 }
 
 /// Appends one styled run to the status row.
-fn run(text: RichText, content: &str, ink: Color) -> RichText {
+fn run(text: RichText, content: &str, ink: Color, palette: &'static Palette) -> RichText {
     text.span(Span::styled(
         content.to_owned(),
-        Style::new().fg(ink).bg(palette::PANEL),
+        Style::new().fg(ink).bg(palette.panel),
     ))
 }
 
@@ -112,29 +113,35 @@ fn run(text: RichText, content: &str, ink: Color) -> RichText {
 /// failed one `Failed` (the typed error is the detail line), and an interrupted
 /// one `Interrupted`. A run whose elapsed value the front end never reported
 /// keeps the word without a number instead of showing a fabricated one.
-fn run_phrase(text: RichText, status: RunStatusDto, elapsed: Option<u64>) -> RichText {
+fn run_phrase(
+    text: RichText,
+    status: RunStatusDto,
+    elapsed: Option<u64>,
+    palette: &'static Palette,
+) -> RichText {
     match status {
         RunStatusDto::Starting | RunStatusDto::Running => {
-            let mut text = run(text, THINKING, palette::SCARLET);
+            let mut text = run(text, THINKING, palette.scarlet, palette);
             if let Some(millis) = elapsed {
                 text = run(
                     text,
                     &format!(" {}", live_elapsed(millis)),
-                    palette::TIMER_INK,
+                    palette.timer_ink,
+                    palette,
                 );
             }
             text
         }
         RunStatusDto::Completed => {
-            let mut text = run(text, ANSWERED, palette::SUCCESS);
+            let mut text = run(text, ANSWERED, palette.success, palette);
             if let Some(millis) = elapsed {
-                text = run(text, " in ", palette::SUCCESS);
-                text = run(text, &finished_elapsed(millis), palette::TIMER_INK);
+                text = run(text, " in ", palette.success, palette);
+                text = run(text, &finished_elapsed(millis), palette.timer_ink, palette);
             }
             text
         }
-        RunStatusDto::Interrupted => run(text, INTERRUPTED, palette::WARNING),
-        RunStatusDto::Failed => run(text, FAILED, palette::ERROR),
+        RunStatusDto::Interrupted => run(text, INTERRUPTED, palette.warning, palette),
+        RunStatusDto::Failed => run(text, FAILED, palette.error, palette),
     }
 }
 

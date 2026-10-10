@@ -25,7 +25,7 @@ use revue::text::char_width;
 use revue::widget::{Border, Card, RichText, Span, Style, Text, vstack};
 
 use crate::app::{AppState, BrowserRow, BrowserTab};
-use crate::tui::palette;
+use crate::tui::palette::{self, Palette};
 
 /// The blank canvas row the chat container keeps above the docked panel.
 ///
@@ -162,11 +162,11 @@ struct Run {
 
 impl Run {
     /// Returns one run of plain body text.
-    const fn plain(text: String) -> Self {
+    const fn plain(text: String, palette: &'static Palette) -> Self {
         Self {
             text,
-            ink: palette::INK,
-            wash: palette::PANEL,
+            ink: palette.ink,
+            wash: palette.panel,
             bold: false,
         }
     }
@@ -229,20 +229,24 @@ pub(super) fn geometry(state: &AppState, window: Rect) -> Option<Geometry> {
 /// background fill, and the footer legend, so the two read as one container
 /// with the title embedded in its top border. The caller places the panel in
 /// the window's last [`Geometry::rows`] rows.
+///
+/// The theme is resolved here, once per frame, and handed to every row the
+/// panel draws.
 pub(super) fn panel(state: &AppState, now: i64, geometry: Geometry) -> Border {
+    let palette = palette::of(state.theme());
     let width = geometry.content_columns;
     let columns = columns(width);
     let mut body = vstack()
         .child_sized(Text::new(""), 1)
-        .child_sized(tabs_row(state, width), 1)
-        .child_sized(search_bar(state, width), 1)
-        .child_sized(divider(width), 1)
-        .child_sized(table_header(&columns, width), 1);
+        .child_sized(tabs_row(state, width, palette), 1)
+        .child_sized(search_bar(state, width, palette), 1)
+        .child_sized(divider(width, palette), 1)
+        .child_sized(table_header(&columns, width, palette), 1);
     let rows = state.browser_rows();
     if rows.is_empty() {
         let reason = state.browser_empty_reason();
         if let Some(reason) = reason {
-            body = body.child_sized(empty_state(reason, width), 1);
+            body = body.child_sized(empty_state(reason, width, palette), 1);
         }
         let filler = geometry
             .data_rows
@@ -256,43 +260,51 @@ pub(super) fn panel(state: &AppState, now: i64, geometry: Geometry) -> Border {
         for index in visible_window(rows.len(), cursor, geometry.data_rows) {
             let selected = index == cursor;
             body = body.child_sized(
-                data_row(&rows[index], selected, index % 2 == 1, &columns, now, width),
+                data_row(
+                    &rows[index],
+                    selected,
+                    index % 2 == 1,
+                    &columns,
+                    now,
+                    width,
+                    palette,
+                ),
                 1,
             );
         }
     }
-    body = body.child_sized(divider(width), 1);
+    body = body.child_sized(divider(width, palette), 1);
 
     Border::rounded()
         .min_size(geometry.columns, geometry.rows)
         .max_size(geometry.columns, geometry.rows)
-        .fg(palette::ACCENT)
-        .bg(palette::PANEL)
+        .fg(palette.accent)
+        .bg(palette.panel)
         .title(" Sessions ")
         .child(
             Card::new()
                 .flat()
                 .padding(PANEL_PADDING)
-                .background(palette::PANEL)
+                .background(palette.panel)
                 .body(body)
-                .footer(footer(state, geometry.data_rows, width)),
+                .footer(footer(state, geometry.data_rows, width, palette)),
         )
 }
 
 /// Returns the tab radio row: `⦿` on the active tab, `◦` on every other one.
-fn tabs_row(state: &AppState, width: usize) -> RichText {
+fn tabs_row(state: &AppState, width: usize, palette: &'static Palette) -> RichText {
     let mut runs = vec![Run {
         text: " ".to_owned(),
-        ink: palette::INK_MUTED,
-        wash: palette::HEADER_BG,
+        ink: palette.ink_muted,
+        wash: palette.header_bg,
         bold: false,
     }];
     for (index, tab) in BrowserTab::ALL.into_iter().enumerate() {
         if index > 0 {
             runs.push(Run {
                 text: "  |  ".to_owned(),
-                ink: palette::INK_FAINT,
-                wash: palette::HEADER_BG,
+                ink: palette.ink_faint,
+                wash: palette.header_bg,
                 bold: false,
             });
         }
@@ -304,14 +316,14 @@ fn tabs_row(state: &AppState, width: usize) -> RichText {
                 tab.label()
             ),
             ink: if active {
-                palette::ACCENT_DEEP
+                palette.accent_deep
             } else {
-                palette::INK_MUTED
+                palette.ink_muted
             },
             wash: if active {
-                palette::TAB_ACTIVE_BG
+                palette.tab_active_bg
             } else {
-                palette::HEADER_BG
+                palette.header_bg
             },
             bold: active,
         });
@@ -320,8 +332,8 @@ fn tabs_row(state: &AppState, width: usize) -> RichText {
     if filler > 0 {
         runs.push(Run {
             text: " ".repeat(filler),
-            ink: palette::INK_MUTED,
-            wash: palette::HEADER_BG,
+            ink: palette.ink_muted,
+            wash: palette.header_bg,
             bold: false,
         });
     }
@@ -355,26 +367,26 @@ fn run_widths(runs: &[Run]) -> usize {
 }
 
 /// Returns the search row: the filter text, or its placeholder while empty.
-fn search_bar(state: &AppState, width: usize) -> Text {
+fn search_bar(state: &AppState, width: usize, palette: &'static Palette) -> Text {
     let (text, ink) = if state.browser_filter().is_empty() {
-        (SEARCH_PLACEHOLDER.to_owned(), palette::INK_FAINT)
+        (SEARCH_PLACEHOLDER.to_owned(), palette.ink_faint)
     } else {
-        (state.browser_filter().to_owned(), palette::INK)
+        (state.browser_filter().to_owned(), palette.ink)
     };
     Text::new(pad(&truncate(&text, width), width))
         .fg(ink)
-        .bg(palette::INPUT_BG)
+        .bg(palette.input_bg)
 }
 
 /// Returns one divider band across the card's content.
-fn divider(width: usize) -> Text {
+fn divider(width: usize, palette: &'static Palette) -> Text {
     Text::new("─".repeat(width))
-        .fg(palette::INK_FAINT)
-        .bg(palette::DIVIDER_TINT)
+        .fg(palette.ink_faint)
+        .bg(palette.divider_tint)
 }
 
 /// Returns the table's column header row.
-fn table_header(columns: &Columns, width: usize) -> Text {
+fn table_header(columns: &Columns, width: usize, palette: &'static Palette) -> Text {
     let cells = Cells {
         marker: ROW_MARKER,
         modified: "Modified",
@@ -384,8 +396,8 @@ fn table_header(columns: &Columns, width: usize) -> Text {
         path: "Path",
     };
     Text::new(row_text(columns, &cells, width))
-        .fg(palette::INK_MUTED)
-        .bg(palette::HEADER_BG)
+        .fg(palette.ink_muted)
+        .bg(palette.header_bg)
         .bold()
 }
 
@@ -397,6 +409,7 @@ fn data_row(
     columns: &Columns,
     now: i64,
     width: usize,
+    palette: &'static Palette,
 ) -> Text {
     let modified = relative_time(row.updated_at(), now);
     let cells = Cells {
@@ -410,56 +423,56 @@ fn data_row(
     let line = row_text(columns, &cells, width);
     if selected {
         Text::new(line)
-            .fg(palette::ACCENT_DEEP)
-            .bg(palette::ROW_SELECTED_BG)
+            .fg(palette.accent_deep)
+            .bg(palette.row_selected_bg)
             .bold()
     } else if zebra {
-        Text::new(line).fg(palette::INK).bg(palette::ROW_ALT_BG)
+        Text::new(line).fg(palette.ink).bg(palette.row_alt_bg)
     } else {
-        Text::new(line).fg(palette::INK)
+        Text::new(line).fg(palette.ink)
     }
 }
 
 /// Returns the explanatory row of an empty table.
-fn empty_state(reason: &str, width: usize) -> Text {
+fn empty_state(reason: &str, width: usize, palette: &'static Palette) -> Text {
     Text::new(pad(&truncate(reason, width), width))
-        .fg(palette::ACCENT_DEEP)
-        .bg(palette::STUB_BG)
+        .fg(palette.accent_deep)
+        .bg(palette.stub_bg)
 }
 
 /// Returns the footer: the notice or the hotkey legend, then the row counter.
 ///
 /// The legend gives way before the counter does: hints that do not fit beside
 /// the counter are dropped whole, so the row never ends in half a key name.
-fn footer(state: &AppState, data_rows: usize, width: usize) -> RichText {
+fn footer(state: &AppState, data_rows: usize, width: usize, palette: &'static Palette) -> RichText {
     let counter = counter(state, data_rows);
     let counter_width = display_width(&counter);
     let mut runs = state.notice().map_or_else(
-        || legend_runs(width.saturating_sub(counter_width + 1)),
+        || legend_runs(width.saturating_sub(counter_width + 1), palette),
         |notice| {
             vec![Run {
                 text: truncate(notice, width),
-                ink: palette::WARNING,
-                wash: palette::PANEL,
+                ink: palette.warning,
+                wash: palette.panel,
                 bold: true,
             }]
         },
     );
     let filler = width.saturating_sub(run_widths(&runs) + counter_width);
     if filler > 0 {
-        runs.push(Run::plain(" ".repeat(filler)));
+        runs.push(Run::plain(" ".repeat(filler), palette));
     }
     runs.push(Run {
         text: counter,
-        ink: palette::INK_MUTED,
-        wash: palette::PANEL,
+        ink: palette.ink_muted,
+        wash: palette.panel,
         bold: false,
     });
     runs_text(runs)
 }
 
 /// Returns the legend runs that fit in `limit` columns.
-fn legend_runs(limit: usize) -> Vec<Run> {
+fn legend_runs(limit: usize, palette: &'static Palette) -> Vec<Run> {
     let mut runs = Vec::new();
     let mut used = 0;
     for (index, (key, action)) in HINTS.iter().enumerate() {
@@ -472,18 +485,18 @@ fn legend_runs(limit: usize) -> Vec<Run> {
         if !gap.is_empty() {
             runs.push(Run {
                 text: gap.to_owned(),
-                ink: palette::INK_FAINT,
-                wash: palette::PANEL,
+                ink: palette.ink_faint,
+                wash: palette.panel,
                 bold: false,
             });
         }
         runs.push(Run {
             text: (*key).to_owned(),
-            ink: palette::ACCENT,
-            wash: palette::PANEL,
+            ink: palette.accent,
+            wash: palette.panel,
             bold: true,
         });
-        runs.push(Run::plain(format!(" {action}")).with_ink(palette::INK_MUTED));
+        runs.push(Run::plain(format!(" {action}"), palette).with_ink(palette.ink_muted));
     }
     runs
 }

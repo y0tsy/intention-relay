@@ -3,7 +3,7 @@
 //! A committed row becomes one or more blocks, and exactly one blank row
 //! ([`crate::tui::layout::append_blocks`]) separates two consecutive blocks:
 //!
-//! - a committed **user** row is a card: a labelled frame on [`palette::USER_SURFACE`]
+//! - a committed **user** row is a card: a labelled frame on [`Palette::user_surface`]
 //!   whose content is laid out through the same markdown pipeline as an answer,
 //!   because a user message is prose too (code fences, bold, and lists render);
 //! - a committed **assistant** row is its reasoning block (when the row carries
@@ -24,7 +24,7 @@
 //! display rows, gaps included: it shows the newest `height - 2` rows and moves
 //! `state.scroll()` rows towards the older ones, one native scrollbar column
 //! stays reserved beside them, and the selected display rows are painted on
-//! [`palette::SELECTION_BG`].
+//! [`Palette::selection_bg`].
 //!
 //! Committed rows are laid out once and kept in the [`TranscriptLayoutCache`]
 //! the front end owns; this pane asks that cache for the rows of the current
@@ -49,7 +49,7 @@ use crate::tui::layout::{
     TranscriptLayoutCache, TranscriptWindow, append_blocks, box_bottom, box_content, box_top,
     display_width, marker_text,
 };
-use crate::tui::palette;
+use crate::tui::palette::Palette;
 use crate::tui::panes::{markdown, tools};
 
 /// The glyph and label a user card's frame carries.
@@ -109,22 +109,25 @@ const SCROLLBAR_COLUMNS: usize = 1;
 /// newest `height - 2` rows and moves `state.scroll()` rows towards the older
 /// ones. `top` is the screen row the window's first display row sits on, which
 /// the pane publishes with the rest of its geometry. The committed rows come
-/// from `cache`; only the window's rows become widgets.
+/// from `cache`; only the window's rows become widgets. `palette` is the
+/// resolved palette of the frame, and every row - committed or provisional -
+/// paints its roles.
 pub(in crate::tui) fn transcript_pane(
     state: &AppState,
     top: u16,
     height: u16,
     width: u16,
     cache: &RefCell<TranscriptLayoutCache>,
+    palette: &'static Palette,
 ) -> Border {
     let content_width = usize::from(width.saturating_sub(2));
     let gutter = content_width > SCROLLBAR_COLUMNS;
     let text_width = content_width.saturating_sub(usize::from(gutter));
-    let provisional = provisional_rows(state, text_width);
+    let provisional = provisional_rows(state, text_width, palette);
     let mut cache = cache.borrow_mut();
     let committed_len = cache
-        .rows(state, text_width, |range, width| {
-            committed_blocks(state, range, width)
+        .rows(state, text_width, palette, |range, width| {
+            committed_blocks(state, range, width, palette)
         })
         .len();
     // The provisional tail is one more block: the gap rule puts one blank row
@@ -155,14 +158,14 @@ pub(in crate::tui) fn transcript_pane(
     for index in start..total.min(start.saturating_add(visible)) {
         let selected = selection.is_some_and(|range| range.contains(as_row(index)));
         let surface = if selected {
-            palette::SELECTION_BG
+            palette.selection_bg
         } else {
-            palette::PANEL
+            palette.panel
         };
         let row = window_row(committed, &provisional, tail_offset, index);
         rows = rows.child(row.map_or_else(
-            || LaidOutRow::blank(surface).rich_text(),
-            |row| row.rich_text_on(surface),
+            || LaidOutRow::blank(surface).rich_text(palette),
+            |row| row.rich_text_on(surface, palette),
         ));
     }
     // The scrollbar is revue's own widget and carries no state: the core owns
@@ -172,7 +175,7 @@ pub(in crate::tui) fn transcript_pane(
         hstack()
             .child_sized(rows, u16::try_from(text_width).unwrap_or(u16::MAX))
             .child_sized(
-                scrollbar(total, start),
+                scrollbar(total, start, palette),
                 u16::try_from(SCROLLBAR_COLUMNS).unwrap_or(u16::MAX),
             )
     } else {
@@ -180,8 +183,8 @@ pub(in crate::tui) fn transcript_pane(
     };
     Border::rounded()
         .title("transcript")
-        .fg(palette::BORDER)
-        .bg(palette::PANEL)
+        .fg(palette.border)
+        .bg(palette.panel)
         .child(body)
 }
 
@@ -190,11 +193,11 @@ pub(in crate::tui) fn transcript_pane(
 /// The widget paints its track and thumb only while the content is taller than
 /// the window, which is exactly while there is content above or below the
 /// visible rows; a transcript that fits shows the gutter's blank column.
-fn scrollbar(total: usize, start: usize) -> ScrollView {
+fn scrollbar(total: usize, start: usize, palette: &'static Palette) -> ScrollView {
     ScrollView::new()
         .content_height(as_row(total))
         .scroll_offset(as_row(start))
-        .scrollbar_style(palette::SCROLL_THUMB, palette::SCROLL_TRACK)
+        .scrollbar_style(palette.scroll_thumb, palette.scroll_track)
 }
 
 /// Returns one display-row count as the terminal's row type.
@@ -223,13 +226,20 @@ fn window_row<'a>(
 ///
 /// A row that renders nothing - a tool result the call's block already draws -
 /// still takes its entry, so the cache keeps one display-row span per message.
-fn committed_blocks(state: &AppState, range: Range<usize>, width: usize) -> Vec<MessageBlocks> {
+fn committed_blocks(
+    state: &AppState,
+    range: Range<usize>,
+    width: usize,
+    palette: &'static Palette,
+) -> Vec<MessageBlocks> {
     let tools = tools::Pairing::of(state.transcript());
     let start = range.start;
     state.transcript()[range]
         .iter()
         .enumerate()
-        .map(|(offset, message)| message_blocks(state, message, start + offset, &tools, width))
+        .map(|(offset, message)| {
+            message_blocks(state, message, start + offset, &tools, width, palette)
+        })
         .collect()
 }
 
@@ -241,9 +251,13 @@ fn committed_blocks(state: &AppState, range: Range<usize>, width: usize) -> Vec<
 /// same hanging indents, the same collapse rule, the same inks and wash, and
 /// the same one-row block gap between them. Nothing here knows it is streaming,
 /// and no row of it changes when the commit arrives.
-fn provisional_rows(state: &AppState, width: usize) -> Vec<LaidOutRow> {
+fn provisional_rows(state: &AppState, width: usize, palette: &'static Palette) -> Vec<LaidOutRow> {
     let mut rows = Vec::new();
-    append_blocks(&mut rows, provisional_blocks(state, width));
+    append_blocks(
+        &mut rows,
+        provisional_blocks(state, width, palette),
+        palette,
+    );
     rows
 }
 
@@ -253,7 +267,7 @@ fn provisional_rows(state: &AppState, width: usize) -> Vec<LaidOutRow> {
 /// committed assistant row carries both, so the live tail is exactly the
 /// block list that row will produce - with the empty block a channel that has
 /// not streamed yet simply contributing no row.
-fn provisional_blocks(state: &AppState, width: usize) -> MessageBlocks {
+fn provisional_blocks(state: &AppState, width: usize, palette: &'static Palette) -> MessageBlocks {
     let mut blocks = Vec::new();
     let reasoning = state.provisional_reasoning();
     if !reasoning.is_empty() {
@@ -263,11 +277,12 @@ fn provisional_blocks(state: &AppState, width: usize) -> MessageBlocks {
             reasoning,
             width,
             state.reasoning_expansion(state.live_reasoning_row()),
+            palette,
         ));
     }
     let answer = state.provisional_text();
     if !answer.is_empty() {
-        blocks.push(answer_block(answer, width));
+        blocks.push(answer_block(answer, width, palette));
     }
     blocks
 }
@@ -279,20 +294,21 @@ fn message_blocks(
     index: usize,
     tools: &tools::Pairing<'_>,
     width: usize,
+    palette: &'static Palette,
 ) -> MessageBlocks {
     match message.kind() {
-        MessageKindDto::User => vec![user_card(message.text(), width)],
-        MessageKindDto::Assistant => assistant_blocks(state, message, index, width),
+        MessageKindDto::User => vec![user_card(message.text(), width, palette)],
+        MessageKindDto::Assistant => assistant_blocks(state, message, index, width, palette),
         // A tool row is dispatched by its `tool_id`, paired with the row that
         // shares its call identity: the exchange is drawn once, at the call.
         MessageKindDto::ToolCall | MessageKindDto::ToolResult => {
-            tools::block(message, index, tools, width)
+            tools::block(message, index, tools, width, palette)
                 .into_iter()
                 .collect()
         }
         // A notice is daemon-authored content bound to the run: it renders as
         // its own block on the palette's notice pair, never as ordinary prose.
-        MessageKindDto::Notice => vec![notice_block(message.text(), width)],
+        MessageKindDto::Notice => vec![notice_block(message.text(), width, palette)],
     }
 }
 
@@ -306,6 +322,7 @@ fn assistant_blocks(
     message: &MessageProjectionDto,
     index: usize,
     width: usize,
+    palette: &'static Palette,
 ) -> MessageBlocks {
     let mut blocks = Vec::new();
     if let Some(reasoning) = message.reasoning() {
@@ -313,9 +330,10 @@ fn assistant_blocks(
             reasoning,
             width,
             state.reasoning_expansion(index),
+            palette,
         ));
     }
-    blocks.push(answer_block(message.text(), width));
+    blocks.push(answer_block(message.text(), width, palette));
     blocks
 }
 
@@ -327,13 +345,13 @@ fn assistant_blocks(
 /// wrapped answer lines up under its first line rather than under the glyph.
 /// The markdown is laid out that indent short of the block's width, so a
 /// prefixed row is exactly as wide as the block and never clipped.
-fn answer_block(text: &str, width: usize) -> Vec<LaidOutRow> {
+fn answer_block(text: &str, width: usize, palette: &'static Palette) -> Vec<LaidOutRow> {
     let indent = answer_indent();
     let inner = width.saturating_sub(indent);
-    markdown::rows(text, inner, palette::PANEL)
+    markdown::rows(text, inner, palette.panel, palette)
         .into_iter()
         .enumerate()
-        .map(|(index, row)| answer_row(&row, index == 0, indent, inner))
+        .map(|(index, row)| answer_row(&row, index == 0, indent, inner, palette))
         .collect()
 }
 
@@ -347,7 +365,13 @@ fn answer_indent() -> usize {
 
 /// Returns one answer row: the marker on the first row, the hanging indent on
 /// every row after it, then the row's own runs.
-fn answer_row(row: &LaidOutRow, marked: bool, indent: usize, inner: usize) -> LaidOutRow {
+fn answer_row(
+    row: &LaidOutRow,
+    marked: bool,
+    indent: usize,
+    inner: usize,
+    palette: &'static Palette,
+) -> LaidOutRow {
     let mut builder = RowBuilder::new();
     if marked {
         builder.push(ANSWER_GLYPH, RowStyleId::Muted);
@@ -356,7 +380,7 @@ fn answer_row(row: &LaidOutRow, marked: bool, indent: usize, inner: usize) -> La
         builder.push(&" ".repeat(indent), RowStyleId::Muted);
     }
     builder.push_clipped(row, inner);
-    builder.finish(palette::PANEL)
+    builder.finish(palette.panel)
 }
 
 /// Returns the display rows of one user card.
@@ -368,9 +392,9 @@ fn answer_row(row: &LaidOutRow, marked: bool, indent: usize, inner: usize) -> La
 /// markdown layout at the card's inner width, so a user message renders its
 /// code fences, bold, and lists exactly like an answer does; a window too
 /// narrow for a frame falls back to the bare rows.
-fn user_card(text: &str, width: usize) -> Vec<LaidOutRow> {
+fn user_card(text: &str, width: usize, palette: &'static Palette) -> Vec<LaidOutRow> {
     if width <= CARD_CHROME_COLUMNS {
-        return markdown::rows(text, width.max(1), palette::USER_SURFACE);
+        return markdown::rows(text, width.max(1), palette.user_surface, palette);
     }
     let inner = width - CARD_CHROME_COLUMNS;
     let label = marker_text(USER_GLYPH, USER_LABEL);
@@ -378,15 +402,15 @@ fn user_card(text: &str, width: usize) -> Vec<LaidOutRow> {
         Some((&label, RowStyleId::UserLabel)),
         width,
         RowStyleId::UserBorder,
-        palette::USER_SURFACE,
+        palette.user_surface,
     )];
-    for row in markdown::rows(text, inner, palette::USER_SURFACE) {
+    for row in markdown::rows(text, inner, palette.user_surface, palette) {
         rows.push(box_content(&row, inner, RowStyleId::UserBorder));
     }
     rows.push(box_bottom(
         width,
         RowStyleId::UserBorder,
-        palette::USER_SURFACE,
+        palette.user_surface,
     ));
     rows
 }
@@ -401,10 +425,10 @@ fn user_card(text: &str, width: usize) -> Vec<LaidOutRow> {
 // @todo(core): a `notice` row carries only free text - no notice code, no
 // severity, and no run binding beyond the row's own run - so the block renders
 // the text exactly as the daemon wrote it and never invents a classification.
-fn notice_block(text: &str, width: usize) -> Vec<LaidOutRow> {
+fn notice_block(text: &str, width: usize, palette: &'static Palette) -> Vec<LaidOutRow> {
     let indent = display_width(NOTICE_GLYPH) + MARKER_GAP;
     let inner = width.saturating_sub(indent);
-    plain_rows(text, inner, RowStyleId::Notice)
+    plain_rows(text, inner, RowStyleId::Notice, palette)
         .into_iter()
         .enumerate()
         .map(|(index, row)| {
@@ -415,7 +439,7 @@ fn notice_block(text: &str, width: usize) -> Vec<LaidOutRow> {
                 indent,
                 inner,
                 RowStyleId::Notice,
-                palette::NOTICE_SURFACE,
+                palette.notice_surface,
             )
         })
         .collect()
@@ -459,12 +483,18 @@ pub(in crate::tui) fn marked_row(
 /// more chunk of display rows, which is what `expansion` counts. The state
 /// lives in the core, keyed by the block's committed row, so it survives
 /// appends and clears when the transcript is replaced or front-trimmed.
-fn reasoning_block(reasoning: &str, width: usize, expansion: usize) -> Vec<LaidOutRow> {
+fn reasoning_block(
+    reasoning: &str,
+    width: usize,
+    expansion: usize,
+    palette: &'static Palette,
+) -> Vec<LaidOutRow> {
     let mut rows = vec![text_row(
         &marker_text(REASONING_GLYPH, REASONING_LABEL),
         RowStyleId::ReasoningHeader,
+        palette,
     )];
-    let body = plain_rows(reasoning, width, RowStyleId::Reasoning);
+    let body = plain_rows(reasoning, width, RowStyleId::Reasoning, palette);
     let shown = REASONING_VISIBLE_ROWS
         .saturating_add(expansion)
         .min(body.len());
@@ -477,9 +507,14 @@ fn reasoning_block(reasoning: &str, width: usize, expansion: usize) -> Vec<LaidO
                 &format!("… {hidden} more reasoning lines hidden — click or Ctrl+E to reveal more"),
             ),
             RowStyleId::ReasoningMarker,
+            palette,
         ));
     }
-    rows.push(text_row(&"─".repeat(width.max(1)), RowStyleId::Accent));
+    rows.push(text_row(
+        &"─".repeat(width.max(1)),
+        RowStyleId::Accent,
+        palette,
+    ));
     rows
 }
 
@@ -488,21 +523,26 @@ fn reasoning_block(reasoning: &str, width: usize, expansion: usize) -> Vec<LaidO
 ///
 /// The tool blocks lay their preview content out through the same wrapper, so
 /// one wrap rule covers the whole transcript.
-pub(in crate::tui) fn plain_rows(line: &str, width: usize, ink: RowStyleId) -> Vec<LaidOutRow> {
+pub(in crate::tui) fn plain_rows(
+    line: &str,
+    width: usize,
+    ink: RowStyleId,
+    palette: &'static Palette,
+) -> Vec<LaidOutRow> {
     TextWrapper::new(width.max(1))
         .mode(WrapMode::Word)
         .subsequent_indent(CONTINUATION_INDENT)
         .wrap(line)
         .into_iter()
-        .map(|row| text_row(&row, ink))
+        .map(|row| text_row(&row, ink, palette))
         .collect()
 }
 
 /// Returns one text row in one ink id, on the panel's wash.
-fn text_row(text: &str, ink: RowStyleId) -> LaidOutRow {
+fn text_row(text: &str, ink: RowStyleId, palette: &'static Palette) -> LaidOutRow {
     let mut row = RowBuilder::new();
     row.push(text, ink);
-    row.finish(palette::PANEL)
+    row.finish(palette.panel)
 }
 
 #[cfg(test)]
@@ -524,11 +564,17 @@ mod tests {
     };
     use revue::render::Modifier;
 
-    use crate::app::{Action, AppState};
+    use crate::app::{Action, AppState, Theme};
     use crate::tui::layout::{
         LaidOutRow, MARKER_GAP, RowStyleId, TranscriptLayoutCache, append_blocks, append_messages,
     };
-    use crate::tui::palette;
+    use crate::tui::palette::{self, Palette};
+
+    /// The light palette every fixture renders with.
+    const LIGHT: &Palette = &palette::LIGHT;
+
+    /// The dark palette the theme-switch fixture renders with.
+    const DARK: &Palette = &palette::DARK;
 
     use super::{
         ANSWER_GLYPH, REASONING_GLYPH, USER_GLYPH, answer_block, assistant_blocks,
@@ -704,18 +750,19 @@ mod tests {
     }
 
     /// Returns what one direct layout of the whole transcript produces.
-    fn direct_rows(state: &AppState, width: usize) -> Vec<LaidOutRow> {
+    fn direct_rows(state: &AppState, width: usize, palette: &'static Palette) -> Vec<LaidOutRow> {
         let mut rows = Vec::new();
         append_messages(
             &mut rows,
-            committed_blocks(state, 0..state.transcript().len(), width),
+            committed_blocks(state, 0..state.transcript().len(), width, palette),
+            palette,
         );
         rows
     }
 
     /// Returns one plain fixture row carrying `text`.
     fn plain(text: &str) -> LaidOutRow {
-        text_row(text, RowStyleId::Body(Modifier::empty()))
+        text_row(text, RowStyleId::Body(Modifier::empty()), LIGHT)
     }
 
     #[test]
@@ -725,8 +772,8 @@ mod tests {
         let mut state = fixture_state(session_id, run_id);
         let mut cache = TranscriptLayoutCache::new();
         let laid_out = cache
-            .rows(&state, WIDTH, |range, width| {
-                committed_blocks(&state, range, width)
+            .rows(&state, WIDTH, LIGHT, |range, width| {
+                committed_blocks(&state, range, width, LIGHT)
             })
             .len();
         assert!(laid_out > 0, "the fixture set lays out display rows");
@@ -735,8 +782,8 @@ mod tests {
         state.update(Action::InputChar('x'));
         state.update(Action::InputChar('y'));
         let again = cache
-            .rows(&state, WIDTH, |range, width| {
-                committed_blocks(&state, range, width)
+            .rows(&state, WIDTH, LIGHT, |range, width| {
+                committed_blocks(&state, range, width, LIGHT)
             })
             .len();
         assert_eq!(
@@ -756,9 +803,9 @@ mod tests {
         let mut cache = TranscriptLayoutCache::new();
         let mut ranges: Vec<Range<usize>> = Vec::new();
         let first = cache
-            .rows(&state, WIDTH, |range, width| {
+            .rows(&state, WIDTH, LIGHT, |range, width| {
                 ranges.push(range.clone());
-                committed_blocks(&state, range, width)
+                committed_blocks(&state, range, width, LIGHT)
             })
             .len();
         assert_eq!(ranges, vec![0..seeded], "a cold cache lays out everything");
@@ -767,9 +814,9 @@ mod tests {
         ranges.clear();
         append_row(&mut state, session_id, run_id, "a later answer");
         let second = cache
-            .rows(&state, WIDTH, |range, width| {
+            .rows(&state, WIDTH, LIGHT, |range, width| {
                 ranges.push(range.clone());
-                committed_blocks(&state, range, width)
+                committed_blocks(&state, range, width, LIGHT)
             })
             .len();
         assert_eq!(
@@ -780,10 +827,10 @@ mod tests {
         assert_eq!(cache.layout_count(), 2, "one tail layout, not a replay");
         assert!(second > first, "the appended block adds its own rows");
         assert_eq!(
-            roles(&direct_rows(&state, WIDTH)),
+            roles(&direct_rows(&state, WIDTH, LIGHT)),
             {
-                let cached = cache.rows(&state, WIDTH, |range, width| {
-                    committed_blocks(&state, range, width)
+                let cached = cache.rows(&state, WIDTH, LIGHT, |range, width| {
+                    committed_blocks(&state, range, width, LIGHT)
                 });
                 roles(cached)
             },
@@ -798,16 +845,16 @@ mod tests {
         let state = fixture_state(session_id, run_id);
         let mut cache = TranscriptLayoutCache::new();
         let mut ranges: Vec<Range<usize>> = Vec::new();
-        cache.rows(&state, WIDTH, |range, width| {
+        cache.rows(&state, WIDTH, LIGHT, |range, width| {
             ranges.push(range.clone());
-            committed_blocks(&state, range, width)
+            committed_blocks(&state, range, width, LIGHT)
         });
         ranges.clear();
 
         let replayed = cache
-            .rows(&state, WIDTH / 2, |range, width| {
+            .rows(&state, WIDTH / 2, LIGHT, |range, width| {
                 ranges.push(range.clone());
-                committed_blocks(&state, range, width)
+                committed_blocks(&state, range, width, LIGHT)
             })
             .len();
         assert_eq!(
@@ -818,8 +865,49 @@ mod tests {
         assert_eq!(cache.layout_count(), 2);
         assert_eq!(
             replayed,
-            direct_rows(&state, WIDTH / 2).len(),
+            direct_rows(&state, WIDTH / 2, LIGHT).len(),
             "the replayed rows are the rows a direct pass lays out"
+        );
+    }
+
+    #[test]
+    fn a_theme_change_lays_the_whole_transcript_out_again() {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let mut state = fixture_state(session_id, run_id);
+        let mut cache = TranscriptLayoutCache::new();
+        let light: Vec<_> = cache
+            .rows(&state, WIDTH, LIGHT, |range, width| {
+                committed_blocks(&state, range, width, LIGHT)
+            })
+            .iter()
+            .map(|row| row.surface)
+            .collect();
+        assert_eq!(
+            light[0], LIGHT.user_surface,
+            "the fixture opens on a user card"
+        );
+
+        state = state.with_theme(Theme::Dark);
+        let dark: Vec<_> = cache
+            .rows(&state, WIDTH, DARK, |range, width| {
+                committed_blocks(&state, range, width, DARK)
+            })
+            .iter()
+            .map(|row| row.surface)
+            .collect();
+        assert_eq!(
+            cache.layout_count(),
+            2,
+            "a theme change replays: cached surfaces carry the theme's own values"
+        );
+        assert_eq!(
+            dark[0], DARK.user_surface,
+            "the replay paints the dark card"
+        );
+        assert_ne!(
+            light[0], dark[0],
+            "the two themes paint the same row on different surfaces"
         );
     }
 
@@ -830,9 +918,9 @@ mod tests {
         let mut state = fixture_state(session_id, run_id);
         let mut cache = TranscriptLayoutCache::new();
         let mut ranges: Vec<Range<usize>> = Vec::new();
-        cache.rows(&state, WIDTH, |range, width| {
+        cache.rows(&state, WIDTH, LIGHT, |range, width| {
             ranges.push(range.clone());
-            committed_blocks(&state, range, width)
+            committed_blocks(&state, range, width, LIGHT)
         });
         ranges.clear();
 
@@ -841,9 +929,9 @@ mod tests {
             vec![user_row(session_id, "a whole new session")],
         )));
         let replayed = cache
-            .rows(&state, WIDTH, |range, width| {
+            .rows(&state, WIDTH, LIGHT, |range, width| {
                 ranges.push(range.clone());
-                committed_blocks(&state, range, width)
+                committed_blocks(&state, range, width, LIGHT)
             })
             .len();
         assert_eq!(
@@ -854,7 +942,7 @@ mod tests {
         assert_eq!(cache.layout_count(), 2);
         assert_eq!(
             replayed,
-            direct_rows(&state, WIDTH).len(),
+            direct_rows(&state, WIDTH, LIGHT).len(),
             "the replaced transcript lays out as a direct pass would"
         );
     }
@@ -876,9 +964,9 @@ mod tests {
         )));
         let mut cache = TranscriptLayoutCache::new();
         let mut ranges: Vec<Range<usize>> = Vec::new();
-        cache.rows(&state, WIDTH, |range, width| {
+        cache.rows(&state, WIDTH, LIGHT, |range, width| {
             ranges.push(range.clone());
-            committed_blocks(&state, range, width)
+            committed_blocks(&state, range, width, LIGHT)
         });
         ranges.clear();
 
@@ -886,9 +974,9 @@ mod tests {
             assistant_row(session_id, run_id, "the newest row", None),
         )));
         assert_eq!(state.transcript().len(), RETAINED_TRANSCRIPT_MESSAGES);
-        cache.rows(&state, WIDTH, |range, width| {
+        cache.rows(&state, WIDTH, LIGHT, |range, width| {
             ranges.push(range.clone());
-            committed_blocks(&state, range, width)
+            committed_blocks(&state, range, width, LIGHT)
         });
         assert_eq!(
             ranges,
@@ -905,12 +993,12 @@ mod tests {
         let mut state = fixture_state(session_id, run_id);
         let mut cache = TranscriptLayoutCache::new();
         let first = {
-            let cached = cache.rows(&state, WIDTH, |range, width| {
-                committed_blocks(&state, range, width)
+            let cached = cache.rows(&state, WIDTH, LIGHT, |range, width| {
+                committed_blocks(&state, range, width, LIGHT)
             });
             assert_eq!(
                 roles(cached),
-                roles(&direct_rows(&state, WIDTH)),
+                roles(&direct_rows(&state, WIDTH, LIGHT)),
                 "a cold cache lays out what a direct pass lays out"
             );
             cached.len()
@@ -918,12 +1006,12 @@ mod tests {
 
         append_row(&mut state, session_id, run_id, "a later answer");
         let second = {
-            let cached = cache.rows(&state, WIDTH, |range, width| {
-                committed_blocks(&state, range, width)
+            let cached = cache.rows(&state, WIDTH, LIGHT, |range, width| {
+                committed_blocks(&state, range, width, LIGHT)
             });
             assert_eq!(
                 roles(cached),
-                roles(&direct_rows(&state, WIDTH)),
+                roles(&direct_rows(&state, WIDTH, LIGHT)),
                 "the tail layout ends up exactly where a full replay would"
             );
             cached.len()
@@ -940,12 +1028,12 @@ mod tests {
         let run_id = RunId::new();
         let mut state = opened_stream(session_id, run_id);
         let mut cache = TranscriptLayoutCache::new();
-        cache.rows(&state, WIDTH, |range, width| {
-            committed_blocks(&state, range, width)
+        cache.rows(&state, WIDTH, LIGHT, |range, width| {
+            committed_blocks(&state, range, width, LIGHT)
         });
 
         stream_answer(&mut state, session_id, run_id, "partial");
-        let tail = provisional_rows(&state, WIDTH);
+        let tail = provisional_rows(&state, WIDTH, LIGHT);
         assert_eq!(tail.len(), 1, "the tail is one wrapped line here");
         assert_eq!(tail[0].text, format!("{ANSWER_GLYPH} partial"));
         assert_eq!(
@@ -968,7 +1056,7 @@ mod tests {
         let text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda";
         stream_answer(&mut state, session_id, run_id, text);
 
-        let tail = provisional_rows(&state, WIDTH);
+        let tail = provisional_rows(&state, WIDTH, LIGHT);
         assert!(tail.len() > 1, "the fixture tail wraps");
         assert!(
             tail[0].text.starts_with(&format!("{ANSWER_GLYPH} ")),
@@ -976,7 +1064,7 @@ mod tests {
             tail[0].text
         );
         assert!(
-            tail.iter().all(|row| row.surface == palette::PANEL),
+            tail.iter().all(|row| row.surface == LIGHT.panel),
             "the live tail sits on the panel wash, like a committed answer"
         );
 
@@ -985,6 +1073,7 @@ mod tests {
             &assistant_row(session_id, run_id, text, None),
             0,
             WIDTH,
+            LIGHT,
         );
         assert_eq!(
             committed.len(),
@@ -1008,7 +1097,7 @@ mod tests {
         stream_reasoning(&mut state, session_id, run_id, reasoning);
         stream_answer(&mut state, session_id, run_id, answer);
 
-        let tail = provisional_rows(&state, WIDTH);
+        let tail = provisional_rows(&state, WIDTH, LIGHT);
         assert!(
             tail[0].text.starts_with(&format!("{REASONING_GLYPH} ")),
             "the live reasoning segment opens with the committed marker: {:?}",
@@ -1022,10 +1111,11 @@ mod tests {
             &assistant_row(session_id, run_id, answer, Some(reasoning)),
             0,
             WIDTH,
+            LIGHT,
         );
         assert_eq!(committed.len(), 2, "reasoning and answer are two blocks");
         let mut expected = Vec::new();
-        append_blocks(&mut expected, committed);
+        append_blocks(&mut expected, committed, LIGHT);
         assert!(
             expected.iter().any(LaidOutRow::is_blank),
             "the fixture keeps the gap row between the two blocks"
@@ -1046,8 +1136,8 @@ mod tests {
         stream_reasoning(&mut state, session_id, run_id, &reasoning);
         stream_answer(&mut state, session_id, run_id, "the answer");
 
-        let tail = provisional_rows(&state, WIDTH);
-        let committed = reasoning_block(&reasoning, WIDTH, 0);
+        let tail = provisional_rows(&state, WIDTH, LIGHT);
+        let committed = reasoning_block(&reasoning, WIDTH, 0, LIGHT);
         assert!(
             committed.iter().any(LaidOutRow::is_reasoning_marker),
             "the committed block of this reasoning collapses"
@@ -1069,14 +1159,14 @@ mod tests {
         stream_reasoning(&mut state, session_id, run_id, &reasoning);
         stream_answer(&mut state, session_id, run_id, answer);
         let live_row = state.live_reasoning_row();
-        let collapsed = provisional_rows(&state, WIDTH).len();
+        let collapsed = provisional_rows(&state, WIDTH, LIGHT).len();
 
         state.update(Action::ExpandReasoning {
             row: Some(live_row),
         });
         let expansion = state.reasoning_expansion(live_row);
         assert!(expansion > 0, "the live segment expands by one chunk");
-        let expanded_tail = provisional_rows(&state, WIDTH);
+        let expanded_tail = provisional_rows(&state, WIDTH, LIGHT);
         assert!(
             expanded_tail.len() > collapsed,
             "the activation reveals rows the collapsed live segment hid"
@@ -1107,9 +1197,10 @@ mod tests {
             &assistant_row(session_id, run_id, answer, Some(&reasoning)),
             live_row,
             WIDTH,
+            LIGHT,
         );
         let mut expected = Vec::new();
-        append_blocks(&mut expected, committed);
+        append_blocks(&mut expected, committed, LIGHT);
         assert_eq!(
             roles(&expanded_tail),
             roles(&expected),
@@ -1124,7 +1215,7 @@ mod tests {
         let mut state = opened_stream(session_id, run_id);
         stream_reasoning(&mut state, session_id, run_id, &long_reasoning());
         let cache = RefCell::new(TranscriptLayoutCache::new());
-        let _pane = transcript_pane(&state, 0, 40, 50, &cache);
+        let _pane = transcript_pane(&state, 0, 40, 50, &cache, LIGHT);
         let window = cache.borrow().window();
         let committed_len = cache.borrow().laid_out().len();
         let marker = window
@@ -1145,7 +1236,7 @@ mod tests {
         let mut short = opened_stream(session_id, run_id);
         stream_reasoning(&mut short, session_id, run_id, "a thought");
         let cache = RefCell::new(TranscriptLayoutCache::new());
-        let _pane = transcript_pane(&short, 0, 40, 50, &cache);
+        let _pane = transcript_pane(&short, 0, 40, 50, &cache, LIGHT);
         assert_eq!(cache.borrow().window().live_reasoning_marker, None);
     }
 
@@ -1178,7 +1269,7 @@ mod tests {
         let run_id = RunId::new();
         let state = fixture_state(session_id, run_id);
         let cache = RefCell::new(TranscriptLayoutCache::new());
-        let pane = transcript_pane(&state, 3, 20, 50, &cache);
+        let pane = transcript_pane(&state, 3, 20, 50, &cache, LIGHT);
         assert!(
             matches!(pane, revue::widget::Border { .. }),
             "the pane stays the framed transcript"
@@ -1195,21 +1286,21 @@ mod tests {
         let gap = " ".repeat(MARKER_GAP);
         assert_eq!(MARKER_GAP, 1, "the one shared gap is one blank column");
 
-        let answer = answer_block("the answer", 40);
+        let answer = answer_block("the answer", 40, LIGHT);
         assert_eq!(
             answer[0].text,
             format!("{ANSWER_GLYPH}{gap}the answer"),
             "the answer's marker rides its own first line"
         );
 
-        let reasoning = reasoning_block("a thought", 40, 0);
+        let reasoning = reasoning_block("a thought", 40, 0, LIGHT);
         assert_eq!(
             reasoning[0].text,
             format!("{REASONING_GLYPH}{gap}reasoning"),
             "the reasoning header uses the same gap"
         );
 
-        let card = user_card("a question", 40);
+        let card = user_card("a question", 40, LIGHT);
         assert!(
             card[0]
                 .text
@@ -1224,6 +1315,7 @@ mod tests {
         let rows = answer_block(
             "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda",
             24,
+            LIGHT,
         );
         assert!(rows.len() > 1, "the fixture answer wraps");
         let indent = " ".repeat(super::answer_indent());
@@ -1263,7 +1355,7 @@ mod tests {
             extent: 3,
         });
         let cache = RefCell::new(TranscriptLayoutCache::new());
-        let pane = transcript_pane(&state, 0, 12, 48, &cache);
+        let pane = transcript_pane(&state, 0, 12, 48, &cache, LIGHT);
         let app = revue::testing::TestApp::with_size(pane, 48, 12);
         let selected = app
             .buffer()
@@ -1271,7 +1363,7 @@ mod tests {
             .expect("the selected row paints a cell");
         assert_eq!(
             selected.bg,
-            Some(palette::SELECTION_BG),
+            Some(LIGHT.selection_bg),
             "the selected display row is painted on the selection fill"
         );
         let plain = app
@@ -1280,7 +1372,7 @@ mod tests {
             .expect("an unselected row paints a cell");
         assert_eq!(
             plain.bg,
-            Some(palette::PANEL),
+            Some(LIGHT.panel),
             "a row outside the selection keeps the panel wash"
         );
     }
@@ -1291,7 +1383,7 @@ mod tests {
         let run_id = RunId::new();
         let state = fixture_state(session_id, run_id);
         let cache = RefCell::new(TranscriptLayoutCache::new());
-        transcript_pane(&state, 7, 20, 50, &cache);
+        transcript_pane(&state, 7, 20, 50, &cache, LIGHT);
         let window = cache.borrow().window();
         assert_eq!(window.top, 7, "the window publishes its first screen row");
         assert_eq!(window.visible, 18, "the pane's own frame takes two rows");
@@ -1326,8 +1418,8 @@ mod tests {
         )));
         let mut cache = TranscriptLayoutCache::new();
         let marker = {
-            let rows = cache.rows(&state, WIDTH, |range, width| {
-                committed_blocks(&state, range, width)
+            let rows = cache.rows(&state, WIDTH, LIGHT, |range, width| {
+                committed_blocks(&state, range, width, LIGHT)
             });
             rows.iter()
                 .position(|row| row.is_reasoning_marker())

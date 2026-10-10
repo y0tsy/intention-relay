@@ -34,8 +34,8 @@ use revue::style::Color;
 use revue::text::char_width;
 use revue::widget::{RichText, Span, Style, theme};
 
-use crate::app::{AppState, TranscriptScroll};
-use crate::tui::palette;
+use crate::app::{AppState, Theme, TranscriptScroll};
+use crate::tui::palette::Palette;
 
 /// The indent every continuation row of one wrapped logical line carries.
 pub(in crate::tui) const CONTINUATION_INDENT: &str = "  ";
@@ -87,7 +87,7 @@ pub(in crate::tui) struct Run {
 /// run's segment; [`RowStyleId::style`] resolves the pair plus the surface the
 /// row sits on into one [`Style`]. A visible row therefore builds one `Style`
 /// per run, never one per character, and a colour is never invented here: every
-/// ink is a [`palette`] role or the parser's own callout banner.
+/// ink is a [`crate::tui::palette`] role or the parser's own callout banner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::tui) enum RowStyleId {
     /// Ordinary body text in the palette's body ink.
@@ -136,48 +136,57 @@ impl RowStyleId {
     ///
     /// A segment with no colour is body text. The widget's own neutrals (its
     /// grid and rule tone and the placeholder tone of a heading marker and a
-    /// quote) become the palette's divider ink; every other colour this module
-    /// configured is already a palette role.
-    pub(in crate::tui) fn of_parsed(fg: Option<Color>, modifier: Modifier) -> Self {
+    /// quote) become the palette's divider ink; every other colour the parser
+    /// carries is compared against the resolved palette, because the parser was
+    /// configured from those very roles.
+    pub(in crate::tui) fn of_parsed(
+        fg: Option<Color>,
+        modifier: Modifier,
+        palette: &'static Palette,
+    ) -> Self {
         let Some(fg) = fg else {
             return Self::Body(modifier);
         };
         if WIDGET_NEUTRALS.contains(&fg) {
             return Self::Divider(modifier);
         }
-        match fg {
-            palette::MARKDOWN_HEADING => Self::Heading(modifier),
-            palette::MARKDOWN_CODE => Self::Code(modifier),
-            palette::MARKDOWN_LINK => Self::Link(modifier),
-            callout => Self::Callout(callout, modifier),
+        if fg == palette.markdown_heading {
+            Self::Heading(modifier)
+        } else if fg == palette.markdown_code {
+            Self::Code(modifier)
+        } else if fg == palette.markdown_link {
+            Self::Link(modifier)
+        } else {
+            Self::Callout(fg, modifier)
         }
     }
 
     /// Resolves one run into the style it paints with on `surface`.
     ///
-    /// The `bg` is the wash the row named, and the parser's modifier bits are
-    /// carried over so bold really is bold.
-    pub(in crate::tui) const fn style(self, surface: Color) -> Style {
+    /// Every ink comes from the resolved `palette`, and the `bg` is the wash
+    /// the row named; the parser's modifier bits are carried over so bold
+    /// really is bold.
+    pub(in crate::tui) const fn style(self, surface: Color, palette: &'static Palette) -> Style {
         match self {
-            Self::Body(modifier) => ink(palette::INK, surface, modifier),
-            Self::Heading(modifier) => ink(palette::MARKDOWN_HEADING, surface, modifier),
-            Self::Code(modifier) => ink(palette::MARKDOWN_CODE, surface, modifier),
-            Self::Link(modifier) => ink(palette::MARKDOWN_LINK, surface, modifier),
-            Self::Divider(modifier) => ink(palette::INK_FAINT, surface, modifier),
+            Self::Body(modifier) => ink(palette.ink, surface, modifier),
+            Self::Heading(modifier) => ink(palette.markdown_heading, surface, modifier),
+            Self::Code(modifier) => ink(palette.markdown_code, surface, modifier),
+            Self::Link(modifier) => ink(palette.markdown_link, surface, modifier),
+            Self::Divider(modifier) => ink(palette.ink_faint, surface, modifier),
             Self::Callout(callout, modifier) => ink(callout, surface, modifier),
-            Self::Reasoning => ink(palette::REASONING_BODY, surface, Modifier::empty()),
-            Self::ReasoningHeader => ink(palette::REASONING_HEADER, surface, Modifier::empty()),
-            Self::ReasoningMarker => ink(palette::REASONING_MARKER, surface, Modifier::BOLD),
-            Self::Muted => ink(palette::INK_MUTED, surface, Modifier::empty()),
-            Self::Notice => ink(palette::NOTICE_INK, surface, Modifier::empty()),
-            Self::Accent => ink(palette::ACCENT, surface, Modifier::empty()),
-            Self::UserBorder => ink(palette::USER_BORDER, surface, Modifier::empty()),
-            Self::UserLabel => ink(palette::USER_LABEL, surface, Modifier::BOLD),
-            Self::ToolBorder => ink(palette::TOOL_BORDER, surface, Modifier::empty()),
-            Self::ToolLabel => ink(palette::TOOL_LABEL, surface, Modifier::BOLD),
-            Self::ToolPreview => ink(palette::TOOL_PREVIEW, surface, Modifier::empty()),
-            Self::ToolNote => ink(palette::INK_MUTED, surface, Modifier::DIM),
-            Self::Todo => ink(palette::TODO_INK, surface, Modifier::empty()),
+            Self::Reasoning => ink(palette.reasoning_body, surface, Modifier::empty()),
+            Self::ReasoningHeader => ink(palette.reasoning_header, surface, Modifier::empty()),
+            Self::ReasoningMarker => ink(palette.reasoning_marker, surface, Modifier::BOLD),
+            Self::Muted => ink(palette.ink_muted, surface, Modifier::empty()),
+            Self::Notice => ink(palette.notice_ink, surface, Modifier::empty()),
+            Self::Accent => ink(palette.accent, surface, Modifier::empty()),
+            Self::UserBorder => ink(palette.user_border, surface, Modifier::empty()),
+            Self::UserLabel => ink(palette.user_label, surface, Modifier::BOLD),
+            Self::ToolBorder => ink(palette.tool_border, surface, Modifier::empty()),
+            Self::ToolLabel => ink(palette.tool_label, surface, Modifier::BOLD),
+            Self::ToolPreview => ink(palette.tool_preview, surface, Modifier::empty()),
+            Self::ToolNote => ink(palette.ink_muted, surface, Modifier::DIM),
+            Self::Todo => ink(palette.todo_ink, surface, Modifier::empty()),
         }
     }
 }
@@ -252,8 +261,8 @@ impl LaidOutRow {
     }
 
     /// Materialises the row as one widget, resolving one style per run.
-    pub(in crate::tui) fn rich_text(&self) -> RichText {
-        self.rich_text_on(self.surface)
+    pub(in crate::tui) fn rich_text(&self, palette: &'static Palette) -> RichText {
+        self.rich_text_on(self.surface, palette)
     }
 
     /// Materialises the row on `surface` instead of its own wash.
@@ -261,14 +270,18 @@ impl LaidOutRow {
     /// The transcript paints its selected display rows this way: the runs
     /// resolve their ink against the surface the row is painted on, so a
     /// selection repaints a row without touching a single run.
-    pub(in crate::tui) fn rich_text_on(&self, surface: Color) -> RichText {
+    pub(in crate::tui) fn rich_text_on(
+        &self,
+        surface: Color,
+        palette: &'static Palette,
+    ) -> RichText {
         if self.runs.is_empty() {
             return RichText::plain(self.text.clone()).default_style(Style::new().bg(surface));
         }
         let mut text = RichText::new();
         for run in &self.runs {
             let slice = self.text[run.range.clone()].to_owned();
-            text = text.span(Span::styled(slice, run.style.style(surface)));
+            text = text.span(Span::styled(slice, run.style.style(surface, palette)));
         }
         text
     }
@@ -493,6 +506,7 @@ struct BlockSpan {
 pub(in crate::tui) fn append_blocks(
     rows: &mut Vec<LaidOutRow>,
     blocks: Vec<Vec<LaidOutRow>>,
+    palette: &'static Palette,
 ) -> Vec<Range<usize>> {
     let mut spans = Vec::with_capacity(blocks.len());
     for block in blocks {
@@ -502,7 +516,7 @@ pub(in crate::tui) fn append_blocks(
         }
         if !rows.is_empty() {
             for _ in 0..BLOCK_GAP {
-                rows.push(LaidOutRow::blank(palette::PANEL));
+                rows.push(LaidOutRow::blank(palette.panel));
             }
         }
         let start = rows.len();
@@ -520,11 +534,12 @@ pub(in crate::tui) fn append_blocks(
 pub(in crate::tui) fn append_messages(
     rows: &mut Vec<LaidOutRow>,
     messages: Vec<MessageBlocks>,
+    palette: &'static Palette,
 ) -> Vec<Range<usize>> {
     messages
         .into_iter()
         .map(|blocks| {
-            let ranges = append_blocks(rows, blocks);
+            let ranges = append_blocks(rows, blocks, palette);
             match (ranges.first(), ranges.last()) {
                 (Some(first), Some(last)) => first.start..last.end,
                 _ => rows.len()..rows.len(),
@@ -688,6 +703,12 @@ pub(in crate::tui) fn display_width(text: &str) -> usize {
 pub(in crate::tui) struct TranscriptLayoutCache {
     /// The content width the cached rows were laid out at.
     width: usize,
+    /// The colour theme the cached rows were laid out for.
+    ///
+    /// A laid-out row carries resolved surfaces, so a theme change makes every
+    /// cached row a value of the other theme: a moved theme replays the whole
+    /// transcript, exactly as a resize does.
+    theme: Theme,
     /// The transcript epoch the cached rows reflect.
     epoch: u64,
     /// The reasoning expansion epoch the cached rows reflect.
@@ -721,6 +742,7 @@ impl TranscriptLayoutCache {
     pub(in crate::tui) const fn new() -> Self {
         Self {
             width: 0,
+            theme: Theme::Light,
             epoch: 0,
             reasoning_epoch: 0,
             tool_results: 0,
@@ -745,24 +767,29 @@ impl TranscriptLayoutCache {
     /// `blocks` lays out one committed-row range as its messages' blocks, each
     /// block a run of display rows: the whole transcript on a miss, and only
     /// the appended tail when the transcript grew by appends since the cached
-    /// epoch. A hit calls it not at all.
+    /// epoch. A hit calls it not at all. `palette` is the resolved palette of
+    /// the frame, and the cache reads its theme from the same state, so the
+    /// gap rows and the blocks paint one theme.
     ///
-    /// The cached rows are current only while the width, the transcript epoch,
-    /// the reasoning expansion epoch, and the committed tool results all
-    /// match; anything else - a replacement, a trim's front drain, a session
-    /// switch, a resize, an expansion, a result that answers an earlier call,
-    /// or no cache yet - is a full replay.
+    /// The cached rows are current only while the width, the theme, the
+    /// transcript epoch, the reasoning expansion epoch, and the committed tool
+    /// results all match; anything else - a replacement, a trim's front drain,
+    /// a session switch, a resize, a theme change, an expansion, a result that
+    /// answers an earlier call, or no cache yet - is a full replay.
     pub(in crate::tui) fn rows(
         &mut self,
         state: &AppState,
         width: usize,
+        palette: &'static Palette,
         blocks: impl FnOnce(Range<usize>, usize) -> Vec<MessageBlocks>,
     ) -> &[LaidOutRow] {
         let width = width.max(1);
+        let theme = state.theme();
         let epoch = state.transcript_epoch();
         let reasoning_epoch = state.reasoning_epoch();
         let tool_results = state.tool_result_count();
         let appended = if width == self.width
+            && theme == self.theme
             && reasoning_epoch == self.reasoning_epoch
             && tool_results == self.tool_results
         {
@@ -784,22 +811,23 @@ impl TranscriptLayoutCache {
                 let laid_out = blocks(from..from + appended, width);
                 self.epoch = epoch;
                 self.len = from + appended;
-                self.append(laid_out, from);
+                self.append(laid_out, from, palette);
                 #[cfg(test)]
                 self.count_layout();
             }
-            // A replacement, a trim, a resize, an expansion, a paired result,
-            // or a first layout: lay out all.
+            // A replacement, a trim, a resize, a theme change, an expansion, a
+            // paired result, or a first layout: lay out all.
             None => {
                 let laid_out = blocks(0..state.transcript().len(), width);
                 self.rows.clear();
                 self.spans.clear();
                 self.epoch = epoch;
+                self.theme = theme;
                 self.reasoning_epoch = reasoning_epoch;
                 self.tool_results = tool_results;
                 self.len = state.transcript().len();
                 self.width = width;
-                self.append(laid_out, 0);
+                self.append(laid_out, 0, palette);
                 #[cfg(test)]
                 self.count_layout();
             }
@@ -809,8 +837,8 @@ impl TranscriptLayoutCache {
 
     /// Appends one range of laid-out messages, recording the display rows each
     /// message owns from `from`.
-    fn append(&mut self, messages: Vec<MessageBlocks>, from: usize) {
-        for (offset, rows) in append_messages(&mut self.rows, messages)
+    fn append(&mut self, messages: Vec<MessageBlocks>, from: usize, palette: &'static Palette) {
+        for (offset, rows) in append_messages(&mut self.rows, messages, palette)
             .into_iter()
             .enumerate()
         {

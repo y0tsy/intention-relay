@@ -10,7 +10,7 @@ use revue::widget::{Border, Card, Stack, Text, hstack, vstack};
 
 use crate::app::AppState;
 use crate::tui::layout::TranscriptLayoutCache;
-use crate::tui::palette;
+use crate::tui::palette::{self, Palette};
 use crate::tui::panes::{commands, input, status, transcript, welcome};
 
 /// The columns and rows the window keeps around the chat panel.
@@ -106,11 +106,16 @@ const fn transcript_top(window: Rect) -> u16 {
 /// Returns the chat screen: the framed panel that holds the transcript, the
 /// input block, and the notice or error line, placed on the canvas the window
 /// fills.
+///
+/// The theme is resolved here, once per frame, and handed to every pane down
+/// the tree: the panel, the transcript (or the welcome), the command band, the
+/// input block, and the detail line all paint the same palette.
 pub(super) fn chat_screen(
     state: &AppState,
     window: Rect,
     cache: &RefCell<TranscriptLayoutCache>,
 ) -> Stack {
+    let palette = palette::of(state.theme());
     let panel = panel(window, input::block_rows(state), commands::menu_rows(state));
     let bottom = window
         .height
@@ -121,7 +126,7 @@ pub(super) fn chat_screen(
             hstack()
                 .child_sized(Text::new(""), PANEL_MARGIN)
                 .child_sized(
-                    panel_widget(state, panel, transcript_top(window), cache),
+                    panel_widget(state, panel, transcript_top(window), cache, palette),
                     panel.columns,
                 ),
             panel.rows,
@@ -148,11 +153,12 @@ fn panel_widget(
     panel: Panel,
     top: u16,
     cache: &RefCell<TranscriptLayoutCache>,
+    palette: &'static Palette,
 ) -> Border {
     let mut content = vstack();
     content = if welcome::is_welcome(state) {
         content.child_sized(
-            welcome::welcome_pane(panel.transcript_rows, panel.content_columns),
+            welcome::welcome_pane(panel.transcript_rows, panel.content_columns, palette),
             panel.transcript_rows,
         )
     } else {
@@ -163,6 +169,7 @@ fn panel_widget(
                 panel.transcript_rows,
                 panel.content_columns,
                 cache,
+                palette,
             ),
             panel.transcript_rows,
         )
@@ -170,24 +177,34 @@ fn panel_widget(
     Border::rounded()
         .min_size(panel.columns, panel.rows)
         .max_size(panel.columns, panel.rows)
-        .fg(palette::BORDER)
-        .bg(palette::PANEL)
+        .fg(palette.border)
+        .bg(palette.panel)
         .child(
             Card::new()
                 .flat()
                 .padding(PANEL_PADDING)
-                .background(palette::PANEL)
+                .background(palette.panel)
                 .body(
                     content
                         .child_sized(
-                            commands::menu_block(state, panel.content_columns, panel.menu_rows),
+                            commands::menu_block(
+                                state,
+                                panel.content_columns,
+                                panel.menu_rows,
+                                palette,
+                            ),
                             panel.menu_rows,
                         )
                         .child_sized(
-                            input::input_block(state, panel.content_columns, panel.input_rows),
+                            input::input_block(
+                                state,
+                                panel.content_columns,
+                                panel.input_rows,
+                                palette,
+                            ),
                             panel.input_rows,
                         )
-                        .child_sized(status::status_detail(state), panel.detail_rows),
+                        .child_sized(status::status_detail(state, palette), panel.detail_rows),
                 ),
         )
 }
