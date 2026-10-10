@@ -16,14 +16,16 @@ use common::{TEST_REPLY_BOUND, endpoint, message};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use intention_client::{DaemonLauncher, IntentionClient, ProcessDaemonLauncher};
+use intention_client::{DaemonLauncher, IntentionClient, ProcessDaemonLauncher, RunStreamState};
 use intention_proto::{
-    ClientRequestDto, CreateSessionCommandDto, DaemonHealthDto, DaemonReadinessDto,
-    InterruptRunAcceptedDto, ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto,
-    RunId, SessionId, SessionSnapshotDto, TurnId, decode_request_line, encode_request,
+    ClientRequestDto, ConfigRevisionId, CreateSessionCommandDto, DaemonHealthDto,
+    DaemonReadinessDto, InterruptRunAcceptedDto, ProtocolDaemonMessageDto, ProtocolResultDto,
+    RemoveTurnAcceptedDto, RunId, RunProjectionDto, RunStatusDto, RunStreamFrameDto,
+    RunSubscriptionSnapshotDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
+    SessionSummaryDto, TextDeltaFrameDto, TurnId, decode_request_line, encode_request,
 };
 use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, ProjectId, WorkspaceId};
-use intention_proto::{MessageKindDto, RunModeDto, SessionProjectionDto};
+use intention_proto::{MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto};
 use intention_transport::{AsyncLocalDaemonConnection, AsyncLocalListener, LocalEndpoint};
 
 fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
@@ -187,6 +189,43 @@ fn fixture_create_command(session_id: SessionId) -> CreateSessionCommandDto {
         .expect("fixture workspace root is valid"),
         RunModeDto::Build,
     )
+}
+
+fn fixture_run(session_id: SessionId, run_id: RunId, status: RunStatusDto) -> RunProjectionDto {
+    RunProjectionDto::new(
+        session_id,
+        run_id,
+        TurnId::new(),
+        status,
+        ConfigRevisionId::new(),
+    )
+}
+
+fn fixture_summary(session_id: SessionId, updated_at: i64) -> SessionSummaryDto {
+    SessionSummaryDto::new(
+        session_id,
+        ProjectId::new(),
+        WorkspaceId::new(),
+        RunModeDto::Build,
+        updated_at,
+        None,
+    )
+}
+
+fn fixture_snapshot(
+    session_id: SessionId,
+    run_id: RunId,
+    messages: Vec<MessageProjectionDto>,
+) -> RunSubscriptionSnapshotDto {
+    RunSubscriptionSnapshotDto::new(
+        fixture_run(session_id, run_id, RunStatusDto::Running),
+        messages,
+    )
+    .expect("fixture run snapshot is valid")
+}
+
+fn fixture_delta(session_id: SessionId, run_id: RunId, step: u32, text: &str) -> TextDeltaFrameDto {
+    TextDeltaFrameDto::new(session_id, run_id, step, text).expect("fixture text delta is valid")
 }
 
 #[test]
@@ -534,4 +573,263 @@ async fn foreign_peer_on_the_current_endpoint_is_stale() {
     assert_eq!(error.code(), "stale_daemon_protocol");
     assert_eq!(error.category(), ErrorCategoryDto::Unavailable);
     server.await.expect("foreign fixture server completes");
+}
+
+#[tokio::test]
+async fn list_sessions_round_trips_and_validates_the_reply() {
+    let _guard = fixture_guard();
+    let newest = SessionId::new();
+    let run_id = RunId::new();
+    let summaries = SessionSummariesDto::new(
+        vec![
+            SessionSummaryDto::new(
+                newest,
+                ProjectId::new(),
+                WorkspaceId::new(),
+                RunModeDto::Build,
+                2_000,
+                Some(fixture_run(newest, run_id, RunStatusDto::Running)),
+            ),
+            fixture_summary(SessionId::new(), 1_000),
+        ],
+        4,
+    )
+    .expect("fixture session summaries are valid");
+    let list_endpoint = endpoint();
+    let server = start_fixture_server(
+        list_endpoint.clone(),
+        FixtureResponse::Result(ProtocolResultDto::SessionsListed(summaries.clone())),
+    );
+    let received = client(
+        list_endpoint,
+        FixtureResponse::Result(ProtocolResultDto::SessionsListed(summaries.clone())),
+        Arc::new(AtomicUsize::new(0)),
+    )
+    .list_sessions()
+    .await
+    .expect("typed session list response is returned");
+    assert_eq!(received, summaries);
+    assert_eq!(received.sessions().len(), 2);
+    assert_eq!(received.sessions()[0].session_id(), newest);
+    assert_eq!(
+        received.sessions()[0].active_run().map(|run| run.run_id()),
+        Some(run_id)
+    );
+    assert_eq!(
+        received.sessions()[1].active_run(),
+        None,
+        "a session without an active run round-trips as inactive"
+    );
+    assert_eq!(received.omitted(), 4);
+    server.await.expect("session list fixture server completes");
+
+    // Another result kind is not this request's answer.
+    let invalid_endpoint = endpoint();
+    let server = start_fixture_server(
+        invalid_endpoint.clone(),
+        FixtureResponse::Result(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
+            SessionId::new(),
+            TurnId::new(),
+        ))),
+    );
+    assert_eq!(
+        client(
+            invalid_endpoint,
+            FixtureResponse::Result(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
+                SessionId::new(),
+                TurnId::new(),
+            ))),
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .list_sessions()
+        .await
+        .expect_err("a non-list result is not this request's answer")
+        .code(),
+        "invalid_local_protocol_response"
+    );
+    server.await.expect("invalid list fixture server completes");
+}
+
+#[test]
+fn state_tracks_provisional_text_per_model_step() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = RunStreamState::new(session_id, run_id);
+    let committed = message(session_id, Some(run_id), MessageKindDto::User, "build it");
+    state
+        .apply_initial(fixture_snapshot(
+            session_id,
+            run_id,
+            vec![committed.clone()],
+        ))
+        .expect("fixture snapshot applies");
+    assert_eq!(state.provisional_text(), "");
+
+    // Deltas of one step append to each other.
+    state
+        .apply_frame(RunStreamFrameDto::TextDelta(fixture_delta(
+            session_id, run_id, 0, "Hel",
+        )))
+        .expect("first delta applies");
+    state
+        .apply_frame(RunStreamFrameDto::TextDelta(fixture_delta(
+            session_id, run_id, 0, "lo",
+        )))
+        .expect("second delta of the same step applies");
+    assert_eq!(state.provisional_text(), "Hello");
+    assert_eq!(
+        state.messages(),
+        &[committed],
+        "provisional deltas never touch the committed transcript"
+    );
+
+    // A delta for another scope is rejected without mutation.
+    assert_eq!(
+        state
+            .apply_frame(RunStreamFrameDto::TextDelta(fixture_delta(
+                session_id,
+                RunId::new(),
+                0,
+                "stray",
+            )))
+            .expect_err("a delta from another run is rejected")
+            .code(),
+        "invalid_run_subscription"
+    );
+    assert_eq!(state.provisional_text(), "Hello");
+
+    // A delta for a new step replaces the buffer.
+    state
+        .apply_frame(RunStreamFrameDto::TextDelta(fixture_delta(
+            session_id, run_id, 1, "next",
+        )))
+        .expect("a delta of the next step applies");
+    assert_eq!(state.provisional_text(), "next");
+
+    // A fresh correlated snapshot resets provisional text with committed state.
+    let next_committed = message(
+        session_id,
+        Some(run_id),
+        MessageKindDto::Assistant,
+        "committed by the snapshot",
+    );
+    state
+        .apply_initial(fixture_snapshot(
+            session_id,
+            run_id,
+            vec![next_committed.clone()],
+        ))
+        .expect("a fresh snapshot applies");
+    assert_eq!(state.provisional_text(), "");
+    assert_eq!(state.messages(), &[next_committed]);
+}
+
+#[test]
+fn state_clears_provisional_text_on_the_committed_assistant_row() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = RunStreamState::new(session_id, run_id);
+    state
+        .apply_initial(fixture_snapshot(session_id, run_id, Vec::new()))
+        .expect("fixture snapshot applies");
+    state
+        .apply_frame(RunStreamFrameDto::TextDelta(fixture_delta(
+            session_id, run_id, 0, "half",
+        )))
+        .expect("provisional delta applies");
+    assert_eq!(state.provisional_text(), "half");
+
+    state
+        .apply_frame(RunStreamFrameDto::Content(message(
+            session_id,
+            Some(run_id),
+            MessageKindDto::Notice,
+            "still running",
+        )))
+        .expect("a committed notice frame applies");
+    assert_eq!(
+        state.provisional_text(),
+        "half",
+        "only the step's committed assistant row supersedes its provisional text"
+    );
+
+    state
+        .apply_frame(RunStreamFrameDto::Content(message(
+            session_id,
+            Some(run_id),
+            MessageKindDto::Assistant,
+            "half",
+        )))
+        .expect("the committed assistant row applies");
+    assert_eq!(state.provisional_text(), "");
+    assert_eq!(state.messages().len(), 2);
+    assert_eq!(
+        state.messages().last().expect("rows remain").text(),
+        "half",
+        "the committed transcript carries the row while the buffer is dropped"
+    );
+}
+
+#[test]
+fn state_clears_provisional_text_when_the_run_reaches_a_terminal_status() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+
+    // A non-terminal status frame keeps the current step's advance notice.
+    let mut state = RunStreamState::new(session_id, run_id);
+    state
+        .apply_initial(fixture_snapshot(session_id, run_id, Vec::new()))
+        .expect("fixture snapshot applies");
+    state
+        .apply_frame(RunStreamFrameDto::TextDelta(fixture_delta(
+            session_id, run_id, 0, "half",
+        )))
+        .expect("provisional delta applies");
+    state
+        .apply_frame(RunStreamFrameDto::Status(fixture_run(
+            session_id,
+            run_id,
+            RunStatusDto::Running,
+        )))
+        .expect("a running status frame applies");
+    assert_eq!(
+        state.provisional_text(),
+        "half",
+        "a running run keeps its provisional text"
+    );
+
+    // A terminal status ends the run: the daemon discards its unpublished
+    // delta window, so no advance notice may outlive the run.
+    for terminal in [
+        RunStatusDto::Failed,
+        RunStatusDto::Completed,
+        RunStatusDto::Interrupted,
+    ] {
+        let mut state = RunStreamState::new(session_id, run_id);
+        state
+            .apply_initial(fixture_snapshot(session_id, run_id, Vec::new()))
+            .expect("fixture snapshot applies");
+        state
+            .apply_frame(RunStreamFrameDto::TextDelta(fixture_delta(
+                session_id, run_id, 0, "half",
+            )))
+            .expect("provisional delta applies");
+        assert_eq!(state.provisional_text(), "half");
+
+        state
+            .apply_frame(RunStreamFrameDto::Status(fixture_run(
+                session_id, run_id, terminal,
+            )))
+            .expect("a terminal status frame applies");
+        assert_eq!(
+            state.provisional_text(),
+            "",
+            "a {terminal:?} run must not retain provisional text"
+        );
+        assert_eq!(state.status(), Some(terminal));
+        assert!(
+            state.messages().is_empty(),
+            "status frames never write transcript rows"
+        );
+    }
 }

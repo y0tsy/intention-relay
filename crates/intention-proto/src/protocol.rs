@@ -1,17 +1,20 @@
 //! Typed local-protocol DTOs for Intention Relay.
 //!
 //! One typed message travels per NDJSON line: a correlated client request, a
-//! correlated daemon reply or rejection, or an uncorrelated committed run
-//! frame. The typed request and result enums are the complete wire contract:
+//! correlated daemon reply or rejection, or an uncorrelated run-stream frame.
+//! The typed request and result enums are the complete wire contract:
 //! there is no method table, no second error channel, and no version
 //! negotiation. This module defines typed wire contracts only. It contains no
 //! socket framing, client bootstrap, daemon lifecycle, runtime actors, or
 //! presentation logic.
 
+use std::collections::BTreeSet;
+
 use crate::{
     ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorDto, GetSessionSnapshotQueryDto,
     InterruptRunCommandDto, MessageProjectionDto, ProjectId, RemoveTurnCommandDto, RunId,
-    RunProjectionDto, SendUserTurnCommandDto, SessionId, SessionProjectionDto, TurnId, WorkspaceId,
+    RunModeDto, RunProjectionDto, SendUserTurnCommandDto, SessionId, SessionProjectionDto, TurnId,
+    WorkspaceId,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -76,12 +79,98 @@ impl SubscribeRunCommandDto {
     }
 }
 
-/// A server-originated, uncorrelated committed run-stream frame.
+/// One transient provisional text delta from a running model step.
 ///
-/// The wire tag is `kind` with `content` for one committed transcript row and
-/// `status` for one committed run projection; the payload travels in `data` and
-/// carries no event position. A status frame carries the committed projection
-/// itself, never a status delta a client would have to merge.
+/// A text delta is best-effort advance notice: it is never persisted and never
+/// replayed after a reconnect, so a client renders it only until the committed
+/// assistant row of the same step arrives.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TextDeltaFrameDto {
+    session_id: SessionId,
+    run_id: RunId,
+    step: u32,
+    text: String,
+}
+
+impl<'de> Deserialize<'de> for TextDeltaFrameDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawTextDeltaFrameDto {
+            session_id: SessionId,
+            run_id: RunId,
+            step: u32,
+            text: String,
+        }
+
+        let raw = RawTextDeltaFrameDto::deserialize(deserializer)?;
+        Self::new(raw.session_id, raw.run_id, raw.step, raw.text).map_err(serde::de::Error::custom)
+    }
+}
+
+impl TextDeltaFrameDto {
+    /// Creates one transient provisional text delta.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the delta text is empty.
+    pub fn new(
+        session_id: SessionId,
+        run_id: RunId,
+        step: u32,
+        text: impl Into<String>,
+    ) -> DtoResult<Self> {
+        let text = text.into();
+        if text.is_empty() {
+            Err(ErrorDto::validation(
+                "invalid_text_delta",
+                "model text delta must not be empty",
+            ))
+        } else {
+            Ok(Self {
+                session_id,
+                run_id,
+                step,
+                text,
+            })
+        }
+    }
+
+    /// Returns the owning session identity.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the run whose model step produced the delta.
+    #[must_use]
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
+    }
+
+    /// Returns the zero-based model step index within the run.
+    #[must_use]
+    pub const fn step(&self) -> u32 {
+        self.step
+    }
+
+    /// Returns the provisional text chunk.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+/// A server-originated, uncorrelated run-stream frame.
+///
+/// The wire tag is `kind` with `content` for one committed transcript row,
+/// `status` for one committed run projection, and `text_delta` for one
+/// transient provisional model chunk; the payload travels in `data`. No frame
+/// carries an event position: a text delta names only its model step. A status
+/// frame carries the committed projection itself, never a status delta a client
+/// would have to merge.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum RunStreamFrameDto {
@@ -89,6 +178,8 @@ pub enum RunStreamFrameDto {
     Content(MessageProjectionDto),
     /// The committed run projection after one status change.
     Status(RunProjectionDto),
+    /// One transient provisional text delta from the run's current model step.
+    TextDelta(TextDeltaFrameDto),
 }
 
 /// The current run state returned by a dedicated run subscription.
@@ -225,6 +316,143 @@ impl SessionSnapshotDto {
     }
 }
 
+/// One bounded current summary of a durable session.
+///
+/// A summary carries no transcript rows: the list reports which sessions
+/// exist, and a client reads the session it selects through a full session
+/// read.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SessionSummaryDto {
+    session_id: SessionId,
+    project_id: ProjectId,
+    workspace_id: WorkspaceId,
+    mode: RunModeDto,
+    updated_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_run: Option<RunProjectionDto>,
+}
+
+impl SessionSummaryDto {
+    /// Creates the bounded public summary of one durable session.
+    #[must_use]
+    pub const fn new(
+        session_id: SessionId,
+        project_id: ProjectId,
+        workspace_id: WorkspaceId,
+        mode: RunModeDto,
+        updated_at: i64,
+        active_run: Option<RunProjectionDto>,
+    ) -> Self {
+        Self {
+            session_id,
+            project_id,
+            workspace_id,
+            mode,
+            updated_at,
+            active_run,
+        }
+    }
+
+    /// Returns the durable session identity.
+    #[must_use]
+    pub const fn session_id(self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the owning project identity.
+    #[must_use]
+    pub const fn project_id(self) -> ProjectId {
+        self.project_id
+    }
+
+    /// Returns the daemon-owned workspace identity.
+    #[must_use]
+    pub const fn workspace_id(self) -> WorkspaceId {
+        self.workspace_id
+    }
+
+    /// Returns the session run policy mode.
+    #[must_use]
+    pub const fn mode(self) -> RunModeDto {
+        self.mode
+    }
+
+    /// Returns the last durable session update in whole Unix seconds.
+    #[must_use]
+    pub const fn updated_at(self) -> i64 {
+        self.updated_at
+    }
+
+    /// Returns the sole active run, if one exists.
+    #[must_use]
+    pub const fn active_run(self) -> Option<RunProjectionDto> {
+        self.active_run
+    }
+}
+
+/// One bounded list of current session summaries.
+///
+/// The omitted count is always explicit: a bounded read reports how many
+/// sessions exist beyond the returned window instead of silently truncating
+/// the list.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SessionSummariesDto {
+    sessions: Vec<SessionSummaryDto>,
+    omitted: u32,
+}
+
+impl<'de> Deserialize<'de> for SessionSummariesDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawSessionSummariesDto {
+            sessions: Vec<SessionSummaryDto>,
+            omitted: u32,
+        }
+
+        let raw = RawSessionSummariesDto::deserialize(deserializer)?;
+        Self::new(raw.sessions, raw.omitted).map_err(serde::de::Error::custom)
+    }
+}
+
+impl SessionSummariesDto {
+    /// Creates a coherent bounded session list with its explicit omitted count.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when one summary's active run belongs to a
+    /// different session or session identities are not unique.
+    pub fn new(sessions: Vec<SessionSummaryDto>, omitted: u32) -> DtoResult<Self> {
+        let mut unique_session_ids = BTreeSet::new();
+        if sessions.iter().any(|summary| {
+            summary
+                .active_run()
+                .is_some_and(|run| run.session_id() != summary.session_id())
+                || !unique_session_ids.insert(summary.session_id())
+        }) {
+            return Err(ErrorDto::validation(
+                "invalid_session_summaries",
+                "session summaries must carry unique sessions with their own active runs",
+            ));
+        }
+        Ok(Self { sessions, omitted })
+    }
+
+    /// Returns the bounded session summaries in their durable order.
+    #[must_use]
+    pub fn sessions(&self) -> &[SessionSummaryDto] {
+        &self.sessions
+    }
+
+    /// Returns how many sessions exist beyond the returned window.
+    #[must_use]
+    pub const fn omitted(&self) -> u32 {
+        self.omitted
+    }
+}
+
 /// One typed request from a local adapter to the daemon.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
@@ -241,6 +469,8 @@ pub enum ClientRequestDto {
     GetSessionSnapshot(GetSessionSnapshotQueryDto),
     /// Obtains the daemon's latest health projection.
     GetDaemonHealth,
+    /// Obtains the bounded current session list.
+    ListSessions,
     /// Begins a dedicated run-stream subscription.
     SubscribeRun(SubscribeRunCommandDto),
 }
@@ -294,6 +524,8 @@ pub enum ProtocolResultDto {
     SessionSnapshot(SessionSnapshotDto),
     /// The daemon health projection.
     DaemonHealth(DaemonHealthDto),
+    /// A bounded current list of session summaries.
+    SessionsListed(SessionSummariesDto),
     /// The current run state of a new subscription.
     RunSubscribed(RunSubscriptionSnapshotDto),
 }

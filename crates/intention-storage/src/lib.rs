@@ -20,6 +20,7 @@ use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
     RemoveTurnCommandDto, RunProjectionDto, RunStatusDto, SessionProjectionDto, SessionSnapshotDto,
+    SessionSummariesDto,
 };
 use intention_proto::{
     DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, RunId,
@@ -643,6 +644,18 @@ pub trait StorageRepositoryDto {
     /// Returns a not-found error when the session has no durable projection, or
     /// an unavailable error when storage cannot be read.
     fn load_session_projection(&self, session_id: SessionId) -> DtoResult<SessionProjectionDto>;
+
+    /// Lists the current durable sessions newest-first in one bounded window.
+    ///
+    /// Returns at most `limit` sessions ordered by their last durable update,
+    /// newest first, with the durable session identity breaking ties, and
+    /// reports how many sessions exist beyond the returned window instead of
+    /// silently truncating the list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when durable storage cannot be read.
+    fn list_sessions(&self, limit: u32) -> DtoResult<SessionSummariesDto>;
 
     /// Loads the most recent committed transcript rows of one session.
     ///

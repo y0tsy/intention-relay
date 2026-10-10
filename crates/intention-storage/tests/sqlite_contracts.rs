@@ -63,6 +63,35 @@ fn create(store: &SqliteStorageRepository) -> SessionId {
     create_session(store, &SessionId::new().to_string())
 }
 
+/// Creates one durable session whose last durable update is `updated_at`.
+fn create_at(store: &SqliteStorageRepository, updated_at: i64) -> SessionId {
+    let session_id = SessionId::new();
+    store
+        .create_session(
+            CreateSessionCommandDto::new(
+                ProjectId::new(),
+                session_id,
+                WorkspaceId::new(),
+                workspace_root(&session_id.to_string()),
+                RunModeDto::Build,
+            ),
+            time(updated_at),
+        )
+        .expect("session creates");
+    session_id
+}
+
+/// Returns the session identities of one session-list window in durable order.
+fn listed(store: &SqliteStorageRepository, limit: u32) -> Vec<SessionId> {
+    store
+        .list_sessions(limit)
+        .expect("sessions list")
+        .sessions()
+        .iter()
+        .map(|summary| summary.session_id())
+        .collect()
+}
+
 fn accept(
     store: &SqliteStorageRepository,
     session: SessionId,
@@ -1852,4 +1881,198 @@ fn accept_user_turn_rejects_content_over_the_durable_turn_bound() {
     );
     assert_eq!(message.run_id(), Some(run.run_id()));
     assert_eq!(message.text().len(), bound);
+}
+
+#[test]
+fn session_list_orders_by_its_last_update_and_breaks_ties_by_identity() {
+    let (directory, store) = repository();
+    let oldest = create_at(&store, 10);
+    let middle = create_at(&store, 20);
+    let newest = create_at(&store, 30);
+    let tie_left = create_at(&store, 40);
+    let tie_right = create_at(&store, 40);
+    let mut tied = [tie_left, tie_right];
+    tied.sort_unstable();
+
+    assert_eq!(
+        listed(&store, 10),
+        vec![tied[0], tied[1], newest, middle, oldest],
+        "newest-first order with the durable identity breaking an update-time tie"
+    );
+
+    // A later durable update is what moves a session to the front: the list
+    // reflects `updated_at`, not the order the sessions were created in.
+    drop(store);
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for the update");
+    connection
+        .execute(
+            "UPDATE sessions SET updated_at=?1 WHERE id=?2",
+            sqlite::params![50, oldest.to_string()],
+        )
+        .expect("the session update applies");
+    drop(connection);
+
+    assert_eq!(
+        listed(&reopen(&directory), 10),
+        vec![oldest, tied[0], tied[1], newest, middle],
+        "the updated session leads the list"
+    );
+}
+
+#[test]
+fn session_list_reports_its_window_and_the_omitted_count() {
+    let (_directory, store) = repository();
+    let empty = store.list_sessions(1).expect("an empty store lists");
+    assert!(empty.sessions().is_empty());
+    assert_eq!(empty.omitted(), 0, "an empty store omits nothing");
+
+    let oldest = create_at(&store, 10);
+    let middle = create_at(&store, 20);
+    let newest = create_at(&store, 30);
+
+    // A zero limit reports the whole list as omitted instead of silently
+    // returning nothing.
+    let none = store.list_sessions(0).expect("a zero limit lists");
+    assert!(none.sessions().is_empty());
+    assert_eq!(none.omitted(), 3);
+
+    let single = store.list_sessions(1).expect("a one-row window lists");
+    assert_eq!(
+        single
+            .sessions()
+            .iter()
+            .map(|summary| summary.session_id())
+            .collect::<Vec<_>>(),
+        vec![newest]
+    );
+    assert_eq!(single.omitted(), 2);
+
+    let exact = store.list_sessions(3).expect("an exact window lists");
+    assert_eq!(exact.sessions().len(), 3);
+    assert_eq!(exact.omitted(), 0);
+
+    let wider = store.list_sessions(10).expect("an over-wide window lists");
+    assert_eq!(wider.sessions().len(), 3);
+    assert_eq!(wider.omitted(), 0);
+    assert_eq!(listed(&store, 10), vec![newest, middle, oldest]);
+}
+
+#[test]
+fn session_list_maps_every_durable_session_column() {
+    let (_directory, store) = repository();
+    let project = ProjectId::new();
+    let workspace = WorkspaceId::new();
+    let session = SessionId::new();
+    store
+        .create_session(
+            CreateSessionCommandDto::new(
+                project,
+                session,
+                workspace,
+                workspace_root(&session.to_string()),
+                RunModeDto::Plan,
+            ),
+            time(7),
+        )
+        .expect("session creates");
+
+    let summaries = store.list_sessions(10).expect("sessions list");
+    assert_eq!(summaries.sessions().len(), 1);
+    let summary = summaries.sessions()[0];
+    assert_eq!(summary.session_id(), session);
+    assert_eq!(summary.project_id(), project);
+    assert_eq!(summary.workspace_id(), workspace);
+    assert_eq!(summary.mode(), RunModeDto::Plan);
+    assert_eq!(summary.updated_at(), 7);
+    assert!(summary.active_run().is_none());
+}
+
+#[test]
+fn session_list_maps_the_active_run_of_each_session() {
+    let (_directory, store) = repository();
+    let idle = create_at(&store, 10);
+    let starting = create_at(&store, 20);
+    let starting_run = RunId::new();
+    let _ = accept(
+        &store,
+        starting,
+        IdempotencyKey::new(),
+        starting_run,
+        "starting",
+    );
+    let running = create_at(&store, 30);
+    let running_run = RunId::new();
+    let _ = accept(
+        &store,
+        running,
+        IdempotencyKey::new(),
+        running_run,
+        "running",
+    );
+    store
+        .transition_run(running, running_run, RunStatusDto::Running, time(50))
+        .expect("run starts");
+    let finished = create_at(&store, 40);
+    let finished_run = RunId::new();
+    let _ = accept(
+        &store,
+        finished,
+        IdempotencyKey::new(),
+        finished_run,
+        "finished",
+    );
+    store
+        .transition_run(finished, finished_run, RunStatusDto::Running, time(60))
+        .expect("run starts");
+    store
+        .finish_run(
+            finished,
+            finished_run,
+            outcome(
+                RunStatusDto::Completed,
+                Some(UsageDto::NotReported),
+                Some(FinishReasonDto::Stop),
+                None,
+            ),
+            time(70),
+        )
+        .expect("run completes");
+
+    let summaries = store.list_sessions(10).expect("sessions list");
+    assert_eq!(
+        summaries
+            .sessions()
+            .iter()
+            .map(|summary| summary.session_id())
+            .collect::<Vec<_>>(),
+        vec![finished, running, starting, idle]
+    );
+    let summary_of = |session: SessionId| {
+        *summaries
+            .sessions()
+            .iter()
+            .find(|summary| summary.session_id() == session)
+            .expect("every created session is listed")
+    };
+    assert!(
+        summary_of(idle).active_run().is_none(),
+        "an idle session carries no active run"
+    );
+    assert!(
+        summary_of(finished).active_run().is_none(),
+        "a terminal run is not active"
+    );
+    let starting_run_dto = summary_of(starting)
+        .active_run()
+        .expect("a starting run is active");
+    assert_eq!(starting_run_dto.session_id(), starting);
+    assert_eq!(starting_run_dto.run_id(), starting_run);
+    assert_eq!(starting_run_dto.status(), RunStatusDto::Starting);
+    let running_run_dto = summary_of(running)
+        .active_run()
+        .expect("a running run is active");
+    assert_eq!(running_run_dto.session_id(), running);
+    assert_eq!(running_run_dto.run_id(), running_run);
+    assert_eq!(running_run_dto.status(), RunStatusDto::Running);
 }

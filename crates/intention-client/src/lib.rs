@@ -2,8 +2,9 @@
 //!
 //! Adapters use this crate instead of direct daemon, runtime, storage, or
 //! transport implementation access. It exposes typed operations over domain
-//! identifiers and retains only the committed run projection and transcript
-//! rows the daemon reports; daemon authority remains remote.
+//! identifiers and retains only the committed run projection, the committed
+//! transcript rows, and the transient provisional text the daemon reports;
+//! daemon authority remains remote.
 
 use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
@@ -14,11 +15,12 @@ use std::time::{Duration, Instant};
 use intention_proto::{
     ClientRequestDto, CreateSessionAcceptedDto, CreateSessionCommandDto, DaemonHealthDto,
     DtoResult, ErrorCategoryDto, ErrorDto, GetSessionSnapshotQueryDto, IdempotencyKey,
-    InterruptRunAcceptedDto, InterruptRunCommandDto, MessageProjectionDto, ProtocolResultDto,
-    RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunId, RunProjectionDto, RunStatusDto,
-    RunStreamFrameDto, RunSubscriptionSnapshotDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto,
-    SessionId, SessionSnapshotDto, SubscribeRunCommandDto, TurnId, decode_response, encode_request,
-    parse_run_frame,
+    InterruptRunAcceptedDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
+    ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunId, RunProjectionDto,
+    RunStatusDto, RunStreamFrameDto, RunSubscriptionSnapshotDto, SendUserTurnCommandDto,
+    SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
+    SubscribeRunCommandDto, TextDeltaFrameDto, TurnId, decode_response, encode_request,
+    parse_run_frame, run_status_is_terminal,
 };
 use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncMessageSender, LocalEndpoint,
@@ -274,6 +276,24 @@ impl IntentionClient {
         }
     }
 
+    /// Lists the current durable sessions in their durable order.
+    ///
+    /// This is a bounded read: the reply carries an explicit omitted count, so
+    /// a caller renders the window as partial instead of reading it as the
+    /// complete list. Like the session snapshot, this is not a retained
+    /// connection and re-listing re-reads current state.
+    ///
+    /// # Errors
+    ///
+    /// Returns the daemon's typed rejection, a typed transport or timeout error,
+    /// or an invalid-response error when the reply is not a session list.
+    pub async fn list_sessions(&self) -> DtoResult<SessionSummariesDto> {
+        match self.request(ClientRequestDto::ListSessions).await? {
+            ProtocolResultDto::SessionsListed(summaries) => Ok(summaries),
+            _ => Err(invalid_response()),
+        }
+    }
+
     async fn connect_ready(&self) -> DtoResult<DaemonHealthDto> {
         let link = self.connect().await?;
         match Self::request_on(link, ClientRequestDto::GetDaemonHealth).await? {
@@ -439,13 +459,19 @@ pub const RETAINED_TRANSCRIPT_MESSAGES: usize = 256;
 /// a content frame is idempotent only for the newest accepted row — the wire
 /// carries no row identity, so the daemon-side watermark remains the authority
 /// for a row the snapshot already carried. The retained transcript keeps the
-/// newest [`RETAINED_TRANSCRIPT_MESSAGES`] rows.
+/// newest [`RETAINED_TRANSCRIPT_MESSAGES`] rows. Transient provisional text is
+/// not committed state: it is held only for the current model step and is
+/// dropped as soon as that step's assistant row commits.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunStreamState {
     session_id: SessionId,
     run_id: RunId,
     run: Option<RunProjectionDto>,
     messages: Vec<MessageProjectionDto>,
+    /// The model step the provisional buffer currently belongs to, if any.
+    provisional_step: Option<u32>,
+    /// The transient provisional text of the current model step.
+    provisional_text: String,
 }
 
 impl RunStreamState {
@@ -457,12 +483,15 @@ impl RunStreamState {
             run_id,
             run: None,
             messages: Vec::new(),
+            provisional_step: None,
+            provisional_text: String::new(),
         }
     }
 
     /// Applies the correlated first reply for this subscription.
     ///
-    /// A snapshot replaces every value held before it.
+    /// A snapshot replaces every value held before it, including any transient
+    /// provisional text.
     ///
     /// # Errors
     ///
@@ -478,7 +507,11 @@ impl RunStreamState {
         Ok(())
     }
 
-    /// Applies one uncorrelated committed frame.
+    /// Applies one uncorrelated run-stream frame.
+    ///
+    /// A provisional text delta is best-effort advance notice: it mutates only
+    /// the transient buffer and never the committed run or transcript. A
+    /// terminal status frame ends the run and drops the buffer with it.
     ///
     /// # Errors
     ///
@@ -489,11 +522,17 @@ impl RunStreamState {
         match frame {
             RunStreamFrameDto::Content(message) => self.apply_content(message),
             RunStreamFrameDto::Status(run) => self.apply_status(run),
+            RunStreamFrameDto::TextDelta(delta) => self.apply_text_delta(delta),
         }
     }
 
     fn apply_content(&mut self, message: MessageProjectionDto) -> DtoResult<()> {
         self.ensure_scope(message.session_id(), message.run_id())?;
+        // The committed assistant row of a step supersedes that step's
+        // provisional text, so the buffer never outlives its own step.
+        if message.kind() == MessageKindDto::Assistant {
+            self.clear_provisional_text();
+        }
         // A content frame repeating the newest accepted row is the frame the
         // subscription snapshot already carried: re-appending it would show the
         // same committed row twice.
@@ -503,6 +542,24 @@ impl RunStreamState {
         self.messages.push(message);
         self.retain_newest();
         Ok(())
+    }
+
+    fn apply_text_delta(&mut self, delta: TextDeltaFrameDto) -> DtoResult<()> {
+        self.ensure_scope(delta.session_id(), Some(delta.run_id()))?;
+        // A delta for a new step replaces the buffer: the previous step's
+        // advance notice is stale once the run moves on.
+        if self.provisional_step != Some(delta.step()) {
+            self.provisional_step = Some(delta.step());
+            self.provisional_text.clear();
+        }
+        self.provisional_text.push_str(delta.text());
+        Ok(())
+    }
+
+    /// Drops the transient provisional text of the current model step.
+    fn clear_provisional_text(&mut self) {
+        self.provisional_step = None;
+        self.provisional_text.clear();
     }
 
     /// Drops the oldest retained rows past [`RETAINED_TRANSCRIPT_MESSAGES`].
@@ -517,6 +574,11 @@ impl RunStreamState {
         self.ensure_scope(run.session_id(), Some(run.run_id()))?;
         if self.run.is_none() {
             return Err(invalid_response());
+        }
+        // A terminal status ends the run: the daemon discards its unpublished
+        // delta window, so no advance notice may outlive the run.
+        if run_status_is_terminal(run.status()) {
+            self.clear_provisional_text();
         }
         self.run = Some(run);
         Ok(())
@@ -561,6 +623,17 @@ impl RunStreamState {
     #[must_use]
     pub fn messages(&self) -> &[MessageProjectionDto] {
         &self.messages
+    }
+
+    /// Returns the transient provisional text of the current model step.
+    ///
+    /// The text is best-effort advance notice, never committed state: it is
+    /// empty until the first delta of a step arrives and is cleared once that
+    /// step's committed assistant row arrives or the run reaches a terminal
+    /// status.
+    #[must_use]
+    pub fn provisional_text(&self) -> &str {
+        &self.provisional_text
     }
 }
 

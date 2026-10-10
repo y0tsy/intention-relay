@@ -19,8 +19,9 @@ use intention_proto::{
     ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto,
     RunProjectionDto, RunStatusDto, RunStreamFrameDto, RunSubscriptionSnapshotDto,
     SendUserTurnAcceptedDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionSnapshotDto,
-    SubscribeRunCommandDto, decode_request_line, decode_response, encode_reply, encode_request,
-    parse_daemon_message, parse_run_frame, run_status_is_terminal, validate_run_status_transition,
+    SessionSummariesDto, SessionSummaryDto, SubscribeRunCommandDto, TextDeltaFrameDto,
+    decode_request_line, decode_response, encode_reply, encode_request, parse_daemon_message,
+    parse_run_frame, run_status_is_terminal, validate_run_status_transition,
 };
 use intention_proto::{ConfigRevisionId, IdempotencyKey, MessageKindDto, ProjectId, RunId};
 use intention_proto::{RunModeDto, SessionId, TurnId, WorkspaceId};
@@ -52,6 +53,22 @@ fn fixture_run_snapshot(session_id: SessionId, run_id: RunId) -> RunSubscription
     .expect("fixture run snapshot is valid")
 }
 
+fn fixture_session_summary(session_id: SessionId, run_id: RunId) -> SessionSummaryDto {
+    SessionSummaryDto::new(
+        session_id,
+        ProjectId::new(),
+        WorkspaceId::new(),
+        RunModeDto::Build,
+        1_726_000_000,
+        Some(fixture_run(session_id, run_id)),
+    )
+}
+
+fn fixture_session_summaries(session_id: SessionId, run_id: RunId) -> SessionSummariesDto {
+    SessionSummariesDto::new(vec![fixture_session_summary(session_id, run_id)], 3)
+        .expect("fixture session summaries are valid")
+}
+
 /// Returns the wire kind one request is answered with.
 ///
 /// The match is deliberately wildcard-free: adding a request variant fails to
@@ -65,6 +82,7 @@ const fn result_kind(request: &ClientRequestDto) -> &'static str {
         ClientRequestDto::InterruptRun(_) => "run_interrupted",
         ClientRequestDto::GetSessionSnapshot(_) => "session_snapshot",
         ClientRequestDto::GetDaemonHealth => "daemon_health",
+        ClientRequestDto::ListSessions => "sessions_listed",
         ClientRequestDto::SubscribeRun(_) => "run_subscribed",
     }
 }
@@ -86,6 +104,7 @@ fn fixture_requests(session_id: SessionId, run_id: RunId) -> Vec<ClientRequestDt
         ClientRequestDto::InterruptRun(InterruptRunCommandDto::new(session_id, run_id)),
         ClientRequestDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id)),
         ClientRequestDto::GetDaemonHealth,
+        ClientRequestDto::ListSessions,
         ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, run_id)),
     ]
 }
@@ -106,6 +125,7 @@ fn fixture_results(session_id: SessionId, run_id: RunId) -> Vec<ProtocolResultDt
         ProtocolResultDto::RunInterrupted(InterruptRunAcceptedDto::new(session_id, run_id)),
         ProtocolResultDto::SessionSnapshot(fixture_snapshot(session_id, run_id)),
         ProtocolResultDto::DaemonHealth(DaemonHealthDto::ready()),
+        ProtocolResultDto::SessionsListed(fixture_session_summaries(session_id, run_id)),
         ProtocolResultDto::RunSubscribed(fixture_run_snapshot(session_id, run_id)),
     ]
 }
@@ -152,7 +172,7 @@ fn every_request_round_trips_with_its_named_result_kind() {
     }
     assert_eq!(
         kinds.len(),
-        7,
+        8,
         "the wire implements exactly one request kind per operation"
     );
 }
@@ -238,6 +258,125 @@ fn frames_carry_committed_values_without_positions() {
             "a frame is never accepted as a correlated reply"
         );
     }
+}
+
+#[test]
+fn session_lists_round_trip_with_their_omitted_count() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let summaries = fixture_session_summaries(session_id, run_id);
+    assert_eq!(summaries.omitted(), 3);
+    let summary = summaries.sessions()[0];
+    assert_eq!(summary.session_id(), session_id);
+    assert_eq!(summary.mode(), RunModeDto::Build);
+    assert_eq!(summary.updated_at(), 1_726_000_000);
+    assert_eq!(
+        summary.active_run().map(RunProjectionDto::run_id),
+        Some(run_id)
+    );
+
+    let line = serde_json::to_string(&encode_request(9, ClientRequestDto::ListSessions))
+        .expect("session list request serializes");
+    let value: serde_json::Value = serde_json::from_str(&line).expect("request line is JSON");
+    assert_eq!(value["request"]["kind"], "list_sessions");
+    assert_eq!(
+        decode_request_line(&line)
+            .expect("request decodes")
+            .request(),
+        &ClientRequestDto::ListSessions
+    );
+
+    let reply = encode_reply(9, ProtocolResultDto::SessionsListed(summaries.clone()));
+    let line = serde_json::to_string(&reply).expect("session list reply serializes");
+    let value: serde_json::Value = serde_json::from_str(&line).expect("reply line is JSON");
+    assert_eq!(value["data"]["result"]["kind"], "sessions_listed");
+    assert_eq!(
+        decode_response(&line, 9).expect("the correlated reply decodes"),
+        ProtocolResultDto::SessionsListed(summaries.clone())
+    );
+    assert_eq!(
+        serde_json::from_str::<SessionSummariesDto>(
+            &serde_json::to_string(&summaries).expect("session summaries serialize")
+        )
+        .expect("session summaries deserialize"),
+        summaries
+    );
+}
+
+#[test]
+fn text_delta_frames_round_trip_as_transient_chunks() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let delta = TextDeltaFrameDto::new(session_id, run_id, 2, "partial output")
+        .expect("fixture text delta is valid");
+    assert_eq!(delta.session_id(), session_id);
+    assert_eq!(delta.run_id(), run_id);
+    assert_eq!(delta.step(), 2);
+    assert_eq!(delta.text(), "partial output");
+
+    let frame = RunStreamFrameDto::TextDelta(delta);
+    let message = ProtocolDaemonMessageDto::frame(frame.clone());
+    let line = serde_json::to_string(&message).expect("text delta frame serializes");
+    let value: serde_json::Value = serde_json::from_str(&line).expect("frame line is JSON");
+    assert_eq!(value["data"]["kind"], "text_delta");
+    assert_eq!(value["data"]["data"]["step"], 2);
+    assert_eq!(value["data"]["data"]["text"], "partial output");
+    assert!(
+        !line.contains("cursor") && !line.contains("sequence"),
+        "a text delta carries no stream position"
+    );
+    assert_eq!(parse_run_frame(&line).expect("frame parses"), frame);
+    assert!(
+        decode_response(&line, 1).is_err(),
+        "a text delta is never accepted as a correlated reply"
+    );
+}
+
+#[test]
+fn session_summaries_and_text_deltas_validate_their_required_shape() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    assert_eq!(
+        SessionSummariesDto::new(
+            vec![SessionSummaryDto::new(
+                SessionId::new(),
+                ProjectId::new(),
+                WorkspaceId::new(),
+                RunModeDto::Build,
+                1_726_000_000,
+                Some(fixture_run(session_id, run_id)),
+            )],
+            0,
+        )
+        .expect_err("an active run must belong to its summary session")
+        .code(),
+        "invalid_session_summaries"
+    );
+    assert_eq!(
+        SessionSummariesDto::new(
+            vec![
+                fixture_session_summary(session_id, run_id),
+                fixture_session_summary(session_id, run_id),
+            ],
+            0,
+        )
+        .expect_err("a session list carries each session once")
+        .code(),
+        "invalid_session_summaries"
+    );
+    assert_eq!(
+        TextDeltaFrameDto::new(session_id, run_id, 0, "")
+            .expect_err("an empty text delta is rejected")
+            .code(),
+        "invalid_text_delta"
+    );
+    assert!(
+        serde_json::from_str::<RunStreamFrameDto>(
+            r#"{"kind":"text_delta","data":{"session_id":"11111111-1111-4111-8111-111111111111","run_id":"11111111-1111-4111-8111-111111111111","step":0,"text":""}}"#
+        )
+        .is_err(),
+        "an empty text delta fails closed on the wire"
+    );
 }
 
 #[test]

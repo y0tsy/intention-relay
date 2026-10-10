@@ -25,7 +25,8 @@ use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorCategoryDto, ErrorDto,
     ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId, RemoveTurnCommandDto, RunId,
-    SessionId, SessionSnapshotDto, TimestampDto, ToolCallId, TurnId, UsageDto, WorkspaceId,
+    SessionId, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TimestampDto,
+    ToolCallId, TurnId, UsageDto, WorkspaceId,
 };
 use intention_proto::{
     MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, RunModeDto, RunProjectionDto,
@@ -1240,6 +1241,18 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         Ok(projection)
     }
 
+    fn list_sessions(&self, limit: u32) -> DtoResult<SessionSummariesDto> {
+        let connection = self.connection()?;
+        let total: u32 = connection
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .map_err(storage_error)?;
+        let sessions = session_summaries(&connection, limit)?;
+        drop(connection);
+        // The window returns at most `limit` rows, so every session above that
+        // many is reported as omitted.
+        SessionSummariesDto::new(sessions, total.saturating_sub(limit))
+    }
+
     fn load_recent_messages(
         &self,
         session_id: SessionId,
@@ -1403,6 +1416,79 @@ fn decode_message(row: RawMessageRow) -> DtoResult<MessageProjectionDto> {
             .map_err(codec_error)?,
         row.6,
     )
+}
+
+/// Returns one bounded newest-first window of current session summaries.
+///
+/// Sessions are ordered by their last durable update with their identity
+/// breaking ties, and one row carries at most one active run: the current
+/// schema admits a single non-terminal run per session.
+fn session_summaries(
+    connection: &sqlite::Connection,
+    limit: u32,
+) -> DtoResult<Vec<SessionSummaryDto>> {
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT sessions.id, sessions.project_id, sessions.workspace_id, sessions.mode, \
+             sessions.updated_at, runs.id, runs.turn_id, runs.status, runs.config_revision_id \
+             FROM sessions LEFT JOIN runs ON runs.session_id=sessions.id \
+             AND runs.status NOT IN ({TERMINAL_STATUSES}) \
+             ORDER BY sessions.updated_at DESC, sessions.id ASC LIMIT ?1"
+        ))
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([i64::from(limit)], raw_session_summary_row)
+        .map_err(storage_error)?;
+    rows.map(|row| decode_session_summary(row.map_err(storage_error)?))
+        .collect()
+}
+
+/// The committed columns of one session-list row: the session's own columns
+/// followed by its sole non-terminal run's columns, absent together when the
+/// session has no active run.
+type RawSessionSummaryRow = (
+    String,
+    String,
+    String,
+    String,
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+fn raw_session_summary_row(row: &sqlite::Row<'_>) -> sqlite::Result<RawSessionSummaryRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+    ))
+}
+
+fn decode_session_summary(row: RawSessionSummaryRow) -> DtoResult<SessionSummaryDto> {
+    let session_id = SessionId::parse(&row.0).map_err(codec_error)?;
+    let active_run = match (row.5, row.6, row.7, row.8) {
+        (None, None, None, None) => None,
+        (Some(run), Some(turn), Some(status), Some(revision)) => {
+            Some(run_projection(session_id, &run, &turn, &status, &revision)?)
+        }
+        _ => return Err(codec_error("the durable active run columns are incomplete")),
+    };
+    Ok(SessionSummaryDto::new(
+        session_id,
+        ProjectId::parse(&row.1).map_err(codec_error)?,
+        WorkspaceId::parse(&row.2).map_err(codec_error)?,
+        RunModeDto::parse(&row.3)?,
+        row.4,
+        active_run,
+    ))
 }
 
 /// Loads the raw durable columns of one scoped run, or `None` when the run row
