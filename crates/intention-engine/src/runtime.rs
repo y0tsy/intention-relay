@@ -98,6 +98,18 @@ pub trait ModelTimePort {
 pub type ModelSleepFuture<'a> =
     std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
 
+/// Best-effort observation of one uncommitted provider text chunk.
+///
+/// The model-run executor reports every provider text chunk here together with
+/// the 0-based index of the model step that produced it. The observation is
+/// transient: it never becomes durable state, never fails a run, and never
+/// changes the assistant row the step commits when it closes. A run without an
+/// attached port behaves exactly like one whose port ignores every call.
+pub trait ModelTextDeltaPort: Send + Sync {
+    /// Observes one streamed text chunk of the model step at `step`.
+    fn text_delta(&self, step: u32, text: &str);
+}
+
 /// Safe terminal outcome of one tool call returned by the execution port.
 ///
 /// The port selects the bounded, credential-free content the runtime commits as
@@ -378,7 +390,7 @@ pub trait ModelRunCommitObserver: Send + Sync {
 }
 
 /// DTO-only executor over injected storage, selected driver, time port,
-/// commit observer, and tool executor.
+/// commit observer, tool executor, and an optional text-delta port.
 ///
 /// Every collaborator is shared behind a `Sync` reference: the execution
 /// lifecycle hands its futures to a scheduling runtime, so each returned
@@ -389,6 +401,8 @@ pub struct ModelRunExecutionService<'a, Repository, Driver: ?Sized, Time> {
     time: &'a Time,
     observer: &'a dyn ModelRunCommitObserver,
     tool_executor: &'a dyn ToolExecutionPort,
+    /// Unattached by default, so a run observes nothing that is not wired.
+    text_delta: Option<&'a dyn ModelTextDeltaPort>,
 }
 
 impl<'a, Repository, Driver, Time> ModelRunExecutionService<'a, Repository, Driver, Time>
@@ -402,7 +416,8 @@ where
     /// Provider-emitted tool calls always execute through the supplied
     /// `ToolExecutionPort`, and every committed value is handed to the
     /// supplied [`ModelRunCommitObserver`]; neither collaborator has a
-    /// fallback.
+    /// fallback. The transient text-delta observation starts unattached and is
+    /// added with [`Self::with_text_delta_port`].
     #[must_use]
     pub const fn new(
         repository: &'a Repository,
@@ -417,7 +432,19 @@ where
             time,
             observer,
             tool_executor,
+            text_delta: None,
         }
+    }
+
+    /// Attaches the transient text-delta observation port.
+    ///
+    /// The port receives every provider text chunk of the run; it cannot
+    /// return a value or an error, so its presence never changes the run's
+    /// state or its commits.
+    #[must_use]
+    pub const fn with_text_delta_port(mut self, port: &'a dyn ModelTextDeltaPort) -> Self {
+        self.text_delta = Some(port);
+        self
     }
 
     /// Performs one bounded model execution lifecycle.
@@ -465,6 +492,10 @@ where
         let mut pending_text = String::new();
         let mut usage: Option<UsageDto> = None;
         let mut durable_output = false;
+        // The run's 0-based model-step sequence. One provider round is one
+        // model step, and the sequence continues across retried attempts and
+        // tool rounds, so every round of the run carries its own step index.
+        let mut next_step = 0u32;
         // Context additions that must survive a retryable attempt boundary:
         // joined pending user messages and interruption notices. The live
         // context of the run stays continuous across provider attempts.
@@ -484,6 +515,7 @@ where
                     &input,
                     policy.attempt_timeout_seconds(),
                     RoundState::new(
+                        &mut next_step,
                         &mut pending_text,
                         &mut usage,
                         &mut durable_output,
@@ -777,6 +809,9 @@ where
         let mut lifecycle = ModelStreamLifecycleDto::new();
         let request_characters = ContextWindowState::request_characters(&request);
         state.begin_round();
+        // The round claims its step index before its stream starts, so every
+        // chunk of the round publishes the same step.
+        let step = state.begin_step();
         let mut stream = self
             .driver
             .execute(request, input.cancellation.model_signal());
@@ -873,6 +908,7 @@ where
             match event {
                 ModelEventDto::Started => {}
                 ModelEventDto::TextDelta { content } => {
+                    self.publish_text_delta(step, &content);
                     state.push_text(&content);
                 }
                 ModelEventDto::ReasoningDelta { content } => {
@@ -1050,6 +1086,16 @@ where
         Ok(ModelRunExecutionOutcomeDto::Failed { run, error })
     }
 
+    /// Publishes one streamed provider text chunk as a transient observation.
+    ///
+    /// The chunk is uncommitted step text, so the publication is best-effort:
+    /// it never fails the run and never touches run state.
+    fn publish_text_delta(&self, step: u32, text: &str) {
+        if let Some(port) = self.text_delta {
+            port.text_delta(step, text);
+        }
+    }
+
     /// Publishes one committed transcript row.
     fn publish_content(&self, message: &MessageProjectionDto) {
         self.observer
@@ -1074,6 +1120,8 @@ where
 /// the loop flags belong to the attempt's current round, and every round
 /// observes them through the transitions below instead of raw fields.
 struct RoundState<'a> {
+    /// The run's next 0-based model-step index.
+    next_step: &'a mut u32,
     /// Accumulated uncommitted assistant text of the current model step.
     pending_text: &'a mut String,
     /// The last reported provider usage of the run.
@@ -1093,12 +1141,14 @@ struct RoundState<'a> {
 impl<'a> RoundState<'a> {
     /// Creates one attempt's state over the run's live step state.
     const fn new(
+        next_step: &'a mut u32,
         pending_text: &'a mut String,
         usage: &'a mut Option<UsageDto>,
         durable_output: &'a mut bool,
         context_window: ContextWindowState,
     ) -> Self {
         Self {
+            next_step,
             pending_text,
             usage,
             durable_output,
@@ -1114,6 +1164,18 @@ impl<'a> RoundState<'a> {
         self.reasoning_channel_seen = false;
         self.reasoning_echo_exceeds_round_bound = false;
         self.interrupted_tool = false;
+    }
+
+    /// Takes the run's next model-step index and advances the sequence.
+    ///
+    /// One provider round is one model step: it issues exactly one provider
+    /// request and commits at most one assistant transcript row. The counter
+    /// belongs to the run rather than the attempt, so a retried attempt and a
+    /// tool round continue the sequence instead of repeating an index.
+    const fn begin_step(&mut self) -> u32 {
+        let step = *self.next_step;
+        *self.next_step = step + 1;
+        step
     }
 
     /// Appends one provider text delta to the uncommitted step text.

@@ -26,8 +26,8 @@ use intention_engine::{
 use intention_proto::{
     CreateSessionCommandDto, DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey,
     MessageProjectionDto, PendingTurnProjectionDto, ProjectId, RemoveTurnCommandDto, RunId,
-    RunModeDto, RunProjectionDto, RunStatusDto, SessionId, SessionProjectionDto, TimestampDto,
-    ToolCallId, TurnId, UsageDto, WorkspaceId, WorkspaceRootDto,
+    RunModeDto, RunProjectionDto, RunStatusDto, SessionId, SessionProjectionDto,
+    SessionSummariesDto, TimestampDto, ToolCallId, TurnId, UsageDto, WorkspaceId, WorkspaceRootDto,
 };
 use intention_providers::ToolCallDto;
 use intention_storage::{
@@ -623,6 +623,13 @@ impl StorageRepositoryDto for FakeRepository {
     ) -> DtoResult<Vec<MessageProjectionDto>> {
         // Suites seed the durable context explicitly and never history.
         Ok(Vec::new())
+    }
+
+    fn list_sessions(&self, _limit: u32) -> DtoResult<SessionSummariesDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "session listing is not used by this fixture",
+        ))
     }
 
     fn load_run_messages(

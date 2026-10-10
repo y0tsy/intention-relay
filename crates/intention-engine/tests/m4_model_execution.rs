@@ -5,14 +5,17 @@
 
 mod common;
 
-use std::sync::PoisonError;
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use common::{FakeRepository, ImmediateTime, RecordedTransition, RecordingCommitObserver};
+use common::{
+    FakeRepository, ImmediateTime, RecordedFinish, RecordedTransition, RecordingCommitObserver,
+};
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
     ModelRunCommitDto, ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto,
-    ModelRunExecutionService, RunCancellation, ToolExecutionPort, ToolResultOutcomeDto,
+    ModelRunExecutionService, ModelTextDeltaPort, RunCancellation, ToolExecutionPort,
+    ToolResultOutcomeDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId};
 use intention_proto::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
@@ -55,6 +58,38 @@ impl ToolExecutionPort for NeverInvokedToolExecutor {
                 "m4 execution fixtures never invoke the tool executor",
             ))
         })
+    }
+}
+
+/// Captures every transient text-delta observation of one execution.
+struct CapturingTextDeltaPort {
+    deltas: Mutex<Vec<(u32, String)>>,
+}
+
+impl CapturingTextDeltaPort {
+    /// Creates an empty capturing port.
+    const fn new() -> Self {
+        Self {
+            deltas: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Returns every observed `(step, text)` pair in publication order.
+    #[must_use]
+    fn deltas(&self) -> Vec<(u32, String)> {
+        self.deltas
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl ModelTextDeltaPort for CapturingTextDeltaPort {
+    fn text_delta(&self, step: u32, text: &str) {
+        self.deltas
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((step, text.to_owned()));
     }
 }
 
@@ -1200,5 +1235,178 @@ fn a_persisted_window_policy_disagreement_fails_the_run_before_provider_work() {
     assert_eq!(
         finishes[0].error_code(),
         Some("provider_configuration_unavailable")
+    );
+}
+
+#[test]
+fn text_delta_port_observes_every_chunk_with_its_model_step_index() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = fixture_snapshot_with_model("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let signal = RunCancellation::new();
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::reasoning_delta("why").expect("reasoning is valid")),
+            Ok(ModelEventDto::text_delta("partial ").expect("text is valid")),
+            Ok(ModelEventDto::text_delta("answer").expect("text is valid")),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::text_delta("final answer").expect("text is valid")),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    // The interrupt lands after both chunks of the first round were delivered,
+    // so the run continues with a second model step of its own.
+    driver.cancel_during_stream(3, signal.model_signal());
+    let clock = ImmediateTime::new();
+    let observer = RecordingCommitObserver::new();
+    let deltas = CapturingTextDeltaPort::new();
+
+    let outcome = run_ready(
+        ModelRunExecutionService::new(
+            &repository,
+            &driver,
+            &clock,
+            &observer,
+            &NeverInvokedToolExecutor,
+        )
+        .with_text_delta_port(&deltas)
+        .execute(ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request(run_id, "fixture"),
+            config,
+            signal,
+        )),
+    )
+    .expect("the interrupted run continues and completes");
+
+    assert!(matches!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
+    assert_eq!(
+        deltas.deltas(),
+        vec![
+            (0, "partial ".to_owned()),
+            (0, "answer".to_owned()),
+            (1, "final answer".to_owned()),
+        ],
+        "every text chunk is published once with its own step, and reasoning is never text"
+    );
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| (message.kind(), message.text().to_owned()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                MessageKindDto::Assistant,
+                format!("partial answer\n{}", intention_engine::INTERRUPTED_MARKER),
+            ),
+            (
+                MessageKindDto::Notice,
+                intention_engine::INTERRUPT_NOTICE.to_owned(),
+            ),
+            (MessageKindDto::Assistant, "final answer".to_owned()),
+        ],
+        "each committed step row holds exactly the chunks published for its step"
+    );
+}
+
+/// Cross-run comparable durable evidence of one fixture execution.
+type RoundEvidence = (
+    Vec<(MessageKindDto, String)>,
+    Vec<ModelRunCommitDto>,
+    Vec<RunStatusDto>,
+);
+
+/// Runs the two-round interrupted fixture, optionally observing its text.
+fn interrupted_round_evidence(
+    session_id: SessionId,
+    run_id: RunId,
+    port: Option<&CapturingTextDeltaPort>,
+) -> RoundEvidence {
+    let config = fixture_snapshot_with_model("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let signal = RunCancellation::new();
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::text_delta("partial answer").expect("text is valid")),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::text_delta("final answer").expect("text is valid")),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    driver.cancel_during_stream(1, signal.model_signal());
+    let clock = ImmediateTime::new();
+    let observer = RecordingCommitObserver::new();
+    let service = ModelRunExecutionService::new(
+        &repository,
+        &driver,
+        &clock,
+        &observer,
+        &NeverInvokedToolExecutor,
+    );
+    let service = match port {
+        Some(port) => service.with_text_delta_port(port),
+        None => service,
+    };
+    run_ready(service.execute(ModelRunExecutionInputDto::new(
+        session_id,
+        run_id,
+        request(run_id, "fixture"),
+        config,
+        signal,
+    )))
+    .expect("the interrupted run continues and completes");
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .map(|message| (message.kind(), message.text().to_owned()))
+        .collect();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .map(RecordedFinish::status)
+        .collect();
+    (messages, observer.commits(), finishes)
+}
+
+#[test]
+fn an_unattached_text_delta_port_keeps_the_run_behavior_unchanged() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let observed = CapturingTextDeltaPort::new();
+
+    let with_port = interrupted_round_evidence(session_id, run_id, Some(&observed));
+    let without_port = interrupted_round_evidence(session_id, run_id, None);
+
+    assert_eq!(
+        with_port, without_port,
+        "the transient port changes neither the committed rows nor the published statuses"
+    );
+    assert_eq!(
+        observed.deltas(),
+        vec![
+            (0, "partial answer".to_owned()),
+            (1, "final answer".to_owned()),
+        ],
+        "the attached port observed both model steps of the unchanged run"
     );
 }

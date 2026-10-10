@@ -26,7 +26,7 @@ use intention_proto::{
     InterruptRunAcceptedDto, InterruptRunCommandDto, ProtocolResultDto, RemoveTurnAcceptedDto,
     RemoveTurnCommandDto, RunId, RunProjectionDto, SchemaVersionDto, SendUserTurnAcceptedDto,
     SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId, SessionProjectionDto,
-    SessionSnapshotDto, TimestampDto,
+    SessionSnapshotDto, SessionSummariesDto, TimestampDto,
 };
 #[cfg(test)]
 use intention_proto::{ProjectId, RunModeDto, WorkspaceId, WorkspaceRootDto};
@@ -53,6 +53,12 @@ const DATABASE_FILENAME: &str = "intention-relay.sqlite";
 /// The row bound is additionally held to `MAX_TRANSCRIPT_SNAPSHOT_BYTES`, the
 /// representation budget derived from the single transport envelope cap.
 pub const SESSION_SNAPSHOT_MESSAGES: u32 = 256;
+
+/// The retained bounded window of one current session list.
+///
+/// The storage read reports every session beyond this window as its explicit
+/// `omitted` count, so a bounded list is never a silent truncation.
+pub const SESSION_LIST_ROWS: u32 = 256;
 
 /// The one daemon composition root.
 ///
@@ -323,6 +329,20 @@ impl DaemonApplicationFacade {
                 .load_recent_messages(session_id, SESSION_SNAPSHOT_MESSAGES)?,
         )?;
         SessionSnapshotDto::with_projection(session_id, projection, messages)
+    }
+
+    /// Lists the current durable sessions newest-first in one bounded window.
+    ///
+    /// This is the one session list: it reports which sessions exist, with the
+    /// newest durable update first and the durable identity breaking ties, and
+    /// how many sessions exist beyond the window. A session a client selects is
+    /// then read through the full session snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when durable storage cannot be read.
+    pub fn list_sessions(&self, limit: u32) -> DtoResult<SessionSummariesDto> {
+        self.inner.repository.list_sessions(limit)
     }
 
     /// Creates one durable session and assembles its typed reply evidence.

@@ -12,14 +12,17 @@ pub use composition::DaemonApplicationFacade;
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
 use intention_engine::{
     ApplicationService, ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionService,
-    ModelSleepFuture, ModelTimePort, RunCancellation, ToolExecutionPort, ToolInvocationRequestDto,
-    ToolResultOutcomeDto, fail_starting_run,
+    ModelSleepFuture, ModelTextDeltaPort, ModelTimePort, RunCancellation, ToolExecutionPort,
+    ToolInvocationRequestDto, ToolResultOutcomeDto, fail_starting_run,
 };
 use intention_proto::{
     ClientRequestDto, DtoResult, ErrorDto, InterruptRunCommandDto, RunId,
@@ -27,7 +30,8 @@ use intention_proto::{
     TimestampDto, ToolCallDto,
 };
 use intention_proto::{
-    ProtocolDaemonMessageDto, ProtocolResultDto, RunStreamFrameDto, decode_request_line,
+    ProtocolDaemonMessageDto, ProtocolResultDto, RunStreamFrameDto, TextDeltaFrameDto,
+    decode_request_line,
 };
 use intention_proto::{RunStatusDto, run_status_is_terminal};
 use intention_storage::{RunOutcomeDto, StorageRepositoryDto};
@@ -261,8 +265,16 @@ impl HostState {
         self.recorder.register(key);
         let host = Arc::clone(self);
         let task = tokio::spawn(async move {
+            // The run's provisional text has one window, one cadence task, and
+            // one commit observer, and all three are dropped with the run.
+            let deltas = Arc::new(RunTextDeltas::new(Arc::clone(&host), key));
+            host.recorder
+                .track(tokio::spawn(publish_text_deltas_at_cadence(Arc::clone(
+                    &deltas,
+                ))));
             let observer = HostCommitObserver {
                 host: Arc::clone(&host),
+                deltas: Arc::clone(&deltas),
             };
             // The model-run executor and the tool-invocation path share this
             // one commit sink, this one per-run cancellation handle, and the
@@ -280,8 +292,10 @@ impl HostState {
                 &observer,
                 &executor,
             )
+            .with_text_delta_port(deltas.as_ref())
             .execute(input)
             .await;
+            deltas.finish();
             // An executor error must never leave a non-terminal durable run
             // without an owner (PR24-012/013): a still-active run is
             // terminalized as `Failed` with the executor's stable error code.
@@ -557,6 +571,16 @@ impl HostState {
         drop(removed);
     }
 
+    /// Returns whether any live subscriber is registered for one run.
+    ///
+    /// Transient publication asks this before it retains anything, so a run
+    /// nobody follows keeps no provisional text at all.
+    fn has_subscribers(&self, key: RunKey) -> bool {
+        self.data
+            .lock()
+            .is_ok_and(|data| data.subscribers.contains_key(&key))
+    }
+
     /// Removes one connection's subscription from one run.
     ///
     /// Removal is by the connection's own channel identity: the guard that owns
@@ -695,6 +719,152 @@ impl HostState {
     }
 }
 
+/// The publication cadence of one run's coalesced provisional text.
+const RUN_TEXT_DELTA_INTERVAL: Duration = Duration::from_millis(50);
+
+/// The retained bound of one run's pending provisional text.
+///
+/// The pending window is uncommitted, best-effort display state, so an over-long
+/// step loses the rest of its provisional text instead of growing without
+/// limit, and its committed row still carries the whole step. The bound stays
+/// far below the single transport envelope cap, so a coalesced frame is always
+/// writable.
+const RUN_TEXT_DELTA_MAX_BYTES: usize = 8 * 1024;
+
+/// The pending provisional text window of one run.
+///
+/// One window belongs to one model step: the first chunk of another step
+/// replaces it, so a window never mixes two steps' text.
+struct PendingText {
+    step: u32,
+    text: String,
+    /// The current step crossed [`RUN_TEXT_DELTA_MAX_BYTES`].
+    dropped: bool,
+}
+
+/// The transient text publication of one admitted run.
+///
+/// The engine's text-delta port fills one bounded window, this run's cadence
+/// task publishes it at [`RUN_TEXT_DELTA_INTERVAL`], and this run's commit
+/// observer drains it before it publishes the committed row that supersedes it,
+/// so a subscriber never receives committed text behind its own provisional
+/// text. Every step of this path is best-effort: text is never persisted, a run
+/// without subscribers retains nothing, a slow subscriber's bounded queue drops
+/// what it cannot hold, and no failure here can reach the run's durable state.
+struct RunTextDeltas {
+    host: Arc<HostState>,
+    key: RunKey,
+    /// The one window; its lock also orders a cadence publication against the
+    /// flush that precedes one commit's publication.
+    pending: Mutex<PendingText>,
+    /// Set when the run's execution returned, ending its cadence task.
+    finished: AtomicBool,
+}
+
+impl RunTextDeltas {
+    /// Creates the empty transient publication of one run.
+    const fn new(host: Arc<HostState>, key: RunKey) -> Self {
+        Self {
+            host,
+            key,
+            pending: Mutex::new(PendingText::new()),
+            finished: AtomicBool::new(false),
+        }
+    }
+
+    /// Publishes the pending text of the run, leaving the window empty.
+    ///
+    /// The window is drained and published under one lock acquisition, so the
+    /// cadence task and this flush can never interleave: whatever the cadence
+    /// task published is published before the flush that follows it.
+    fn flush(&self) {
+        let Ok(mut pending) = self.pending.lock() else {
+            return;
+        };
+        if pending.text.trim().is_empty() {
+            // A step that produced only whitespace never becomes provisional
+            // text, because a text delta must carry text.
+            pending.text.clear();
+            return;
+        }
+        let text = std::mem::take(&mut pending.text);
+        if let Ok(delta) = TextDeltaFrameDto::new(self.key.0, self.key.1, pending.step, text) {
+            self.host.broadcast(
+                self.key,
+                ProtocolDaemonMessageDto::frame(RunStreamFrameDto::TextDelta(delta)),
+            );
+        }
+    }
+
+    /// Reports that the run's execution returned, ending its cadence task.
+    ///
+    /// Whatever the run's last step had not published is discarded with it, so
+    /// no transient frame follows the run's committed terminal state.
+    fn finish(&self) {
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.text.clear();
+            pending.dropped = false;
+        }
+        self.finished.store(true, Ordering::Release);
+    }
+
+    /// Returns whether the run's execution returned.
+    fn is_finished(&self) -> bool {
+        self.finished.load(Ordering::Acquire)
+    }
+}
+
+impl PendingText {
+    /// Creates the empty pending window of one run.
+    const fn new() -> Self {
+        Self {
+            step: 0,
+            text: String::new(),
+            dropped: false,
+        }
+    }
+}
+
+impl ModelTextDeltaPort for RunTextDeltas {
+    fn text_delta(&self, step: u32, text: &str) {
+        // Provisional text nobody follows is dropped instead of retained, so a
+        // run keeps exactly the durable path it would have without this port.
+        if text.is_empty() || !self.host.has_subscribers(self.key) {
+            return;
+        }
+        let Ok(mut pending) = self.pending.lock() else {
+            return;
+        };
+        if pending.step != step {
+            pending.step = step;
+            pending.text.clear();
+            pending.dropped = false;
+        }
+        if pending.dropped {
+            return;
+        }
+        if pending.text.len() + text.len() > RUN_TEXT_DELTA_MAX_BYTES {
+            // The over-long step loses its pending window and the rest of its
+            // provisional text; its committed row still carries the whole step.
+            pending.text.clear();
+            pending.dropped = true;
+            return;
+        }
+        pending.text.push_str(text);
+    }
+}
+
+/// Publishes one run's coalesced provisional text at its cadence.
+///
+/// The task ends on the first tick after the run's execution returned, so it
+/// never outlives its run by more than one cadence.
+async fn publish_text_deltas_at_cadence(run: Arc<RunTextDeltas>) {
+    while !run.is_finished() {
+        tokio::time::sleep(RUN_TEXT_DELTA_INTERVAL).await;
+        run.flush();
+    }
+}
+
 /// The typed rejection one connection receives when it cannot be registered.
 fn subscriber_unavailable(request_id: u64) -> ProtocolDaemonMessageDto {
     ProtocolDaemonMessageDto::rejection(
@@ -763,16 +933,26 @@ async fn retry_bounded(
 /// The one commit sink serves both the model-run executor and the
 /// tool-invocation path: a content frame carries the row the commit returned,
 /// and a status frame carries the committed run projection the transition just
-/// wrote, so no frame ever carries an uncommitted value.
+/// wrote, so no frame ever carries an uncommitted value. A content frame is
+/// preceded by the provisional text of the run, which that committed row
+/// supersedes.
 #[derive(Clone)]
 struct HostCommitObserver {
     host: Arc<HostState>,
+    /// The transient text of the one run this observer commits for.
+    deltas: Arc<RunTextDeltas>,
 }
 
 impl ModelRunCommitObserver for HostCommitObserver {
     fn observe_model_run_commit(&self, committed: &ModelRunCommitDto) {
         match committed {
-            ModelRunCommitDto::Content(message) => self.host.publish_content(message),
+            ModelRunCommitDto::Content(message) => {
+                // Provisional text is published strictly before the committed
+                // row of its step, so a subscriber replaces its provisional
+                // text with the committed value and never the reverse.
+                self.deltas.flush();
+                self.host.publish_content(message);
+            }
             ModelRunCommitDto::Status {
                 session_id,
                 run_id,
@@ -1155,6 +1335,10 @@ fn dispatch_request(
             .facade
             .session_snapshot(query.session_id())
             .map(ProtocolResultDto::SessionSnapshot),
+        ClientRequestDto::ListSessions => host
+            .facade
+            .list_sessions(composition::SESSION_LIST_ROWS)
+            .map(ProtocolResultDto::SessionsListed),
         ClientRequestDto::CreateSession(command) => host.facade.create_session(command),
         ClientRequestDto::SendUserTurn(command) => {
             let result = host.facade.send_user_turn(command)?;
