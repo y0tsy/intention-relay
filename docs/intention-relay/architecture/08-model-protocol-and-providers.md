@@ -29,9 +29,9 @@ persisted/current safe-selection equality before execution, owns cancellation la
 retries, and commits only current-state rows (assistant transcript rows, run status, usage, finish, and failure) through
 the DTO-only storage contract. Its `ModelTimePort` exposes fresh
 provider-neutral delay futures and safe timestamps, never Tokio, and its transient `ModelTextDeltaPort` observes every
-streamed text chunk with its model-step index on a best-effort, infallible path that never affects run state. The
-service does not select a provider or own a Tokio runtime; the daemon-owned composition host supplies those private
-execution resources.
+streamed text chunk with its model-step index and text channel on a best-effort, infallible path that never affects run
+state. The service does not select a provider or own a Tokio runtime; the daemon-owned composition host supplies those
+private execution resources.
 
 Core DTO families:
 

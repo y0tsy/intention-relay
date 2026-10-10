@@ -126,7 +126,10 @@ the compile and test contracts are already covered.
 
 `make deps` and blocking CI run `cargo metadata --locked` as the authoritative lockfile check; `make notices-check`,
 which regenerates `THIRD_PARTY_NOTICES.md` from `Cargo.lock`, `quality/about.toml`, and the notice template through
-pinned `cargo-about` and fails on drift; `cargo deny check` for advisories, licenses, banned crates, allowed sources,
+pinned `cargo-about` and compares it byte for byte, falling back to comparing which license every crate reference is
+rendered under when the bytes differ only because the local registry cache grouped or attributed identical license texts
+differently, so the check does not depend on which machine ran it while a changed graph, version, or license name still
+fails; `cargo deny check` for advisories, licenses, banned crates, allowed sources,
 and duplicate-version policy, using the policy expression in `deny.toml`; `cargo audit` as an independent advisory
 source; `cargo udeps` for unused dependencies; `cargo machete` for manifest hygiene; and `cargo outdated` for stale
 direct dependencies under the policy in `quality/outdated.toml`.

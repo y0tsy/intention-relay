@@ -335,6 +335,14 @@ text above is the live policy.
 - Closed typed process status. Every mode ends with one of the closed statuses — 0 completed, 1 usage, 2 daemon or
   transport, 3 typed rejection or failed run, 4 timeout after an interrupt, 5 interrupted run — and the binary writes
   its output through explicit writers, never through printing macros.
+- Launch rule and the welcome surface. A launch opens no session at all — not even the most recent one; a session
+  appears only for an explicit `--session ID`, for `--continue` (the newest session the daemon lists), for `/new`, for a
+  browser row, or for the first prompt, which creates the session it needs and sends the prompt as that session's first
+  turn. While no session is open and no committed row exists, the chat region shows the welcome surface instead of the
+  transcript: the product lockup — `INTENTION` in the deep accent ink with a tracked muted `RELAY` after a fixed
+  two-column gap — above a one-row overview whose chips are the binary's own version (`env!("CARGO_PKG_VERSION")`) and
+  deliberate `@todo(core)` plates for `AGENTS.md`, `MCPs`, and `Skills`. The input block and the detail line keep the
+  rows they always have, so the chat geometry never moves between the welcome and the transcript.
 - One window. The fullscreen front end draws one frame: the chat panel on the canvas and, while the core's screen
   carries the browser, the sessions panel docked as a layout row to the window's bottom rows. The panel is no overlay —
   the chat container reflows into the rows the panel leaves, its own bottom canvas margin row is the one blank gap row
@@ -380,8 +388,12 @@ text above is the live policy.
   word.
 - Input block and status vocabulary. The input block is one focused frame around a badge header carrying the session's
   durable mode (the `mode @todo(core)` placeholder until a snapshot names it) beside the `model @todo(core)`
-  placeholder, the input line with its `█` block cursor and a window that keeps the cursor visible, and the run status
-  row under it. The status row reads in words — `Ready · session … · build · Thinking… 3.2s · ctx @todo(core)` — and
+  placeholder, one display row per buffer line with the `█` block cursor and a window that keeps the cursor's line and
+  cell visible, and the run status row under it. A `\` immediately before `Enter` inserts a line break and never reaches
+  the buffer, so a prompt is typed over several lines; the block takes one more row per buffer line while the transcript
+  gives up exactly those rows, no line count is capped, and a buffer taller than the block shows the window of lines
+  that keeps the cursor's line visible. The status row reads in words — `Ready · session … · build · Thinking… 3.2s ·
+  ctx @todo(core)` — and
   the removed debug vocabulary (`connected`, `run none`, `stream idle`, `stream closed`) is gone: the stream is this
   front end's own plumbing, and a run is described by what it is doing. The elapsed value is the front end's own
   measurement, reported to the core as `Action::ElapsedReported` so the view stays a pure function of state.
@@ -389,12 +401,17 @@ text above is the live policy.
   `/sessions` opens the browser panel, and an unknown command answers with the known set. The keymap is one mapping per
   screen: `Enter` submits the line or selects the browser row, `Tab` and `Shift+Tab` switch the browser tab, `Ctrl+R`,
   `Ctrl+X`, and `Ctrl+F` show the rename, archive, and tree notices whose core support does not exist yet, `Esc` closes
-  the browser, and `Ctrl+Q` always exits immediately. `Ctrl+C` is layered: with an active run, the first press arms the
+  the browser, and `Ctrl+Q` always exits immediately. `Esc` on the chat is the cancel, clear, and exit key: a live run is
+  cancelled by a single press with no arming, a non-empty line arms the clear on the first press and needs a second
+  consecutive press to abandon the line into the recallable history, exactly as one `Ctrl+C` press does, and an empty
+  line exits. `Ctrl+C` is layered: with an active run, the first press arms the
   interrupt and shows its notice while a second consecutive press interrupts the run; with no run and a non-empty
   input, the press pushes the line into the recallable history and clears it; with no run and an empty input, the first
   press arms the exit and a second consecutive press quits; any other user action disarms, while a live run's own
   reports — committed rows, transient deltas, and elapsed ticks — leave an armed interrupt standing, so an armed
-  interrupt whose run ended by itself re-arms as the exit instead of quitting. The mouse wheel is the scrolling
+  interrupt whose run ended by itself re-arms as the exit instead of quitting. The two arming states are separate: one
+  key's press disarms the other arm but never counts as its second press. `Home` and `End` move inside the line the
+  cursor is on, while `Left` and `Right` cross line breaks like any other character. The mouse wheel is the scrolling
   and navigation input, and mouse capture is on so a notch reaches the front end: in the chat it moves the transcript
   window three display rows, and in the browser it moves the cursor one row with the virtualized window following it.
   No key moves the transcript. In the chat the left button is a selection pointer: a press anchors a selection at the
@@ -409,6 +426,10 @@ text above is the live policy.
 - Session listing. `ListSessions` returns `SessionsListed` with the recency-ordered summary window
   (`SESSION_LIST_ROWS`) and an `omitted` count, so the list is never silently truncated; storage owns the ordering and
   the count, and the daemon passes the result through unchanged. Tree and branching views remain Slice 6 work.
+- Session creation and the workspace root. `/new` and the first prompt create a session on the front end's workspace
+  root. A root resolves to its durable project/workspace binding when one exists, so session creation joins that binding
+  instead of proposing a new identity, one root carries an unbounded number of sessions, and storage still rejects a
+  different identity for an already-bound root (`workspace_root_conflict`).
 - Transient delta semantics. The run stream also carries `RunStreamFrameDto::TextDelta` frames, whose
   `TextDeltaFrameDto` names its session, run, model step, channel, and one coalesced chunk of that step's uncommitted
   text. The channel closes over the two things a step says before it is committed — the reasoning it thinks with and
@@ -436,6 +457,9 @@ fabricated value. The table below names each one, taken from the markers in the 
 | the row counter's `+N omitted (core: paged list @todo)` | a session list that can be paged past its bounded window |
 | the `ctx @todo(core)` status run | token usage on the run projection |
 | the `model @todo(core)` badge | the provider model on the session projection |
+| the welcome overview's `AGENTS.md` chip | the instruction sources and their effective projection (Slice 3) |
+| the welcome overview's `MCPs` chip | MCP capability support |
+| the welcome overview's `Skills` chip | skills support |
 | the `Ctrl+F` tree notice | session forks (Slice 6) |
 | the `write`, `edit`, and `execute` plates | a typed projection of each result |
 | the read preview, which can only repeat the tool's own `[truncated]` line | typed result metadata (for example a read truncation flag) |

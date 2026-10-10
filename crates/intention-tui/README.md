@@ -7,8 +7,8 @@ the revue fullscreen UI (`tui`), the interactive `repl`, and the headless
 ## Module map
 
 - `src/app/` — `action.rs` (`Action`/`Effect` vocabulary), `state.rs` (state,
-  accessors, `update`), `sessions.rs`/`browser.rs`/`run.rs`/`input.rs`
-  (transitions), `tests.rs`.
+  accessors, `update`), `sessions.rs`/`browser.rs`/`run.rs`/`input.rs` and the
+  layered `ctrl_c.rs`/`escape.rs` (transitions), `tests.rs`.
 - `src/client_task.rs` — the one async `Effect` to client-call mapper.
 - `src/tui/` — `mod.rs` (`run_blocking`, event handler, wheel mapping, wiring,
   the turn clock), `layout.rs` (the neutral row model and the transcript layout
@@ -16,8 +16,8 @@ the revue fullscreen UI (`tui`), the interactive `repl`, and the headless
   (`RevueView`, one file per surface: `chat.rs` and the `sessions.rs` docked
   browser panel), `keymap.rs` (one mapping per state), `driver.rs` (thread,
   runtime, select loop), and `panes/` (one file per chat pane: `transcript.rs`,
-  `input.rs`, `status.rs`, the `markdown.rs` content layout, and the
-  `tools.rs` per-tool block dispatch).
+  `welcome.rs`, `input.rs`, `status.rs`, the `markdown.rs` content layout, and
+  the `tools.rs` per-tool block dispatch).
 - `src/main.rs`, `src/cli.rs`, `src/headless.rs`, `src/repl.rs` — the binary.
 
 ## One window
@@ -29,6 +29,15 @@ it; `Enter` opens the session the cursor points at and returns to the same chat,
 which keeps its transcript, its input, and its window. No command opens a second
 window, and no mode switch replaces the frame: `screen` names which surface owns
 the keyboard, not which window is drawn.
+
+The chat opens on its welcome surface while no session is open - the product
+lockup over a version/`AGENTS.md`/`MCPs`/`Skills` overview - and the interactive
+front ends open no session at all at launch, not even the most recent one: a
+session appears only for an explicit `--session`/`--continue`, `/new`, a selected
+browser row, or the first prompt, which creates the session it needs. In the
+chat `Esc` cancels a live run in one press, clears a typed line into the
+recallable history on a second consecutive press, and exits when the line is
+empty; `Ctrl+C` keeps its layered interrupt, recall, and exit behavior.
 
 Sessions are reachable only through `/sessions`: the chat has no sidebar, and
 the docked panel carries the whole browser - the frame with the `Sessions` title,
@@ -42,11 +51,14 @@ The chat panel itself is the transcript (user messages as labelled cards,
 assistant answers as markdown under their `∷` marker, committed reasoning as a
 separate dimmed block, tool exchanges as framed blocks, daemon notices as their
 own `※` block), the input block (a badge header with the session's real mode and
-a model placeholder, the input line with a `█` block cursor, and the run status
-row under it), and the notice or error line. The status row reads
+a model placeholder, one row per buffer line with a `█` block cursor, and the run
+status row under it), and the notice or error line. The status row reads
 in words - `Ready · session … · build · Thinking… 3.2s · ctx @todo(core)` - and
 the elapsed value is measured by this front end's turn clock and reported to the
 core as `Action::ElapsedReported`, so the view stays a pure function of state.
+A `\` immediately before `Enter` inserts a line break instead of submitting, and
+the backslash never reaches the buffer; the block grows a row per buffer line
+while the transcript gives up exactly those rows, with no line cap.
 
 The wheel moves both surfaces: in the chat it moves the transcript three display
 rows a notch, and in the sessions browser it moves the cursor one row with the
@@ -74,22 +86,26 @@ Rules the panes keep:
 - Committed rows are laid out once into neutral rows and cached by pane width
   and transcript version: an append lays out only the tail, a resize or a
   replacement (a snapshot, a trim, a session switch) lays the transcript out
-  again, and only the visible window becomes widgets. The live provisional tail
-  is one or two rows laid out per frame and never cached. A reasoning expansion
-  and a newly committed tool result also replay the whole transcript, because
-  both change a block the cached prefix holds.
+  again, and only the visible window becomes widgets. The live tail a step is
+  streaming - its reasoning segment and its answer segment - is laid out per
+  frame through the same block functions the committed rows use and never
+  cached, so nothing looks streaming and nothing changes style at commit time.
+  A reasoning expansion and a newly committed tool result also replay the whole
+  transcript, because both change a block the cached prefix holds.
 - A tool row is paired with the row that shares its `tool_call_id`: the exchange
   is drawn once, as a framed block whose badge, plates, and structured result
   rows use the tool palette roles; an `execute` result is never rendered in any
   form.
 - A daemon notice renders as its own block on the palette's notice pair, never
   as ordinary prose, and never through the markdown pipeline.
-- Reasoning renders only when a committed row carries it (the wire streams no
-  reasoning frame); a block longer than 15 display rows shows its first fifteen
-  and a marker naming the hidden ones, and each activation of that marker - or
-  of `Ctrl+E` - reveals a hundred more.
+- Reasoning streams and commits as the same block: the wire's transient reasoning
+  channel and the committed row that replaces it are laid out by the same block
+  functions, so the live segment never looks provisional. A block longer than 15
+  display rows shows its first fifteen and a marker naming the hidden ones, and
+  each activation of that marker - or of `Ctrl+E` - reveals a hundred more.
 - A value the wire does not carry is an explicit `@todo(core)` placeholder
-  (`mode`, `model`, `ctx`), never a fabricated one.
+  (`mode`, `model`, `ctx`, and the welcome overview's `AGENTS.md`, `MCPs`, and
+  `Skills` chips), never a fabricated one.
 
 ## Palette
 
@@ -210,7 +226,8 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
    marker click's expansion, and the edge-drag fast scroll); mouse capture is
    on, and every other mouse event stays ignored.
 4. Handle the action in `src/app/state.rs::update` and put its transition body
-   in `src/app/sessions.rs`, `browser.rs`, `run.rs`, or `input.rs`.
+   in `src/app/sessions.rs`, `browser.rs`, `run.rs`, or `input.rs`; a layered
+   key's arm lives in its own file (`ctrl_c.rs`, `escape.rs`).
 
 ### A new slash command
 

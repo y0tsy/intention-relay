@@ -130,15 +130,19 @@ full-screen revue-based TUI, a mandatory interactive REPL, and a headless comman
 text, workspace, session continuation, run mode, streaming output, timeout, and a script-friendly output format; the
 model, system-prompt, and provider-profile parameters are deliberately absent and arrive with Slices 3 and 4. The TUI
 delivers one window — the chat panel and the sessions panel docked to the window's bottom rows, never an overlay — over
-one palette that is the sole colour system, with user cards and assistant answers rendered as markdown, committed
-reasoning as its own block, a committed transcript laid out once and cached per pane width and transcript version, a
-wheel-driven transcript, and layered `Ctrl+C` (an arming press, then a consecutive interrupting, history-pushing, or
-quitting press). The slice also froze the terminal client contract: TUI, REPL, and headless modes are
-contract-equivalent over one `intention-client` surface, the headless
-exit-status set is closed and typed (0 completed, 1 usage, 2 daemon or transport, 3 typed rejection or failed
-run, 4 timeout after interrupt, 5 interrupted run), and no presentation logic enters the daemon. Provisional model
-text streams as transient `TextDelta` frames that are never persisted and never replayed; the committed assistant row
-always replaces them. Session branching and forks remain Slice 6 work; desktop presentation remains Milestone 6 work.
+one palette that is the sole colour system, with a welcome surface (the product lockup and the
+version/`AGENTS.md`/`MCPs`/`Skills` overview) while no session is open — a launch opens no session, not even the most
+recent one — a multi-line input block that grows a row per buffer line, user cards and assistant answers rendered as
+markdown, committed reasoning as its own block, a committed transcript laid out once and cached per pane width and
+transcript version, a wheel-driven transcript, and layered `Ctrl+C` and `Esc` (an arming press, then a consecutive
+interrupting, history-pushing, or quitting press; a single `Esc` cancels a live run). Session creation resolves the
+durable workspace binding of its root, so one root carries an unbounded number of sessions. The slice also froze the
+terminal client contract: TUI, REPL, and headless modes are contract-equivalent over one `intention-client` surface,
+the headless exit-status set is closed and typed (0 completed, 1 usage, 2 daemon or transport, 3 typed rejection or
+failed run, 4 timeout after interrupt, 5 interrupted run), and no presentation logic enters the daemon. The step's
+answer and reasoning stream as channel-tagged transient `TextDelta` frames that are never persisted and never replayed;
+the committed assistant row replaces both channels, and the live tail lays out through the same block functions the
+committed rows use. Session branching and forks remain Slice 6 work; desktop presentation remains Milestone 6 work.
 -  **Slice 3 — Instruction sources and system context — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
 deployment instruction profile adapted from the legacy Antibusy static prompt set, user-authored fragments at user,

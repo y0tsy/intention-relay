@@ -223,21 +223,25 @@ fresh subscription clears both. Daemon tests prove `ListSessions` dispatch, per-
 two channels, and that the step's pending deltas flush before its committed frames.
 
 The terminal crate itself carries a render suite and a process end-to-end suite. `tests/tui_render.rs` renders the
-render-free `AppState` through revue's own test app in sixty-one cases: the chat panel, the transcript blocks (the
+render-free `AppState` through revue's own test app in sixty-one cases: the welcome surface (the lockup and the
+overview, gone once a session opens, the launch that lists sessions but opens none, and the state that never covers a
+reported row), the chat panel, the transcript blocks (the
 labelled user card and the markdown inside it, the markdown answer, the heading, the bold phrase, the aligned table,
 the committed reasoning block with its collapsed marker and its chunked expansion, the blank gap row, the streaming
 tail laid out row for row like the committed answer block it becomes, the live reasoning segment laid out like the
 committed reasoning block it becomes, the framed tool blocks for `read`, `glob`, `grep`, `write`, `edit`, `execute`, and an unknown
 `tool_id`, the call-without-result degradation, and the notice blocks streamed live and restored by a snapshot), the
-input line and its badges, the human status row, transcript scrolling, and the docked sessions panel
-(its frame and embedded title, the tab radio row, the search bar, the table header, columns, cursor marker, and resize
-reflow, the footer legend and row counter, and the stub tabs' `@todo` empty state). `tests/terminal_e2e.rs` spawns the
+input line and its badges, a two-line buffer growing the input block and shrinking the transcript, the armed `Esc`
+clear and the `Ctrl+C` clear, exit, and interrupt notices, the human status row, transcript scrolling, and the docked
+sessions panel (its frame and embedded title, the tab radio row, the search bar, the table header, columns, cursor
+marker, and resize reflow, the footer legend and row counter, and the stub tabs' `@todo` empty state).
+`tests/terminal_e2e.rs` spawns the
 real binary against a real daemon and the scripted fake provider in eleven cases: NDJSON transient deltas before the
 committed row, the channel-tagged reasoning deltas that precede the answer they inform, progressive text output and
 completion, both REPL paths (a piped turn and input EOF), the prompt that creates the session it needs, an explicit
-continuation that reuses its session instead of creating one, two `/new` runs creating two sessions, a multi-line
-prompt reaching the session unchanged, the timeout interrupt with exit 4, and a typed unknown-session rejection with
-exit 3. The binary's own unit tests cover the command
+continuation that reuses its session instead of creating one, every `/new` run creating a fresh session under one
+workspace root, a multi-line prompt reaching the session unchanged, the timeout interrupt with exit 4, and a typed
+unknown-session rejection with exit 3. The binary's own unit tests cover the command
 grammar, the exit-status mapping, the workspace-root resolution, the REPL line loop, and the headless formats, drivers,
 and wait deadlines. The crate's inline unit tests cover the `AppState` transitions, the keymap, the palette roles, the
 wheel mapping, the left-button pointer's press, drag, release, marker expansion, and edge scrolling, the turn clock, the

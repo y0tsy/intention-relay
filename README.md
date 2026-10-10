@@ -61,7 +61,7 @@ of each.
 | M3 SQLite sessions, transcript, queue | Closed | Durable SQLite-backed sessions, runs, turns, and transcript rows; turn queueing; canonical credential-free config revisions; recovery-before-ready. |
 | M4 Model contract, providers, one streaming run | Closed | Provider-neutral model contracts and validated stream facts; private OpenRouter and generic Chat Completions drivers; durable model evidence in the transcript; one daemon-owned streaming run with reconnect to current state and run-scoped delivery. |
 | M5 Typed tools and workspace | Closed | Production model-tool loop hosted by the real daemon binary: six executable tools, fail-closed `WorkspaceRoot` resolution, one deterministic typed tool sequence, durable and redacted tool-result evidence, daemon-host end-to-end tests on Linux and Windows. |
-| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (defined in the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md); the instruction sources slice is owned by [architecture 30](docs/intention-relay/architecture/30-instruction-sources-and-system-context.md)) delivered as seven slices: 1) contracts and versions, 1.5) core simplification, 2) terminal UX (TUI, REPL, and headless CLI in one `intention-tui` binary), 3) instruction sources and system context, 4) control plane, 5) Goal domain, 6) UI foundation. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slice 1.5 is activated and its current-state core is merged into `main`: it froze a current-state core where the nine production crates stay, DTOs remain only at the IPC wire, SQLite, and provider-SDK boundaries, tool inputs and outputs are schema-validated JSON, identity reduces to eight newtypes, the event log, snapshots, cursors, and resync gave way to the eight current-state tables written in one SQLite transaction per state change with publication from the committed values, the typed hook plane was removed, hello/version negotiation gave way to one typed wire, and `intention-client` is fully asynchronous. Slice 2 is activated: `intention-tui` is the terminal application — one binary with a revue-based fullscreen UI, an interactive REPL, and a headless prompt command, all contract-equivalent over the shared client, with session listing, transient text deltas, and a closed typed exit-status set; the fullscreen UI draws one window (the chat panel with markdown answers, and the sessions panel docked to the window's bottom rows over one palette), caches the committed transcript layout, and layers `Ctrl+C` into an arming press followed by an interrupting, history-pushing, or quitting press. Slices 3-6 are defined and not implemented. |
+| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (defined in the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md); the instruction sources slice is owned by [architecture 30](docs/intention-relay/architecture/30-instruction-sources-and-system-context.md)) delivered as seven slices: 1) contracts and versions, 1.5) core simplification, 2) terminal UX (TUI, REPL, and headless CLI in one `intention-tui` binary), 3) instruction sources and system context, 4) control plane, 5) Goal domain, 6) UI foundation. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slice 1.5 is activated and its current-state core is merged into `main`: it froze a current-state core where the nine production crates stay, DTOs remain only at the IPC wire, SQLite, and provider-SDK boundaries, tool inputs and outputs are schema-validated JSON, identity reduces to eight newtypes, the event log, snapshots, cursors, and resync gave way to the eight current-state tables written in one SQLite transaction per state change with publication from the committed values, the typed hook plane was removed, hello/version negotiation gave way to one typed wire, and `intention-client` is fully asynchronous. Slice 2 is activated: `intention-tui` is the terminal application — one binary with a revue-based fullscreen UI, an interactive REPL, and a headless prompt command, all contract-equivalent over the shared client, with session listing, the answer and reasoning channels of transient text deltas, and a closed typed exit-status set; the fullscreen UI shows a welcome surface (the product lockup and a version/`AGENTS.md`/`MCPs`/`Skills` overview) until a session is asked for and opens no session at launch, draws one window (the chat panel with markdown answers and a multi-line input block, and the sessions panel docked to the window's bottom rows over one palette), caches the committed transcript layout, streams the live tail through the same block functions as the committed rows, and layers `Ctrl+C` and `Esc` into consecutive-press arms for interrupting, history-pushing, and quitting, with a single `Esc` cancelling a live run. Slices 3-6 are defined and not implemented. |
 | M6-M9 | Planned | M6 Tauri bridge and primary desktop UI; M7 Plan/Build policies, physical plans, and Build Autopilot; M8 VFR and Headroom; M9 hardening and acceptance verification. See the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md). |
 
 Everything beyond M5 outside the activated M5+ slices is roadmap direction
@@ -162,10 +162,14 @@ never appear in protocol DTOs or errors.
 The terminal client shares one command grammar across its three modes
 (`tui`, `repl`, `run <PROMPT>`, with `--workspace`, `--session`, `--continue`,
 `--mode`, `--timeout`, and `--format`), talks to the daemon only through
-`intention-client`, renders streamed model text as transient deltas until the
-committed row replaces it, and ends with a closed typed status set: 0
-completed, 1 usage, 2 daemon or transport, 3 typed rejection or failed run, 4
-timeout after an interrupt, 5 interrupted run.
+`intention-client`, renders the step's answer and reasoning as separate
+transient delta channels until the committed row replaces them, and ends with a
+closed typed status set: 0 completed, 1 usage, 2 daemon or transport, 3 typed
+rejection or failed run, 4 timeout after an interrupt, 5 interrupted run. The
+interactive modes open no session at launch: the fullscreen UI starts on its
+welcome surface, and a session appears only for an explicit
+`--session`/`--continue`, `/new`, a browser row, or the first prompt, which
+creates the session it needs.
 
 ## Configuration
 
@@ -304,12 +308,16 @@ What `main` does not yet provide (all of it is documented roadmap work):
   consolidation and the composition-facade removal are merged on `main`.
 - Slice 2 terminal UX is activated: one `intention-tui` binary carries the
   fullscreen revue TUI, the interactive REPL, and the headless prompt command
-  over one shared client, with session listing, transient text deltas, and a
-  closed typed exit-status set. The fullscreen UI draws one window — the chat
-  panel with markdown answers, and the sessions panel docked to the window's
-  bottom rows — over one palette, caches the committed transcript layout, and
-  layers `Ctrl+C` into an arming press followed by an interrupting,
-  history-pushing, or quitting press.
+  over one shared client, with session listing, the answer and reasoning
+  channels of transient text deltas, and a closed typed exit-status set. The
+  fullscreen UI shows a welcome surface (the product lockup and a
+  version/`AGENTS.md`/`MCPs`/`Skills` overview) while no session is open, opens
+  no session at launch, draws one window — the chat panel with markdown answers
+  and a multi-line input block, and the sessions panel docked to the window's
+  bottom rows — over one palette, caches the committed transcript layout,
+  streams the live tail through the same block functions as the committed rows,
+  and layers `Ctrl+C` and `Esc` into consecutive-press arms for interrupting,
+  history-pushing, and quitting (a single `Esc` cancels a live run).
 - Out of scope for v1: Web/remote transport, multi-user access, sandboxed
   execution, and automatic run resumption.
 

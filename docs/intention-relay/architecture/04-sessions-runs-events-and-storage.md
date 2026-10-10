@@ -28,7 +28,10 @@ erDiagram
 ## Core invariants
 
 1.  Each session has one mandatory stable `WorkspaceId` and declared `WorkspaceRootDto`; M3 persists the identity/root
-association, while M5 owns the workspace addressing policy — the root as an anchor, not a containment boundary
+association, and a root binds to exactly one project/workspace identity for the life of the database — a creation
+command that proposes another identity for an already-bound root joins the durable binding instead of replacing it, so
+one root carries an unbounded number of sessions while storage still rejects a different identity for a bound root
+(`workspace_root_conflict`). M5 owns the workspace addressing policy — the root as an anchor, not a containment boundary
 ([architecture 05](05-tools-and-workspace.md)).
 2. A session has at most one run in an active state.
 3. Every turn, run, plan, tool call, todo, permission, question, and message carries stable typed identity.
