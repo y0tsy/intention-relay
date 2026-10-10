@@ -10,7 +10,7 @@ architecture checks, and supply-chain gates live in [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md); test-first and outcome-verification rules live in [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md).
 
-The systems of documents 15 and 18-30 and of Slices 2-6 are not activated, and each activation requires an accepted
+The systems of documents 15 and 18-30 and of Slices 3-6 are not activated, and each activation requires an accepted
 activating specification ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ## Closed milestones (M0-M5)
@@ -124,14 +124,21 @@ end-to-end suite drives that client (`client_e2e`) instead of the low-level tran
 sequence of identity check, durable call row, workspace binding, dispatch, and durable terminal row; the nine-production-crate consolidation and the removal of the composition facade landed, so
 the daemon host calls the engine directly; and the single storage schema is created on open under one integer stamp,
 where a stamp bump discards and recreates the database with no migration or compatibility path.
--  **Slice 2 — Terminal UX — not activated.** The terminal application over the existing typed client and daemon
-([architecture 03](03-daemon-transport-and-adapters.md)): one `intention-tui` binary with three modes — a full-screen
-TUI (session list, create/open session, send a turn, stream the response, status, reconnect), a mandatory interactive
-REPL, and a headless command that invokes one prompt with model, prompt text, system prompt, workspace, provider
-profile, session continuation, streaming output, timeout, and a script-friendly output format. The slice also freezes
-the terminal client contract: TUI and headless modes are contract-equivalent over one `intention-client` surface,
-headless exit codes and safe errors are typed, and no presentation logic enters the daemon. Session branching and
-forks remain Slice 6 work; desktop presentation remains Milestone 6 work.
+-  **Slice 2 — Terminal UX — activated.** The terminal application over the existing typed client and daemon
+([architecture 03](03-daemon-transport-and-adapters.md)) landed as one `intention-tui` binary with three modes — a
+full-screen revue-based TUI, a mandatory interactive REPL, and a headless command that invokes one prompt with prompt
+text, workspace, session continuation, run mode, streaming output, timeout, and a script-friendly output format; the
+model, system-prompt, and provider-profile parameters are deliberately absent and arrive with Slices 3 and 4. The TUI
+delivers one window — the chat panel and the sessions panel docked to the window's bottom rows, never an overlay — over
+one palette that is the sole colour system, with user cards and assistant answers rendered as markdown, committed
+reasoning as its own block, a committed transcript laid out once and cached per pane width and transcript version, a
+wheel-driven transcript, and layered `Ctrl+C` (an arming press, then a consecutive interrupting, history-pushing, or
+quitting press). The slice also froze the terminal client contract: TUI, REPL, and headless modes are
+contract-equivalent over one `intention-client` surface, the headless
+exit-status set is closed and typed (0 completed, 1 usage, 2 daemon or transport, 3 typed rejection or failed
+run, 4 timeout after interrupt, 5 interrupted run), and no presentation logic enters the daemon. Provisional model
+text streams as transient `TextDelta` frames that are never persisted and never replayed; the committed assistant row
+always replaces them. Session branching and forks remain Slice 6 work; desktop presentation remains Milestone 6 work.
 -  **Slice 3 — Instruction sources and system context — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
 deployment instruction profile adapted from the legacy Antibusy static prompt set, user-authored fragments at user,
@@ -169,6 +176,8 @@ SQLite storage is the single live schema created directly on open.
 -  Slice 1.5 preserves durable meaning: the single storage schema is created on open under one integer stamp, where a
 stamp bump discards and recreates the database with no migration or compatibility layer, and tool and lifecycle
 semantics keep their recorded law.
+-  The Slice 2 terminal keeps one `intention-tui` binary whose three modes stay contract-equivalent over one
+`intention-client` surface, exit with the closed typed status set, and carry no presentation logic into the daemon.
 -  The Slice 4 health, discovery, and pricing surfaces are non-authorizing: they create no RunId, tool
 permission, MCP capability, bridge grant, kernel epoch, context projection, or branch, and the activating
 specification must prove that non-authority.
