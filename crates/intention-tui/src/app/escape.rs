@@ -1,8 +1,12 @@
-//! The layered Esc: cancel the live run, clear the typed line, or exit.
+//! The layered Esc: close the hint menu, cancel the live run, clear the typed
+//! line, or exit.
 //!
-//! One key press on the chat screen means one of three things, decided by the
+//! One key press on the chat screen means one of four things, decided by the
 //! state it finds and by the arm the previous press left:
 //!
+//! - the input's command hint menu is open: the press closes it and means
+//!   nothing else - no clear arm, no cancel, no exit - so dismissing the hint
+//!   list can never abandon the line or end the front end;
 //! - a run whose last known status is not terminal: the press cancels it
 //!   immediately, with no arming - a single press is the cancel, the way a
 //!   shell cancels a running command;
@@ -30,6 +34,13 @@ const CLEAR_ARM_NOTICE: &str = "press Esc again to clear the input";
 impl AppState {
     /// Applies one Esc press on the chat screen.
     pub(super) fn apply_escape(&mut self) -> Vec<Effect> {
+        // The hint menu is the innermost layer: while it is open, one press
+        // closes it and touches nothing else, so the clear arm, the live run,
+        // and the exit are all unreachable until the menu is gone.
+        if self.command_menu.take().is_some() {
+            self.escape_arm = false;
+            return Vec::new();
+        }
         if self
             .active_run
             .is_some_and(|run| !run_status_is_terminal(run.status()))

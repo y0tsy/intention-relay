@@ -13,8 +13,9 @@ use intention_proto::{
 };
 
 use super::{
-    Action, AppState, BrowserCursorMove, BrowserTab, ConnectionStatus, Effect, InputCursorMove,
-    InputHistoryMove, Screen, StreamStatus, TRANSCRIPT_DRAG_ROWS, TranscriptScroll,
+    Action, AppState, BrowserCursorMove, BrowserTab, COMMANDS, ConnectionStatus, Effect,
+    InputCursorMove, InputHistoryMove, MenuMove, Screen, StreamStatus, TRANSCRIPT_DRAG_ROWS,
+    TranscriptScroll,
 };
 
 /// The canonical id of the first fixture session.
@@ -207,6 +208,20 @@ fn type_text(state: &mut AppState, text: &str) {
     for character in text.chars() {
         state.update(Action::InputChar(character));
     }
+}
+
+/// Runs one typed slash command the way the keyboard does.
+///
+/// The first Enter completes the open hint menu into `/<name> `, the second
+/// submits the completed line: a line that already spells a complete command
+/// needs both presses, and the completing press runs nothing.
+fn run_command(state: &mut AppState) -> Vec<Effect> {
+    let completing = state.update(Action::InputSubmitted);
+    assert!(
+        completing.is_empty(),
+        "the press that completes the command runs nothing"
+    );
+    state.update(Action::InputSubmitted)
 }
 
 /// Types `text` into the sessions browser filter, one character action each.
@@ -584,7 +599,7 @@ fn submitting_blank_input_sends_nothing() {
 fn a_slash_new_command_creates_a_session() {
     let mut state = AppState::new(None);
     type_text(&mut state, "/new");
-    let effects = state.update(Action::InputSubmitted);
+    let effects = run_command(&mut state);
     assert_eq!(effects, vec![Effect::CreateSession]);
     assert_eq!(state.input(), "");
     assert_eq!(state.cursor(), 0);
@@ -610,9 +625,319 @@ fn a_slash_command_never_enters_the_input_history() {
     let session_id = SessionId::new();
     let mut state = opened_session(session_id, Vec::new());
     type_text(&mut state, "/new");
-    state.update(Action::InputSubmitted);
+    run_command(&mut state);
     state.update(Action::NavigateInputHistory(InputHistoryMove::Previous));
     assert_eq!(state.input(), "", "a command line is never recallable");
+}
+
+#[test]
+fn the_hint_menu_opens_on_a_leading_slash_and_stays_closed_otherwise() {
+    let session_id = SessionId::new();
+    let mut state = opened_session(session_id, Vec::new());
+    assert!(
+        state.command_menu().is_none(),
+        "an empty line opens no menu"
+    );
+
+    type_text(&mut state, "read /new");
+    assert!(
+        state.command_menu().is_none(),
+        "a slash that is not the first character opens no menu"
+    );
+    let effects = state.update(Action::InputSubmitted);
+    assert_eq!(
+        effects,
+        vec![Effect::SendTurn {
+            session_id,
+            content: "read /new".to_owned(),
+        }],
+        "the mid-text slash reaches the session unchanged"
+    );
+
+    // A blank before the slash leaves the line a turn too: the rule is the
+    // line's first character, not its first non-blank one, and submission and
+    // the menu answer to the same rule.
+    let mut state = opened_session(session_id, Vec::new());
+    type_text(&mut state, " /new");
+    assert!(
+        state.command_menu().is_none(),
+        "a slash the first character does not start is no command word"
+    );
+    let effects = state.update(Action::InputSubmitted);
+    assert_eq!(
+        effects,
+        vec![Effect::SendTurn {
+            session_id,
+            content: "/new".to_owned(),
+        }],
+        "the blank-led line is a turn whose content is trimmed"
+    );
+
+    type_text(&mut state, "/");
+    let menu = state
+        .command_menu()
+        .expect("a leading slash opens the menu");
+    assert_eq!(menu.len(), 2, "a bare slash offers every command");
+    assert_eq!(menu.highlight(), 0, "the best match starts highlighted");
+    assert_eq!(
+        menu.commands()
+            .map(|command| command.typed_name())
+            .collect::<Vec<_>>(),
+        vec!["/new".to_owned(), "/sessions".to_owned()],
+        "a bare slash lists the registry in registry order"
+    );
+}
+
+#[test]
+fn the_hint_menu_filters_as_the_word_grows() {
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/s");
+    let menu = state
+        .command_menu()
+        .expect("a prefix match keeps the menu open");
+    assert_eq!(
+        menu.commands()
+            .map(|command| command.typed_name())
+            .collect::<Vec<_>>(),
+        vec!["/sessions".to_owned()],
+        "s narrows the list to the command that starts with it"
+    );
+
+    type_text(&mut state, "e");
+    assert_eq!(
+        state.command_menu().map(|menu| menu.len()),
+        Some(1),
+        "the list keeps narrowing as the word grows"
+    );
+
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/sns");
+    assert_eq!(
+        state
+            .command_menu()
+            .expect("an ordered subsequence matches")
+            .commands()
+            .map(|command| command.typed_name())
+            .collect::<Vec<_>>(),
+        vec!["/sessions".to_owned()],
+        "sns is an ordered subsequence of sessions"
+    );
+
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/zz");
+    assert!(
+        state.command_menu().is_none(),
+        "a filter no command matches closes the menu"
+    );
+}
+
+#[test]
+fn the_hint_menu_highlight_moves_with_the_arrows_while_the_history_waits() {
+    let session_id = SessionId::new();
+    let mut state = opened_session(session_id, Vec::new());
+    type_text(&mut state, "an earlier prompt");
+    state.update(Action::InputSubmitted);
+
+    type_text(&mut state, "/");
+    assert_eq!(state.command_menu().map(|menu| menu.highlight()), Some(0));
+    state.update(Action::MenuMove(MenuMove::Down));
+    assert_eq!(
+        state.command_menu().map(|menu| menu.highlight()),
+        Some(1),
+        "Down moves the highlight through the open menu"
+    );
+    assert_eq!(
+        state.input(),
+        "/",
+        "the menu's arrows never walk the input history"
+    );
+    state.update(Action::MenuMove(MenuMove::Down));
+    assert_eq!(
+        state.command_menu().map(|menu| menu.highlight()),
+        Some(1),
+        "the highlight stops at the list's last row"
+    );
+    state.update(Action::MenuMove(MenuMove::Up));
+    assert_eq!(state.command_menu().map(|menu| menu.highlight()), Some(0));
+
+    state.update(Action::MenuMove(MenuMove::Up));
+    assert_eq!(
+        state.command_menu().map(|menu| menu.highlight()),
+        Some(0),
+        "the highlight stops at the list's first row"
+    );
+
+    // With the menu closed the same arrows are the history walk again.
+    state.update(Action::EscapePressed);
+    assert!(state.command_menu().is_none());
+    state.update(Action::NavigateInputHistory(InputHistoryMove::Previous));
+    assert_eq!(state.input(), "an earlier prompt");
+}
+
+#[test]
+fn the_hint_menu_commits_the_highlighted_command_with_a_trailing_space() {
+    for (key, highlight) in [(Action::MenuAccept, 0), (Action::MenuAccept, 1)] {
+        let mut state = AppState::new(None);
+        type_text(&mut state, "/s");
+        for _ in 0..highlight {
+            state.update(Action::MenuMove(MenuMove::Down));
+        }
+        state.update(key);
+        assert_eq!(
+            state.input(),
+            "/sessions ",
+            "the committed command is spelled out with one trailing space"
+        );
+        assert_eq!(
+            state.cursor(),
+            "/sessions ".chars().count(),
+            "the caret lands ready for the command's arguments"
+        );
+        assert!(
+            state.command_menu().is_none(),
+            "the committed word closes the menu"
+        );
+    }
+
+    // Enter commits the same way while the menu is open, and the caret is then
+    // ready for the second press that submits the completed line.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/ne");
+    let completing = state.update(Action::InputSubmitted);
+    assert!(completing.is_empty(), "the completing press runs nothing");
+    assert_eq!(state.input(), "/new ");
+    let submitting = state.update(Action::InputSubmitted);
+    assert_eq!(
+        submitting,
+        vec![Effect::CreateSession],
+        "the second press runs the completed command"
+    );
+}
+
+#[test]
+fn the_hint_menu_closes_on_every_close_rule() {
+    // The slash removed.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/n");
+    state.update(Action::InputBackspace);
+    state.update(Action::InputBackspace);
+    assert!(state.command_menu().is_none(), "no slash, no menu");
+
+    // A space after a complete command name.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/new");
+    state.update(Action::InputChar(' '));
+    assert!(
+        state.command_menu().is_none(),
+        "the caret past the word closes the menu"
+    );
+    assert_eq!(state.input(), "/new ");
+
+    // The filter leaving no match.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/zz");
+    assert!(state.command_menu().is_none(), "no match, no menu");
+
+    // Esc closes the menu and means nothing else: over a live run the press
+    // cancels nothing, so the run's own cancel still needs its own press.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    type_text(&mut state, "/n");
+    assert!(state.command_menu().is_some());
+    let closing = state.update(Action::EscapePressed);
+    assert!(closing.is_empty(), "closing the menu interrupts nothing");
+    assert!(state.command_menu().is_none());
+    assert_eq!(
+        state.notice(),
+        None,
+        "closing the menu never arms the clear with a notice"
+    );
+    assert_eq!(
+        state.run_status(),
+        Some(RunStatusDto::Running),
+        "closing the menu leaves the live run alone"
+    );
+    let cancelling = state.update(Action::EscapePressed);
+    assert!(
+        !cancelling.is_empty(),
+        "the run's cancel is the next press's own meaning"
+    );
+    assert!(
+        state
+            .notice()
+            .is_some_and(|notice| notice.starts_with("interrupting run")),
+        "the second press cancels the run: {:?}",
+        state.notice()
+    );
+    assert!(!state.should_quit(), "closing the menu never exits");
+
+    // The menu's close is not the clear's first press either: over a
+    // non-empty line and no run, the clear arm still needs its own press.
+    let session_id = SessionId::new();
+    let mut state = opened_session(session_id, Vec::new());
+    type_text(&mut state, "/n");
+    state.update(Action::EscapePressed);
+    assert!(state.command_menu().is_none());
+    assert_eq!(state.notice(), None);
+    assert!(!state.should_quit(), "closing the menu never exits");
+    state.update(Action::EscapePressed);
+    assert_eq!(
+        state.notice(),
+        Some("press Esc again to clear the input"),
+        "the clear arm needs its own first press, so the menu's close was not one"
+    );
+}
+
+#[test]
+fn the_registry_answers_for_both_submission_and_the_menu() {
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/");
+    assert_eq!(
+        state
+            .command_menu()
+            .expect("a bare slash offers the registry")
+            .commands()
+            .map(|command| command.typed_name())
+            .collect::<Vec<_>>(),
+        COMMANDS
+            .iter()
+            .map(|command| command.typed_name())
+            .collect::<Vec<_>>(),
+        "the menu lists exactly the registry, in registry order"
+    );
+
+    for command in COMMANDS {
+        let mut state = AppState::new(None);
+        type_text(&mut state, &command.typed_name());
+        assert!(
+            state.command_menu().is_some(),
+            "/{} is offered by the menu",
+            command.name
+        );
+        let effects = run_command(&mut state);
+        assert!(
+            !effects.is_empty(),
+            "/{} is dispatched by the submission path",
+            command.name
+        );
+        assert!(
+            state
+                .notice()
+                .is_none_or(|notice| !notice.starts_with("unknown command")),
+            "/{} is known to the submission path",
+            command.name
+        );
+    }
+
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/nothing");
+    state.update(Action::InputSubmitted);
+    assert_eq!(
+        state.notice(),
+        Some("unknown command /nothing; known commands: /new /sessions"),
+        "the unknown-command notice answers from the registry"
+    );
 }
 
 #[test]
@@ -636,7 +961,7 @@ fn the_sessions_command_opens_the_browser_and_refreshes_the_list() {
     let session_id = fixture_session(FIRST_SESSION);
     let mut state = opened_session(session_id, Vec::new());
     type_text(&mut state, "/sessions");
-    let effects = state.update(Action::InputSubmitted);
+    let effects = run_command(&mut state);
     assert_eq!(
         effects,
         vec![Effect::ListSessions],

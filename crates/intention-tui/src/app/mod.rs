@@ -8,6 +8,7 @@
 
 mod action;
 mod browser;
+mod commands;
 mod ctrl_c;
 mod escape;
 mod input;
@@ -24,6 +25,7 @@ pub use action::{
     StreamStatus, TranscriptScroll,
 };
 pub use browser::{BrowserRow, BrowserTab};
+pub use commands::{COMMANDS, CommandMenu, CommandSpec, MenuMove};
 pub use input::TRANSCRIPT_DRAG_ROWS;
 pub use state::AppState;
 pub use transcript::TranscriptSelection;

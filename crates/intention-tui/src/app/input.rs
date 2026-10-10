@@ -1,6 +1,8 @@
-//! The input transitions: the input line, its cursor, its history, and submission.
+//! The input transitions: the input line, its cursor, its history, the command
+//! hint menu, and submission.
 
-use super::{AppState, Effect, InputCursorMove, InputHistoryMove, TranscriptScroll};
+use super::commands::{self, CommandMenu};
+use super::{AppState, Effect, InputCursorMove, InputHistoryMove, MenuMove, TranscriptScroll};
 
 /// How many transcript display rows one mouse-wheel notch moves.
 const TRANSCRIPT_WHEEL_ROWS: u16 = 3;
@@ -14,15 +16,13 @@ const TRANSCRIPT_WHEEL_ROWS: u16 = 3;
 /// the pointer is over.
 pub const TRANSCRIPT_DRAG_ROWS: u16 = TRANSCRIPT_WHEEL_ROWS * 5;
 
-/// The commands a line beginning with `/` can name, as the notice lists them.
-const KNOWN_COMMANDS: &str = "/new /sessions";
-
 impl AppState {
     /// Inserts one typed character at the cursor.
     pub(super) fn apply_input_char(&mut self, character: char) -> Vec<Effect> {
         let offset = self.input_byte_offset(self.cursor);
         self.input.insert(offset, character);
         self.cursor += 1;
+        self.refresh_menu();
         Vec::new()
     }
 
@@ -34,6 +34,7 @@ impl AppState {
         let removed = self.input_byte_offset(self.cursor - 1)..self.input_byte_offset(self.cursor);
         self.input.replace_range(removed, "");
         self.cursor -= 1;
+        self.refresh_menu();
         Vec::new()
     }
 
@@ -52,6 +53,60 @@ impl AppState {
             InputCursorMove::Home => line_start(&characters, self.cursor),
             InputCursorMove::End => line_end(&characters, self.cursor),
         };
+        self.refresh_menu();
+    }
+
+    /// Recomputes the input's command hint menu from the line and the caret.
+    ///
+    /// The open rule is one function of the two: the line's first character is
+    /// `/`, the caret sits in or immediately after that word, and at least one
+    /// registered command matches the text after the slash. Anything else -
+    /// the slash removed, the caret past the word, no match left - closes the
+    /// menu, and the same refresh reopens it as soon as the line matches again.
+    /// A menu whose filter did not change keeps the row the user highlighted, so
+    /// moving the caret inside the word it is already on never moves the
+    /// highlight; another character starts the highlight at the best match.
+    pub(super) fn refresh_menu(&mut self) {
+        let opened = commands::command_word(&self.input, self.cursor)
+            .and_then(|word| CommandMenu::opened(&word.filter));
+        self.command_menu = match (self.command_menu.take(), opened) {
+            (Some(previous), Some(next)) if previous.filter() == next.filter() => Some(previous),
+            (_, opened) => opened,
+        };
+    }
+
+    /// Moves the hint menu's highlight one row towards `direction`.
+    pub(super) fn move_menu(&mut self, direction: MenuMove) {
+        if let Some(menu) = self.command_menu.as_mut() {
+            menu.move_highlight(direction);
+        }
+    }
+
+    /// Commits the hint menu's highlighted command into the input line.
+    ///
+    /// The word the menu was opened for - its leading slash through its last
+    /// character - is replaced by the command's full name and one trailing
+    /// space, so the caret lands ready for the command's arguments, and the
+    /// menu closes because the caret is now past the word it completed.
+    /// Completing a caret that sits inside the word replaces the whole word
+    /// rather than duplicating its tail, which is the same result the committed
+    /// range has whenever the caret already sits at the word's end.
+    pub(super) fn accept_menu(&mut self) {
+        let Some(command) = self
+            .command_menu
+            .as_ref()
+            .and_then(CommandMenu::highlighted)
+        else {
+            return;
+        };
+        let Some(word) = commands::command_word(&self.input, self.cursor) else {
+            self.command_menu = None;
+            return;
+        };
+        let completed = format!("{} ", command.typed_name());
+        self.input.replace_range(word.start..word.end, &completed);
+        self.cursor = completed.chars().count();
+        self.refresh_menu();
     }
 
     /// Walks the history of sent and abandoned lines, newest entry first.
@@ -112,15 +167,28 @@ impl AppState {
         if self.insert_line_break() {
             return Vec::new();
         }
+        // The menu owns Enter while it is open: the press completes the word
+        // the user is typing instead of running it, so a line that already
+        // spells a complete command needs its second Enter to run, and the
+        // caret always lands past the command with one space ready for its
+        // arguments.
+        if self.command_menu.is_some() {
+            self.accept_menu();
+            return Vec::new();
+        }
         let content = self.input.trim().to_owned();
         if content.is_empty() {
             self.notice = Some("type a message before sending it".to_owned());
             return Vec::new();
         }
-        if let Some(command) = content.strip_prefix('/') {
-            // A command is never a turn and never enters the history.
+        if let Some(command) = self.input.strip_prefix('/') {
+            // One rule decides what a command is, for the menu and for
+            // submission alike: the line's first character is the slash, so a
+            // line whose first character is anything else - a blank included -
+            // is a turn.
+            let command = command.trim().to_owned();
             self.clear_input();
-            return self.submit_command(command);
+            return self.submit_command(&command);
         }
         let Some(session_id) = self.session_id else {
             return self.start_session_for_prompt(content);
@@ -156,6 +224,7 @@ impl AppState {
             return false;
         }
         self.input.replace_range(offset..offset + 1, "\n");
+        self.refresh_menu();
         true
     }
 
@@ -183,16 +252,23 @@ impl AppState {
     }
 
     /// Runs one slash command, spelled without its leading `/`.
+    ///
+    /// The name is resolved through the one registry, and the transition it
+    /// runs is the one its entry names, so the submission path and the hint
+    /// menu can never disagree about which commands exist. An unregistered name
+    /// answers with the registry's own list.
     fn submit_command(&mut self, command: &str) -> Vec<Effect> {
-        match command.trim() {
-            "new" => self.request_new_session(),
-            "sessions" => self.request_sessions_browser(),
-            unknown => {
-                self.note(format!(
-                    "unknown command /{unknown}; known commands: {KNOWN_COMMANDS}"
-                ));
-                Vec::new()
-            }
+        let name = command.trim();
+        let Some(spec) = commands::command_named(name) else {
+            self.note(format!(
+                "unknown command /{name}; known commands: {}",
+                commands::known_commands()
+            ));
+            return Vec::new();
+        };
+        match spec.action {
+            commands::CommandAction::NewSession => self.request_new_session(),
+            commands::CommandAction::SessionsBrowser => self.request_sessions_browser(),
         }
     }
 
@@ -212,12 +288,14 @@ impl AppState {
         self.cursor = 0;
         self.history_position = None;
         self.history_draft = None;
+        self.refresh_menu();
     }
 
     /// Replaces the input line with `content` and puts the cursor at its end.
     fn set_input(&mut self, content: String) {
         self.cursor = content.chars().count();
         self.input = content;
+        self.refresh_menu();
     }
 
     /// Returns the byte offset of character index `index` in the input line.

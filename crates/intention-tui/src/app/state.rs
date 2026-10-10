@@ -12,7 +12,7 @@ use intention_proto::{
 };
 
 use super::{
-    Action, BrowserRow, BrowserTab, ConnectionStatus, Effect, Screen, StreamStatus,
+    Action, BrowserRow, BrowserTab, CommandMenu, ConnectionStatus, Effect, Screen, StreamStatus,
     TranscriptSelection, browser, ctrl_c, error_text, transcript,
 };
 
@@ -79,6 +79,14 @@ pub struct AppState {
     pub(super) history_position: Option<usize>,
     /// The in-progress line saved when the user walked into the history.
     pub(super) history_draft: Option<String>,
+    /// The input's command hint menu, while one is open.
+    ///
+    /// The menu is derived from the input line and the caret: the word the
+    /// caret is in or immediately after, and the registered commands that word
+    /// selects. It holds only what a frame cannot recompute cheaply - the
+    /// matches and the highlighted row - so the input line stays the single
+    /// source of the word.
+    pub(super) command_menu: Option<CommandMenu>,
     /// The arm the last Ctrl+C press left for the next consecutive press.
     ///
     /// The arm names which press armed it: an interrupt arm fires only while
@@ -151,6 +159,7 @@ impl AppState {
             history: Vec::new(),
             history_position: None,
             history_draft: None,
+            command_menu: None,
             ctrl_c_arm: None,
             escape_arm: false,
             notice: None,
@@ -230,6 +239,14 @@ impl AppState {
             }
             Action::NavigateInputHistory(movement) => {
                 self.apply_input_history_move(movement);
+                Vec::new()
+            }
+            Action::MenuMove(movement) => {
+                self.move_menu(movement);
+                Vec::new()
+            }
+            Action::MenuAccept => {
+                self.accept_menu();
                 Vec::new()
             }
             Action::InputSubmitted => self.submit_input(),
@@ -498,6 +515,18 @@ impl AppState {
     #[must_use]
     pub const fn stream(&self) -> StreamStatus {
         self.stream
+    }
+
+    /// Returns the input's command hint menu, while one is open.
+    ///
+    /// The menu is open exactly while the input's first character is `/` and
+    /// the caret sits in or immediately after that word and at least one
+    /// registered command matches it; every one of those conditions is a
+    /// function of the input line, the caret, and the registry, so a front end
+    /// only reads this value and never decides for itself.
+    #[must_use]
+    pub const fn command_menu(&self) -> Option<&CommandMenu> {
+        self.command_menu.as_ref()
     }
 
     /// Returns the transient provisional answer text of the run's current model

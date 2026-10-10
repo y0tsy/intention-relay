@@ -6,6 +6,8 @@ use intention_proto::{
     SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
 };
 
+use super::MenuMove;
+
 /// The readiness the client last reported for the local daemon.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConnectionStatus {
@@ -126,6 +128,13 @@ pub enum Action {
     MoveInputCursor(InputCursorMove),
     /// The user walked the input line history.
     NavigateInputHistory(InputHistoryMove),
+    /// The user moved the input's command hint menu highlight.
+    ///
+    /// The menu is a state machine value the core owns, so the same arrows move
+    /// it in a test, a renderer, and a live terminal.
+    MenuMove(MenuMove),
+    /// The user committed the highlighted command of the input's hint menu.
+    MenuAccept,
     /// The user submitted the input line.
     InputSubmitted,
     /// The user cleared the input line, keeping its text recallable.
