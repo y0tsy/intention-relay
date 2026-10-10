@@ -32,6 +32,10 @@ pub fn fixture_config_document(port: u16, credential: &str) -> String {
 /// the tool arguments the fixture supplied, the second (whose body carries the
 /// tool result) receives a text round, and any further request receives an
 /// HTTP 500 and is counted as excess traffic.
+///
+/// A text round streams the reasoning chunks the fixture scripted before the
+/// answer they inform, exactly as a thinking provider does, so the same script
+/// drives the reasoning channel and the answer channel of one step.
 pub struct FakeProvider {
     port: u16,
     requests: Arc<AtomicUsize>,
@@ -48,6 +52,26 @@ impl FakeProvider {
     /// Panics when the loopback listener or the provider thread cannot start.
     #[must_use]
     pub fn start(tool_arguments: &str) -> Self {
+        Self::scripted(tool_arguments, &[])
+    }
+
+    /// Starts a fake provider whose text round streams `reasoning` chunks
+    /// before the answer it informs.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the loopback listener or the provider thread cannot start.
+    #[must_use]
+    pub fn start_with_reasoning(tool_arguments: &str, reasoning: &[&str]) -> Self {
+        Self::scripted(tool_arguments, reasoning)
+    }
+
+    /// Starts a fake provider on one loopback port with its own listener thread.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the loopback listener or the provider thread cannot start.
+    fn scripted(tool_arguments: &str, reasoning: &[&str]) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("provider binds");
         let port = listener
             .local_addr()
@@ -99,11 +123,35 @@ impl FakeProvider {
             }],
         }))
         .expect("text chunk serializes");
+        let reasoning_bodies = reasoning
+            .iter()
+            .map(|chunk| {
+                serde_json::to_string(&serde_json::json!({
+                    "id": "chatcmpl-client-e2e-2",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "fixture-model",
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"reasoning_content": chunk},
+                        "finish_reason": null,
+                    }],
+                }))
+                .expect("reasoning chunk serializes")
+            })
+            .collect::<Vec<_>>();
         let tool_response = sse_response(&format!(
             "data: {tool_body}\n\ndata: {usage_body}\n\ndata: [DONE]\n\n"
         ));
+        // The text round streams the thinking channel first and the answer
+        // after it, which is the order the provider-neutral stream reports both
+        // channels in.
+        let text_events = reasoning_bodies
+            .iter()
+            .map(|body| format!("data: {body}\n\n"))
+            .collect::<String>();
         let text_response = sse_response(&format!(
-            "data: {text_body}\n\ndata: {usage_body}\n\ndata: [DONE]\n\n"
+            "{text_events}data: {text_body}\n\ndata: {usage_body}\n\ndata: [DONE]\n\n"
         ));
         let thread = thread::Builder::new()
             .name("fake-provider".to_owned())

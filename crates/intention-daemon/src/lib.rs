@@ -30,8 +30,8 @@ use intention_proto::{
     TimestampDto, ToolCallDto,
 };
 use intention_proto::{
-    ProtocolDaemonMessageDto, ProtocolResultDto, RunStreamFrameDto, TextDeltaFrameDto,
-    decode_request_line,
+    ProtocolDaemonMessageDto, ProtocolResultDto, RunStreamFrameDto, TextDeltaChannelDto,
+    TextDeltaFrameDto, decode_request_line,
 };
 use intention_proto::{RunStatusDto, run_status_is_terminal};
 use intention_storage::{RunOutcomeDto, StorageRepositoryDto};
@@ -265,8 +265,9 @@ impl HostState {
         self.recorder.register(key);
         let host = Arc::clone(self);
         let task = tokio::spawn(async move {
-            // The run's provisional text has one window, one cadence task, and
-            // one commit observer, and all three are dropped with the run.
+            // The run's provisional text has one window per channel, one
+            // cadence task, and one commit observer, and all three are dropped
+            // with the run.
             let deltas = Arc::new(RunTextDeltas::new(Arc::clone(&host), key));
             host.recorder
                 .track(tokio::spawn(publish_text_deltas_at_cadence(Arc::clone(
@@ -728,10 +729,11 @@ const RUN_TEXT_DELTA_INTERVAL: Duration = Duration::from_millis(50);
 /// step loses the rest of its provisional text instead of growing without
 /// limit, and its committed row still carries the whole step. The bound stays
 /// far below the single transport envelope cap, so a coalesced frame is always
-/// writable.
+/// writable. It bounds each channel's window on its own, because a step
+/// publishes its two channels independently.
 const RUN_TEXT_DELTA_MAX_BYTES: usize = 8 * 1024;
 
-/// The pending provisional text window of one run.
+/// The pending provisional text window of one run and channel.
 ///
 /// One window belongs to one model step: the first chunk of another step
 /// replaces it, so a window never mixes two steps' text.
@@ -742,21 +744,56 @@ struct PendingText {
     dropped: bool,
 }
 
+/// The pending provisional text windows of one run: one per text channel.
+///
+/// The reasoning and the answer of a step arrive as two independent channels
+/// of the same step, so each keeps its own step index and its own bound: the
+/// answer's buffer never absorbs the reasoning that precedes it.
+struct PendingWindow {
+    reasoning: PendingText,
+    answer: PendingText,
+}
+
+impl PendingWindow {
+    /// Creates the empty pending windows of one run.
+    const fn new() -> Self {
+        Self {
+            reasoning: PendingText::new(),
+            answer: PendingText::new(),
+        }
+    }
+
+    /// Returns the pending window of one channel.
+    const fn of(&mut self, channel: TextDeltaChannelDto) -> &mut PendingText {
+        match channel {
+            TextDeltaChannelDto::Answer => &mut self.answer,
+            TextDeltaChannelDto::Reasoning => &mut self.reasoning,
+        }
+    }
+
+    /// Discards whatever neither channel had published yet.
+    fn clear(&mut self) {
+        self.reasoning.clear();
+        self.answer.clear();
+    }
+}
+
 /// The transient text publication of one admitted run.
 ///
-/// The engine's text-delta port fills one bounded window, this run's cadence
-/// task publishes it at [`RUN_TEXT_DELTA_INTERVAL`], and this run's commit
-/// observer drains it before it publishes the committed row that supersedes it,
-/// so a subscriber never receives committed text behind its own provisional
-/// text. Every step of this path is best-effort: text is never persisted, a run
-/// without subscribers retains nothing, a slow subscriber's bounded queue drops
-/// what it cannot hold, and no failure here can reach the run's durable state.
+/// The engine's text-delta port fills one bounded window per channel, this
+/// run's cadence task publishes them at [`RUN_TEXT_DELTA_INTERVAL`], and this
+/// run's commit observer drains them before it publishes the committed row that
+/// supersedes them, so a subscriber never receives committed text behind its
+/// own provisional text. Every step of this path is best-effort: text is never
+/// persisted, a run without subscribers retains nothing, a slow subscriber's
+/// bounded queue drops what it cannot hold, and no failure here can reach the
+/// run's durable state.
 struct RunTextDeltas {
     host: Arc<HostState>,
     key: RunKey,
-    /// The one window; its lock also orders a cadence publication against the
+    /// The two windows; its lock also orders a cadence publication against the
     /// flush that precedes one commit's publication.
-    pending: Mutex<PendingText>,
+    pending: Mutex<PendingWindow>,
     /// Set when the run's execution returned, ending its cadence task.
     finished: AtomicBool,
 }
@@ -767,32 +804,38 @@ impl RunTextDeltas {
         Self {
             host,
             key,
-            pending: Mutex::new(PendingText::new()),
+            pending: Mutex::new(PendingWindow::new()),
             finished: AtomicBool::new(false),
         }
     }
 
-    /// Publishes the pending text of the run, leaving the window empty.
+    /// Publishes the pending text of every channel, leaving the windows empty.
     ///
-    /// The window is drained and published under one lock acquisition, so the
+    /// The windows are drained and published under one lock acquisition, so the
     /// cadence task and this flush can never interleave: whatever the cadence
-    /// task published is published before the flush that follows it.
+    /// task published is published before the flush that follows it. The
+    /// reasoning is published before the answer it precedes, which is the order
+    /// the provider streamed them in; each channel keeps its own order.
     fn flush(&self) {
         let Ok(mut pending) = self.pending.lock() else {
             return;
         };
-        if pending.text.trim().is_empty() {
-            // A step that produced only whitespace never becomes provisional
-            // text, because a text delta must carry text.
-            pending.text.clear();
-            return;
-        }
-        let text = std::mem::take(&mut pending.text);
-        if let Ok(delta) = TextDeltaFrameDto::new(self.key.0, self.key.1, pending.step, text) {
-            self.host.broadcast(
-                self.key,
-                ProtocolDaemonMessageDto::frame(RunStreamFrameDto::TextDelta(delta)),
-            );
+        for channel in [TextDeltaChannelDto::Reasoning, TextDeltaChannelDto::Answer] {
+            let window = pending.of(channel);
+            if window.text.trim().is_empty() {
+                // A step that produced only whitespace never becomes
+                // provisional text, because a text delta must carry text.
+                window.text.clear();
+                continue;
+            }
+            let step = window.step;
+            let text = std::mem::take(&mut window.text);
+            if let Ok(delta) = TextDeltaFrameDto::new(self.key.0, self.key.1, step, channel, text) {
+                self.host.broadcast(
+                    self.key,
+                    ProtocolDaemonMessageDto::frame(RunStreamFrameDto::TextDelta(delta)),
+                );
+            }
         }
     }
 
@@ -802,8 +845,7 @@ impl RunTextDeltas {
     /// no transient frame follows the run's committed terminal state.
     fn finish(&self) {
         if let Ok(mut pending) = self.pending.lock() {
-            pending.text.clear();
-            pending.dropped = false;
+            pending.clear();
         }
         self.finished.store(true, Ordering::Release);
     }
@@ -815,7 +857,7 @@ impl RunTextDeltas {
 }
 
 impl PendingText {
-    /// Creates the empty pending window of one run.
+    /// Creates the empty pending window of one run channel.
     const fn new() -> Self {
         Self {
             step: 0,
@@ -823,10 +865,16 @@ impl PendingText {
             dropped: false,
         }
     }
+
+    /// Discards the pending text and its over-bound marker.
+    fn clear(&mut self) {
+        self.text.clear();
+        self.dropped = false;
+    }
 }
 
 impl ModelTextDeltaPort for RunTextDeltas {
-    fn text_delta(&self, step: u32, text: &str) {
+    fn text_delta(&self, step: u32, channel: TextDeltaChannelDto, text: &str) {
         // Provisional text nobody follows is dropped instead of retained, so a
         // run keeps exactly the durable path it would have without this port.
         if text.is_empty() || !self.host.has_subscribers(self.key) {
@@ -835,22 +883,23 @@ impl ModelTextDeltaPort for RunTextDeltas {
         let Ok(mut pending) = self.pending.lock() else {
             return;
         };
-        if pending.step != step {
-            pending.step = step;
-            pending.text.clear();
-            pending.dropped = false;
+        let window = pending.of(channel);
+        if window.step != step {
+            window.step = step;
+            window.text.clear();
+            window.dropped = false;
         }
-        if pending.dropped {
+        if window.dropped {
             return;
         }
-        if pending.text.len() + text.len() > RUN_TEXT_DELTA_MAX_BYTES {
+        if window.text.len() + text.len() > RUN_TEXT_DELTA_MAX_BYTES {
             // The over-long step loses its pending window and the rest of its
             // provisional text; its committed row still carries the whole step.
-            pending.text.clear();
-            pending.dropped = true;
+            window.text.clear();
+            window.dropped = true;
             return;
         }
-        pending.text.push_str(text);
+        window.text.push_str(text);
     }
 }
 

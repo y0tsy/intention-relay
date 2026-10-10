@@ -22,7 +22,8 @@ use intention_proto::{
     DaemonReadinessDto, InterruptRunAcceptedDto, ProtocolDaemonMessageDto, ProtocolResultDto,
     RemoveTurnAcceptedDto, RunId, RunProjectionDto, RunStatusDto, RunStreamFrameDto,
     RunSubscriptionSnapshotDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
-    SessionSummaryDto, TextDeltaFrameDto, TurnId, decode_request_line, encode_request,
+    SessionSummaryDto, TextDeltaChannelDto, TextDeltaFrameDto, TurnId, decode_request_line,
+    encode_request,
 };
 use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, ProjectId, WorkspaceId};
 use intention_proto::{MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto};
@@ -225,7 +226,24 @@ fn fixture_snapshot(
 }
 
 fn fixture_delta(session_id: SessionId, run_id: RunId, step: u32, text: &str) -> TextDeltaFrameDto {
-    TextDeltaFrameDto::new(session_id, run_id, step, text).expect("fixture text delta is valid")
+    TextDeltaFrameDto::new(session_id, run_id, step, TextDeltaChannelDto::Answer, text)
+        .expect("fixture text delta is valid")
+}
+
+fn fixture_reasoning_delta(
+    session_id: SessionId,
+    run_id: RunId,
+    step: u32,
+    text: &str,
+) -> TextDeltaFrameDto {
+    TextDeltaFrameDto::new(
+        session_id,
+        run_id,
+        step,
+        TextDeltaChannelDto::Reasoning,
+        text,
+    )
+    .expect("fixture reasoning delta is valid")
 }
 
 #[test]
@@ -768,6 +786,63 @@ fn state_clears_provisional_text_on_the_committed_assistant_row() {
         "half",
         "the committed transcript carries the row while the buffer is dropped"
     );
+}
+
+#[test]
+fn state_buffers_the_reasoning_channel_apart_from_the_answer() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = RunStreamState::new(session_id, run_id);
+    state
+        .apply_initial(fixture_snapshot(session_id, run_id, Vec::new()))
+        .expect("fixture snapshot applies");
+    assert_eq!(state.provisional_text(), "");
+    assert_eq!(state.provisional_reasoning(), "");
+
+    // The reasoning of one step accumulates on its own channel and never
+    // becomes answer text, even when the two channels interleave.
+    for delta in [
+        fixture_reasoning_delta(session_id, run_id, 0, "weigh"),
+        fixture_delta(session_id, run_id, 0, "the "),
+        fixture_reasoning_delta(session_id, run_id, 0, "ing"),
+        fixture_delta(session_id, run_id, 0, "answer"),
+    ] {
+        state
+            .apply_frame(RunStreamFrameDto::TextDelta(delta))
+            .expect("a delta of the current step applies");
+    }
+    assert_eq!(state.provisional_reasoning(), "weighing");
+    assert_eq!(state.provisional_text(), "the answer");
+    assert!(
+        state.messages().is_empty(),
+        "neither channel is committed state"
+    );
+
+    // A delta of the next step replaces both channels' buffers.
+    state
+        .apply_frame(RunStreamFrameDto::TextDelta(fixture_reasoning_delta(
+            session_id, run_id, 1, "then",
+        )))
+        .expect("the next step's reasoning applies");
+    assert_eq!(state.provisional_reasoning(), "then");
+    assert_eq!(
+        state.provisional_text(),
+        "",
+        "the previous step's answer does not outlive its step"
+    );
+
+    // The step's committed assistant row supersedes both channels at once.
+    state
+        .apply_frame(RunStreamFrameDto::Content(message(
+            session_id,
+            Some(run_id),
+            MessageKindDto::Assistant,
+            "the answer",
+        )))
+        .expect("the committed assistant row applies");
+    assert_eq!(state.provisional_reasoning(), "");
+    assert_eq!(state.provisional_text(), "");
+    assert_eq!(state.messages().len(), 1);
 }
 
 #[test]

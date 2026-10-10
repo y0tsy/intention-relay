@@ -37,8 +37,8 @@ use intention_proto::TurnId;
 #[cfg(feature = "test-support")]
 use intention_proto::{
     ClientRequestDto, InterruptRunCommandDto, ProtocolDaemonMessageDto, ProtocolResultDto,
-    RunStreamFrameDto, RunSubscriptionSnapshotDto, SubscribeRunCommandDto, decode_response,
-    encode_request, run_status_is_terminal,
+    RunStreamFrameDto, RunSubscriptionSnapshotDto, SubscribeRunCommandDto, TextDeltaChannelDto,
+    decode_response, encode_request, run_status_is_terminal,
 };
 use intention_proto::{IdempotencyKey, RunId, SessionId};
 use intention_proto::{MessageKindDto, RunStatusDto, SendUserTurnCommandDto};
@@ -196,6 +196,58 @@ impl ModelExecutionDriver for PartialAnswerDriver {
 /// The chunked answer the gated driver streams, as its chunks.
 #[cfg(feature = "test-support")]
 const GATED_CHUNKS: [&str; 3] = ["alpha ", "beta ", "gamma"];
+
+/// The reasoning chunks the two-channel driver streams before its answer.
+#[cfg(feature = "test-support")]
+const GATED_REASONING_CHUNKS: [&str; 3] = ["weigh", "ing ", "the options"];
+
+/// The answer chunks the two-channel driver streams after its reasoning.
+#[cfg(feature = "test-support")]
+const GATED_ANSWER_CHUNKS: [&str; 3] = ["alpha ", "beta ", "gamma"];
+
+/// Streams one step's reasoning and then its answer once the scenario releases
+/// it.
+///
+/// The run must already be subscribed before the provider streams, so the
+/// accepted turn is durable while both channels of the step are still pending.
+#[cfg(feature = "test-support")]
+struct GatedChannelDriver {
+    release: Arc<tokio::sync::Notify>,
+}
+
+#[cfg(feature = "test-support")]
+impl ModelExecutionDriver for GatedChannelDriver {
+    fn capabilities(&self) -> ModelCapabilitiesDto {
+        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+    }
+
+    fn execute(
+        &self,
+        _request: ModelRequestDto,
+        _cancellation: ModelCancellationSignal,
+    ) -> ModelEventStream {
+        let release = Arc::clone(&self.release);
+        let events = GATED_REASONING_CHUNKS
+            .iter()
+            .map(|chunk| Ok(ModelEventDto::reasoning_delta(*chunk).expect("reasoning is valid")))
+            .chain(
+                GATED_ANSWER_CHUNKS
+                    .iter()
+                    .map(|chunk| Ok(ModelEventDto::text_delta(*chunk).expect("text is valid"))),
+            )
+            .chain(std::iter::once(Ok(ModelEventDto::finished(
+                FinishReasonDto::Stop,
+            ))))
+            .collect::<Vec<_>>();
+        Box::pin(
+            stream::once(async move {
+                release.notified().await;
+                Ok(ModelEventDto::started())
+            })
+            .chain(stream::iter(events)),
+        )
+    }
+}
 
 /// Streams one chunked answer once the scenario releases it.
 ///
@@ -893,6 +945,151 @@ async fn streamed_provider_text_reaches_a_subscriber_before_its_committed_row_an
         vec![committed_text],
         "the committed row carries the whole step and no provisional fragment survives"
     );
+    let snapshot_json = serde_json::to_string(&snapshot).expect("the current snapshot serializes");
+    assert!(
+        !snapshot_json.contains("text_delta"),
+        "a current-state snapshot carries no transient frame"
+    );
+
+    server.await.expect("host accepts every fixture peer");
+    host.shutdown().await;
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn both_channels_of_a_step_reach_a_subscriber_before_the_row_they_become() {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let driver = Arc::new(GatedChannelDriver {
+        release: Arc::clone(&release),
+    });
+    let (_directory, facade, _snapshot) = fixture_facade("two-channels", driver);
+    let session_id = SessionId::new();
+    create_session(&facade, session_id, &std::env::temp_dir());
+    let endpoint = LocalEndpoint::from_instance_id(format!("m4-two-channels-{}", RunId::new()))
+        .expect("fixture endpoint is valid");
+    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
+    let host = intention_daemon::test_host_lifecycle(facade.clone());
+    let host_server = host.clone();
+    let server = tokio::spawn(async move {
+        host_server.serve_connections(listener, 3).await;
+    });
+
+    let run_id = send_user_turn_through_host(&endpoint, session_id).await;
+    let connection = intention_transport::AsyncLocalClientConnection::connect(&endpoint)
+        .await
+        .expect("stream subscriber connects");
+    let (mut subscriber_requests, mut frames) = connection.split();
+    subscriber_requests
+        .send_message(&encode_request(
+            1,
+            ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, run_id)),
+        ))
+        .await
+        .expect("subscription request sends");
+    let reply = frames
+        .receive_line()
+        .await
+        .expect("subscription reply arrives");
+    assert!(
+        matches!(
+            decode_response(&reply, 1).expect("subscription reply decodes"),
+            ProtocolResultDto::RunSubscribed(_)
+        ),
+        "a live subscription is what transient frames are published to"
+    );
+
+    release.notify_one();
+
+    let mut received: Vec<RunStreamFrameDto> = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let ProtocolDaemonMessageDto::Frame(frame) = receive_message(&mut frames).await else {
+                continue;
+            };
+            let terminal = matches!(
+                &frame,
+                RunStreamFrameDto::Status(run) if run_status_is_terminal(run.status())
+            );
+            received.push(frame);
+            if terminal {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the streamed run reaches its terminal frame");
+
+    let channels: Vec<(TextDeltaChannelDto, String)> = received
+        .iter()
+        .filter_map(|frame| match frame {
+            RunStreamFrameDto::TextDelta(delta) => {
+                assert_eq!(delta.session_id(), session_id);
+                assert_eq!(delta.run_id(), run_id);
+                assert_eq!(delta.step(), 0, "one provider round is one model step");
+                Some((delta.channel(), delta.text().to_owned()))
+            }
+            _ => None,
+        })
+        .collect();
+    let joined = |channel: TextDeltaChannelDto| {
+        channels
+            .iter()
+            .filter(|(published, _)| *published == channel)
+            .map(|(_, text)| text.as_str())
+            .collect::<String>()
+    };
+    assert_eq!(
+        joined(TextDeltaChannelDto::Reasoning),
+        GATED_REASONING_CHUNKS.concat(),
+        "the reasoning channel is coalesced in the order the provider streamed it"
+    );
+    assert_eq!(
+        joined(TextDeltaChannelDto::Answer),
+        GATED_ANSWER_CHUNKS.concat(),
+        "the answer channel is never reordered by the reasoning beside it"
+    );
+
+    let (committed_index, committed) = received
+        .iter()
+        .enumerate()
+        .find_map(|(index, frame)| match frame {
+            RunStreamFrameDto::Content(message) if message.kind() == MessageKindDto::Assistant => {
+                Some((index, message.clone()))
+            }
+            _ => None,
+        })
+        .expect("the run commits its assistant row");
+    let newest_delta = received
+        .iter()
+        .rposition(|frame| matches!(frame, RunStreamFrameDto::TextDelta(_)))
+        .expect("every advertised delta is a received frame");
+    assert!(
+        newest_delta < committed_index,
+        "both channels flush before the committed row that supersedes them"
+    );
+    assert_eq!(
+        committed.reasoning(),
+        Some(GATED_REASONING_CHUNKS.concat().as_str()),
+        "the committed row carries the reasoning the live segment streamed"
+    );
+    assert_eq!(
+        committed.text(),
+        GATED_ANSWER_CHUNKS.concat(),
+        "the committed row carries the answer the live segment streamed"
+    );
+    assert!(
+        channels
+            .iter()
+            .position(|(channel, _)| *channel == TextDeltaChannelDto::Answer)
+            > channels
+                .iter()
+                .rposition(|(channel, _)| *channel == TextDeltaChannelDto::Reasoning),
+        "the reasoning channel is published before the answer it precedes"
+    );
+
+    // Transient means never durable: the current-state snapshot carries the
+    // committed row alone, with no provisional fragment of either channel.
+    let snapshot = run_snapshot_through_host(&endpoint, session_id, run_id).await;
     let snapshot_json = serde_json::to_string(&snapshot).expect("the current snapshot serializes");
     assert!(
         !snapshot_json.contains("text_delta"),

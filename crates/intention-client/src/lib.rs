@@ -19,8 +19,8 @@ use intention_proto::{
     ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunId, RunProjectionDto,
     RunStatusDto, RunStreamFrameDto, RunSubscriptionSnapshotDto, SendUserTurnCommandDto,
     SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
-    SubscribeRunCommandDto, TextDeltaFrameDto, TurnId, decode_response, encode_request,
-    parse_run_frame, run_status_is_terminal,
+    SubscribeRunCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, TurnId, decode_response,
+    encode_request, parse_run_frame, run_status_is_terminal,
 };
 use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncMessageSender, LocalEndpoint,
@@ -460,18 +460,21 @@ pub const RETAINED_TRANSCRIPT_MESSAGES: usize = 256;
 /// carries no row identity, so the daemon-side watermark remains the authority
 /// for a row the snapshot already carried. The retained transcript keeps the
 /// newest [`RETAINED_TRANSCRIPT_MESSAGES`] rows. Transient provisional text is
-/// not committed state: it is held only for the current model step and is
-/// dropped as soon as that step's assistant row commits.
+/// not committed state: each of the current model step's two text channels is
+/// held in its own buffer for that step only and is dropped as soon as the
+/// step's assistant row commits.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunStreamState {
     session_id: SessionId,
     run_id: RunId,
     run: Option<RunProjectionDto>,
     messages: Vec<MessageProjectionDto>,
-    /// The model step the provisional buffer currently belongs to, if any.
+    /// The model step the provisional buffers currently belong to, if any.
     provisional_step: Option<u32>,
-    /// The transient provisional text of the current model step.
+    /// The transient answer text of the current model step.
     provisional_text: String,
+    /// The transient reasoning text of the current model step.
+    provisional_reasoning: String,
 }
 
 impl RunStreamState {
@@ -485,6 +488,7 @@ impl RunStreamState {
             messages: Vec::new(),
             provisional_step: None,
             provisional_text: String::new(),
+            provisional_reasoning: String::new(),
         }
     }
 
@@ -510,8 +514,9 @@ impl RunStreamState {
     /// Applies one uncorrelated run-stream frame.
     ///
     /// A provisional text delta is best-effort advance notice: it mutates only
-    /// the transient buffer and never the committed run or transcript. A
-    /// terminal status frame ends the run and drops the buffer with it.
+    /// the transient buffer of the channel it names and never the committed run
+    /// or transcript. A terminal status frame ends the run and drops both
+    /// buffers with it.
     ///
     /// # Errors
     ///
@@ -528,10 +533,10 @@ impl RunStreamState {
 
     fn apply_content(&mut self, message: MessageProjectionDto) -> DtoResult<()> {
         self.ensure_scope(message.session_id(), message.run_id())?;
-        // The committed assistant row of a step supersedes that step's
-        // provisional text, so the buffer never outlives its own step.
+        // The committed assistant row of a step supersedes both its channels'
+        // provisional text, so neither buffer outlives its own step.
         if message.kind() == MessageKindDto::Assistant {
-            self.clear_provisional_text();
+            self.clear_provisional();
         }
         // A content frame repeating the newest accepted row is the frame the
         // subscription snapshot already carried: re-appending it would show the
@@ -546,20 +551,29 @@ impl RunStreamState {
 
     fn apply_text_delta(&mut self, delta: TextDeltaFrameDto) -> DtoResult<()> {
         self.ensure_scope(delta.session_id(), Some(delta.run_id()))?;
-        // A delta for a new step replaces the buffer: the previous step's
+        // A delta for a new step replaces both buffers: the previous step's
         // advance notice is stale once the run moves on.
         if self.provisional_step != Some(delta.step()) {
             self.provisional_step = Some(delta.step());
             self.provisional_text.clear();
+            self.provisional_reasoning.clear();
         }
-        self.provisional_text.push_str(delta.text());
+        // The channel is what keeps the reasoning a step thinks through apart
+        // from the answer it commits: each buffer grows on its own, so no
+        // reasoning chunk ever becomes answer text.
+        match delta.channel() {
+            TextDeltaChannelDto::Answer => self.provisional_text.push_str(delta.text()),
+            TextDeltaChannelDto::Reasoning => self.provisional_reasoning.push_str(delta.text()),
+        }
         Ok(())
     }
 
-    /// Drops the transient provisional text of the current model step.
-    fn clear_provisional_text(&mut self) {
+    /// Drops the transient provisional text of every channel of the current
+    /// model step.
+    fn clear_provisional(&mut self) {
         self.provisional_step = None;
         self.provisional_text.clear();
+        self.provisional_reasoning.clear();
     }
 
     /// Drops the oldest retained rows past [`RETAINED_TRANSCRIPT_MESSAGES`].
@@ -576,9 +590,9 @@ impl RunStreamState {
             return Err(invalid_response());
         }
         // A terminal status ends the run: the daemon discards its unpublished
-        // delta window, so no advance notice may outlive the run.
+        // delta windows, so no advance notice may outlive the run.
         if run_status_is_terminal(run.status()) {
-            self.clear_provisional_text();
+            self.clear_provisional();
         }
         self.run = Some(run);
         Ok(())
@@ -625,15 +639,28 @@ impl RunStreamState {
         &self.messages
     }
 
-    /// Returns the transient provisional text of the current model step.
+    /// Returns the transient provisional answer text of the current model step.
     ///
     /// The text is best-effort advance notice, never committed state: it is
     /// empty until the first delta of a step arrives and is cleared once that
     /// step's committed assistant row arrives or the run reaches a terminal
-    /// status.
+    /// status. Only the answer channel grows this buffer; the reasoning the
+    /// step precedes it with is buffered separately.
     #[must_use]
     pub fn provisional_text(&self) -> &str {
         &self.provisional_text
+    }
+
+    /// Returns the transient provisional reasoning text of the current model
+    /// step.
+    ///
+    /// The reasoning channel is advance notice exactly like the answer text,
+    /// with the same lifetime: it is empty until the first reasoning delta of a
+    /// step arrives and is cleared with the answer once that step's committed
+    /// assistant row arrives or the run reaches a terminal status.
+    #[must_use]
+    pub fn provisional_reasoning(&self) -> &str {
+        &self.provisional_reasoning
     }
 }
 
