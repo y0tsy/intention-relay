@@ -603,6 +603,54 @@ fn the_repl_streams_a_piped_turn_and_exits_on_quit() {
 }
 
 #[test]
+fn every_new_command_creates_a_fresh_session_under_one_workspace_root() {
+    let host = TerminalHost::new(ProviderEndpoint::scripted(), Some(WORKSPACE_FILE));
+    let workspace = host.workspace_root();
+    // Two runs of the same line front end over one durable host: the second
+    // `/new` proposes fresh identities for the same workspace root, and the
+    // daemon resolves them to the root's durable binding instead of rejecting
+    // the second session.
+    for run in 1..=2 {
+        let output = host.run(&["repl", "--workspace", &workspace], Some("/new\n/quit\n"));
+        assert_eq!(
+            output.code,
+            Some(0),
+            "the REPL exits cleanly on run {run}: {}",
+            output.stderr
+        );
+        assert!(
+            output.stdout.contains(" open\n"),
+            "run {run} opens a session: {}",
+            output.stdout
+        );
+        assert!(
+            !output.stderr.contains("error:"),
+            "run {run} reports no creation failure: {}",
+            output.stderr
+        );
+    }
+
+    let sessions = block_on(host.client.list_sessions()).expect("the session list reads");
+    assert_eq!(
+        sessions.sessions().len(),
+        2,
+        "every /new created its own session under the one workspace root"
+    );
+    let binding = sessions
+        .sessions()
+        .first()
+        .map(|summary| summary.workspace_id())
+        .expect("the listed sessions carry their workspace identity");
+    assert!(
+        sessions
+            .sessions()
+            .iter()
+            .all(|summary| summary.workspace_id() == binding),
+        "one workspace root keeps one durable workspace identity"
+    );
+}
+
+#[test]
 fn the_repl_exits_on_input_eof() {
     let host = TerminalHost::new(ProviderEndpoint::scripted(), Some(WORKSPACE_FILE));
     let workspace = host.workspace_root();
