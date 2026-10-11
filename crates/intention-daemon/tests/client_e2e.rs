@@ -17,7 +17,7 @@
 use std::process::Child;
 use std::time::{Duration, Instant};
 
-use intention_client::{SessionStreamClient, SessionStreamSubscription};
+use intention_client::{SessionStreamClient, SessionStreamSubscription, StreamStep};
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunStatusDto,
     SendUserTurnOutcomeDto, SessionFrameDto, SubscribeSessionCommandDto, ThemeDto,
@@ -187,8 +187,8 @@ async fn observe_run_until_terminal(
             "the run reaches a terminal status before the deadline"
         );
         match tokio::time::timeout(Duration::from_secs(1), subscription.receive()).await {
-            Ok(Ok(Some(frame))) => frames.push(frame),
-            Ok(Ok(None)) => {
+            Ok(Ok(StreamStep::Frame(frame))) => frames.push(frame),
+            Ok(Ok(StreamStep::Closed(_))) => {
                 panic!("the daemon closed the run stream before the run terminalized")
             }
             Ok(Err(error)) => panic!("run stream frame error: {}", error.code()),

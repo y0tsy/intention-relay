@@ -55,7 +55,7 @@ use std::process::Child;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use intention_client::{IntentionClient, ProcessDaemonLauncher, SessionStreamClient};
+use intention_client::{IntentionClient, ProcessDaemonLauncher, SessionStreamClient, StreamStep};
 use intention_config::{
     ConfigPathDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto,
 };
@@ -708,8 +708,8 @@ async fn collect_run_frames(endpoint: &LocalEndpoint, session_id: SessionId) -> 
             }));
         }
         match subscription.receive().await {
-            Ok(Some(_)) => {}
-            Ok(None) => {
+            Ok(StreamStep::Frame(_)) => {}
+            Ok(StreamStep::Closed(_)) => {
                 return RunObservation::Lost(format!(
                     "the daemon closed the run stream after {} committed rows",
                     subscription.state().messages().len()
