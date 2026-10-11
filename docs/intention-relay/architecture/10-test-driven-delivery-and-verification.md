@@ -256,14 +256,15 @@ transcript scrolling, and the docked
 sessions panel (its frame and embedded title, the tab radio row, the search bar, the table header, columns, cursor
 marker, and resize reflow, the footer legend and row counter, and the stub tabs' `@todo` empty state).
 `tests/terminal_e2e.rs` spawns the
-real binary against a real daemon and the scripted fake provider in thirteen cases: NDJSON transient deltas before the
+real binary against a real daemon and the scripted fake provider in fifteen cases: NDJSON transient deltas before the
 committed row, the channel-tagged reasoning deltas that precede the answer they inform, progressive text output and
 completion, both REPL paths (a piped turn and input EOF), the prompt that creates the session it needs, an explicit
 continuation that reuses its session instead of creating one, every `/new` run creating a fresh session under one
-workspace root, a multi-line prompt reaching the session unchanged, the timeout deadline stop that ends the process
-with the interrupted status, a SIGINT that stops the headless run's stalled round and ends the process with the
-interrupted status, a SIGINT that stops the REPL's stalled round and hands the loop back to its prompt, and a typed
-unknown-session rejection with exit 3. The binary's own unit tests cover the command
+workspace root, a multi-line prompt reaching the session unchanged, a slash-prefixed prompt reaching the session as one
+turn instead of running a command, a prompt ending in a backslash reaching the session unchanged, the timeout deadline
+stop that ends the process with the interrupted status, a SIGINT that stops the headless run's stalled round and ends
+the process with the interrupted status, a SIGINT that stops the REPL's stalled round and hands the loop back to its
+prompt, and a typed unknown-session rejection with exit 3. The binary's own unit tests cover the command
 grammar, the exit-status mapping, the workspace-root resolution, the REPL line loop, and the headless formats, drivers,
 and wait deadlines, including the reasoning-only row the text report leaves unwritten. The crate's inline unit tests cover the `AppState` transitions, the settings load and theme
 selection and rejection paths, the picker's preview, commit, and revert transitions, the theme vocabulary and its
