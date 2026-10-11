@@ -12,7 +12,9 @@ mod common;
 
 use common::{TEST_REPLY_BOUND, endpoint, message};
 
-use intention_client::{RETAINED_TRANSCRIPT_MESSAGES, SessionStreamClient, SessionStreamState};
+use intention_client::{
+    FrameUpdate, RETAINED_TRANSCRIPT_MESSAGES, SessionStreamClient, SessionStreamState,
+};
 use intention_proto::{
     ClientRequestDto, ConfigRevisionId, MessageKindDto, MessageProjectionDto, ProjectId,
     ProtocolDaemonMessageDto, ProtocolResultDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto,
@@ -80,18 +82,19 @@ fn state_applies_the_subscription_snapshot_then_committed_frames() {
     // A session between runs carries no active run: the snapshot is the
     // transcript, and the status frame that follows opens the run another
     // window started.
-    state
-        .apply_initial(snapshot(
+    let read = SessionStreamState::from_snapshot(snapshot(
+        session_id,
+        None,
+        vec![message(
             session_id,
-            None,
-            vec![message(
-                session_id,
-                Some(run_id),
-                MessageKindDto::User,
-                "build it",
-            )],
-        ))
-        .expect("current-state snapshot applies");
+            Some(run_id),
+            MessageKindDto::User,
+            "build it",
+        )],
+    ));
+    state
+        .reconcile(read)
+        .expect("a read of this state's own session merges");
     assert!(state.run().is_none());
     assert_eq!(state.messages().len(), 1);
 
@@ -134,13 +137,14 @@ fn state_accepts_another_run_of_its_session_and_rejects_another_session() {
     let run_id = RunId::new();
     let other_run = RunId::new();
     let mut state = SessionStreamState::new(session_id);
+    let read = SessionStreamState::from_snapshot(snapshot(
+        session_id,
+        Some(run(session_id, run_id, RunStatusDto::Running)),
+        Vec::new(),
+    ));
     state
-        .apply_initial(snapshot(
-            session_id,
-            Some(run(session_id, run_id, RunStatusDto::Running)),
-            Vec::new(),
-        ))
-        .expect("fixture snapshot applies");
+        .reconcile(read)
+        .expect("a read of this state's own session merges");
 
     // The reported defect: a run another window started belongs to this
     // window's session, so its projection and rows apply here too.
@@ -180,8 +184,12 @@ fn state_accepts_another_run_of_its_session_and_rejects_another_session() {
     let mut foreign = SessionStreamState::new(session_id);
     assert_eq!(
         foreign
-            .apply_initial(snapshot(SessionId::new(), None, Vec::new()))
-            .expect_err("a snapshot from another session is rejected")
+            .reconcile(SessionStreamState::from_snapshot(snapshot(
+                SessionId::new(),
+                None,
+                Vec::new(),
+            )))
+            .expect_err("a read from another session is rejected")
             .code(),
         "invalid_session_subscription"
     );
@@ -239,13 +247,14 @@ fn state_dedupes_the_newest_row_and_bounds_the_transcript() {
         MessageKindDto::Assistant,
         "committed by the snapshot",
     );
+    let read = SessionStreamState::from_snapshot(snapshot(
+        session_id,
+        Some(run(session_id, run_id, RunStatusDto::Running)),
+        vec![snapshot_row.clone()],
+    ));
     state
-        .apply_initial(snapshot(
-            session_id,
-            Some(run(session_id, run_id, RunStatusDto::Running)),
-            vec![snapshot_row.clone()],
-        ))
-        .expect("fixture snapshot applies");
+        .reconcile(read)
+        .expect("a read of this state's own session merges");
 
     let repeated = MessageProjectionDto::new(
         snapshot_row.id(),
@@ -302,11 +311,157 @@ fn state_dedupes_the_newest_row_and_bounds_the_transcript() {
     );
 }
 
+/// Returns one state that has read `messages` of its own session.
+fn reading_state(
+    session_id: SessionId,
+    active_run: Option<RunProjectionDto>,
+    messages: Vec<MessageProjectionDto>,
+) -> SessionStreamState {
+    let mut state = SessionStreamState::new(session_id);
+    state
+        .reconcile(SessionStreamState::from_snapshot(snapshot(
+            session_id, active_run, messages,
+        )))
+        .expect("a read of the state's own session merges");
+    state
+}
+
+/// Returns one running fixture run projection of `session_id`.
+fn running(session_id: SessionId, run_id: RunId) -> RunProjectionDto {
+    run(session_id, run_id, RunStatusDto::Running)
+}
+
+/// Returns one answer-channel delta of `step` for a fixture run.
+fn answer_delta(session_id: SessionId, run_id: RunId, step: u32, text: &str) -> SessionFrameDto {
+    SessionFrameDto::TextDelta(
+        TextDeltaFrameDto::new(session_id, run_id, step, TextDeltaChannelDto::Answer, text)
+            .expect("the fixture delta is valid"),
+    )
+}
+
 #[test]
-fn state_merges_another_read_of_the_same_transcript_by_row_identity() {
+fn state_reports_the_update_of_every_frame_kind() {
+    // The client reports what each frame changed, so a consumer never re-derives
+    // the acceptance decision for itself.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let mut state = SessionStreamState::new(session_id);
+    let current = running(session_id, run_id);
+    let mut state = reading_state(session_id, Some(current), Vec::new());
+    // A transient delta advances the provisional buffer of its own run and step.
+    assert_eq!(
+        state
+            .apply_frame(answer_delta(session_id, run_id, 3, "hello"))
+            .expect("a delta of the projected run applies"),
+        FrameUpdate::Delta { run_id, step: 3 }
+    );
+    // A delta of a run this state does not project changes nothing.
+    assert_eq!(
+        state
+            .apply_frame(answer_delta(session_id, RunId::new(), 0, "stray"))
+            .expect("a delta of another run applies as a no-op"),
+        FrameUpdate::Unchanged
+    );
+
+    // A committed row is reported by the identity it appended, and the same row
+    // repeated changes nothing.
+    let row = message(session_id, Some(run_id), MessageKindDto::Assistant, "hello");
+    assert_eq!(
+        state
+            .apply_frame(SessionFrameDto::Content(row.clone()))
+            .expect("the committed row applies"),
+        FrameUpdate::Row(row.id())
+    );
+    assert_eq!(
+        state
+            .apply_frame(SessionFrameDto::Content(row))
+            .expect("a repeated row applies once"),
+        FrameUpdate::Unchanged
+    );
+
+    // A status frame replaces the projected run; repeating the same projection
+    // changes nothing.
+    assert_eq!(
+        state
+            .apply_frame(SessionFrameDto::Status(current))
+            .expect("the projected run's status applies"),
+        FrameUpdate::Unchanged,
+        "the projected run already carries this projection"
+    );
+    assert_eq!(
+        state
+            .apply_frame(SessionFrameDto::Status(run(
+                session_id,
+                run_id,
+                RunStatusDto::Completed,
+            )))
+            .expect("the terminal status applies"),
+        FrameUpdate::Run(run_id)
+    );
+}
+
+#[test]
+fn state_names_the_step_its_committed_assistant_row_superseded() {
+    // The identity a sink needs to suppress streamed text is the client's: the
+    // committed assistant row of a step carries the step it became.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = reading_state(session_id, Some(running(session_id, run_id)), Vec::new());
+    state
+        .apply_frame(answer_delta(session_id, run_id, 2, "half"))
+        .expect("the delta applies");
+    let row = message(session_id, Some(run_id), MessageKindDto::Assistant, "half");
+    state
+        .apply_frame(SessionFrameDto::Content(row.clone()))
+        .expect("the committed row applies");
+    assert_eq!(
+        state.superseded_step(row.id()),
+        Some(2),
+        "the row carries the step whose streamed text it became"
+    );
+
+    // A row that superseded no streamed text names no step.
+    let notice = message(
+        session_id,
+        Some(run_id),
+        MessageKindDto::Notice,
+        "still running",
+    );
+    state
+        .apply_frame(SessionFrameDto::Content(notice.clone()))
+        .expect("the notice applies");
+    assert_eq!(state.superseded_step(notice.id()), None);
+
+    // The identity lives exactly as long as its row: a front drain drops it.
+    for index in 0..RETAINED_TRANSCRIPT_MESSAGES {
+        state
+            .apply_frame(SessionFrameDto::Content(message(
+                session_id,
+                Some(run_id),
+                MessageKindDto::Notice,
+                &format!("row {index}"),
+            )))
+            .expect("a fresh committed row applies");
+    }
+    assert!(
+        state
+            .messages()
+            .iter()
+            .all(|committed| committed.id() != row.id()),
+        "the bound drained the superseded row"
+    );
+    assert_eq!(
+        state.superseded_step(row.id()),
+        None,
+        "a drained row keeps no identity to report"
+    );
+}
+
+#[test]
+fn state_reconciles_a_newer_read_by_row_identity() {
+    // The union of two reads of one durable transcript, matched by durable row
+    // identity: equal content with distinct identities is never conflated.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
     let first = message(session_id, Some(run_id), MessageKindDto::User, "build it");
     let second = message(
         session_id,
@@ -315,35 +470,248 @@ fn state_merges_another_read_of_the_same_transcript_by_row_identity() {
         "working",
     );
     let third = message(session_id, Some(run_id), MessageKindDto::Notice, "stopped");
-    state
-        .apply_initial(snapshot(
-            session_id,
-            Some(run(session_id, run_id, RunStatusDto::Running)),
-            vec![first.clone(), second.clone(), third.clone()],
-        ))
-        .expect("fixture snapshot applies");
-
-    // A session read carrying the outer rows leaves exactly the row it never
-    // carried.
-    assert_eq!(
-        state.missing_rows(&[first.clone(), third.clone()]),
-        vec![second.clone()]
+    let mut state = reading_state(
+        session_id,
+        Some(running(session_id, run_id)),
+        vec![first.clone(), third.clone()],
     );
+    assert_eq!(state.messages().len(), 2);
+    assert_eq!(state.messages()[0], first);
+    assert_eq!(state.messages()[1], third);
 
-    // Equal content with a distinct durable identity is still missing.
+    // A newer read carrying the row between them joins it in durable order.
+    state
+        .reconcile(SessionStreamState::from_snapshot(snapshot(
+            session_id,
+            Some(running(session_id, run_id)),
+            vec![second.clone()],
+        )))
+        .expect("a second read of the same session merges");
+    assert_eq!(state.messages().len(), 3);
+    assert_eq!(state.messages()[0], first);
+    assert_eq!(state.messages()[1], second);
+    assert_eq!(state.messages()[2], third);
+
+    // Equal content with a distinct durable identity is a distinct row.
     let equal_content = message(
         session_id,
         Some(run_id),
         MessageKindDto::Assistant,
         "working",
     );
+    state
+        .reconcile(SessionStreamState::from_snapshot(snapshot(
+            session_id,
+            Some(running(session_id, run_id)),
+            vec![equal_content.clone()],
+        )))
+        .expect("a read carrying equal content merges by identity");
     assert_eq!(
-        state.missing_rows(&[first, equal_content]),
-        vec![second, third]
+        state.messages().len(),
+        4,
+        "rows match by identity, never by value"
+    );
+    assert_eq!(
+        state.messages().last().expect("rows remain"),
+        &equal_content
     );
 
-    // A read that already carries every row leaves nothing to merge.
-    assert!(state.missing_rows(state.messages()).is_empty());
+    // A read that already carries every row adds nothing.
+    state
+        .reconcile(SessionStreamState::from_snapshot(snapshot(
+            session_id,
+            Some(running(session_id, run_id)),
+            state.messages().to_vec(),
+        )))
+        .expect("a read of its own rows merges");
+    assert_eq!(state.messages().len(), 4);
+}
+
+#[test]
+fn state_reconciliation_keeps_the_newest_retained_rows() {
+    // A read larger than the client's window is bounded by the client itself:
+    // the newest rows stay, in durable order.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let rows: Vec<_> = (0..RETAINED_TRANSCRIPT_MESSAGES + 4)
+        .map(|index| {
+            message(
+                session_id,
+                Some(run_id),
+                MessageKindDto::Notice,
+                &format!("row {index}"),
+            )
+        })
+        .collect();
+    let state = reading_state(session_id, Some(running(session_id, run_id)), rows.clone());
+    assert_eq!(state.messages().len(), RETAINED_TRANSCRIPT_MESSAGES);
+    assert_eq!(
+        state.messages(),
+        &rows[4..],
+        "the window keeps the newest rows in durable order"
+    );
+}
+
+#[test]
+fn state_walks_the_rows_after_a_reported_identity_past_the_retention_bound() {
+    // A reporter that walks by durable identity sees every committed row once,
+    // even past the client's retention bound, and a reported row the bound has
+    // since dropped never blocks the next report.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = reading_state(session_id, Some(running(session_id, run_id)), Vec::new());
+    let mut reported = None;
+    let mut reported_ids = Vec::new();
+    for index in 0..RETAINED_TRANSCRIPT_MESSAGES + 4 {
+        state
+            .apply_frame(SessionFrameDto::Content(message(
+                session_id,
+                Some(run_id),
+                MessageKindDto::Notice,
+                &format!("row {index}"),
+            )))
+            .expect("a committed row applies");
+        for pending in state.rows_after(reported) {
+            reported = Some(pending.id());
+            reported_ids.push(pending.id());
+        }
+    }
+    assert_eq!(
+        reported_ids.len(),
+        RETAINED_TRANSCRIPT_MESSAGES + 4,
+        "every committed row is reported exactly once"
+    );
+    assert_eq!(
+        state.rows_after(reported),
+        &[] as &[MessageProjectionDto],
+        "a reporter that reported the newest row has nothing pending"
+    );
+
+    // The row committed past the bound is the next reported row.
+    let newest = message(
+        session_id,
+        Some(run_id),
+        MessageKindDto::Notice,
+        "the newest row",
+    );
+    state
+        .apply_frame(SessionFrameDto::Content(newest.clone()))
+        .expect("a committed row applies");
+    assert_eq!(
+        state.rows_after(reported),
+        std::slice::from_ref(&newest),
+        "the row committed past the bound is reported"
+    );
+
+    // A reported row the bound dropped never blocks the next report.
+    let drained = reported_ids[0];
+    assert!(
+        state.messages().iter().all(|row| row.id() != drained),
+        "the bound dropped the first reported row"
+    );
+    assert!(
+        !state.rows_after(Some(drained)).is_empty(),
+        "a drained reported identity still lets the retained rows through"
+    );
+}
+
+#[test]
+fn state_reports_appends_only_while_the_rows_at_the_epoch_stay_a_prefix() {
+    // The epoch machinery a layout cache keys on: appends answer a count, and a
+    // reconciliation, a read, or a front drain ends the append-only run.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = reading_state(
+        session_id,
+        Some(running(session_id, run_id)),
+        vec![message(
+            session_id,
+            Some(run_id),
+            MessageKindDto::User,
+            "hello",
+        )],
+    );
+    let epoch = state.transcript_epoch();
+    assert_eq!(
+        state.transcript_appended_since(epoch),
+        Some(0),
+        "a transcript that changed nothing appended nothing"
+    );
+    state
+        .apply_frame(SessionFrameDto::Content(message(
+            session_id,
+            Some(run_id),
+            MessageKindDto::Assistant,
+            "one",
+        )))
+        .expect("a committed row applies");
+    assert_eq!(state.transcript_appended_since(epoch), Some(1));
+    state
+        .apply_frame(SessionFrameDto::Content(message(
+            session_id,
+            Some(run_id),
+            MessageKindDto::Assistant,
+            "two",
+        )))
+        .expect("a committed row applies");
+    assert_eq!(state.transcript_appended_since(epoch), Some(2));
+    assert_eq!(
+        state.transcript_appended_since(state.transcript_epoch()),
+        Some(0)
+    );
+    assert_eq!(
+        state.transcript_appended_since(state.transcript_epoch() + 1),
+        None,
+        "a future epoch is never answered append-only"
+    );
+
+    // A reconciliation is a replacement: the rows current at the epoch are no
+    // longer a prefix of the transcript.
+    let epoch = state.transcript_epoch();
+    state
+        .reconcile(SessionStreamState::from_snapshot(snapshot(
+            session_id,
+            Some(running(session_id, run_id)),
+            vec![message(
+                session_id,
+                Some(run_id),
+                MessageKindDto::Notice,
+                "three",
+            )],
+        )))
+        .expect("a read of the same session merges");
+    assert_eq!(
+        state.transcript_appended_since(epoch),
+        None,
+        "a reconciliation ends the append-only run"
+    );
+
+    // A front drain is a replacement too.
+    let rows: Vec<_> = (0..RETAINED_TRANSCRIPT_MESSAGES)
+        .map(|index| {
+            message(
+                session_id,
+                Some(run_id),
+                MessageKindDto::Notice,
+                &format!("row {index}"),
+            )
+        })
+        .collect();
+    let mut state = reading_state(session_id, Some(running(session_id, run_id)), rows);
+    let epoch = state.transcript_epoch();
+    state
+        .apply_frame(SessionFrameDto::Content(message(
+            session_id,
+            Some(run_id),
+            MessageKindDto::Notice,
+            "the newest row",
+        )))
+        .expect("a committed row applies");
+    assert_eq!(
+        state.transcript_appended_since(epoch),
+        None,
+        "a front drain ends the append-only run"
+    );
 }
 
 #[tokio::test]

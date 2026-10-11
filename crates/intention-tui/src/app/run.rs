@@ -1,9 +1,9 @@
 //! The run transitions: the live subscription, frames, turns, and interrupts.
 
-use intention_client::{RETAINED_TRANSCRIPT_MESSAGES, SessionStreamState};
+use intention_client::{FrameUpdate, SessionStreamState};
 use intention_proto::{
-    ErrorDto, MessageKindDto, MessageProjectionDto, RunProjectionDto, SendUserTurnOutcomeDto,
-    SessionFrameDto, TextDeltaChannelDto, run_status_is_terminal,
+    ErrorDto, MessageKindDto, RunProjectionDto, SendUserTurnOutcomeDto, SessionFrameDto,
+    TextDeltaChannelDto, run_status_is_terminal,
 };
 
 use super::{AppState, ConnectionStatus, Effect, RunPhase, StreamStatus, short_identifier};
@@ -16,22 +16,23 @@ use super::{AppState, ConnectionStatus, Effect, RunPhase, StreamStatus, short_id
 const TOOL_WORKING_AFTER_MILLIS: u64 = 500;
 
 impl AppState {
-    /// Mirrors a freshly opened subscription and appends the rows it was missing.
+    /// Reconciles a freshly opened subscription into the client's row state.
+    ///
+    /// The subscription reply is a second read of the same durable transcript
+    /// the session read carried, so the client merges the two by durable row
+    /// identity and the read's run projection is the current one. This front end
+    /// keeps no second projection: the panes render exactly the rows the client
+    /// reconciled.
     pub(super) fn apply_session_stream_opened(&mut self, state: SessionStreamState) -> Vec<Effect> {
-        // @todo(hack): the app keeps a second committed-transcript projection and answers a fresh
-        // subscription by appending the client's set difference at the tail, so the row order the
-        // pane shows is the adapter's own and the mirror must happen to be a prefix of the durable
-        // order. The client owns reconciliation; the pane should render the rows it reconciled.
-        // The subscription snapshot is a fresh read of the run's rows: rows the
-        // seeded transcript is missing (they committed after the session read)
-        // are appended once, and rows it already carries are not repeated. The
-        // client reconciles the two reads by durable row identity.
-        let missing = state.missing_rows(&self.transcript);
-        self.extend_transcript(missing);
-        self.trim_transcript();
-        self.active_run = state.run().copied();
-        self.session_stream = Some(state);
+        if let Err(error) = self.merge_transcript(state) {
+            // The reply belongs to another session: the client classified it,
+            // so the front end reports that failure instead of merging it.
+            return self.apply_failure(&error);
+        }
+        self.note_replacement();
         self.stream = StreamStatus::Live;
+        // A stream that opened again owes its own one reconnect.
+        self.reconnects_asked = 0;
         self.error = None;
         // A fresh subscription carries no streamed text: a live run it opens is
         // waiting for the first token this state will see, and a terminal one
@@ -43,21 +44,20 @@ impl AppState {
     /// Records a subscription that failed to open or stay live.
     ///
     /// The stream is this front end's one live channel, so its loss is not a
-    /// dead end: the state clears what the stream justified - the phase and the
-    /// tool watch, so [`Self::live_run`] stops claiming a run nobody observes
-    /// and the exit and clear arms come back - and asks for one reconnect. The
-    /// reconnect re-reads current state through the one resynchronization this
-    /// protocol has, and a reconnect that fails reports its own typed error
-    /// instead of retrying in a loop.
+    /// dead end: the state ends the observation the stream justified - the
+    /// transient text, the phase, and the tool watch, so [`Self::live_run`]
+    /// stops claiming a run nobody observes and the exit and clear arms come
+    /// back - and asks for the one reconnect this loss is owed. The reconnect
+    /// re-reads current state through the one resynchronization this protocol
+    /// has, and a reconnect that fails reports its own typed error instead of
+    /// retrying in a loop.
+    ///
+    /// The committed rows and the run projection stay: they are the session's
+    /// own durable state, and a front end that lost a stream still knows what
+    /// the session committed.
     pub(super) fn apply_session_stream_failed(&mut self, error: &ErrorDto) -> Vec<Effect> {
-        self.session_stream = None;
         self.stream = StreamStatus::Failed;
-        // The stream that justified the live phase is gone, so the phase and
-        // the tool watch clear with it: the status row never names a working
-        // run this front end no longer observes, and [`Self::live_run`] stops
-        // claiming one, which is what lets the exit and clear arms through.
-        self.phase = None;
-        self.reset_tool_watch();
+        self.end_stream_observation();
         let mut effects = self.apply_failure(error);
         effects.extend(self.reconnect_once());
         effects
@@ -66,24 +66,43 @@ impl AppState {
     /// Records a stream the daemon closed.
     ///
     /// A closed stream is the same loss as a failed one - the daemon closed the
-    /// connection or the host is leaving - so it clears the same state and asks
-    /// for the same one reconnect.
+    /// connection or the host is leaving - so it ends the same observation and
+    /// asks for the same one reconnect.
     pub(super) fn apply_session_stream_ended(&mut self) -> Vec<Effect> {
-        self.session_stream = None;
         self.stream = StreamStatus::Ended;
+        self.end_stream_observation();
+        self.reconnect_once()
+    }
+
+    /// Ends the observation the lost stream justified.
+    ///
+    /// The transient provisional text belongs to the stream that streamed it,
+    /// and the phase and the tool watch belong to a run this front end no longer
+    /// observes: the status row never names a working run nobody watches, and
+    /// [`Self::live_run`] stops claiming one, which is what lets the exit and
+    /// clear arms through.
+    fn end_stream_observation(&mut self) {
+        if let Some(state) = self.session_state.as_mut() {
+            state.end_stream();
+        }
         self.phase = None;
         self.reset_tool_watch();
-        self.reconnect_once()
     }
 
     /// Returns the one reconnect this front end asks for after a lost stream.
     ///
-    /// The connection reads as connecting while the attempt runs, and the loss
-    /// stays visible: a typed failure keeps its error line, and the stream
-    /// status keeps naming the loss, so the status row never claims live updates
-    /// this front end does not have. A reconnect that fails reports its own
-    /// typed error instead of retrying in a loop.
-    fn reconnect_once(&mut self) -> Vec<Effect> {
+    /// The budget is one reconnect per lost stream: the first loss asks for it
+    /// and a second loss inside the same recovery asks for nothing, so the
+    /// front end reports its typed failure instead of retrying in a loop. The
+    /// connection reads as connecting while the attempt runs, and the loss stays
+    /// visible: a typed failure keeps its error line, and the stream status
+    /// keeps naming the loss, so the status row never claims live updates this
+    /// front end does not have.
+    pub(super) fn reconnect_once(&mut self) -> Vec<Effect> {
+        if self.reconnects_asked > 0 {
+            return Vec::new();
+        }
+        self.reconnects_asked += 1;
         self.connection = ConnectionStatus::Connecting;
         self.note("reconnecting".to_owned());
         vec![Effect::Connect]
@@ -91,38 +110,42 @@ impl AppState {
 
     /// Applies one committed or transient run-stream frame.
     pub(super) fn apply_frame(&mut self, frame: SessionFrameDto) -> Vec<Effect> {
-        let Some(stream) = self.session_stream.as_mut() else {
-            // A frame for a subscription this front end no longer holds is stale;
-            // dropping it keeps the seeded transcript authoritative.
+        if self.stream != StreamStatus::Live {
+            // A frame for a subscription this front end no longer holds is
+            // stale; dropping it keeps the committed rows authoritative.
+            return Vec::new();
+        }
+        let epoch = self.transcript_epoch();
+        let previous_run = self.active_run().map(|run| run.run_id());
+        let Some(state) = self.session_state.as_mut() else {
             return Vec::new();
         };
-        if let Err(error) = stream.apply_frame(frame.clone()) {
-            return self.apply_failure(&error);
-        }
+        let update = match state.apply_frame(frame.clone()) {
+            Ok(update) => update,
+            Err(error) => return self.apply_failure(&error),
+        };
         match frame {
             SessionFrameDto::Content(message) => {
-                // A content frame repeating the newest accepted row carries the
-                // identity of the row the snapshot already carried, so the two
-                // are the same committed row.
-                // @todo(hack): the newest-accepted-row idempotency rule is re-implemented here on
-                // the second projection, although the client applies the same rule to its own rows.
-                // Two copies mean a change to the rule reaches only one of them - and the copy the
-                // user reads is this one.
-                if self.transcript.last().map(MessageProjectionDto::id) != Some(message.id()) {
-                    self.push_transcript_row(message);
-                    self.trim_transcript();
+                // The client accepted this committed row: the display state
+                // that follows the rows - the in-flight tool watch - moves with
+                // it.
+                if matches!(update, FrameUpdate::Row(_)) {
+                    self.note_row_committed(message.kind());
+                }
+                // A row the client's retention bound dropped in front of the
+                // transcript is a replacement, never an append: every display
+                // row moved, so the selection and the expansions go with it.
+                if self.transcript_appended_since(epoch).is_none() {
+                    self.note_replacement();
                 }
             }
             SessionFrameDto::Status(run) => {
                 // A status of a run this state does not project yet is a run
                 // change - it came from another window's turn or from the daemon
                 // itself - and the phase belongs to the run, so the previous
-                // run's phase and its in-flight tool call never carry over.
-                let changed = self
-                    .active_run
-                    .is_none_or(|current| current.run_id() != run.run_id());
-                self.active_run = Some(run);
-                if changed {
+                // run's phase and its in-flight tool call never carry over. A
+                // status of the projected run keeps the phase the stream named.
+                if previous_run != Some(run.run_id()) {
                     self.rebase_run_phase();
                 }
                 // A live status keeps the phase the stream already named, and
@@ -142,10 +165,7 @@ impl AppState {
                 // The channel carries every run of the session, so a delta of a
                 // run this state does not project is another window's text: it
                 // never colours the projected run's phase.
-                if self
-                    .active_run
-                    .is_none_or(|current| current.run_id() != delta.run_id())
-                {
+                if !matches!(update, FrameUpdate::Delta { .. }) {
                     return Vec::new();
                 }
                 // The channel names the phase: the reasoning stream thinks and
@@ -237,6 +257,19 @@ impl AppState {
         self.phase = live.then_some(RunPhase::Waiting);
     }
 
+    /// Moves the display state that follows one committed row.
+    ///
+    /// The rows themselves are the client's; this front end keeps only the
+    /// in-flight tool watch over them, so a committed row of the client's
+    /// transcript is what opens or closes the watch.
+    pub(super) const fn note_row_committed(&mut self, kind: MessageKindDto) {
+        match kind {
+            MessageKindDto::ToolCall => self.note_tool_call(),
+            MessageKindDto::ToolResult => self.note_tool_result(),
+            MessageKindDto::User | MessageKindDto::Assistant | MessageKindDto::Notice => {}
+        }
+    }
+
     /// Records that one committed tool call joined the transcript.
     ///
     /// A tool call is in flight from its committed row until the result row
@@ -266,12 +299,12 @@ impl AppState {
     /// Re-reads the in-flight tool calls from the committed transcript.
     pub(super) fn recount_tool_watch(&mut self) {
         let calls = self
-            .transcript
+            .transcript()
             .iter()
             .filter(|row| row.kind() == MessageKindDto::ToolCall)
             .count();
         let results = self
-            .transcript
+            .transcript()
             .iter()
             .filter(|row| row.kind() == MessageKindDto::ToolResult)
             .count();
@@ -309,7 +342,7 @@ impl AppState {
         if self.stream != StreamStatus::Live {
             return None;
         }
-        self.active_run
+        self.active_run()
             .filter(|run| !run_status_is_terminal(run.status()))
     }
 
@@ -358,20 +391,5 @@ impl AppState {
     pub(super) fn apply_run_cancel_accepted(&mut self) -> Vec<Effect> {
         self.note("stop accepted".to_owned());
         Vec::new()
-    }
-
-    /// Drops the oldest transcript rows past the client's own retention bound.
-    ///
-    /// A drain drops rows in front of the transcript, so it is a replacement
-    /// and never an append: the epoch moves and the append-only run ends here.
-    // @todo(hack): the client's retention bound is re-applied here because the
-    // front end's mirror can hold more rows than the client keeps; the bound
-    // should be enforced in one layer.
-    fn trim_transcript(&mut self) {
-        if self.transcript.len() > RETAINED_TRANSCRIPT_MESSAGES {
-            let excess = self.transcript.len() - RETAINED_TRANSCRIPT_MESSAGES;
-            self.transcript.drain(..excess);
-            self.note_replacement();
-        }
     }
 }

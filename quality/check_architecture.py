@@ -370,20 +370,34 @@ def declared_test_targets(declarations: dict[str, object], package_name: str) ->
 test_only_patterns: set[str] = set()
 
 
+def forbidden_pattern_occurrence(
+    text: str, pattern: str, test_only: tuple[str, ...] = ()
+) -> bool:
+    """Return whether `text` uses `pattern` outside test-only code.
+
+    A pattern the global list or the caller's own list declares test-only is
+    exempt exactly where every occurrence sits inside `cfg(test)`/`#[test]`
+    code; every other occurrence stays forbidden.
+    """
+    if pattern not in text:
+        return False
+    if pattern in test_only_patterns or pattern in test_only:
+        return not only_test_code(text, pattern)
+    return True
+
 def check_source_patterns(
     package_name: str,
     package: dict[str, object],
     texts: dict[Path, str],
     patterns: list[str],
     boundary: str,
+    test_only: tuple[str, ...] = (),
 ) -> list[str]:
     failures: list[str] = []
     for path in source_files_for_package(package):
         text = texts[path]
         for pattern in patterns:
-            if pattern in test_only_patterns and only_test_code(text, pattern):
-                continue
-            if pattern in text:
+            if forbidden_pattern_occurrence(text, pattern, test_only):
                 failures.append(f"{path}: {package_name} {boundary} forbids {pattern!r}")
     return failures
 
@@ -612,6 +626,7 @@ def check_declared_boundaries(
     adapter_test_workspace = set(string_list(adapters, "allowed_test_workspace_dependencies"))
     adapter_external = set(string_list(adapters, "allowed_external_dependencies"))
     adapter_sources = string_list(adapters, "forbidden_source_patterns")
+    adapter_test_only_sources = string_list(adapters, "test_only_forbidden_source_patterns")
     for package_name in adapter_packages:
         if package_name not in packages:
             fail(f"adapter boundary references missing package {package_name}")
@@ -634,7 +649,14 @@ def check_declared_boundaries(
             adapter_external,
             "adapter external",
         ))
-        failures.extend(check_source_patterns(package_name, package, texts, adapter_sources, "adapter boundary"))
+        failures.extend(check_source_patterns(
+            package_name,
+            package,
+            texts,
+            list(dict.fromkeys([*adapter_sources, *adapter_test_only_sources])),
+            "adapter boundary",
+            test_only=tuple(adapter_test_only_sources),
+        ))
 
     protocol_name = protocol.get("package")
     if not isinstance(protocol_name, str) or protocol_name not in packages:
@@ -893,6 +915,24 @@ def self_test_crate_declarations() -> None:
         fail("crate declaration self-test: a non-list test target declaration must be rejected")
 
 
+def self_test_adapter_test_only_patterns() -> None:
+    """Proves the adapter's test-only pattern list exempts test code only."""
+    pattern = "RETAINED_TRANSCRIPT_MESSAGES"
+    production = f"fn bound() -> usize {{ {pattern} }}\n"
+    test_code = (
+        "#[cfg(test)]\n"
+        f"mod tests {{\n    const BOUND: usize = {pattern};\n}}\n"
+    )
+    unrelated = "#[cfg(test)]\nmod tests {\n    const OTHER: usize = SOMETHING_ELSE;\n}\n"
+    if not forbidden_pattern_occurrence(production, pattern, (pattern,)):
+        fail("adapter test-only self-test: a production occurrence must stay forbidden")
+    if forbidden_pattern_occurrence(test_code, pattern, (pattern,)):
+        fail("adapter test-only self-test: a cfg(test) occurrence must be exempt")
+    if not forbidden_pattern_occurrence(test_code, pattern):
+        fail("adapter test-only self-test: the exemption must be declared per pattern")
+    if forbidden_pattern_occurrence(unrelated, pattern, (pattern,)):
+        fail("adapter test-only self-test: a source without the pattern must pass")
+
 def self_test_ordering_authorities() -> None:
     """Proves the ordering-authority check can fail before it is trusted."""
     suffixes = ["SequenceDto"]
@@ -1002,6 +1042,7 @@ def main() -> None:
     self_test_dependency_cycle_scope()
     self_test_dependency_declarations()
     self_test_crate_declarations()
+    self_test_adapter_test_only_patterns()
     ordering = policy.get("ordering_authorities")
     if not isinstance(ordering, dict):
         fail("missing [ordering_authorities] table")

@@ -138,7 +138,7 @@ impl AppState {
         if !self.provisional_reasoning().is_empty() {
             return Some(self.live_reasoning_row());
         }
-        self.transcript
+        self.transcript()
             .iter()
             .rposition(|row| row.reasoning().is_some())
     }
@@ -151,7 +151,7 @@ impl AppState {
         if row == self.live_reasoning_row() && !self.provisional_reasoning().is_empty() {
             return true;
         }
-        self.transcript
+        self.transcript()
             .get(row)
             .is_some_and(|message| message.reasoning().is_some())
     }

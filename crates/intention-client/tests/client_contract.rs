@@ -858,11 +858,11 @@ fn state_tracks_provisional_text_per_model_step() {
     let mut state = SessionStreamState::new(session_id);
     let committed = message(session_id, Some(run_id), MessageKindDto::User, "build it");
     state
-        .apply_initial(fixture_snapshot(
+        .reconcile(SessionStreamState::from_snapshot(fixture_snapshot(
             session_id,
             run_id,
             vec![committed.clone()],
-        ))
+        )))
         .expect("fixture snapshot applies");
     assert_eq!(state.provisional_text(), "");
 
@@ -904,22 +904,22 @@ fn state_tracks_provisional_text_per_model_step() {
         .expect("a delta of the next step applies");
     assert_eq!(state.provisional_text(), "next");
 
-    // A fresh correlated snapshot resets provisional text with committed state.
+    // A fresh correlated snapshot resets provisional text with committed state:
+    // the read a subscription reply is carries the snapshot's rows alone and no
+    // transient text at all.
     let next_committed = message(
         session_id,
         Some(run_id),
         MessageKindDto::Assistant,
         "committed by the snapshot",
     );
-    state
-        .apply_initial(fixture_snapshot(
-            session_id,
-            run_id,
-            vec![next_committed.clone()],
-        ))
-        .expect("a fresh snapshot applies");
-    assert_eq!(state.provisional_text(), "");
-    assert_eq!(state.messages(), &[next_committed]);
+    let fresh = SessionStreamState::from_snapshot(fixture_snapshot(
+        session_id,
+        run_id,
+        vec![next_committed.clone()],
+    ));
+    assert_eq!(fresh.provisional_text(), "");
+    assert_eq!(fresh.messages(), &[next_committed]);
 }
 
 #[test]
@@ -928,7 +928,11 @@ fn state_clears_provisional_text_on_the_committed_assistant_row() {
     let run_id = RunId::new();
     let mut state = SessionStreamState::new(session_id);
     state
-        .apply_initial(fixture_snapshot(session_id, run_id, Vec::new()))
+        .reconcile(SessionStreamState::from_snapshot(fixture_snapshot(
+            session_id,
+            run_id,
+            Vec::new(),
+        )))
         .expect("fixture snapshot applies");
     state
         .apply_frame(SessionFrameDto::TextDelta(fixture_delta(
@@ -974,7 +978,11 @@ fn state_clears_provisional_reasoning_on_the_committed_reasoning_only_row() {
     let run_id = RunId::new();
     let mut state = SessionStreamState::new(session_id);
     state
-        .apply_initial(fixture_snapshot(session_id, run_id, Vec::new()))
+        .reconcile(SessionStreamState::from_snapshot(fixture_snapshot(
+            session_id,
+            run_id,
+            Vec::new(),
+        )))
         .expect("fixture snapshot applies");
     state
         .apply_frame(SessionFrameDto::TextDelta(fixture_reasoning_delta(
@@ -1015,7 +1023,11 @@ fn state_buffers_the_reasoning_channel_apart_from_the_answer() {
     let run_id = RunId::new();
     let mut state = SessionStreamState::new(session_id);
     state
-        .apply_initial(fixture_snapshot(session_id, run_id, Vec::new()))
+        .reconcile(SessionStreamState::from_snapshot(fixture_snapshot(
+            session_id,
+            run_id,
+            Vec::new(),
+        )))
         .expect("fixture snapshot applies");
     assert_eq!(state.provisional_text(), "");
     assert_eq!(state.provisional_reasoning(), "");
@@ -1074,7 +1086,11 @@ fn state_clears_provisional_text_when_the_run_reaches_a_terminal_status() {
     // A non-terminal status frame keeps the current step's advance notice.
     let mut state = SessionStreamState::new(session_id);
     state
-        .apply_initial(fixture_snapshot(session_id, run_id, Vec::new()))
+        .reconcile(SessionStreamState::from_snapshot(fixture_snapshot(
+            session_id,
+            run_id,
+            Vec::new(),
+        )))
         .expect("fixture snapshot applies");
     state
         .apply_frame(SessionFrameDto::TextDelta(fixture_delta(
@@ -1103,7 +1119,11 @@ fn state_clears_provisional_text_when_the_run_reaches_a_terminal_status() {
     ] {
         let mut state = SessionStreamState::new(session_id);
         state
-            .apply_initial(fixture_snapshot(session_id, run_id, Vec::new()))
+            .reconcile(SessionStreamState::from_snapshot(fixture_snapshot(
+                session_id,
+                run_id,
+                Vec::new(),
+            )))
             .expect("fixture snapshot applies");
         state
             .apply_frame(SessionFrameDto::TextDelta(fixture_delta(

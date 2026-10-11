@@ -7,8 +7,8 @@
 
 use intention_client::SessionStreamState;
 use intention_proto::{
-    ErrorDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto, RunStatusDto,
-    SessionId, SessionSummaryDto, WorkspaceRootDto,
+    DtoResult, ErrorDto, MessageId, MessageKindDto, MessageProjectionDto, RunModeDto,
+    RunProjectionDto, RunStatusDto, SessionId, SessionSummaryDto, WorkspaceRootDto,
 };
 
 use super::{
@@ -66,22 +66,14 @@ pub struct AppState {
     pub(super) session_id: Option<SessionId>,
     /// The run policy mode of the open session's projection.
     pub(super) session_mode: Option<RunModeDto>,
-    pub(super) transcript: Vec<MessageProjectionDto>,
-    /// The committed transcript's version: every mutation moves it forward.
-    pub(super) transcript_epoch: u64,
-    /// The epoch a replacement left the transcript at.
+    /// The shared client's state of the open session, if any.
     ///
-    /// Only rows appended at or after this epoch keep the transcript a prefix
-    /// of what it was, so a query before it can never be answered append-only.
-    pub(super) transcript_append_base: u64,
-    /// The epoch of every row appended since [`Self::transcript_append_base`],
-    /// in append order.
-    ///
-    /// The epoch of a row is the value the transcript had right after the row
-    /// joined it, so the count of rows appended after any epoch in the run is a
-    /// partition point rather than a scan.
-    pub(super) transcript_appends: Vec<u64>,
-    pub(super) active_run: Option<RunProjectionDto>,
+    /// The client owns the committed transcript - its rows, its one retention
+    /// bound, its run projection, its supersession identities, and its
+    /// append-only epoch - so this front end holds no second copy of any of it:
+    /// the accessors below delegate, and the display state they read is what a
+    /// pane needs and the client does not carry.
+    pub(super) session_state: Option<SessionStreamState>,
     /// The live phase of the run the status row names.
     ///
     /// `None` means no live phase: no turn request has left the state since it
@@ -101,7 +93,12 @@ pub struct AppState {
     pub(super) tool_working: bool,
     /// The elapsed time the front end measured for the current or last turn.
     pub(super) elapsed_millis: Option<u64>,
-    pub(super) session_stream: Option<SessionStreamState>,
+    /// How many reconnects this front end has asked for the current stream.
+    ///
+    /// The budget is one reconnect per lost stream: a stream that opens again
+    /// resets it, and a second loss inside one recovery asks for nothing, so
+    /// the front end reports its typed failure instead of retrying in a loop.
+    pub(super) reconnects_asked: u32,
     pub(super) stream: StreamStatus,
     pub(super) input: String,
     /// The caret position of `input`, measured in characters from its start.
@@ -148,12 +145,6 @@ pub struct AppState {
     /// into an existing block, so a layout cache keyed on the transcript epoch
     /// alone would keep a prefix that is no longer a prefix.
     pub(super) reasoning_epoch: u64,
-    /// How many committed `tool_result` rows the transcript carries.
-    ///
-    /// A tool block pairs a call with its result, so a committed result changes
-    /// an earlier block: the layout cache compares this count to know whether
-    /// its prefix still reflects the pairing.
-    pub(super) tool_results: usize,
     pub(super) quit: bool,
 }
 
@@ -181,17 +172,13 @@ impl AppState {
             browser: browser::SessionsBrowserState::new(),
             session_id: None,
             session_mode: None,
-            transcript: Vec::new(),
-            transcript_epoch: 0,
-            transcript_append_base: 0,
-            transcript_appends: Vec::new(),
-            active_run: None,
+            session_state: None,
             phase: None,
             tools_in_flight: 0,
             tool_wait_from: None,
             tool_working: false,
             elapsed_millis: None,
-            session_stream: None,
+            reconnects_asked: 0,
             stream: StreamStatus::Inactive,
             input: String::new(),
             cursor: 0,
@@ -207,7 +194,6 @@ impl AppState {
             selection: None,
             reasoning_expansions: Vec::new(),
             reasoning_epoch: 0,
-            tool_results: 0,
             quit: false,
         }
     }
@@ -491,20 +477,52 @@ impl AppState {
     }
 
     /// Returns the committed transcript rows of the current session.
+    ///
+    /// The rows are the client's own reconciled list: this front end holds no
+    /// second projection, so what a pane renders is exactly what the client
+    /// kept.
     #[must_use]
     pub fn transcript(&self) -> &[MessageProjectionDto] {
-        &self.transcript
+        self.session_state
+            .as_ref()
+            .map_or(&[], SessionStreamState::messages)
+    }
+
+    /// Returns the retained rows appended after the identity a caller last
+    /// reported, in durable order.
+    ///
+    /// The walk is the client's, by durable identity: a reported row the
+    /// retention bound has since dropped never blocks the next report.
+    #[must_use]
+    pub fn transcript_after(&self, after: Option<MessageId>) -> &[MessageProjectionDto] {
+        self.session_state
+            .as_ref()
+            .map_or(&[], |state| state.rows_after(after))
+    }
+
+    /// Returns the model step whose provisional text a committed row
+    /// superseded, once that row arrived.
+    ///
+    /// The identity is the client's, so a sink that already wrote a step's
+    /// streamed text never compares text to decide whether to suppress a row.
+    #[must_use]
+    pub fn superseded_step(&self, row: MessageId) -> Option<u32> {
+        self.session_state
+            .as_ref()
+            .and_then(|state| state.superseded_step(row))
     }
 
     /// Returns the version of the committed transcript.
     ///
-    /// Every transcript mutation moves it forward: an append, a replacement,
-    /// and a trim's front drain each leave a new value. A renderer caches what
+    /// Every transcript mutation moves it forward: an append, a reconciliation,
+    /// a read, and a front drain each leave a new value. A renderer caches what
     /// it laid out under the epoch it saw, and one comparison tells it whether
     /// the rows it holds are still current.
     #[must_use]
-    pub const fn transcript_epoch(&self) -> u64 {
-        self.transcript_epoch
+    pub fn transcript_epoch(&self) -> u64 {
+        self.session_state
+            .as_ref()
+            .map_or(0, SessionStreamState::transcript_epoch)
     }
 
     /// Returns the transcript display rows the pointer selected, if any.
@@ -546,95 +564,80 @@ impl AppState {
     /// changes a block the cached prefix holds; a layout cache compares this
     /// count to know whether its prefix still reflects the pairing.
     #[must_use]
-    pub const fn tool_result_count(&self) -> usize {
-        self.tool_results
+    pub fn tool_result_count(&self) -> usize {
+        self.transcript()
+            .iter()
+            .filter(|row| row.kind() == MessageKindDto::ToolResult)
+            .count()
     }
 
     /// Returns how many transcript rows were appended since `epoch`, if the
     /// transcript has only grown by appends since then.
     ///
-    /// `None` means a replacement, a trim's front drain, a session switch, or a
-    /// future epoch: the rows current at `epoch` are no longer a prefix of the
-    /// transcript, so a caller holding them must lay the whole transcript out
-    /// again. `Some(0)` means the transcript did not change at all.
+    /// `None` means a reconciliation, a read, a front drain, a session switch,
+    /// or a future epoch: the rows current at `epoch` are no longer a prefix of
+    /// the transcript, so a caller holding them must lay the whole transcript
+    /// out again. `Some(0)` means the transcript did not change at all.
     #[must_use]
     pub fn transcript_appended_since(&self, epoch: u64) -> Option<usize> {
-        if epoch > self.transcript_epoch || epoch < self.transcript_append_base {
-            return None;
-        }
-        let before = self
-            .transcript_appends
-            .partition_point(|mark| *mark <= epoch);
-        Some(self.transcript_appends.len() - before)
+        self.session_state
+            .as_ref()
+            .and_then(|state| state.transcript_appended_since(epoch))
     }
 
-    /// Appends one committed row, recording the append.
-    pub(super) fn push_transcript_row(&mut self, row: MessageProjectionDto) {
-        self.tool_results += usize::from(row.kind() == MessageKindDto::ToolResult);
-        match row.kind() {
-            // A tool call is in flight from this row until the result row that
-            // answers it, so the append opens or closes the working watch.
-            MessageKindDto::ToolCall => self.note_tool_call(),
-            MessageKindDto::ToolResult => self.note_tool_result(),
-            MessageKindDto::User | MessageKindDto::Assistant | MessageKindDto::Notice => {}
-        }
-        self.transcript.push(row);
-        self.transcript_epoch += 1;
-        self.transcript_appends.push(self.transcript_epoch);
-    }
-
-    /// Appends committed rows, recording each append.
-    pub(super) fn extend_transcript(
-        &mut self,
-        rows: impl IntoIterator<Item = MessageProjectionDto>,
-    ) {
-        for row in rows {
-            self.push_transcript_row(row);
-        }
-    }
-
-    /// Replaces every committed row, resetting the append-only marker.
-    pub(super) fn replace_transcript(&mut self, rows: &[MessageProjectionDto]) {
-        self.transcript.clear();
-        self.transcript.extend_from_slice(rows);
-        self.note_replacement();
-    }
-
-    /// Moves the epoch past a mutation that is not an append.
+    /// Moves the display state past a transcript mutation that is not an append.
     ///
-    /// A row that is dropped in front of the transcript - a trim or a session
-    /// switch - changes every cached row offset, so the append-only run ends
-    /// here and a stale cache always lays out whole. Every display-row offset
-    /// may now point at another row, so the selection and every reasoning
-    /// expansion are dropped with it.
+    /// A reconciliation, a read, and a front drain each move every retained row,
+    /// so every display-row offset may now point at another row: the selection
+    /// and every reasoning expansion are dropped with it.
     pub(super) fn note_replacement(&mut self) {
-        self.transcript_epoch += 1;
-        self.transcript_appends.clear();
-        self.transcript_append_base = self.transcript_epoch;
         self.selection = None;
         self.reasoning_expansions.clear();
         self.reasoning_epoch += 1;
-        self.tool_results = self
-            .transcript
-            .iter()
-            .filter(|row| row.kind() == MessageKindDto::ToolResult)
-            .count();
         self.recount_tool_watch();
+    }
+
+    /// Merges one read of a session's durable transcript into the client state.
+    ///
+    /// The client matches rows by durable identity, so a read of the session
+    /// this front end already holds joins the rows it has; a read of another
+    /// session seeds the state, because a front end holds exactly one session's
+    /// rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns the client's scoped-response error for a read of another session.
+    pub(super) fn merge_transcript(&mut self, read: SessionStreamState) -> DtoResult<()> {
+        if self.session_id != Some(read.session_id()) {
+            self.session_state = Some(read);
+            return Ok(());
+        }
+        let state = self
+            .session_state
+            .get_or_insert_with(|| SessionStreamState::new(read.session_id()));
+        state.reconcile(read)
     }
 
     /// Returns the last known run projection.
     ///
-    /// A status frame replaces it, so a finished run keeps reporting its terminal
-    /// status until another run starts.
+    /// The projection is the client's: a status frame replaces it, so a
+    /// finished run keeps reporting its terminal status until another run
+    /// starts, and a lost stream leaves the last projection the session
+    /// reported in place.
     #[must_use]
-    pub const fn active_run(&self) -> Option<RunProjectionDto> {
-        self.active_run
+    pub fn active_run(&self) -> Option<RunProjectionDto> {
+        self.session_state
+            .as_ref()
+            .and_then(SessionStreamState::run)
+            .copied()
     }
 
     /// Returns the last known run lifecycle status.
     #[must_use]
     pub fn run_status(&self) -> Option<RunStatusDto> {
-        self.active_run.map(|run| run.status())
+        self.session_state
+            .as_ref()
+            .and_then(SessionStreamState::status)
     }
 
     /// Returns the live phase of the run the status row names, if one is live.
@@ -675,7 +678,7 @@ impl AppState {
     /// step.
     #[must_use]
     pub fn provisional_text(&self) -> &str {
-        self.session_stream
+        self.session_state
             .as_ref()
             .map_or("", SessionStreamState::provisional_text)
     }
@@ -688,7 +691,7 @@ impl AppState {
     /// renders from it is the reasoning block's own streaming form.
     #[must_use]
     pub fn provisional_reasoning(&self) -> &str {
-        self.session_stream
+        self.session_state
             .as_ref()
             .map_or("", SessionStreamState::provisional_reasoning)
     }
@@ -701,8 +704,8 @@ impl AppState {
     /// key is the same before and after the commit, so a reader who expanded
     /// the streaming reasoning still sees it expanded once it is committed.
     #[must_use]
-    pub const fn live_reasoning_row(&self) -> usize {
-        self.transcript.len()
+    pub fn live_reasoning_row(&self) -> usize {
+        self.transcript().len()
     }
 
     /// Returns the current input line.

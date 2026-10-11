@@ -357,14 +357,11 @@ fn welcome_state() -> AppState {
 
 /// Applies the opened-subscription action for one run of `status` to `state`.
 fn subscribe(state: &mut AppState, session_id: SessionId, run_id: RunId, status: RunStatusDto) {
-    let mut stream = SessionStreamState::new(session_id);
-    stream
-        .apply_initial(snapshot(
-            session_id,
-            Some(run(session_id, run_id, status)),
-            Vec::new(),
-        ))
-        .expect("the fixture session snapshot applies to its own scope");
+    let stream = SessionStreamState::from_snapshot(snapshot(
+        session_id,
+        Some(run(session_id, run_id, status)),
+        Vec::new(),
+    ));
     state.update(Action::SessionStreamOpened(stream));
 }
 

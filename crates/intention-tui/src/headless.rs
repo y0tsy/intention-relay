@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use intention_client::{IntentionClient, SessionStreamSubscription};
 use intention_proto::{
-    ErrorDto, MessageKindDto, MessageProjectionDto, RunId, RunModeDto, RunStatusDto,
+    ErrorDto, MessageId, MessageKindDto, MessageProjectionDto, RunId, RunModeDto, RunStatusDto,
     SessionFrameDto, SessionId, TextDeltaChannelDto, WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_transport::LocalEndpoint;
@@ -301,11 +301,13 @@ pub struct Driver {
     state: AppState,
     subscription: Option<SessionStreamSubscription>,
     last_failure: Option<ErrorDto>,
-    // @todo(hack): unreported rows are counted by position, so a committed row that the transcript
-    // mirror trims at its retention bound is never handed to the report and `run --format text|json`
-    // silently omits it. Rows have a durable identity and the app publishes an append epoch, so the
-    // reporter should track what it has reported by identity instead of by index.
-    reported_rows: usize,
+    /// The newest committed row this driver has reported, if any.
+    ///
+    /// Rows are walked by durable identity, never by position: the client's
+    /// retention bound can drop a row the driver already reported without
+    /// shifting the rows it has not, so an identity is what tells the next
+    /// report where the previous one ended.
+    reported_row: Option<MessageId>,
     reported_status: Option<RunStatusDto>,
 }
 
@@ -326,7 +328,7 @@ impl Driver {
             state: AppState::new(None).with_workspace_root(workspace_root),
             subscription: None,
             last_failure: None,
-            reported_rows: 0,
+            reported_row: None,
             reported_status: None,
         }
     }
@@ -382,24 +384,24 @@ impl Driver {
                 self.apply(Action::Bootstrapped(health)).await;
             }
         }
-        self.reported_rows = self.state.transcript().len();
+        self.note_reported_rows();
         Ok(())
     }
 
     /// Reads one known session's current snapshot into the core.
     pub async fn show(&mut self, session: SessionId) {
         self.reset(Some(session), false);
-        if let Some(action) = self.perform(Effect::OpenSession(session)).await {
+        if let Some((action, _failure)) = self.perform(Effect::OpenSession(session)).await {
             self.apply(action).await;
         }
-        self.reported_rows = self.state.transcript().len();
+        self.note_reported_rows();
     }
 
     /// Creates a new session from the driver's workspace and mode through the core.
     pub async fn create(&mut self) {
         self.reset(None, false);
         self.apply(Action::NewSessionRequested).await;
-        self.reported_rows = self.state.transcript().len();
+        self.note_reported_rows();
     }
 
     /// Returns the most recently updated session the daemon reports, if any.
@@ -409,6 +411,15 @@ impl Driver {
     /// Returns the typed failure when the session list cannot be read.
     pub async fn most_recent_session(&self) -> Result<Option<SessionId>, ErrorDto> {
         self.client.most_recent_session().await
+    }
+
+    /// Records that the rows a session read carries are already reported.
+    ///
+    /// A session read re-reads the whole transcript, so the rows it carries are
+    /// not new events for a reporter that has not run yet: the walk starts after
+    /// the newest row the read carried.
+    fn note_reported_rows(&mut self) {
+        self.reported_row = self.state.transcript().last().map(MessageProjectionDto::id);
     }
 
     /// Sends one prompt as one typed user turn through the core.
@@ -474,10 +485,6 @@ impl Driver {
         deadline: Option<Deadline>,
         interrupts: &mut InterruptRequests,
     ) -> Result<Option<RunOutcome>, PumpFailure> {
-        // @todo(hack): a closed or empty stream is recoverable exactly once; the
-        // budget and the decision to fail after it live here because the run
-        // stream has no resume of its own. Kept as is by owner decision.
-        let mut reconnects = 0;
         loop {
             self.report_pending(events)?;
             if let Some(outcome) = terminal_outcome(self.state.run_status()) {
@@ -500,11 +507,13 @@ impl Driver {
                 }
                 Received::Expired => return Ok(None),
                 Received::Empty | Received::Closed => {
-                    if reconnects > 0 {
+                    // The front end owns the one reconnect a lost stream is
+                    // owed: it asks for it while its budget lasts, and reports
+                    // its typed failure once the budget is spent.
+                    let (_failure, reconnected) = self.apply(Action::ReconnectRequested).await;
+                    if !reconnected {
                         return Err(self.pump_failure());
                     }
-                    reconnects += 1;
-                    self.apply(Action::ReconnectRequested).await;
                 }
             }
         }
@@ -554,13 +563,16 @@ impl Driver {
     }
 
     /// Reports the rows and the status the core accepted since the last report.
+    ///
+    /// The row walk is by durable identity: the client's retention bound can
+    /// drop a row this reporter already reported without moving the rows it has
+    /// not, so every row committed past the bound is still reported exactly
+    /// once.
     fn report_pending(&mut self, events: &mut impl Report) -> Result<(), PumpFailure> {
-        let rows = self.state.transcript();
-        let start = self.reported_rows.min(rows.len());
-        for row in &rows[start..] {
+        for row in self.state.transcript_after(self.reported_row) {
             events.row(row).map_err(PumpFailure::Output)?;
+            self.reported_row = Some(row.id());
         }
-        self.reported_rows = rows.len();
         let status = self.state.run_status();
         if status != self.reported_status {
             self.reported_status = status;
@@ -572,34 +584,50 @@ impl Driver {
     }
 
     /// Applies one action and performs the effects it produces, in order.
-    async fn apply(&mut self, action: Action) {
+    ///
+    /// Returns the typed failure the chain reported and whether the chain asked
+    /// the client to re-read current state, so a caller that owns a run's wait
+    /// can tell a reconnect request from a budget that is already spent.
+    async fn apply(&mut self, action: Action) -> (Option<ErrorDto>, bool) {
+        let mut failure = None;
+        let mut reconnected = false;
         let mut pending = VecDeque::from([action]);
         while let Some(action) = pending.pop_front() {
             for effect in self.state.update(action) {
-                if let Some(reported) = self.perform(effect).await {
+                if matches!(effect, Effect::Connect) {
+                    reconnected = true;
+                }
+                if let Some((reported, error)) = self.perform(effect).await {
+                    if error.is_some() {
+                        failure = error;
+                    }
                     pending.push_back(reported);
                 }
             }
         }
+        (failure, reconnected)
     }
 
-    /// Performs one effect and returns the action it reports, if any.
+    /// Performs one effect and returns the action it reports with the typed
+    /// failure the client call observed, if any.
     ///
     /// Every request effect goes through the shared [`client_task`] mapper. A
     /// failure never escapes: the driver keeps the typed error for its process
     /// status and reports the core's own failure action, so every state
     /// transition stays total.
-    async fn perform(&mut self, effect: Effect) -> Option<Action> {
+    async fn perform(&mut self, effect: Effect) -> Option<(Action, Option<ErrorDto>)> {
         match effect {
-            Effect::Subscribe { session_id } => Some(self.open_stream_action(session_id).await),
+            Effect::Subscribe { session_id } => {
+                Some((self.open_stream_action(session_id).await, None))
+            }
             effect => {
                 match client_task::perform(&self.client, &self.workspace_root, self.mode, effect)
                     .await?
                 {
-                    Ok(action) => Some(action),
+                    Ok(action) => Some((action, None)),
                     Err((action, error)) => {
                         self.record_failure(&error);
-                        Some(action)
+                        Some((action, Some(error)))
                     }
                 }
             }
@@ -643,7 +671,7 @@ impl Driver {
             .with_workspace_root(self.workspace_root.clone());
         self.subscription = None;
         self.last_failure = None;
-        self.reported_rows = 0;
+        self.reported_row = None;
         self.reported_status = None;
     }
 }
@@ -982,6 +1010,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicI64, Ordering};
 
+    use intention_client::{RETAINED_TRANSCRIPT_MESSAGES, SessionStreamState};
     use intention_proto::MessageId;
 
     /// Returns one fresh durable row identity for a committed fixture row.
@@ -989,6 +1018,98 @@ mod tests {
         static NEXT: AtomicI64 = AtomicI64::new(0);
         MessageId::new(NEXT.fetch_add(1, Ordering::Relaxed) + 1)
             .expect("the fixture row identity is positive")
+    }
+
+    /// Returns one committed fixture row of `session_id` and `run_id`.
+    fn committed_row(session_id: SessionId, run_id: RunId, text: &str) -> MessageProjectionDto {
+        MessageProjectionDto::new(
+            row_id(),
+            session_id,
+            Some(run_id),
+            MessageKindDto::Notice,
+            text,
+            None,
+            None,
+            None,
+        )
+        .expect("the fixture row is coherent")
+    }
+
+    /// Returns one application state whose client holds `count` committed rows
+    /// of one session, with that session's identity.
+    fn committed_state(count: usize) -> (AppState, SessionId) {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let mut state = AppState::new(None);
+        state.update(Action::SessionStreamOpened(SessionStreamState::new(
+            session_id,
+        )));
+        for index in 0..count {
+            state.update(Action::FrameReceived(SessionFrameDto::Content(
+                committed_row(session_id, run_id, &format!("row {index}")),
+            )));
+        }
+        (state, session_id)
+    }
+
+    #[test]
+    fn every_row_newer_than_the_last_reported_id_is_reported_once() {
+        // The reporter walks the client's rows by durable identity, so a run
+        // that commits more rows than the client retains still reports every
+        // one of them: the row committed past the bound is the next reported
+        // row.
+        let (state, _session) = committed_state(RETAINED_TRANSCRIPT_MESSAGES + 2);
+        let rows = state.transcript();
+        assert_eq!(
+            rows.len(),
+            RETAINED_TRANSCRIPT_MESSAGES,
+            "the client's window is bounded"
+        );
+        let reported = rows
+            .first()
+            .expect("the bound drained the oldest rows")
+            .id();
+        let pending = state.transcript_after(Some(reported));
+        assert_eq!(
+            pending.len(),
+            rows.len() - 1,
+            "every retained row newer than the reported identity is pending"
+        );
+        assert!(pending.iter().all(|row| row.id() > reported));
+        assert_eq!(
+            pending.last().expect("a row is pending"),
+            rows.last().expect("a row is retained"),
+            "the row committed past the bound is reported"
+        );
+    }
+
+    #[test]
+    fn a_reported_row_that_was_drained_never_blocks_the_next_report() {
+        // The reporter's memory is a durable identity, never a position: a
+        // reported row the retention bound has since dropped still lets every
+        // later row through.
+        let (mut state, session_id) = committed_state(RETAINED_TRANSCRIPT_MESSAGES);
+        let reported = state.transcript().first().expect("rows remain").id();
+        let run_id = RunId::new();
+        let newest = committed_row(session_id, run_id, "the newest row");
+        state.update(Action::FrameReceived(SessionFrameDto::Content(
+            newest.clone(),
+        )));
+        assert!(
+            state.transcript().iter().all(|row| row.id() != reported),
+            "the bound drained the reported row"
+        );
+        let pending = state.transcript_after(Some(reported));
+        assert_eq!(
+            pending.len(),
+            RETAINED_TRANSCRIPT_MESSAGES,
+            "every retained row is newer than the drained reported identity"
+        );
+        assert_eq!(
+            pending.last().expect("a row is pending"),
+            &newest,
+            "the row committed past the bound is reported"
+        );
     }
 
     /// Returns one coherent committed transcript row fixture.

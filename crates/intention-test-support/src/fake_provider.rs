@@ -87,7 +87,24 @@ impl FakeProvider {
     /// Panics when the loopback listener or the provider thread cannot start.
     #[must_use]
     pub fn start_with_round_reasoning(tool_arguments: &str, reasoning: &[&str]) -> Self {
-        Self::scripted("read", tool_arguments, reasoning, &[])
+        Self::script("read", tool_arguments, reasoning, &[], 1, true)
+    }
+
+    /// Starts a fake provider that serves `rounds` tool-call rounds and one
+    /// final text round.
+    ///
+    /// The rounds are what let one scripted run commit more rows than a
+    /// subscription retains: every round commits its call's row and that call's
+    /// result row, so a run of `rounds` rounds commits `rounds * 2` tool rows.
+    /// Only the first request is paced, because the subscription the run opens
+    /// before its first round observes every later round.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the loopback listener or the provider thread cannot start.
+    #[must_use]
+    pub fn start_rounds(tool_name: &str, tool_arguments: &str, rounds: usize) -> Self {
+        Self::script(tool_name, tool_arguments, &[], &[], rounds, false)
     }
 
     /// Starts a fake provider on one loopback port with its own listener thread.
@@ -101,6 +118,29 @@ impl FakeProvider {
         tool_round_reasoning: &[&str],
         reasoning: &[&str],
     ) -> Self {
+        Self::script(
+            tool_name,
+            tool_arguments,
+            tool_round_reasoning,
+            reasoning,
+            1,
+            true,
+        )
+    }
+
+    /// Starts a fake provider serving `rounds` tool rounds and one text round.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the loopback listener or the provider thread cannot start.
+    fn script(
+        tool_name: &str,
+        tool_arguments: &str,
+        tool_round_reasoning: &[&str],
+        reasoning: &[&str],
+        rounds: usize,
+        pace_every_round: bool,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("provider binds");
         let port = listener
             .local_addr()
@@ -112,47 +152,6 @@ impl FakeProvider {
         let thread_requests = Arc::clone(&requests);
         let thread_excess = Arc::clone(&excess);
         let thread_stop = Arc::clone(&stop);
-        let thread_tool_name = tool_name.to_owned();
-        let tool_body = serde_json::to_string(&serde_json::json!({
-            "id": "chatcmpl-client-e2e-1",
-            "object": "chat.completion.chunk",
-            "created": 1,
-            "model": "fixture-model",
-            "choices": [{
-                "index": 0,
-                "delta": {
-                    "tool_calls": [{
-                        "index": 0,
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": tool_name, "arguments": tool_arguments},
-                    }],
-                },
-                "finish_reason": "tool_calls",
-            }],
-        }))
-        .expect("tool chunk serializes");
-        let usage_body = serde_json::to_string(&serde_json::json!({
-            "id": "chatcmpl-client-e2e-1",
-            "object": "chat.completion.chunk",
-            "created": 1,
-            "model": "fixture-model",
-            "choices": [],
-            "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
-        }))
-        .expect("usage chunk serializes");
-        let text_body = serde_json::to_string(&serde_json::json!({
-            "id": "chatcmpl-client-e2e-2",
-            "object": "chat.completion.chunk",
-            "created": 1,
-            "model": "fixture-model",
-            "choices": [{
-                "index": 0,
-                "delta": {"content": "done"},
-                "finish_reason": "stop",
-            }],
-        }))
-        .expect("text chunk serializes");
         // Either round streams its thinking channel first and the content it
         // precedes after it, which is the order the provider-neutral stream
         // reports both channels in.
@@ -176,14 +175,35 @@ impl FakeProvider {
                 })
                 .collect()
         };
-        let tool_events = reasoning_events(tool_round_reasoning);
-        let tool_response = sse_response(&format!(
-            "{tool_events}data: {tool_body}\n\ndata: {usage_body}\n\ndata: [DONE]\n\n"
-        ));
-        let text_events = reasoning_events(reasoning);
-        let text_response = sse_response(&format!(
-            "{text_events}data: {text_body}\n\ndata: {usage_body}\n\ndata: [DONE]\n\n"
-        ));
+        let script = Script {
+            tool_name: tool_name.to_owned(),
+            tool_arguments: tool_arguments.to_owned(),
+            tool_events: reasoning_events(tool_round_reasoning),
+            text_events: reasoning_events(reasoning),
+            usage_body: serde_json::to_string(&serde_json::json!({
+                "id": "chatcmpl-client-e2e-1",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "fixture-model",
+                "choices": [],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+            }))
+            .expect("usage chunk serializes"),
+            text_body: serde_json::to_string(&serde_json::json!({
+                "id": "chatcmpl-client-e2e-2",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "fixture-model",
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": "done"},
+                    "finish_reason": "stop",
+                }],
+            }))
+            .expect("text chunk serializes"),
+            tool_rounds: rounds,
+            pace_every_round,
+        };
         let thread = thread::Builder::new()
             .name("fake-provider".to_owned())
             .spawn(move || {
@@ -192,14 +212,14 @@ impl FakeProvider {
                     .expect("provider listener is non-blocking");
                 while !thread_stop.load(Ordering::Acquire) {
                     match listener.accept() {
-                        Ok((stream, _)) => handle_provider_request(
-                            stream,
-                            &thread_requests,
-                            &thread_excess,
-                            &thread_tool_name,
-                            &tool_response,
-                            &text_response,
-                        ),
+                        Ok((stream, _)) => {
+                            handle_provider_request(
+                                stream,
+                                &thread_requests,
+                                &thread_excess,
+                                &script,
+                            );
+                        }
                         Err(_) => thread::sleep(Duration::from_millis(10)),
                     }
                 }
@@ -241,14 +261,85 @@ impl FakeProvider {
     }
 }
 
+/// How long the fixture paces one scripted request before answering it.
+const ROUND_PACE: Duration = Duration::from_millis(500);
+
+/// One scripted provider script: the rounds it serves and how it paces them.
+struct Script {
+    /// The tool the fixture advertises and calls.
+    tool_name: String,
+    /// The arguments every scripted call carries.
+    tool_arguments: String,
+    /// The reasoning events the tool rounds stream before their call.
+    tool_events: String,
+    /// The reasoning events the text round streams before its answer.
+    text_events: String,
+    /// The usage chunk every round ends with.
+    usage_body: String,
+    /// The text chunk the final round answers with.
+    text_body: String,
+    /// How many tool-call rounds the script serves before its text round.
+    tool_rounds: usize,
+    /// Whether every request is paced, or only the first one.
+    ///
+    /// A test's subscriber must attach before a round's committed state is
+    /// published, which is why the fixture's short script paces every round. A
+    /// long script paces only its first request: the subscription the first
+    /// round established observes every later round, and pacing a hundred
+    /// rounds would cost a minute.
+    pace_every_round: bool,
+}
+
+impl Script {
+    /// Returns the response one scripted request receives.
+    ///
+    /// Every tool round carries its own call identity, because a call's durable
+    /// evidence is unique per identity.
+    fn response(&self, request_number: usize) -> String {
+        if request_number <= self.tool_rounds {
+            let tool_body = serde_json::to_string(&serde_json::json!({
+                "id": "chatcmpl-client-e2e-1",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "fixture-model",
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": format!("call_{request_number}"),
+                            "type": "function",
+                            "function": {
+                                "name": self.tool_name,
+                                "arguments": self.tool_arguments,
+                            },
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+            }))
+            .expect("tool chunk serializes");
+            return sse_response(&format!(
+                "{}data: {tool_body}\n\ndata: {}\n\ndata: [DONE]\n\n",
+                self.tool_events, self.usage_body
+            ));
+        }
+        if request_number == self.tool_rounds + 1 {
+            return sse_response(&format!(
+                "{}data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+                self.text_events, self.text_body, self.usage_body
+            ));
+        }
+        excess_response()
+    }
+}
+
 /// Reads one HTTP request head and body and answers it from the script.
 fn handle_provider_request(
     mut stream: TcpStream,
     requests: &AtomicUsize,
     excess: &AtomicUsize,
-    tool_name: &str,
-    tool_response: &str,
-    text_response: &str,
+    script: &Script,
 ) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let Some(body) = read_request_body(&mut stream) else {
@@ -256,27 +347,23 @@ fn handle_provider_request(
     };
     // The provider paces each scripted round so the test's subscriber can
     // attach before the committed state for that round is published.
-    thread::sleep(Duration::from_millis(500));
     let request_number = requests.fetch_add(1, Ordering::AcqRel) + 1;
+    if script.pace_every_round || request_number == 1 {
+        thread::sleep(ROUND_PACE);
+    }
     let body_text = String::from_utf8_lossy(&body);
     if request_number == 1 {
         assert!(
             body_text.contains(r#""tools":["#)
-                && body_text.contains(&format!(r#""name":"{tool_name}""#)),
-            "the first provider request advertises tools including {tool_name}: {body_text}"
+                && body_text.contains(&format!(r#""name":"{}""#, script.tool_name)),
+            "the first provider request advertises tools including {}: {body_text}",
+            script.tool_name
         );
     }
-    if request_number <= 2 {
-        let response = if body_text.contains("\"role\":\"tool\"") {
-            text_response
-        } else {
-            tool_response
-        };
-        write_response(&mut stream, response);
-    } else {
+    if request_number > script.tool_rounds + 1 {
         excess.fetch_add(1, Ordering::AcqRel);
-        write_response(&mut stream, &excess_response());
     }
+    write_response(&mut stream, &script.response(request_number));
 }
 
 fn write_response(stream: &mut TcpStream, response: &str) {

@@ -140,6 +140,12 @@ forbidden_source_patterns = [
   "rusqlite::",
   "tauri::",
 ]
+# A pattern the client declares in production may still be named by adapter test
+# code, so the adapter's list is test-only-exempt: the lexical `cfg(test)`/`#[test]`
+# exemption decides, and a production adapter source that names the pattern fails.
+test_only_forbidden_source_patterns = [
+  "RETAINED_TRANSCRIPT_MESSAGES",
+]
 
 [protocol_boundary]
 package = "intention-proto"

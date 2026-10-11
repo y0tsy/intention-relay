@@ -569,7 +569,7 @@ mod tests {
     use std::ops::Range;
     use std::sync::atomic::{AtomicI64, Ordering};
 
-    use intention_client::{RETAINED_TRANSCRIPT_MESSAGES, SessionStreamState};
+    use intention_client::SessionStreamState;
     use intention_proto::{
         ConfigRevisionId, MessageId, MessageKindDto, MessageProjectionDto, ProjectId, RunId,
         RunModeDto, RunProjectionDto, RunStatusDto, SessionFrameDto, SessionId,
@@ -679,20 +679,41 @@ mod tests {
         run_id: RunId,
         messages: Vec<MessageProjectionDto>,
     ) -> SessionStreamState {
-        let mut state = SessionStreamState::new(session_id);
-        state
-            .apply_initial(session_snapshot(
-                session_id,
-                Some(run(session_id, run_id, RunStatusDto::Running)),
-                messages,
-            ))
-            .expect("the fixture session snapshot applies to its own scope");
-        state
+        SessionStreamState::from_snapshot(session_snapshot(
+            session_id,
+            Some(run(session_id, run_id, RunStatusDto::Running)),
+            messages,
+        ))
     }
 
     /// Returns one session snapshot carrying `messages` and no active run.
     fn snapshot(session_id: SessionId, messages: Vec<MessageProjectionDto>) -> SessionSnapshotDto {
         session_snapshot(session_id, None, messages)
+    }
+
+    /// Returns one client state holding exactly the rows it retains.
+    ///
+    /// Rows are read into the state until its retained count stops growing, so
+    /// the fixture measures the client's own window through the client instead
+    /// of restating its bound.
+    fn full_transcript(session_id: SessionId, run_id: RunId) -> SessionStreamState {
+        let mut state = SessionStreamState::new(session_id);
+        let mut retained = 0;
+        loop {
+            let row = assistant_row(session_id, run_id, &format!("row {retained}"), None);
+            let read = SessionStreamState::from_snapshot(session_snapshot(
+                session_id,
+                Some(run(session_id, run_id, RunStatusDto::Running)),
+                vec![row],
+            ));
+            state
+                .reconcile(read)
+                .expect("the fixture read belongs to the state's own session");
+            if state.messages().len() == retained {
+                return state;
+            }
+            retained = state.messages().len();
+        }
     }
 
     /// Returns one session snapshot whose projection carries `active_run`.
@@ -784,13 +805,12 @@ mod tests {
 
     /// Appends one committed assistant row through the live stream path.
     ///
-    /// The subscription snapshot carries the row the session read missed, which
-    /// is exactly the append path the core reports as append-only.
+    /// The row arrives as a content frame of the open stream, which is the
+    /// client's one append path: a subscription reply is a read, and a read is
+    /// never an append.
     fn append_row(state: &mut AppState, session_id: SessionId, run_id: RunId, text: &str) {
-        let mut rows = state.transcript().to_vec();
-        rows.push(assistant_row(session_id, run_id, text, None));
-        state.update(Action::SessionStreamOpened(stream_state(
-            session_id, run_id, rows,
+        state.update(Action::FrameReceived(SessionFrameDto::Content(
+            assistant_row(session_id, run_id, text, None),
         )));
     }
 
@@ -850,7 +870,7 @@ mod tests {
     fn an_appended_row_lays_out_only_the_tail() {
         let session_id = SessionId::new();
         let run_id = RunId::new();
-        let mut state = fixture_state(session_id, run_id);
+        let mut state = opened_stream(session_id, run_id);
         let seeded = state.transcript().len();
         let mut cache = TranscriptLayoutCache::new();
         let mut ranges: Vec<Range<usize>> = Vec::new();
@@ -1023,6 +1043,7 @@ mod tests {
             session_id,
             vec![user_row(session_id, "a whole new session")],
         )));
+        let merged = state.transcript().len();
         let replayed = cache
             .rows(&state, WIDTH, LIGHT, |range, width| {
                 ranges.push(range.clone());
@@ -1031,14 +1052,14 @@ mod tests {
             .len();
         assert_eq!(
             ranges,
-            vec![0..1],
-            "a snapshot replaces the transcript, so nothing cached survives it"
+            vec![0..merged],
+            "a snapshot read is a replacement, so nothing cached survives it"
         );
         assert_eq!(cache.layout_count(), 2);
         assert_eq!(
             replayed,
             direct_rows(&state, WIDTH, LIGHT).len(),
-            "the replaced transcript lays out as a direct pass would"
+            "the reconciled transcript lays out as a direct pass would"
         );
     }
 
@@ -1046,17 +1067,15 @@ mod tests {
     fn a_front_trim_lays_the_whole_transcript_out_again() {
         let session_id = SessionId::new();
         let run_id = RunId::new();
-        let rows: Vec<_> = (0..RETAINED_TRANSCRIPT_MESSAGES)
-            .map(|index| assistant_row(session_id, run_id, &format!("row {index}"), None))
-            .collect();
         let mut state = AppState::new(None);
         state.update(Action::SessionSnapshotLoaded(snapshot(
             session_id,
-            rows.clone(),
+            Vec::new(),
         )));
-        state.update(Action::SessionStreamOpened(stream_state(
-            session_id, run_id, rows,
+        state.update(Action::SessionStreamOpened(full_transcript(
+            session_id, run_id,
         )));
+        let retained = state.transcript().len();
         let mut cache = TranscriptLayoutCache::new();
         let mut ranges: Vec<Range<usize>> = Vec::new();
         cache.rows(&state, WIDTH, LIGHT, |range, width| {
@@ -1068,14 +1087,18 @@ mod tests {
         state.update(Action::FrameReceived(SessionFrameDto::Content(
             assistant_row(session_id, run_id, "the newest row", None),
         )));
-        assert_eq!(state.transcript().len(), RETAINED_TRANSCRIPT_MESSAGES);
+        assert_eq!(
+            state.transcript().len(),
+            retained,
+            "the client's window keeps its newest rows"
+        );
         cache.rows(&state, WIDTH, LIGHT, |range, width| {
             ranges.push(range.clone());
             committed_blocks(&state, range, width, LIGHT)
         });
         assert_eq!(
             ranges,
-            vec![0..RETAINED_TRANSCRIPT_MESSAGES],
+            vec![0..retained],
             "a front drain moves every row, so the whole transcript replays"
         );
         assert_eq!(cache.layout_count(), 2);
@@ -1085,7 +1108,7 @@ mod tests {
     fn the_cached_rows_are_the_rows_of_a_direct_layout() {
         let session_id = SessionId::new();
         let run_id = RunId::new();
-        let mut state = fixture_state(session_id, run_id);
+        let mut state = opened_stream(session_id, run_id);
         let mut cache = TranscriptLayoutCache::new();
         let first = {
             let cached = cache.rows(&state, WIDTH, LIGHT, |range, width| {

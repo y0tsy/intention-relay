@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use intention_client::{RETAINED_TRANSCRIPT_MESSAGES, SessionStreamState};
+use intention_client::SessionStreamState;
 use intention_proto::{
     ConfigRevisionId, DaemonHealthDto, ErrorDto, MessageId, MessageKindDto, MessageProjectionDto,
     ProjectId, RunId, RunModeDto, RunProjectionDto, RunStatusDto, SendUserTurnOutcomeDto,
@@ -149,15 +149,36 @@ fn stream_state(
     status: RunStatusDto,
     messages: Vec<MessageProjectionDto>,
 ) -> SessionStreamState {
+    SessionStreamState::from_snapshot(snapshot(
+        session_id,
+        Some(run(session_id, run_id, status)),
+        messages,
+    ))
+}
+
+/// Returns one client state holding exactly the rows it retains.
+///
+/// Rows are read into the state until its retained count stops growing, so the
+/// fixture measures the client's own window through the client instead of
+/// restating its bound.
+fn full_transcript(session_id: SessionId, run_id: RunId) -> SessionStreamState {
     let mut state = SessionStreamState::new(session_id);
-    state
-        .apply_initial(snapshot(
+    let mut retained = 0;
+    loop {
+        let row = reasoning_row(session_id, run_id, &format!("row {retained}"), "thought");
+        let read = SessionStreamState::from_snapshot(snapshot(
             session_id,
-            Some(run(session_id, run_id, status)),
-            messages,
-        ))
-        .expect("the fixture session snapshot applies to its own scope");
-    state
+            Some(run(session_id, run_id, RunStatusDto::Running)),
+            vec![row],
+        ));
+        state
+            .reconcile(read)
+            .expect("the fixture read belongs to the state's own session");
+        if state.messages().len() == retained {
+            return state;
+        }
+        retained = state.messages().len();
+    }
 }
 
 fn user_row(session_id: SessionId, run_id: Option<RunId>, text: &str) -> MessageProjectionDto {
@@ -2186,7 +2207,11 @@ fn the_key_expansion_targets_the_live_reasoning_segment_while_it_streams() {
 }
 
 #[test]
-fn the_stream_mirror_reuses_snapshot_rows_without_repeating_them() {
+fn the_adapter_renders_the_clients_reconciled_rows() {
+    // The front end holds the client's one reconciled row list: the session read
+    // and the subscription read are the same durable transcript, so the client
+    // merges them by durable row identity and the pane renders exactly what the
+    // client kept - never a second projection of the adapter's own.
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let rows = vec![
@@ -2198,12 +2223,12 @@ fn the_stream_mirror_reuses_snapshot_rows_without_repeating_them() {
         session_id,
         run_id,
         RunStatusDto::Running,
-        rows,
+        rows.clone(),
     )));
     assert_eq!(
-        state.transcript().len(),
-        2,
-        "rows the transcript already carries are not appended twice"
+        state.transcript(),
+        rows.as_slice(),
+        "rows the session read already carries are not duplicated by the subscription read"
     );
 
     let mut state = opened_session(session_id, Vec::new());
@@ -2211,14 +2236,11 @@ fn the_stream_mirror_reuses_snapshot_rows_without_repeating_them() {
         session_id,
         run_id,
         RunStatusDto::Running,
-        vec![
-            user_row(session_id, Some(run_id), "hello"),
-            assistant_row(session_id, run_id, "hi"),
-        ],
+        rows.clone(),
     )));
     assert_eq!(
-        state.transcript().len(),
-        2,
+        state.transcript(),
+        rows.as_slice(),
         "rows committed after the session read arrive with the subscription"
     );
     assert_eq!(state.stream(), StreamStatus::Live);
@@ -2256,30 +2278,6 @@ fn a_content_frame_reports_every_row_appended_since_an_epoch() {
 }
 
 #[test]
-fn the_stream_snapshot_appends_only_the_rows_the_session_read_missed() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let seeded = vec![user_row(session_id, Some(run_id), "hello")];
-    let mut state = opened_session(session_id, seeded.clone());
-    let epoch = state.transcript_epoch();
-    let mut rows = seeded;
-    rows.push(assistant_row(session_id, run_id, "hi"));
-
-    state.update(Action::SessionStreamOpened(stream_state(
-        session_id,
-        run_id,
-        RunStatusDto::Running,
-        rows,
-    )));
-    assert_eq!(state.transcript().len(), 2);
-    assert_eq!(
-        state.transcript_appended_since(epoch),
-        Some(1),
-        "only the row the session read missed is appended"
-    );
-}
-
-#[test]
 fn a_session_snapshot_reports_no_append_since_the_previous_epoch() {
     let session_id = SessionId::new();
     let mut state = opened_session(session_id, vec![user_row(session_id, None, "hello")]);
@@ -2296,7 +2294,7 @@ fn a_session_snapshot_reports_no_append_since_the_previous_epoch() {
     assert_eq!(
         state.transcript_appended_since(epoch),
         None,
-        "a snapshot replaces the transcript instead of appending to it"
+        "a snapshot read is a replacement, never an append"
     );
     assert_eq!(
         state.transcript_appended_since(state.transcript_epoch()),
@@ -2308,22 +2306,21 @@ fn a_session_snapshot_reports_no_append_since_the_previous_epoch() {
 fn a_trim_of_the_oldest_rows_reports_no_append_since_the_previous_epoch() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let rows: Vec<_> = (0..RETAINED_TRANSCRIPT_MESSAGES)
-        .map(|index| assistant_row(session_id, run_id, &format!("row {index}")))
-        .collect();
-    let mut state = opened_session(session_id, rows.clone());
-    state.update(Action::SessionStreamOpened(stream_state(
-        session_id,
-        run_id,
-        RunStatusDto::Running,
-        rows,
+    let mut state = opened_session(session_id, Vec::new());
+    state.update(Action::SessionStreamOpened(full_transcript(
+        session_id, run_id,
     )));
+    let retained = state.transcript().len();
     let epoch = state.transcript_epoch();
 
     state.update(Action::FrameReceived(SessionFrameDto::Content(
         assistant_row(session_id, run_id, "the newest row"),
     )));
-    assert_eq!(state.transcript().len(), RETAINED_TRANSCRIPT_MESSAGES);
+    assert_eq!(
+        state.transcript().len(),
+        retained,
+        "the client's window keeps its newest rows"
+    );
     assert_eq!(
         state.transcript_appended_since(epoch),
         None,
@@ -3107,6 +3104,54 @@ fn a_failed_stream_reports_the_failure() {
 }
 
 #[test]
+fn a_second_lost_stream_asks_for_no_reconnect() {
+    // The budget is one reconnect per lost stream: the first loss asks for it,
+    // and a second loss inside the same recovery asks for nothing, so the front
+    // end reports its typed failure instead of retrying in a loop.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    assert_eq!(
+        state.update(Action::SessionStreamFailed(failure())),
+        vec![Effect::Connect],
+        "the first loss asks for the one reconnect"
+    );
+    assert_eq!(
+        state.update(Action::SessionStreamEnded),
+        Vec::<Effect>::new(),
+        "a second loss inside one recovery asks for no second reconnect"
+    );
+    assert!(
+        state.error().is_some(),
+        "the typed failure stays visible on the error line"
+    );
+}
+
+#[test]
+fn a_live_stream_resets_the_reconnect_budget() {
+    // The budget is per lost stream: a stream that opened again owes its own
+    // one reconnect, so a front end that recovered is never left without one.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    assert_eq!(
+        state.update(Action::SessionStreamFailed(failure())),
+        vec![Effect::Connect]
+    );
+    state.update(Action::SessionStreamOpened(stream_state(
+        session_id,
+        run_id,
+        RunStatusDto::Running,
+        Vec::new(),
+    )));
+    assert_eq!(
+        state.update(Action::SessionStreamFailed(failure())),
+        vec![Effect::Connect],
+        "a stream that opened again resets the budget"
+    );
+}
+
+#[test]
 fn a_lost_subscription_lets_the_stop_clear_and_exit_arms_through() {
     // The daemon died: the subscription is gone while the last known run
     // status still reads `running`. The stop arms must not claim that run any
@@ -3371,28 +3416,23 @@ fn the_key_expansion_targets_the_newest_row_that_carries_reasoning() {
 fn an_expansion_clears_when_the_transcript_is_front_trimmed() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let rows: Vec<_> = (0..RETAINED_TRANSCRIPT_MESSAGES)
-        .map(|index| reasoning_row(session_id, run_id, &format!("row {index}"), "thought"))
-        .collect();
-    let mut state = opened_session(session_id, rows.clone());
+    let mut state = opened_session(session_id, Vec::new());
+    state.update(Action::SessionStreamOpened(full_transcript(
+        session_id, run_id,
+    )));
+    let retained = state.transcript().len();
     state.update(Action::SelectTranscriptRows {
         anchor: 2,
         extent: 4,
     });
     state.update(Action::ExpandReasoning { row: Some(1) });
     assert_eq!(state.reasoning_expansion(1), 100);
-    state.update(Action::SessionStreamOpened(stream_state(
-        session_id,
-        run_id,
-        RunStatusDto::Running,
-        rows,
-    )));
     state.update(Action::FrameReceived(SessionFrameDto::Content(
         assistant_row(session_id, run_id, "the newest row"),
     )));
     assert_eq!(
         state.transcript().len(),
-        RETAINED_TRANSCRIPT_MESSAGES,
+        retained,
         "the trim dropped the oldest row"
     );
     assert_eq!(

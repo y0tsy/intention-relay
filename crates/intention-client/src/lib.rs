@@ -476,12 +476,15 @@ impl SessionStreamClient {
         else {
             return Err(invalid_response());
         };
-        let mut state = SessionStreamState::new(session_id);
-        state.apply_initial(snapshot)?;
+        if snapshot.session_id() != session_id {
+            // The correlated reply belongs to the session this subscription
+            // asked for; another session's snapshot is a scoped-response error.
+            return Err(scope_error());
+        }
         Ok(SessionStreamSubscription {
             sender,
             receiver,
-            state,
+            state: SessionStreamState::from_snapshot(snapshot),
         })
     }
 }
@@ -519,7 +522,7 @@ impl SessionStreamSubscription {
             Err(error) => return Err(error),
         };
         let frame = parse_session_frame(&line)?;
-        self.state.apply_frame(frame.clone())?;
+        let _update = self.state.apply_frame(frame.clone())?;
         Ok(Some(frame))
     }
 
@@ -537,6 +540,26 @@ impl SessionStreamSubscription {
 /// re-subscribe re-reads the bounded current-state snapshot.
 pub const RETAINED_TRANSCRIPT_MESSAGES: usize = 256;
 
+/// What one applied session-stream frame changed in the committed state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FrameUpdate {
+    /// The frame advanced nothing: a content frame repeated the newest accepted
+    /// row, or a status frame repeated the projected run.
+    Unchanged,
+    /// A content frame appended this committed row identity.
+    Row(MessageId),
+    /// A status frame replaced the session's run projection.
+    Run(RunId),
+    /// A transient delta advanced the provisional buffer of the run and step it
+    /// names.
+    Delta {
+        /// The run whose step streamed the text.
+        run_id: RunId,
+        /// The zero-based model step the text belongs to.
+        step: u32,
+    },
+}
+
 /// The committed state of one fixed session scope.
 ///
 /// The subscription reply is the current session snapshot, and every later
@@ -548,8 +571,8 @@ pub const RETAINED_TRANSCRIPT_MESSAGES: usize = 256;
 /// accepted row by the durable row identity it carries, so no accepted row is
 /// shown twice. The retained transcript keeps the newest
 /// [`RETAINED_TRANSCRIPT_MESSAGES`] rows, and
-/// [`SessionStreamState::missing_rows`] reconciles another read of the same
-/// durable transcript with this one. Transient provisional text is not
+/// [`SessionStreamState::reconcile`] is the one entry that merges another read
+/// of the same durable transcript into them. Transient provisional text is not
 /// committed state: each of the active run's current model step's two text
 /// channels is held in its own buffer for that step only and is dropped as soon
 /// as the step's assistant row commits.
@@ -558,6 +581,20 @@ pub struct SessionStreamState {
     session_id: SessionId,
     run: Option<RunProjectionDto>,
     messages: Vec<MessageProjectionDto>,
+    /// The committed rows that superseded a model step's streamed text, oldest
+    /// first: one durable row identity to the step it became.
+    supersessions: Vec<(MessageId, u32)>,
+    /// The retained transcript's version: every mutation moves it forward.
+    epoch: u64,
+    /// The epoch a replacement or a front drain left the transcript at.
+    ///
+    /// Only rows appended at or after this epoch keep the transcript a prefix
+    /// of what it was, so a query before it can never be answered append-only.
+    append_base: u64,
+    /// The epoch of every row appended since [`Self::append_base`], in append
+    /// order, so the count of rows appended after any epoch in the run is a
+    /// partition point rather than a scan.
+    appends: Vec<u64>,
     /// The model step the provisional buffers currently belong to, if any.
     provisional_step: Option<u32>,
     /// The transient answer text of the current model step.
@@ -574,53 +611,138 @@ impl SessionStreamState {
             session_id,
             run: None,
             messages: Vec::new(),
+            supersessions: Vec::new(),
+            epoch: 0,
+            append_base: 0,
+            appends: Vec::new(),
             provisional_step: None,
             provisional_text: String::new(),
             provisional_reasoning: String::new(),
         }
     }
 
-    /// Applies the correlated first reply for this subscription.
+    /// Reads one durable session snapshot into a state of its own.
     ///
-    /// A snapshot replaces every value held before it, including any transient
-    /// provisional text and any run projection of another read.
+    /// A snapshot is a read of the session's durable transcript: the state it
+    /// returns carries the snapshot's rows - the newest
+    /// [`RETAINED_TRANSCRIPT_MESSAGES`] of them - and the run projection the
+    /// snapshot carried. A caller that already holds this session's state
+    /// merges the read with [`SessionStreamState::reconcile`] instead, so the
+    /// two reads of one transcript meet by durable row identity.
+    #[must_use]
+    pub fn from_snapshot(snapshot: SessionSnapshotDto) -> Self {
+        let mut state = Self::new(snapshot.session_id());
+        state.run = snapshot.projection().active_run();
+        state.messages = snapshot.messages().to_vec();
+        state.retain_newest();
+        // A read is never an append: the rows it carries replace what the state
+        // held, so no caller can answer an epoch query append-only across it.
+        state.note_replacement();
+        state
+    }
+
+    /// Reconciles a newer read of this session's durable transcript.
+    ///
+    /// Rows are matched by durable identity: every row the read carries joins
+    /// this state's rows in identity order, and the newest
+    /// [`RETAINED_TRANSCRIPT_MESSAGES`] rows are kept. The read's run projection
+    /// replaces this state's - a newer read is the current one - and the
+    /// supersession identity of every retained row stays.
     ///
     /// # Errors
     ///
-    /// Returns a typed scoped-response error without mutation when the snapshot
-    /// belongs to another session.
-    pub fn apply_initial(&mut self, snapshot: SessionSnapshotDto) -> DtoResult<()> {
-        self.ensure_scope(snapshot.session_id())?;
-        let mut next = Self::new(self.session_id);
-        next.run = snapshot.projection().active_run();
-        next.messages = snapshot.messages().to_vec();
-        next.retain_newest();
-        *self = next;
-        Ok(())
-    }
-
-    /// Returns the rows of this snapshot that `existing` does not already
-    /// carry, in order.
-    ///
-    /// A run subscription and a session read read the same durable transcript,
-    /// so one may carry committed rows the other already shows. Rows are
-    /// matched by their durable identity, so two rows with equal content but
-    /// distinct identities (a user sending the same text twice) are never
-    /// conflated.
-    #[must_use]
-    pub fn missing_rows(&self, existing: &[MessageProjectionDto]) -> Vec<MessageProjectionDto> {
-        let known = existing
+    /// Returns the typed scoped-response error for a read of another session.
+    pub fn reconcile(&mut self, read: Self) -> DtoResult<()> {
+        self.ensure_scope(read.session_id)?;
+        let known = self
+            .messages
             .iter()
             .map(MessageProjectionDto::id)
             .collect::<BTreeSet<MessageId>>();
-        self.messages
-            .iter()
-            .filter(|row| !known.contains(&row.id()))
-            .cloned()
-            .collect()
+        self.messages.extend(
+            read.messages
+                .into_iter()
+                .filter(|row| !known.contains(&row.id())),
+        );
+        self.messages.sort_by_key(MessageProjectionDto::id);
+        self.run = read.run;
+        // The read is a fresh observation of committed state: the transient
+        // advance notice of an earlier stream never outlives it.
+        self.clear_provisional();
+        self.note_replacement();
+        self.retain_newest();
+        Ok(())
     }
 
-    /// Applies one uncorrelated session-stream frame.
+    /// Returns the retained rows appended after the identity a caller last
+    /// reported, in durable order.
+    ///
+    /// `after` is the durable identity of the newest row the caller already
+    /// reported, or `None` for a caller that has reported none. The retained
+    /// rows are bounded, so a caller that lets more rows commit than the bound
+    /// retains before it reads cannot be shown the rows the bound dropped; a
+    /// caller that reports each frame before it waits again sees every one, and
+    /// a reported row the bound has since dropped never blocks the next report.
+    #[must_use]
+    pub fn rows_after(&self, after: Option<MessageId>) -> &[MessageProjectionDto] {
+        match after {
+            None => &self.messages,
+            Some(after) => {
+                let start = self.messages.partition_point(|row| row.id() <= after);
+                &self.messages[start..]
+            }
+        }
+    }
+
+    /// Returns the model step whose provisional text a committed row
+    /// superseded, once that row arrived.
+    ///
+    /// The identity is kept for as long as its row is retained, so a sink that
+    /// already wrote the step's streamed answer asks for this identity instead
+    /// of comparing text, and a row whose identity the window dropped has no
+    /// supersession left to report.
+    #[must_use]
+    pub fn superseded_step(&self, row: MessageId) -> Option<u32> {
+        self.supersessions
+            .iter()
+            .find(|(identity, _step)| *identity == row)
+            .map(|(_identity, step)| *step)
+    }
+
+    /// Returns the version of the retained transcript.
+    ///
+    /// Every mutation moves it forward: an appended row, a reconciliation, a
+    /// read, and a front trim each leave a new value.
+    #[must_use]
+    pub const fn transcript_epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// Returns how many rows were appended since `epoch`, when the rows current
+    /// at `epoch` remain a prefix of the retained transcript; `None` means a
+    /// reconciliation, a read, or a front trim ended the append-only run.
+    #[must_use]
+    pub fn transcript_appended_since(&self, epoch: u64) -> Option<usize> {
+        if epoch > self.epoch || epoch < self.append_base {
+            return None;
+        }
+        let before = self.appends.partition_point(|mark| *mark <= epoch);
+        Some(self.appends.len() - before)
+    }
+
+    /// Ends this state's stream observation.
+    ///
+    /// The transient provisional text belongs to the stream that streamed it,
+    /// so a stream that ended drops both of its channels' buffers. The
+    /// committed rows and the run projection stay: they are the session's own
+    /// durable state, and a front end that lost one stream still knows what the
+    /// session committed and which run it last observed.
+    pub fn end_stream(&mut self) {
+        self.clear_provisional();
+    }
+
+    /// Applies one uncorrelated session-stream frame and reports what it
+    /// changed.
     ///
     /// A provisional text delta is best-effort advance notice: it mutates only
     /// the transient buffer of the channel it names and never the committed
@@ -631,7 +753,7 @@ impl SessionStreamState {
     ///
     /// Returns a typed scoped-response error without mutation for a frame that
     /// belongs to another session.
-    pub fn apply_frame(&mut self, frame: SessionFrameDto) -> DtoResult<()> {
+    pub fn apply_frame(&mut self, frame: SessionFrameDto) -> DtoResult<FrameUpdate> {
         match frame {
             SessionFrameDto::Content(message) => self.apply_content(message),
             SessionFrameDto::Status(run) => self.apply_status(run),
@@ -639,25 +761,33 @@ impl SessionStreamState {
         }
     }
 
-    fn apply_content(&mut self, message: MessageProjectionDto) -> DtoResult<()> {
+    fn apply_content(&mut self, message: MessageProjectionDto) -> DtoResult<FrameUpdate> {
         self.ensure_scope(message.session_id())?;
-        // The committed assistant row of a step supersedes both its channels'
-        // provisional text, so neither buffer outlives its own step.
-        if message.kind() == MessageKindDto::Assistant {
-            self.clear_provisional();
-        }
         // A content frame repeating the newest accepted row carries the
         // identity of the row the subscription snapshot already carried:
         // re-appending it would show the same committed row twice.
-        if self.messages.last().map(MessageProjectionDto::id) == Some(message.id()) {
-            return Ok(());
+        let repeated = self.messages.last().map(MessageProjectionDto::id) == Some(message.id());
+        if message.kind() == MessageKindDto::Assistant {
+            // The committed assistant row of a step supersedes both its
+            // channels' provisional text, and it carries the identity of the
+            // step it became: a sink that already wrote that step's streamed
+            // text asks for the identity instead of comparing text.
+            if !repeated && let Some(step) = self.provisional_step {
+                self.supersessions.push((message.id(), step));
+            }
+            self.clear_provisional();
         }
+        if repeated {
+            return Ok(FrameUpdate::Unchanged);
+        }
+        let id = message.id();
         self.messages.push(message);
+        self.note_append();
         self.retain_newest();
-        Ok(())
+        Ok(FrameUpdate::Row(id))
     }
 
-    fn apply_text_delta(&mut self, delta: TextDeltaFrameDto) -> DtoResult<()> {
+    fn apply_text_delta(&mut self, delta: TextDeltaFrameDto) -> DtoResult<FrameUpdate> {
         self.ensure_scope(delta.session_id())?;
         // Transient text belongs to the session's current run: a delta of a run
         // this state no longer projects is a cadence frame that crossed its
@@ -667,7 +797,7 @@ impl SessionStreamState {
             .as_ref()
             .is_none_or(|run| run.run_id() != delta.run_id())
         {
-            return Ok(());
+            return Ok(FrameUpdate::Unchanged);
         }
         // A delta for a new step replaces both buffers: the previous step's
         // advance notice is stale once the run moves on.
@@ -683,7 +813,10 @@ impl SessionStreamState {
             TextDeltaChannelDto::Answer => self.provisional_text.push_str(delta.text()),
             TextDeltaChannelDto::Reasoning => self.provisional_reasoning.push_str(delta.text()),
         }
-        Ok(())
+        Ok(FrameUpdate::Delta {
+            run_id: delta.run_id(),
+            step: delta.step(),
+        })
     }
 
     /// Drops the transient provisional text of every channel of the current
@@ -694,15 +827,52 @@ impl SessionStreamState {
         self.provisional_reasoning.clear();
     }
 
+    /// Records one appended row in the append-only run.
+    fn note_append(&mut self) {
+        self.epoch += 1;
+        self.appends.push(self.epoch);
+    }
+
+    /// Moves the epoch past a mutation that is not an append.
+    ///
+    /// A reconciliation, a read, and a front drain all move every retained row,
+    /// so the append-only run ends here and a stale caller lays the whole
+    /// transcript out again.
+    fn note_replacement(&mut self) {
+        self.epoch += 1;
+        self.appends.clear();
+        self.append_base = self.epoch;
+    }
+
     /// Drops the oldest retained rows past [`RETAINED_TRANSCRIPT_MESSAGES`].
+    ///
+    /// A front drain moves every retained row, so it is a replacement and never
+    /// an append.
     fn retain_newest(&mut self) {
         if self.messages.len() > RETAINED_TRANSCRIPT_MESSAGES {
             let excess = self.messages.len() - RETAINED_TRANSCRIPT_MESSAGES;
             self.messages.drain(..excess);
+            self.note_replacement();
         }
+        self.prune_supersessions();
     }
 
-    fn apply_status(&mut self, run: RunProjectionDto) -> DtoResult<()> {
+    /// Drops the supersession identity of every row the window no longer holds.
+    ///
+    /// The identity lives exactly as long as its row: a sink that kept its own
+    /// copy of the step it streamed can never be told about a row the window
+    /// dropped, and it prints that row in full instead.
+    fn prune_supersessions(&mut self) {
+        let retained = self
+            .messages
+            .iter()
+            .map(MessageProjectionDto::id)
+            .collect::<BTreeSet<MessageId>>();
+        self.supersessions
+            .retain(|(row, _step)| retained.contains(row));
+    }
+
+    fn apply_status(&mut self, run: RunProjectionDto) -> DtoResult<FrameUpdate> {
         self.ensure_scope(run.session_id())?;
         // The first status of a run the session did not carry yet is exactly
         // how a window learns that a run started elsewhere, so a status frame
@@ -712,8 +882,14 @@ impl SessionStreamState {
         if run_status_is_terminal(run.status()) {
             self.clear_provisional();
         }
+        let changed = self.run.as_ref() != Some(&run);
+        let run_id = run.run_id();
         self.run = Some(run);
-        Ok(())
+        Ok(if changed {
+            FrameUpdate::Run(run_id)
+        } else {
+            FrameUpdate::Unchanged
+        })
     }
 
     fn ensure_scope(&self, session_id: SessionId) -> DtoResult<()> {

@@ -23,7 +23,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use intention_client::IntentionClient;
+use intention_client::{IntentionClient, RETAINED_TRANSCRIPT_MESSAGES};
 use intention_proto::{MessageKindDto, SessionId, SessionSnapshotDto};
 use intention_test_support::daemon_process::{
     self, spawn_daemon, unique_endpoint, wait_until_ready, write_config_document,
@@ -322,6 +322,12 @@ impl ProviderEndpoint {
         Self::Stalled(StalledProvider::start())
     }
 
+    /// Starts the scripted fake provider serving `rounds` tool rounds and one
+    /// final text round.
+    fn rounds(rounds: usize) -> Self {
+        Self::Scripted(FakeProvider::start_rounds("read", TOOL_ARGUMENTS, rounds))
+    }
+
     /// Returns the loopback port the daemon's provider configuration points at.
     const fn port(&self) -> u16 {
         match self {
@@ -608,6 +614,85 @@ fn the_json_run_reports_transient_deltas_before_the_committed_row() {
             MessageKindDto::Assistant,
         ],
         "the reported session holds the committed transcript"
+    );
+}
+
+#[test]
+fn a_run_past_the_retention_bound_reports_every_committed_row() {
+    // The reporter walks the client's rows by durable identity, so a run that
+    // commits more rows than the client retains still reports every one of
+    // them: a row the bound drains after it was reported never hides the rows
+    // that follow it.
+    let rounds = RETAINED_TRANSCRIPT_MESSAGES / 2 + 1;
+    let committed = rounds * 2 + 2;
+    assert!(
+        committed > RETAINED_TRANSCRIPT_MESSAGES,
+        "the fixture run crosses the client's retention bound"
+    );
+    let host = TerminalHost::new(ProviderEndpoint::rounds(rounds), Some(WORKSPACE_FILE));
+    let workspace = host.workspace_root();
+    let output = host.run(
+        &["run", PROMPT, "--format", "json", "--workspace", &workspace],
+        None,
+    );
+    assert_eq!(output.code, Some(0), "the run completes: {}", output.stderr);
+    assert!(output.stderr.is_empty(), "stderr: {}", output.stderr);
+
+    let records = json_records(&output.stdout);
+    let messages: Vec<&Value> = records
+        .iter()
+        .filter(|record| kind(record) == "message")
+        .collect();
+    assert_eq!(
+        messages.len(),
+        committed,
+        "every committed row is reported exactly once"
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|record| record["kind"] == "tool_call")
+            .count(),
+        rounds,
+        "every tool round's call is reported"
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|record| record["kind"] == "tool_result")
+            .count(),
+        rounds,
+        "every tool round's result is reported"
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|record| record["kind"] == "user" && text(record) == PROMPT)
+            .count(),
+        1,
+        "the accepted turn is reported once"
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|record| record["kind"] == "assistant" && text(record) == COMMITTED_TEXT)
+            .count(),
+        1,
+        "the final answer is reported once"
+    );
+
+    let result = records.last().expect("the run reports one final result");
+    assert_eq!(kind(result), "result", "the result record ends the output");
+    assert_eq!(result["outcome"].as_str(), Some("completed"));
+    assert_eq!(
+        host.scripted_provider().request_count(),
+        rounds + 1,
+        "the provider serves every tool round and the answer that ends the run"
+    );
+    assert_eq!(
+        host.scripted_provider().excess_count(),
+        0,
+        "no request follows the script"
     );
 }
 

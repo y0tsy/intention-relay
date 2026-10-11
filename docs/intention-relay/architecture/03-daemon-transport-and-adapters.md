@@ -567,8 +567,7 @@ lacks. Each site carries the same `@todo(core):` prefix and names what the core 
 | counts committed tool-call rows minus tool-result rows to decide what is in flight (`app/run.rs`) | the run's open tool calls |
 
 The `@todo(hack)` marker is the crate's own class for work the adapter or the client must still do, and it is not
-catalogued here. Its sites are the second transcript projection and the retention bound it re-applies
-(`app/run.rs`), reporting rows by position (`headless.rs`), protocol errors composed for conditions the core never
+catalogued here. Its sites are protocol errors composed for conditions the core never
 reports and the process status they select (`headless.rs`), the run-stream recovery budget (`headless.rs`, kept as
 is by owner decision), streamed text matched to its committed row by text equality (`headless.rs`), the theme values
 re-spelled in the registry (`app/commands.rs`), the committed duration measured by the front end (`tui/mod.rs`), an

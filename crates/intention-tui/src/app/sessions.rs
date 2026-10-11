@@ -1,6 +1,7 @@
 //! The connection and session transitions: bootstrap, reconnect, the session
 //! list, and session selection.
 
+use intention_client::SessionStreamState;
 use intention_proto::{
     DaemonReadinessDto, ErrorDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
 };
@@ -73,18 +74,27 @@ impl AppState {
     /// projection, and the active run's transient text - whoever committed them
     /// in that session. A front end holds exactly one subscription.
     ///
+    /// The snapshot is the client's read of the session's durable transcript:
+    /// the state it returns is the front end's one row list, so the panes render
+    /// exactly the rows the client read.
+    ///
     /// The snapshot also sends the prompt a submission asked to start a session
     /// for: that prompt is the session's first turn, and every other snapshot
     /// leaves it pending.
     pub(super) fn apply_session_snapshot(&mut self, snapshot: SessionSnapshotDto) -> Vec<Effect> {
         let session_id = snapshot.session_id();
+        let mode = snapshot.projection().mode();
+        let read = SessionStreamState::from_snapshot(snapshot);
+        if let Err(error) = self.merge_transcript(read) {
+            // The client classified the read as another session's: the front end
+            // reports that failure instead of rendering rows it cannot own.
+            return self.apply_failure(&error);
+        }
         self.session_id = Some(session_id);
-        self.session_mode = Some(snapshot.projection().mode());
-        self.replace_transcript(snapshot.messages());
-        self.active_run = snapshot.projection().active_run();
-        // A snapshot re-reads committed state: a mirror of an earlier subscription
-        // is stale, and its transient provisional text must not outlive it.
-        self.session_stream = None;
+        self.session_mode = Some(mode);
+        // A read replaces the rows the front end held, so every display-row
+        // offset moved: the selection and the reasoning expansions go with it.
+        self.note_replacement();
         self.stream = StreamStatus::Inactive;
         // The elapsed time belongs to the turn the previous session was running.
         self.elapsed_millis = None;
@@ -132,15 +142,19 @@ impl AppState {
     }
 
     /// Re-reads current state from the daemon after a reconnect request.
+    ///
+    /// The request is the ask that follows an observed stream loss: the
+    /// transient observation ends - the stream that streamed the provisional
+    /// text is gone - and the one reconnect the loss is owed goes out. A budget
+    /// already spent asks for nothing, which is how the driver learns that the
+    /// recovery is over.
     pub(super) fn request_reconnect(&mut self) -> Vec<Effect> {
-        self.connection = ConnectionStatus::Connecting;
-        // Transient stream state never survives a reconnect: the fresh snapshot
-        // and subscription re-read current committed state.
-        self.session_stream = None;
         self.stream = StreamStatus::Inactive;
+        if let Some(state) = self.session_state.as_mut() {
+            state.end_stream();
+        }
         self.error = None;
-        self.note("reconnecting".to_owned());
-        vec![Effect::Connect]
+        self.reconnect_once()
     }
 
     /// Returns the subscription that makes the open session live, if any.
