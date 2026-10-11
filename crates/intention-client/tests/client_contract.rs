@@ -27,7 +27,9 @@ use intention_proto::{
     TuiThemeAcceptedDto, TurnId, decode_request_line, encode_request,
 };
 use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, ProjectId, WorkspaceId};
-use intention_proto::{MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto};
+use intention_proto::{
+    MessageId, MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto,
+};
 use intention_transport::{AsyncLocalDaemonConnection, AsyncLocalListener, LocalEndpoint};
 
 /// Returns one valid fixture timestamp in whole Unix seconds.
@@ -951,6 +953,47 @@ fn state_clears_provisional_text_on_the_committed_assistant_row() {
         "half",
         "the committed transcript carries the row while the buffer is dropped"
     );
+}
+
+#[test]
+fn state_clears_provisional_reasoning_on_the_committed_reasoning_only_row() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = RunStreamState::new(session_id, run_id);
+    state
+        .apply_initial(fixture_snapshot(session_id, run_id, Vec::new()))
+        .expect("fixture snapshot applies");
+    state
+        .apply_frame(RunStreamFrameDto::TextDelta(fixture_reasoning_delta(
+            session_id, run_id, 0, "thinking",
+        )))
+        .expect("provisional reasoning applies");
+    assert_eq!(state.provisional_reasoning(), "thinking");
+
+    // The step's reasoning-only assistant row commits before the tool rows of
+    // the same step, so the provisional reasoning is superseded by the row
+    // that now carries it.
+    state
+        .apply_frame(RunStreamFrameDto::Content(
+            MessageProjectionDto::new(
+                MessageId::new(1).expect("fixture row identity is valid"),
+                session_id,
+                Some(run_id),
+                MessageKindDto::Assistant,
+                "",
+                Some("thinking".to_owned()),
+                None,
+                None,
+            )
+            .expect("a reasoning-only assistant row is coherent"),
+        ))
+        .expect("the committed reasoning-only row applies");
+    assert_eq!(state.provisional_reasoning(), "");
+    assert_eq!(state.provisional_text(), "");
+    let row = state.messages().last().expect("the row remains");
+    assert_eq!(row.kind(), MessageKindDto::Assistant);
+    assert_eq!(row.text(), "");
+    assert_eq!(row.reasoning(), Some("thinking"));
 }
 
 #[test]

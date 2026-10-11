@@ -49,6 +49,16 @@ struct E2eHost {
 impl E2eHost {
     /// Creates a fresh isolated fixture and spawns its first daemon process.
     fn new(workspace_file: Option<(&str, &str)>, tool_arguments: &str) -> Self {
+        Self::with_tool_round_reasoning(workspace_file, tool_arguments, &[])
+    }
+
+    /// Creates a fresh isolated fixture whose tool round streams `reasoning`
+    /// before the tool call it emits.
+    fn with_tool_round_reasoning(
+        workspace_file: Option<(&str, &str)>,
+        tool_arguments: &str,
+        reasoning: &[&str],
+    ) -> Self {
         let config_home = TempDir::new().expect("config directory exists");
         let state_home = TempDir::new().expect("state directory exists");
         let workspace = TempDir::new().expect("workspace directory exists");
@@ -56,7 +66,7 @@ impl E2eHost {
             std::fs::write(workspace.path().join(name), content).expect("workspace fixture writes");
         }
         let credential = format!("fixture-credential-{}", std::process::id());
-        let provider = FakeProvider::start(tool_arguments);
+        let provider = FakeProvider::start_with_round_reasoning(tool_arguments, reasoning);
         let config_document = fixture_config_document(provider.port(), &credential);
         write_config_document(config_home.path(), &config_document);
         let endpoint = unique_endpoint("e2e");
@@ -508,6 +518,107 @@ async fn real_daemon_tool_loop_answers_a_failed_call_without_stopping() {
         messages[2].text()
     );
     assert_eq!(messages[3].text(), "done");
+}
+
+#[tokio::test]
+async fn real_daemon_commits_step_reasoning_above_its_tool_exchange() {
+    let host = E2eHost::with_tool_round_reasoning(
+        Some(("hello.txt", "hello world")),
+        r#"{"path":"hello.txt"}"#,
+        &["weigh ", "the call"],
+    );
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
+
+    let session_id = SessionId::new();
+    client
+        .create_session(CreateSessionCommandDto::new(
+            ProjectId::new(),
+            session_id,
+            WorkspaceId::new(),
+            WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
+                .expect("workspace root is absolute"),
+            RunModeDto::Build,
+        ))
+        .await
+        .expect("the daemon accepts session creation");
+
+    let outcome = client
+        .send_user_turn(
+            session_id,
+            IdempotencyKey::new(),
+            "Read hello.txt".to_owned(),
+        )
+        .await
+        .expect("user turn is accepted");
+    let SendUserTurnOutcomeDto::Started { run_id, .. } = outcome else {
+        panic!("first turn starts a run, got: {outcome:?}")
+    };
+
+    let stream_client = RunStreamClient::new(host.endpoint.clone());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let observation =
+        observe_run_until_terminal(&stream_client, session_id, run_id, deadline).await;
+    assert_eq!(
+        observation.subscription.state().status(),
+        Some(RunStatusDto::Completed),
+        "the reasoned round completes after its tool exchange"
+    );
+
+    // The step's reasoning commits as its own assistant row before the tool
+    // rows of that same step; the live subscription observes the same order.
+    let expected = [
+        (MessageKindDto::User, "Read hello.txt".to_owned(), None),
+        (
+            MessageKindDto::Assistant,
+            String::new(),
+            Some("weigh the call".to_owned()),
+        ),
+        (
+            MessageKindDto::ToolCall,
+            r#"{"path":"hello.txt"}"#.to_owned(),
+            None,
+        ),
+        (MessageKindDto::ToolResult, "hello world".to_owned(), None),
+        (MessageKindDto::Assistant, "done".to_owned(), None),
+    ];
+    let observed = observation
+        .subscription
+        .state()
+        .messages()
+        .iter()
+        .map(|message| {
+            (
+                message.kind(),
+                message.text().to_owned(),
+                message.reasoning().map(str::to_owned),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        observed, expected,
+        "the live frames carry the committed order"
+    );
+    let snapshot = client
+        .session_snapshot(session_id)
+        .await
+        .expect("session snapshot reads");
+    let durable = snapshot
+        .messages()
+        .iter()
+        .map(|message| {
+            (
+                message.kind(),
+                message.text().to_owned(),
+                message.reasoning().map(str::to_owned),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        durable, expected,
+        "the durable transcript carries the same order the live frames did"
+    );
+    assert_eq!(host.provider.request_count(), 2);
+    assert_eq!(host.provider.excess_count(), 0);
 }
 
 #[tokio::test]
