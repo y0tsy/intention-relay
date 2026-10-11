@@ -528,7 +528,7 @@ lacks. Each site carries the same `@todo(core):` prefix and names what the core 
 | The terminal still | The core should own |
 | --- | --- |
 | matches a wire `tool_id` against the six tool names (`tui/panes/tools.rs`) | the closed set of tool ids and their typed kind |
-| decodes a tool call's arguments document and reads `path`, `offset`, `limit`, `pattern`, `scope`, `program`, and `args` (`tui/panes/tools.rs`) | typed tool-argument structs |
+| decodes a tool call's arguments document and reads `path`, `offset`, `limit`, `pattern`, `scope`, `command`, and `cwd` (`tui/panes/tools.rs`) | typed tool-argument structs |
 | splits a tool result's text into a path list, a located hit, or a preview (`tui/panes/tools.rs`) | a typed tool result and its metadata |
 | resolves the default run policy of a created session (`cli.rs`) | the durable run-mode default |
 | spells the declared run-mode set in the flag's usage and rejection text (`cli.rs`) | a declared set on the run-mode vocabulary |

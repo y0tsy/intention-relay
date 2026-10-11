@@ -280,6 +280,28 @@ The per-crate self-checks are `cargo fmt -p intention-tui`, `cargo nextest run -
 `make verify` before merge. Tests of deleted surfaces are deleted without replacement, the crate keeps its declared
 `edge` tier, and the per-crate coverage policy in `quality/coverage.toml` is otherwise unchanged.
 
+### Slice 2 tool-execution corrections
+
+The retrospective tool-execution corrections land inside the activated slice. `execute` now takes one
+`ShellCommandTextDto` and optional typed `cwd`, `env`, and `timeout_seconds` parameters and runs through the private
+platform shell adapter — `bash -c` on Unix and `cmd /C` on Windows — so pipelines, redirects, and compound commands
+are ordinary tool semantics. The fixed thirty-second ceiling is removed: a call without a declared timeout has no
+deadline, and `READER_DRAIN_GRACE` is the one liveness bound, applied as a fixed pipe-collection window after the
+direct child is reaped. Tool-contract tests cover the pipeline, redirect, and compound-command semantics, a declared
+working directory and environment overlay, the declared timeout's lost interruption, and the background descendant
+that cannot extend the collection. A pathless `grep` searches from the workspace root, matching architectures 05 and 15.
+
+Tool failures are now recoverable. The daemon's tool seam and the engine's durable local-tool lifecycle commit one
+call row plus exactly one terminal result per model call; a call whose arguments do not decode, an unknown tool name,
+and any workspace or execution failure commit a `Failed` result whose content is the bounded guidance rendered by
+`tool_failure_guidance`, and the model loop answers the call with that content and continues. `m3_engine` proves the
+decode failure and the unknown tool each commit the call row and one guided result; `m5_tool_loop` proves the failed
+call is answered with its guidance, executes exactly once, and is never retried; the daemon end-to-end suite proves
+the real daemon completes the run, delivers the guidance-bearing tool row, and asks the fake provider exactly once
+more. The terminal adapter reads the call's `command` and declared `cwd` for its execute facts. A run of
+`cargo nextest run --workspace` observed 755 tests run, 755 passed, and 2 skipped; the acceptance gate is `make quick`
+during delivery and `make verify` before merge.
+
 ### Future package evidence
 
 Evidence obligations for systems that are not activated are owned by their documents; this document keeps only the

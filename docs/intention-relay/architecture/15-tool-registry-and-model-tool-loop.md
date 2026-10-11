@@ -91,12 +91,15 @@ version; labels, executor handles, live readiness, and opaque owner resources ar
 
 ## Base-tool initial contracts
 
--  **`execute`** takes one `ShellCommandTextDto`; a private local shell adapter interprets it, and
+-  **`execute`** takes one `ShellCommandTextDto` plus optional typed launch parameters (`cwd`, `env`,
+  `timeout_seconds`); a private local shell adapter interprets the command text, and
   the executable path, platform resource, and parser never cross a public DTO boundary. Shell syntax (pipelines,
   redirects, compound commands) is code-owned tool semantics. `stdout`, `stderr`, and exit status stay separate
   typed result fields before the bounded durable stream and safe projection and are never reconstructed from a formatted
-  text footer. `execute` runs with the user's ordinary OS authority and `WorkspaceRoot` CWD, is not a sandbox, and
-  claims no complete effect enumeration.
+  text footer. `execute` runs with the user's ordinary OS authority and the workspace root as its default CWD, is not a
+  sandbox, and claims no complete effect enumeration. A call without a declared timeout has no deadline: run
+  cancellation and the child's own exit are its only stops, and one fixed pipe-collection window after the direct child
+  is reaped keeps a descendant that inherited the pipes from extending the call.
 -  **`fetch_url`** is network retrieval only. The closed first request form permits only `GET` and `HEAD` over `HTTP` or
   `HTTPS`: no request body, header map, cookie jar, credential source, URL userinfo, or non-HTTP(S) scheme. Every
   HTTP(S) address is permitted, including public, private, and literal loopback; it is deliberately not a local-network
@@ -171,7 +174,7 @@ The workspace rule is the same for every run:
 | Item | `WorkspaceRoot` meaning |
 | --- | --- |
 | Relative paths | Default base: `workspace_root.join(path)`. |
-| `execute` | Initial CWD; the child process starts in the root. |
+| `execute` | Initial CWD; the child process starts in the root unless the call declares a `cwd`. |
 | glob/grep | Default scope root when no path is supplied. |
 | Containment | None. The anchor does not contain: no symlink parser, containment check, or path-based denial remains, and a path inside the root may resolve outside it through a symbolic link. The typed input still rejects absolute and parent (`..`) paths — `WorkspaceRelativePathDto` for tool paths and the search-pattern validator for `glob`/`grep` patterns — as an input-shape rule, not a boundary; `WorkspaceRoot` is not a security boundary ([architecture 05](05-tools-and-workspace.md)). |
 
@@ -253,12 +256,14 @@ The closed initial terminal outcome taxonomy is: `Succeeded`, `Deferred`, `Denie
 It carries only safe model-visible projection and approved typed metadata; no value silently changes category later.
 `Succeeded`, `Deferred`, known denials, known pre-effect failures, and `Partial` may enter the next typed exchange; a
 `Partial` result carries the bounded captured output with its interruption notice, never blocks another model step, and
-is never retried. `Deferred` is the asynchronous `sub_agent` acceptance outcome: it carries the child session handle,
+is never retried. Every `Failed` outcome answers its call with its bounded code-owned guidance the same way, so the
+model reads what went wrong and can correct the call instead of losing the run to it. `Deferred` is the asynchronous `sub_agent` acceptance outcome: it carries the child session handle,
 permits the next model step, and never changes category when the child's terminal markdown answer arrives later as the committed child-result message.
 
-Failure semantics are closed: invalid tool input or a refused workspace binding produces a typed failed tool result
-and the run terminalizes `Failed` without retry, and a tool infrastructure error produces a safe normalized failure
-without leaking provider or OS text.
+Failure semantics are closed: invalid tool input or a refused workspace binding produces a typed `Failed` result whose
+bounded model-visible guidance answers the call, and the model loop continues to the next step without retrying the
+call or stopping the run; a tool infrastructure error produces a safe normalized failure without leaking provider or OS
+text and remains the one tool-path outcome that terminalizes the run.
 
 #### Lifecycle vocabulary and interruption notices
 
@@ -333,7 +338,8 @@ An admitted call's start is the boundary after which an external effect may be p
 restart records `CancelledBeforeStart` or `InterruptedBeforeStart` and no external action occurs; after it, known
 terminal evidence records the exact known result, and a started action interrupted or lost without proven terminal
 effect commits a bounded `Partial` result with its interruption notice. Known validation failures, denials, and known
-tool/process failures are known outcomes, not partial results. Tools are never automatically retried; provider retry may
+tool/process failures are known outcomes, not partial results, and each one is delivered to the model as the call's
+answering result with its bounded guidance. Tools are never automatically retried; provider retry may
 not repeat a tool action or occur after committed call or result evidence. Cancellation stops further admission,
 suppresses late results, and prevents a next model step.
 

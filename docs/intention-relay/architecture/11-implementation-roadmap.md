@@ -154,6 +154,12 @@ failed run, 4 timeout after interrupt, 5 interrupted run), and no presentation l
 answer and reasoning stream as channel-tagged transient `TextDelta` frames that are never persisted and never replayed;
 the committed assistant row replaces both channels, and the live tail lays out through the same block functions the
 committed rows use. Session branching and forks remain Slice 6 work; desktop presentation remains Milestone 6 work.
+The slice also carries the retrospective tool-execution corrections: `execute` runs one shell command through the
+private platform shell adapter (`bash -c` on Unix, `cmd /C` on Windows) with optional typed `cwd`, `env`, and
+`timeout_seconds` parameters, the fixed thirty-second ceiling is removed so a call without a declared timeout is
+bounded by cancellation alone and by one pipe-collection window after the direct child is reaped, a pathless `grep`
+searches from the workspace root, and a failed or undecodable call commits one durable `Failed` result whose bounded
+model-visible guidance answers the call before the loop continues.
 -  **Slice 3 — Instruction sources and system context — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
 deployment instruction profile adapted from the legacy Antibusy static prompt set, user-authored fragments at user,

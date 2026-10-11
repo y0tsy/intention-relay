@@ -121,7 +121,8 @@ The current bounds are:
 | Tool read and output windows (`MAX_TOOL_OUTPUT_BYTES`, `MAX_EDIT_TARGET_BYTES`, `MAX_GREP_AGGREGATE_BYTES`) | Representation: bounds one tool read or rendered result; a cut is marked, never hidden. |
 | Tool-result content (`MAX_TOOL_RESULT_CONTENT_BYTES`, 512 KiB) | Representation: bounds one persisted tool-result content; an over-bound value fails `invalid_tool_result` instead of truncating. |
 | Transient reasoning attachment (`MAX_MODEL_ASSISTANT_REASONING_BYTES`, 512 KiB) | Representation: bounds the reasoning one provider response attaches to its tool calls for the same-run continuation; an over-bound value fails `invalid_model_assistant_reasoning_text`. |
-| Process timeout and drain windows (`EXECUTE_TIMEOUT` 30 s, `READER_DRAIN_GRACE` 5 s) | Liveness: a child process that stops producing progress or never exits cannot hang the loop. |
+| Tool failure guidance (`MAX_TOOL_GUIDANCE_BYTES`, 8 KiB) | Representation: bounds one failed call's model-visible guidance; a cut is marked and never hides the failure. |
+| Pipe-collection window (`READER_DRAIN_GRACE`, 5 s) | Liveness: after the direct child is reaped, a descendant holding the pipes open cannot extend the call; a window that runs out stops the process group and keeps the captured output. |
 | Provider progress and retry timeouts | Liveness: a live provider request that stops producing progress fails typed. |
 | Subscriber queue and write deadline (`SUBSCRIBER_QUEUE_CAPACITY` 64, `SUBSCRIBER_WRITE_DEADLINE` 10 s) | Liveness: isolates a slow local peer from execution, persistence, and healthy delivery. |
 
