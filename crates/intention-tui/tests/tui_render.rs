@@ -1126,6 +1126,48 @@ fn expanding_a_reasoning_block_above_the_window_keeps_the_visible_rows() {
 }
 
 #[test]
+fn a_reasoning_only_step_draws_its_reasoning_without_an_answer_line() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let state = open_state(
+        session_id,
+        vec![reasoning_row(session_id, run_id, "", "weighing the call")],
+    );
+    let mut app = TestApp::new(RevueView::new(&state));
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_contains("weighing the call");
+    pilot.assert_not_contains("∷");
+}
+
+#[test]
+fn a_reasoned_tool_round_draws_its_reasoning_above_the_tool_exchange() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut messages = vec![reasoning_row(session_id, run_id, "", "weighing the call")];
+    messages.extend(tool_exchange(
+        session_id,
+        run_id,
+        "read",
+        r#"{"path":"src/lib.rs"}"#,
+        "file contents",
+    ));
+    let state = open_state(session_id, messages);
+    let mut app = TestApp::new(RevueView::new(&state));
+    let pilot = Pilot::new(&mut app);
+    let screen = pilot.screen();
+    let reasoning = screen
+        .find("weighing the call")
+        .expect("the step's reasoning renders");
+    let badge = screen
+        .find("▸ read · src/lib.rs")
+        .expect("the tool badge renders");
+    assert!(
+        reasoning < badge,
+        "the reasoning paints above the tool exchange it precedes: {screen}"
+    );
+}
+
+#[test]
 fn the_streaming_tail_renders_as_the_answer_row_it_becomes() {
     let state = streaming_state(Some("partial answer"));
     let mut app = TestApp::new(RevueView::new(&state));

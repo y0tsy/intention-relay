@@ -320,11 +320,14 @@ fn message_blocks(
     }
 }
 
-/// Returns one committed assistant row's blocks: its reasoning, then the answer.
+/// Returns one committed assistant row's blocks: its reasoning and, when the
+/// step answered, its answer.
 ///
 /// The reasoning here is the durable attachment the committed row carries; the
 /// live chain of thought of a step in flight is not a committed row, and the
-/// pane draws it as the provisional tail's own reasoning segment.
+/// pane draws it as the provisional tail's own reasoning segment. A row whose
+/// step reasoned without answering owns its reasoning block alone: no empty
+/// answer line is drawn for it.
 fn assistant_blocks(
     state: &AppState,
     message: &MessageProjectionDto,
@@ -341,7 +344,9 @@ fn assistant_blocks(
             palette,
         ));
     }
-    blocks.push(answer_block(message.text(), width, palette));
+    if !message.text().trim().is_empty() {
+        blocks.push(answer_block(message.text(), width, palette));
+    }
     blocks
 }
 
@@ -569,7 +574,7 @@ mod tests {
         ConfigRevisionId, MessageId, MessageKindDto, MessageProjectionDto, ProjectId, RunId,
         RunModeDto, RunProjectionDto, RunStatusDto, RunStreamFrameDto, RunSubscriptionSnapshotDto,
         SessionId, SessionProjectionDto, SessionSnapshotDto, TextDeltaChannelDto,
-        TextDeltaFrameDto, TurnId, WorkspaceId, WorkspaceRootDto,
+        TextDeltaFrameDto, ToolCallId, TurnId, WorkspaceId, WorkspaceRootDto,
     };
     use revue::render::Modifier;
 
@@ -634,6 +639,27 @@ mod tests {
             None,
         )
         .expect("the fixture assistant row is coherent")
+    }
+
+    /// Returns one committed tool row of `kind` bound to `call_id`.
+    fn tool_row(
+        session_id: SessionId,
+        run_id: RunId,
+        kind: MessageKindDto,
+        text: &str,
+        call_id: ToolCallId,
+    ) -> MessageProjectionDto {
+        MessageProjectionDto::new(
+            row_id(),
+            session_id,
+            Some(run_id),
+            kind,
+            text,
+            None,
+            Some(call_id),
+            Some("read".to_owned()),
+        )
+        .expect("the fixture tool row is coherent")
     }
 
     /// Returns one run projection of `session_id` in `status`.
@@ -1185,6 +1211,79 @@ mod tests {
             roles(&tail),
             roles(&expected),
             "the live tail is the committed row's own blocks, row for row"
+        );
+    }
+
+    #[test]
+    fn a_reasoning_only_committed_row_owns_its_reasoning_block_alone() {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let blocks = assistant_blocks(
+            &AppState::new(None),
+            &assistant_row(session_id, run_id, "", Some("weighing the call")),
+            0,
+            WIDTH,
+            LIGHT,
+        );
+        assert_eq!(
+            blocks.len(),
+            1,
+            "a step without an answer owns its reasoning block alone"
+        );
+        assert!(
+            blocks[0][0]
+                .text
+                .starts_with(&format!("{REASONING_GLYPH} ")),
+            "the reasoning block keeps its marker: {:?}",
+            blocks[0][0].text
+        );
+        assert!(
+            blocks
+                .iter()
+                .flatten()
+                .all(|row| !row.text.contains(ANSWER_GLYPH)),
+            "no empty answer line is drawn for a reasoning-only step"
+        );
+    }
+
+    #[test]
+    fn a_reasoned_step_paints_its_reasoning_above_the_tool_exchange_it_precedes() {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let call_id = ToolCallId::new();
+        let messages = vec![
+            assistant_row(session_id, run_id, "", Some("weighing the call")),
+            tool_row(
+                session_id,
+                run_id,
+                MessageKindDto::ToolCall,
+                r#"{"path":"src/lib.rs"}"#,
+                call_id,
+            ),
+            tool_row(
+                session_id,
+                run_id,
+                MessageKindDto::ToolResult,
+                "file contents",
+                call_id,
+            ),
+        ];
+        let mut state = AppState::new(None);
+        state.update(Action::SessionSnapshotLoaded(snapshot(
+            session_id, messages,
+        )));
+        let rows = direct_rows(&state, WIDTH, LIGHT);
+        let reasoning = rows
+            .iter()
+            .position(|row| row.text.contains(REASONING_GLYPH))
+            .expect("the reasoning block is painted");
+        let tool = rows
+            .iter()
+            .position(|row| row.text.contains("read"))
+            .expect("the tool exchange is painted");
+        assert!(
+            reasoning < tool,
+            "the step's reasoning is painted above the tool exchange it precedes"
         );
     }
 

@@ -729,6 +729,12 @@ impl<W: Write> Report for TextReport<W> {
         if supersedes {
             return Ok(());
         }
+        // A reasoning-only assistant row carries no text output: the report
+        // never writes the reasoning channel, so the row prints nothing
+        // instead of an empty assistant line.
+        if row.kind() == MessageKindDto::Assistant && row.text().trim().is_empty() {
+            return Ok(());
+        }
         writeln!(self.writer, "{}: {}", row.kind().as_str(), row.text())
     }
 
@@ -932,6 +938,22 @@ mod tests {
             None,
         )
         .expect("the fixture row is coherent")
+    }
+
+    /// Returns one coherent committed assistant row fixture carrying
+    /// `reasoning` above `text`.
+    fn reasoning_row(text: &str, reasoning: &str) -> MessageProjectionDto {
+        MessageProjectionDto::new(
+            row_id(),
+            SessionId::new(),
+            Some(RunId::new()),
+            MessageKindDto::Assistant,
+            text,
+            Some(reasoning.to_owned()),
+            None,
+            None,
+        )
+        .expect("the fixture reasoning row is coherent")
     }
 
     /// Writes one record and returns the written line.
@@ -1141,6 +1163,26 @@ mod tests {
             text_of(&buffer),
             "the answer\n",
             "the pipe reports the answer the row carries, never the reasoning channel"
+        );
+    }
+
+    #[test]
+    fn a_text_sink_writes_nothing_for_a_reasoning_only_row() {
+        let mut buffer = Vec::new();
+        let mut report = TextReport::new(&mut buffer);
+        report
+            .delta(0, TextDeltaChannelDto::Reasoning, "weighing the call")
+            .expect("the reasoning delta writes");
+        report
+            .row(&reasoning_row("", "weighing the call"))
+            .expect("the row writes");
+        report
+            .row(&row(MessageKindDto::Notice, "step finished"))
+            .expect("the row writes");
+        assert_eq!(
+            text_of(&buffer),
+            "notice: step finished\n",
+            "a step without an answer prints no assistant line of its own"
         );
     }
 
