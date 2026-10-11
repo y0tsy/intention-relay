@@ -7,9 +7,9 @@
 
 use std::thread;
 
-use intention_client::{IntentionClient, RunStreamSubscription};
+use intention_client::{IntentionClient, SessionStreamSubscription};
 use intention_proto::{
-    DtoResult, ErrorDto, RunModeDto, RunStreamFrameDto, SessionId, WorkspaceRootDto,
+    DtoResult, ErrorDto, RunModeDto, SessionFrameDto, SessionId, WorkspaceRootDto,
 };
 use intention_transport::LocalEndpoint;
 use tokio::sync::mpsc;
@@ -87,7 +87,7 @@ enum Step {
     /// The next effect a front end asked for, or `None` once it left.
     Effect(Option<Effect>),
     /// The next committed frame, or the end of the live subscription.
-    Frame(DtoResult<Option<RunStreamFrameDto>>),
+    Frame(DtoResult<Option<SessionFrameDto>>),
 }
 
 /// The client task one revue front end drives through [`Effect`] values.
@@ -165,7 +165,7 @@ async fn drive(
     mut effects: mpsc::UnboundedReceiver<Effect>,
     actions: mpsc::UnboundedSender<Action>,
 ) {
-    let mut live: Option<RunStreamSubscription> = None;
+    let mut live: Option<SessionStreamSubscription> = None;
     loop {
         let step = match live.as_mut() {
             Some(subscription) => tokio::select! {
@@ -176,22 +176,12 @@ async fn drive(
         };
         let action = match step {
             Step::Effect(None) => return,
-            Step::Effect(Some(Effect::CloseStream)) => {
-                // The task owns the one live subscription, so the front end
-                // unsubscribes by asking for the drop instead of holding a
-                // stream the core would only discard frames from.
-                // @todo(hack): the effect vocabulary carries no unsubscribe, so
-                // the driver models one by dropping the subscription it owns;
-                // give the core a typed unsubscribe instead.
+            Step::Effect(Some(Effect::Subscribe { session_id })) => {
                 live = None;
-                None
-            }
-            Step::Effect(Some(Effect::Subscribe { session_id, run_id })) => {
-                live = None;
-                match client_task::open_subscription(&endpoint, session_id, run_id).await {
+                match client_task::open_session_subscription(&endpoint, session_id).await {
                     Ok(subscription) => {
                         if actions
-                            .send(Action::RunStreamOpened(subscription.state().clone()))
+                            .send(Action::SessionStreamOpened(subscription.state().clone()))
                             .is_err()
                         {
                             return;
@@ -199,7 +189,7 @@ async fn drive(
                         live = Some(subscription);
                         None
                     }
-                    Err(error) => Some(Action::RunStreamFailed(error)),
+                    Err(error) => Some(Action::SessionStreamFailed(error)),
                 }
             }
             Step::Effect(Some(effect)) => {
@@ -210,11 +200,11 @@ async fn drive(
             Step::Frame(Ok(Some(frame))) => Some(Action::FrameReceived(frame)),
             Step::Frame(Ok(None)) => {
                 live = None;
-                Some(Action::RunStreamEnded)
+                Some(Action::SessionStreamEnded)
             }
             Step::Frame(Err(error)) => {
                 live = None;
-                Some(Action::RunStreamFailed(error))
+                Some(Action::SessionStreamFailed(error))
             }
         };
         if let Some(action) = action

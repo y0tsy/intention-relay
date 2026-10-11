@@ -3,7 +3,6 @@
 
 use intention_proto::{
     DaemonReadinessDto, ErrorDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
-    run_status_is_terminal,
 };
 
 use super::{AppState, ConnectionStatus, Effect, StreamStatus, short_identifier};
@@ -69,11 +68,10 @@ impl AppState {
     /// Shows one session snapshot and opens the one subscription it needs.
     ///
     /// A snapshot re-reads committed state, so the previous session's
-    /// subscription never survives it: the one live run the snapshot carries is
-    /// subscribed to, and every other snapshot closes whatever stream the front
-    /// end still holds. Both effects are exclusive: a front end holds exactly
-    /// one subscription, and a session that opens either re-establishes it or
-    /// drops it.
+    /// subscription never survives it: the open session's own stream is
+    /// (re-)established, and it carries every committed row, the active run's
+    /// projection, and the active run's transient text - whoever committed them
+    /// in that session. A front end holds exactly one subscription.
     ///
     /// The snapshot also sends the prompt a submission asked to start a session
     /// for: that prompt is the session's first turn, and every other snapshot
@@ -86,7 +84,7 @@ impl AppState {
         self.active_run = snapshot.projection().active_run();
         // A snapshot re-reads committed state: a mirror of an earlier subscription
         // is stale, and its transient provisional text must not outlive it.
-        self.run_stream = None;
+        self.session_stream = None;
         self.stream = StreamStatus::Inactive;
         // The elapsed time belongs to the turn the previous session was running.
         self.elapsed_millis = None;
@@ -94,12 +92,7 @@ impl AppState {
         self.error = None;
         // Opening a session records no notice: the status row already names the
         // session, and the notice line stays free for real transient events.
-        let subscription = self.subscribe_to_active_run(session_id);
-        let mut effects = if subscription.is_empty() {
-            vec![Effect::CloseStream]
-        } else {
-            subscription
-        };
+        let mut effects = self.ensure_session_stream();
         // The session a submitted prompt asked for now exists: send the prompt
         // as its first turn.
         // @todo(hack): the parked prompt is delivered to the first snapshot that arrives, so an
@@ -143,23 +136,25 @@ impl AppState {
         self.connection = ConnectionStatus::Connecting;
         // Transient stream state never survives a reconnect: the fresh snapshot
         // and subscription re-read current committed state.
-        self.run_stream = None;
+        self.session_stream = None;
         self.stream = StreamStatus::Inactive;
         self.error = None;
         self.note("reconnecting".to_owned());
         vec![Effect::Connect]
     }
 
-    /// Returns the subscription of a session whose run is still live, if any.
-    fn subscribe_to_active_run(&self, session_id: SessionId) -> Vec<Effect> {
-        let live_run = self
-            .active_run
-            .filter(|run| !run_status_is_terminal(run.status()));
-        live_run.map_or_else(Vec::new, |run| {
-            vec![Effect::Subscribe {
-                session_id,
-                run_id: run.run_id(),
-            }]
-        })
+    /// Returns the subscription that makes the open session live, if any.
+    ///
+    /// A window follows the session it has open, not one run: the run a turn
+    /// starts - its own or another window's - reaches the state as a status
+    /// frame, so a stream that is already live needs nothing and a lost one is
+    /// re-established by the caller that observes it.
+    pub(super) fn ensure_session_stream(&self) -> Vec<Effect> {
+        match (self.session_id, self.stream) {
+            (Some(session_id), status) if status != StreamStatus::Live => {
+                vec![Effect::Subscribe { session_id }]
+            }
+            _ => Vec::new(),
+        }
     }
 }

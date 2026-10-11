@@ -1,9 +1,9 @@
 //! Typed inputs and client effects of the render-free application state.
 
-use intention_client::RunStreamState;
+use intention_client::SessionStreamState;
 use intention_proto::{
-    DaemonHealthDto, DaemonReadinessDto, ErrorDto, RunId, RunStreamFrameDto,
-    SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto, SessionSummariesDto, ThemeDto,
+    DaemonHealthDto, DaemonReadinessDto, ErrorDto, RunId, SendUserTurnOutcomeDto, SessionFrameDto,
+    SessionId, SessionSnapshotDto, SessionSummariesDto, ThemeDto,
 };
 
 use super::{MenuMove, Theme};
@@ -132,13 +132,13 @@ pub enum Action {
     /// The user left the theme picker: the local preview is dropped.
     ThemePreviewCleared,
     /// A run subscription opened with the daemon's current run state.
-    RunStreamOpened(RunStreamState),
+    SessionStreamOpened(SessionStreamState),
     /// Opening a run subscription failed.
-    RunStreamFailed(ErrorDto),
+    SessionStreamFailed(ErrorDto),
     /// The daemon closed the run stream.
-    RunStreamEnded,
+    SessionStreamEnded,
     /// One committed or transient run-stream frame arrived.
-    FrameReceived(RunStreamFrameDto),
+    FrameReceived(SessionFrameDto),
     /// The daemon accepted one user turn.
     TurnAccepted(SendUserTurnOutcomeDto),
     /// The front end measured how long a dispatched turn has been in flight.
@@ -284,9 +284,9 @@ impl Action {
                 | Self::SessionCreateFailed(_)
                 | Self::SettingsReceived(_)
                 | Self::SettingsFailed(_)
-                | Self::RunStreamOpened(_)
-                | Self::RunStreamFailed(_)
-                | Self::RunStreamEnded
+                | Self::SessionStreamOpened(_)
+                | Self::SessionStreamFailed(_)
+                | Self::SessionStreamEnded
                 | Self::FrameReceived(_)
                 | Self::ElapsedReported { .. }
                 | Self::TurnAccepted(_)
@@ -331,18 +331,11 @@ pub enum Effect {
         /// The non-blank turn content.
         content: String,
     },
-    /// Subscribe to the committed stream of one run.
+    /// Subscribe to the live changes of one session.
     Subscribe {
         /// The owning session.
         session_id: SessionId,
-        /// The subscribed run.
-        run_id: RunId,
     },
-    /// Drop the live subscription the front end holds, if any.
-    ///
-    /// A front end owns its one subscription as a resource, so it is the front
-    /// end that closes it; no client call is involved.
-    CloseStream,
     /// Request interruption of one run's current operation.
     Interrupt {
         /// The owning session.

@@ -5,7 +5,7 @@
 //! `sessions.rs`, `browser.rs`, `run.rs`, `input.rs`, `transcript.rs`, and
 //! `ctrl_c.rs`.
 
-use intention_client::RunStreamState;
+use intention_client::SessionStreamState;
 use intention_proto::{
     ErrorDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto, RunStatusDto,
     SessionId, SessionSummaryDto, WorkspaceRootDto,
@@ -101,7 +101,7 @@ pub struct AppState {
     pub(super) tool_working: bool,
     /// The elapsed time the front end measured for the current or last turn.
     pub(super) elapsed_millis: Option<u64>,
-    pub(super) run_stream: Option<RunStreamState>,
+    pub(super) session_stream: Option<SessionStreamState>,
     pub(super) stream: StreamStatus,
     pub(super) input: String,
     /// The caret position of `input`, measured in characters from its start.
@@ -191,7 +191,7 @@ impl AppState {
             tool_wait_from: None,
             tool_working: false,
             elapsed_millis: None,
-            run_stream: None,
+            session_stream: None,
             stream: StreamStatus::Inactive,
             input: String::new(),
             cursor: 0,
@@ -301,9 +301,9 @@ impl AppState {
             Action::ThemeSelected(theme) => self.apply_theme_selected(theme),
             Action::ThemePreviewed(theme) => self.apply_theme_previewed(theme),
             Action::ThemePreviewCleared => self.apply_theme_preview_cleared(),
-            Action::RunStreamOpened(state) => self.apply_run_stream_opened(state),
-            Action::RunStreamFailed(error) => self.apply_run_stream_failed(&error),
-            Action::RunStreamEnded => self.apply_run_stream_ended(),
+            Action::SessionStreamOpened(state) => self.apply_session_stream_opened(state),
+            Action::SessionStreamFailed(error) => self.apply_session_stream_failed(&error),
+            Action::SessionStreamEnded => self.apply_session_stream_ended(),
             Action::FrameReceived(frame) => self.apply_frame(frame),
             Action::TurnAccepted(outcome) => self.apply_turn_accepted(outcome),
             Action::ElapsedReported { millis } => self.apply_elapsed_reported(millis),
@@ -674,9 +674,9 @@ impl AppState {
     /// step.
     #[must_use]
     pub fn provisional_text(&self) -> &str {
-        self.run_stream
+        self.session_stream
             .as_ref()
-            .map_or("", RunStreamState::provisional_text)
+            .map_or("", SessionStreamState::provisional_text)
     }
 
     /// Returns the transient provisional reasoning of the run's current model
@@ -687,9 +687,9 @@ impl AppState {
     /// renders from it is the reasoning block's own streaming form.
     #[must_use]
     pub fn provisional_reasoning(&self) -> &str {
-        self.run_stream
+        self.session_stream
             .as_ref()
-            .map_or("", RunStreamState::provisional_reasoning)
+            .map_or("", SessionStreamState::provisional_reasoning)
     }
 
     /// Returns the committed row the live reasoning segment will become.

@@ -4,14 +4,14 @@
 //! client calls, and every failure becomes the same core [`Action`] value. This
 //! module is the single place a new client-backed behavior is added: a request
 //! effect gains exactly one arm in [`perform`], and a subscription-shaped
-//! behavior gains an opener beside [`open_subscription`]. A live subscription is
+//! behavior gains an opener beside [`open_session_subscription`]. A live subscription is
 //! a resource of the front end that keeps it, so the opener returns it to its
 //! caller instead of hiding it here.
 
-use intention_client::{IntentionClient, RunStreamClient, RunStreamSubscription};
+use intention_client::{IntentionClient, SessionStreamClient, SessionStreamSubscription};
 use intention_proto::{
-    CreateSessionCommandDto, ErrorDto, IdempotencyKey, ProjectId, RunId, RunModeDto, SessionId,
-    SubscribeRunCommandDto, WorkspaceId, WorkspaceRootDto,
+    CreateSessionCommandDto, ErrorDto, IdempotencyKey, ProjectId, RunModeDto, SessionId,
+    SubscribeSessionCommandDto, WorkspaceId, WorkspaceRootDto,
 };
 use intention_transport::LocalEndpoint;
 
@@ -19,10 +19,9 @@ use crate::app::{Action, Effect};
 
 /// Performs one request effect over the shared client.
 ///
-/// Returns `None` for the effects that carry no client call: a live run
+/// Returns `None` for the effects that carry no client call: a live session
 /// subscription is a front-end resource, so a subscriber opens it with
-/// [`open_subscription`] and keeps it, and [`Effect::CloseStream`] only drops
-/// the subscription the front end already holds.
+/// [`open_session_subscription`] and keeps it until it replaces it.
 ///
 /// The `Err` arm carries the core's failure action together with the typed
 /// error, so a front end that reports a process status can keep the error while
@@ -92,22 +91,21 @@ pub async fn perform(
             .await
             .map(|_accepted| Action::RunCancelAccepted)
             .map_err(|error| (Action::RunCancelFailed(error.clone()), error)),
-        Effect::Subscribe { .. } | Effect::CloseStream => return None,
+        Effect::Subscribe { .. } => return None,
     };
     Some(outcome)
 }
 
-/// Opens one live run subscription for the front end that keeps it.
+/// Opens one live session subscription for the front end that keeps it.
 ///
 /// # Errors
 ///
 /// Returns the typed failure when the subscription cannot be opened.
-pub async fn open_subscription(
+pub async fn open_session_subscription(
     endpoint: &LocalEndpoint,
     session_id: SessionId,
-    run_id: RunId,
-) -> Result<RunStreamSubscription, ErrorDto> {
-    RunStreamClient::new(endpoint.clone())
-        .subscribe(SubscribeRunCommandDto::new(session_id, run_id))
+) -> Result<SessionStreamSubscription, ErrorDto> {
+    SessionStreamClient::new(endpoint.clone())
+        .subscribe(SubscribeSessionCommandDto::new(session_id))
         .await
 }

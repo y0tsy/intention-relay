@@ -569,12 +569,12 @@ mod tests {
     use std::ops::Range;
     use std::sync::atomic::{AtomicI64, Ordering};
 
-    use intention_client::{RETAINED_TRANSCRIPT_MESSAGES, RunStreamState};
+    use intention_client::{RETAINED_TRANSCRIPT_MESSAGES, SessionStreamState};
     use intention_proto::{
         ConfigRevisionId, MessageId, MessageKindDto, MessageProjectionDto, ProjectId, RunId,
-        RunModeDto, RunProjectionDto, RunStatusDto, RunStreamFrameDto, RunSubscriptionSnapshotDto,
-        SessionId, SessionProjectionDto, SessionSnapshotDto, TextDeltaChannelDto,
-        TextDeltaFrameDto, ToolCallId, TurnId, WorkspaceId, WorkspaceRootDto,
+        RunModeDto, RunProjectionDto, RunStatusDto, SessionFrameDto, SessionId,
+        SessionProjectionDto, SessionSnapshotDto, TextDeltaChannelDto, TextDeltaFrameDto,
+        ToolCallId, TurnId, WorkspaceId, WorkspaceRootDto,
     };
     use revue::render::Modifier;
 
@@ -673,26 +673,34 @@ mod tests {
         )
     }
 
-    /// Returns one live run-stream state over `messages`.
+    /// Returns one live session-stream state over `messages`.
     fn stream_state(
         session_id: SessionId,
         run_id: RunId,
         messages: Vec<MessageProjectionDto>,
-    ) -> RunStreamState {
-        let snapshot = RunSubscriptionSnapshotDto::new(
-            run(session_id, run_id, RunStatusDto::Running),
-            messages,
-        )
-        .expect("the fixture run snapshot is coherent");
-        let mut state = RunStreamState::new(session_id, run_id);
+    ) -> SessionStreamState {
+        let mut state = SessionStreamState::new(session_id);
         state
-            .apply_initial(snapshot)
-            .expect("the fixture run snapshot applies to its own scope");
+            .apply_initial(session_snapshot(
+                session_id,
+                Some(run(session_id, run_id, RunStatusDto::Running)),
+                messages,
+            ))
+            .expect("the fixture session snapshot applies to its own scope");
         state
     }
 
-    /// Returns one session snapshot carrying `messages`.
+    /// Returns one session snapshot carrying `messages` and no active run.
     fn snapshot(session_id: SessionId, messages: Vec<MessageProjectionDto>) -> SessionSnapshotDto {
+        session_snapshot(session_id, None, messages)
+    }
+
+    /// Returns one session snapshot whose projection carries `active_run`.
+    fn session_snapshot(
+        session_id: SessionId,
+        active_run: Option<RunProjectionDto>,
+        messages: Vec<MessageProjectionDto>,
+    ) -> SessionSnapshotDto {
         let root = WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
             .expect("the process temporary directory is an absolute workspace root");
         let projection = SessionProjectionDto::new(
@@ -702,7 +710,7 @@ mod tests {
             root,
             RunModeDto::Build,
             None,
-            None,
+            active_run,
             Vec::new(),
         )
         .expect("the fixture session projection is coherent");
@@ -744,7 +752,7 @@ mod tests {
     fn opened_stream(session_id: SessionId, run_id: RunId) -> AppState {
         let mut state = fixture_state(session_id, run_id);
         let rows = state.transcript().to_vec();
-        state.update(Action::RunStreamOpened(stream_state(
+        state.update(Action::SessionStreamOpened(stream_state(
             session_id, run_id, rows,
         )));
         state
@@ -752,7 +760,7 @@ mod tests {
 
     /// Streams one answer chunk of the fixture stream's first model step.
     fn stream_answer(state: &mut AppState, session_id: SessionId, run_id: RunId, text: &str) {
-        state.update(Action::FrameReceived(RunStreamFrameDto::TextDelta(
+        state.update(Action::FrameReceived(SessionFrameDto::TextDelta(
             TextDeltaFrameDto::new(session_id, run_id, 0, TextDeltaChannelDto::Answer, text)
                 .expect("the fixture answer delta is valid"),
         )));
@@ -760,7 +768,7 @@ mod tests {
 
     /// Streams one reasoning chunk of the fixture stream's first model step.
     fn stream_reasoning(state: &mut AppState, session_id: SessionId, run_id: RunId, text: &str) {
-        state.update(Action::FrameReceived(RunStreamFrameDto::TextDelta(
+        state.update(Action::FrameReceived(SessionFrameDto::TextDelta(
             TextDeltaFrameDto::new(session_id, run_id, 0, TextDeltaChannelDto::Reasoning, text)
                 .expect("the fixture reasoning delta is valid"),
         )));
@@ -781,7 +789,7 @@ mod tests {
     fn append_row(state: &mut AppState, session_id: SessionId, run_id: RunId, text: &str) {
         let mut rows = state.transcript().to_vec();
         rows.push(assistant_row(session_id, run_id, text, None));
-        state.update(Action::RunStreamOpened(stream_state(
+        state.update(Action::SessionStreamOpened(stream_state(
             session_id, run_id, rows,
         )));
     }
@@ -1046,7 +1054,7 @@ mod tests {
             session_id,
             rows.clone(),
         )));
-        state.update(Action::RunStreamOpened(stream_state(
+        state.update(Action::SessionStreamOpened(stream_state(
             session_id, run_id, rows,
         )));
         let mut cache = TranscriptLayoutCache::new();
@@ -1057,7 +1065,7 @@ mod tests {
         });
         ranges.clear();
 
-        state.update(Action::FrameReceived(RunStreamFrameDto::Content(
+        state.update(Action::FrameReceived(SessionFrameDto::Content(
             assistant_row(session_id, run_id, "the newest row", None),
         )));
         assert_eq!(state.transcript().len(), RETAINED_TRANSCRIPT_MESSAGES);
@@ -1338,7 +1346,7 @@ mod tests {
 
         // The commit lands the assistant row at exactly the row the live
         // segment was anchored at, carrying the same reasoning.
-        state.update(Action::FrameReceived(RunStreamFrameDto::Content(
+        state.update(Action::FrameReceived(SessionFrameDto::Content(
             assistant_row(session_id, run_id, answer, Some(&reasoning)),
         )));
         assert_eq!(state.transcript().len(), live_row + 1);

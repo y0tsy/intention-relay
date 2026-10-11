@@ -1,12 +1,12 @@
 //! The run transitions: the live subscription, frames, turns, and interrupts.
 
-use intention_client::{RETAINED_TRANSCRIPT_MESSAGES, RunStreamState};
+use intention_client::{RETAINED_TRANSCRIPT_MESSAGES, SessionStreamState};
 use intention_proto::{
-    ErrorDto, MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStreamFrameDto,
-    SendUserTurnOutcomeDto, TextDeltaChannelDto, run_status_is_terminal,
+    ErrorDto, MessageKindDto, MessageProjectionDto, RunProjectionDto, SendUserTurnOutcomeDto,
+    SessionFrameDto, TextDeltaChannelDto, run_status_is_terminal,
 };
 
-use super::{AppState, Effect, RunPhase, StreamStatus, short_identifier};
+use super::{AppState, ConnectionStatus, Effect, RunPhase, StreamStatus, short_identifier};
 
 /// How long a tool call may be in flight before the status row names it.
 ///
@@ -17,7 +17,7 @@ const TOOL_WORKING_AFTER_MILLIS: u64 = 500;
 
 impl AppState {
     /// Mirrors a freshly opened subscription and appends the rows it was missing.
-    pub(super) fn apply_run_stream_opened(&mut self, state: RunStreamState) -> Vec<Effect> {
+    pub(super) fn apply_session_stream_opened(&mut self, state: SessionStreamState) -> Vec<Effect> {
         // @todo(hack): the app keeps a second committed-transcript projection and answers a fresh
         // subscription by appending the client's set difference at the tail, so the row order the
         // pane shows is the adapter's own and the mirror must happen to be a prefix of the durable
@@ -30,7 +30,7 @@ impl AppState {
         self.extend_transcript(missing);
         self.trim_transcript();
         self.active_run = state.run().copied();
-        self.run_stream = Some(state);
+        self.session_stream = Some(state);
         self.stream = StreamStatus::Live;
         self.error = None;
         // A fresh subscription carries no streamed text: a live run it opens is
@@ -41,8 +41,16 @@ impl AppState {
     }
 
     /// Records a subscription that failed to open or stay live.
-    pub(super) fn apply_run_stream_failed(&mut self, error: &ErrorDto) -> Vec<Effect> {
-        self.run_stream = None;
+    ///
+    /// The stream is this front end's one live channel, so its loss is not a
+    /// dead end: the state clears what the stream justified - the phase and the
+    /// tool watch, so [`Self::live_run`] stops claiming a run nobody observes
+    /// and the exit and clear arms come back - and asks for one reconnect. The
+    /// reconnect re-reads current state through the one resynchronization this
+    /// protocol has, and a reconnect that fails reports its own typed error
+    /// instead of retrying in a loop.
+    pub(super) fn apply_session_stream_failed(&mut self, error: &ErrorDto) -> Vec<Effect> {
+        self.session_stream = None;
         self.stream = StreamStatus::Failed;
         // The stream that justified the live phase is gone, so the phase and
         // the tool watch clear with it: the status row never names a working
@@ -50,22 +58,40 @@ impl AppState {
         // claiming one, which is what lets the exit and clear arms through.
         self.phase = None;
         self.reset_tool_watch();
-        self.apply_failure(error)
+        let mut effects = self.apply_failure(error);
+        effects.extend(self.reconnect_once());
+        effects
     }
 
     /// Records a stream the daemon closed.
-    pub(super) fn apply_run_stream_ended(&mut self) -> Vec<Effect> {
-        self.run_stream = None;
+    ///
+    /// A closed stream is the same loss as a failed one - the daemon closed the
+    /// connection or the host is leaving - so it clears the same state and asks
+    /// for the same one reconnect.
+    pub(super) fn apply_session_stream_ended(&mut self) -> Vec<Effect> {
+        self.session_stream = None;
         self.stream = StreamStatus::Ended;
         self.phase = None;
         self.reset_tool_watch();
-        self.note("live updates ended".to_owned());
-        Vec::new()
+        self.reconnect_once()
+    }
+
+    /// Returns the one reconnect this front end asks for after a lost stream.
+    ///
+    /// The connection reads as connecting while the attempt runs, and the loss
+    /// stays visible: a typed failure keeps its error line, and the stream
+    /// status keeps naming the loss, so the status row never claims live updates
+    /// this front end does not have. A reconnect that fails reports its own
+    /// typed error instead of retrying in a loop.
+    fn reconnect_once(&mut self) -> Vec<Effect> {
+        self.connection = ConnectionStatus::Connecting;
+        self.note("reconnecting".to_owned());
+        vec![Effect::Connect]
     }
 
     /// Applies one committed or transient run-stream frame.
-    pub(super) fn apply_frame(&mut self, frame: RunStreamFrameDto) -> Vec<Effect> {
-        let Some(stream) = self.run_stream.as_mut() else {
+    pub(super) fn apply_frame(&mut self, frame: SessionFrameDto) -> Vec<Effect> {
+        let Some(stream) = self.session_stream.as_mut() else {
             // A frame for a subscription this front end no longer holds is stale;
             // dropping it keeps the seeded transcript authoritative.
             return Vec::new();
@@ -74,7 +100,7 @@ impl AppState {
             return self.apply_failure(&error);
         }
         match frame {
-            RunStreamFrameDto::Content(message) => {
+            SessionFrameDto::Content(message) => {
                 // A content frame repeating the newest accepted row carries the
                 // identity of the row the snapshot already carried, so the two
                 // are the same committed row.
@@ -87,8 +113,18 @@ impl AppState {
                     self.trim_transcript();
                 }
             }
-            RunStreamFrameDto::Status(run) => {
+            SessionFrameDto::Status(run) => {
+                // A status of a run this state does not project yet is a run
+                // change - it came from another window's turn or from the daemon
+                // itself - and the phase belongs to the run, so the previous
+                // run's phase and its in-flight tool call never carry over.
+                let changed = self
+                    .active_run
+                    .is_none_or(|current| current.run_id() != run.run_id());
                 self.active_run = Some(run);
+                if changed {
+                    self.rebase_run_phase();
+                }
                 // A live status keeps the phase the stream already named, and
                 // the first status of a run this state has not streamed yet
                 // starts as waiting. A terminal status ends the run's phase:
@@ -102,7 +138,16 @@ impl AppState {
                 }
                 self.note(format!("run {}", run.status().as_str()));
             }
-            RunStreamFrameDto::TextDelta(delta) => {
+            SessionFrameDto::TextDelta(delta) => {
+                // The channel carries every run of the session, so a delta of a
+                // run this state does not project is another window's text: it
+                // never colours the projected run's phase.
+                if self
+                    .active_run
+                    .is_none_or(|current| current.run_id() != delta.run_id())
+                {
+                    return Vec::new();
+                }
                 // The channel names the phase: the reasoning stream thinks and
                 // the answer stream answers, and the later channel of a step
                 // is the phase the step is in.
@@ -115,20 +160,25 @@ impl AppState {
         Vec::new()
     }
 
-    /// Subscribes to a run the daemon accepted a turn for.
+    /// Records the turn the daemon accepted and keeps the session stream live.
+    ///
+    /// The run a started turn opens reaches this state through the session's own
+    /// stream, so nothing new is subscribed here: a stream that is already live
+    /// carries the run's status, rows, and text, and only a lost one is
+    /// re-established.
     pub(super) fn apply_turn_accepted(&mut self, outcome: SendUserTurnOutcomeDto) -> Vec<Effect> {
         self.error = None;
-        let Some(session_id) = self.session_id else {
+        let Some(_session_id) = self.session_id else {
             return Vec::new();
         };
         match outcome {
             SendUserTurnOutcomeDto::Started { run_id, .. } => {
                 self.note(format!("run {} started", short_identifier(run_id)));
-                vec![Effect::Subscribe { session_id, run_id }]
+                self.ensure_session_stream()
             }
             SendUserTurnOutcomeDto::Pending => {
                 self.note("turn queued behind the active run".to_owned());
-                Vec::new()
+                self.ensure_session_stream()
             }
         }
     }

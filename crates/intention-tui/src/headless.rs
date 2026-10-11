@@ -11,10 +11,10 @@ use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
-use intention_client::{IntentionClient, RunStreamSubscription};
+use intention_client::{IntentionClient, SessionStreamSubscription};
 use intention_proto::{
     ErrorDto, MessageKindDto, MessageProjectionDto, RunId, RunModeDto, RunStatusDto,
-    RunStreamFrameDto, SessionId, TextDeltaChannelDto, WorkspaceRootDto, run_status_is_terminal,
+    SessionFrameDto, SessionId, TextDeltaChannelDto, WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_transport::LocalEndpoint;
 use intention_tui::app::{Action, AppState, Effect};
@@ -246,7 +246,7 @@ impl Deadline {
 #[derive(Debug)]
 enum Received {
     /// One committed or transient frame arrived.
-    Frame(RunStreamFrameDto),
+    Frame(SessionFrameDto),
     /// The subscription ended or failed; the core holds the reported reason.
     Closed,
     /// No live subscription is open.
@@ -292,7 +292,7 @@ pub struct Driver {
     workspace_root: WorkspaceRootDto,
     mode: RunModeDto,
     state: AppState,
-    subscription: Option<RunStreamSubscription>,
+    subscription: Option<SessionStreamSubscription>,
     last_failure: Option<ErrorDto>,
     // @todo(hack): unreported rows are counted by position, so a committed row that the transcript
     // mirror trims at its retention bound is never handed to the report and `run --format text|json`
@@ -341,7 +341,7 @@ impl Driver {
     pub fn session_failure(&self) -> ErrorDto {
         // @todo(hack): the front end composes protocol errors for states the
         // core never reports - `session_not_open` here, `no_sessions_to_continue`
-        // in `no_sessions_error`, and `run_stream_closed` in `pump_failure`;
+        // in `no_sessions_error`, and `session_stream_closed` in `pump_failure`;
         // the client should carry these conditions as typed failures.
         self.last_failure
             .clone()
@@ -479,7 +479,7 @@ impl Driver {
             }
             match self.next(deadline, interrupts).await {
                 Received::Frame(frame) => {
-                    if let RunStreamFrameDto::TextDelta(delta) = &frame {
+                    if let SessionFrameDto::TextDelta(delta) = &frame {
                         events
                             .delta(delta.step(), delta.channel(), delta.text())
                             .map_err(PumpFailure::Output)?;
@@ -535,13 +535,13 @@ impl Driver {
             Ok(Some(frame)) => Received::Frame(frame),
             Ok(None) => {
                 self.subscription = None;
-                self.apply(Action::RunStreamEnded).await;
+                self.apply(Action::SessionStreamEnded).await;
                 Received::Closed
             }
             Err(error) => {
                 self.subscription = None;
                 self.record_failure(&error);
-                self.apply(Action::RunStreamFailed(error)).await;
+                self.apply(Action::SessionStreamFailed(error)).await;
                 Received::Closed
             }
         }
@@ -585,15 +585,7 @@ impl Driver {
     /// transition stays total.
     async fn perform(&mut self, effect: Effect) -> Option<Action> {
         match effect {
-            Effect::Subscribe { session_id, run_id } => {
-                Some(self.open_stream_action(session_id, run_id).await)
-            }
-            Effect::CloseStream => {
-                // This driver owns its one live subscription, so the close
-                // effect drops it here instead of reaching the client.
-                self.subscription = None;
-                None
-            }
+            Effect::Subscribe { session_id } => Some(self.open_stream_action(session_id).await),
             effect => {
                 match client_task::perform(&self.client, &self.workspace_root, self.mode, effect)
                     .await?
@@ -608,17 +600,17 @@ impl Driver {
         }
     }
 
-    /// Opens one run subscription and returns the core's action for its outcome.
-    async fn open_stream_action(&mut self, session_id: SessionId, run_id: RunId) -> Action {
-        match client_task::open_subscription(&self.endpoint, session_id, run_id).await {
+    /// Opens one session subscription and returns the core's action for it.
+    async fn open_stream_action(&mut self, session_id: SessionId) -> Action {
+        match client_task::open_session_subscription(&self.endpoint, session_id).await {
             Ok(subscription) => {
                 let state = subscription.state().clone();
                 self.subscription = Some(subscription);
-                Action::RunStreamOpened(state)
+                Action::SessionStreamOpened(state)
             }
             Err(error) => {
                 self.record_failure(&error);
-                Action::RunStreamFailed(error)
+                Action::SessionStreamFailed(error)
             }
         }
     }
@@ -627,7 +619,7 @@ impl Driver {
     fn pump_failure(&self) -> PumpFailure {
         PumpFailure::Client(self.last_failure.clone().unwrap_or_else(|| {
             ErrorDto::unavailable(
-                "run_stream_closed",
+                "session_stream_closed",
                 "the run stream closed before the run reported a terminal status",
             )
         }))

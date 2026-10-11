@@ -68,7 +68,7 @@ use std::time::Instant;
 
 use intention_client::IntentionClient;
 use intention_proto::{
-    DtoResult, ErrorDto, RunStreamFrameDto, SessionId, WorkspaceRootDto, run_status_is_terminal,
+    DtoResult, ErrorDto, SessionFrameDto, SessionId, WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_transport::LocalEndpoint;
 use revue::core::app::App;
@@ -407,7 +407,7 @@ impl FrontEnd {
     fn apply(&mut self, action: Action) {
         let terminal = matches!(
             &action,
-            Action::FrameReceived(RunStreamFrameDto::Status(run))
+            Action::FrameReceived(SessionFrameDto::Status(run))
                 if run_status_is_terminal(run.status())
         );
         let effects = self.state.update(action);

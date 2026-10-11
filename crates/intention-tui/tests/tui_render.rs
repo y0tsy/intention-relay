@@ -15,13 +15,13 @@
 
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use intention_client::RunStreamState;
+use intention_client::SessionStreamState;
 use intention_proto::{
     ConfigRevisionId, DaemonHealthDto, ErrorDto, MessageId, MessageKindDto, MessageProjectionDto,
-    ProjectId, RunId, RunModeDto, RunProjectionDto, RunStatusDto, RunStreamFrameDto,
-    RunSubscriptionSnapshotDto, SessionId, SessionProjectionDto, SessionSnapshotDto,
-    SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto, TextDeltaFrameDto, TimestampDto,
-    ToolCallId, TurnId, WorkspaceId, WorkspaceRootDto,
+    ProjectId, RunId, RunModeDto, RunProjectionDto, RunStatusDto, SessionFrameDto, SessionId,
+    SessionProjectionDto, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto,
+    TextDeltaChannelDto, TextDeltaFrameDto, TimestampDto, ToolCallId, TurnId, WorkspaceId,
+    WorkspaceRootDto,
 };
 use intention_tui::app::{
     Action, AppState, BrowserCursorMove, InputCursorMove, MenuMove, Screen, Theme,
@@ -357,13 +357,15 @@ fn welcome_state() -> AppState {
 
 /// Applies the opened-subscription action for one run of `status` to `state`.
 fn subscribe(state: &mut AppState, session_id: SessionId, run_id: RunId, status: RunStatusDto) {
-    let subscription = RunSubscriptionSnapshotDto::new(run(session_id, run_id, status), Vec::new())
-        .expect("the fixture run snapshot is coherent");
-    let mut stream = RunStreamState::new(session_id, run_id);
+    let mut stream = SessionStreamState::new(session_id);
     stream
-        .apply_initial(subscription)
-        .expect("the fixture run snapshot applies to its own scope");
-    state.update(Action::RunStreamOpened(stream));
+        .apply_initial(snapshot(
+            session_id,
+            Some(run(session_id, run_id, status)),
+            Vec::new(),
+        ))
+        .expect("the fixture session snapshot applies to its own scope");
+    state.update(Action::SessionStreamOpened(stream));
 }
 
 /// Returns a connected session streaming one running run, with the session and
@@ -392,7 +394,7 @@ fn delta_frame(
     channel: TextDeltaChannelDto,
     text: &str,
 ) {
-    state.update(Action::FrameReceived(RunStreamFrameDto::TextDelta(
+    state.update(Action::FrameReceived(SessionFrameDto::TextDelta(
         TextDeltaFrameDto::new(session_id, run_id, 0, channel, text)
             .expect("the fixture delta is valid"),
     )));
@@ -958,13 +960,11 @@ fn a_notice_row_streamed_from_the_run_renders_as_its_own_block() {
     subscribe(&mut state, session_id, run_id, RunStatusDto::Running);
     // The engine commits its interruption notice as a `notice` row and the
     // daemon streams it as a content frame, exactly like every other row.
-    state.update(Action::FrameReceived(RunStreamFrameDto::Content(
-        notice_row(
-            session_id,
-            run_id,
-            "[The call was stopped before a final result.]",
-        ),
-    )));
+    state.update(Action::FrameReceived(SessionFrameDto::Content(notice_row(
+        session_id,
+        run_id,
+        "[The call was stopped before a final result.]",
+    ))));
     assert_eq!(
         state.transcript()[0].kind(),
         MessageKindDto::Notice,
@@ -1981,7 +1981,7 @@ fn a_tool_call_in_flight_past_half_a_second_shows_the_working_word() {
         "the answer",
     );
     state.update(Action::ElapsedReported { millis: 2_000 });
-    state.update(Action::FrameReceived(RunStreamFrameDto::Content(
+    state.update(Action::FrameReceived(SessionFrameDto::Content(
         tool_call_row(
             session_id,
             run_id,
@@ -2007,7 +2007,7 @@ fn a_tool_call_under_half_a_second_keeps_the_answering_word() {
         "the answer",
     );
     state.update(Action::ElapsedReported { millis: 2_000 });
-    state.update(Action::FrameReceived(RunStreamFrameDto::Content(
+    state.update(Action::FrameReceived(SessionFrameDto::Content(
         tool_call_row(
             session_id,
             run_id,
@@ -2034,11 +2034,11 @@ fn a_finished_tool_call_returns_the_row_to_the_answering_word() {
         "the answer",
     );
     state.update(Action::ElapsedReported { millis: 2_000 });
-    state.update(Action::FrameReceived(RunStreamFrameDto::Content(
+    state.update(Action::FrameReceived(SessionFrameDto::Content(
         tool_call_row(session_id, run_id, "read", "{}", call_id),
     )));
     state.update(Action::ElapsedReported { millis: 2_700 });
-    state.update(Action::FrameReceived(RunStreamFrameDto::Content(
+    state.update(Action::FrameReceived(SessionFrameDto::Content(
         tool_result_row(session_id, run_id, "read", "the file", call_id),
     )));
     let mut app = TestApp::new(RevueView::new(&state));
@@ -2103,14 +2103,14 @@ fn a_failed_run_reports_its_status_and_the_error_line() {
     let run_id = RunId::new();
     let mut state = open_state(session_id, Vec::new());
     subscribe(&mut state, session_id, run_id, RunStatusDto::Failed);
-    state.update(Action::RunStreamFailed(ErrorDto::unavailable(
-        "run_stream_failed",
+    state.update(Action::SessionStreamFailed(ErrorDto::unavailable(
+        "session_stream_failed",
         "the run stream failed",
     )));
     let mut app = TestApp::new(RevueView::new(&state));
     let pilot = Pilot::new(&mut app);
     pilot.assert_contains("Failed");
-    pilot.assert_contains("run_stream_failed: the run stream failed");
+    pilot.assert_contains("session_stream_failed: the run stream failed");
 }
 
 #[test]
@@ -2237,28 +2237,24 @@ fn the_welcome_state_is_gone_once_a_session_is_open() {
 
 #[test]
 fn the_welcome_state_never_covers_a_row_the_core_reports() {
-    // A run subscription can append committed rows before any session snapshot
-    // opens, so the transcript with rows wins even with no open session.
+    // A session can open empty and receive its first committed row on the live
+    // stream, so the transcript with rows wins over the welcome pane.
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let mut state = AppState::new(None);
-    state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
-    let subscription = RunSubscriptionSnapshotDto::new(
-        run(session_id, run_id, RunStatusDto::Running),
-        vec![row(
-            session_id,
-            run_id,
-            MessageKindDto::Assistant,
-            "the committed row",
-        )],
-    )
-    .expect("the fixture run snapshot is coherent");
-    let mut stream = RunStreamState::new(session_id, run_id);
-    stream
-        .apply_initial(subscription)
-        .expect("the fixture run snapshot applies to its own scope");
-    state.update(Action::RunStreamOpened(stream));
-    assert!(state.session_id().is_none(), "no session snapshot arrived");
+    let mut state = welcome_state();
+    state.update(Action::SessionSnapshotLoaded(snapshot(
+        session_id,
+        None,
+        Vec::new(),
+    )));
+    subscribe(&mut state, session_id, run_id, RunStatusDto::Running);
+    state.update(Action::FrameReceived(SessionFrameDto::Content(row(
+        session_id,
+        run_id,
+        MessageKindDto::Assistant,
+        "the committed row",
+    ))));
+    assert_eq!(state.session_id(), Some(session_id));
     assert_eq!(state.transcript().len(), 1, "one committed row is present");
 
     let app = TestApp::with_size(
