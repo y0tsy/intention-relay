@@ -388,8 +388,9 @@ text above is the live policy.
 - One colour system, two themes. `src/tui/palette.rs` is the single source of colours: `palette::of(theme)` resolves
   one `Palette` value once per frame from the state's effective theme, and every pane reads the roles of the reference
   it was handed, so no pane constructs a colour of its own. The light theme is the warm off-white surface the terminal
-  has always drawn; the dark theme is the same warm family read on a warm charcoal canvas, keeping every role's hue and
-  lifting its value far enough to read. The module's own role table pairs each role's light and dark value. Within one
+  has always drawn; the dark theme is a neutral graphite ramp whose only hue is the accent pair, so a state there
+  reaches the reader through its word and glyph rather than through a colour of its own. The module's own role table
+  pairs each role's light and dark value. Within one
   theme no two roles share a value — the one documented alias is `error`, which spells `scarlet` exactly — every role
   is fully opaque, and every role differs between the two themes, so a frame is wholly one theme and never a
   half-switched surface. Colours degrade, words do not: a terminal without truecolor maps each role of the active theme

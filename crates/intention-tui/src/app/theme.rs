@@ -2,10 +2,10 @@
 //! picker transitions that select it.
 //!
 //! The theme is the terminal's own value: the light theme is the warm
-//! off-white surface every session starts in, and the dark theme is the warm
-//! charcoal surface for a terminal that paints on a dark background. The two
-//! names are the whole vocabulary here; the palette module turns one of them
-//! into the roles a frame paints, so no view reads the theme itself.
+//! off-white surface every session starts in, and the dark theme is the
+//! neutral graphite surface for a terminal that paints on a dark background.
+//! The two names are the whole vocabulary here; the palette module turns one
+//! of them into the roles a frame paints, so no view reads the theme itself.
 //!
 //! The parser is deliberately total: it reads one name however it is spelled
 //! and answers `None` for anything else, so a caller that maps an external
@@ -30,7 +30,8 @@ pub enum Theme {
     /// The warm off-white theme every session starts in.
     #[default]
     Light,
-    /// The warm charcoal theme for a terminal that paints on a dark background.
+    /// The neutral graphite theme for a terminal that paints on a dark
+    /// background.
     Dark,
 }
 
@@ -61,7 +62,7 @@ impl Theme {
     pub const fn description(self) -> &'static str {
         match self {
             Self::Light => "the warm off-white surface",
-            Self::Dark => "the warm charcoal surface",
+            Self::Dark => "the neutral graphite surface",
         }
     }
 

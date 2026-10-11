@@ -2,55 +2,57 @@
 //!
 //! Every pane reads its colours here and nothing constructs a colour of its
 //! own, so the whole terminal has one documented surface: a warm off-white
-//! light theme and a warm charcoal dark theme over the same role table. Both
-//! families are the same warm base - the dark theme is the light theme read by
-//! inversion, keeping every role's hue and lifting its value far enough to
-//! read on charcoal - so a frame switched between the two changes its
-//! luminance and never its meaning.
+//! light theme and a neutral graphite dark theme over the same role table. The
+//! two themes share the role table, not a hue family: the light theme is the
+//! warm off-white surface the terminal has always drawn, while the dark theme
+//! is a grey graphite ramp whose only saturated ink is the accent pair - every
+//! other role is a neutral grey, and a status is carried by its word and glyph
+//! rather than by its colour. A frame switched between the two changes its
+//! luminance, its temperature, and never its meaning.
 //!
 //! | Role | Light | Dark | Used by |
 //! | --- | --- | --- | --- |
-//! | [`Palette::canvas`] | `#F7F2E9` | `#16130F` | the window behind every panel |
-//! | [`Palette::panel`] | `#FFFCF5` | `#1E1A15` | card and panel fills |
-//! | [`Palette::header_bg`] | `#F3E7D5` | `#272219` | the tab row and the table header band |
-//! | [`Palette::tab_active_bg`] | `#FCE2C4` | `#3A2A18` | the active tab's wash |
-//! | [`Palette::row_selected_bg`] | `#FADFC0` | `#40291A` | the cursor row's wash |
-//! | [`Palette::row_alt_bg`] | `#FBF5EC` | `#221D17` | every second row's zebra tint |
-//! | [`Palette::stub_bg`] | `#FBE4DF` | `#33211E` | the `@todo(core)` empty state and welcome sub-blocks |
-//! | [`Palette::input_bg`] | `#FFF4E2` | `#241E17` | the chat input buffer rows |
-//! | [`Palette::badge_bg`] | `#EFE0C8` | `#322A20` | the badge wash of the input header and the welcome version |
-//! | [`Palette::badge_ink`] | `#5C4632` | `#E4D3BC` | the label ink of a badge |
-//! | [`Palette::user_surface`] | `#EDF1F5` | `#1C2229` | the wash of a user message card |
-//! | [`Palette::user_border`] | `#A9BCD0` | `#4A5A6B` | the frame of a user message card |
-//! | [`Palette::user_label`] | `#2F5D7C` | `#9CC2E0` | the `you` label of a user message card |
-//! | [`Palette::selection_bg`] | `#D8E6F8` | `#26384C` | the fill of the transcript's selected display rows |
-//! | [`Palette::tool_surface`] | `#FBEDDE` | `#241C15` | the wash of a tool block |
-//! | [`Palette::tool_border`] | `#D8A76F` | `#8A5F32` | the frame of a tool block |
-//! | [`Palette::tool_label`] | `#8F4A16` | `#F0A868` | the badge ink of a tool block's header |
-//! | [`Palette::tool_preview`] | `#7A5330` | `#D3A87C` | the parsed result ink of a tool block |
-//! | [`Palette::notice_surface`] | `#F7E8CE` | `#2A2113` | the wash of a daemon notice block |
-//! | [`Palette::notice_ink`] | `#8A5A0B` | `#E3B15C` | the ink of a daemon notice block |
-//! | [`Palette::scroll_track`] | `#E7DCCB` | `#2A241C` | the track of the transcript's native scrollbar |
-//! | [`Palette::scroll_thumb`] | `#B08968` | `#6B543C` | the thumb of the transcript's native scrollbar |
-//! | [`Palette::divider_tint`] | `#EFE6D8` | `#2A231B` | the divider bands between blocks |
-//! | [`Palette::border`] | `#DCCFBB` | `#3A3229` | the neutral frames (chat, panes) |
+//! | [`Palette::canvas`] | `#F7F2E9` | `#0A0A0C` | the window behind every panel |
+//! | [`Palette::panel`] | `#FFFCF5` | `#101012` | card and panel fills |
+//! | [`Palette::header_bg`] | `#F3E7D5` | `#161618` | the tab row and the table header band |
+//! | [`Palette::tab_active_bg`] | `#FCE2C4` | `#2F2F31` | the active tab's wash |
+//! | [`Palette::row_selected_bg`] | `#FADFC0` | `#333335` | the cursor row's wash |
+//! | [`Palette::row_alt_bg`] | `#FBF5EC` | `#0D0D0F` | every second row's zebra tint |
+//! | [`Palette::stub_bg`] | `#FBE4DF` | `#1C1C1E` | the `@todo(core)` empty state and welcome sub-blocks |
+//! | [`Palette::input_bg`] | `#FFF4E2` | `#131315` | the chat input buffer rows |
+//! | [`Palette::badge_bg`] | `#EFE0C8` | `#28282A` | the badge wash of the input header and the welcome version |
+//! | [`Palette::badge_ink`] | `#5C4632` | `#CACACC` | the label ink of a badge |
+//! | [`Palette::user_surface`] | `#EDF1F5` | `#252527` | the wash of a user message card |
+//! | [`Palette::user_border`] | `#A9BCD0` | `#474749` | the frame of a user message card |
+//! | [`Palette::user_label`] | `#2F5D7C` | `#828284` | the `you` label of a user message card |
+//! | [`Palette::selection_bg`] | `#D8E6F8` | `#3A3A3C` | the fill of the transcript's selected display rows |
+//! | [`Palette::tool_surface`] | `#FBEDDE` | `#1F1F21` | the wash of a tool block |
+//! | [`Palette::tool_border`] | `#D8A76F` | `#525254` | the frame of a tool block |
+//! | [`Palette::tool_label`] | `#8F4A16` | `#C2C2C4` | the badge ink of a tool block's header |
+//! | [`Palette::tool_preview`] | `#7A5330` | `#8A8A8C` | the parsed result ink of a tool block |
+//! | [`Palette::notice_surface`] | `#F7E8CE` | `#222224` | the wash of a daemon notice block |
+//! | [`Palette::notice_ink`] | `#8A5A0B` | `#BABABC` | the ink of a daemon notice block |
+//! | [`Palette::scroll_track`] | `#E7DCCB` | `#2B2B2D` | the track of the transcript's native scrollbar |
+//! | [`Palette::scroll_thumb`] | `#B08968` | `#4A4A4C` | the thumb of the transcript's native scrollbar |
+//! | [`Palette::divider_tint`] | `#EFE6D8` | `#19191B` | the divider bands between blocks |
+//! | [`Palette::border`] | `#DCCFBB` | `#414143` | the neutral frames (chat, panes) |
 //! | [`Palette::accent`] | `#F97316` | `#FB923C` | the primary accent: the focused frame, hotkeys |
 //! | [`Palette::accent_deep`] | `#C2410C` | `#FDBA74` | accent text on an accent wash, the welcome lockup's product word |
-//! | [`Palette::scarlet`] | `#DC2626` | `#F87171` | the secondary accent: active runs, failures |
-//! | [`Palette::markdown_heading`] | `#9A3412` | `#FDA47A` | an assistant heading line |
-//! | [`Palette::markdown_code`] | `#7C2D12` | `#FBC08A` | inline code and code blocks in an answer |
-//! | [`Palette::markdown_link`] | `#1D4ED8` | `#93B4FB` | link text in an answer |
-//! | [`Palette::reasoning_body`] | `#8A7A66` | `#B7A48C` | the dimmed chain-of-thought block |
-//! | [`Palette::reasoning_header`] | `#6D5A44` | `#CDB79A` | the reasoning block's glyph and header |
-//! | [`Palette::reasoning_marker`] | `#8A5A2B` | `#DEA263` | the expand affordance of a collapsed reasoning block |
-//! | [`Palette::timer_ink`] | `#A16207` | `#E9C46A` | the measured elapsed value |
-//! | [`Palette::todo_ink`] | `#8B7AA8` | `#C4B5E0` | the `@todo(core)` placeholder tone |
-//! | [`Palette::ink`] | `#2A211A` | `#F0E7DA` | body text |
-//! | [`Palette::ink_muted`] | `#7A6A58` | `#B9A992` | secondary text, hints, and the welcome lockup's trailing word |
-//! | [`Palette::ink_faint`] | `#A8967F` | `#8F7E69` | dividers and separators |
-//! | [`Palette::success`] | `#2F7D4F` | `#6EE7A0` | completed runs |
-//! | [`Palette::warning`] | `#B45309` | `#F5B45C` | queued or interrupted work |
-//! | [`Palette::error`] | `#DC2626` | `#F87171` | typed failures (the scarlet ink) |
+//! | [`Palette::scarlet`] | `#DC2626` | `#5E5E60` | the secondary accent: active runs, failures |
+//! | [`Palette::markdown_heading`] | `#9A3412` | `#D2D2D4` | an assistant heading line |
+//! | [`Palette::markdown_code`] | `#7C2D12` | `#B2B2B4` | inline code and code blocks in an answer |
+//! | [`Palette::markdown_link`] | `#1D4ED8` | `#AAAAAC` | link text in an answer |
+//! | [`Palette::reasoning_body`] | `#8A7A66` | `#5A5A5C` | the dimmed chain-of-thought block |
+//! | [`Palette::reasoning_header`] | `#6D5A44` | `#7A7A7C` | the reasoning block's glyph and header |
+//! | [`Palette::reasoning_marker`] | `#8A5A2B` | `#A2A2A4` | the expand affordance of a collapsed reasoning block |
+//! | [`Palette::timer_ink`] | `#A16207` | `#9A9A9C` | the measured elapsed value |
+//! | [`Palette::todo_ink`] | `#8B7AA8` | `#929294` | the `@todo(core)` placeholder tone |
+//! | [`Palette::ink`] | `#2A211A` | `#DADADC` | body text |
+//! | [`Palette::ink_muted`] | `#7A6A58` | `#A6A6A8` | secondary text, hints, and the welcome lockup's trailing word |
+//! | [`Palette::ink_faint`] | `#A8967F` | `#626264` | dividers and separators |
+//! | [`Palette::success`] | `#2F7D4F` | `#6A6A6C` | completed runs |
+//! | [`Palette::warning`] | `#B45309` | `#727274` | queued or interrupted work |
+//! | [`Palette::error`] | `#DC2626` | `#5E5E60` | typed failures (the scarlet ink) |
 //!
 //! Three rules hold per theme and one holds across them:
 //!
@@ -63,6 +65,13 @@
 //!   mistaken for its neighbour;
 //! - every role differs between the two themes, so a frame is wholly one theme
 //!   and never a half-switched surface.
+//!
+//! The dark theme adds one rule of its own: it is monochrome, so every role
+//! except the accent pair is a neutral grey whose blue channel sits at or one
+//! step above its red, and only [`Palette::accent`] and
+//! [`Palette::accent_deep`] carry a hue. A state therefore never reaches the
+//! reader through a colour of its own on the dark theme; it reaches through
+//! the word and glyph the rule below already requires.
 //!
 //! Colours degrade, words do not: a terminal without truecolor maps each role
 //! of the active theme to its nearest ANSI colour, so no role may be the only
@@ -222,49 +231,54 @@ pub static LIGHT: Palette = Palette {
     error: Color::rgb(0xDC, 0x26, 0x26),
 };
 
-/// The dark theme: the same warm family read on a warm charcoal canvas.
+/// The dark theme: a neutral graphite ramp whose only hue is the accent pair.
+///
+/// Every role but [`Palette::accent`] and [`Palette::accent_deep`] is a neutral
+/// grey: red equals green and blue sits two steps above red, one constant cool
+/// bias for the whole ramp. Nothing else here carries a hue, so a state on this
+/// theme reaches the reader through its word and glyph alone.
 pub static DARK: Palette = Palette {
-    canvas: Color::rgb(0x16, 0x13, 0x0F),
-    panel: Color::rgb(0x1E, 0x1A, 0x15),
-    header_bg: Color::rgb(0x27, 0x22, 0x19),
-    tab_active_bg: Color::rgb(0x3A, 0x2A, 0x18),
-    row_selected_bg: Color::rgb(0x40, 0x29, 0x1A),
-    row_alt_bg: Color::rgb(0x22, 0x1D, 0x17),
-    stub_bg: Color::rgb(0x33, 0x21, 0x1E),
-    input_bg: Color::rgb(0x24, 0x1E, 0x17),
-    badge_bg: Color::rgb(0x32, 0x2A, 0x20),
-    badge_ink: Color::rgb(0xE4, 0xD3, 0xBC),
-    user_surface: Color::rgb(0x1C, 0x22, 0x29),
-    user_border: Color::rgb(0x4A, 0x5A, 0x6B),
-    user_label: Color::rgb(0x9C, 0xC2, 0xE0),
-    selection_bg: Color::rgb(0x26, 0x38, 0x4C),
-    tool_surface: Color::rgb(0x24, 0x1C, 0x15),
-    tool_border: Color::rgb(0x8A, 0x5F, 0x32),
-    tool_label: Color::rgb(0xF0, 0xA8, 0x68),
-    tool_preview: Color::rgb(0xD3, 0xA8, 0x7C),
-    notice_surface: Color::rgb(0x2A, 0x21, 0x13),
-    notice_ink: Color::rgb(0xE3, 0xB1, 0x5C),
-    scroll_track: Color::rgb(0x2A, 0x24, 0x1C),
-    scroll_thumb: Color::rgb(0x6B, 0x54, 0x3C),
-    divider_tint: Color::rgb(0x2A, 0x23, 0x1B),
-    border: Color::rgb(0x3A, 0x32, 0x29),
+    canvas: Color::rgb(0x0A, 0x0A, 0x0C),
+    panel: Color::rgb(0x10, 0x10, 0x12),
+    header_bg: Color::rgb(0x16, 0x16, 0x18),
+    tab_active_bg: Color::rgb(0x2F, 0x2F, 0x31),
+    row_selected_bg: Color::rgb(0x33, 0x33, 0x35),
+    row_alt_bg: Color::rgb(0x0D, 0x0D, 0x0F),
+    stub_bg: Color::rgb(0x1C, 0x1C, 0x1E),
+    input_bg: Color::rgb(0x13, 0x13, 0x15),
+    badge_bg: Color::rgb(0x28, 0x28, 0x2A),
+    badge_ink: Color::rgb(0xCA, 0xCA, 0xCC),
+    user_surface: Color::rgb(0x25, 0x25, 0x27),
+    user_border: Color::rgb(0x47, 0x47, 0x49),
+    user_label: Color::rgb(0x82, 0x82, 0x84),
+    selection_bg: Color::rgb(0x3A, 0x3A, 0x3C),
+    tool_surface: Color::rgb(0x1F, 0x1F, 0x21),
+    tool_border: Color::rgb(0x52, 0x52, 0x54),
+    tool_label: Color::rgb(0xC2, 0xC2, 0xC4),
+    tool_preview: Color::rgb(0x8A, 0x8A, 0x8C),
+    notice_surface: Color::rgb(0x22, 0x22, 0x24),
+    notice_ink: Color::rgb(0xBA, 0xBA, 0xBC),
+    scroll_track: Color::rgb(0x2B, 0x2B, 0x2D),
+    scroll_thumb: Color::rgb(0x4A, 0x4A, 0x4C),
+    divider_tint: Color::rgb(0x19, 0x19, 0x1B),
+    border: Color::rgb(0x41, 0x41, 0x43),
     accent: Color::rgb(0xFB, 0x92, 0x3C),
     accent_deep: Color::rgb(0xFD, 0xBA, 0x74),
-    scarlet: Color::rgb(0xF8, 0x71, 0x71),
-    markdown_heading: Color::rgb(0xFD, 0xA4, 0x7A),
-    markdown_code: Color::rgb(0xFB, 0xC0, 0x8A),
-    markdown_link: Color::rgb(0x93, 0xB4, 0xFB),
-    reasoning_body: Color::rgb(0xB7, 0xA4, 0x8C),
-    reasoning_header: Color::rgb(0xCD, 0xB7, 0x9A),
-    reasoning_marker: Color::rgb(0xDE, 0xA2, 0x63),
-    timer_ink: Color::rgb(0xE9, 0xC4, 0x6A),
-    todo_ink: Color::rgb(0xC4, 0xB5, 0xE0),
-    ink: Color::rgb(0xF0, 0xE7, 0xDA),
-    ink_muted: Color::rgb(0xB9, 0xA9, 0x92),
-    ink_faint: Color::rgb(0x8F, 0x7E, 0x69),
-    success: Color::rgb(0x6E, 0xE7, 0xA0),
-    warning: Color::rgb(0xF5, 0xB4, 0x5C),
-    error: Color::rgb(0xF8, 0x71, 0x71),
+    scarlet: Color::rgb(0x5E, 0x5E, 0x60),
+    markdown_heading: Color::rgb(0xD2, 0xD2, 0xD4),
+    markdown_code: Color::rgb(0xB2, 0xB2, 0xB4),
+    markdown_link: Color::rgb(0xAA, 0xAA, 0xAC),
+    reasoning_body: Color::rgb(0x5A, 0x5A, 0x5C),
+    reasoning_header: Color::rgb(0x7A, 0x7A, 0x7C),
+    reasoning_marker: Color::rgb(0xA2, 0xA2, 0xA4),
+    timer_ink: Color::rgb(0x9A, 0x9A, 0x9C),
+    todo_ink: Color::rgb(0x92, 0x92, 0x94),
+    ink: Color::rgb(0xDA, 0xDA, 0xDC),
+    ink_muted: Color::rgb(0xA6, 0xA6, 0xA8),
+    ink_faint: Color::rgb(0x62, 0x62, 0x64),
+    success: Color::rgb(0x6A, 0x6A, 0x6C),
+    warning: Color::rgb(0x72, 0x72, 0x74),
+    error: Color::rgb(0x5E, 0x5E, 0x60),
 };
 
 /// Returns the palette of one theme.
@@ -387,6 +401,28 @@ mod tests {
                 light, dark,
                 "{name} must read as one theme's own value, not the other's: \
                  {light:?} is both themes' value"
+            );
+        }
+    }
+
+    #[test]
+    fn the_dark_theme_is_monochrome_apart_from_its_accent_pair() {
+        for (name, role) in roles(&DARK) {
+            if name == "accent" || name == "accent_deep" {
+                continue;
+            }
+            assert_eq!(
+                role.r, role.g,
+                "the dark theme's {name} must be a neutral grey: red {} and \
+                 green {} differ",
+                role.r, role.g
+            );
+            assert!(
+                i32::from(role.b) - i32::from(role.r) <= 2,
+                "the dark theme's {name} must be a neutral grey: blue {} sits \
+                 more than two steps above red {}",
+                role.b,
+                role.r
             );
         }
     }

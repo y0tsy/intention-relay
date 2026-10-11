@@ -264,15 +264,15 @@ selection and rejection paths, the picker's preview, commit, and revert transiti
 parser, the command registry with its declared arguments and a submitted line's argument resolution and notices, the
 ranking and menu
 transitions, the hint band's row arithmetic and columns, the keymap, both themes' palette roles and the documented
-opacity, distinctness, `error`/`scarlet` alias, and cross-theme rules, the
+opacity, distinctness, `error`/`scarlet` alias, cross-theme, and dark-monochrome rules, the
 wheel mapping, the left-button pointer's press, drag, release, marker expansion, and edge scrolling, the turn clock, the
 browser geometry and row helpers, the markdown layout, the per-tool block dispatch, the marker and notice layout, the
 transcript layout cache's append-only fast path, width change, theme change, replacement, reasoning expansion,
 paired-result, and
 front-trim replays, and the clipboard-free source audit. A run of
-`cargo nextest run -p intention-tui` observed 358 tests across four binaries, all passing: 239 library unit tests,
+`cargo nextest run -p intention-tui` observed 359 tests across four binaries, all passing: 240 library unit tests,
 79 `tui_render` cases, 29 binary unit tests, and 11 `terminal_e2e` cases. A run of `cargo nextest run --workspace`
-observed 740 tests run, 740 passed, and 2 skipped.
+observed 741 tests run, 741 passed, and 2 skipped.
 
 The per-crate self-checks are `cargo fmt -p intention-tui`, `cargo nextest run -p intention-tui`, and
 `cargo clippy -p intention-tui --all-targets`; the slice's acceptance gate is `make quick` during delivery and

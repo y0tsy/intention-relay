@@ -976,7 +976,7 @@ mod tests {
         let menu = menu_of("/theme d").expect("d selects dark");
         let row = menu.highlighted().expect("a row is highlighted");
         assert_eq!(row.completion(), "dark ");
-        assert_eq!(row.description(), "the warm charcoal surface");
+        assert_eq!(row.description(), "the neutral graphite surface");
         assert_eq!(row.trailing(), "theme", "the third cell names the argument");
 
         let menu = menu_of("/se").expect("se selects sessions");

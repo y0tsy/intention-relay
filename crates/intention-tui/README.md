@@ -121,8 +121,8 @@ space after a complete value closes it. The band closes when the slash is
 removed, on `Esc`, or when nothing matches.
 
 The colour theme is the terminal's own value and the daemon's. The light palette
-is the warm off-white surface every session starts in; the dark palette is the
-warm charcoal surface for a terminal that paints on a dark background. Both are
+is the warm off-white surface every session starts in; the dark palette is a
+neutral graphite surface whose only hue is its accent pair. Both are
 the same role table resolved by `palette::of(theme)`, which the frame calls once
 per state's effective theme and hands to every pane, so a theme switch repaints
 the whole window - the transcript layout cache included, because the cache is
@@ -213,53 +213,53 @@ Rules the panes keep:
 `src/tui/palette.rs` is the single source of colours: `palette::of(theme)`
 resolves one `Palette` value once per frame from the state's effective theme,
 and every pane reads the roles of the reference it was handed. The light theme
-is the warm off-white surface every session starts in; the dark theme is the
-same warm family read on a warm charcoal canvas, keeping every role's hue and
-lifting its value far enough to read. No pane constructs a colour of its own.
+is the warm off-white surface every session starts in; the dark theme is a
+neutral graphite ramp whose only hue is the accent pair. No pane constructs a
+colour of its own.
 
 | Role | Light | Dark | Used by |
 | --- | --- | --- | --- |
-| `canvas` | `#F7F2E9` | `#16130F` | the window behind every panel |
-| `panel` | `#FFFCF5` | `#1E1A15` | card and panel fills |
-| `header_bg` | `#F3E7D5` | `#272219` | the tab row and the table header band |
-| `tab_active_bg` | `#FCE2C4` | `#3A2A18` | the active tab's wash |
-| `row_selected_bg` | `#FADFC0` | `#40291A` | the cursor row's wash |
-| `row_alt_bg` | `#FBF5EC` | `#221D17` | every second row's zebra tint |
-| `stub_bg` | `#FBE4DF` | `#33211E` | the `@todo(core)` empty state and welcome sub-blocks |
-| `input_bg` | `#FFF4E2` | `#241E17` | the chat input buffer rows |
-| `badge_bg` | `#EFE0C8` | `#322A20` | the badge wash of the input header and the welcome version |
-| `badge_ink` | `#5C4632` | `#E4D3BC` | the label ink of a badge |
-| `user_surface` | `#EDF1F5` | `#1C2229` | the wash of a user message card |
-| `user_border` | `#A9BCD0` | `#4A5A6B` | the frame of a user message card |
-| `user_label` | `#2F5D7C` | `#9CC2E0` | the `you` label of a user message card |
-| `selection_bg` | `#D8E6F8` | `#26384C` | the fill of the transcript's selected display rows |
-| `tool_surface` | `#FBEDDE` | `#241C15` | the wash of a tool block |
-| `tool_border` | `#D8A76F` | `#8A5F32` | the frame of a tool block |
-| `tool_label` | `#8F4A16` | `#F0A868` | the badge ink of a tool block's header |
-| `tool_preview` | `#7A5330` | `#D3A87C` | the parsed result ink of a tool block |
-| `notice_surface` | `#F7E8CE` | `#2A2113` | the wash of a daemon notice block |
-| `notice_ink` | `#8A5A0B` | `#E3B15C` | the ink of a daemon notice block |
-| `scroll_track` | `#E7DCCB` | `#2A241C` | the track of the transcript's native scrollbar |
-| `scroll_thumb` | `#B08968` | `#6B543C` | the thumb of the transcript's native scrollbar |
-| `divider_tint` | `#EFE6D8` | `#2A231B` | the divider bands between blocks |
-| `border` | `#DCCFBB` | `#3A3229` | the neutral frames (chat, panes) |
+| `canvas` | `#F7F2E9` | `#0A0A0C` | the window behind every panel |
+| `panel` | `#FFFCF5` | `#101012` | card and panel fills |
+| `header_bg` | `#F3E7D5` | `#161618` | the tab row and the table header band |
+| `tab_active_bg` | `#FCE2C4` | `#2F2F31` | the active tab's wash |
+| `row_selected_bg` | `#FADFC0` | `#333335` | the cursor row's wash |
+| `row_alt_bg` | `#FBF5EC` | `#0D0D0F` | every second row's zebra tint |
+| `stub_bg` | `#FBE4DF` | `#1C1C1E` | the `@todo(core)` empty state and welcome sub-blocks |
+| `input_bg` | `#FFF4E2` | `#131315` | the chat input buffer rows |
+| `badge_bg` | `#EFE0C8` | `#28282A` | the badge wash of the input header and the welcome version |
+| `badge_ink` | `#5C4632` | `#CACACC` | the label ink of a badge |
+| `user_surface` | `#EDF1F5` | `#252527` | the wash of a user message card |
+| `user_border` | `#A9BCD0` | `#474749` | the frame of a user message card |
+| `user_label` | `#2F5D7C` | `#828284` | the `you` label of a user message card |
+| `selection_bg` | `#D8E6F8` | `#3A3A3C` | the fill of the transcript's selected display rows |
+| `tool_surface` | `#FBEDDE` | `#1F1F21` | the wash of a tool block |
+| `tool_border` | `#D8A76F` | `#525254` | the frame of a tool block |
+| `tool_label` | `#8F4A16` | `#C2C2C4` | the badge ink of a tool block's header |
+| `tool_preview` | `#7A5330` | `#8A8A8C` | the parsed result ink of a tool block |
+| `notice_surface` | `#F7E8CE` | `#222224` | the wash of a daemon notice block |
+| `notice_ink` | `#8A5A0B` | `#BABABC` | the ink of a daemon notice block |
+| `scroll_track` | `#E7DCCB` | `#2B2B2D` | the track of the transcript's native scrollbar |
+| `scroll_thumb` | `#B08968` | `#4A4A4C` | the thumb of the transcript's native scrollbar |
+| `divider_tint` | `#EFE6D8` | `#19191B` | the divider bands between blocks |
+| `border` | `#DCCFBB` | `#414143` | the neutral frames (chat, panes) |
 | `accent` | `#F97316` | `#FB923C` | the primary accent: the focused frame, hotkeys |
 | `accent_deep` | `#C2410C` | `#FDBA74` | accent text on an accent wash, the welcome lockup's product word |
-| `scarlet` | `#DC2626` | `#F87171` | the secondary accent: active runs, failures |
-| `markdown_heading` | `#9A3412` | `#FDA47A` | an assistant heading line |
-| `markdown_code` | `#7C2D12` | `#FBC08A` | inline code and code blocks in an answer |
-| `markdown_link` | `#1D4ED8` | `#93B4FB` | link text in an answer |
-| `reasoning_body` | `#8A7A66` | `#B7A48C` | the dimmed chain-of-thought block |
-| `reasoning_header` | `#6D5A44` | `#CDB79A` | the reasoning block's glyph and header |
-| `reasoning_marker` | `#8A5A2B` | `#DEA263` | the expand affordance of a collapsed reasoning block |
-| `timer_ink` | `#A16207` | `#E9C46A` | the measured elapsed value |
-| `todo_ink` | `#8B7AA8` | `#C4B5E0` | the `@todo(core)` placeholder tone |
-| `ink` | `#2A211A` | `#F0E7DA` | body text |
-| `ink_muted` | `#7A6A58` | `#B9A992` | secondary text, hints, and the welcome lockup's trailing word |
-| `ink_faint` | `#A8967F` | `#8F7E69` | dividers and separators |
-| `success` | `#2F7D4F` | `#6EE7A0` | completed runs |
-| `warning` | `#B45309` | `#F5B45C` | queued or interrupted work |
-| `error` | `#DC2626` | `#F87171` | typed failures (the scarlet ink) |
+| `scarlet` | `#DC2626` | `#5E5E60` | the secondary accent: active runs, failures |
+| `markdown_heading` | `#9A3412` | `#D2D2D4` | an assistant heading line |
+| `markdown_code` | `#7C2D12` | `#B2B2B4` | inline code and code blocks in an answer |
+| `markdown_link` | `#1D4ED8` | `#AAAAAC` | link text in an answer |
+| `reasoning_body` | `#8A7A66` | `#5A5A5C` | the dimmed chain-of-thought block |
+| `reasoning_header` | `#6D5A44` | `#7A7A7C` | the reasoning block's glyph and header |
+| `reasoning_marker` | `#8A5A2B` | `#A2A2A4` | the expand affordance of a collapsed reasoning block |
+| `timer_ink` | `#A16207` | `#9A9A9C` | the measured elapsed value |
+| `todo_ink` | `#8B7AA8` | `#929294` | the `@todo(core)` placeholder tone |
+| `ink` | `#2A211A` | `#DADADC` | body text |
+| `ink_muted` | `#7A6A58` | `#A6A6A8` | secondary text, hints, and the welcome lockup's trailing word |
+| `ink_faint` | `#A8967F` | `#626264` | dividers and separators |
+| `success` | `#2F7D4F` | `#6A6A6C` | completed runs |
+| `warning` | `#B45309` | `#727274` | queued or interrupted work |
+| `error` | `#DC2626` | `#5E5E60` | typed failures (the scarlet ink) |
 
 Three rules hold per theme and one holds across them: every role is fully
 opaque, because a terminal cannot show a transparent literal; within one theme
@@ -267,7 +267,10 @@ no two roles share a value, the one documented alias being `error`, which
 spells `scarlet` exactly; within one theme every role carries its own value, so
 a surface is never mistaken for its neighbour; and every role differs between
 the two themes, so a frame is wholly one theme and never a half-switched
-surface. The transcript layout cache is keyed by the theme like the pane width,
+surface. The dark theme is additionally monochrome: every role but `accent` and
+`accent_deep` is a neutral grey, so a state there reaches the reader through its
+word and glyph, never through a colour of its own. The transcript layout cache
+is keyed by the theme like the pane width,
 so a theme change replays the whole transcript exactly as a resize does. Colours
 degrade, words do not: a terminal without truecolor maps each role of the active
 theme to its nearest ANSI colour, so no role carries a state alone. Every use

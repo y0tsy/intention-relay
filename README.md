@@ -178,8 +178,9 @@ highlighted one and `Esc` closing the band before it means anything else. The
 registry also declares each command's arguments: `/theme` takes an optional
 `light` or `dark` value, and while the caret is in that argument word the band
 lists those values in the same three columns, completing one with a trailing
-space. A theme is the terminal's warm off-white light palette or its warm
-charcoal dark palette, resolved once per frame so a theme change replays the
+space. A theme is the terminal's warm off-white light palette or its neutral
+graphite dark palette whose only hue is the accent pair, resolved once per frame
+so a theme change replays the
 transcript exactly as a resize does. The daemon owns the effective theme:
 `config.toml` supplies the default through `[tui] theme` (absent means light),
 and the stored single-row override in the state database wins over it. `/theme`
