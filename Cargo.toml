@@ -66,8 +66,10 @@ debug = 1
 [profile.dev.package."*"]
 opt-level = 2
 
-# `revue` is patched to a locally vendored 3.9.1 copy whose only behavioral
-# change is a configurable quit key (`AppBuilder::quit_key`); see
-# `vendor/revue/PATCH.md`. Drop the patch once upstream offers the option.
+# `revue` is patched to a locally vendored 3.9.1 copy; see
+# `vendor/revue/PATCH.md`. The copy stays only until a release replaces the
+# unmaintained `unic-emoji-char` source (hawk90/revue#950): the upgrade to
+# 3.10.0 or newer, the terminal's switch to `App::prevent_default`, and the
+# deletion of this patch land together.
 [patch.crates-io]
 revue = { path = "vendor/revue" }

@@ -138,16 +138,20 @@ direct dependencies under the policy in `quality/outdated.toml`.
 `publish = false` workspace packages stay project-owned code and are excluded. A failed or stale notice generation is a
 blocking supply-chain failure, not an inferred pass.
 
-`revue` 3.9.1 is vendored at `vendor/revue` and selected through the root `[patch.crates-io]` entry, because the
-released crate quits the `App` event loop on Ctrl+C with no builder option. The vendored copy is 3.9.1 upstream source
-with `tests/`, `benches/`, `examples/`, and `docs/` dropped and their manifest targets stripped, plus two changes: an
-`AppBuilder::quit_key(Option<KeyEvent>)` option whose default, Ctrl+C, is the pre-patch behavior, and the removal of
-the unmaintained `unic-emoji-char` probe, which only produced the configurable emoji width while `unicode-width`
-already reports that default width; the advisory policy resolves advisories instead of acknowledging them, and that
-probe was their only path into the graph. The copy is
-excluded from the workspace, so format, lint, coverage, and architecture policy stay scoped to `crates/`, and
+`revue` 3.9.1 is vendored at `vendor/revue` and selected through the root `[patch.crates-io]` entry. The copy was
+taken for two reasons: the released crate quit the `App` event loop on Ctrl+C with no builder option, and it pulled the
+unmaintained `unic-emoji-char` probe. The first reason is settled upstream — 3.10.0 adds `App::prevent_default`, which
+the terminal's layered Ctrl+C adopts when this copy is dropped — and the second is what keeps the copy here: registry
+3.10.0 still depends on `unic-emoji-char`, whose unmaintained advisories the advisory policy resolves instead of
+acknowledging, and a `cargo deny check advisories` probe against that graph fails. Upstream plans to replace the probe's
+source (hawk90/revue#950); the upgrade, the `prevent_default` switch, and the deletion of this copy land together in one
+change. The vendored copy is 3.9.1 upstream source with `tests/`, `benches/`, `examples/`, and `docs/` dropped and their
+manifest targets stripped, plus two changes: an `AppBuilder::quit_key(Option<KeyEvent>)` option whose default, Ctrl+C,
+is the pre-patch behavior, and the removal of the `unic-emoji-char` probe, which only served the public
+`CharWidthTable` while `unicode-width` reports the same width for all but the 26 regional-indicator code points. The
+copy is excluded from the workspace, so format, lint, coverage, and architecture policy stay scoped to `crates/`, and
 `quality/check_architecture.py` skips `vendor/` in its raw-text scans; `vendor/revue/PATCH.md` records the patch, its
-files, and how to drop the vendored copy once upstream offers the option.
+files, and the conditions that drop the vendored copy.
 
 The terminal binary takes `mimalloc` as its process-wide global allocator, because a terminal frame allocates many
 short-lived small strings; it is an ordinary crates.io dependency under the MIT license, disclosed like every other
