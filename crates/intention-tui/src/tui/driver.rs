@@ -19,7 +19,7 @@ use crate::client_task;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TuiOptions {
     workspace_root: WorkspaceRootDto,
-    mode: RunModeDto,
+    mode: Option<RunModeDto>,
     session: Option<SessionId>,
     continue_session: bool,
 }
@@ -27,14 +27,16 @@ pub struct TuiOptions {
 impl TuiOptions {
     /// Creates the front-end options for one workspace, run mode, and session.
     ///
-    /// `session` is the session the caller selected; `None` opens nothing, so
-    /// the launch shows the welcome state until the user asks for a session. A
-    /// caller that wants the newest session opened asks for it explicitly with
+    /// `mode` is the run policy the caller declared, if any: an absent mode
+    /// leaves the durable policy of a created session to the core. `session` is
+    /// the session the caller selected; `None` opens nothing, so the launch
+    /// shows the welcome state until the user asks for a session. A caller that
+    /// wants the newest session opened asks for it explicitly with
     /// [`TuiOptions::continuing`].
     #[must_use]
     pub const fn new(
         workspace_root: WorkspaceRootDto,
-        mode: RunModeDto,
+        mode: Option<RunModeDto>,
         session: Option<SessionId>,
     ) -> Self {
         Self {
@@ -61,9 +63,10 @@ impl TuiOptions {
         &self.workspace_root
     }
 
-    /// Returns the run mode a new session is created with.
+    /// Returns the run mode a new session is created with, if the caller
+    /// declared one.
     #[must_use]
-    pub const fn mode(&self) -> RunModeDto {
+    pub const fn mode(&self) -> Option<RunModeDto> {
         self.mode
     }
 
@@ -136,7 +139,7 @@ impl Driver {
         client: IntentionClient,
         endpoint: LocalEndpoint,
         workspace_root: WorkspaceRootDto,
-        mode: RunModeDto,
+        mode: Option<RunModeDto>,
     ) -> DtoResult<Self> {
         let runtime = client_runtime()?;
         let (effects, effect_requests) = mpsc::unbounded_channel();
@@ -183,7 +186,7 @@ async fn drive(
     client: IntentionClient,
     endpoint: LocalEndpoint,
     workspace_root: WorkspaceRootDto,
-    mode: RunModeDto,
+    mode: Option<RunModeDto>,
     mut effects: mpsc::UnboundedReceiver<Effect>,
     actions: mpsc::UnboundedSender<Action>,
 ) {

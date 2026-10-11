@@ -303,7 +303,7 @@ pub struct Driver {
     client: IntentionClient,
     endpoint: LocalEndpoint,
     workspace_root: WorkspaceRootDto,
-    mode: RunModeDto,
+    mode: Option<RunModeDto>,
     state: AppState,
     subscription: Option<SessionStreamSubscription>,
     last_failure: Option<ErrorDto>,
@@ -324,7 +324,7 @@ impl Driver {
         client: IntentionClient,
         endpoint: LocalEndpoint,
         workspace_root: WorkspaceRootDto,
-        mode: RunModeDto,
+        mode: Option<RunModeDto>,
     ) -> Self {
         Self {
             client,
@@ -1208,7 +1208,7 @@ mod tests {
             endpoint,
             WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
                 .expect("the temporary directory is an absolute workspace root"),
-            RunModeDto::Build,
+            Some(RunModeDto::Build),
         )
     }
 

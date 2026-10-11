@@ -564,8 +564,6 @@ lacks. Each site carries the same `@todo(core):` prefix and names what the core 
 
 | The terminal still | The core should own |
 | --- | --- |
-| resolves the default run policy of a created session (`cli.rs`) | the durable run-mode default |
-| spells the declared run-mode set in the flag's usage and rejection text (`cli.rs`) | a declared set on the run-mode vocabulary |
 | parks a prompt that has no session and sends it as the first turn of whichever snapshot arrives first (`app/input.rs`) | create-session-and-first-turn as one use case |
 
 The `@todo(hack)` marker is the crate's own class for work the adapter or the client must still do, and it is not

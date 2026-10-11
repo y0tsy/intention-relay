@@ -51,7 +51,7 @@ fn main() -> ExitCode {
         Err(message) => return usage_failure(&message, &mut stderr),
     };
     if invocation == Invocation::Help {
-        let _ = stdout.write_all(cli::HELP.as_bytes());
+        let _ = stdout.write_all(cli::help().as_bytes());
         return ExitStatus::Completed.code();
     }
     dispatch(invocation, &mut stdout, &mut stderr)

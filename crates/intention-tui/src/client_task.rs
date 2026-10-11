@@ -30,7 +30,7 @@ use crate::app::{Action, Effect};
 pub async fn perform(
     client: &IntentionClient,
     workspace_root: &WorkspaceRootDto,
-    mode: RunModeDto,
+    mode: Option<RunModeDto>,
     effect: Effect,
 ) -> Option<Result<Action, (Action, ErrorDto)>> {
     let outcome = match effect {

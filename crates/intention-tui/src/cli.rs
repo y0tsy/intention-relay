@@ -21,8 +21,15 @@ pub const TUI_REQUIRES_TERMINAL: &str =
     "the fullscreen front end requires a terminal on standard input and output";
 
 /// The complete help text `-h` and `--help` print.
-pub const HELP: &str = "\
-Intention Relay terminal client
+///
+/// The run-mode line renders the set `RunModeDto` declares and the default it
+/// declares, so the help cannot drift from the wire vocabulary.
+#[must_use]
+pub fn help() -> String {
+    let modes = RunModeDto::ALL.map(RunModeDto::as_str).join("|");
+    let default = RunModeDto::DEFAULT.as_str();
+    format!(
+        "Intention Relay terminal client
 
 usage:
   intention-tui [tui] [OPTIONS]         fullscreen terminal UI (requires a terminal)
@@ -33,11 +40,13 @@ options:
   --workspace PATH    workspace root for a new session (default: current directory)
   --session ID        open an existing session by its durable identifier
   --continue          continue the most recently updated session
-  --mode plan|build   run policy of a created session (default: build)
+  --mode {modes}   run policy of a created session (default: {default})
   --timeout SECS      stop the run when it does not finish within SECS
   --format text|json  run output format: progressive text or NDJSON records
   -h, --help          print this help
-";
+"
+    )
+}
 
 /// The script output format of the headless command.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,7 +63,7 @@ pub struct Options {
     workspace: Option<PathBuf>,
     session: Option<SessionId>,
     continue_session: bool,
-    mode: RunModeDto,
+    mode: Option<RunModeDto>,
     timeout: Option<Duration>,
     format: Format,
 }
@@ -78,9 +87,13 @@ impl Options {
         self.continue_session
     }
 
-    /// Returns the run policy a created session starts with.
+    /// Returns the run policy a created session starts with, if the caller
+    /// declared one.
+    ///
+    /// The grammar carries no default: an absent `--mode` leaves the durable
+    /// policy of a created session to the core.
     #[must_use]
-    pub const fn mode(&self) -> RunModeDto {
+    pub const fn mode(&self) -> Option<RunModeDto> {
         self.mode
     }
 
@@ -196,11 +209,9 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, String> {
     let mut workspace = None;
     let mut session = None;
     let mut continue_session = false;
-    // @todo(core): the durable run policy of every session this binary creates defaults to `build`
-    // here, in the command grammar, because nothing else states a default. The default belongs to
-    // the core - the configuration or the daemon - the way the terminal theme's default comes from
-    // `config.toml`, and this flag should carry only a mode the caller actually spelled.
-    let mut mode = RunModeDto::Build;
+    // The flag carries only a mode the caller spelled: the durable default of a
+    // created session is the core's, so the grammar substitutes none.
+    let mut mode = None;
     let mut timeout = None;
     let mut format = None;
 
@@ -215,7 +226,7 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, String> {
                 session = Some(parsed);
             }
             Long("continue") => continue_session = true,
-            Long("mode") => mode = mode_value(&text(parser)?)?,
+            Long("mode") => mode = Some(mode_value(&text(parser)?)?),
             Long("timeout") => timeout = Some(seconds(&text(parser)?)?),
             Long("format") => format = Some(format_value(&text(parser)?)?),
             Value(value) => {
@@ -317,12 +328,11 @@ fn text(parser: &mut lexopt::Parser) -> Result<String, String> {
 /// # Errors
 ///
 /// Returns the usage message for a mode the grammar does not declare.
-// @todo(core): the declared set of durable run modes is hand-spelled in this rejection text and in
-// the usage block, so a mode added to the vocabulary can be missing from both. The core should
-// declare the set the way the terminal statuses declare theirs, and this flag should spell what that
-// declaration carries.
 fn mode_value(value: &str) -> Result<RunModeDto, String> {
-    RunModeDto::parse(value).map_err(|_| format!("--mode must be plan or build, got '{value}'"))
+    RunModeDto::parse(value).map_err(|_| {
+        let modes = RunModeDto::ALL.map(RunModeDto::as_str).join(" or ");
+        format!("--mode must be {modes}, got '{value}'")
+    })
 }
 
 /// Parses one `--format` value.
@@ -382,9 +392,46 @@ mod tests {
         assert_eq!(default.workspace(), None);
         assert_eq!(default.session(), None);
         assert!(!default.continue_session());
-        assert_eq!(default.mode(), RunModeDto::Build);
+        assert_eq!(default.mode(), None);
         assert_eq!(default.timeout(), None);
         assert_eq!(default.format(), Format::Text);
+    }
+
+    #[test]
+    fn an_absent_mode_leaves_the_default_to_the_core() {
+        let absent = options_of(parsed(&["repl"]).expect("repl parses"));
+        assert_eq!(
+            absent.mode(),
+            None,
+            "the grammar carries no run policy of its own"
+        );
+        let spelled = options_of(parsed(&["repl", "--mode", "plan"]).expect("repl parses"));
+        assert_eq!(
+            spelled.mode(),
+            Some(RunModeDto::Plan),
+            "the flag carries only the mode the caller spelled"
+        );
+    }
+
+    #[test]
+    fn the_usage_and_rejection_spell_the_declared_mode_set() {
+        let declared = RunModeDto::ALL.map(RunModeDto::as_str).join("|");
+        let help = help();
+        assert!(
+            help.contains(&format!("--mode {declared} ")),
+            "the help renders the declared run-mode set"
+        );
+        assert!(
+            help.contains(RunModeDto::DEFAULT.as_str()),
+            "the help renders the declared durable default"
+        );
+        let rejection =
+            mode_value("fast").expect_err("a mode the vocabulary does not declare is rejected");
+        let spelled = RunModeDto::ALL.map(RunModeDto::as_str).join(" or ");
+        assert!(
+            rejection.contains(&spelled),
+            "the rejection names exactly the declared run-mode set"
+        );
     }
 
     #[test]
@@ -422,7 +469,7 @@ mod tests {
         };
         assert_eq!(prompt, "hello");
         assert_eq!(options.format(), Format::Json);
-        assert_eq!(options.mode(), RunModeDto::Plan);
+        assert_eq!(options.mode(), Some(RunModeDto::Plan));
         assert_eq!(options.timeout(), Some(Duration::from_secs(7)));
         assert_eq!(options.session(), Some(session));
         assert!(!options.continue_session());
@@ -436,7 +483,7 @@ mod tests {
             parsed(&["--continue", "--mode", "plan", "repl"]).expect("continue parses with repl"),
         );
         assert!(continued.continue_session());
-        assert_eq!(continued.mode(), RunModeDto::Plan);
+        assert_eq!(continued.mode(), Some(RunModeDto::Plan));
     }
 
     #[test]
@@ -483,9 +530,10 @@ mod tests {
             "a second positional argument is rejected"
         );
         assert!(parsed(&["repl", "prompt"]).is_err(), "repl takes no prompt");
+        let declared = RunModeDto::ALL.map(RunModeDto::as_str).join(" or ");
         assert_eq!(
             parsed(&["run", "hello", "--mode", "fast"]),
-            Err("--mode must be plan or build, got 'fast'".to_owned()),
+            Err(format!("--mode must be {declared}, got 'fast'")),
         );
         assert!(parsed(&["run", "hello", "--format", "yaml"]).is_err());
         assert!(parsed(&["run", "hello", "--timeout", "soon"]).is_err());
