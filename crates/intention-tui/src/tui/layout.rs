@@ -140,8 +140,6 @@ pub(in crate::tui) enum RowStyleId {
     ToolPreview,
     /// A muted note inside one tool block: a fact the durable rows do not carry.
     ToolNote,
-    /// An `@todo(core)` plate row a tool block cannot fill from the wire.
-    Todo,
 }
 
 impl RowStyleId {
@@ -199,7 +197,6 @@ impl RowStyleId {
             Self::ToolLabel => ink(palette.tool_label, surface, Modifier::BOLD),
             Self::ToolPreview => ink(palette.tool_preview, surface, Modifier::empty()),
             Self::ToolNote => ink(palette.ink_muted, surface, Modifier::DIM),
-            Self::Todo => ink(palette.todo_ink, surface, Modifier::empty()),
         }
     }
 }

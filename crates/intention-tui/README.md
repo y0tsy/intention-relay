@@ -206,9 +206,10 @@ Rules the panes keep:
   A reasoning expansion and a newly committed tool result also replay the whole
   transcript, because both change a block the cached prefix holds.
 - A tool row is paired with the row that shares its `tool_call_id`: the exchange
-  is drawn once, as a framed block whose badge, plates, and structured result
-  rows use the tool palette roles; an `execute` result is never rendered in any
-  form.
+  is drawn once, as a framed block whose badge, typed argument facts, typed
+  result payload, lifecycle status, and approved metadata use the tool palette
+  roles; nothing re-reads the arguments document or the result text, and an
+  `execute` result is never rendered in any form.
 - A daemon notice renders as its own block on the palette's notice pair, never
   as ordinary prose, and never through the markdown pipeline.
 - Reasoning streams and commits as the same block: the wire's transient reasoning
@@ -225,11 +226,10 @@ Rules the panes keep:
   either can be a `@todo(core)`.
 - The same `@todo(core)` marker also names work the front end still performs
   that belongs to the core rather than a fact it lacks. The architecture
-  document's boundary table is the catalogue of those sites - the tool
-  vocabulary, the argument document, and the result text in
-  `src/tui/panes/tools.rs`, the run-mode default and its declared set in
-  `src/cli.rs`, the parked first prompt in `src/app/`, and the in-flight tool
-  count in `src/app/run.rs` - and each marker names what the core should own.
+  document's boundary table is the catalogue of those sites - the run-mode
+  default and its declared set in `src/cli.rs`, the parked first prompt in
+  `src/app/`, and the in-flight tool count in `src/app/run.rs` - and each
+  marker names what the core should own.
   The crate's `@todo(hack)` markers name the work the adapter or the client
   still owes separately, and are not part of that catalogue.
 

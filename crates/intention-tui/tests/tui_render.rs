@@ -17,11 +17,14 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use intention_client::SessionStreamState;
 use intention_proto::{
-    ConfigRevisionId, DaemonHealthDto, ErrorDto, MessageId, MessageKindDto, MessageProjectionDto,
-    ProjectId, RunId, RunModeDto, RunProjectionDto, RunStatusDto, SessionFrameDto, SessionId,
-    SessionProjectionDto, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto,
-    TextDeltaChannelDto, TextDeltaFrameDto, TimestampDto, ToolCallId, TurnId, WorkspaceId,
-    WorkspaceRootDto,
+    BoundedText, ConfigRevisionId, DaemonHealthDto, ErrorDto, ExecuteResult, GrepMatch, GrepResult,
+    MessageId, MessageKindDto, MessageProjectionDto, PathsResult, ProjectId, RunId, RunModeDto,
+    RunProjectionDto, RunStatusDto, SessionFrameDto, SessionId, SessionProjectionDto,
+    SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto,
+    TextDeltaFrameDto, TextResult, TimestampDto, ToolCallId, ToolCallRowDto, ToolIdentityDto,
+    ToolInput, ToolProcessStatus, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto,
+    ToolResultStatusDto, ToolRowDto, TurnId, WorkspaceId, WorkspaceRelativePathDto,
+    WorkspaceRootDto, WriteResult,
 };
 use intention_tui::app::{
     Action, AppState, BrowserCursorMove, InputCursorMove, MenuMove, Screen, Theme,
@@ -215,9 +218,31 @@ fn row(
         text,
         None,
         None,
-        None,
     )
     .expect("the fixture transcript row is coherent")
+}
+
+/// Returns one bounded fixture text.
+fn bounded(text: &str) -> BoundedText {
+    BoundedText::new(text).expect("the fixture text is bounded")
+}
+
+/// Returns one workspace-relative fixture path.
+fn relative(path: &str) -> WorkspaceRelativePathDto {
+    WorkspaceRelativePathDto::parse(path).expect("the fixture path is workspace-relative")
+}
+
+/// Returns one typed `read` payload carrying `text`.
+fn read_payload(text: &str) -> ToolResult {
+    ToolResult::Read(TextResult {
+        text: bounded(text),
+        truncated: false,
+    })
+}
+
+/// Returns one parsed wire identity of the fixture rows.
+fn identity(tool_id: &str) -> ToolIdentityDto {
+    ToolIdentityDto::parse(tool_id).expect("the fixture tool identity is well-formed")
 }
 
 /// Returns one committed tool-call row carrying `arguments` for `tool_id`.
@@ -228,6 +253,14 @@ fn tool_call_row(
     arguments: &str,
     call_id: ToolCallId,
 ) -> MessageProjectionDto {
+    let tool = ToolRowDto::Call(
+        ToolCallRowDto::new(
+            call_id,
+            identity(tool_id),
+            ToolInput::from_arguments_json(tool_id, arguments).ok(),
+        )
+        .expect("the fixture call row is coherent"),
+    );
     MessageProjectionDto::new(
         row_id(),
         session_id,
@@ -235,29 +268,51 @@ fn tool_call_row(
         MessageKindDto::ToolCall,
         arguments,
         None,
-        Some(call_id),
-        Some(tool_id.to_owned()),
+        Some(tool),
     )
     .expect("the fixture tool-call row is coherent")
 }
 
-/// Returns one committed tool-result row carrying `content` for `call_id`.
+/// Returns one committed completed tool-result row carrying `result` for
+/// `call_id`.
 fn tool_result_row(
     session_id: SessionId,
     run_id: RunId,
     tool_id: &str,
-    content: &str,
+    result: ToolResult,
     call_id: ToolCallId,
 ) -> MessageProjectionDto {
+    tool_result_row_with(session_id, run_id, tool_id, result, Vec::new(), call_id)
+}
+
+/// Returns one committed completed tool-result row carrying `result` and
+/// `metadata` for `call_id`.
+fn tool_result_row_with(
+    session_id: SessionId,
+    run_id: RunId,
+    tool_id: &str,
+    result: ToolResult,
+    metadata: Vec<ToolResultMetadataEntryDto>,
+    call_id: ToolCallId,
+) -> MessageProjectionDto {
+    let tool = ToolRowDto::Result(
+        ToolResultRowDto::new(
+            call_id,
+            identity(tool_id),
+            ToolResultStatusDto::Completed,
+            Some(result),
+            metadata,
+        )
+        .expect("the fixture result row is coherent"),
+    );
     MessageProjectionDto::new(
         row_id(),
         session_id,
         Some(run_id),
         MessageKindDto::ToolResult,
-        content,
+        "committed content",
         None,
-        Some(call_id),
-        Some(tool_id.to_owned()),
+        Some(tool),
     )
     .expect("the fixture tool-result row is coherent")
 }
@@ -268,12 +323,12 @@ fn tool_exchange(
     run_id: RunId,
     tool_id: &str,
     arguments: &str,
-    content: &str,
+    result: ToolResult,
 ) -> Vec<MessageProjectionDto> {
     let call_id = ToolCallId::new();
     vec![
         tool_call_row(session_id, run_id, tool_id, arguments, call_id),
-        tool_result_row(session_id, run_id, tool_id, content, call_id),
+        tool_result_row(session_id, run_id, tool_id, result, call_id),
     ]
 }
 
@@ -285,7 +340,6 @@ fn notice_row(session_id: SessionId, run_id: RunId, text: &str) -> MessageProjec
         Some(run_id),
         MessageKindDto::Notice,
         text,
-        None,
         None,
         None,
     )
@@ -306,7 +360,6 @@ fn reasoning_row(
         MessageKindDto::Assistant,
         text,
         Some(reasoning.to_owned()),
-        None,
         None,
     )
     .expect("the fixture reasoning row is coherent")
@@ -854,23 +907,23 @@ fn a_read_tool_exchange_draws_its_path_and_a_bounded_content_preview() {
             session_id,
             run_id,
             "read",
-            r#"{"path":"src/lib.rs","limit":10}"#,
-            &content,
+            r#"{"path":"src/lib.rs"}"#,
+            read_payload(&content),
         ),
     );
     // The window is tall enough for the badge, the bounded preview, and its
     // marker: the block's own header stays visible.
     let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, 40);
     let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("▸ read · src/lib.rs · limit 10");
+    pilot.assert_contains("▸ read · src/lib.rs");
     pilot.assert_contains("line 0");
     pilot.assert_contains("… 18 more rows");
     pilot.assert_not_contains("line 29");
-    pilot.assert_not_contains(r#"{"path":"src/lib.rs","limit":10}"#);
+    pilot.assert_not_contains(r#"{"path":"src/lib.rs"}"#);
 }
 
 #[test]
-fn a_glob_or_grep_exchange_draws_its_parsed_matches() {
+fn a_glob_or_grep_exchange_draws_its_typed_matches() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut messages = tool_exchange(
@@ -878,14 +931,25 @@ fn a_glob_or_grep_exchange_draws_its_parsed_matches() {
         run_id,
         "glob",
         r#"{"pattern":"**/*.rs"}"#,
-        "src/lib.rs\nsrc/main.rs",
+        ToolResult::Glob(PathsResult {
+            paths: vec![relative("src/lib.rs"), relative("src/main.rs")],
+            truncated: false,
+        }),
     );
     messages.extend(tool_exchange(
         session_id,
         run_id,
         "grep",
         r#"{"pattern":"needle","scope":{"kind":"directory","path":"src"}}"#,
-        "src/lib.rs:3:5: needle",
+        ToolResult::Grep(GrepResult {
+            matches: vec![GrepMatch {
+                path: relative("src/lib.rs"),
+                line: 3,
+                column: 5,
+                fragment: bounded("needle"),
+            }],
+            truncated: false,
+        }),
     ));
     let state = open_state(session_id, messages);
     let mut app = TestApp::new(RevueView::new(&state));
@@ -898,33 +962,47 @@ fn a_glob_or_grep_exchange_draws_its_parsed_matches() {
 }
 
 #[test]
-fn a_mutation_or_execute_exchange_draws_a_badge_and_a_plate_without_its_result() {
+fn a_mutation_or_execute_exchange_draws_its_typed_outcome_without_the_output() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut messages = Vec::new();
-    for (tool_id, arguments) in [
-        ("write", r#"{"path":"src/lib.rs","content":"new"}"#),
-        ("edit", r#"{"path":"src/lib.rs","old":"a","new":"b"}"#),
-        ("execute", r#"{"command":"cargo test"}"#),
+    for (tool_id, arguments, result) in [
+        (
+            "write",
+            r#"{"path":"src/lib.rs","content":"new"}"#,
+            ToolResult::Write(WriteResult { bytes: 3 }),
+        ),
+        (
+            "edit",
+            r#"{"path":"src/lib.rs","old":"a","new":"b"}"#,
+            ToolResult::Edit(WriteResult { bytes: 1 }),
+        ),
+        (
+            "execute",
+            r#"{"command":"cargo test"}"#,
+            ToolResult::Execute(ExecuteResult {
+                text: TextResult {
+                    text: bounded("SECRET COMMAND OUTPUT"),
+                    truncated: false,
+                },
+                process: Some(ToolProcessStatus::NonZero { code: 101 }),
+            }),
+        ),
     ] {
-        messages.extend(tool_exchange(
-            session_id,
-            run_id,
-            tool_id,
-            arguments,
-            "SECRET COMMAND OUTPUT",
-        ));
+        messages.extend(tool_exchange(session_id, run_id, tool_id, arguments, result));
     }
     let state = open_state(session_id, messages);
     // The window is tall enough for all three framed blocks: each one is a
-    // badge border, its plate, and a bottom border.
+    // badge border, its typed outcome, and a bottom border.
     let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, 40);
     let pilot = Pilot::new(&mut app);
     for tool_id in ["write", "edit"] {
         pilot.assert_contains(&format!("╭─ ▸ {tool_id} · src/lib.rs"));
     }
     pilot.assert_contains("╭─ ▸ execute · cargo test");
-    pilot.assert_contains("@todo(core): ");
+    pilot.assert_contains("wrote 3 bytes");
+    pilot.assert_contains("edited 1 byte");
+    pilot.assert_contains("the program exited with code 101");
     pilot.assert_not_contains("SECRET COMMAND OUTPUT");
     pilot.assert_not_contains("\"content\":\"new\"");
 }
@@ -992,37 +1070,24 @@ fn a_notice_row_restored_by_a_session_snapshot_renders_as_a_notice_block_too() {
 }
 
 #[test]
-fn an_unknown_tool_row_still_degrades_to_its_plate() {
+fn an_undeclared_tool_row_names_its_absent_typed_kind() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let call_id = ToolCallId::new();
     let state = open_state(
         session_id,
-        vec![
-            tool_call_row(
-                session_id,
-                run_id,
-                "mystery",
-                "not one json object",
-                call_id,
-            ),
-            tool_result_row(
-                session_id,
-                run_id,
-                "mystery",
-                "the unknown tool's output",
-                call_id,
-            ),
-        ],
+        vec![tool_call_row(
+            session_id,
+            run_id,
+            "mystery",
+            "not one json object",
+            ToolCallId::new(),
+        )],
     );
     let mut app = TestApp::new(RevueView::new(&state));
     let pilot = Pilot::new(&mut app);
     pilot.assert_contains("╭─ ▸ mystery");
-    pilot.assert_contains("not one json object");
-    pilot.assert_contains("the wire names tools by string");
-    pilot.assert_contains("the closed set is");
-    pilot.assert_contains("not declared");
-    pilot.assert_not_contains("the unknown tool's output");
+    pilot.assert_contains("the row names a tool outside the declared set");
+    pilot.assert_not_contains("not one json object");
 }
 
 #[test]
@@ -1146,7 +1211,7 @@ fn a_reasoned_tool_round_draws_its_reasoning_above_the_tool_exchange() {
         run_id,
         "read",
         r#"{"path":"src/lib.rs"}"#,
-        "file contents",
+        read_payload("file contents"),
     ));
     let state = open_state(session_id, messages);
     let mut app = TestApp::new(RevueView::new(&state));
@@ -2036,7 +2101,7 @@ fn a_finished_tool_call_returns_the_row_to_the_answering_word() {
     )));
     state.update(Action::ElapsedReported { millis: 2_700 });
     state.update(Action::FrameReceived(SessionFrameDto::Content(
-        tool_result_row(session_id, run_id, "read", "the file", call_id),
+        tool_result_row(session_id, run_id, "read", read_payload("the file"), call_id),
     )));
     let mut app = TestApp::new(RevueView::new(&state));
     let pilot = Pilot::new(&mut app);
@@ -2331,7 +2396,7 @@ fn the_same_screen_paints_its_characters_under_both_themes() {
             run_id,
             "read",
             r#"{"path":"src/lib.rs"}"#,
-            "line one\nline two",
+            read_payload("line one\nline two"),
         ));
         messages.push(row(
             session_id,

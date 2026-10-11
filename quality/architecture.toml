@@ -61,7 +61,7 @@ test_targets = ["adapter_contracts", "m4_execution_contracts", "model_contracts"
 
 [crate_declarations."intention-tools"]
 role = "active"
-responsibility = "Tool contracts with JSON Schema descriptors, the static six-tool spec match, and the WorkspaceRoot addressing anchor."
+responsibility = "The workspace tool service: the declared tools' dispatch behind the proto's typed contract, their model-facing JSON Schema descriptors, and the WorkspaceRoot addressing anchor."
 test_targets = ["bounded_contracts", "tool_contracts", "tool_coverage", "workspace_contract"]
 
 [crate_declarations."intention-tui"]
@@ -79,6 +79,10 @@ source_patterns = [
   "std::env::current_dir",
   "std::process::exit",
   "serde_json::Value",
+  "serde_json::value::Value",
+  "serde_json::{",
+  "::<Value>",
+  "Value::as_",
   "rusqlite::",
   "tauri::",
 ]

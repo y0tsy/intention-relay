@@ -842,6 +842,30 @@ def self_test_composition_type_ownership() -> None:
         fail("composition ownership self-test: a declaration no crate defines must fail")
 
 
+def self_test_source_patterns() -> None:
+    """Proves the untyped-decode spellings a hidden import could dodge fail.
+
+    The old adapter hid its decode behind an unqualified `Value` import, which
+    the literal `serde_json::Value` pattern could not see. These shapes are the
+    ones a decode can be spelled with, and the legitimate adapter spelling must
+    keep passing through the same matching code path.
+    """
+    leaked = {
+        "serde_json::Value": "fn read(value: serde_json::Value) -> usize { value.as_u64() as usize }\n",
+        "serde_json::value::Value": "use serde_json::value::Value;\n",
+        "serde_json::{": "use serde_json::{Map, Value};\n",
+        "::<Value>": "fn decode(text: &str) { let _ = serde_json::from_str::<Value>(text); }\n",
+        "Value::as_": "fn probe(value: &Value) -> Option<&str> { Value::as_str(value) }\n",
+    }
+    for pattern, spelling in leaked.items():
+        if not forbidden_pattern_occurrence(spelling, pattern):
+            fail(f"source pattern self-test: {pattern!r} must be forbidden in production code")
+    legitimate = 'fn record() { serde_json::json!({ "record": "message" }); }\n'
+    for pattern in leaked:
+        if forbidden_pattern_occurrence(legitimate, pattern):
+            fail(f"source pattern self-test: the adapter's json! spelling must pass {pattern!r}")
+
+
 def self_test_dependency_cycle_scope() -> None:
     """Proves the cycle check follows production edges and tolerates dev edges."""
 
@@ -1039,6 +1063,7 @@ def main() -> None:
 
     self_test_ordering_authorities()
     self_test_composition_type_ownership()
+    self_test_source_patterns()
     self_test_dependency_cycle_scope()
     self_test_dependency_declarations()
     self_test_crate_declarations()

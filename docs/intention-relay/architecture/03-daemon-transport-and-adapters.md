@@ -551,9 +551,6 @@ fabricated value. The table below names each one, taken from the markers in the 
 | the welcome overview's `MCPs` chip | MCP capability support |
 | the welcome overview's `Skills` chip | skills support |
 | the `Ctrl+F` tree notice | session forks (Slice 6) |
-| the `write`, `edit`, and `execute` plates | a typed projection of each result |
-| the read preview, which can only repeat the tool's own `[truncated]` line | typed result metadata (for example a read truncation flag) |
-| an unknown `tool_id`'s plate | a closed set of wire tool ids |
 | a `notice` block's text-only body | a notice code or severity |
 
 A second marker class names work the terminal still performs that belongs to the core rather than a fact it
@@ -561,20 +558,15 @@ lacks. Each site carries the same `@todo(core):` prefix and names what the core 
 
 | The terminal still | The core should own |
 | --- | --- |
-| matches a wire `tool_id` against the six tool names (`tui/panes/tools.rs`) | the closed set of tool ids and their typed kind |
-| decodes a tool call's arguments document and reads `path`, `offset`, `limit`, `pattern`, `scope`, `command`, and `cwd` (`tui/panes/tools.rs`) | typed tool-argument structs |
-| splits a tool result's text into a path list, a located hit, or a preview (`tui/panes/tools.rs`) | a typed tool result and its metadata |
+| counts committed tool-call rows minus tool-result rows to decide what is in flight (`app/run.rs`) | the run's open tool calls |
 | resolves the default run policy of a created session (`cli.rs`) | the durable run-mode default |
 | spells the declared run-mode set in the flag's usage and rejection text (`cli.rs`) | a declared set on the run-mode vocabulary |
 | parks a prompt that has no session and sends it as the first turn of whichever snapshot arrives first (`app/input.rs`) | create-session-and-first-turn as one use case |
-| counts committed tool-call rows minus tool-result rows to decide what is in flight (`app/run.rs`) | the run's open tool calls |
 
 The `@todo(hack)` marker is the crate's own class for work the adapter or the client must still do, and it is not
 catalogued here. Its sites are the theme values re-spelled in the registry (`app/commands.rs`), the committed duration
-measured by the front end (`tui/mod.rs`), an absent `tool_id` defaulted to the empty string (`tui/panes/tools.rs`), the
-endpoint instance and the daemon program resolved by the binary (`main.rs`), and the untyped decode the architecture
-check cannot see (`tui/panes/tools.rs`). Each of those markers names the client or core surface that should replace
-it.
+measured by the front end (`tui/mod.rs`), and the endpoint instance and the daemon program resolved by the binary
+(`main.rs`). Each of those markers names the client or core surface that should replace it.
 
 ### Frame cost
 
