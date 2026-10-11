@@ -616,6 +616,118 @@ async fn real_daemon_reports_a_declared_execute_timeout_as_a_named_partial() {
 }
 
 #[tokio::test]
+async fn real_daemon_stops_a_running_tool_and_ends_the_run_interrupted() {
+    // The stop is terminal where an interruption is not: a command that is
+    // still running is killed, its partial result answers the call, the run
+    // records its stop notice, and the loop never asks the provider again.
+    let arguments = if cfg!(windows) {
+        r#"{"command":"ping -n 11 127.0.0.1"}"#
+    } else {
+        r#"{"command":"sleep 10"}"#
+    };
+    let host = E2eHost::with_tool_round("execute", None, arguments, &[]);
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
+
+    let session_id = SessionId::new();
+    client
+        .create_session(CreateSessionCommandDto::new(
+            ProjectId::new(),
+            session_id,
+            WorkspaceId::new(),
+            WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
+                .expect("workspace root is absolute"),
+            RunModeDto::Build,
+        ))
+        .await
+        .expect("the daemon accepts session creation");
+
+    let outcome = client
+        .send_user_turn(
+            session_id,
+            IdempotencyKey::new(),
+            "Run a long command".to_owned(),
+        )
+        .await
+        .expect("user turn is accepted");
+    let SendUserTurnOutcomeDto::Started { run_id, .. } = outcome else {
+        panic!("first turn starts a run, got: {outcome:?}")
+    };
+
+    // The tool call commits before the command is dispatched, so waiting for
+    // its row proves the stop lands while the command runs.
+    let call_deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let snapshot = client
+            .session_snapshot(session_id)
+            .await
+            .expect("session snapshot reads");
+        if snapshot
+            .messages()
+            .iter()
+            .any(|message| message.kind() == MessageKindDto::ToolCall)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < call_deadline,
+            "the tool call row never committed"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let stopped = client
+        .cancel_run(session_id, run_id)
+        .await
+        .expect("the daemon accepts the stop");
+    assert_eq!(stopped.session_id(), session_id);
+    assert_eq!(stopped.run_id(), run_id);
+
+    let stream_client = RunStreamClient::new(host.endpoint.clone());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let observation =
+        observe_run_until_terminal(&stream_client, session_id, run_id, deadline).await;
+    assert_eq!(
+        observation.subscription.state().status(),
+        Some(RunStatusDto::Interrupted),
+        "the stop ends the run instead of continuing it"
+    );
+    assert_eq!(
+        host.provider.request_count(),
+        1,
+        "a stopped run asks the provider no further round"
+    );
+    assert_eq!(host.provider.excess_count(), 0);
+
+    let session_snapshot = client
+        .session_snapshot(session_id)
+        .await
+        .expect("session snapshot reads");
+    let messages = session_snapshot.messages();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.kind())
+            .collect::<Vec<_>>(),
+        vec![
+            MessageKindDto::User,
+            MessageKindDto::ToolCall,
+            MessageKindDto::ToolResult,
+            MessageKindDto::Notice,
+        ],
+        "the stopped call is answered and the run records its own stop"
+    );
+    let result = messages[2].text();
+    assert!(
+        result.contains("was stopped before a final result"),
+        "the durable result carries the stopped-call notice: {result}"
+    );
+    assert_eq!(
+        messages[3].text(),
+        "[The run was stopped before a final answer.]"
+    );
+}
+
+#[tokio::test]
 async fn real_daemon_commits_step_reasoning_above_its_tool_exchange() {
     let host = E2eHost::with_tool_round_reasoning(
         Some(("hello.txt", "hello world")),

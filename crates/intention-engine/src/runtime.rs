@@ -40,6 +40,12 @@ pub const INTERRUPT_NOTICE: &str = "[The call was stopped before a final result.
 /// tell the answer was cut; a step with no text commits nothing.
 pub const INTERRUPTED_MARKER: &str = "[interrupted]";
 
+/// The durable notice recorded when a client stopped the whole run.
+///
+/// A stop is terminal where an interruption is not: the run records this notice
+/// and ends `interrupted` instead of continuing to the next model step.
+pub const RUN_STOP_NOTICE: &str = "[The run was stopped before a final answer.]";
+
 /// The bounded delay between two provider attempts.
 const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 
@@ -241,6 +247,7 @@ pub struct RunCancellation {
     model: ModelCancellationSignal,
     tool: ToolCancellationSignal,
     notice_taken: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
 }
 
 /// The cancellation handle carries interior shared state with no safe debug
@@ -267,6 +274,24 @@ impl RunCancellation {
     pub fn cancel(&self) {
         self.model.cancel();
         self.tool.cancel();
+    }
+
+    /// Requests that the run stop for good.
+    ///
+    /// The stop reaches the same in-flight operation as an interruption, but it
+    /// is terminal: every later boundary returns the run's `interrupted`
+    /// outcome with one stop notice instead of continuing, and the intent is
+    /// never cleared - [`Self::reset`] clears an interruption, because a stop
+    /// is not one operation's state but the run's own.
+    pub fn request_stop(&self) {
+        self.stop.store(true, Ordering::Release);
+        self.cancel();
+    }
+
+    /// Returns whether the run was asked to stop for good.
+    #[must_use]
+    pub fn stop_requested(&self) -> bool {
+        self.stop.load(Ordering::Acquire)
     }
 
     /// Clears the request so the continuing run observes the next interrupt.
@@ -629,12 +654,22 @@ where
         let mut request = input.request.with_messages(messages.clone())?;
         let mut tool_round = 0u8;
         loop {
+            // A stop requested while the run waited here is terminal before any
+            // further provider work: the run ends instead of asking again.
+            if input.cancellation.stop_requested() {
+                return self.end_stopped_run(input, state.reported_usage());
+            }
             let outcome = self
                 .drive_provider_round(request.clone(), input, timeout_seconds, &mut state)
                 .await?;
             match outcome {
                 RoundOutcome::Finished { reason, assistant } => {
                     state.record_step_commit(assistant.as_ref());
+                    // A stop that raced the finish is terminal too: the step's
+                    // own row stands as evidence and the run ends here.
+                    if input.cancellation.stop_requested() {
+                        return self.end_stopped_run(input, state.reported_usage());
+                    }
                     // A pending message is the nearest-boundary continuation:
                     // it joins the live context in FIFO order and the run
                     // continues instead of completing. An interruption that
@@ -671,6 +706,13 @@ where
                 }
                 RoundOutcome::Interrupted { assistant } => {
                     state.record_step_commit(assistant.as_ref());
+                    // A stopped run ends terminal: the interrupted step is
+                    // already committed with its own cut marker, so the stop
+                    // records its notice and the run stops instead of asking
+                    // the model what to do next.
+                    if input.cancellation.stop_requested() {
+                        return self.end_stopped_run(input, state.reported_usage());
+                    }
                     // A round that ended stopped is its own interruption event,
                     // so it records the notice even when no host request caused
                     // it - a stream the provider ended stopped. It spends the
@@ -685,6 +727,12 @@ where
                     request = continuation_request(input, &messages, &reasoning_attachments)?;
                 }
                 RoundOutcome::Failed { error, retryable } => {
+                    // A stop never retries: whatever the failed attempt left
+                    // uncommitted commits as its step and the run ends.
+                    if input.cancellation.stop_requested() {
+                        self.commit_step(input, state.pending_text_mut(), None)?;
+                        return self.end_stopped_run(input, state.reported_usage());
+                    }
                     if tool_round == 0 {
                         return Ok(AttemptResult::Failed { error, retryable });
                     }
@@ -771,6 +819,12 @@ where
                         // and recomputed breakpoints.
                         state.apply_window(&mut messages, &reasoning_attachments)?;
                     }
+                    // A stop ends the run at this boundary: the batch's results
+                    // are committed, so the run records the stop notice and its
+                    // terminal status instead of asking the model again.
+                    if input.cancellation.stop_requested() {
+                        return self.end_stopped_run(input, state.reported_usage());
+                    }
                     // A tool batch is the second bounded interruption
                     // boundary. A partial tool result already carries the
                     // stopped-call notice, so the run continues to the next
@@ -798,6 +852,38 @@ where
                 }
             }
         }
+    }
+
+    /// Ends one stopped run: one durable notice, then the terminal outcome.
+    ///
+    /// The boundary that observed the stop already committed the step's own
+    /// evidence - a cut answer keeps [`INTERRUPTED_MARKER`] - so this commits
+    /// the notice a reader needs and the run's terminal `interrupted` status,
+    /// and the loop never continues past it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or storage error when the notice or the
+    /// terminal outcome cannot commit.
+    fn end_stopped_run(
+        &self,
+        input: &ModelRunExecutionInputDto,
+        usage: Option<&UsageDto>,
+    ) -> DtoResult<AttemptResult> {
+        input.cancellation.reset();
+        let message = NewMessageDto::new(
+            input.session_id,
+            Some(input.run_id),
+            MessageKindDto::Notice,
+            RUN_STOP_NOTICE,
+            None,
+            None,
+            None,
+        )?;
+        let committed = self.repository.append_message(message, self.time.now())?;
+        self.publish_content(&committed);
+        let run = self.finish_run(input, RunStatusDto::Interrupted, None, None, usage)?;
+        Ok(AttemptResult::Completed { run })
     }
 
     /// Commits the interruption notice one request owes and clears the run's

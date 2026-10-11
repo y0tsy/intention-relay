@@ -397,6 +397,28 @@ where
         self.repository.remove_turn(command, occurred_at)
     }
 
+    /// Returns the exact active run one request addresses.
+    ///
+    /// Interruption and the terminal stop validate through this one rule: the
+    /// addressed run must be the session's own active run.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error when the exact run is not active, or a
+    /// repository error when the session projection cannot be read.
+    pub fn active_run(&self, session_id: SessionId, run_id: RunId) -> DtoResult<RunProjectionDto> {
+        self.repository
+            .load_session_projection(session_id)?
+            .active_run()
+            .filter(|run| run.run_id() == run_id)
+            .ok_or_else(|| {
+                ErrorDto::validation(
+                    "active_run_not_found",
+                    "the requested run is not active in the session",
+                )
+            })
+    }
+
     /// Accepts an interruption request for one exact active run.
     ///
     /// Interruption is not a durable run state: the run stays active and the
@@ -407,16 +429,7 @@ where
     /// Returns a typed validation error when the exact run is not active, or a
     /// repository error when the session projection cannot be read.
     pub fn interrupt_run(&self, command: InterruptRunCommandDto) -> DtoResult<RunProjectionDto> {
-        self.repository
-            .load_session_projection(command.session_id())?
-            .active_run()
-            .filter(|run| run.run_id() == command.run_id())
-            .ok_or_else(|| {
-                ErrorDto::validation(
-                    "active_run_not_found",
-                    "the requested run is not active in the session",
-                )
-            })
+        self.active_run(command.session_id(), command.run_id())
     }
 
     /// Reconstructs the exact durable context for one current `Starting` run.

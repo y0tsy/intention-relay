@@ -22,12 +22,12 @@ use intention_engine::ApplicationService;
 use intention_engine::{ModelRunCommitObserver, ToolInvocationRequestDto};
 use intention_proto::DaemonHealthDto;
 use intention_proto::{
-    ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto, DtoResult, ErrorDto,
-    InterruptRunAcceptedDto, InterruptRunCommandDto, ProtocolResultDto, RemoveTurnAcceptedDto,
-    RemoveTurnCommandDto, RunId, RunProjectionDto, SchemaVersionDto, SendUserTurnAcceptedDto,
-    SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId, SessionProjectionDto,
-    SessionSnapshotDto, SessionSummariesDto, ThemeDto, TimestampDto, TuiSettingsDto,
-    TuiThemeAcceptedDto,
+    CancelRunCommandDto, ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto,
+    DtoResult, ErrorDto, InterruptRunAcceptedDto, InterruptRunCommandDto, ProtocolResultDto,
+    RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunCancelledAcceptedDto, RunId, RunProjectionDto,
+    SchemaVersionDto, SendUserTurnAcceptedDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto,
+    SessionId, SessionProjectionDto, SessionSnapshotDto, SessionSummariesDto, ThemeDto,
+    TimestampDto, TuiSettingsDto, TuiThemeAcceptedDto,
 };
 #[cfg(test)]
 use intention_proto::{ProjectId, RunModeDto, WorkspaceId, WorkspaceRootDto};
@@ -419,6 +419,25 @@ impl DaemonApplicationFacade {
         let run = ApplicationService::new(&self.inner.repository).interrupt_run(command)?;
         Ok(ProtocolResultDto::RunInterrupted(
             InterruptRunAcceptedDto::new(run.session_id(), run.run_id()),
+        ))
+    }
+
+    /// Validates one stop request and assembles its typed reply evidence.
+    ///
+    /// The stop shares the interruption's validation rule - the exact active
+    /// run - and commits nothing itself, so it is a pure read and never enters
+    /// the command gate. The daemon host signals the registered execution with
+    /// the terminal intent afterwards, and the host registry lock is what
+    /// orders that signal against admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error when the exact run is not active.
+    pub fn cancel_run(&self, command: CancelRunCommandDto) -> DtoResult<ProtocolResultDto> {
+        let run = ApplicationService::new(&self.inner.repository)
+            .active_run(command.session_id(), command.run_id())?;
+        Ok(ProtocolResultDto::RunCancelled(
+            RunCancelledAcceptedDto::new(run.session_id(), run.run_id()),
         ))
     }
 

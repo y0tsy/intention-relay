@@ -1680,6 +1680,190 @@ fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
 }
 
 #[test]
+fn a_stop_while_the_round_select_waits_ends_the_run_instead_of_continuing() {
+    // The stock interruption continues the loop; the terminal stop ends it. The
+    // round select is proven suspended on the provider stream before the stop
+    // lands, so the stop is observed there and honored at the round boundary:
+    // the run records its stop notice and terminal status, and it never asks
+    // the provider again.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = fixture_snapshot_with_model("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let signal = RunCancellation::new();
+    let (started_tx, _started_rx) = mpsc::channel();
+    let driver = PendingAfterStartedDriver {
+        entered: std::sync::Mutex::new(Some(started_tx)),
+        executions: std::sync::Mutex::new(0),
+    };
+    let port = ScriptedPort::new(Vec::new());
+    let (select_tx, select_rx) = mpsc::channel();
+    let clock = RoundSelectTime {
+        entered: std::sync::Mutex::new(Some(select_tx)),
+    };
+    let execution_signal = signal.clone();
+
+    let execution = std::thread::spawn(move || {
+        let outcome = run_ready(
+            ModelRunExecutionService::new(
+                &repository,
+                &driver,
+                &clock,
+                &RecordingCommitObserver::new(),
+                &port,
+            )
+            .execute(ModelRunExecutionInputDto::new(
+                session_id,
+                run_id,
+                request(run_id, "fixture"),
+                config,
+                execution_signal,
+            )),
+        );
+        (outcome, repository, driver)
+    });
+    select_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the round select waits on the provider stream");
+    signal.request_stop();
+    let (outcome, repository, driver) = execution.join().expect("execution thread completes");
+    let outcome = outcome.expect("a stopped run reaches its terminal outcome");
+
+    let ModelRunExecutionOutcomeDto::Completed { run } = outcome else {
+        unreachable!("a stopped run ends terminal, got {outcome:?}");
+    };
+    assert_eq!(
+        run.status(),
+        RunStatusDto::Interrupted,
+        "the stop is the run's terminal status"
+    );
+    assert_eq!(
+        *driver
+            .executions
+            .lock()
+            .expect("driver recorder is available"),
+        1,
+        "a stopped run never re-enters the provider"
+    );
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(finishes.len(), 1, "the run commits one terminal outcome");
+    assert_eq!(finishes[0].status(), RunStatusDto::Interrupted);
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| (message.kind(), message.text()))
+            .collect::<Vec<_>>(),
+        vec![(MessageKindDto::Notice, intention_engine::RUN_STOP_NOTICE)],
+        "a stopped run records the stop notice instead of an interruption notice"
+    );
+}
+
+/// A tool port that stops the run while it answers its first call.
+struct StoppingPort {
+    cancellation: RunCancellation,
+}
+
+impl ToolExecutionPort for StoppingPort {
+    fn execute_tool(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+        _call: ToolCallDto,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = DtoResult<ToolResultOutcomeDto>> + Send + '_>,
+    > {
+        self.cancellation.request_stop();
+        Box::pin(future::ready(Ok(ToolResultOutcomeDto::completed(
+            "stopped output",
+        )
+        .expect("content is valid"))))
+    }
+}
+
+#[test]
+fn a_stop_during_a_tool_batch_ends_the_run_after_the_results_commit() {
+    // The batch's results are durable before the boundary that honors the stop,
+    // so the run ends with the call answered, one stop notice committed, and no
+    // further model round asking what to do next.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = fixture_snapshot_with_model("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let call = ToolCallDto::new(ToolCallId::new(), "execute", "{}").expect("call is valid");
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::tool_call(call)),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    let signal = RunCancellation::new();
+    let port = StoppingPort {
+        cancellation: signal.clone(),
+    };
+
+    let clock = ImmediateTime::new();
+    let outcome = run_ready(
+        ModelRunExecutionService::new(
+            &repository,
+            &driver,
+            &clock,
+            &RecordingCommitObserver::new(),
+            &port,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request(run_id, "fixture"),
+            config,
+            signal,
+        )),
+    )
+    .expect("a stopped run reaches its terminal outcome");
+
+    let ModelRunExecutionOutcomeDto::Completed { run } = outcome else {
+        unreachable!("a stopped run ends terminal, got {outcome:?}");
+    };
+    assert_eq!(run.status(), RunStatusDto::Interrupted);
+    assert_eq!(
+        driver.executions(),
+        1,
+        "the tool batch boundary ends the run instead of asking the model again"
+    );
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].status(), RunStatusDto::Interrupted);
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| (message.kind(), message.text()))
+            .collect::<Vec<_>>(),
+        vec![(MessageKindDto::Notice, intention_engine::RUN_STOP_NOTICE)]
+    );
+}
+
+#[test]
 fn interruption_during_the_retry_delay_starts_the_next_attempt() {
     // A retryable pre-tool provider failure schedules a retry and the run then
     // waits out the retry delay. An interruption inside that wait commits its

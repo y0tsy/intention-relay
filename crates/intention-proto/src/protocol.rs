@@ -11,10 +11,11 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorCategoryDto, ErrorDto,
-    ErrorRetryDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto, MessageProjectionDto,
-    ProjectId, RemoveTurnCommandDto, RunId, RunModeDto, RunProjectionDto, SendUserTurnCommandDto,
-    SessionId, SessionProjectionDto, TimestampDto, TurnId, WorkspaceId, WorkspaceRootDto,
+    CancelRunCommandDto, ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorCategoryDto,
+    ErrorDto, ErrorRetryDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto,
+    MessageProjectionDto, ProjectId, RemoveTurnCommandDto, RunId, RunModeDto, RunProjectionDto,
+    SendUserTurnCommandDto, SessionId, SessionProjectionDto, TimestampDto, TurnId, WorkspaceId,
+    WorkspaceRootDto,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -650,6 +651,8 @@ pub enum ClientRequestDto {
     RemoveTurn(RemoveTurnCommandDto),
     /// Requests interruption of an active daemon-owned run's current operation.
     InterruptRun(InterruptRunCommandDto),
+    /// Requests that an active daemon-owned run stop for good.
+    CancelRun(CancelRunCommandDto),
     /// Obtains the latest durable session projection.
     GetSessionSnapshot(GetSessionSnapshotQueryDto),
     /// Obtains the daemon's latest health projection.
@@ -709,6 +712,8 @@ pub enum ProtocolResultDto {
     TurnRemoved(RemoveTurnAcceptedDto),
     /// An interruption request was accepted for a run.
     RunInterrupted(InterruptRunAcceptedDto),
+    /// A stop request was accepted for a run.
+    RunCancelled(RunCancelledAcceptedDto),
     /// A current durable session projection.
     SessionSnapshot(SessionSnapshotDto),
     /// The daemon health projection.
@@ -871,6 +876,33 @@ impl InterruptRunAcceptedDto {
     }
 
     /// Returns the interrupted run identity.
+    #[must_use]
+    pub const fn run_id(self) -> RunId {
+        self.run_id
+    }
+}
+
+/// Typed acceptance evidence for a run stop request.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RunCancelledAcceptedDto {
+    session_id: SessionId,
+    run_id: RunId,
+}
+
+impl RunCancelledAcceptedDto {
+    /// Creates complete stop acceptance evidence.
+    #[must_use]
+    pub const fn new(session_id: SessionId, run_id: RunId) -> Self {
+        Self { session_id, run_id }
+    }
+
+    /// Returns the owning session identity.
+    #[must_use]
+    pub const fn session_id(self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the stopped run identity.
     #[must_use]
     pub const fn run_id(self) -> RunId {
         self.run_id

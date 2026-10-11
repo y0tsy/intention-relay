@@ -25,7 +25,7 @@ use intention_engine::{
     ToolInvocationRequestDto, ToolResultOutcomeDto, fail_starting_run,
 };
 use intention_proto::{
-    ClientRequestDto, DtoResult, ErrorDto, InterruptRunCommandDto, RunId,
+    CancelRunCommandDto, ClientRequestDto, DtoResult, ErrorDto, InterruptRunCommandDto, RunId,
     RunSubscriptionSnapshotDto, SendUserTurnOutcomeDto, SessionId, SubscribeRunCommandDto,
     TimestampDto, ToolCallDto,
 };
@@ -344,6 +344,68 @@ impl HostState {
         }
         drop(data);
         Ok(accepted)
+    }
+
+    /// Stops one active run for good.
+    ///
+    /// The stop is accepted only for an exact active run. Its registered signal
+    /// carries the terminal intent - `request_stop` signals the in-flight
+    /// provider stream or tool call too - so the run ends `interrupted` at the
+    /// execution's next boundary instead of continuing. A run no registered
+    /// execution owns (its task returned while the run stayed active) is
+    /// terminalized here as durably `interrupted`, the same outcome recovery
+    /// writes, so a stop never silently does nothing.
+    fn cancel_run(
+        self: &Arc<Self>,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<ProtocolResultDto> {
+        let accepted = self
+            .facade
+            .cancel_run(CancelRunCommandDto::new(session_id, run_id))?;
+        let registered = {
+            let data = self.data.lock().map_err(|_| {
+                ErrorDto::unavailable(
+                    "daemon_task_registry_unavailable",
+                    "the daemon task registry is unavailable",
+                )
+            })?;
+            data.tasks
+                .get(&(session_id, run_id))
+                .map(RunCancellation::request_stop)
+        };
+        if registered.is_none() {
+            self.stop_active_run(session_id, run_id)?;
+        }
+        Ok(accepted)
+    }
+
+    /// Terminalizes one still-active run as durably `interrupted`.
+    ///
+    /// A stop whose run has no registered execution commits the terminal
+    /// `interrupted` outcome daemon recovery writes for an unfinished run, so
+    /// the request always reaches durable state. A run already terminal is a
+    /// no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns the repository's typed error when the terminal run row cannot
+    /// commit.
+    fn stop_active_run(self: &Arc<Self>, session_id: SessionId, run_id: RunId) -> DtoResult<()> {
+        let stopped = self.facade.command_gate().run(|| {
+            let repository = self.facade.repository();
+            let run = repository.load_run_projection(session_id, run_id)?;
+            if run_status_is_terminal(run.status()) {
+                return Ok(false);
+            }
+            let outcome = RunOutcomeDto::new(RunStatusDto::Interrupted, None, None, None, None)?;
+            repository.finish_run(session_id, run_id, outcome, composition::now()?)?;
+            Ok(true)
+        })?;
+        if stopped {
+            self.on_terminal(session_id, run_id);
+        }
+        Ok(())
     }
 
     fn fail_unadmitted_starting_run(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
@@ -1407,6 +1469,9 @@ fn dispatch_request(
         ClientRequestDto::RemoveTurn(command) => host.facade.remove_turn(command),
         ClientRequestDto::InterruptRun(command) => {
             host.interrupt_run(command.session_id(), command.run_id())
+        }
+        ClientRequestDto::CancelRun(command) => {
+            host.cancel_run(command.session_id(), command.run_id())
         }
         // A subscription is answered by the connection registration path, which
         // queues the correlated reply under the same lock that publishes.

@@ -26,8 +26,8 @@ pub use projection::{
 pub use protocol::{
     ClientRequestDto, CreateSessionAcceptedDto, DaemonHealthDto, DaemonReadinessDto,
     InterruptRunAcceptedDto, ProtocolDaemonMessageDto, ProtocolRejectionDto, ProtocolReplyDto,
-    ProtocolRequestDto, ProtocolResultDto, RemoveTurnAcceptedDto, RunStreamFrameDto,
-    RunSubscriptionSnapshotDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
+    ProtocolRequestDto, ProtocolResultDto, RemoveTurnAcceptedDto, RunCancelledAcceptedDto,
+    RunStreamFrameDto, RunSubscriptionSnapshotDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
     SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, SetTuiThemeCommandDto,
     SubscribeRunCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TuiSettingsDto,
     TuiThemeAcceptedDto, decode_request_line, decode_response, encode_reply, encode_request,
@@ -38,8 +38,8 @@ pub use run::{
     validate_run_status_transition,
 };
 pub use turn::{
-    CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto,
-    RemoveTurnCommandDto, SendUserTurnCommandDto,
+    CancelRunCommandDto, CreateSessionCommandDto, GetSessionSnapshotQueryDto,
+    InterruptRunCommandDto, RemoveTurnCommandDto, SendUserTurnCommandDto,
 };
 pub use workspace::WorkspaceRootDto;
 
