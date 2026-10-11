@@ -514,12 +514,13 @@ vocabulary` (MR-28, MR-30, MR-31) and `6a5358b docs(m5+): repair the stale run-f
 their evidence is the two self-tested `quality/check_docs.py` rules and one falsifiable `rg` line per claim, and
 `99973a8 docs(m5+): count the terminal e2e cases the crate ships` repaired the `terminal_e2e` tally this section
 supersedes. `b3043ae docs(m5+): record the open decisions of the second rot audit` writes the roadmap record,
-`62a7343 docs(tui): record the corrected terminal facts` rewrites both READMEs, and MR-29's W6 commit
-(`docs(m5+): reconcile the boundary catalogue with the closed defects`) is the wave's outstanding one: it rewrites doc
-03's catalogue so every remaining row names a live marker.
+`62a7343 docs(tui): record the corrected terminal facts` rewrites both READMEs, and `72dbb98 docs(m5+): record the
+corrective evidence and counts` adds this section. MR-29 needed no W6 commit: doc 03's catalogue was already correct at
+the wave base, because W2, W3, W4a, and W4b removed every closed row in their own commits, so the wave verified the
+catalogue against the code instead of rewriting it.
 
-Every MR-1…MR-31 is FIX. MR-1…MR-28 and MR-30/MR-31 carry the commits above; MR-29 is the W6 catalogue commit, whose
-sha the integrator records at the wave tip. The facts the pass leaves open live in that record: the six stub facts doc
+Every MR-1…MR-31 is FIX. MR-1…MR-28 and MR-30/MR-31 carry the commits above; MR-29 is verified fixed against the
+deletions the code waves made in their own commits, with no W6 edit required. The facts the pass leaves open live in that record: the six stub facts doc
 03's boundary table names (the execute-call fact on the session summary, the durable session title and its rename
 command, the durable
 favorite and archive flags, a session list paged past its bounded window, and a notice code or severity) and five
