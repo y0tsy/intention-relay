@@ -815,8 +815,114 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
             .iter()
             .map(|message| (message.kind(), message.text(), message.reasoning()))
             .collect::<Vec<_>>(),
-        vec![(MessageKindDto::Assistant, "after", None)],
-        "a textless reasoning round never becomes a blank assistant row"
+        vec![
+            (MessageKindDto::Assistant, "", Some("think ")),
+            (MessageKindDto::Assistant, "", Some("second round")),
+            (MessageKindDto::Assistant, "after", None),
+        ],
+        "each reasoned round commits its own assistant row before the answer row"
+    );
+}
+
+#[test]
+fn a_reasoning_only_final_step_commits_its_reasoning_row() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = fixture_snapshot_with_model("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let driver = ScriptedDriver::new(vec![
+        Ok(ModelEventDto::started()),
+        Ok(ModelEventDto::reasoning_delta("only thinking").expect("reasoning is valid")),
+        Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+    ]);
+    let port = ScriptedPort::new(Vec::new());
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        &port,
+        request(run_id, "fixture"),
+        config,
+        RunCancellation::new(),
+    )
+    .expect("a reasoning-only stop completes the run");
+    assert!(matches!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
+
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| (message.kind(), message.text(), message.reasoning()))
+            .collect::<Vec<_>>(),
+        vec![(MessageKindDto::Assistant, "", Some("only thinking"))],
+        "a step that reasoned without answering still commits its row"
+    );
+}
+
+#[test]
+fn an_interrupted_reasoning_only_step_commits_its_reasoning_without_a_cut_marker() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = fixture_snapshot_with_model("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let signal = RunCancellation::new();
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::reasoning_delta("interrupted thinking").expect("reasoning is valid")),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::text_delta("done").expect("text is valid")),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    // The stop lands after the reasoning chunk was delivered, so the first
+    // step is interrupted with reasoning and no answer text.
+    driver.cancel_during_stream(1, signal.model_signal());
+    let port = ScriptedPort::new(Vec::new());
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        &port,
+        request(run_id, "fixture"),
+        config,
+        signal,
+    )
+    .expect("the interrupted run continues and completes");
+    assert!(matches!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
+
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| (message.kind(), message.text(), message.reasoning()))
+            .collect::<Vec<_>>(),
+        vec![
+            (MessageKindDto::Assistant, "", Some("interrupted thinking")),
+            (
+                MessageKindDto::Notice,
+                intention_engine::INTERRUPT_NOTICE,
+                None
+            ),
+            (MessageKindDto::Assistant, "done", None),
+        ],
+        "a stopped reasoned step commits its reasoning without the cut-answer marker"
     );
 }
 
@@ -873,7 +979,7 @@ fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .is_empty(),
-        "a textless reasoning channel must not become a durable assistant row"
+        "an empty reasoning presence carries no text and commits no durable assistant row"
     );
 }
 

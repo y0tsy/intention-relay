@@ -410,6 +410,14 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
     );
     assert!(row(MessageKindDto::Assistant, "", None, None, None).is_err());
     assert!(
+        row(MessageKindDto::Assistant, "", Some("reasoning"), None, None).is_ok(),
+        "a reasoning-only step commits its reasoning as its own row"
+    );
+    assert!(
+        row(MessageKindDto::Assistant, "  ", Some("  "), None, None).is_err(),
+        "a row with neither text nor reasoning carries nothing"
+    );
+    assert!(
         row(
             MessageKindDto::Assistant,
             "answer",

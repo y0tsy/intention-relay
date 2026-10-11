@@ -158,6 +158,58 @@ fn starting_run_context_ends_at_the_target_run_user_turn() {
 }
 
 #[test]
+fn a_reasoning_only_assistant_row_round_trips_through_the_transcript_read() {
+    let (_directory, repository) = repository();
+    let session_id = create_session(&repository, "reasoning-only");
+    let previous_run = start_run(&repository, session_id, "first user", "first-model", 2);
+    // A completed step that reasoned without answering commits its reasoning
+    // as its own assistant row; the storage gate accepts the empty text
+    // because the reasoning carries the row's content.
+    append(
+        &repository,
+        session_id,
+        Some(previous_run),
+        MessageKindDto::Assistant,
+        "",
+        Some("step reasoning"),
+        None,
+        None,
+        2,
+    );
+    repository
+        .transition_run(session_id, previous_run, RunStatusDto::Running, time(3))
+        .expect("first run starts");
+    repository
+        .finish_run(
+            session_id,
+            previous_run,
+            RunOutcomeDto::new(
+                RunStatusDto::Completed,
+                None,
+                Some(FinishReasonDto::Stop),
+                None,
+                None,
+            )
+            .expect("fixture outcome is valid"),
+            time(4),
+        )
+        .expect("first run completes");
+
+    let current_run = start_run(&repository, session_id, "current user", "current-model", 5);
+    let context = repository
+        .load_starting_run_model_context(session_id, current_run)
+        .expect("the reasoning-only row never blocks the starting context");
+    let row = context
+        .messages()
+        .iter()
+        .find(|message| message.kind() == MessageKindDto::Assistant)
+        .expect("the reasoning-only row is durable transcript evidence");
+    assert_eq!(row.text(), "");
+    assert_eq!(row.reasoning(), Some("step reasoning"));
+    assert_eq!(row.run_id(), Some(previous_run));
+}
+
+#[test]
 fn model_context_rejects_unknown_cross_session_and_non_starting_runs_safely() {
     let (_directory, repository) = repository();
     let session_id = create_session(&repository, "owner");

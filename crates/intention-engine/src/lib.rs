@@ -505,6 +505,10 @@ fn schedule_from_context(
 /// committed arguments document. Its `tool_result` row replays as the tool-role
 /// message answering that call.
 ///
+/// An assistant row without answer text carries only the reasoning of a step
+/// that issued calls without answering; reasoning is never replayed, so the row
+/// contributes no model message.
+///
 /// A call whose result never committed cannot replay: an assistant tool-call
 /// message whose answer is missing is not a valid model context, so the call is
 /// omitted. A result whose call was omitted for that reason, or that never had
@@ -535,7 +539,12 @@ fn model_context_messages(rows: &[MessageProjectionDto]) -> DtoResult<Vec<ModelM
                 messages.push(ModelMessageDto::new(ModelRoleDto::User, row.text())?);
             }
             MessageKindDto::Assistant => {
-                messages.push(ModelMessageDto::new(ModelRoleDto::Assistant, row.text())?);
+                // A reasoning-only step row is durable transcript evidence,
+                // not model context: reasoning is never replayed, so a row
+                // without answer text contributes no message.
+                if !row.text().trim().is_empty() {
+                    messages.push(ModelMessageDto::new(ModelRoleDto::Assistant, row.text())?);
+                }
             }
             MessageKindDto::Notice => {
                 messages.push(ModelMessageDto::new(ModelRoleDto::Notice, row.text())?);

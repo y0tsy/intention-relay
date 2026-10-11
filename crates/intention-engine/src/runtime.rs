@@ -1077,8 +1077,11 @@ where
     /// Commits the accumulated assistant step as one transcript row.
     ///
     /// The step's text and reasoning accumulate in memory and become one
-    /// committed `assistant` message; a step without non-blank text commits
-    /// nothing, because the transcript shape requires assistant content.
+    /// committed `assistant` message. A step that produced non-blank text,
+    /// non-blank reasoning, or both commits its row; a reasoning-only step
+    /// commits its reasoning as the row of that step, so the step's durable
+    /// evidence exists before its tool rows. A step with neither carries
+    /// nothing and commits nothing.
     ///
     /// # Errors
     ///
@@ -1089,9 +1092,12 @@ where
         pending_text: &mut String,
         reasoning: Option<&str>,
     ) -> DtoResult<Option<MessageProjectionDto>> {
+        let carries_reasoning = reasoning.is_some_and(|reasoning| !reasoning.trim().is_empty());
         if pending_text.trim().is_empty() {
             pending_text.clear();
-            return Ok(None);
+            if !carries_reasoning {
+                return Ok(None);
+            }
         }
         let message = NewMessageDto::new(
             input.session_id,
@@ -1110,9 +1116,11 @@ where
     /// Commits one stopped model step with its durable interruption marker.
     ///
     /// The text the model produced before the stop becomes durable exactly like
-    /// a completed step's text, with [`INTERRUPTED_MARKER`] on its own line; a
-    /// blank or whitespace-only step commits nothing, so an interruption that
-    /// produced no text leaves only the notice row.
+    /// a completed step's text, with [`INTERRUPTED_MARKER`] on its own line,
+    /// which marks a cut answer; a stopped step that produced reasoning but no
+    /// text commits its reasoning row without the marker. A step with neither
+    /// text nor reasoning commits nothing, so an interruption that produced no
+    /// content leaves only the notice row.
     ///
     /// # Errors
     ///

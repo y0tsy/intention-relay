@@ -352,11 +352,12 @@ pub struct NewMessageDto {
 impl NewMessageDto {
     /// Creates one coherent transcript row for commit.
     ///
-    /// A user, assistant, or notice row carries non-blank content and no tool
-    /// identity; a tool-call row carries its call identity, its wire tool name,
-    /// and the canonical arguments document; a tool-result row carries its call
-    /// identity, its wire tool name, and non-blank content. Only assistant rows
-    /// may carry reasoning text.
+    /// A user or notice row carries non-blank content and no tool identity; an
+    /// assistant row carries non-blank text, non-blank reasoning, or both, and
+    /// no tool identity; a tool-call row carries its call identity, its wire tool
+    /// name, and the canonical arguments document; a tool-result row carries its
+    /// call identity, its wire tool name, and non-blank content. Only assistant
+    /// rows may carry reasoning text.
     ///
     /// # Errors
     ///
@@ -489,11 +490,12 @@ impl<'de> Deserialize<'de> for MessageProjectionDto {
 impl MessageProjectionDto {
     /// Creates one coherent committed transcript row.
     ///
-    /// A user, assistant, or notice row carries non-blank content and no tool
-    /// identity; a tool-call row carries its call identity, its wire tool name,
-    /// and the canonical arguments document; a tool-result row carries its call
-    /// identity, its wire tool name, and non-blank content. Only assistant rows
-    /// may carry reasoning text.
+    /// A user or notice row carries non-blank content and no tool identity; an
+    /// assistant row carries non-blank text, non-blank reasoning, or both, and
+    /// no tool identity; a tool-call row carries its call identity, its wire tool
+    /// name, and the canonical arguments document; a tool-result row carries its
+    /// call identity, its wire tool name, and non-blank content. Only assistant
+    /// rows may carry reasoning text.
     ///
     /// # Errors
     ///
@@ -611,7 +613,13 @@ fn validate_message_row(
                 && tool_id.is_none()
         }
         MessageKindDto::Assistant => {
-            !text.trim().is_empty() && tool_call_id.is_none() && tool_id.is_none()
+            // A step's assistant row carries the text it answered with, the
+            // reasoning it thought through, or both: a step that reasoned
+            // without answering still commits its reasoning as its own row,
+            // while a row with neither carries nothing and is rejected.
+            (!text.trim().is_empty() || reasoning.is_some_and(|value| !value.trim().is_empty()))
+                && tool_call_id.is_none()
+                && tool_id.is_none()
         }
         MessageKindDto::ToolCall => tool_identity && reasoning.is_none(),
         MessageKindDto::ToolResult => {

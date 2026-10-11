@@ -489,6 +489,89 @@ fn starting_run_context_rebuilds_the_committed_tool_exchange() {
 }
 
 #[test]
+fn starting_run_context_skips_reasoning_only_assistant_rows() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = fixture_snapshot();
+    let context = StartingRunModelContextDto::new(
+        session_id,
+        run_id,
+        config,
+        vec![
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                None,
+                MessageKindDto::User,
+                "first user",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            // A completed step that reasoned without answering: durable
+            // transcript evidence that never enters the model context.
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                None,
+                MessageKindDto::Assistant,
+                "",
+                Some("step reasoning".to_owned()),
+                None,
+                None,
+            )
+            .expect("a reasoning-only assistant row is coherent"),
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                None,
+                MessageKindDto::Assistant,
+                "the answer",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                Some(run_id),
+                MessageKindDto::User,
+                "current user",
+                None,
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+        ],
+    )
+    .expect("fixture context is valid");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .starting_context
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(context);
+
+    let scheduled = ApplicationService::new(&repository)
+        .schedule_starting_run(session_id, run_id, RunCancellation::new())
+        .expect("the reasoning-only row never blocks scheduling");
+    let messages = scheduled.request().messages();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| (message.role(), message.content()))
+            .collect::<Vec<_>>(),
+        vec![
+            (ModelRoleDto::User, "first user"),
+            (ModelRoleDto::Assistant, "the answer"),
+            (ModelRoleDto::User, "current user"),
+        ],
+        "reasoning is never replayed into the model context"
+    );
+}
+
+#[test]
 fn starting_run_context_omits_unpaired_tool_rows() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
