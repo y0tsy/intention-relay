@@ -592,7 +592,11 @@ impl ProviderExecutionPolicyDto {
         })
     }
 
-    /// Returns the timeout for one provider attempt in seconds.
+    /// Returns the idle window of one provider attempt in seconds.
+    ///
+    /// The window bounds the silence between two provider facts, not the
+    /// attempt's total duration: it is armed when the attempt's stream opens
+    /// and re-armed by every event that stream delivers.
     #[must_use]
     pub const fn attempt_timeout_seconds(self) -> u8 {
         self.attempt_timeout_seconds

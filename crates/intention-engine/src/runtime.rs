@@ -971,11 +971,6 @@ where
         let mut stream = self
             .driver
             .execute(request, input.cancellation.model_signal());
-        let timeout = self
-            .time
-            .sleep(std::time::Duration::from_secs(u64::from(timeout_seconds)))
-            .fuse();
-        futures_util::pin_mut!(timeout);
         let mut calls: Vec<ToolCallDto> = Vec::new();
         let mut reasoning_text = String::new();
         loop {
@@ -991,7 +986,18 @@ where
             }
             let next = stream.next().fuse();
             let cancelled = input.cancellation.cancelled().fuse();
-            futures_util::pin_mut!(next, cancelled);
+            // The attempt deadline is an idle deadline: it bounds the silence
+            // between two provider facts, never the round's total duration.
+            // Every turn of this loop follows exactly one delivered event (or
+            // the round's start), so arming the window here re-arms it after
+            // each of them: a stream that keeps producing progress is never cut
+            // off, while a stream that produces nothing for the whole window
+            // fails the attempt exactly as a total deadline did.
+            let timeout = self
+                .time
+                .sleep(std::time::Duration::from_secs(u64::from(timeout_seconds)))
+                .fuse();
+            futures_util::pin_mut!(next, cancelled, timeout);
             let event_or_timeout = match futures_util::future::select(
                 cancelled,
                 futures_util::future::select(next, &mut timeout),

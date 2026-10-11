@@ -136,14 +136,17 @@ impl ModelTimePort for RetryDelayTime {
     }
 }
 
-/// A time port that signals when the provider round's timeout sleep is first
-/// polled, proving the round's select is suspended on the provider stream, and
-/// then stays pending until the run is cancelled.
+/// A time port that signals when the provider round's timeout sleep is polled
+/// while the provider stream is pending, proving the round's select is
+/// suspended on that stream, and then stays pending until the run is
+/// cancelled.
 ///
 /// The attempt timeout is a seconds-scale duration while the runtime's retry
-/// delay is sub-second, so only the round timeout is held pending.
+/// delay is sub-second, so only the round timeout is held pending. The round
+/// re-arms its idle window after every delivered event, so the port signals on
+/// every arm instead of only the first one.
 struct RoundSelectTime {
-    entered: std::sync::Mutex<Option<mpsc::Sender<()>>>,
+    entered: std::sync::Mutex<mpsc::Sender<()>>,
 }
 
 impl ModelTimePort for RoundSelectTime {
@@ -157,13 +160,11 @@ impl ModelTimePort for RoundSelectTime {
                 .entered
                 .lock()
                 .expect("time channel is available")
-                .take();
+                .clone();
             Box::pin(async move {
-                if let Some(entered) = entered {
-                    entered
-                        .send(())
-                        .expect("the test observes the round select");
-                }
+                entered
+                    .send(())
+                    .expect("the test observes the round select");
                 future::pending::<()>().await;
             })
         } else {
@@ -1606,10 +1607,10 @@ fn second_tool_call_does_not_start_until_first_finishes() {
 
 #[test]
 fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
-    // The time port signals when the round's timeout sleep is first polled,
-    // which proves the round's select is already suspended on the provider
-    // stream. The interruption then must be observed by that select rather
-    // than by a later pre-stream check, and the run continues.
+    // The time port signals when the round's timeout sleep is polled while the
+    // provider stream is pending, which proves the round's select is already
+    // suspended on that stream. The interruption then must be observed by that
+    // select rather than by a later pre-stream check, and the run continues.
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = fixture_snapshot_with_model("fixture");
@@ -1623,7 +1624,7 @@ fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
     let port = ScriptedPort::new(Vec::new());
     let (select_tx, select_rx) = mpsc::channel();
     let clock = RoundSelectTime {
-        entered: std::sync::Mutex::new(Some(select_tx)),
+        entered: std::sync::Mutex::new(select_tx),
     };
     let execution_signal = signal.clone();
 
@@ -1699,7 +1700,7 @@ fn a_stop_while_the_round_select_waits_ends_the_run_instead_of_continuing() {
     let port = ScriptedPort::new(Vec::new());
     let (select_tx, select_rx) = mpsc::channel();
     let clock = RoundSelectTime {
-        entered: std::sync::Mutex::new(Some(select_tx)),
+        entered: std::sync::Mutex::new(select_tx),
     };
     let execution_signal = signal.clone();
 

@@ -343,7 +343,9 @@ A provider stream that stops producing content fails with `model_stream_progress
 fixed deadline value: the enforcing bound for the current scope is the provider execution's configured attempt timeout,
 an implementation safeguard owned by [architecture 08](08-model-protocol-and-providers.md) and [architecture
 09](09-configuration-security-and-observability.md), and a later activating specification selects any progress deadline
-it adds. Before the first committed content or other irreversible evidence, exactly one retry is permitted after
+it adds. That safeguard bounds silence, not content: it is armed when a provider stream opens and re-armed by every
+event the stream delivers, usage and tool-call facts included, so it holds the no-stall outcome while this policy's
+content-only refinement waits for its activating specification. Before the first committed content or other irreversible evidence, exactly one retry is permitted after
 `model_stream_progress_timeout`; after such a fact, no retry is permitted. A simultaneously committed user cancellation
 wins the race. A timeout otherwise produces a safe failed outcome, suppresses late output, and never claims success
 or resumes work after restart.

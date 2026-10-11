@@ -16,6 +16,7 @@ use std::collections::VecDeque;
 use std::future;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
+use std::task::Poll;
 use std::time::Duration;
 
 use intention_config::ConfigSnapshotDto;
@@ -762,6 +763,76 @@ impl ModelTimePort for ImmediateTime {
             .unwrap_or_else(PoisonError::into_inner)
             .push(duration);
         Box::pin(future::ready(()))
+    }
+}
+
+/// A manual clock whose elapsed time advances only when a scripted provider
+/// stream reports a silence.
+///
+/// The seconds-scale attempt window resolves only against the silences the
+/// fixture drives, so a test can model a slow provider without waiting. A
+/// sub-second delay is the runtime's own retry delay, which no provider
+/// silence drives: it completes immediately and advances the clock by its own
+/// duration, exactly like the m5 fixtures that classify delays by their scale.
+pub struct ManualTime {
+    elapsed: Mutex<Duration>,
+    sleeps: Mutex<Vec<Duration>>,
+}
+
+impl ManualTime {
+    /// Creates a manual clock at zero elapsed time.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            elapsed: Mutex::new(Duration::ZERO),
+            sleeps: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Advances the clock by one provider silence.
+    pub fn advance(&self, silence: Duration) {
+        let mut elapsed = self.elapsed.lock().unwrap_or_else(PoisonError::into_inner);
+        *elapsed += silence;
+    }
+
+    /// Returns the elapsed virtual time.
+    #[must_use]
+    pub fn elapsed(&self) -> Duration {
+        *self.elapsed.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Returns every armed delay in arming order.
+    #[must_use]
+    pub fn sleeps(&self) -> Vec<Duration> {
+        self.sleeps
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl ModelTimePort for ManualTime {
+    fn now(&self) -> TimestampDto {
+        time(2)
+    }
+
+    fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
+        self.sleeps
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(duration);
+        if duration < Duration::from_secs(1) {
+            self.advance(duration);
+            return Box::pin(future::ready(()));
+        }
+        let deadline = self.elapsed() + duration;
+        Box::pin(future::poll_fn(move |_| {
+            if self.elapsed() >= deadline {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        }))
     }
 }
 

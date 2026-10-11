@@ -5,12 +5,15 @@
 
 mod common;
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use common::{
-    FakeRepository, ImmediateTime, RecordedFinish, RecordedTransition, RecordingCommitObserver,
+    FakeRepository, ImmediateTime, ManualTime, RecordedFinish, RecordedTransition,
+    RecordingCommitObserver,
 };
+use futures_util::stream;
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
     ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto, ModelRunExecutionService,
@@ -19,7 +22,8 @@ use intention_engine::{
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TextDeltaChannelDto};
 use intention_proto::{MessageKindDto, RunProjectionDto, RunStatusDto};
 use intention_providers::{
-    FinishReasonDto, ModelEventDto, ModelMessageDto, ModelRequestDto, ModelRoleDto,
+    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
+    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
     ProviderErrorDto, ToolCallDto, UsageDto,
 };
 use intention_test_support::{
@@ -91,6 +95,118 @@ impl ModelTextDeltaPort for CapturingTextDeltaPort {
             .unwrap_or_else(PoisonError::into_inner)
             .push((step, channel, text.to_owned()));
     }
+}
+
+/// One scripted provider step: the silence that precedes it and its event.
+type SilentStep = (Duration, Result<ModelEventDto, ProviderErrorDto>);
+
+/// A scripted provider round that reports its own silences.
+///
+/// A step's silence advances the manual clock while the stream is pending, so
+/// the runtime's armed delays observe the gap exactly as they observe real
+/// wall-clock time. A round whose script is exhausted keeps advancing the clock
+/// and never yields again, which models a provider that stops producing output
+/// mid-answer. Every execution replays the same script, so a retried attempt
+/// stalls identically.
+struct SilentDriver {
+    steps: Vec<SilentStep>,
+    stall: Duration,
+    clock: Arc<ManualTime>,
+    executions: AtomicUsize,
+}
+
+impl SilentDriver {
+    /// Creates a driver replaying one scripted round per provider execution.
+    #[must_use]
+    fn new(steps: Vec<SilentStep>, stall: Duration, clock: &Arc<ManualTime>) -> Self {
+        Self {
+            steps,
+            stall,
+            clock: Arc::clone(clock),
+            executions: AtomicUsize::new(0),
+        }
+    }
+
+    /// Returns how many provider executions started.
+    #[must_use]
+    fn executions(&self) -> usize {
+        self.executions.load(Ordering::Relaxed)
+    }
+}
+
+impl ModelExecutionDriver for SilentDriver {
+    fn capabilities(&self) -> ModelCapabilitiesDto {
+        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+    }
+
+    fn execute(
+        &self,
+        _request: ModelRequestDto,
+        _cancellation: ModelCancellationSignal,
+    ) -> ModelEventStream {
+        self.executions.fetch_add(1, Ordering::Relaxed);
+        let steps = self.steps.clone();
+        let stall = self.stall;
+        let clock = Arc::clone(&self.clock);
+        Box::pin(stream::unfold(
+            (steps.into_iter(), true, clock, stall),
+            |(mut steps, first, clock, stall)| async move {
+                let Some((silence, event)) = steps.next() else {
+                    loop {
+                        clock.advance(stall);
+                        silence_poll().await;
+                    }
+                };
+                if !first {
+                    clock.advance(silence);
+                    silence_poll().await;
+                }
+                Some((event, (steps, false, clock, stall)))
+            },
+        ))
+    }
+}
+
+/// Returns after one pending poll, waking itself, so the round's select
+/// observes the advanced clock before the stream delivers its next event.
+async fn silence_poll() {
+    let mut yielded = false;
+    std::future::poll_fn(|cx| {
+        if yielded {
+            std::task::Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            std::task::Poll::Pending
+        }
+    })
+    .await;
+}
+
+/// Executes one scripted round through a manual clock.
+fn execute_silent(
+    repository: &FakeRepository,
+    driver: &SilentDriver,
+    request: ModelRequestDto,
+    config: ConfigSnapshotDto,
+    clock: &ManualTime,
+) -> DtoResult<ModelRunExecutionOutcomeDto> {
+    run_ready(
+        ModelRunExecutionService::new(
+            repository,
+            driver,
+            clock,
+            &RecordingCommitObserver::new(),
+            &NeverInvokedToolExecutor,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            repository.session_id,
+            repository.run_id,
+            request,
+            config,
+            RunCancellation::new(),
+        )),
+    )
 }
 
 fn execute(
@@ -956,6 +1072,8 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let driver = ScriptedDriver::new(Vec::new());
+    // The stream yields nothing at all, so the attempt's idle window expires
+    // without a single progress event.
     driver.stay_pending();
     let clock = ImmediateTime::new();
 
@@ -1009,6 +1127,169 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
             .unwrap_or_else(PoisonError::into_inner)
             .is_empty(),
         "a timed-out attempt commits no transcript row"
+    );
+}
+
+/// The silence each scripted provider chunk follows in the idle-window tests.
+const CHUNK_SILENCE: Duration = Duration::from_secs(20);
+
+#[test]
+fn continuous_provider_progress_outlives_the_attempt_timeout_and_completes() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = fixture_snapshot_with_model("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let clock = Arc::new(ManualTime::new());
+    // Every chunk follows a 20-second silence, so the stream runs for 100
+    // seconds while never falling silent for the 30-second configured window.
+    let driver = SilentDriver::new(
+        vec![
+            (Duration::ZERO, Ok(ModelEventDto::started())),
+            (
+                CHUNK_SILENCE,
+                Ok(ModelEventDto::text_delta("still ").expect("text is valid")),
+            ),
+            (
+                CHUNK_SILENCE,
+                Ok(ModelEventDto::reasoning_delta("working").expect("reasoning is valid")),
+            ),
+            (
+                CHUNK_SILENCE,
+                Ok(ModelEventDto::text_delta("making ").expect("text is valid")),
+            ),
+            (
+                CHUNK_SILENCE,
+                Ok(ModelEventDto::usage(
+                    UsageDto::reported(1, 2, 3).expect("usage is valid"),
+                )),
+            ),
+            (
+                CHUNK_SILENCE,
+                Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+            ),
+        ],
+        CHUNK_SILENCE,
+        &clock,
+    );
+
+    let outcome = execute_silent(
+        &repository,
+        &driver,
+        request(run_id, "fixture"),
+        config,
+        &clock,
+    )
+    .expect("a continuously producing stream completes");
+
+    assert!(matches!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
+    assert_eq!(
+        driver.executions(),
+        1,
+        "a stream that keeps producing progress is never retried"
+    );
+    assert_eq!(
+        clock.elapsed(),
+        Duration::from_secs(100),
+        "the round outlived the configured 30-second window more than three times over"
+    );
+    assert_eq!(
+        clock.sleeps(),
+        vec![Duration::from_secs(30); 6],
+        "every delivered event re-arms one fresh idle window"
+    );
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| (message.kind(), message.text().to_owned()))
+            .collect::<Vec<_>>(),
+        vec![(MessageKindDto::Assistant, "still making ".to_owned())],
+        "the slow stream commits its whole answer once"
+    );
+}
+
+#[test]
+fn a_silent_stall_expires_the_idle_window_armed_after_the_last_event() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = fixture_snapshot_with_model("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let clock = Arc::new(ManualTime::new());
+    // A usage fact arrives after a 10-second silence and the provider then goes
+    // silent for good: the window that expires is the fresh one armed after
+    // that last event, not one armed when the attempt started.
+    let driver = SilentDriver::new(
+        vec![
+            (Duration::ZERO, Ok(ModelEventDto::started())),
+            (
+                Duration::from_secs(10),
+                Ok(ModelEventDto::usage(
+                    UsageDto::reported(1, 2, 3).expect("usage is valid"),
+                )),
+            ),
+        ],
+        Duration::from_secs(10),
+        &clock,
+    );
+
+    let outcome = execute_silent(
+        &repository,
+        &driver,
+        request(run_id, "fixture"),
+        config,
+        &clock,
+    )
+    .expect("exhausted silent stalls become a durable failure");
+
+    let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
+        unreachable!("exhausted silent stalls fail the run");
+    };
+    assert_eq!(run.status(), RunStatusDto::Failed);
+    assert_eq!(error.code(), "provider_attempt_timed_out");
+    assert_eq!(
+        driver.executions(),
+        2,
+        "a silent attempt keeps the blank-text budget open and the retry stalls too"
+    );
+    assert_eq!(
+        clock.elapsed(),
+        Duration::from_secs(80) + Duration::from_millis(250),
+        "each attempt expired 30 seconds after its own last event, not 30 seconds after its start"
+    );
+    assert_eq!(
+        clock.sleeps(),
+        vec![
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            Duration::from_millis(250),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+        ],
+        "each delivered event arms one fresh window and exactly one retry delay runs"
+    );
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].error_code(), Some("provider_attempt_timed_out"));
+    assert!(
+        repository
+            .messages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty(),
+        "a stalled attempt commits no transcript row"
     );
 }
 
@@ -1166,10 +1447,13 @@ fn whitespace_only_text_keeps_the_attempt_budget_open() {
             .as_slice(),
         &[
             Duration::from_secs(30),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
             Duration::from_millis(250),
+            Duration::from_secs(30),
             Duration::from_secs(30)
         ],
-        "exactly one retry delay runs"
+        "every delivered event re-arms the idle window and exactly one retry delay runs"
     );
     assert!(
         repository
