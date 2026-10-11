@@ -417,7 +417,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
 }
 
 #[tokio::test]
-async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
+async fn real_daemon_tool_loop_answers_a_failed_call_without_stopping() {
     let host = E2eHost::new(None, r#"{"path":"missing.txt"}"#);
     let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
 
@@ -452,24 +452,25 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
         observe_run_until_terminal(&stream_client, session_id, run_id, deadline).await;
     assert_eq!(
         observation.subscription.state().status(),
-        Some(RunStatusDto::Failed),
-        "the real daemon terminalizes the missing-file tool round as Failed"
+        Some(RunStatusDto::Completed),
+        "the real daemon answers the failed tool call and continues the loop"
     );
     if !observation.snapshot_is_terminal() {
         assert!(
             observation.received_status_frame(),
-            "a live status frame carries the committed failure to the subscriber"
+            "a live status frame carries the committed completion to the subscriber"
         );
     }
     assert_eq!(
         host.provider.request_count(),
-        1,
-        "the typed tool failure never retries the provider"
+        2,
+        "the failed call is answered with a tool message and the loop continues once"
     );
     assert_eq!(host.provider.excess_count(), 0);
 
-    // The failed run's transcript carries the model's call row and the typed
-    // failure result row committed for that exact invocation.
+    // The completed run's transcript carries the model's call row, the
+    // guidance-bearing failure result committed for that exact invocation, and
+    // the answer the loop produced after reading both.
     let session_snapshot = client
         .session_snapshot(session_id)
         .await
@@ -484,26 +485,29 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
             MessageKindDto::User,
             MessageKindDto::ToolCall,
             MessageKindDto::ToolResult,
+            MessageKindDto::Assistant,
         ],
-        "the failed run records the turn, the denied call, and its typed failure result"
+        "the failed call is answered and the loop continues to a completed answer"
     );
     assert_eq!(messages[0].text(), "Read missing.txt");
     assert_eq!(messages[1].tool_id(), Some("read"));
     assert_eq!(
         messages[1].text(),
         r#"{"path":"missing.txt"}"#,
-        "the denied tool call keeps the relative workspace path"
+        "the tool call keeps the relative workspace path"
     );
     let call_id = messages[1]
         .tool_call_id()
         .expect("the tool call row carries its identity");
     assert_eq!(messages[2].tool_id(), Some("read"));
     assert_eq!(messages[2].tool_call_id(), Some(call_id));
-    assert_eq!(
-        messages[2].text(),
-        "tool_read_failed",
-        "the missing-file tool result is durable typed-failure evidence"
+    assert!(
+        messages[2].text().starts_with("the tool call failed\n")
+            && messages[2].text().contains("tool_read_failed"),
+        "the durable failed result carries the model-visible guidance: {}",
+        messages[2].text()
     );
+    assert_eq!(messages[3].text(), "done");
 }
 
 #[tokio::test]

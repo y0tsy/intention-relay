@@ -67,19 +67,19 @@ fn scoped_search_reports_file_directory_workspace_and_failures() {
                 .is_err()
         );
     }
-    assert_eq!(
-        service
-            .dispatch_with_cancellation(
-                ToolInput::Grep(GrepInput {
-                    pattern: text("needle"),
-                    scope: None,
-                    path: None,
-                }),
-                CancellationSignal::new()
-            )
-            .unwrap_err()
-            .code(),
-        "invalid_tool_path"
+    // A pathless call addresses the whole workspace: it is the declared
+    // default scope, not a model error.
+    let pathless = service.dispatch_completed(
+        ToolInput::Grep(GrepInput {
+            pattern: text("needle"),
+            scope: None,
+            path: None,
+        }),
+        CancellationSignal::new(),
+    );
+    assert!(
+        matches!(pathless, ToolResult::Grep(value) if value.matches.len() == 2),
+        "a pathless grep searches from the workspace root"
     );
 }
 

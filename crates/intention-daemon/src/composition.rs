@@ -43,7 +43,7 @@ use intention_storage::{
     StorageRepositoryDto,
 };
 #[cfg(test)]
-use intention_tools::{ToolInput, WorkspaceRoot};
+use intention_tools::WorkspaceRoot;
 use intention_transport::MAX_TRANSCRIPT_SNAPSHOT_BYTES;
 
 /// The single live configuration snapshot schema (intention-config current schema).
@@ -770,14 +770,6 @@ mod tests {
         (directory, root)
     }
 
-    /// Builds the read input for the shared `hello.txt` workspace fixture.
-    fn read_hello_input() -> ToolInput {
-        ToolInput::Read(intention_tools::ReadInput {
-            path: intention_proto::WorkspaceRelativePathDto::parse("hello.txt")
-                .expect("fixture path is valid"),
-        })
-    }
-
     /// Starts one durable run through a direct user turn and returns its identity.
     fn started_run(facade: &DaemonApplicationFacade, session_id: SessionId, label: &str) -> RunId {
         let accepted = send_user_turn(facade, session_id, label).expect("fixture turn is accepted");
@@ -1157,34 +1149,13 @@ mod tests {
                     worker_run,
                     call_id,
                     "execute",
-                    ToolInput::Execute(intention_tools::ExecuteInput {
-                        program: intention_tools::BoundedText::new(if cfg!(windows) {
-                            "cmd"
-                        } else {
-                            "sh"
-                        })
-                        .expect("fixture program"),
-                        args: if cfg!(windows) {
-                            vec![
-                                intention_tools::BoundedText::new("/C").expect("arg"),
-                                intention_tools::BoundedText::new(
-                                    "echo started> sentinel.txt & ping -n 2 127.0.0.1",
-                                )
-                                .expect("arg"),
-                            ]
-                        } else {
-                            vec![
-                                intention_tools::BoundedText::new("-c").expect("arg"),
-                                intention_tools::BoundedText::new(
-                                    "printf x > sentinel.txt; sleep 2",
-                                )
-                                .expect("arg"),
-                            ]
-                        },
-                    }),
                     now().expect("fixture clock reads"),
                 )
-                .with_arguments_json("{}")
+                .with_arguments_json(if cfg!(windows) {
+                    r#"{"command":"echo started> sentinel.txt & ping -n 2 127.0.0.1"}"#
+                } else {
+                    r#"{"command":"printf x > sentinel.txt; sleep 2"}"#
+                })
                 .with_cancellation(worker_cancellation),
                 &RecordingPublisher::new(),
             )
@@ -1247,10 +1218,9 @@ mod tests {
                         run_id,
                         call_id,
                         "read",
-                        read_hello_input(),
                         now().expect("fixture clock reads"),
                     )
-                    .with_arguments_json("{}")
+                    .with_arguments_json(r#"{"path":"hello.txt"}"#)
                     .with_cancellation(cancellation.clone()),
                     &RecordingPublisher::new(),
                 )
@@ -1296,10 +1266,9 @@ mod tests {
                     run_id,
                     call_id,
                     "read",
-                    read_hello_input(),
                     now().expect("fixture clock reads"),
                 )
-                .with_arguments_json("{}"),
+                .with_arguments_json(r#"{"path":"hello.txt"}"#),
                 &publisher,
             )
             .expect("read completes");

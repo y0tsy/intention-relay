@@ -26,7 +26,7 @@ use intention_storage::{
 };
 use intention_tools::{
     InterruptCause, ToolDispatchOutcome, ToolInput, ToolResult, ToolService, WorkspaceRoot,
-    partial_tool_result_content, render_tool_result_content,
+    partial_tool_result_content, render_tool_result_content, tool_failure_guidance,
 };
 
 /// Complete engine command for one local tool invocation.
@@ -37,7 +37,6 @@ pub struct ToolInvocationRequestDto {
     run_id: RunId,
     call_id: ToolCallId,
     tool_id: String,
-    input: ToolInput,
     occurred_at: TimestampDto,
     cancellation: RunCancellation,
     arguments_json: String,
@@ -49,7 +48,8 @@ impl ToolInvocationRequestDto {
     /// The canonical arguments document defaults to an empty JSON object; a
     /// caller that holds the model's original arguments attaches them with
     /// [`Self::with_arguments_json`] so the committed `tool_call` row carries
-    /// the exact requested arguments.
+    /// the exact requested arguments and the service decodes that same
+    /// document after the commit.
     #[must_use]
     pub fn new(
         workspace: WorkspaceRoot,
@@ -57,7 +57,6 @@ impl ToolInvocationRequestDto {
         run_id: RunId,
         call_id: ToolCallId,
         tool_id: impl Into<String>,
-        input: ToolInput,
         occurred_at: TimestampDto,
     ) -> Self {
         Self {
@@ -66,7 +65,6 @@ impl ToolInvocationRequestDto {
             run_id,
             call_id,
             tool_id: tool_id.into(),
-            input,
             occurred_at,
             cancellation: RunCancellation::new(),
             arguments_json: "{}".to_owned(),
@@ -100,10 +98,13 @@ where
     /// Executes one explicit local invocation, durably records its lifecycle,
     /// and returns its model-visible outcome.
     ///
+    /// The call row commits before decoding, so a call whose arguments never
+    /// decode still leaves durable evidence; its failure commits one terminal
+    /// result carrying bounded model-visible guidance and the run continues.
+    ///
     /// # Errors
     ///
-    /// Returns the typed validation, storage, or tool execution error when no
-    /// terminal outcome could be produced.
+    /// Returns the typed storage error when a durable row cannot commit.
     pub fn invoke_local_tool_with_publication<P: ModelRunCommitObserver>(
         &self,
         input: ToolInvocationRequestDto,
@@ -115,21 +116,12 @@ where
             run_id,
             call_id,
             tool_id,
-            input,
             occurred_at,
             cancellation,
             arguments_json,
         } = input;
-        // The input identity is validated before the call row commits, so a
-        // mismatched identifier is rejected without a durable trace.
-        if tool_id != input.tool_id().as_str() {
-            return Err(ErrorDto::validation(
-                "tool_id_mismatch",
-                "tool identifier does not match typed tool input",
-            ));
-        }
-        // The tool-call row commits before any dispatch: the model's requested
-        // call is durable evidence even when execution fails.
+        // The tool-call row commits before any effect: the model's requested
+        // call is durable evidence even when its arguments never decode.
         self.append_tool_call(
             session_id,
             run_id,
@@ -142,9 +134,29 @@ where
         // The invocation addresses the workspace root its caller resolved; the
         // root is an addressing anchor resolved once by the host.
         let service = ToolService::new(workspace);
-        let outcome = service.dispatch_with_cancellation(input, cancellation.tool_signal());
-        let result: DtoResult<ToolResult> = match outcome {
-            Ok(ToolDispatchOutcome::Completed(value)) => Ok(value),
+        // A call whose arguments do not decode is a known, model-visible
+        // failure: the durable result answers it with bounded guidance and the
+        // run continues, so the model can correct the call.
+        let decoded = match ToolInput::from_arguments_json(&tool_id, &arguments_json) {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                let content = tool_failure_guidance(&tool_id, &error);
+                self.commit_tool_result(
+                    session_id,
+                    run_id,
+                    call_id,
+                    &tool_id,
+                    ToolResultStatusDto::Failed,
+                    content.clone(),
+                    Vec::new(),
+                    occurred_at,
+                    publisher,
+                )?;
+                return ToolResultOutcomeDto::failed(error, content);
+            }
+        };
+        let value = match service.dispatch_with_cancellation(decoded, cancellation.tool_signal()) {
+            Ok(ToolDispatchOutcome::Completed(value)) => value,
             Ok(ToolDispatchOutcome::Interrupted { cause, partial }) => {
                 // An interrupted dispatch is a durable partial outcome, not a
                 // typed failure: the call ends with whatever output was
@@ -165,47 +177,37 @@ where
                 return ToolResultOutcomeDto::partial(content);
             }
             Err(error) => {
-                self.append_tool_failure(
+                let content = tool_failure_guidance(&tool_id, &error);
+                self.commit_tool_result(
                     session_id,
                     run_id,
                     call_id,
                     &tool_id,
-                    &error,
+                    ToolResultStatusDto::Failed,
+                    content.clone(),
+                    Vec::new(),
                     occurred_at,
                     publisher,
                 )?;
-                return Ok(ToolResultOutcomeDto::failed(error));
+                return ToolResultOutcomeDto::failed(error, content);
             }
         };
         // The terminal result commits once, with its answering transcript row,
         // and the committed row is published immediately after that commit.
-        let (status, content, metadata) = match &result {
-            Ok(value) => (
-                ToolResultStatusDto::Completed,
-                render_tool_result_content(value)?,
-                tool_result_metadata(value)?,
-            ),
-            Err(error) => (
-                ToolResultStatusDto::Failed,
-                error.code().to_owned(),
-                Vec::new(),
-            ),
-        };
+        let content = render_tool_result_content(&value)?;
+        let metadata = tool_result_metadata(&value)?;
         self.commit_tool_result(
             session_id,
             run_id,
             call_id,
             &tool_id,
-            status,
+            ToolResultStatusDto::Completed,
             content.clone(),
             metadata,
             occurred_at,
             publisher,
         )?;
-        match result {
-            Ok(_) => ToolResultOutcomeDto::completed(content),
-            Err(error) => Ok(ToolResultOutcomeDto::failed(error)),
-        }
+        ToolResultOutcomeDto::completed(content)
     }
 
     /// Commits one tool-call row before the call is dispatched, then hands the
@@ -240,39 +242,6 @@ where
         let committed = self.repository.append_message(message, occurred_at)?;
         publisher.observe_model_run_commit(&ModelRunCommitDto::Content(committed.clone()));
         Ok(committed)
-    }
-
-    /// Commits one terminal failed result for a call that never produced output.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed validation or storage error when the result cannot commit.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "One flat failure payload keeps the single failure commit at one call site."
-    )]
-    fn append_tool_failure<P: ModelRunCommitObserver>(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        call_id: ToolCallId,
-        tool_id: &str,
-        error: &ErrorDto,
-        occurred_at: TimestampDto,
-        publisher: &P,
-    ) -> DtoResult<()> {
-        self.commit_tool_result(
-            session_id,
-            run_id,
-            call_id,
-            tool_id,
-            ToolResultStatusDto::Failed,
-            error.code().to_owned(),
-            Vec::new(),
-            occurred_at,
-            publisher,
-        )
-        .map(|_| ())
     }
 
     /// Commits one terminal tool result with its answering transcript row, then

@@ -989,10 +989,11 @@ fn control_character_reasoning_echo_terminalizes_as_typed_failed_run() {
 }
 
 #[test]
-fn tool_failure_terminalizes_without_retry() {
+fn tool_failure_continues_with_guidance_without_retry() {
     // A typed failed outcome from the port — including the daemon's
-    // `invalid_tool_input_json` decoding failure — fails the run without
-    // scheduling any retry or re-invoking the call.
+    // `invalid_tool_input_json` decoding failure — is answered like a
+    // completed call: the run continues with the guidance content as the
+    // call's tool message and the call is never re-invoked.
     for (code, message) in [
         ("tool_denied", "the workspace denied the call"),
         ("invalid_tool_input_json", "tool arguments are invalid"),
@@ -1002,13 +1003,23 @@ fn tool_failure_terminalizes_without_retry() {
         let config = fixture_snapshot_with_model("fixture");
         let repository = FakeRepository::new(session_id, run_id, config.clone());
         let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
-        let driver = ScriptedDriver::new(vec![
-            Ok(ModelEventDto::started()),
-            Ok(ModelEventDto::tool_call(call)),
+        let driver = ScriptedDriver::with_rounds(vec![
+            vec![
+                Ok(ModelEventDto::started()),
+                Ok(ModelEventDto::tool_call(call.clone())),
+            ],
+            vec![
+                Ok(ModelEventDto::started()),
+                Ok(ModelEventDto::text_delta("recovered").expect("text is valid")),
+                Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+            ],
         ]);
+        let guidance = format!("the tool call failed\ntool: read\n{code}: {message}\n");
         let port = ScriptedPort::new(vec![Ok(ToolResultOutcomeDto::failed(
             ErrorDto::validation(code, message),
-        ))]);
+            guidance.clone(),
+        )
+        .expect("guidance content is valid"))]);
 
         let outcome = execute(
             &repository,
@@ -1018,18 +1029,27 @@ fn tool_failure_terminalizes_without_retry() {
             config,
             RunCancellation::new(),
         )
-        .expect("a typed tool failure terminalizes safely");
+        .expect("a typed tool failure keeps the run alive");
 
-        let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
-            unreachable!("a failed tool call fails the run");
+        let ModelRunExecutionOutcomeDto::Completed { run } = outcome else {
+            unreachable!("a failed tool call must not fail the run");
         };
-        assert_eq!(run.status(), RunStatusDto::Failed);
-        assert_eq!(error.code(), code);
-        assert_eq!(driver.executions(), 1, "{code} must not retry");
+        assert_eq!(run.status(), RunStatusDto::Completed);
+        assert_eq!(driver.executions(), 2, "{code} never retries the round");
         assert_eq!(
-            port.calls().len(),
-            1,
+            port.calls().as_slice(),
+            &[(session_id, run_id, call.clone())],
             "{code} executes the tool exactly once, never re-invoking it"
+        );
+        let requests = driver.requests();
+        let answered = requests[1].messages().iter().any(|message| {
+            message.role() == ModelRoleDto::Tool
+                && message.tool_call_id() == Some(call.call_id())
+                && message.content() == guidance
+        });
+        assert!(
+            answered,
+            "{code}: the failed call is answered with its guidance"
         );
         let finishes = repository
             .finishes
@@ -1037,7 +1057,8 @@ fn tool_failure_terminalizes_without_retry() {
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
         assert_eq!(finishes.len(), 1, "a tool failure never retries");
-        assert_eq!(finishes[0].error_code(), Some(code));
+        assert_eq!(finishes[0].status(), RunStatusDto::Completed);
+        drop(finishes);
         assert!(
             repository
                 .tool_results

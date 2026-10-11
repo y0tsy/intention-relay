@@ -1039,18 +1039,14 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_survives_resta
     )
     .await;
 
-    // `execute`: the real registry runs a child process in the workspace.
-    let (program, args) = if cfg!(windows) {
-        ("cmd", vec!["/C".to_owned(), format!("echo {token}")])
-    } else {
-        ("sh", vec!["-c".to_owned(), format!("echo {token}")])
-    };
+    // `execute`: the real registry runs a shell command in the workspace.
+    let command = format!("echo {token}");
     let (execute_session, execute_run) = drive_tool_turn(
         &host,
         "execute",
         &format!(
             "Use the execute tool with the arguments {} to print the token with a real child process.",
-            serde_json::json!({"program": program, "args": args})
+            serde_json::json!({"command": command})
         ),
         &|run| {
             let content = run.tool_result_contents("execute").join("\n");

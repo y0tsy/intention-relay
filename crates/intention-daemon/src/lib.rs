@@ -35,7 +35,7 @@ use intention_proto::{
 };
 use intention_proto::{RunStatusDto, run_status_is_terminal};
 use intention_storage::{RunOutcomeDto, StorageRepositoryDto};
-use intention_tools::{ToolInput, WorkspaceRoot};
+use intention_tools::WorkspaceRoot;
 use intention_transport::{AsyncLocalListener, AsyncMessageSender, LocalEndpoint};
 
 const SUBSCRIBER_QUEUE_CAPACITY: usize = 64;
@@ -1021,11 +1021,11 @@ impl ModelRunCommitObserver for HostCommitObserver {
 
 /// The one blocking tool seam.
 ///
-/// The engine's model loop calls it; each call is decoded into the typed local
-/// tool input and executed through the engine's durable local-tool lifecycle,
-/// which hands every committed transcript row to the configured publication
-/// boundary. The blocking effect runs on a spawned worker so the async
-/// execution loop is never stalled.
+/// The engine's model loop calls it; the engine's durable local-tool lifecycle
+/// decodes the call's arguments after the call row commits and hands every
+/// committed transcript row to the configured publication boundary. The
+/// blocking effect runs on a spawned worker so the async execution loop is
+/// never stalled.
 #[derive(Clone)]
 struct DaemonToolExecutor<P> {
     facade: DaemonApplicationFacade,
@@ -1074,7 +1074,6 @@ impl<P: ModelRunCommitObserver + Clone + Send + Sync + 'static> ToolExecutionPor
             let tool_id = call.name().to_owned();
             let call_id = call.call_id();
             let arguments = call.arguments_json().to_owned();
-            let input = ToolInput::from_arguments_json(&tool_id, &arguments)?;
             tokio::task::spawn_blocking(move || {
                 let repository = facade.repository();
                 ApplicationService::new(repository).invoke_local_tool_with_publication(
@@ -1084,7 +1083,6 @@ impl<P: ModelRunCommitObserver + Clone + Send + Sync + 'static> ToolExecutionPor
                         run_id,
                         call_id,
                         tool_id,
-                        input,
                         composition::now()?,
                     )
                     .with_arguments_json(arguments)
@@ -2663,6 +2661,7 @@ mod tests {
 
     #[test]
     fn daemon_tool_decoder_covers_every_advertised_model_visible_tool() {
+        use intention_tools::ToolInput;
         let advertised = intention_tools::model_visible_descriptors();
         for descriptor in &advertised {
             let name = descriptor.id().as_str();

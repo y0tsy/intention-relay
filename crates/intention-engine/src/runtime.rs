@@ -122,8 +122,9 @@ pub trait ModelTextDeltaPort: Send + Sync {
 ///
 /// The port selects the bounded, credential-free content the runtime commits as
 /// the call's durable result and delivers to the model. A `Failed` outcome
-/// carries the safe error that terminalizes the run; `Completed`, `Partial`,
-/// and `Cancelled` keep the run going with the returned content.
+/// carries its safe error classification plus the bounded guidance the run
+/// delivers as the call's tool message; `Completed`, `Partial`, `Cancelled`,
+/// and `Failed` all keep the run going with the returned content.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolResultOutcomeDto {
     /// The call completed with bounded model-visible content.
@@ -142,10 +143,12 @@ pub enum ToolResultOutcomeDto {
         /// The bounded, credential-free content answering the call.
         content: String,
     },
-    /// The call failed safely; the error terminalizes the run.
+    /// The call failed safely; content explains the failure to the model.
     Failed {
-        /// The safe failure that terminalizes the run.
+        /// The safe failure classification the result row records.
         error: ErrorDto,
+        /// The bounded, credential-free content answering the call.
+        content: String,
     },
 }
 
@@ -183,10 +186,16 @@ impl ToolResultOutcomeDto {
         })
     }
 
-    /// Creates a safe failed tool outcome.
-    #[must_use]
-    pub const fn failed(error: ErrorDto) -> Self {
-        Self::Failed { error }
+    /// Creates a safe failed tool outcome with its model-visible content.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the content is blank.
+    pub fn failed(error: ErrorDto, content: impl Into<String>) -> DtoResult<Self> {
+        Ok(Self::Failed {
+            error,
+            content: tool_result_content(content.into())?,
+        })
     }
 }
 
@@ -734,15 +743,14 @@ where
                             }
                         };
                         match outcome {
-                            ToolResultOutcomeDto::Failed { error } => {
-                                let run = self.finish_run(
-                                    input,
-                                    RunStatusDto::Failed,
-                                    None,
-                                    Some(&error),
-                                    state.reported_usage(),
-                                )?;
-                                return Ok(AttemptResult::FailedTerminal { run, error });
+                            ToolResultOutcomeDto::Failed { content, .. } => {
+                                // A failed call is answered like a completed
+                                // one: its content is the model-visible
+                                // failure guidance, and the loop continues so
+                                // the model can recover instead of losing the
+                                // run to its own call.
+                                messages
+                                    .push(ModelMessageDto::tool_result(call.call_id(), content)?);
                             }
                             ToolResultOutcomeDto::Completed { content, .. } => {
                                 messages

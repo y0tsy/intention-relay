@@ -26,22 +26,20 @@ use intention_proto::{
 };
 use intention_storage::{StartingRunModelContextDto, ToolResultStatusDto};
 use intention_test_support::fixture_snapshot;
-use intention_tools::{BoundedText, ExecuteInput, GlobInput, ReadInput, ToolInput, WorkspaceRoot};
+use intention_tools::WorkspaceRoot;
+
+/// Builds the canonical model arguments document of one `read` call.
+fn read_arguments(path: &str) -> String {
+    format!("{{\"path\":\"{path}\"}}")
+}
 
 fn invoke_read_input(path: &str) -> ToolInvocationRequestDto {
-    ToolInvocationRequestDto::new(
-        WorkspaceRoot::resolve(
+    invoke_read_input_in_workspace(
+        &WorkspaceRoot::resolve(
             &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy()).expect("workspace"),
         )
         .expect("workspace is valid"),
-        SessionId::new(),
-        RunId::new(),
-        ToolCallId::new(),
-        "read",
-        ToolInput::Read(ReadInput {
-            path: intention_proto::WorkspaceRelativePathDto::parse(path).expect("path"),
-        }),
-        fixture_time(),
+        path,
     )
 }
 
@@ -52,11 +50,9 @@ fn invoke_read_input_in_workspace(root: &WorkspaceRoot, path: &str) -> ToolInvoc
         RunId::new(),
         ToolCallId::new(),
         "read",
-        ToolInput::Read(ReadInput {
-            path: intention_proto::WorkspaceRelativePathDto::parse(path).expect("path"),
-        }),
         fixture_time(),
     )
+    .with_arguments_json(read_arguments(path))
 }
 fn fixture_time() -> TimestampDto {
     TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid")
@@ -101,42 +97,22 @@ fn hello_workspace(root: &std::path::Path) -> WorkspaceRoot {
         .expect("workspace")
 }
 
-fn managed_read_input(path: &str) -> ToolInput {
-    ToolInput::Read(ReadInput {
-        path: intention_proto::WorkspaceRelativePathDto::parse(path).expect("path"),
-    })
+fn cancelled_execute_arguments() -> String {
+    r#"{"command":"sleep 1"}"#.to_owned()
 }
 
-fn cancelled_execute_input() -> ToolInput {
-    ToolInput::Execute(ExecuteInput {
-        program: BoundedText::new("sh").expect("program"),
-        args: vec![
-            BoundedText::new("-c").expect("arg"),
-            BoundedText::new("sleep 1").expect("arg"),
-        ],
-    })
-}
-
-/// An execute invocation that reports its own start and keeps running.
+/// The arguments of an execute call that reports its own start and keeps
+/// running.
 ///
-/// The child writes `sentinel.txt` into the invocation's working directory and
-/// then waits, so a fixture can synchronize on the observed effect before it
-/// cancels the call.
-fn started_execute_input() -> ToolInput {
-    ToolInput::Execute(ExecuteInput {
-        program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).expect("program"),
-        args: if cfg!(windows) {
-            vec![
-                BoundedText::new("/C").expect("arg"),
-                BoundedText::new("echo started> sentinel.txt & ping -n 2 127.0.0.1").expect("arg"),
-            ]
-        } else {
-            vec![
-                BoundedText::new("-c").expect("arg"),
-                BoundedText::new("printf x > sentinel.txt; sleep 2").expect("arg"),
-            ]
-        },
-    })
+/// The command writes `sentinel.txt` into the invocation's working directory
+/// and then waits, so a fixture can synchronize on the observed effect before
+/// it cancels the call.
+fn started_execute_arguments() -> String {
+    if cfg!(windows) {
+        r#"{"command":"echo started> sentinel.txt & ping -n 2 127.0.0.1"}"#.to_owned()
+    } else {
+        r#"{"command":"printf x > sentinel.txt; sleep 2"}"#.to_owned()
+    }
 }
 
 #[test]
@@ -154,9 +130,9 @@ fn local_tool_success_records_admission_and_completion() {
                 run,
                 call,
                 "read",
-                managed_read_input("hello.txt"),
                 fixture_time(),
-            ),
+            )
+            .with_arguments_json(read_arguments("hello.txt")),
             &RecordingCommitObserver::new(),
         )
         .expect("tool succeeds");
@@ -196,11 +172,9 @@ fn an_empty_search_result_still_commits_one_terminal_answer() {
                 run,
                 call,
                 "glob",
-                ToolInput::Glob(GlobInput {
-                    pattern: BoundedText::new("*.none").expect("pattern"),
-                }),
                 fixture_time(),
-            ),
+            )
+            .with_arguments_json(r#"{"pattern":"*.none"}"#.to_owned()),
             &RecordingCommitObserver::new(),
         )
         .expect("an empty search result answers its call instead of failing");
@@ -263,7 +237,7 @@ fn committed_rows_redact_absolute_workspace_root_and_os_error_text() {
             &RecordingCommitObserver::new(),
         )
         .expect("a missing file is a durable safe failure");
-    let ToolResultOutcomeDto::Failed { error } = outcome else {
+    let ToolResultOutcomeDto::Failed { error, .. } = outcome else {
         unreachable!("a missing file fails the call");
     };
     let rendered = format!(
@@ -277,9 +251,9 @@ fn committed_rows_redact_absolute_workspace_root_and_os_error_text() {
 }
 
 #[test]
-fn local_tool_rejects_unknown_or_mismatched_id_before_effects() {
+fn unknown_tool_calls_commit_a_guided_failure_instead_of_stopping() {
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let error = ApplicationService::new(&repository)
+    let outcome = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
             ToolInvocationRequestDto::new(
                 WorkspaceRoot::resolve(
@@ -290,16 +264,29 @@ fn local_tool_rejects_unknown_or_mismatched_id_before_effects() {
                 SessionId::new(),
                 RunId::new(),
                 ToolCallId::new(),
-                "unknown",
-                managed_read_input("missing"),
+                "frobnicate",
                 fixture_time(),
-            ),
+            )
+            .with_arguments_json(r#"{"path":"missing"}"#),
             &RecordingCommitObserver::new(),
         )
-        .expect_err("mismatched tool id is rejected");
-    assert_eq!(error.code(), "tool_id_mismatch");
-    assert!(repository.committed_messages().is_empty());
-    assert!(repository.committed_results().is_empty());
+        .expect("an unknown tool is a durable, model-visible failure");
+    let ToolResultOutcomeDto::Failed { error, content } = outcome else {
+        unreachable!("an unknown tool fails the call");
+    };
+    assert_eq!(error.code(), "unknown_tool");
+    assert!(content.contains("read, write, edit, execute, glob, grep"));
+    // The call row and exactly one terminal Failed result commit; the model's
+    // mistake never stops the run.
+    let messages = repository.committed_messages();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].kind(), MessageKindDto::ToolCall);
+    assert_eq!(messages[0].tool_id(), Some("frobnicate"));
+    assert_eq!(messages[1].kind(), MessageKindDto::ToolResult);
+    assert_eq!(messages[1].text(), content);
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
 }
 
 #[test]
@@ -974,9 +961,9 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
                 run_id,
                 call_id,
                 "read",
-                managed_read_input("hello.txt"),
                 fixture_time(),
-            ),
+            )
+            .with_arguments_json(read_arguments("hello.txt")),
             &publisher,
         )
         .expect("read succeeds");
@@ -1026,16 +1013,21 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
                 run_id,
                 call_id,
                 "read",
-                managed_read_input("missing.txt"),
                 fixture_time(),
-            ),
+            )
+            .with_arguments_json(read_arguments("missing.txt")),
             &publisher,
         )
         .expect("a missing file is a durable safe failure");
-    let ToolResultOutcomeDto::Failed { error } = outcome else {
+    let ToolResultOutcomeDto::Failed { error, content } = outcome else {
         unreachable!("a missing file fails the call");
     };
     assert_eq!(error.code(), "tool_read_failed");
+    assert!(content.contains("tool_read_failed"));
+    assert!(
+        !content.contains(&root.to_string_lossy().to_string()),
+        "guidance never carries the absolute workspace root"
+    );
     assert_single_terminal_result(
         &repository,
         session_id,
@@ -1044,9 +1036,10 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
         "read",
         ToolResultStatusDto::Failed,
     );
-    // The terminal Failed commit classifies the safe error code.
+    // The terminal Failed commit carries the model-visible failure guidance.
     let failed = &repository.committed_results()[0];
-    assert_eq!(failed.content(), "tool_read_failed");
+    assert!(failed.content().starts_with("the tool call failed\n"));
+    assert!(failed.content().contains("tool_read_failed"));
     assert!(failed.metadata().is_empty());
     publisher.assert_call_row_then_one_terminal();
     drop(publisher);
@@ -1066,9 +1059,9 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
                 run_id,
                 call_id,
                 "execute",
-                cancelled_execute_input(),
                 fixture_time(),
             )
+            .with_arguments_json(cancelled_execute_arguments())
             .with_cancellation(cancelled),
             &publisher,
         )
@@ -1126,9 +1119,9 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
                 run_id,
                 call_id,
                 "execute",
-                started_execute_input(),
                 fixture_time(),
             )
+            .with_arguments_json(started_execute_arguments())
             .with_cancellation(signal),
             &publisher,
         )
@@ -1168,8 +1161,7 @@ fn tool_call_row_commits_the_canonical_arguments_document() {
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
-            invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt")
-                .with_arguments_json(r#"{"path":"hello.txt"}"#),
+            invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt"),
             &RecordingCommitObserver::new(),
         )
         .expect("read succeeds");
@@ -1178,7 +1170,9 @@ fn tool_call_row_commits_the_canonical_arguments_document() {
     assert_eq!(messages[0].text(), r#"{"path":"hello.txt"}"#);
     assert_eq!(messages[0].tool_id(), Some("read"));
 
-    // A caller without the model's arguments still commits a well-formed row.
+    // A caller without the model's arguments still commits the call row; the
+    // undecodable call is answered by one terminal Failed result instead of
+    // stopping the run.
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
@@ -1188,13 +1182,17 @@ fn tool_call_row_commits_the_canonical_arguments_document() {
                 RunId::new(),
                 call,
                 "read",
-                managed_read_input("hello.txt"),
                 fixture_time(),
             ),
             &RecordingCommitObserver::new(),
         )
-        .expect("read succeeds");
+        .expect("a call without model arguments still commits its row");
     assert_eq!(repository.committed_messages()[0].text(), "{}");
+    assert_eq!(repository.committed_messages().len(), 2);
+    assert_eq!(
+        repository.committed_results()[0].status(),
+        ToolResultStatusDto::Failed
+    );
     let _ = fs::remove_dir_all(root);
 }
 
