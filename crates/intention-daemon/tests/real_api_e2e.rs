@@ -539,7 +539,7 @@ async fn create_session(host: &LiveE2eHost, session_id: SessionId, label: &str) 
             host.workspace_id,
             WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
                 .expect("workspace root is absolute"),
-            RunModeDto::Build,
+            Some(RunModeDto::Build),
         ))
         .await
         .unwrap_or_else(|error| {

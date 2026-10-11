@@ -23,6 +23,10 @@ flowchart LR
 A run snapshots its mode and policy at startup. A policy change applies to a later run unless an explicit, typed
 transition workflow is introduced. The Autopilot policy is immutable for the active run.
 
+The durable default of a created session is `RunModeDto::DEFAULT` (`Build`): a create command carries an optional run
+mode, and the application service resolves its absence to that default before the durable write, so no front end
+decides the run policy of a session it creates.
+
 ## Build mode
 
 Build mode:

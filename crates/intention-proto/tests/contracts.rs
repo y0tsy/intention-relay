@@ -271,14 +271,14 @@ fn commands_round_trip_with_typed_identity_and_mode() {
         session_id,
         workspace_id,
         workspace_root(),
-        RunModeDto::Plan,
+        Some(RunModeDto::Plan),
     );
 
     assert_eq!(command.project_id(), project_id);
     assert_eq!(command.session_id(), session_id);
     assert_eq!(command.workspace_id(), workspace_id);
     assert_eq!(command.workspace_root(), &workspace_root());
-    assert_eq!(command.mode(), RunModeDto::Plan);
+    assert_eq!(command.mode(), Some(RunModeDto::Plan));
 
     let decoded: CreateSessionCommandDto =
         serde_json::from_str(&serde_json::to_string(&command).expect("command serializes"))

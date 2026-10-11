@@ -767,7 +767,7 @@ mod tests {
                 session_id,
                 WorkspaceId::new(),
                 fixture_workspace_root(),
-                RunModeDto::Build,
+                Some(RunModeDto::Build),
             ))
             .expect("fixture session creates");
         assert!(matches!(accepted, ProtocolResultDto::SessionCreated(_)));

@@ -107,7 +107,7 @@ fn fixture_session_command(session_id: SessionId) -> CreateSessionCommandDto {
         session_id,
         WorkspaceId::new(),
         fixture_workspace_root("m3-test-support"),
-        RunModeDto::Build,
+        Some(RunModeDto::Build),
     )
 }
 

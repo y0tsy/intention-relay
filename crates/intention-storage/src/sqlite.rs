@@ -875,7 +875,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                         session_id.to_string(),
                         command.project_id().to_string(),
                         command.workspace_id().to_string(),
-                        command.mode().as_str(),
+                        command.resolved_mode().as_str(),
                         occurred_at
                     ],
                 )
@@ -2575,7 +2575,7 @@ mod tests {
                     session_id,
                     WorkspaceId::new(),
                     fixture_workspace_root(),
-                    RunModeDto::Build,
+                    Some(RunModeDto::Build),
                 ),
                 fixture_time(1),
             )

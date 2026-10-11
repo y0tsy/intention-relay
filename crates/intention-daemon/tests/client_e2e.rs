@@ -221,7 +221,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
             session_id,
             WorkspaceId::new(),
             WorkspaceRootDto::parse(workspace_root).expect("workspace root is absolute"),
-            RunModeDto::Build,
+            Some(RunModeDto::Build),
         ))
         .await
         .expect("the daemon accepts session creation");
@@ -449,7 +449,7 @@ async fn real_daemon_tool_loop_answers_a_failed_call_without_stopping() {
             WorkspaceId::new(),
             WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
                 .expect("workspace root is absolute"),
-            RunModeDto::Build,
+            Some(RunModeDto::Build),
         ))
         .await
         .expect("the daemon accepts session creation");
@@ -555,7 +555,7 @@ async fn real_daemon_reports_a_declared_execute_timeout_as_a_named_partial() {
             WorkspaceId::new(),
             WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
                 .expect("workspace root is absolute"),
-            RunModeDto::Build,
+            Some(RunModeDto::Build),
         ))
         .await
         .expect("the daemon accepts session creation");
@@ -642,7 +642,7 @@ async fn real_daemon_stops_a_running_tool_and_ends_the_run_interrupted() {
             WorkspaceId::new(),
             WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
                 .expect("workspace root is absolute"),
-            RunModeDto::Build,
+            Some(RunModeDto::Build),
         ))
         .await
         .expect("the daemon accepts session creation");
@@ -749,7 +749,7 @@ async fn real_daemon_commits_step_reasoning_above_its_tool_exchange() {
             WorkspaceId::new(),
             WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
                 .expect("workspace root is absolute"),
-            RunModeDto::Build,
+            Some(RunModeDto::Build),
         ))
         .await
         .expect("the daemon accepts session creation");

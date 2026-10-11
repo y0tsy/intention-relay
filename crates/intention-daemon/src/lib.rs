@@ -1822,7 +1822,7 @@ mod tests {
                 WorkspaceId::new(),
                 WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
                     .expect("fixture workspace is absolute"),
-                RunModeDto::Build,
+                Some(RunModeDto::Build),
             ))
             .expect("fixture session creates");
         assert!(matches!(created, ProtocolResultDto::SessionCreated(_)));
@@ -1933,7 +1933,7 @@ mod tests {
                 WorkspaceId::new(),
                 WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
                     .expect("fixture workspace is absolute"),
-                RunModeDto::Build,
+                Some(RunModeDto::Build),
             ))
             .expect("fixture session creates");
         let endpoint = endpoint();

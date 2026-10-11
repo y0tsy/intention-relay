@@ -19,18 +19,22 @@ pub struct CreateSessionCommandDto {
     session_id: SessionId,
     workspace_id: WorkspaceId,
     workspace_root: WorkspaceRootDto,
-    mode: RunModeDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mode: Option<RunModeDto>,
 }
 
 impl CreateSessionCommandDto {
     /// Creates a typed durable session request with daemon-owned stable identities.
+    ///
+    /// `mode` is the run policy the caller declared, or `None` to leave the
+    /// durable default to the core.
     #[must_use]
     pub const fn new(
         project_id: ProjectId,
         session_id: SessionId,
         workspace_id: WorkspaceId,
         workspace_root: WorkspaceRootDto,
-        mode: RunModeDto,
+        mode: Option<RunModeDto>,
     ) -> Self {
         Self {
             project_id,
@@ -68,10 +72,32 @@ impl CreateSessionCommandDto {
         &self.workspace_root
     }
 
-    /// Returns the initial run policy mode.
+    /// Returns the run policy the caller declared, if any.
+    ///
+    /// The core resolves an absent value to [`RunModeDto::DEFAULT`] before the
+    /// durable session is written, so no front end decides the session policy.
     #[must_use]
-    pub const fn mode(&self) -> RunModeDto {
+    pub const fn mode(&self) -> Option<RunModeDto> {
         self.mode
+    }
+
+    /// Returns the durable run policy of the session this command creates.
+    ///
+    /// An absent caller mode resolves to [`RunModeDto::DEFAULT`], the one core
+    /// declaration of the durable default.
+    #[must_use]
+    pub const fn resolved_mode(&self) -> RunModeDto {
+        match self.mode {
+            Some(mode) => mode,
+            None => RunModeDto::DEFAULT,
+        }
+    }
+
+    /// Returns this command carrying the durable run policy the core resolved.
+    #[must_use]
+    pub const fn with_mode(mut self, mode: RunModeDto) -> Self {
+        self.mode = Some(mode);
+        self
     }
 }
 

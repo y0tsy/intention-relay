@@ -104,7 +104,7 @@ fn fixture_requests(session_id: SessionId, run_id: RunId) -> Vec<ClientRequestDt
             session_id,
             WorkspaceId::new(),
             fixture_workspace_root(),
-            RunModeDto::Build,
+            Some(RunModeDto::Build),
         )),
         ClientRequestDto::SendUserTurn(
             SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "hello")
@@ -274,6 +274,31 @@ fn frames_carry_committed_values_without_positions() {
             "a frame is never accepted as a correlated reply"
         );
     }
+}
+
+#[test]
+fn a_create_command_may_omit_its_mode() {
+    let declared = CreateSessionCommandDto::new(
+        ProjectId::new(),
+        SessionId::new(),
+        WorkspaceId::new(),
+        fixture_workspace_root(),
+        Some(RunModeDto::Plan),
+    );
+    let mut value = serde_json::to_value(&declared).expect("the command serializes");
+    assert_eq!(value["mode"], "plan");
+    value
+        .as_object_mut()
+        .expect("the command serializes as an object")
+        .remove("mode");
+    let decoded: CreateSessionCommandDto =
+        serde_json::from_value(value).expect("a command without a declared mode decodes");
+    assert_eq!(decoded.mode(), None);
+    assert_eq!(
+        decoded.resolved_mode(),
+        RunModeDto::DEFAULT,
+        "the core resolves an absent caller mode to the declared default"
+    );
 }
 
 #[test]

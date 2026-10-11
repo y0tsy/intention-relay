@@ -51,7 +51,7 @@ pub fn create_session(facade: &DaemonApplicationFacade, session_id: SessionId, w
             WorkspaceId::new(),
             WorkspaceRootDto::parse(workspace.to_string_lossy().into_owned())
                 .expect("fixture workspace is absolute"),
-            RunModeDto::Build,
+            Some(RunModeDto::Build),
         ))
         .expect("fixture session creates");
     assert!(matches!(created, ProtocolResultDto::SessionCreated(_)));

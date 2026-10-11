@@ -48,6 +48,19 @@ impl RunModeDto {
             )?),
         }
     }
+
+    /// The declared durable run modes, in `as_str` order.
+    ///
+    /// This is the single source the command grammar renders in its usage and
+    /// rejection text, and the proto tests pin it to the wire spelling of every
+    /// member.
+    pub const ALL: [Self; 2] = [Self::Plan, Self::Build];
+
+    /// The durable run mode a session starts with when its creation command declares none.
+    ///
+    /// The application service resolves an absent caller mode to this value, so
+    /// no front end decides the durable policy of a created session.
+    pub const DEFAULT: Self = Self::Build;
 }
 
 /// The durable lifecycle status for a run.
@@ -334,6 +347,22 @@ mod tests {
         assert_eq!(
             rejected.as_ref().err().map(ErrorDto::retry),
             Some(ErrorRetryDto::Never)
+        );
+    }
+
+    #[test]
+    fn every_declared_run_mode_round_trips() {
+        assert_eq!(
+            RunModeDto::ALL.map(RunModeDto::as_str),
+            ["plan", "build"],
+            "the declared set is every durable run mode in as_str order"
+        );
+        for mode in RunModeDto::ALL {
+            assert_eq!(RunModeDto::parse(mode.as_str()).ok(), Some(mode));
+        }
+        assert!(
+            RunModeDto::ALL.contains(&RunModeDto::DEFAULT),
+            "the durable default is a declared run mode"
         );
     }
 

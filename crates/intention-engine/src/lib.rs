@@ -318,6 +318,11 @@ where
 
     /// Creates a durable session and returns its committed projection.
     ///
+    /// The command's declared run policy is resolved before the workspace
+    /// binding and the durable write: an absent mode becomes the vocabulary's
+    /// `RunModeDto::DEFAULT`, so no front end decides the durable policy of a
+    /// created session.
+    ///
     /// A workspace root is bound to exactly one project and workspace identity
     /// for the life of the database, so a command proposing another identity
     /// for an already-bound root joins the durable binding instead: the
@@ -334,6 +339,8 @@ where
         command: CreateSessionCommandDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<SessionProjectionDto> {
+        let resolved = command.resolved_mode();
+        let command = command.with_mode(resolved);
         let command = self.join_workspace_binding(command)?;
         self.repository.create_session(command, occurred_at)
     }

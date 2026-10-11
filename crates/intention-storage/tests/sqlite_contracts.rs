@@ -76,7 +76,7 @@ fn create_at(store: &SqliteStorageRepository, updated_at: i64) -> SessionId {
                 session_id,
                 WorkspaceId::new(),
                 workspace_root(&session_id.to_string()),
-                RunModeDto::Build,
+                Some(RunModeDto::Build),
             ),
             time(updated_at),
         )
@@ -1668,7 +1668,7 @@ fn the_workspace_binding_reads_the_association_a_creation_established() {
                 SessionId::new(),
                 workspace_id,
                 root.clone(),
-                RunModeDto::Build,
+                Some(RunModeDto::Build),
             ),
             time(1),
         )
@@ -1702,7 +1702,7 @@ fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
                     session,
                     workspace_id,
                     root.clone(),
-                    RunModeDto::Build,
+                    Some(RunModeDto::Build),
                 ),
                 time(1),
             )
@@ -1716,7 +1716,7 @@ fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
                     first_session,
                     workspace_id,
                     root.clone(),
-                    RunModeDto::Build,
+                    Some(RunModeDto::Build),
                 ),
                 time(1),
             )
@@ -1732,7 +1732,7 @@ fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
                     SessionId::new(),
                     workspace_id,
                     workspace_root("conflict"),
-                    RunModeDto::Build,
+                    Some(RunModeDto::Build),
                 ),
                 time(2),
             )
@@ -1747,7 +1747,7 @@ fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
                 SessionId::new(),
                 WorkspaceId::new(),
                 root,
-                RunModeDto::Build,
+                Some(RunModeDto::Build),
             ),
             time(3),
         )
@@ -2755,7 +2755,7 @@ fn session_list_maps_every_durable_session_column() {
                 session,
                 workspace,
                 root.clone(),
-                RunModeDto::Plan,
+                Some(RunModeDto::Plan),
             ),
             time(7),
         )

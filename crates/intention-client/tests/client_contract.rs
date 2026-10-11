@@ -224,7 +224,7 @@ fn fixture_create_command(session_id: SessionId) -> CreateSessionCommandDto {
                 .into_owned(),
         )
         .expect("fixture workspace root is valid"),
-        RunModeDto::Build,
+        Some(RunModeDto::Build),
     )
 }
 
