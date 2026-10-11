@@ -361,7 +361,8 @@ text above is the live policy.
   the chat has no sidebar, and no command opens a second window.
 - The transcript block model. A committed `user` row is a labelled, framed markdown card whose frame opens with `❯ you`;
   a committed `assistant` row is its committed reasoning block — collapsed beyond fifteen display rows and closed by an
-  accent rule — plus the markdown answer. A committed `tool_call`/`tool_result` pair, paired by `tool_call_id`, is one
+  accent rule — plus the markdown answer when the step answered, and a reasoning-only row draws its reasoning block
+  alone, with no empty answer line. A committed `tool_call`/`tool_result` pair, paired by `tool_call_id`, is one
   framed block dispatched by its `tool_id`: `read`, `glob`, and `grep` are parsed in full, as the arguments' field
   summary plus a bounded twelve-display-row preview closed by its `… N more rows` marker, on the block's own tool
   surface, border, badge ink, and muted result ink; `write`, `edit`, and `execute` show the badge plus the visible

@@ -159,7 +159,11 @@ private platform shell adapter (`bash -c` on Unix, `cmd /C` on Windows) with opt
 `timeout_seconds` parameters, the fixed thirty-second ceiling is removed so a call without a declared timeout is
 bounded by cancellation alone and by one pipe-collection window after the direct child is reaped, a pathless `grep`
 searches from the workspace root, and a failed or undecodable call commits one durable `Failed` result whose bounded
-model-visible guidance answers the call before the loop continues.
+model-visible guidance answers the call before the loop continues. One more correction closes the slice's reasoning
+gap: every completed step commits one assistant row whenever it produced text or reasoning, a reasoning-only row
+commits before its own step's tool rows carrying an empty `text` and the step's whole reasoning, and the context
+rebuild skips it, so a live transcript keeps a tool round's reasoning above its exchange and a reload shows that same
+order.
 -  **Slice 3 — Instruction sources and system context — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
 deployment instruction profile adapted from the legacy Antibusy static prompt set, user-authored fragments at user,

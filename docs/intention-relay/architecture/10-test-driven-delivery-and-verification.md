@@ -233,12 +233,13 @@ another theme. Daemon tests prove the effective-theme rule (the stored override,
 light) and that a stored theme survives a daemon restart.
 
 The terminal crate itself carries a render suite and a process end-to-end suite. `tests/tui_render.rs` renders the
-render-free `AppState` through revue's own test app in seventy-nine cases: the welcome surface (the lockup and the
+render-free `AppState` through revue's own test app in eighty-one cases: the welcome surface (the lockup and the
 overview, gone once a session opens, the launch that lists sessions but opens none, and the state that never covers a
 reported row), the chat panel, the transcript blocks (the
 labelled user card and the markdown inside it, the markdown answer, the heading (its text painted without the parser's
 `#` marker), the bold phrase, the aligned table,
-the committed reasoning block with its collapsed marker and its chunked expansion, the blank gap row, the streaming
+the committed reasoning block with its collapsed marker and its chunked expansion, the reasoning-only row that draws no
+answer line, the reasoning painted above the tool exchange it precedes, the blank gap row, the streaming
 tail laid out row for row like the committed answer block it becomes, the live reasoning segment laid out like the
 committed reasoning block it becomes, the framed tool blocks for `read`, `glob`, `grep`, `write`, `edit`, `execute`, and an unknown
 `tool_id`, the call-without-result degradation, and the notice blocks streamed live and restored by a snapshot), the
@@ -260,7 +261,7 @@ continuation that reuses its session instead of creating one, every `/new` run c
 workspace root, a multi-line prompt reaching the session unchanged, the timeout interrupt with exit 4, and a typed
 unknown-session rejection with exit 3. The binary's own unit tests cover the command
 grammar, the exit-status mapping, the workspace-root resolution, the REPL line loop, and the headless formats, drivers,
-and wait deadlines. The crate's inline unit tests cover the `AppState` transitions, the settings load and theme
+and wait deadlines, including the reasoning-only row the text report leaves unwritten. The crate's inline unit tests cover the `AppState` transitions, the settings load and theme
 selection and rejection paths, the picker's preview, commit, and revert transitions, the theme vocabulary and its
 parser, the command registry with its declared arguments and a submitted line's argument resolution and notices, the
 ranking and menu
@@ -268,12 +269,13 @@ transitions, the hint band's row arithmetic and columns, the keymap, both themes
 opacity, distinctness, `error`/`scarlet` alias, cross-theme, and dark-monochrome rules, the
 wheel mapping, the left-button pointer's press, drag, release, marker expansion, and edge scrolling, the turn clock, the
 browser geometry and row helpers, the markdown layout and the heading marker it drops, the per-tool block dispatch, the marker and notice layout, the
+reasoning-only row that owns one block with no answer line and the reasoning place above the tool exchange it precedes, the
 transcript layout cache's append-only fast path, width change, theme change, replacement, reasoning expansion,
 paired-result, and
 front-trim replays, and the clipboard-free source audit. A run of
-`cargo nextest run -p intention-tui` observed 362 tests across four binaries, all passing: 243 library unit tests,
-79 `tui_render` cases, 29 binary unit tests, and 11 `terminal_e2e` cases. A run of `cargo nextest run --workspace`
-observed 744 tests run, 744 passed, and 2 skipped.
+`cargo nextest run -p intention-tui` observed 367 tests across four binaries, all passing: 245 library unit tests,
+81 `tui_render` cases, 30 binary unit tests, and 11 `terminal_e2e` cases. A run of `cargo nextest run --workspace`
+observed 766 tests run, 766 passed, and 2 skipped.
 
 The per-crate self-checks are `cargo fmt -p intention-tui`, `cargo nextest run -p intention-tui`, and
 `cargo clippy -p intention-tui --all-targets`; the slice's acceptance gate is `make quick` during delivery and
@@ -299,8 +301,23 @@ decode failure and the unknown tool each commit the call row and one guided resu
 call is answered with its guidance, executes exactly once, and is never retried; the daemon end-to-end suite proves
 the real daemon completes the run, delivers the guidance-bearing tool row, and asks the fake provider exactly once
 more. The terminal adapter reads the call's `command` and declared `cwd` for its execute facts. A run of
-`cargo nextest run --workspace` observed 755 tests run, 755 passed, and 2 skipped; the acceptance gate is `make quick`
+`cargo nextest run --workspace` observed 766 tests run, 766 passed, and 2 skipped; the acceptance gate is `make quick`
 during delivery and `make verify` before merge.
+
+### Slice 2 step-reasoning correction
+
+The same slice's reasoning gap is closed in the core. Protocol contract tests admit an `Assistant` row that carries text
+or reasoning, so a reasoning-only step is a coherent row while a row with neither stays `invalid_message`. Engine tests
+prove the rule the transcript depends on: every completed step commits one assistant row whenever it produced text or
+reasoning, that row commits before the step's own tool rows, a reasoning-only final step commits its reasoning alone,
+and an interrupted reasoning-only step commits its reasoning without the `[interrupted]` marker. Storage tests prove a
+reasoning-only row round-trips through the transcript read and that the model-context rebuild skips it, so reasoning
+never replays into a later request. Client tests prove a committed reasoning-only content frame clears the provisional
+reasoning buffer. The daemon end-to-end suite drives a real daemon over the scripted fake provider with round reasoning
+and pins both the live stream order and the committed order — `assistant(reasoning)` before `tool_call`, `tool_result`,
+and the answering `assistant` row. The terminal render suite proves a reasoning-only row draws its reasoning block
+alone with no `∷` answer line, that a reasoned tool round paints its reasoning above the exchange it precedes, and that
+the headless text report writes no assistant line for a reasoning-only row.
 
 ### Future package evidence
 

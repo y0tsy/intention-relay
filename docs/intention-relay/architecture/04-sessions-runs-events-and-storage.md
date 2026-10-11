@@ -165,9 +165,12 @@ because they relate to the same user operation.
 ## Transcript, tool results, and model context
 
 `messages.kind` is a closed set: `user`, `assistant`, `tool_call`, `tool_result`, and `notice`. Assistant rows carry the
-whole reasoning text of the step, not deltas or fragments. `tool_results` is the structured view of tool calls;
+whole reasoning text of the step, not deltas or fragments. A row is valid when it carries text, reasoning, or both: a
+step that reasoned without answering commits a reasoning-only assistant row whose `text` is empty, and one transaction
+commits that row before the step's own tool rows. `tool_results` is the structured view of tool calls;
 `tool_call_id` is unique, and the daemon publishes the committed values a write returned rather than re-reading durable
-state. Model context is rebuilt from `messages`; `turns` stays the acceptance and queue state machine.
+state. Model context is rebuilt from `messages`; `turns` stays the acceptance and queue state machine, and the rebuild
+skips a blank-text assistant row, so a committed reasoning-only row never replays reasoning into a later request.
 
 The daemon writes no mid-stream content: text and reasoning accumulate in memory and commit once per completed model
 step as one `messages` row, while usage, finish reason, and error commit on the `runs` row. A crash mid-step loses the

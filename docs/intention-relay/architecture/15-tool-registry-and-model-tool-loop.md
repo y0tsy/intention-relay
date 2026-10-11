@@ -226,6 +226,13 @@ A `ToolCalls` finish closes a model step, not the run: one transaction records t
 and each admitted call then records its own `tool_results` row and its answering transcript row in one transaction; no
 local effect occurs inside it.
 
+Every completed step commits exactly one assistant row whenever it produced text or reasoning, and that row commits
+before the step's own tool rows do. The row carries the step's whole reasoning; a step that reasoned without answering
+commits it with an empty `text`, so the transcript keeps a tool round's reasoning above the exchange it precedes and a
+reload shows the same picture the live stream did. Reasoning never becomes model context: it rides the step's same-round
+continuation request as its attachment, and a context rebuild skips a row whose text is blank, so a reasoning-only step
+replays nothing.
+
 Calls admit independently and may execute concurrently; a group is not a workspace transaction and makes no
 serializability or merge claim. Each call commits exactly one terminal result; the next model step waits for all calls
 in the group to become terminal and receives a typed `ModelToolExchangeDto` in original model call order, never
@@ -295,8 +302,9 @@ and recovery never changes the call's recorded lifecycle. Blank partial content 
 
 A stopped *answer* carries a different durable mark. The assistant message committed for a model step that the user or
 the environment stopped has `[interrupted]` appended on its own line, so the transcript records that the answer was
-cut; a step with no text commits no assistant row, a completed step never carries the marker, and the durable notice
-row that follows either way is unchanged.
+cut; the marker rides a cut answer only, never a reasoning-only row, a step that produced neither text nor reasoning
+commits no assistant row at all, a completed step never carries the marker, and the durable notice row that follows
+either way is unchanged.
 
 ### Tool result delivery
 

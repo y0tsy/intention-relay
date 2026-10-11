@@ -168,7 +168,9 @@ Rules the panes keep:
 
 - User and assistant text both go through revue's `markdown` feature: a user row
   is a framed, padded card labelled `❯ you`, an assistant row is its reasoning
-  block plus the markdown answer.
+  block plus the markdown answer when the step answered, and a reasoning-only
+  row - a step that reasoned and called a tool without answering - is its
+  reasoning block alone.
 - Every marker in the window keeps the one shared `MARKER_GAP` column between
   its glyph and its text, and an answer's `∷` marker rides the answer's own
   first line with a hanging indent for every row after it.
