@@ -93,6 +93,8 @@ pub struct SessionProjectionDto {
     config_revision_id: Option<ConfigRevisionId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     active_run: Option<RunProjectionDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_model: Option<String>,
     pending_turns: Vec<PendingTurnProjectionDto>,
     pending_turns_omitted: u32,
 }
@@ -113,6 +115,8 @@ impl<'de> Deserialize<'de> for SessionProjectionDto {
             config_revision_id: Option<ConfigRevisionId>,
             #[serde(default)]
             active_run: Option<RunProjectionDto>,
+            #[serde(default)]
+            provider_model: Option<String>,
             pending_turns: Vec<PendingTurnProjectionDto>,
             #[serde(default)]
             pending_turns_omitted: u32,
@@ -131,6 +135,11 @@ impl<'de> Deserialize<'de> for SessionProjectionDto {
         )
         .map_err(de::Error::custom)?;
         projection.pending_turns_omitted = raw.pending_turns_omitted;
+        if let Some(model) = raw.provider_model {
+            projection = projection
+                .with_provider_model(model)
+                .map_err(de::Error::custom)?;
+        }
         Ok(projection)
     }
 }
@@ -179,9 +188,32 @@ impl SessionProjectionDto {
             mode,
             config_revision_id,
             active_run,
+            provider_model: None,
             pending_turns,
             pending_turns_omitted: 0,
         })
+    }
+
+    /// Returns the same projection naming the session's effective provider
+    /// model.
+    ///
+    /// The model is the configuration selection a new run of this session
+    /// would capture; storage leaves it absent because only the daemon can
+    /// resolve the effective selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when `model` is blank or carries a NUL.
+    pub fn with_provider_model(mut self, model: impl Into<String>) -> DtoResult<Self> {
+        let model = model.into();
+        if model.trim().is_empty() || model.contains('\0') {
+            return Err(ErrorDto::validation(
+                "invalid_provider_model",
+                "provider model must be non-blank and free of NUL",
+            ));
+        }
+        self.provider_model = Some(model);
+        Ok(self)
     }
 
     /// Returns the same projection reporting how many pending turns were omitted.
@@ -234,6 +266,11 @@ impl SessionProjectionDto {
     #[must_use]
     pub const fn active_run(&self) -> Option<RunProjectionDto> {
         self.active_run
+    }
+    /// Returns the session's effective provider model, when the daemon filled it.
+    #[must_use]
+    pub fn provider_model(&self) -> Option<&str> {
+        self.provider_model.as_deref()
     }
     /// Returns pending turns in durable insertion order.
     #[must_use]

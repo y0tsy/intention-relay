@@ -183,7 +183,15 @@ retrying in a loop. The slice's tool-projection correction completes the retrosp
 contract — the closed `ToolId`, the typed input and result families, and each committed tool row's typed projection —
 lives in `intention-proto`, the engine decodes the model's arguments document once and commits the typed row, and the
 pane renders that projection with no JSON decode and no result re-parse. That correction is adapter-facing only: it
-activates no registry, admission, bridge, or MCP contract, so Slice 5's tool-layer contracts stay unactivated.
+activates no registry, admission, bridge, or MCP contract, so Slice 5's tool-layer contracts stay unactivated. The
+slice's projection-fields correction carries the committed run facts to the terminal: the run projection gains the
+durable `started_at`/`finished_at` times, the terminal outcome's usage, and the count of committed tool calls no
+committed result answers (storage's read-time pairing); the session projection gains the effective provider model the
+daemon fills from the run's resolved configuration in the one snapshot read behind both the one-shot request and the
+subscription reply; and the status row and the badge render those facts instead of the front-end stubs they replace —
+the committed duration reads `Answered in 13s` from the projection's own times, the committed usage reads
+`ctx in 1200 out 300` (or `ctx not reported`), the badge names the session's model, and the half-second working word
+follows the projection's open-call count, so no front end pairs rows or measures a committed fact itself.
 -  **Slice 3 — Instruction sources and system context — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
 deployment instruction profile adapted from the legacy Antibusy static prompt set, user-authored fragments at user,

@@ -40,7 +40,12 @@ fn fixture_run(session_id: SessionId, run_id: RunId) -> RunProjectionDto {
         TurnId::new(),
         RunStatusDto::Running,
         ConfigRevisionId::new(),
+        None,
+        timestamp(1_726_000_000),
+        None,
+        0,
     )
+    .expect("fixture run projection is valid")
 }
 
 fn fixture_snapshot(session_id: SessionId, run_id: RunId) -> SessionSnapshotDto {

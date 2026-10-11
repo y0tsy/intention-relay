@@ -114,6 +114,14 @@ fn started(outcome: AcceptedTurnOutcomeDto) -> (RunProjectionDto, MessageProject
     }
 }
 
+/// Returns the open committed tool calls one run's projection reports.
+fn open_calls(store: &SqliteStorageRepository, session: SessionId, run: RunId) -> u32 {
+    store
+        .load_run_projection(session, run)
+        .expect("run projection loads")
+        .open_tool_calls()
+}
+
 fn pending(outcome: AcceptedTurnOutcomeDto) -> PendingTurnProjectionDto {
     match outcome {
         AcceptedTurnOutcomeDto::Pending(turn) => turn,
@@ -1761,6 +1769,284 @@ fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
             .code(),
         "storage_record_not_found"
     );
+}
+
+#[test]
+fn a_run_projection_carries_usage_times_and_open_calls() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let (_, _) = started(accept(&store, session, IdempotencyKey::new(), run, "run"));
+    let call_id = ToolCallId::new();
+    let _ = append(
+        &store,
+        tool_message(
+            session,
+            run,
+            MessageKindDto::ToolCall,
+            r#"{"call":"read"}"#,
+            call_row(
+                call_id,
+                identity("read"),
+                Some(read_arguments("src/lib.rs")),
+            ),
+        ),
+        3,
+    );
+
+    let open = store
+        .load_run_projection(session, run)
+        .expect("run projection loads");
+    assert_eq!(open.status(), RunStatusDto::Starting);
+    assert_eq!(
+        open.started_at().unix_seconds(),
+        2,
+        "a run starts at its durable acceptance time"
+    );
+    assert_eq!(
+        open.finished_at(),
+        None,
+        "a live run carries no finish time"
+    );
+    assert_eq!(open.usage(), None, "a live run reports no usage");
+    assert_eq!(
+        open.open_tool_calls(),
+        1,
+        "a committed call without its committed result stays open"
+    );
+
+    let running = store
+        .transition_run(session, run, RunStatusDto::Running, time(3))
+        .expect("run starts");
+    assert_eq!(running.status(), RunStatusDto::Running);
+    assert_eq!(running.open_tool_calls(), 1);
+    let usage = UsageDto::reported(1_200, 300, 1_500).expect("fixture usage is consistent");
+    let finished = store
+        .finish_run(
+            session,
+            run,
+            outcome(
+                RunStatusDto::Completed,
+                Some(usage),
+                Some(FinishReasonDto::Stop),
+                None,
+            ),
+            time(4),
+        )
+        .expect("run completes");
+    assert_eq!(finished.status(), RunStatusDto::Completed);
+    assert_eq!(finished.started_at().unix_seconds(), 2);
+    assert_eq!(
+        finished
+            .finished_at()
+            .expect("a terminal projection carries its finish time")
+            .unix_seconds(),
+        4
+    );
+    assert_eq!(finished.usage(), Some(usage));
+    assert_eq!(
+        finished.open_tool_calls(),
+        1,
+        "the terminal write leaves the committed pairing exactly as it was"
+    );
+    assert_eq!(
+        store
+            .load_run_projection(session, run)
+            .expect("run projection re-reads"),
+        finished,
+        "every write path projects the same committed row"
+    );
+}
+
+#[test]
+fn open_calls_track_committed_calls_without_a_committed_result() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let (_, _) = started(accept(&store, session, IdempotencyKey::new(), run, "run"));
+    let answered = ToolCallId::new();
+    let pending = ToolCallId::new();
+    for (call_id, path) in [(answered, "a.rs"), (pending, "b.rs")] {
+        let _ = append(
+            &store,
+            tool_message(
+                session,
+                run,
+                MessageKindDto::ToolCall,
+                r#"{"call":"read"}"#,
+                call_row(call_id, identity("read"), Some(read_arguments(path))),
+            ),
+            3,
+        );
+    }
+    assert_eq!(open_calls(&store, session, run), 2);
+
+    // Another session's committed call never counts against this run.
+    let other_session = create(&store);
+    let other_run = RunId::new();
+    let (_, _) = started(accept(
+        &store,
+        other_session,
+        IdempotencyKey::new(),
+        other_run,
+        "other",
+    ));
+    let _ = append(
+        &store,
+        tool_message(
+            other_session,
+            other_run,
+            MessageKindDto::ToolCall,
+            r#"{"call":"read"}"#,
+            call_row(
+                ToolCallId::new(),
+                identity("read"),
+                Some(read_arguments("c.rs")),
+            ),
+        ),
+        3,
+    );
+    assert_eq!(
+        open_calls(&store, session, run),
+        2,
+        "a call of another run never counts against this run"
+    );
+
+    // A committed result closes only the call it answers.
+    write_result(&store, session, run, answered, "answered");
+    assert_eq!(
+        open_calls(&store, session, run),
+        1,
+        "the answered call closes and the unanswered call stays open"
+    );
+
+    // An orphan result - a result whose call was never committed - closes
+    // nothing.
+    write_result(&store, session, run, ToolCallId::new(), "orphan");
+    assert_eq!(
+        open_calls(&store, session, run),
+        1,
+        "an orphan result never cancels a live call"
+    );
+
+    write_result(&store, session, run, pending, "pending");
+    assert_eq!(open_calls(&store, session, run), 0);
+}
+
+#[test]
+fn a_terminal_run_projection_carries_its_finish_time() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let (starting, _) = started(accept(&store, session, IdempotencyKey::new(), run, "run"));
+    assert_eq!(starting.status(), RunStatusDto::Starting);
+    assert_eq!(starting.finished_at(), None);
+
+    let running = store
+        .transition_run(session, run, RunStatusDto::Running, time(3))
+        .expect("run starts");
+    assert_eq!(running.status(), RunStatusDto::Running);
+    assert_eq!(
+        running.finished_at(),
+        None,
+        "a run is finished only by its terminal write"
+    );
+
+    let completed = store
+        .finish_run(
+            session,
+            run,
+            outcome(
+                RunStatusDto::Completed,
+                Some(UsageDto::NotReported),
+                Some(FinishReasonDto::Stop),
+                None,
+            ),
+            time(4),
+        )
+        .expect("run completes");
+    assert_eq!(
+        completed
+            .finished_at()
+            .expect("a completed run carries its finish time")
+            .unix_seconds(),
+        4
+    );
+    assert_eq!(completed.usage(), Some(UsageDto::NotReported));
+
+    // Recovery stamps its own finish time on an unfinished run.
+    let recovered_session = create(&store);
+    let recovered_run = RunId::new();
+    let (_, _) = started(accept(
+        &store,
+        recovered_session,
+        IdempotencyKey::new(),
+        recovered_run,
+        "recovered",
+    ));
+    let recovered = store
+        .recover_unfinished_runs(time(9))
+        .expect("recovery commits");
+    let interrupted = recovered
+        .iter()
+        .find(|projection| projection.run_id() == recovered_run)
+        .expect("the unfinished run is recovered");
+    assert_eq!(interrupted.status(), RunStatusDto::Interrupted);
+    assert_eq!(
+        interrupted
+            .finished_at()
+            .expect("a recovered run carries its finish time")
+            .unix_seconds(),
+        9
+    );
+    assert_eq!(
+        store
+            .load_run_projection(recovered_session, recovered_run)
+            .expect("recovered run re-reads")
+            .finished_at()
+            .expect("the recovered row keeps its finish time")
+            .unix_seconds(),
+        9
+    );
+}
+
+/// Commits one completed result row for `call_id` and rereads nothing.
+fn write_result(
+    store: &SqliteStorageRepository,
+    session: SessionId,
+    run: RunId,
+    call_id: ToolCallId,
+    text: &str,
+) {
+    let evidence = ToolResultEvidenceDto::new(
+        session,
+        run,
+        call_id,
+        "read",
+        ToolResultStatusDto::Completed,
+        r#"{"result":"read"}"#,
+        Vec::new(),
+        time(3),
+    )
+    .expect("fixture tool result evidence is valid");
+    let _ = store
+        .write_tool_result(
+            evidence,
+            tool_message(
+                session,
+                run,
+                MessageKindDto::ToolResult,
+                r#"{"result":"read"}"#,
+                result_row(
+                    call_id,
+                    identity("read"),
+                    ToolResultStatusDto::Completed,
+                    Some(read_result(text)),
+                    Vec::new(),
+                ),
+            ),
+        )
+        .expect("tool result commits");
 }
 
 #[test]

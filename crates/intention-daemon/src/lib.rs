@@ -25,9 +25,9 @@ use intention_engine::{
     ToolInvocationRequestDto, ToolResultOutcomeDto, fail_starting_run,
 };
 use intention_proto::{
-    CancelRunCommandDto, ClientRequestDto, DtoResult, ErrorDto, InterruptRunCommandDto, RunId,
-    SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto, SubscribeSessionCommandDto,
-    TimestampDto, ToolCallDto,
+    CancelRunCommandDto, ClientRequestDto, DtoResult, ErrorDto, InterruptRunCommandDto,
+    MessageKindDto, RunId, SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto,
+    SubscribeSessionCommandDto, TimestampDto, ToolCallDto,
 };
 use intention_proto::{
     ProtocolDaemonMessageDto, ProtocolResultDto, SessionFrameDto, TextDeltaChannelDto,
@@ -1061,6 +1061,18 @@ impl SessionCommitObserver for HostCommitObserver {
                     deltas.flush();
                 }
                 self.host.publish_content(message);
+                // The run's open-call count changes exactly when a committed
+                // tool row lands, so the current committed projection follows
+                // the row. The refresh is best-effort like every publication:
+                // a later commit or the terminal publication repairs a
+                // transient read failure.
+                if matches!(
+                    message.kind(),
+                    MessageKindDto::ToolCall | MessageKindDto::ToolResult
+                ) && let Some(run_id) = message.run_id()
+                {
+                    self.host.publish_current(message.session_id(), run_id);
+                }
             }
             SessionCommitDto::Status {
                 session_id,
@@ -2937,6 +2949,239 @@ mod tests {
             row.tool(),
             Some(&call),
             "the frame carries the committed typed projection unchanged"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_subscription_snapshot_carries_the_effective_provider_model() {
+        // The correlated reply of a fresh subscription is the session snapshot
+        // itself, so it announces the same effective model the one-shot read
+        // does: a window that attaches to a running session never falls back to
+        // a front-end default.
+        let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
+        let (session_id, _run_id) = create_and_start(&facade);
+        let host = new_host(facade);
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
+        let (close, _closed) = tokio::sync::watch::channel(false);
+        assert!(host.register_subscriber(
+            SubscribeSessionCommandDto::new(session_id),
+            sender,
+            close,
+            1,
+            None,
+        ));
+
+        let delivered = receiver.recv().await.expect("the snapshot reply arrives");
+        let ProtocolDaemonMessageDto::Reply(reply) = delivered else {
+            unreachable!("a registration first receives its correlated reply")
+        };
+        let ProtocolResultDto::SessionSubscribed(snapshot) = reply.result() else {
+            unreachable!("a session subscription answers with the session snapshot")
+        };
+        assert_eq!(snapshot.projection().provider_model(), Some("fixture"));
+    }
+
+    #[tokio::test]
+    async fn a_tool_call_frame_is_followed_by_a_status_frame_naming_the_open_call() {
+        use intention_proto::{ToolCallId, ToolCallRowDto, ToolIdentityDto, ToolInput, ToolRowDto};
+
+        let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
+        let (session_id, run_id) = create_and_start(&facade);
+        let host = new_host(facade);
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
+        let (close, _closed) = tokio::sync::watch::channel(false);
+        assert!(host.register_subscriber(
+            SubscribeSessionCommandDto::new(session_id),
+            sender,
+            close,
+            1,
+            None,
+        ));
+        assert!(matches!(
+            receiver.recv().await,
+            Some(ProtocolDaemonMessageDto::Reply(_))
+        ));
+
+        let call_id = ToolCallId::new();
+        let committed = host
+            .facade
+            .repository()
+            .append_message(
+                NewMessageDto::new(
+                    session_id,
+                    Some(run_id),
+                    MessageKindDto::ToolCall,
+                    r#"{"path":"hello.txt"}"#,
+                    None,
+                    Some(ToolRowDto::Call(
+                        ToolCallRowDto::new(
+                            call_id,
+                            ToolIdentityDto::parse("read").expect("the fixture tool is declared"),
+                            Some(
+                                ToolInput::from_arguments_json("read", r#"{"path":"hello.txt"}"#)
+                                    .expect("the fixture arguments decode"),
+                            ),
+                        )
+                        .expect("the fixture call row is valid"),
+                    )),
+                )
+                .expect("the fixture tool row is valid"),
+                TimestampDto::from_unix_seconds(2).expect("the fixture timestamp is valid"),
+            )
+            .expect("the fixture tool-call row commits");
+        HostCommitObserver {
+            host: Arc::clone(&host),
+            deltas: None,
+        }
+        .observe_session_commit(&SessionCommitDto::Content(committed));
+
+        // The committed row reaches the subscriber first, unchanged.
+        let delivered = receiver
+            .recv()
+            .await
+            .expect("the committed tool row is delivered");
+        let ProtocolDaemonMessageDto::Frame(SessionFrameDto::Content(row)) = delivered else {
+            unreachable!("the first frame is the committed tool row")
+        };
+        assert_eq!(row.kind(), MessageKindDto::ToolCall);
+
+        // Committing that row changed the run's open-call count, so the daemon
+        // republishes the committed projection that names the open call: the
+        // count comes from durable rows, never from the row kinds a client
+        // counted.
+        let delivered = receiver
+            .recv()
+            .await
+            .expect("the refreshed run projection is delivered");
+        let ProtocolDaemonMessageDto::Frame(SessionFrameDto::Status(run)) = delivered else {
+            unreachable!("the second frame is the committed run projection")
+        };
+        assert_eq!(run.run_id(), run_id);
+        assert_eq!(run.status(), RunStatusDto::Starting);
+        assert_eq!(run.finished_at(), None);
+        assert_eq!(run.open_tool_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_tool_result_frame_is_followed_by_a_status_frame_clearing_it() {
+        use intention_proto::{
+            BoundedText, TextResult, ToolCallId, ToolCallRowDto, ToolIdentityDto, ToolInput,
+            ToolResult, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
+        };
+
+        let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
+        let (session_id, run_id) = create_and_start(&facade);
+        let host = new_host(facade);
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
+        let (close, _closed) = tokio::sync::watch::channel(false);
+        assert!(host.register_subscriber(
+            SubscribeSessionCommandDto::new(session_id),
+            sender,
+            close,
+            1,
+            None,
+        ));
+        assert!(matches!(
+            receiver.recv().await,
+            Some(ProtocolDaemonMessageDto::Reply(_))
+        ));
+
+        let call_id = ToolCallId::new();
+        let tool = ToolIdentityDto::parse("read").expect("the fixture tool is declared");
+        let _ = host
+            .facade
+            .repository()
+            .append_message(
+                NewMessageDto::new(
+                    session_id,
+                    Some(run_id),
+                    MessageKindDto::ToolCall,
+                    r#"{"path":"hello.txt"}"#,
+                    None,
+                    Some(ToolRowDto::Call(
+                        ToolCallRowDto::new(
+                            call_id,
+                            tool.clone(),
+                            Some(
+                                ToolInput::from_arguments_json("read", r#"{"path":"hello.txt"}"#)
+                                    .expect("the fixture arguments decode"),
+                            ),
+                        )
+                        .expect("the fixture call row is valid"),
+                    )),
+                )
+                .expect("the fixture tool row is valid"),
+                TimestampDto::from_unix_seconds(2).expect("the fixture timestamp is valid"),
+            )
+            .expect("the fixture tool-call row commits");
+
+        let evidence = intention_storage::ToolResultEvidenceDto::new(
+            session_id,
+            run_id,
+            call_id,
+            "read",
+            ToolResultStatusDto::Completed,
+            r#"{"result":"read"}"#,
+            Vec::new(),
+            TimestampDto::from_unix_seconds(3).expect("the fixture timestamp is valid"),
+        )
+        .expect("the fixture tool evidence is valid");
+        let committed = host
+            .facade
+            .repository()
+            .write_tool_result(
+                evidence,
+                NewMessageDto::new(
+                    session_id,
+                    Some(run_id),
+                    MessageKindDto::ToolResult,
+                    r#"{"result":"read"}"#,
+                    None,
+                    Some(ToolRowDto::Result(
+                        ToolResultRowDto::new(
+                            call_id,
+                            tool,
+                            ToolResultStatusDto::Completed,
+                            Some(ToolResult::Read(TextResult {
+                                text: BoundedText::new("hello")
+                                    .expect("the fixture read text is bounded"),
+                                truncated: false,
+                            })),
+                            Vec::new(),
+                        )
+                        .expect("the fixture result row is valid"),
+                    )),
+                )
+                .expect("the fixture tool row is valid"),
+            )
+            .expect("the fixture tool-result row commits");
+        HostCommitObserver {
+            host: Arc::clone(&host),
+            deltas: None,
+        }
+        .observe_session_commit(&SessionCommitDto::Content(committed));
+
+        let delivered = receiver
+            .recv()
+            .await
+            .expect("the committed result row is delivered");
+        let ProtocolDaemonMessageDto::Frame(SessionFrameDto::Content(row)) = delivered else {
+            unreachable!("the first frame is the committed result row")
+        };
+        assert_eq!(row.kind(), MessageKindDto::ToolResult);
+
+        let delivered = receiver
+            .recv()
+            .await
+            .expect("the refreshed run projection is delivered");
+        let ProtocolDaemonMessageDto::Frame(SessionFrameDto::Status(run)) = delivered else {
+            unreachable!("the second frame is the committed run projection")
+        };
+        assert_eq!(run.run_id(), run_id);
+        assert_eq!(
+            run.open_tool_calls(),
+            0,
+            "the committed result clears the call it answers"
         );
     }
 }

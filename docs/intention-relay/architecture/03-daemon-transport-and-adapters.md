@@ -330,7 +330,11 @@ This section records the landed model; the text above is the live policy.
   the merged crates and stay non-production.
 - Publication from committed values. A committed transcript row is published as the row the commit returned, and a
   committed status is published as the committed run projection the status transition just wrote (the commit carries the
-  status value alone). The scoped durable reread proof is removed; the live-after-commit ordering rule is unchanged.
+  status value alone). A committed tool-call or tool-result row is followed by that same committed projection, reread
+  from the durable row: committing one call row changes the run's open-call count, and the count is storage's read-time
+  pairing of committed calls and results, never a client's tally. The refresh is best-effort like every publication, so
+  a transient read failure is repaired by the next commit or by the terminal publication. The scoped durable reread
+  proof is removed; the live-after-commit ordering rule is unchanged.
 - No cursors and no resync. `SubscribeSessionCommandDto` carries only its session scope, the subscription result is
   the current session state, and a re-subscribing client re-reads current state. The `RunResyncDto`, `RunSnapshotFrameDto`,
   `RunEventTailPageDto`, and cursor DTOs are removed.

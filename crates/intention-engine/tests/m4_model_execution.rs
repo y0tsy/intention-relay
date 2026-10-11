@@ -20,7 +20,7 @@ use intention_engine::{
     ModelTextDeltaPort, RunCancellation, SessionCommitDto, ToolExecutionPort, ToolResultOutcomeDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TextDeltaChannelDto};
-use intention_proto::{MessageKindDto, RunProjectionDto, RunStatusDto};
+use intention_proto::{MessageKindDto, RunStatusDto};
 use intention_providers::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
@@ -263,17 +263,15 @@ fn observer_receives_only_committed_transcript_rows_and_statuses() {
     )
     .expect("execution completes");
 
+    let committed_run = repository.projection();
+    assert_eq!(committed_run.status(), RunStatusDto::Completed);
+    assert!(
+        committed_run.finished_at().is_some(),
+        "the completed run carries its committed finish time"
+    );
     assert_eq!(
         outcome,
-        ModelRunExecutionOutcomeDto::Completed {
-            run: RunProjectionDto::new(
-                session_id,
-                run_id,
-                repository.projection().turn_id(),
-                RunStatusDto::Completed,
-                repository.config.revision_id(),
-            )
-        }
+        ModelRunExecutionOutcomeDto::Completed { run: committed_run }
     );
     let commits = observer.commits();
     assert_eq!(

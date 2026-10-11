@@ -8,11 +8,12 @@
 //! the run-lifecycle rules.
 
 use intention_proto::{
-    CorrelationIdDto, CreateSessionCommandDto, ErrorCategoryDto, ErrorDto, ErrorRetryDto,
-    GetSessionSnapshotQueryDto, IdempotencyKey, InterruptRunCommandDto, ProjectId,
-    ProviderErrorDto, RemoveTurnCommandDto, RunId, RunModeDto, RunStatusDto,
-    SendUserTurnCommandDto, SessionId, TimestampDto, ToolCallDto, ToolCallId, TurnId, UsageDto,
-    WorkspaceId, WorkspaceRelativePathDto, WorkspaceRootDto, run_status_is_terminal,
+    ConfigRevisionId, CorrelationIdDto, CreateSessionCommandDto, ErrorCategoryDto, ErrorDto,
+    ErrorRetryDto, GetSessionSnapshotQueryDto, IdempotencyKey, InterruptRunCommandDto, ProjectId,
+    ProviderErrorDto, RemoveTurnCommandDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto,
+    SendUserTurnCommandDto, SessionId, SessionProjectionDto, TimestampDto, ToolCallDto, ToolCallId,
+    TurnId, UsageDto, WorkspaceId, WorkspaceRelativePathDto, WorkspaceRootDto,
+    run_status_is_terminal,
 };
 
 fn workspace_root() -> WorkspaceRootDto {
@@ -313,4 +314,199 @@ fn commands_round_trip_with_typed_identity_and_mode() {
         serde_json::from_str(&serde_json::to_string(&query).expect("query serializes"))
             .expect("query decodes");
     assert_eq!(decoded, query);
+}
+
+#[test]
+fn a_run_projection_carries_its_durable_times_usage_and_open_calls() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let revision = ConfigRevisionId::new();
+    let started_at = fixture_time(1_726_000_000);
+    let finished_at = fixture_time(1_726_000_013);
+    let usage = UsageDto::reported(1_200, 300, 1_500).expect("fixture usage is consistent");
+    let run = RunProjectionDto::new(
+        session_id,
+        run_id,
+        TurnId::new(),
+        RunStatusDto::Completed,
+        revision,
+        Some(usage),
+        started_at,
+        Some(finished_at),
+        2,
+    )
+    .expect("the fixture run projection is coherent");
+
+    assert_eq!(run.session_id(), session_id);
+    assert_eq!(run.run_id(), run_id);
+    assert_eq!(run.status(), RunStatusDto::Completed);
+    assert_eq!(run.config_revision_id(), revision);
+    assert_eq!(run.usage(), Some(usage));
+    assert_eq!(run.started_at(), started_at);
+    assert_eq!(run.finished_at(), Some(finished_at));
+    assert_eq!(run.open_tool_calls(), 2);
+
+    let decoded: RunProjectionDto =
+        serde_json::from_str(&serde_json::to_string(&run).expect("run serializes"))
+            .expect("run decodes");
+    assert_eq!(decoded, run);
+
+    // A live projection omits its absent optional facts from the wire, and a
+    // wire that drops a required fact fails closed instead of defaulting.
+    let live = RunProjectionDto::new(
+        session_id,
+        run_id,
+        TurnId::new(),
+        RunStatusDto::Running,
+        revision,
+        None,
+        started_at,
+        None,
+        0,
+    )
+    .expect("the live fixture run projection is coherent");
+    assert_eq!(live.usage(), None);
+    let wire = serde_json::to_value(live).expect("live run serializes");
+    assert!(wire.get("usage").is_none(), "an absent usage is omitted");
+    assert!(
+        wire.get("finished_at").is_none(),
+        "a live run carries no finish time"
+    );
+    let mut truncated = wire;
+    truncated
+        .as_object_mut()
+        .expect("run wire is an object")
+        .remove("started_at");
+    assert!(
+        serde_json::from_value::<RunProjectionDto>(truncated).is_err(),
+        "a projection without its start time does not decode"
+    );
+}
+
+#[test]
+fn a_terminal_run_projection_requires_its_finish_time() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let revision = ConfigRevisionId::new();
+    let started_at = fixture_time(1_726_000_000);
+    for status in [
+        RunStatusDto::Completed,
+        RunStatusDto::Failed,
+        RunStatusDto::Interrupted,
+    ] {
+        let error = RunProjectionDto::new(
+            session_id,
+            run_id,
+            TurnId::new(),
+            status,
+            revision,
+            None,
+            started_at,
+            None,
+            0,
+        )
+        .expect_err("a terminal run projection must carry its finish time");
+        assert_eq!(error.code(), "invalid_run_projection");
+        assert_eq!(error.category(), ErrorCategoryDto::Validation);
+    }
+    for status in [RunStatusDto::Starting, RunStatusDto::Running] {
+        assert!(
+            RunProjectionDto::new(
+                session_id,
+                run_id,
+                TurnId::new(),
+                status,
+                revision,
+                None,
+                started_at,
+                Some(started_at),
+                0,
+            )
+            .is_err(),
+            "a live run projection must not carry a finish time"
+        );
+    }
+    assert!(
+        RunProjectionDto::new(
+            session_id,
+            run_id,
+            TurnId::new(),
+            RunStatusDto::Completed,
+            revision,
+            None,
+            started_at,
+            Some(started_at),
+            0,
+        )
+        .is_ok(),
+        "a run that finishes at its start time is coherent"
+    );
+}
+
+#[test]
+fn a_finish_time_precedes_its_start_time_never() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let started_at = fixture_time(1_726_000_010);
+    let earlier = fixture_time(1_726_000_009);
+    let error = RunProjectionDto::new(
+        session_id,
+        run_id,
+        TurnId::new(),
+        RunStatusDto::Completed,
+        ConfigRevisionId::new(),
+        None,
+        started_at,
+        Some(earlier),
+        0,
+    )
+    .expect_err("a finish time before the start time is rejected");
+    assert_eq!(error.code(), "invalid_run_projection");
+    assert_eq!(error.category(), ErrorCategoryDto::Validation);
+}
+
+#[test]
+fn a_session_projection_carries_an_optional_provider_model() {
+    let session_id = SessionId::new();
+    let projection = SessionProjectionDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        workspace_root(),
+        RunModeDto::Build,
+        None,
+        None,
+        Vec::new(),
+    )
+    .expect("the fixture session projection is coherent");
+    assert_eq!(projection.provider_model(), None);
+    let wire = serde_json::to_value(&projection).expect("projection serializes");
+    assert!(
+        wire.get("provider_model").is_none(),
+        "an absent model is omitted"
+    );
+
+    let named = projection
+        .with_provider_model("openrouter/fixture-model")
+        .expect("a non-blank model is accepted");
+    assert_eq!(named.provider_model(), Some("openrouter/fixture-model"));
+    let decoded: SessionProjectionDto =
+        serde_json::from_str(&serde_json::to_string(&named).expect("named projection serializes"))
+            .expect("named projection decodes");
+    assert_eq!(decoded, named);
+    assert_eq!(decoded.provider_model(), Some("openrouter/fixture-model"));
+
+    assert!(named.clone().with_provider_model("   ").is_err());
+    assert!(named.clone().with_provider_model("fixture\0model").is_err());
+    let mut invalid = serde_json::to_value(&named).expect("named projection serializes");
+    invalid["provider_model"] = serde_json::json!("   ");
+    assert!(
+        serde_json::from_value::<SessionProjectionDto>(invalid).is_err(),
+        "a blank wire model does not decode"
+    );
+}
+
+/// Returns the fixture timestamp for one whole Unix second value.
+fn fixture_time(seconds: i64) -> TimestampDto {
+    TimestampDto::from_unix_seconds(seconds).expect("fixture timestamp is valid")
 }

@@ -331,7 +331,12 @@ fn an_accepted_turn_publishes_its_committed_row_and_run_once() {
         TurnId::new(),
         RunStatusDto::Starting,
         ConfigRevisionId::new(),
-    );
+        None,
+        fixture_time(),
+        None,
+        0,
+    )
+    .expect("fixture run projection is valid");
     let repository = FakeRepository::with_accepted(Ok(AcceptedTurnOutcomeDto::Started {
         run,
         message: message.clone(),
@@ -827,7 +832,12 @@ fn interrupt_run_workflow_maps_durable_results() {
         TurnId::new(),
         RunStatusDto::Starting,
         config.revision_id(),
-    );
+        None,
+        fixture_time(),
+        None,
+        0,
+    )
+    .expect("fixture run projection is valid");
     let state = projection(session_id, Some(expected), Vec::new());
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable(
         "fixture_unused",

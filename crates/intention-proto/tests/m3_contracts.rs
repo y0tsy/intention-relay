@@ -16,8 +16,8 @@ use intention_proto::{
     InterruptRunAcceptedDto, MessageId, MessageKindDto, MessageProjectionDto,
     PendingTurnProjectionDto, ProtocolResultDto, RemoveTurnAcceptedDto, RunId, RunModeDto,
     RunProjectionDto, RunStatusDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
-    SessionProjectionDto, SessionSnapshotDto, TextResult, ToolCallId, ToolCallRowDto, ToolId,
-    ToolIdentityDto, ToolInput, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto,
+    SessionProjectionDto, SessionSnapshotDto, TextResult, TimestampDto, ToolCallId, ToolCallRowDto,
+    ToolId, ToolIdentityDto, ToolInput, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto,
     ToolResultStatusDto, ToolRowDto, TurnId, WorkspaceRootDto, validate_run_status_transition,
 };
 use intention_proto::{ProjectId, SessionId, WorkspaceId};
@@ -30,6 +30,11 @@ fn workspace_root() -> WorkspaceRootDto {
             .into_owned(),
     )
     .expect("native fixture workspace is valid")
+}
+
+/// Returns the fixture run admission time in whole Unix seconds.
+fn fixture_started_at() -> TimestampDto {
+    TimestampDto::from_unix_seconds(1_726_000_000).expect("fixture timestamp is valid")
 }
 
 #[test]
@@ -262,7 +267,12 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
         TurnId::new(),
         RunStatusDto::Running,
         ConfigRevisionId::new(),
-    );
+        None,
+        fixture_started_at(),
+        None,
+        0,
+    )
+    .expect("foreign fixture run projection is valid");
     assert!(
         SessionProjectionDto::new(
             project_id,
@@ -284,7 +294,12 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
         TurnId::new(),
         RunStatusDto::Running,
         revision,
-    );
+        None,
+        fixture_started_at(),
+        None,
+        0,
+    )
+    .expect("fixture run projection is valid");
     assert_eq!(run.session_id(), session_id);
     assert_eq!(run.status(), RunStatusDto::Running);
     assert_eq!(run.config_revision_id(), revision);

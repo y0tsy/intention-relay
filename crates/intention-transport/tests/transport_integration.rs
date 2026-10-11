@@ -53,13 +53,21 @@ fn status_frame(
     session_id: intention_proto::SessionId,
     run_id: intention_proto::RunId,
 ) -> SessionFrameDto {
-    SessionFrameDto::Status(intention_proto::RunProjectionDto::new(
-        session_id,
-        run_id,
-        intention_proto::TurnId::new(),
-        intention_proto::RunStatusDto::Running,
-        intention_proto::ConfigRevisionId::new(),
-    ))
+    SessionFrameDto::Status(
+        intention_proto::RunProjectionDto::new(
+            session_id,
+            run_id,
+            intention_proto::TurnId::new(),
+            intention_proto::RunStatusDto::Running,
+            intention_proto::ConfigRevisionId::new(),
+            None,
+            intention_proto::TimestampDto::from_unix_seconds(1_726_000_000)
+                .expect("fixture timestamp is valid"),
+            None,
+            0,
+        )
+        .expect("fixture run projection is valid"),
+    )
 }
 
 #[tokio::test]

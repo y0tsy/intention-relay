@@ -466,8 +466,8 @@ impl SqliteStorageRepository {
         let active = connection
             .query_row(
                 &format!(
-                    "SELECT id, turn_id, status, config_revision_id FROM runs \
-                     WHERE session_id=?1 AND status NOT IN ({TERMINAL_STATUSES})"
+                    "SELECT id, turn_id, status, config_revision_id, usage_json, started_at, finished_at \
+                     FROM runs WHERE session_id=?1 AND status NOT IN ({TERMINAL_STATUSES})"
                 ),
                 [session_id.to_string()],
                 |row| {
@@ -476,14 +476,29 @@ impl SqliteStorageRepository {
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
                     ))
                 },
             )
             .optional()
             .map_err(storage_error)?
-            .map(|(run, turn, status, revision)| {
-                run_projection(session_id, &run, &turn, &status, &revision)
-            })
+            .map(
+                |(run, turn_id, status, config_revision_id, usage_json, started_at, finished_at)| {
+                    let run_id = RunId::parse(&run).map_err(codec_error)?;
+                    let row = RawRunRow {
+                        turn_id,
+                        status,
+                        config_revision_id,
+                        usage: decode_usage(usage_json)?,
+                        started_at,
+                        finished_at,
+                        open_tool_calls: open_tool_call_count(connection, session_id, run_id)?,
+                    };
+                    committed_run_projection(session_id, run_id, &row)
+                },
+            )
             .transpose()?;
         let (pending_turns, pending_turns_omitted) = bounded_pending_turns(connection, session_id)?;
         SessionProjectionDto::new(
@@ -767,13 +782,9 @@ impl SqliteStorageRepository {
             None,
         )?;
         let message = Self::insert_message(connection, &message, created_at)?;
-        let run = RunProjectionDto::new(
-            session_id,
-            run_id,
-            turn_id,
-            RunStatusDto::Starting,
-            revision_id,
-        );
+        // The committed run is re-read from the row this transaction just
+        // wrote, so the accepted turn and every later read share one decoder.
+        let run = load_scoped_run(connection, session_id, run_id)?;
         Ok(AcceptedTurnOutcomeDto::Started { run, message })
     }
 }
@@ -1035,13 +1046,9 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     ],
                 )
                 .map_err(storage_error)?;
-            Ok(RunProjectionDto::new(
-                session_id,
-                run_id,
-                current.turn_id(),
-                status,
-                current.config_revision_id(),
-            ))
+            // The transition re-reads the row it just wrote, so the returned
+            // projection carries the committed times and usage.
+            load_scoped_run(transaction, session_id, run_id)
         })
     }
 
@@ -1055,19 +1062,12 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         let status = outcome.status();
         self.with_immediate_transaction(|transaction| {
             let current = load_scoped_run(transaction, session_id, run_id)?;
-            let run = RunProjectionDto::new(
-                session_id,
-                run_id,
-                current.turn_id(),
-                status,
-                current.config_revision_id(),
-            );
             if current.status() == status {
                 // The run already holds a terminal outcome. Repeating the exact
                 // recorded outcome is idempotent; a different outcome would
                 // silently discard its evidence, so it is a typed conflict.
                 if load_run_outcome(transaction, session_id, run_id)? == outcome {
-                    return Ok(run);
+                    return Ok(current);
                 }
                 return Err(run_outcome_conflict());
             }
@@ -1094,7 +1094,9 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 )
                 .map_err(storage_error)?;
             self.fault(FaultPoint::RunOutcome)?;
-            Ok(run)
+            // The committed terminal projection is re-read from the row this
+            // transaction just wrote, usage and finish time included.
+            load_scoped_run(transaction, session_id, run_id)
         })
     }
 
@@ -1286,14 +1288,8 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         // its classified storage error.
         let target = scoped_run_row(&connection, session_id, run_id)?
             .ok_or_else(run_model_context_unavailable)?;
-        let target = run_projection(
-            session_id,
-            &run_id.to_string(),
-            &target.0,
-            &target.1,
-            &target.2,
-        )
-        .map_err(|_| run_model_context_unavailable())?;
+        let target = committed_run_projection(session_id, run_id, &target)
+            .map_err(|_| run_model_context_unavailable())?;
         if target.status() != RunStatusDto::Starting {
             return Err(run_model_context_unavailable());
         }
@@ -1422,7 +1418,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         self.with_immediate_transaction(|transaction| {
             let mut statement = transaction
                 .prepare(&format!(
-                    "SELECT session_id, id, turn_id, config_revision_id, status FROM runs \
+                    "SELECT session_id, id, status FROM runs \
                      WHERE status NOT IN ({TERMINAL_STATUSES}) ORDER BY session_id, id"
                 ))
                 .map_err(storage_error)?;
@@ -1432,8 +1428,6 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
                     ))
                 })
                 .map_err(storage_error)?;
@@ -1442,15 +1436,12 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 .collect::<DtoResult<Vec<_>>>()?;
             drop(statement);
             let mut recovered = Vec::with_capacity(unfinished.len());
-            for (session, run, turn, revision, status) in unfinished {
+            for (session, run, status) in unfinished {
                 let current = RunStatusDto::parse(&status)?;
                 validate_run_status_transition(current, RunStatusDto::Interrupted)?;
-                recovered.push(RunProjectionDto::new(
+                recovered.push((
                     SessionId::parse(&session).map_err(codec_error)?,
                     RunId::parse(&run).map_err(codec_error)?,
-                    TurnId::parse(&turn).map_err(codec_error)?,
-                    RunStatusDto::Interrupted,
-                    ConfigRevisionId::parse(&revision).map_err(codec_error)?,
                 ));
             }
             // One transaction marks every unfinished run, so a crash mid-recovery
@@ -1464,7 +1455,12 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     [recovered_at],
                 )
                 .map_err(storage_error)?;
-            Ok(recovered)
+            // Each recovered run is re-read from the row this transaction just
+            // marked, so its finish time and its open calls are durable facts.
+            recovered
+                .into_iter()
+                .map(|(session_id, run_id)| load_scoped_run(transaction, session_id, run_id))
+                .collect()
         })
     }
 
@@ -1643,7 +1639,12 @@ fn session_summaries(
             "SELECT sessions.id, sessions.project_id, sessions.workspace_id, sessions.mode, \
              sessions.created_at, sessions.updated_at, workspace_roots.root, \
              (SELECT COUNT(*) FROM messages WHERE messages.session_id=sessions.id), \
-             runs.id, runs.turn_id, runs.status, runs.config_revision_id \
+             runs.id, runs.turn_id, runs.status, runs.config_revision_id, runs.usage_json, \
+             runs.started_at, runs.finished_at, \
+             (SELECT COUNT(*) FROM messages AS call \
+              WHERE call.session_id=sessions.id AND call.run_id=runs.id AND call.kind='tool_call' \
+              AND NOT EXISTS (SELECT 1 FROM tool_results AS answer \
+                  WHERE answer.tool_call_id=call.tool_call_id)) \
              FROM sessions JOIN workspace_roots ON workspace_roots.id=sessions.workspace_id \
              LEFT JOIN runs ON runs.session_id=sessions.id \
              AND runs.status NOT IN ({TERMINAL_STATUSES}) \
@@ -1673,6 +1674,10 @@ type RawSessionSummaryRow = (
     Option<String>,
     Option<String>,
     Option<String>,
+    Option<String>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
 );
 
 fn raw_session_summary_row(row: &sqlite::Row<'_>) -> sqlite::Result<RawSessionSummaryRow> {
@@ -1689,6 +1694,10 @@ fn raw_session_summary_row(row: &sqlite::Row<'_>) -> sqlite::Result<RawSessionSu
         row.get(9)?,
         row.get(10)?,
         row.get(11)?,
+        row.get(12)?,
+        row.get(13)?,
+        row.get(14)?,
+        row.get(15)?,
     ))
 }
 
@@ -1697,7 +1706,23 @@ fn decode_session_summary(row: RawSessionSummaryRow) -> DtoResult<SessionSummary
     let active_run = match (row.8, row.9, row.10, row.11) {
         (None, None, None, None) => None,
         (Some(run), Some(turn), Some(status), Some(revision)) => {
-            Some(run_projection(session_id, &run, &turn, &status, &revision)?)
+            let run_id = RunId::parse(&run).map_err(codec_error)?;
+            let raw =
+                RawRunRow {
+                    turn_id: turn,
+                    status,
+                    config_revision_id: revision,
+                    usage: decode_usage(row.12)?,
+                    started_at: row.13.ok_or_else(|| {
+                        codec_error("the durable active run columns are incomplete")
+                    })?,
+                    finished_at: row.14,
+                    open_tool_calls: u32::try_from(row.15.ok_or_else(|| {
+                        codec_error("the durable active run columns are incomplete")
+                    })?)
+                    .map_err(codec_error)?,
+                };
+            Some(committed_run_projection(session_id, run_id, &raw)?)
         }
         _ => return Err(codec_error("the durable active run columns are incomplete")),
     };
@@ -1714,6 +1739,28 @@ fn decode_session_summary(row: RawSessionSummaryRow) -> DtoResult<SessionSummary
     ))
 }
 
+/// The committed columns every run-projection read decodes.
+///
+/// One private row carries the durable fields together for the scoped read, the
+/// session list's joined row, and the write paths that re-read the row they just
+/// committed, so one decoder owns every run-projection field.
+struct RawRunRow {
+    /// The causal user turn identity.
+    turn_id: String,
+    /// The durable lifecycle status.
+    status: String,
+    /// The immutable configuration revision selected by the run.
+    config_revision_id: String,
+    /// The terminal outcome's typed usage, absent until it records one.
+    usage: Option<UsageDto>,
+    /// The admission time in whole Unix seconds.
+    started_at: i64,
+    /// The terminal time in whole Unix seconds, absent while the run is live.
+    finished_at: Option<i64>,
+    /// How many committed call rows of this run no committed result answers.
+    open_tool_calls: u32,
+}
+
 /// Loads the raw durable columns of one scoped run, or `None` when the run row
 /// is genuinely absent. A backend failure keeps its classified storage error
 /// instead of collapsing into the caller's absence handling.
@@ -1721,21 +1768,75 @@ fn scoped_run_row(
     connection: &sqlite::Connection,
     session_id: SessionId,
     run_id: RunId,
-) -> DtoResult<Option<(String, String, String)>> {
-    connection
+) -> DtoResult<Option<RawRunRow>> {
+    let row = connection
         .query_row(
-            "SELECT turn_id, status, config_revision_id FROM runs WHERE session_id=?1 AND id=?2",
+            "SELECT turn_id, status, config_revision_id, usage_json, started_at, finished_at \
+             FROM runs WHERE session_id=?1 AND id=?2",
             sqlite::params![session_id.to_string(), run_id.to_string()],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
                 ))
             },
         )
         .optional()
-        .map_err(storage_error)
+        .map_err(storage_error)?;
+    row.map(
+        |(turn_id, status, config_revision_id, usage_json, started_at, finished_at)| {
+            Ok(RawRunRow {
+                turn_id,
+                status,
+                config_revision_id,
+                usage: decode_usage(usage_json)?,
+                started_at,
+                finished_at,
+                open_tool_calls: open_tool_call_count(connection, session_id, run_id)?,
+            })
+        },
+    )
+    .transpose()
+}
+
+/// Decodes one durable usage column into its typed value.
+///
+/// The column carries the serialized outcome usage; decoding it at the read
+/// boundary keeps the row carrier itself free of JSON-shaped fields.
+fn decode_usage(usage_json: Option<String>) -> DtoResult<Option<UsageDto>> {
+    usage_json
+        .as_deref()
+        .map(serde_json::from_str::<UsageDto>)
+        .transpose()
+        .map_err(codec_error)
+}
+
+/// Counts one run's committed tool calls that no committed result answers.
+///
+/// The call identity is the pairing key: a call stays open exactly while the
+/// run carries no committed `tool_results` row for its `tool_call_id`, so an
+/// orphan result never answers a live call and a call of another run never
+/// counts. A run recovered after a crash keeps its unanswered calls.
+fn open_tool_call_count(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+    run_id: RunId,
+) -> DtoResult<u32> {
+    let count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM messages AS call \
+             WHERE call.session_id=?1 AND call.run_id=?2 AND call.kind='tool_call' \
+             AND NOT EXISTS (SELECT 1 FROM tool_results AS answer \
+                 WHERE answer.tool_call_id=call.tool_call_id)",
+            sqlite::params![session_id.to_string(), run_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    u32::try_from(count).map_err(codec_error)
 }
 
 /// Loads one scoped durable run or a typed not-found error.
@@ -1745,7 +1846,7 @@ fn load_scoped_run(
     run_id: RunId,
 ) -> DtoResult<RunProjectionDto> {
     let row = scoped_run_row(connection, session_id, run_id)?.ok_or_else(record_not_found)?;
-    run_projection(session_id, &run_id.to_string(), &row.0, &row.1, &row.2)
+    committed_run_projection(session_id, run_id, &row)
 }
 
 /// Loads one scoped durable run that still accepts further writes.
@@ -2047,20 +2148,27 @@ fn validate_message_limit(limit: u32) -> DtoResult<()> {
     Ok(())
 }
 
-fn run_projection(
-    session: SessionId,
-    run: &str,
-    turn: &str,
-    status: &str,
-    revision: &str,
+/// Decodes one committed run row into its safe public projection.
+fn committed_run_projection(
+    session_id: SessionId,
+    run_id: RunId,
+    row: &RawRunRow,
 ) -> DtoResult<RunProjectionDto> {
-    Ok(RunProjectionDto::new(
-        session,
-        RunId::parse(run).map_err(codec_error)?,
-        TurnId::parse(turn).map_err(codec_error)?,
-        RunStatusDto::parse(status)?,
-        ConfigRevisionId::parse(revision).map_err(codec_error)?,
-    ))
+    RunProjectionDto::new(
+        session_id,
+        run_id,
+        TurnId::parse(&row.turn_id).map_err(codec_error)?,
+        RunStatusDto::parse(&row.status)?,
+        ConfigRevisionId::parse(&row.config_revision_id).map_err(codec_error)?,
+        row.usage,
+        TimestampDto::from_unix_seconds(row.started_at).map_err(codec_error)?,
+        row.finished_at
+            .map(TimestampDto::from_unix_seconds)
+            .transpose()
+            .map_err(codec_error)?,
+        row.open_tool_calls,
+    )
+    .map_err(|_| codec_error("the committed run row is not a coherent run projection"))
 }
 
 const fn finish_reason_name(value: FinishReasonDto) -> &'static str {

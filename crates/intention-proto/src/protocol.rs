@@ -1110,7 +1110,13 @@ mod tests {
             TurnId::new(),
             crate::RunStatusDto::Running,
             ConfigRevisionId::new(),
+            None,
+            crate::TimestampDto::from_unix_seconds(1_726_000_000)
+                .expect("fixture timestamp is valid"),
+            None,
+            0,
         )
+        .expect("fixture run projection is valid")
     }
 
     #[test]

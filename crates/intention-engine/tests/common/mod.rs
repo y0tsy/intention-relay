@@ -29,7 +29,7 @@ use intention_proto::{
     MessageProjectionDto, NewMessageDto, PendingTurnProjectionDto, ProjectId, RemoveTurnCommandDto,
     RunId, RunModeDto, RunProjectionDto, RunStatusDto, SessionId, SessionProjectionDto,
     SessionSummariesDto, ThemeDto, TimestampDto, ToolCallId, ToolResultStatusDto, TurnId, UsageDto,
-    WorkspaceBindingDto, WorkspaceId, WorkspaceRootDto,
+    WorkspaceBindingDto, WorkspaceId, WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_providers::ToolCallDto;
 use intention_storage::{
@@ -268,13 +268,34 @@ impl FakeRepository {
         if let Some(run) = stored {
             return run;
         }
+        let started_at = self.config.captured_at();
+        let status = *self.status.lock().unwrap_or_else(PoisonError::into_inner);
+        self.fixture_run(
+            status,
+            run_status_is_terminal(status).then_some(started_at),
+            0,
+        )
+    }
+
+    /// Returns one coherent fixture run projection in `status`.
+    fn fixture_run(
+        &self,
+        status: RunStatusDto,
+        finished_at: Option<TimestampDto>,
+        open_tool_calls: u32,
+    ) -> RunProjectionDto {
         RunProjectionDto::new(
             self.session_id,
             self.run_id,
             self.turn_id,
-            *self.status.lock().unwrap_or_else(PoisonError::into_inner),
+            status,
             self.config.revision_id(),
+            None,
+            self.config.captured_at(),
+            finished_at,
+            open_tool_calls,
         )
+        .expect("fixture run projection is coherent")
     }
 
     /// Returns every committed transcript row.
@@ -374,7 +395,7 @@ impl FakeRepository {
     }
 
     /// Stores one durable status transition and keeps an explicit run current.
-    fn store_status(&self, status: RunStatusDto) {
+    fn store_status(&self, status: RunStatusDto, occurred_at: TimestampDto) {
         *self.status.lock().unwrap_or_else(PoisonError::into_inner) = status;
         let refreshed = self
             .run
@@ -388,7 +409,12 @@ impl FakeRepository {
                     run.turn_id(),
                     status,
                     run.config_revision_id(),
+                    run.usage(),
+                    run.started_at(),
+                    run_status_is_terminal(status).then_some(occurred_at),
+                    run.open_tool_calls(),
                 )
+                .expect("fixture run projection is coherent")
             });
         if let Some(refreshed) = refreshed {
             *self.run.lock().unwrap_or_else(PoisonError::into_inner) = Some(refreshed);
@@ -487,11 +513,11 @@ impl StorageRepositoryDto for FakeRepository {
         session_id: SessionId,
         run_id: RunId,
         status: RunStatusDto,
-        _occurred_at: TimestampDto,
+        occurred_at: TimestampDto,
     ) -> DtoResult<RunProjectionDto> {
         assert_eq!(session_id, self.session_id);
         assert_eq!(run_id, self.run_id);
-        self.store_status(status);
+        self.store_status(status, occurred_at);
         self.transitions
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -516,7 +542,7 @@ impl StorageRepositoryDto for FakeRepository {
                 outcome,
                 occurred_at,
             });
-        self.store_status(status);
+        self.store_status(status, occurred_at);
         Ok(self.projection())
     }
 

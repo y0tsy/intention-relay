@@ -322,6 +322,12 @@ impl DaemonApplicationFacade {
     /// transcript rows cannot be read.
     pub fn session_snapshot(&self, session_id: SessionId) -> DtoResult<SessionSnapshotDto> {
         let projection = self.inner.repository.load_session_projection(session_id)?;
+        // The effective provider model is this daemon's resolved configuration
+        // selection: storage cannot know it. Both the one-shot session read and
+        // the subscription-open snapshot answer through this one method, so the
+        // two can never disagree about the model.
+        let projection = projection
+            .with_provider_model(self.inner.config_snapshot.resolved().provider().model())?;
         let projection_bytes = session_projection_bytes(&projection)?;
         let messages = bounded_snapshot_messages(
             projection_bytes,
@@ -1393,6 +1399,31 @@ mod tests {
                 .iter()
                 .all(|message| !message.text().starts_with("row 0 ")),
             "the oldest rows are dropped first"
+        );
+    }
+
+    #[test]
+    fn session_snapshots_carry_the_effective_provider_model() {
+        // The snapshot read behind both the one-shot request and the
+        // subscription-open reply announces the model the session's resolved
+        // configuration executes under, so a window never renders a front-end
+        // default next to a session that runs something else.
+        let (_directory, facade) = test_facade();
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        let _ = started_run(&facade, session_id, "model announcement");
+
+        let snapshot = facade
+            .session_snapshot(session_id)
+            .expect("the fixture snapshot reads");
+        assert_eq!(snapshot.projection().provider_model(), Some("fixture"));
+        assert_eq!(
+            facade
+                .session_snapshot(session_id)
+                .expect("the fixture snapshot re-reads")
+                .projection(),
+            snapshot.projection(),
+            "every snapshot consumer reads the same filled projection"
         );
     }
 

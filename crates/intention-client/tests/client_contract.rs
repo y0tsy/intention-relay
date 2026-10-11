@@ -229,13 +229,20 @@ fn fixture_create_command(session_id: SessionId) -> CreateSessionCommandDto {
 }
 
 fn fixture_run(session_id: SessionId, run_id: RunId, status: RunStatusDto) -> RunProjectionDto {
+    let started_at = timestamp(1_726_000_000);
+    let finished_at = intention_proto::run_status_is_terminal(status).then_some(started_at);
     RunProjectionDto::new(
         session_id,
         run_id,
         TurnId::new(),
         status,
         ConfigRevisionId::new(),
+        None,
+        started_at,
+        finished_at,
+        0,
     )
+    .expect("fixture run projection is valid")
 }
 
 fn fixture_summary(session_id: SessionId, updated_at: i64) -> SessionSummaryDto {
