@@ -320,8 +320,9 @@ either way is unchanged.
 
 ### Tool result delivery
 
-Run subscriptions return current state: the correlated response carries the compact current run snapshot, and later
-committed values arrive as live `run.frame` notifications with `kind` `content` or `status` and no positions. There is
+Session subscriptions return current state: the correlated response carries the compact current session snapshot, and
+later committed values arrive as live `SessionFrameDto` notifications with `kind` `content`, `status`, or the transient
+`text_delta` and no positions. There is
 no tool-history page, cursor, snapshot frame, or resynchronization; a re-subscribing client re-reads current state and
 continues live.
 

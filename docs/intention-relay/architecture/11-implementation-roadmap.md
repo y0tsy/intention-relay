@@ -151,8 +151,9 @@ resolves the
 durable workspace binding of its root, so one root carries an unbounded number of sessions. The slice also froze the
 terminal client contract: TUI, REPL, and headless modes are contract-equivalent over one `intention-client` surface,
 the headless exit-status set is closed and typed (0 completed, 1 usage, 2 daemon or transport, 3 typed rejection or
-failed run, 4 timeout after interrupt, 5 interrupted run), and no presentation logic enters the daemon. The step's
-answer and reasoning stream as channel-tagged transient `TextDelta` frames that are never persisted and never replayed;
+failed run, 4 timeout with no observed terminal status, 5 interrupted run), and no presentation logic enters the daemon.
+The step's answer and reasoning stream as channel-tagged transient `TextDelta` frames that are never persisted and
+never replayed;
 the committed assistant row replaces both channels, and the live tail lays out through the same block functions the
 committed rows use. Session branching and forks remain Slice 6 work; desktop presentation remains Milestone 6 work.
 The slice also carries the retrospective tool-execution corrections: `execute` runs one shell command through the

@@ -102,6 +102,9 @@ a threshold authority.
   async test attribute is collected like any other. A collected crate is skipped only when Cargo declares no
   test-executing target for it and the crate is listed in `quality/coverage.toml` under `[policy].unexecutable_crates`;
   an undeclared skip, a stale declaration, or a collected crate absent from the snapshot fails the run.
+- The tool contract families' move into the exempt `intention-proto` is a coverage-position change, not a policy change:
+  `quality/coverage.toml` keeps its tiers, floors, and exclusions, and the moved families' cases are carried by
+  `intention-proto`'s declared `contracts` and `protocol_contracts` targets.
 
 ## Cargo feature policy
 
@@ -177,6 +180,8 @@ fixtures themselves live with their checkers.
 | Undeclared or stale coverage skip declaration | `make coverage`. |
 | Unapproved coverage exclusion metadata | `make coverage`. |
 | Documented bound that no crate defines | `make docs-check`. |
+| Removed wire name still spelled in a document or a crate | `make docs-check`. |
+| Documented placeholder constant that no crate defines | `make docs-check`. |
 | Dependency advisory/license/source/ban/duplicate violation | `make deps`. |
 | Unused, stale, or manifest-only dependency | `make deps`. |
 | Recognizable fake secret in output fixture | `make test` and `make verify`. |
@@ -202,8 +207,8 @@ Slice 1.5 (the current-state core) changes the evidence base without lowering it
   event/snapshot/replay contract blocks are deleted with their surfaces;
 - the engine tests cover commit-and-publish without events or replays, and tool tests cover one transaction per call and
   the pre-effect identity rejection;
-- protocol contract fixtures cover the reduced current-state surface (current-state snapshots and `run.frame`
-  notifications, no cursors or resync);
+- protocol contract fixtures cover the reduced current-state surface (current-state session snapshots and
+  `SessionFrameDto` notifications, no cursors or resync);
 - deleted-surface tests are deleted without replacement; per-crate coverage tiers in `quality/coverage.toml` stay as
   declared, and a merged crate inherits the strictest source floor;
 - `intention-tui`'s declared `edge` floor is enforced again: the runner decides executability from Cargo metadata, so

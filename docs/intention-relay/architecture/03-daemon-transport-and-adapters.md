@@ -336,8 +336,8 @@ This section records the landed model; the text above is the live policy.
   per-payload `schema_version` fields are removed; `ClientRequestDto` and `ProtocolResultDto` are the operation table,
   `ErrorDto` is the only error channel, and the live wire version is the endpoint-name byte.
 - Fully asynchronous client. `intention-client` exposes one asynchronous API covering every typed operation plus the
-  committed `run.frame` stream, and its blocking API is removed. Daemon end-to-end tests drive the real client instead of
-  the low-level transport, and the TUI proof adapter migrates mechanically without rework.
+  committed session-frame stream, and its blocking API is removed. Daemon end-to-end tests drive the real client
+  instead of the low-level transport, and the TUI proof adapter migrates mechanically without rework.
 
 ## Slice 2 terminal model (activated)
 
@@ -359,10 +359,12 @@ text above is the live policy.
   a run the loop still observes. Every wait in a line front end selects on one SIGINT receiver, so one press does
   exactly one thing. Because a window follows its session's stream rather than one run, the run a gesture reaches is the
   session's active run whoever started it: a stop from a second window on the same session ends the run both windows
-  observe.
+  observe. The `--timeout` deadline on `run` is that same stop and not a second mechanism: it issues `run.cancel`, and
+  the committed terminal `interrupted` status frame is its acknowledgement, so the process reports the outcome it
+  observed. `timed_out` survives only as the fallback for a grace that expires with no terminal status observed.
 - Closed typed process status. Every mode ends with one of the closed statuses — 0 completed, 1 usage, 2 daemon or
-  transport, 3 typed rejection or failed run, 4 timeout after an interrupt, 5 interrupted run — and the binary writes
-  its output through explicit writers, never through printing macros.
+  transport, 3 typed rejection or failed run, 4 timeout with no observed terminal status, 5 interrupted run — and the
+  binary writes its output through explicit writers, never through printing macros.
 - Launch rule and the welcome surface. A launch opens no session at all — not even the most recent one; a session
   appears only for an explicit `--session ID`, for `--continue` (the newest session the daemon lists), for `/new`, for a
   browser row, or for the first prompt, which creates the session it needs and sends the prompt as that session's first
@@ -567,11 +569,10 @@ lacks. Each site carries the same `@todo(core):` prefix and names what the core 
 The `@todo(hack)` marker is the crate's own class for work the adapter or the client must still do, and it is not
 catalogued here. Its sites are the second transcript projection and the retention bound it re-applies
 (`app/run.rs`), reporting rows by position (`headless.rs`), protocol errors composed for conditions the core never
-reports and the process status they select (`headless.rs`), a prompt replayed as input characters (`headless.rs`),
-the run-stream recovery budget (`headless.rs`, kept as is by owner decision), streamed text matched to its
-committed row by text equality (`headless.rs`), the theme values re-spelled in the registry (`app/commands.rs`),
-the committed duration measured by the front end (`tui/mod.rs`), an absent `tool_id` defaulted to the empty string
-(`tui/panes/tools.rs`), the one-line error form recomposed (`app/mod.rs`), the continue target re-derived
+reports and the process status they select (`headless.rs`), the run-stream recovery budget (`headless.rs`, kept as
+is by owner decision), streamed text matched to its committed row by text equality (`headless.rs`), the theme values
+re-spelled in the registry (`app/commands.rs`), the committed duration measured by the front end (`tui/mod.rs`), an
+absent `tool_id` defaulted to the empty string (`tui/panes/tools.rs`), the continue target re-derived
 (`app/sessions.rs`), the endpoint instance and the daemon program resolved by the binary (`main.rs`), and the
 untyped decode the architecture check cannot see (`tui/panes/tools.rs`). Each of those markers names the client or
 core surface that should replace it.

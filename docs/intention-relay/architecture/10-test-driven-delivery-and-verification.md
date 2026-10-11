@@ -157,7 +157,7 @@ outgoing request advertises the six active tools (`read`, `write`, `edit`, `exec
 requests the `tool_calls` capability.
 3. Verify the daemon executes the call through the real typed tool service under `WorkspaceRoot`.
 4.  Verify the committed tool-call row, its answering tool-result row, and the `tool_results` row commit before
-   publication, and that the client's `run.frame` notifications carry only those committed values.
+   publication, and that the client's `SessionFrameDto` notifications carry only those committed values.
 5. Verify the provider exchange continues with assistant-tool-call and tool-role messages and completes.
 6. Restart the daemon and re-read current state.
 7. Verify the recorded tool call and result re-read from current state and are never re-executed.
@@ -260,9 +260,9 @@ real binary against a real daemon and the scripted fake provider in thirteen cas
 committed row, the channel-tagged reasoning deltas that precede the answer they inform, progressive text output and
 completion, both REPL paths (a piped turn and input EOF), the prompt that creates the session it needs, an explicit
 continuation that reuses its session instead of creating one, every `/new` run creating a fresh session under one
-workspace root, a multi-line prompt reaching the session unchanged, the timeout interrupt with exit 4, a SIGINT that
-stops the headless run's stalled round and ends the process with the interrupted status, a SIGINT that stops the REPL's
-stalled round and hands the loop back to its prompt, and a typed
+workspace root, a multi-line prompt reaching the session unchanged, the timeout deadline stop that ends the process
+with the interrupted status, a SIGINT that stops the headless run's stalled round and ends the process with the
+interrupted status, a SIGINT that stops the REPL's stalled round and hands the loop back to its prompt, and a typed
 unknown-session rejection with exit 3. The binary's own unit tests cover the command
 grammar, the exit-status mapping, the workspace-root resolution, the REPL line loop, and the headless formats, drivers,
 and wait deadlines, including the reasoning-only row the text report leaves unwritten. The crate's inline unit tests cover the `AppState` transitions, the settings load and theme
