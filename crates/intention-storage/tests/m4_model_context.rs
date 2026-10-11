@@ -19,8 +19,8 @@ use intention_proto::{
     SessionId, TextResult, ToolCallId, ToolIdentityDto, ToolResult, ToolResultRowDto,
     ToolResultStatusDto, ToolRowDto, UsageDto,
 };
-use intention_storage::ToolResultEvidenceDto;
 use intention_proto::{MessageKindDto, MessageProjectionDto, NewMessageDto, RunStatusDto};
+use intention_storage::ToolResultEvidenceDto;
 use intention_storage::{
     AcceptedTurnOutcomeDto, RunOutcomeDto, SqliteStorageRepository, StorageRepositoryDto,
 };

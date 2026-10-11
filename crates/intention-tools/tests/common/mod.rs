@@ -13,7 +13,9 @@
     reason = "Shared fixtures are called for their effect on the fixture, not for the returned value alone."
 )]
 
-use intention_proto::{BoundedText, ToolInput, ToolResult, WorkspaceRelativePathDto, WorkspaceRootDto};
+use intention_proto::{
+    BoundedText, ToolInput, ToolResult, WorkspaceRelativePathDto, WorkspaceRootDto,
+};
 use intention_tools::{CancellationSignal, ToolDispatchOutcome, ToolService};
 use std::path::Path;
 use tempfile::TempDir;

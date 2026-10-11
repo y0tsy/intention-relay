@@ -8,9 +8,9 @@ mod common;
 
 use common::{DispatchCompleted, fixture_dir, service};
 use intention_proto::{
-    BoundedText, EditInput, EnvVarDto, EnvVarNameDto, ExecuteInput, ExecuteResult, GlobInput, GrepInput,
-    GrepScope, ReadInput, ShellCommandTextDto, TextResult, ToolId, ToolInput, ToolResult,
-    ToolTimeoutSecondsDto, WorkspaceRelativePathDto, WriteInput,
+    BoundedText, EditInput, EnvVarDto, EnvVarNameDto, ExecuteInput, ExecuteResult, GlobInput,
+    GrepInput, GrepScope, ReadInput, ShellCommandTextDto, TextResult, ToolId, ToolInput,
+    ToolResult, ToolTimeoutSecondsDto, WorkspaceRelativePathDto, WriteInput,
 };
 use intention_tools::{
     CancellationSignal, InterruptCause, ToolDispatchOutcome, model_visible_descriptors,

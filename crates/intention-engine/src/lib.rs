@@ -123,9 +123,11 @@ where
         // effect cannot disagree and no second decode exists.
         let decoded = ToolInput::from_arguments_json(&tool_id, &arguments_json);
         let projection = match &decoded {
-            Ok(decoded) => {
-                ToolCallRowDto::new(call_id, ToolIdentityDto::parse(&tool_id)?, Some(decoded.clone()))?
-            }
+            Ok(decoded) => ToolCallRowDto::new(
+                call_id,
+                ToolIdentityDto::parse(&tool_id)?,
+                Some(decoded.clone()),
+            )?,
             Err(_) => ToolCallRowDto::new(call_id, ToolIdentityDto::parse(&tool_id)?, None)?,
         };
         // The tool-call row commits before any effect: the model's requested

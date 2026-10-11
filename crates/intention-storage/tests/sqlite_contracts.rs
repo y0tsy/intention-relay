@@ -15,15 +15,15 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_proto::{
-    ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId,
-    RunId, SchemaVersionDto, SessionId, ThemeDto, ToolCallId, UsageDto, WorkspaceId,
-};
-use intention_proto::{
     BoundedText, CreateSessionCommandDto, ExecuteResult, MessageKindDto, MessageProjectionDto,
     NewMessageDto, PathsResult, PendingTurnProjectionDto, ReadInput, RemoveTurnCommandDto,
     RunModeDto, RunProjectionDto, RunStatusDto, TextResult, ToolCallRowDto, ToolIdentityDto,
     ToolInput, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto,
     ToolRowDto, WorkspaceRelativePathDto,
+};
+use intention_proto::{
+    ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId,
+    RunId, SchemaVersionDto, SessionId, ThemeDto, ToolCallId, UsageDto, WorkspaceId,
 };
 use intention_storage::{
     AcceptedTurnOutcomeDto, RunOutcomeDto, SqliteStorageRepository, StorageRepositoryDto,
@@ -156,12 +156,17 @@ fn identity(wire_name: &str) -> ToolIdentityDto {
 /// Returns the typed arguments of one declared `read` fixture call.
 fn read_arguments(path: &str) -> ToolInput {
     ToolInput::Read(ReadInput {
-        path: WorkspaceRelativePathDto::parse(path).expect("the fixture path is workspace-relative"),
+        path: WorkspaceRelativePathDto::parse(path)
+            .expect("the fixture path is workspace-relative"),
     })
 }
 
 /// Builds one typed call-row fixture for a declared tool.
-fn call_row(call_id: ToolCallId, tool: ToolIdentityDto, arguments: Option<ToolInput>) -> ToolRowDto {
+fn call_row(
+    call_id: ToolCallId,
+    tool: ToolIdentityDto,
+    arguments: Option<ToolInput>,
+) -> ToolRowDto {
     ToolRowDto::Call(
         ToolCallRowDto::new(call_id, tool, arguments).expect("fixture call row is valid"),
     )
@@ -902,8 +907,15 @@ fn append_message_and_transcript_reads_obey_bounds_and_order() {
     assert_eq!(
         store
             .append_message(
-                NewMessageDto::new(other, Some(run), MessageKindDto::User, "foreign", None, None)
-                    .expect("foreign row is valid"),
+                NewMessageDto::new(
+                    other,
+                    Some(run),
+                    MessageKindDto::User,
+                    "foreign",
+                    None,
+                    None
+                )
+                .expect("foreign row is valid"),
                 time(5),
             )
             .expect_err("a transcript row cannot address another session's run")
@@ -948,8 +960,15 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
         answering.clone(),
     );
     for mismatched in [
-        NewMessageDto::new(session, Some(run), MessageKindDto::Assistant, "not a result", None, None)
-            .expect("assistant row is valid"),
+        NewMessageDto::new(
+            session,
+            Some(run),
+            MessageKindDto::Assistant,
+            "not a result",
+            None,
+            None,
+        )
+        .expect("assistant row is valid"),
         tool_message(
             SessionId::new(),
             run,
@@ -1209,10 +1228,7 @@ fn a_tool_result_row_round_trips_its_typed_outcome() {
             identity("read"),
             ToolResultStatusDto::Completed,
             Some(read_result("hello")),
-            vec![
-                ToolResultMetadataEntryDto::new("bytes", "5")
-                    .expect("fixture metadata is valid"),
-            ],
+            vec![ToolResultMetadataEntryDto::new("bytes", "5").expect("fixture metadata is valid")],
         ),
         result_row(
             ToolCallId::new(),
@@ -2461,15 +2477,8 @@ fn session_list_maps_every_durable_session_column() {
     for (text, event_time) in [("first row", 8), ("second row", 9)] {
         let _ = append(
             &store,
-            NewMessageDto::new(
-                session,
-                None,
-                MessageKindDto::Notice,
-                text,
-                None,
-                None,
-            )
-            .expect("notice row is valid"),
+            NewMessageDto::new(session, None, MessageKindDto::Notice, text, None, None)
+                .expect("notice row is valid"),
             event_time,
         );
     }

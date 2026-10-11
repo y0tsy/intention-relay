@@ -1590,7 +1590,8 @@ fn decode_tool_row(
     // Every tool row commits with its typed projection in the same transaction
     // as the row itself, so an absent or disagreeing projection is corrupt
     // durable state and is refused instead of decoded as another row's facts.
-    let encoded = projection.ok_or_else(|| codec_error("a tool row carries its typed projection"))?;
+    let encoded =
+        projection.ok_or_else(|| codec_error("a tool row carries its typed projection"))?;
     let stored: StoredToolProjection = serde_json::from_str(encoded).map_err(codec_error)?;
     if stored.call_id != call_id || stored.tool_id != identity {
         return Err(codec_error(

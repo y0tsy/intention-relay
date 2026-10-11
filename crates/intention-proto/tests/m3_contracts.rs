@@ -12,13 +12,13 @@ mod common;
 use common::{fixture_message, fixture_projection};
 
 use intention_proto::{
-    BoundedText, ConfigRevisionId, CreateSessionAcceptedDto, InterruptRunAcceptedDto, MessageId,
-    MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, ProtocolResultDto,
-    RemoveTurnAcceptedDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto,
-    SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionProjectionDto, SessionSnapshotDto,
-    ExecuteResult, TextResult, ToolCallId, ToolCallRowDto, ToolId, ToolIdentityDto, ToolInput,
-    ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
-    TurnId, WorkspaceRootDto, validate_run_status_transition,
+    BoundedText, ConfigRevisionId, CreateSessionAcceptedDto, ExecuteResult,
+    InterruptRunAcceptedDto, MessageId, MessageKindDto, MessageProjectionDto,
+    PendingTurnProjectionDto, ProtocolResultDto, RemoveTurnAcceptedDto, RunId, RunModeDto,
+    RunProjectionDto, RunStatusDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
+    SessionProjectionDto, SessionSnapshotDto, TextResult, ToolCallId, ToolCallRowDto, ToolId,
+    ToolIdentityDto, ToolInput, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto,
+    ToolResultStatusDto, ToolRowDto, TurnId, WorkspaceRootDto, validate_run_status_transition,
 };
 use intention_proto::{ProjectId, SessionId, WorkspaceId};
 
@@ -396,25 +396,31 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
     let run_id = RunId::new();
     let call_id = ToolCallId::new();
     let message_id = MessageId::new(7).expect("fixture row identity is valid");
-    let row = |kind: MessageKindDto,
-               text: &str,
-               reasoning: Option<&str>,
-               tool: Option<ToolRowDto>| {
-        MessageProjectionDto::new(
-            message_id,
-            session_id,
-            Some(run_id),
-            kind,
-            text,
-            reasoning.map(str::to_owned),
-            tool,
-        )
-    };
+    let row =
+        |kind: MessageKindDto, text: &str, reasoning: Option<&str>, tool: Option<ToolRowDto>| {
+            MessageProjectionDto::new(
+                message_id,
+                session_id,
+                Some(run_id),
+                kind,
+                text,
+                reasoning.map(str::to_owned),
+                tool,
+            )
+        };
 
     assert!(row(MessageKindDto::User, "hello", None, None).is_ok());
     assert!(row(MessageKindDto::User, " ", None, None).is_err());
     assert!(row(MessageKindDto::User, "hello", Some("thought"), None).is_err());
-    assert!(row(MessageKindDto::User, "hello", None, Some(read_call(call_id))).is_err());
+    assert!(
+        row(
+            MessageKindDto::User,
+            "hello",
+            None,
+            Some(read_call(call_id))
+        )
+        .is_err()
+    );
 
     assert!(row(MessageKindDto::Assistant, "answer", Some("reasoning"), None).is_ok());
     assert!(row(MessageKindDto::Assistant, "", None, None).is_err());
@@ -426,10 +432,24 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
         row(MessageKindDto::Assistant, "  ", Some("  "), None).is_err(),
         "a row with neither text nor reasoning carries nothing"
     );
-    assert!(row(MessageKindDto::Assistant, "answer", None, Some(read_call(call_id))).is_err());
+    assert!(
+        row(
+            MessageKindDto::Assistant,
+            "answer",
+            None,
+            Some(read_call(call_id))
+        )
+        .is_err()
+    );
 
     assert!(
-        row(MessageKindDto::ToolCall, "{}", None, Some(read_call(call_id))).is_ok(),
+        row(
+            MessageKindDto::ToolCall,
+            "{}",
+            None,
+            Some(read_call(call_id))
+        )
+        .is_ok(),
         "a tool-call row carries its typed call projection"
     );
     assert!(
@@ -457,9 +477,23 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
         "a result projection never answers a call row"
     );
 
-    assert!(row(MessageKindDto::ToolResult, "contents", None, Some(read_result(call_id))).is_ok());
     assert!(
-        row(MessageKindDto::ToolResult, " ", None, Some(read_result(call_id))).is_err(),
+        row(
+            MessageKindDto::ToolResult,
+            "contents",
+            None,
+            Some(read_result(call_id))
+        )
+        .is_ok()
+    );
+    assert!(
+        row(
+            MessageKindDto::ToolResult,
+            " ",
+            None,
+            Some(read_result(call_id))
+        )
+        .is_err(),
         "an answering row carries its content"
     );
     assert!(
@@ -478,7 +512,15 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
     );
 
     assert!(row(MessageKindDto::Notice, "notice", None, None).is_ok());
-    assert!(row(MessageKindDto::Notice, "notice", None, Some(read_call(call_id))).is_err());
+    assert!(
+        row(
+            MessageKindDto::Notice,
+            "notice",
+            None,
+            Some(read_call(call_id))
+        )
+        .is_err()
+    );
 
     assert!(row(MessageKindDto::User, "bad\0text", None, None).is_err());
     assert!(
@@ -685,7 +727,10 @@ fn a_tool_call_projection_carries_every_typed_argument_shape() {
         );
         assert_eq!(row.call_id(), call_id);
         assert_eq!(row.tool_id().wire_name(), tool_id);
-        assert_eq!(row.call().and_then(ToolCallRowDto::arguments), Some(&arguments));
+        assert_eq!(
+            row.call().and_then(ToolCallRowDto::arguments),
+            Some(&arguments)
+        );
         let decoded: ToolRowDto =
             serde_json::from_str(&serde_json::to_string(&row).expect("the row serializes"))
                 .expect("the row decodes");
@@ -717,7 +762,10 @@ fn a_tool_call_projection_carries_every_typed_argument_shape() {
         ToolCallRowDto::new(
             ToolCallId::new(),
             ToolIdentityDto::parse("mystery").expect("an undeclared identity is well-formed"),
-            Some(ToolInput::from_arguments_json("read", r#"{"path":"src/lib.rs"}"#).expect("decodes")),
+            Some(
+                ToolInput::from_arguments_json("read", r#"{"path":"src/lib.rs"}"#)
+                    .expect("decodes")
+            ),
         )
         .expect_err("an undeclared identity carries no typed arguments")
         .code(),

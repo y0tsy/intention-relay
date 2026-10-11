@@ -42,8 +42,8 @@ use intention_proto::{
 };
 
 use crate::tui::layout::{
-    LaidOutRow, MARKER_GAP, RowBuilder, RowStyleId, box_bottom, box_content, box_top, display_width,
-    marker_text,
+    LaidOutRow, MARKER_GAP, RowBuilder, RowStyleId, box_bottom, box_content, box_top,
+    display_width, marker_text,
 };
 use crate::tui::palette::Palette;
 use crate::tui::panes::transcript::{marked_row, plain_rows};
@@ -315,11 +315,7 @@ fn argument_facts(tool: &ToolRowDto) -> Vec<String> {
 /// Returns the rows a call's own typed state leaves: the note an undeclared
 /// identity or an undecoded arguments document shows, or nothing when the call
 /// carries its decoded arguments.
-fn argument_rows(
-    tool: &ToolRowDto,
-    width: usize,
-    palette: &'static Palette,
-) -> Vec<LaidOutRow> {
+fn argument_rows(tool: &ToolRowDto, width: usize, palette: &'static Palette) -> Vec<LaidOutRow> {
     let Some(call) = tool.call() else {
         return Vec::new();
     };
@@ -422,22 +418,18 @@ fn payload_content(
             }
             rows
         }
-        ToolResult::Write(value) => {
-            content_rows(
-                &format!("wrote {} bytes", value.bytes),
-                width,
-                RowStyleId::ToolPreview,
-                palette,
-            )
-        }
-        ToolResult::Edit(value) => {
-            content_rows(
-                &format!("edited {} bytes", value.bytes),
-                width,
-                RowStyleId::ToolPreview,
-                palette,
-            )
-        }
+        ToolResult::Write(value) => content_rows(
+            &format!("wrote {} bytes", value.bytes),
+            width,
+            RowStyleId::ToolPreview,
+            palette,
+        ),
+        ToolResult::Edit(value) => content_rows(
+            &format!("edited {} bytes", value.bytes),
+            width,
+            RowStyleId::ToolPreview,
+            palette,
+        ),
         // An execute result's text is never rendered, in any form: only the
         // typed terminal classification crosses into the transcript.
         ToolResult::Execute(value) => {
@@ -462,7 +454,11 @@ fn metadata_rows(
     width: usize,
     palette: &'static Palette,
 ) -> Vec<LaidOutRow> {
-    note_rows(&format!("{}: {}", entry.key(), entry.value()), width, palette)
+    note_rows(
+        &format!("{}: {}", entry.key(), entry.value()),
+        width,
+        palette,
+    )
 }
 
 /// Returns the wrapped rows of one content text in `ink` on the tool wash.
@@ -516,11 +512,7 @@ fn list_rows(
 /// The location is written in the muted ink and the matched fragment in the
 /// result ink, so a hit reads as one structured row rather than as a line of
 /// prose: the location is the typed match's own path, line, and column.
-fn hit_rows(
-    matched: &GrepMatch,
-    inner: usize,
-    palette: &'static Palette,
-) -> Vec<LaidOutRow> {
+fn hit_rows(matched: &GrepMatch, inner: usize, palette: &'static Palette) -> Vec<LaidOutRow> {
     let location = format!(
         "{}:{}:{}",
         matched.path.as_str(),
@@ -712,7 +704,10 @@ mod tests {
         let (rows, index) = exchange(
             "read",
             r#"{"path":"src/lib.rs"}"#,
-            Some((ToolResultStatusDto::Completed, Some(read_payload(&content, false)))),
+            Some((
+                ToolResultStatusDto::Completed,
+                Some(read_payload(&content, false)),
+            )),
         );
         let text = rendered(&rows, index, 40);
         assert!(text.contains("╭─ ▸ read · src/lib.rs"), "{text}");
@@ -808,7 +803,11 @@ mod tests {
         let expected: [(ToolId, &str, &str); 6] = [
             (ToolId::Read, "▸ read · src/lib.rs", "│ contents"),
             (ToolId::Glob, "▸ glob · \"**/*.rs\"", "│ ‣ src/lib.rs"),
-            (ToolId::Grep, "▸ grep · \"needle\"", "│ ‣ src/lib.rs:3:5 · needle"),
+            (
+                ToolId::Grep,
+                "▸ grep · \"needle\"",
+                "│ ‣ src/lib.rs:3:5 · needle",
+            ),
             (ToolId::Write, "▸ write · src/lib.rs", "│ wrote 3 bytes"),
             (ToolId::Edit, "▸ edit · src/lib.rs", "│ edited 1 byte"),
             (
@@ -824,8 +823,14 @@ mod tests {
                 Some((ToolResultStatusDto::Completed, Some(payload(tool_id)))),
             );
             let text = rendered(&rows, index, 80);
-            assert!(text.starts_with(&format!("╭─ {badge}")), "{tool_id}: {text}");
-            assert!(text.contains(outcome), "{tool_id} owns its own outcome: {text}");
+            assert!(
+                text.starts_with(&format!("╭─ {badge}")),
+                "{tool_id}: {text}"
+            );
+            assert!(
+                text.contains(outcome),
+                "{tool_id} owns its own outcome: {text}"
+            );
             assert!(text.contains('╰'), "{tool_id}: {text}");
         }
 
@@ -854,7 +859,10 @@ mod tests {
         let empty = rendered(&rows, index, 60);
         assert!(empty.contains(NOTE_EMPTY_PATHS), "{empty}");
         assert!(!empty.contains("[no paths]"), "{empty}");
-        assert!(!empty.contains("‣"), "an empty list draws no entry: {empty}");
+        assert!(
+            !empty.contains("‣"),
+            "an empty list draws no entry: {empty}"
+        );
 
         // A truncated typed read states its flag in a note; the flat `[truncated]`
         // line the result text may carry is never an entry.

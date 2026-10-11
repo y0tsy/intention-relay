@@ -15,9 +15,9 @@ use common::{fixture_dir, service};
 #[cfg(unix)]
 use intention_proto::{EditInput, ReadInput, WriteInput};
 use intention_proto::{GrepInput, GrepScope, ToolInput, ToolResult};
+use intention_tools::CancellationSignal;
 #[cfg(unix)]
 use intention_tools::ToolDispatchOutcome;
-use intention_tools::CancellationSignal;
 
 #[test]
 fn scoped_search_reports_file_directory_workspace_and_failures() {

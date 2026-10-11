@@ -2875,9 +2875,7 @@ mod tests {
         // The publication path republishes the committed row the storage
         // boundary returned, typed projection and all: the daemon neither
         // decodes the arguments document nor re-encodes the projection.
-        use intention_proto::{
-            ToolCallId, ToolCallRowDto, ToolIdentityDto, ToolInput, ToolRowDto,
-        };
+        use intention_proto::{ToolCallId, ToolCallRowDto, ToolIdentityDto, ToolInput, ToolRowDto};
 
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
         let (session_id, run_id) = create_and_start(&facade);

@@ -25,8 +25,7 @@ use intention_proto::{
 };
 use intention_proto::{
     DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, RunId, SessionId, ThemeDto, TimestampDto,
-    ToolCallId, ToolResultMetadataEntryDto, ToolResultStatusDto, UsageDto,
-    run_status_is_terminal,
+    ToolCallId, ToolResultMetadataEntryDto, ToolResultStatusDto, UsageDto, run_status_is_terminal,
 };
 
 mod sqlite;

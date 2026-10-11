@@ -573,9 +573,8 @@ impl<'de> Deserialize<'de> for BoundedText {
         D: Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        Self::new(value).map_err(|error| {
-            de::Error::custom(format!("invalid tool text ({})", error.code()))
-        })
+        Self::new(value)
+            .map_err(|error| de::Error::custom(format!("invalid tool text ({})", error.code())))
     }
 }
 
@@ -1031,7 +1030,10 @@ mod tests {
         }
         let undeclared =
             ToolIdentityDto::parse("mystery").expect("an undeclared wire name stays representable");
-        assert_eq!(undeclared, ToolIdentityDto::Undeclared("mystery".to_owned()));
+        assert_eq!(
+            undeclared,
+            ToolIdentityDto::Undeclared("mystery".to_owned())
+        );
         assert_eq!(undeclared.declared(), None);
         assert_eq!(undeclared.wire_name(), "mystery");
         for rejected in ["", "   ", "bad\0name"] {
@@ -1076,8 +1078,12 @@ mod tests {
             "glob cannot carry decoded read arguments"
         );
         assert!(
-            ToolCallRowDto::new(call_id, ToolIdentityDto::Undeclared("mystery".into()), Some(read))
-                .is_err(),
+            ToolCallRowDto::new(
+                call_id,
+                ToolIdentityDto::Undeclared("mystery".into()),
+                Some(read)
+            )
+            .is_err(),
             "an undeclared identity carries no typed arguments"
         );
         assert!(

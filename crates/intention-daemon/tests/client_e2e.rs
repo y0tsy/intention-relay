@@ -20,8 +20,8 @@ use std::time::{Duration, Instant};
 use intention_client::{SessionStreamClient, SessionStreamSubscription, StreamStep};
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunStatusDto,
-    SendUserTurnOutcomeDto, SessionFrameDto, SubscribeSessionCommandDto, ThemeDto,
-    ToolIdentityDto, WorkspaceRootDto, run_status_is_terminal,
+    SendUserTurnOutcomeDto, SessionFrameDto, SubscribeSessionCommandDto, ThemeDto, ToolIdentityDto,
+    WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_proto::{IdempotencyKey, ProjectId, SessionId, WorkspaceId};
 use intention_test_support::daemon_process::{

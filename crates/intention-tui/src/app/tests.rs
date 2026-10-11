@@ -10,10 +10,11 @@ use intention_proto::{
     BoundedText, ConfigRevisionId, DaemonHealthDto, ErrorDto, ExecuteResult, GrepResult, MessageId,
     MessageKindDto, MessageProjectionDto, PathsResult, ProjectId, RunId, RunModeDto,
     RunProjectionDto, RunStatusDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionId,
-    SessionProjectionDto, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto,
-    TextDeltaFrameDto, TextResult, ThemeDto, TimestampDto, ToolCallId, ToolCallRowDto, ToolId,
-    ToolIdentityDto, ToolInput, ToolProcessStatus, ToolResult, ToolResultRowDto,
-    ToolResultStatusDto, ToolRowDto, TurnId, WorkspaceId, WorkspaceRootDto, WriteResult,
+    SessionProjectionDto, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto,
+    TextDeltaChannelDto, TextDeltaFrameDto, TextResult, ThemeDto, TimestampDto, ToolCallId,
+    ToolCallRowDto, ToolId, ToolIdentityDto, ToolInput, ToolProcessStatus, ToolResult,
+    ToolResultRowDto, ToolResultStatusDto, ToolRowDto, TurnId, WorkspaceId, WorkspaceRootDto,
+    WriteResult,
 };
 
 use super::{

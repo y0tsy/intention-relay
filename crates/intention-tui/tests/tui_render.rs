@@ -210,16 +210,8 @@ fn row(
     kind: MessageKindDto,
     text: &str,
 ) -> MessageProjectionDto {
-    MessageProjectionDto::new(
-        row_id(),
-        session_id,
-        Some(run_id),
-        kind,
-        text,
-        None,
-        None,
-    )
-    .expect("the fixture transcript row is coherent")
+    MessageProjectionDto::new(row_id(), session_id, Some(run_id), kind, text, None, None)
+        .expect("the fixture transcript row is coherent")
 }
 
 /// Returns one bounded fixture text.
@@ -989,7 +981,9 @@ fn a_mutation_or_execute_exchange_draws_its_typed_outcome_without_the_output() {
             }),
         ),
     ] {
-        messages.extend(tool_exchange(session_id, run_id, tool_id, arguments, result));
+        messages.extend(tool_exchange(
+            session_id, run_id, tool_id, arguments, result,
+        ));
     }
     let state = open_state(session_id, messages);
     // The window is tall enough for all three framed blocks: each one is a
@@ -2101,7 +2095,13 @@ fn a_finished_tool_call_returns_the_row_to_the_answering_word() {
     )));
     state.update(Action::ElapsedReported { millis: 2_700 });
     state.update(Action::FrameReceived(SessionFrameDto::Content(
-        tool_result_row(session_id, run_id, "read", read_payload("the file"), call_id),
+        tool_result_row(
+            session_id,
+            run_id,
+            "read",
+            read_payload("the file"),
+            call_id,
+        ),
     )));
     let mut app = TestApp::new(RevueView::new(&state));
     let pilot = Pilot::new(&mut app);

@@ -16,6 +16,10 @@ use intention_engine::{
     SessionCommitObserver, ToolInvocationRequestDto, ToolResultOutcomeDto,
 };
 use intention_proto::{
+    BoundedText, TextResult, ToolCallRowDto, ToolIdentityDto, ToolInput, ToolResult,
+    ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
+};
+use intention_proto::{
     ConfigRevisionId, CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto,
     MessageProjectionDto, PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto,
     RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto, WorkspaceRootDto,
@@ -23,10 +27,6 @@ use intention_proto::{
 use intention_proto::{
     ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, TimestampDto, ToolCallId, TurnId,
     WorkspaceBindingDto, WorkspaceId,
-};
-use intention_proto::{
-    BoundedText, TextResult, ToolCallRowDto, ToolIdentityDto, ToolInput, ToolResult,
-    ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
 };
 use intention_storage::{AcceptedTurnOutcomeDto, StartingRunModelContextDto};
 use intention_test_support::fixture_snapshot;
@@ -488,8 +488,16 @@ fn tool_row_fixture(
         ),
         _ => unreachable!("the tool-row fixture serves tool and result rows"),
     };
-    MessageProjectionDto::new(row_id(), session_id, Some(run_id), kind, text, None, Some(tool))
-        .expect("fixture tool row is valid")
+    MessageProjectionDto::new(
+        row_id(),
+        session_id,
+        Some(run_id),
+        kind,
+        text,
+        None,
+        Some(tool),
+    )
+    .expect("fixture tool row is valid")
 }
 
 /// Asserts that every replayed assistant tool-call message stays answered by
@@ -1648,7 +1656,10 @@ fn an_undecodable_call_row_commits_without_a_typed_projection() {
         unreachable!("the answering row carries its typed result evidence")
     };
     assert_eq!(result.status(), ToolResultStatusDto::Failed);
-    assert!(result.result().is_none(), "a failed result carries no payload");
+    assert!(
+        result.result().is_none(),
+        "a failed result carries no payload"
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1686,7 +1697,11 @@ fn a_committed_tool_result_row_carries_status_and_metadata() {
     };
     assert_eq!(evidence.status(), ToolResultStatusDto::Completed);
     assert_eq!(
-        evidence.metadata().iter().map(|entry| (entry.key(), entry.value())).collect::<Vec<_>>(),
+        evidence
+            .metadata()
+            .iter()
+            .map(|entry| (entry.key(), entry.value()))
+            .collect::<Vec<_>>(),
         vec![("truncated", "true")],
         "the approved metadata rides the committed projection"
     );
