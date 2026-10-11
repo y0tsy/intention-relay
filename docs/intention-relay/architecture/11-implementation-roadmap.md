@@ -137,7 +137,8 @@ recent one — a multi-line input block that grows a row per buffer line, user c
 markdown, committed reasoning as its own block, the leading-slash command registry with the hint band it feeds above
 the input block (a ranked, filtered `/new`, `/sessions`, and `/theme` list whose registry declares each command's
 arguments, so the argument word lists the declared `light`/`dark` values in the same three columns; the input history
-and `Tab` returning to the line only once the band is closed; and the band as `Esc`'s innermost layer), the theme
+and `Tab` returning to the line only once the band is closed, while `Enter` on a word that already spells its command
+or value runs the line instead of appending the row's trailing space; and the band as `Esc`'s innermost layer), the theme
 picker (which `/theme` opens with no argument: a panel in the chat panel's band region whose rows carry each theme's
 name and description, the committed row marked with the browser's `> ` cursor, live `Up`/`Down` previews of the whole
 window, `Enter` committing through the daemon, and `Esc` reverting), the daemon-owned effective theme (the optional

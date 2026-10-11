@@ -111,10 +111,13 @@ typed text above one whose characters appear in order (`/ssn` finds
 list never reorders while typing, and an empty filter matches everything.
 `Up`/`Down` move the highlight while the band is open; the input history walks
 only once it is closed. `Tab` commits the highlighted row - a command name or an
-argument value plus one trailing space - and `Enter` completes it too, except on
-the empty argument word an omitted optional argument opens: that band has
-nothing to complete, so `Enter` runs the command itself (`/theme` opens the
-picker) while `Tab` completes the value it highlights. A space after a complete
+argument value plus one trailing space - and `Enter` completes an abbreviated
+word the same way. A word that already spells the command (`/sessions`) or one of
+the argument's declared values (`/theme light`, in whichever case the submission
+path accepts) has nothing left to complete, so `Enter` runs the line on that
+press; the empty argument word an omitted optional argument opens is the same
+case, so `Enter` runs the command itself (`/theme` opens the picker) while `Tab`
+completes the value it highlights. A space after a complete
 command name closes the band only for a command that declares no arguments, and
 a command with a declared argument reopens the band on its argument word; a
 space after a complete value closes it. The band closes when the slash is

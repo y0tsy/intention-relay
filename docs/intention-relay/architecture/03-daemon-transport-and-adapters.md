@@ -450,9 +450,12 @@ text above is the live policy.
   [Argument]` in the same three columns — with the same rule: a prefix beats an ordered subsequence, then registry or
   declaration order, at most five rows with an overflow report for the rest, and an empty filter lists every row. `Up`
   and `Down` move the band's highlight while it is open and walk the input history only once it is closed. `Tab`
-  completes the highlighted row — the name or the value plus one trailing space — while `Enter` completes it too,
-  except on the empty argument word an omitted optional argument opens: that band has nothing to complete, so `Enter`
-  runs the command itself (`/theme` opens the picker) while `Tab` still completes the highlighted value. A space after
+  completes the highlighted row — the name or the value plus one trailing space — and `Enter` completes an abbreviated
+  word the same way. A word that already spells its command (`/sessions`) or one of the argument's declared values
+  (`/theme light`, in whichever case the submission path accepts) has nothing left to complete, so `Enter` runs the
+  line on that press instead of spending it on the trailing space; the empty argument word an omitted optional argument
+  opens is the same case, so `Enter` runs the command itself (`/theme` opens the picker) while `Tab` still completes
+  the highlighted value. A space after
   a complete command name closes the band only for a command that declares no arguments, while a command with a
   declared argument reopens the band on its argument word; a space after a complete value closes it; and the band
   closes when the slash is removed, on `Esc`, or when nothing matches. The keymap is one mapping per

@@ -173,8 +173,10 @@ welcome surface, and a session appears only for an explicit
 creates the session it needs. The fullscreen UI carries the whole command
 surface in one registry — `/new`, `/sessions`, and `/theme` are the registered
 commands — and a leading-slash word opens a hint band above the input block that
-filters, ranks, and completes them, with `Tab` or `Enter` committing the
-highlighted one and `Esc` closing the band before it means anything else. The
+filters, ranks, and completes them, with `Tab` committing the highlighted row,
+`Enter` completing an abbreviated word the same way and running a line whose word
+already spells its command or value, and `Esc` closing the band before it means
+anything else. The
 registry also declares each command's arguments: `/theme` takes an optional
 `light` or `dark` value, and while the caret is in that argument word the band
 lists those values in the same three columns, completing one with a trailing

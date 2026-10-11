@@ -265,7 +265,8 @@ and wait deadlines, including the reasoning-only row the text report leaves unwr
 selection and rejection paths, the picker's preview, commit, and revert transitions, the theme vocabulary and its
 parser, the command registry with its declared arguments and a submitted line's argument resolution and notices, the
 ranking and menu
-transitions, the hint band's row arithmetic and columns, the keymap, both themes' palette roles and the documented
+transitions, the one-press rule that runs a word already spelling its command or value, the hint band's row arithmetic
+and columns, the keymap, both themes' palette roles and the documented
 opacity, distinctness, `error`/`scarlet` alias, cross-theme, and dark-monochrome rules, the
 wheel mapping, the left-button pointer's press, drag, release, marker expansion, and edge scrolling, the turn clock, the
 browser geometry and row helpers, the markdown layout and the heading marker it drops, the per-tool block dispatch, the marker and notice layout, the
@@ -273,9 +274,9 @@ reasoning-only row that owns one block with no answer line and the reasoning pla
 transcript layout cache's append-only fast path, width change, theme change, replacement, reasoning expansion,
 paired-result, and
 front-trim replays, and the clipboard-free source audit. A run of
-`cargo nextest run -p intention-tui` observed 367 tests across four binaries, all passing: 245 library unit tests,
+`cargo nextest run -p intention-tui` observed 369 tests across four binaries, all passing: 247 library unit tests,
 81 `tui_render` cases, 30 binary unit tests, and 11 `terminal_e2e` cases. A run of `cargo nextest run --workspace`
-observed 772 tests run, 772 passed, and 2 skipped.
+observed 774 tests run, 774 passed, and 2 skipped.
 
 The per-crate self-checks are `cargo fmt -p intention-tui`, `cargo nextest run -p intention-tui`, and
 `cargo clippy -p intention-tui --all-targets`; the slice's acceptance gate is `make quick` during delivery and
@@ -310,7 +311,7 @@ decode failure and the unknown tool each commit the call row and one guided resu
 call is answered with its guidance, executes exactly once, and is never retried; the daemon end-to-end suite proves
 the real daemon completes the run, delivers the guidance-bearing tool row, and asks the fake provider exactly once
 more. The terminal adapter reads the call's `command` and declared `cwd` for its execute facts. A run of
-`cargo nextest run --workspace` observed 772 tests run, 772 passed, and 2 skipped; the acceptance gate is `make quick`
+`cargo nextest run --workspace` observed 774 tests run, 774 passed, and 2 skipped; the acceptance gate is `make quick`
 during delivery and `make verify` before merge.
 
 ### Slice 2 step-reasoning correction
