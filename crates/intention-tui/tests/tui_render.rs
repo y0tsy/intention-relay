@@ -906,7 +906,7 @@ fn a_mutation_or_execute_exchange_draws_a_badge_and_a_plate_without_its_result()
     for (tool_id, arguments) in [
         ("write", r#"{"path":"src/lib.rs","content":"new"}"#),
         ("edit", r#"{"path":"src/lib.rs","old":"a","new":"b"}"#),
-        ("execute", r#"{"program":"cargo","args":["test"]}"#),
+        ("execute", r#"{"command":"cargo test"}"#),
     ] {
         messages.extend(tool_exchange(
             session_id,

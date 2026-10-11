@@ -367,19 +367,6 @@ impl Arguments {
         }
     }
 
-    /// Returns one field, only when every element under it is a string.
-    fn texts(&self, field: &str) -> Option<Vec<&str>> {
-        match self {
-            Self::Object(fields) => fields
-                .get(field)?
-                .as_array()?
-                .iter()
-                .map(Value::as_str)
-                .collect(),
-            Self::Raw(_) | Self::Missing => None,
-        }
-    }
-
     /// Returns the raw text of a document that is not one JSON object.
     fn raw(&self) -> Option<&str> {
         match self {
@@ -515,8 +502,8 @@ fn other_content(
 /// caller keeps its raw text muted and shows the same plate every such
 /// document shows.
 // @todo(core): derive the argument facts - `path`, `offset`, `limit`,
-// `pattern`, `scope`, `program`, `args`, and the joined command line - from
-// typed core argument structs; the pane must not read the document's keys.
+// `pattern`, `scope`, `command`, `cwd` - from typed core argument structs;
+// the pane must not read the document's keys.
 fn arguments_facts(tool_id: &str, arguments: &Arguments) -> (Vec<String>, Option<String>) {
     if arguments.raw().is_some() {
         return (Vec::new(), Some(PLATE_MALFORMED.to_owned()));
@@ -598,26 +585,20 @@ fn path_facts(tool_id: &str, arguments: &Arguments) -> (Vec<String>, Option<Stri
     )
 }
 
-/// Returns the facts an `execute` call carries: its command line.
+/// Returns the facts an `execute` call carries: its shell command and the
+/// declared working directory when one is present.
 fn execute_facts(arguments: &Arguments) -> (Vec<String>, Option<String>) {
-    let Some(program) = arguments.text("program") else {
+    let Some(command) = arguments.text("command") else {
         return (
             Vec::new(),
-            Some("the execute arguments carry no program".to_owned()),
+            Some("the execute arguments carry no command".to_owned()),
         );
     };
-    let Some(args) = arguments.texts("args") else {
-        return (
-            Vec::new(),
-            Some("the execute arguments carry no args list".to_owned()),
-        );
-    };
-    let mut command = program.to_owned();
-    for arg in args {
-        command.push(' ');
-        command.push_str(arg);
+    let mut facts = vec![command.to_owned()];
+    if let Some(cwd) = arguments.text("cwd") {
+        facts.push(cwd.to_owned());
     }
-    (vec![command], None)
+    (facts, None)
 }
 
 /// Returns the wrapped rows of one content text in `ink` on the tool wash.
@@ -912,7 +893,7 @@ mod tests {
         for (tool_id, arguments) in [
             ("write", r#"{"path":"src/lib.rs","content":"new"}"#),
             ("edit", r#"{"path":"src/lib.rs","old":"a","new":"b"}"#),
-            ("execute", r#"{"program":"cargo","args":["test"]}"#),
+            ("execute", r#"{"command":"cargo test"}"#),
         ] {
             let (rows, index) = exchange(tool_id, arguments, Some("SECRET RESULT TEXT"));
             let text = rendered(&rows, index, 60);
@@ -927,11 +908,7 @@ mod tests {
 
     #[test]
     fn an_execute_result_is_never_rendered_in_any_form() {
-        let (rows, _) = exchange(
-            "execute",
-            r#"{"program":"cargo","args":[]}"#,
-            Some("raw output"),
-        );
+        let (rows, _) = exchange("execute", r#"{"command":"cargo test"}"#, Some("raw output"));
         let pairing = Pairing::of(&rows);
         assert!(
             block(&rows[1], 1, &pairing, 60, LIGHT).is_none(),
