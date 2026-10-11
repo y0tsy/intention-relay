@@ -398,7 +398,7 @@ impl Driver {
         let outcome = self.perform(Effect::OpenSession(session)).await;
         let failure = match outcome {
             Some((action, failure)) => {
-                let (next_failure, _reconnected) = self.apply(action).await;
+                let next_failure = self.apply(action).await;
                 failure.or(next_failure)
             }
             None => None,
@@ -417,7 +417,7 @@ impl Driver {
     /// reported.
     pub async fn create(&mut self) -> Result<(), ErrorDto> {
         self.reset(None);
-        let (failure, _reconnected) = self.apply(Action::NewSessionRequested).await;
+        let failure = self.apply(Action::NewSessionRequested).await;
         self.finish_open(failure)
     }
 
@@ -439,10 +439,11 @@ impl Driver {
     /// reported, if any.
     pub async fn send_turn(&mut self, content: &str) -> Option<ErrorDto> {
         self.last_failure = None;
-        self.apply(Action::TurnSubmitted {
-            content: content.to_owned(),
-        })
-        .await;
+        let _failure = self
+            .apply(Action::TurnSubmitted {
+                content: content.to_owned(),
+            })
+            .await;
         self.last_failure.clone()
     }
 
@@ -455,7 +456,7 @@ impl Driver {
         if self.state.live_run().is_none() {
             return false;
         }
-        self.apply(Action::CancelRunRequested).await;
+        let _failure = self.apply(Action::CancelRunRequested).await;
         true
     }
 
@@ -481,7 +482,7 @@ impl Driver {
         if let Some(outcome) = self.pump_until(events, deadline, interrupts).await? {
             return Ok(outcome);
         }
-        self.apply(Action::CancelRunRequested).await;
+        let _failure = self.apply(Action::CancelRunRequested).await;
         let grace = Deadline::after(Some(STOP_GRACE), Instant::now());
         let observed = self.pump_until(events, grace, interrupts).await?;
         Ok(deadline_outcome(observed))
@@ -506,7 +507,7 @@ impl Driver {
                             .delta(delta.step(), delta.channel(), delta.text())
                             .map_err(PumpFailure::Output)?;
                     }
-                    self.apply(Action::FrameReceived(frame)).await;
+                    let _failure = self.apply(Action::FrameReceived(frame)).await;
                 }
                 Received::Interrupted => {
                     // The signal reaches the loop that owns the state, which
@@ -516,11 +517,16 @@ impl Driver {
                 }
                 Received::Expired => return Ok(None),
                 Received::Empty | Received::Closed => {
-                    // The front end owns the one reconnect a lost stream is
-                    // owed: it asks for it while its budget lasts, and reports
-                    // its typed failure once the budget is spent.
-                    let (_failure, reconnected) = self.apply(Action::ReconnectRequested).await;
-                    if !reconnected {
+                    // The state owns the one reconnect a lost stream is owed:
+                    // `next` already applied the loss through its own
+                    // transition, which asked for the attempt - and only once -
+                    // while the budget lasted, and the driver performed it
+                    // above. A recovery that left a subscription open is
+                    // observed by the next pass; one that left none - the
+                    // budget was spent, or the attempt's own open failed - is
+                    // over, and the pump reports the front end's typed failure
+                    // instead of asking for a second bootstrap.
+                    if self.subscription.is_none() {
                         return Err(self.pump_failure());
                     }
                 }
@@ -563,13 +569,13 @@ impl Driver {
                 // run that never reached a terminal status reports.
                 self.subscription = None;
                 self.record_failure(&error);
-                self.apply(Action::SessionStreamEnded).await;
+                let _failure = self.apply(Action::SessionStreamEnded).await;
                 Received::Closed
             }
             Err(error) => {
                 self.subscription = None;
                 self.record_failure(&error);
-                self.apply(Action::SessionStreamFailed(error)).await;
+                let _failure = self.apply(Action::SessionStreamFailed(error)).await;
                 Received::Closed
             }
         }
@@ -602,18 +608,13 @@ impl Driver {
 
     /// Applies one action and performs the effects it produces, in order.
     ///
-    /// Returns the typed failure the chain reported and whether the chain asked
-    /// the client to re-read current state, so a caller that owns a run's wait
-    /// can tell a reconnect request from a budget that is already spent.
-    async fn apply(&mut self, action: Action) -> (Option<ErrorDto>, bool) {
+    /// Returns the typed failure the chain reported, so a caller that owns a
+    /// run's wait can report the front end's own classification of it.
+    async fn apply(&mut self, action: Action) -> Option<ErrorDto> {
         let mut failure = None;
-        let mut reconnected = false;
         let mut pending = VecDeque::from([action]);
         while let Some(action) = pending.pop_front() {
             for effect in self.state.update(action) {
-                if matches!(effect, Effect::Connect) {
-                    reconnected = true;
-                }
                 if let Some((reported, error)) = self.perform(effect).await {
                     if error.is_some() {
                         failure = error;
@@ -622,7 +623,7 @@ impl Driver {
                 }
             }
         }
-        (failure, reconnected)
+        failure
     }
 
     /// Performs one effect and returns the action it reports with the typed
@@ -1211,6 +1212,31 @@ mod tests {
                 .expect("the temporary directory is an absolute workspace root"),
             Some(RunModeDto::Build),
         )
+    }
+
+    #[tokio::test]
+    async fn a_run_with_no_live_subscription_reports_the_failure_instead_of_reconnecting() {
+        // The pump owns no reconnect: the state asks for the one a lost stream
+        // is owed and the driver performs the attempt, so a driver whose
+        // recovery left no subscription reports the front end's typed failure
+        // on the next pass instead of starting another bootstrap of its own.
+        let mut driver = offline_driver();
+        let reported = ErrorDto::validation("fixture_failure", "the fixture step failed");
+        driver.record_failure(&reported);
+        let mut out = Vec::new();
+        let mut report = TextReport::new(&mut out);
+        let mut interrupts = interrupt_requests();
+        let failure = driver
+            .pump_until(&mut report, None, &mut interrupts)
+            .await
+            .expect_err("a run with no live subscription cannot be observed");
+        let PumpFailure::Client(error) = failure else {
+            unreachable!("a missing subscription is a typed client failure")
+        };
+        assert_eq!(
+            error, reported,
+            "the pump reports the recorded failure instead of asking for a reconnect"
+        );
     }
 
     #[test]

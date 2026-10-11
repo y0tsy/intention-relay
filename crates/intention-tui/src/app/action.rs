@@ -238,8 +238,6 @@ pub enum Action {
     InterruptRequested,
     /// The user asked to stop the active run for good.
     CancelRunRequested,
-    /// The user asked to re-read current state from the daemon.
-    ReconnectRequested,
     /// The view reported the transcript display rows one selection reaches.
     ///
     /// The range is measured in display rows: the view hit-tests its cells to

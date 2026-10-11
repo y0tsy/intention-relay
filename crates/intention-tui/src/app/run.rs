@@ -31,8 +31,9 @@ impl AppState {
         }
         self.note_replacement();
         self.stream = StreamStatus::Live;
-        // A stream that opened again owes its own one reconnect.
-        self.reconnects_asked = 0;
+        // An accepted subscription proves only that a stream exists: the
+        // reconnect budget a loss spent stays spent until a frame this state
+        // accepts shows the stream is carrying the session's traffic.
         self.error = None;
         // A fresh subscription carries no streamed text: a live run it opens is
         // waiting for the first token this state will see, and a terminal one
@@ -93,11 +94,13 @@ impl AppState {
     ///
     /// The budget is one reconnect per lost stream: the first loss asks for it
     /// and a second loss inside the same recovery asks for nothing, so the
-    /// front end reports its typed failure instead of retrying in a loop. The
-    /// connection reads as connecting while the attempt runs, and the loss stays
-    /// visible: a typed failure keeps its error line, and the stream status
-    /// keeps naming the loss, so the status row never claims live updates this
-    /// front end does not have.
+    /// front end reports its typed failure instead of retrying in a loop. Only
+    /// a frame the state accepts restores the budget: a subscription that
+    /// opened and delivered nothing leaves the next loss asking for nothing.
+    /// The connection reads as connecting while the attempt runs, and the loss
+    /// stays visible: a typed failure keeps its error line, and the stream
+    /// status keeps naming the loss, so the status row never claims live
+    /// updates this front end does not have.
     pub(super) fn reconnect_once(&mut self) -> Vec<Effect> {
         if self.reconnects_asked > 0 {
             return Vec::new();
@@ -124,6 +127,10 @@ impl AppState {
             Ok(update) => update,
             Err(error) => return self.apply_failure(&error),
         };
+        // A frame the client accepted is the evidence that this stream carries
+        // the session's traffic: the one reconnect a later loss is owed is
+        // restored here, and never by a subscription that only opened.
+        self.reconnects_asked = 0;
         match frame {
             SessionFrameDto::Content(_) => {
                 // A row the client's retention bound dropped in front of the

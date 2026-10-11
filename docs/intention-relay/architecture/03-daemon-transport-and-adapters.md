@@ -241,8 +241,11 @@ sequenceDiagram
 - Adapters never synthesize server state or ordering.
 - One window, one session stream: two terminal windows on the same session follow it independently, so a turn sent in
   either reaches both, and either one can stop the run they both observe.
-- A lost stream is not a dead end: the front end asks for exactly one reconnect - bootstrap, open the session, subscribe
-  again - reports a failed reconnect's typed error, and stays usable with its exit arms reachable.
+- A lost stream is not a dead end: the front end asks for exactly one reconnect per lost stream - bootstrap, open the
+  session, subscribe again - reports a failed reconnect's typed error, and stays usable with its exit arms reachable. The
+  one-reconnect budget is restored only by a frame the stream delivers, never by a subscription that merely opened: a peer
+  that accepts a subscription and closes it without delivering a frame is reported with the front end's typed failure
+  after the original bootstrap and its one reconnect.
 
 ## M3 durable authority
 

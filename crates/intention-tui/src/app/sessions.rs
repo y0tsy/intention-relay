@@ -101,22 +101,6 @@ impl AppState {
         vec![Effect::CreateSession { first_turn: None }]
     }
 
-    /// Re-reads current state from the daemon after a reconnect request.
-    ///
-    /// The request is the ask that follows an observed stream loss: the
-    /// transient observation ends - the stream that streamed the provisional
-    /// text is gone - and the one reconnect the loss is owed goes out. A budget
-    /// already spent asks for nothing, which is how the driver learns that the
-    /// recovery is over.
-    pub(super) fn request_reconnect(&mut self) -> Vec<Effect> {
-        self.stream = StreamStatus::Inactive;
-        if let Some(state) = self.session_state.as_mut() {
-            state.end_stream();
-        }
-        self.error = None;
-        self.reconnect_once()
-    }
-
     /// Returns the subscription that makes the open session live, if any.
     ///
     /// A window follows the session it has open, not one run: the run a turn

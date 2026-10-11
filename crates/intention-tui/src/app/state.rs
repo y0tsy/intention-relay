@@ -85,9 +85,11 @@ pub struct AppState {
     pub(super) elapsed_millis: Option<u64>,
     /// How many reconnects this front end has asked for the current stream.
     ///
-    /// The budget is one reconnect per lost stream: a stream that opens again
-    /// resets it, and a second loss inside one recovery asks for nothing, so
-    /// the front end reports its typed failure instead of retrying in a loop.
+    /// The budget is one reconnect per lost stream: the first loss asks for it
+    /// and a second loss inside the same recovery asks for nothing, so the
+    /// front end reports its typed failure instead of retrying in a loop. Only
+    /// a frame the state accepts restores it: a subscription that opened and
+    /// delivered no traffic leaves it spent.
     pub(super) reconnects_asked: u32,
     pub(super) stream: StreamStatus,
     pub(super) input: String,
@@ -312,7 +314,6 @@ impl AppState {
             Action::EscapePressed => self.apply_escape(),
             Action::InterruptRequested => self.request_interrupt(),
             Action::CancelRunRequested => self.request_cancel(),
-            Action::ReconnectRequested => self.request_reconnect(),
             Action::SelectTranscriptRows { anchor, extent } => self.apply_selection(anchor, extent),
             Action::ExpandReasoning { row } => self.apply_expand_reasoning(row),
             Action::ScrollTranscriptFast(direction) => {

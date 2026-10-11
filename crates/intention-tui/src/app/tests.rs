@@ -3358,7 +3358,8 @@ fn a_failed_stream_reports_the_failure() {
 fn a_second_lost_stream_asks_for_no_reconnect() {
     // The budget is one reconnect per lost stream: the first loss asks for it,
     // and a second loss inside the same recovery asks for nothing, so the front
-    // end reports its typed failure instead of retrying in a loop.
+    // end reports its typed failure instead of retrying in a loop. Nothing here
+    // restores the budget, because only a frame the state accepts does.
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
@@ -3379,9 +3380,46 @@ fn a_second_lost_stream_asks_for_no_reconnect() {
 }
 
 #[test]
-fn a_live_stream_resets_the_reconnect_budget() {
-    // The budget is per lost stream: a stream that opened again owes its own
-    // one reconnect, so a front end that recovered is never left without one.
+fn a_stream_that_closed_again_without_delivering_a_frame_asks_for_no_reconnect() {
+    // The bound: a peer that accepts every subscription and closes it before
+    // delivering a frame leaves the budget spent, so the loss that follows the
+    // bare open asks for nothing and the front end reports its typed failure
+    // instead of bootstrapping in a loop.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    assert_eq!(
+        state.update(Action::SessionStreamEnded),
+        vec![Effect::Connect],
+        "the first loss spends the one reconnect"
+    );
+    state.update(Action::SessionStreamOpened(stream_state(
+        session_id,
+        run_id,
+        RunStatusDto::Running,
+        Vec::new(),
+    )));
+    assert_eq!(
+        state.update(Action::SessionStreamEnded),
+        Vec::<Effect>::new(),
+        "a stream that opened and delivered no frame restores nothing"
+    );
+    assert_eq!(
+        state.update(Action::SessionStreamFailed(failure())),
+        Vec::<Effect>::new(),
+        "the budget stays spent across a further loss"
+    );
+    assert!(
+        state.error().is_some(),
+        "the typed failure ends the recovery on the error line"
+    );
+}
+
+#[test]
+fn a_stream_delivering_a_frame_restores_the_reconnect_budget() {
+    // The budget is restored by evidence that the stream is carrying the
+    // session's traffic: a frame the state accepts resets it, so a stream that
+    // recovered and delivered is owed its own one reconnect after a later loss.
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
@@ -3395,10 +3433,11 @@ fn a_live_stream_resets_the_reconnect_budget() {
         RunStatusDto::Running,
         Vec::new(),
     )));
+    state.update(Action::FrameReceived(delta(session_id, run_id, 0, "half")));
     assert_eq!(
         state.update(Action::SessionStreamFailed(failure())),
         vec![Effect::Connect],
-        "a stream that opened again resets the budget"
+        "a stream that delivered a frame is owed its own one reconnect"
     );
 }
 
@@ -3477,15 +3516,15 @@ fn a_failed_stop_reaches_the_error_line() {
 }
 
 #[test]
-fn reconnect_clears_transient_state_and_re_reads_the_session() {
+fn a_lost_stream_re_reads_the_session_after_the_reconnect() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
     state.update(Action::FrameReceived(delta(session_id, run_id, 0, "half")));
-    let effects = state.update(Action::ReconnectRequested);
+    let effects = state.update(Action::SessionStreamEnded);
     assert_eq!(effects, vec![Effect::Connect]);
     assert_eq!(state.connection(), ConnectionStatus::Connecting);
-    assert_eq!(state.stream(), StreamStatus::Inactive);
+    assert_eq!(state.stream(), StreamStatus::Ended);
     assert_eq!(
         state.provisional_text(),
         "",
