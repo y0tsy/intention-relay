@@ -228,7 +228,7 @@ pass's adapter-facing tool projection — the typed tool contract in `intention-
 committed tool row — is recorded as a Slice 2 retrospective correction, not an activation of this slice's
 tool-descriptor, tool-registry, or model-tool-loop contracts: the six-tool closed set and its typed projection are
 already live, and M11 keeps the registry, admission, and bridge work. The pass records the adapter-local rules it
-deleted instead of deferring them: the composed `session_stream_closed`, `session_not_open`, and `no_sessions_error`
+deleted instead of deferring them: the composed `session_stream_closed`, `session_not_open`, and `no_sessions_to_continue`
 fallbacks went with the client's own closed-stream classification and its typed continue failure in
 `intention-client`, so no front end composes a session condition; the pre-deletion anchors were
 `crates/intention-tui/src/headless.rs:343-347`, `:163-169`, and `:618-626` at base `99973a8`.

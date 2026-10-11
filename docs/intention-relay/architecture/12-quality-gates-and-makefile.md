@@ -68,8 +68,10 @@ aliases, and the opt-in `e2e-real-api`.
   test without closing a production cycle, while a production dependency cycle still fails.
 - `make docs-check` resolves Markdown links across `docs/` and the root documents (`README.md`, `AGENTS.md`,
   `THIRD_PARTY_NOTICES.md`), checks code-fence balance and Mermaid diagram headers, verifies that every `MAX_*`/`MIN_*`
-  bound a current-policy document names exists in `crates/`, and rejects secret-shaped assignments. Prose counts,
-  tables, code-path claims, and cross-document contradictions remain review responsibilities.
+  bound a current-policy document names exists in `crates/`, rejects a removed wire name still spelled under `docs/`
+  or `crates/`, verifies that a placeholder constant a `@todo(core)` convention sentence names exists under `crates/`,
+  and rejects secret-shaped assignments. Prose counts, tables, code-path claims, and cross-document contradictions
+  remain review responsibilities.
 - `make quality-tests` runs the checkers' own focused self-tests over synthetic inputs, and it is part of `make check`.
 
 ## Coverage policy
