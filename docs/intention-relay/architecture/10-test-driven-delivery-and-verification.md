@@ -258,12 +258,16 @@ transcript scrolling, and the docked
 sessions panel (its frame and embedded title, the tab radio row, the search bar, the table header, columns, cursor
 marker, and resize reflow, the footer legend and row counter, and the stub tabs' `@todo` empty state).
 `tests/terminal_e2e.rs` spawns the
-real binary against a real daemon and the scripted fake provider in fifteen cases: NDJSON transient deltas before the
+real binary against a real daemon and the scripted fake provider in twenty cases: NDJSON transient deltas before the
 committed row, the channel-tagged reasoning deltas that precede the answer they inform, progressive text output and
 completion, both REPL paths (a piped turn and input EOF), the prompt that creates the session it needs, an explicit
 continuation that reuses its session instead of creating one, every `/new` run creating a fresh session under one
 workspace root, a multi-line prompt reaching the session unchanged, a slash-prefixed prompt reaching the session as one
-turn instead of running a command, a prompt ending in a backslash reaching the session unchanged, the timeout deadline
+turn instead of running a command, a prompt ending in a backslash reaching the session unchanged, a first prompt
+creating its session with its first turn so it never lands in another open one, a continuation with no sessions exiting
+3 with the client's typed failure, a stream that closes before a terminal status reporting the client's failure, a run
+crossing the retention bound reporting every committed row, the binary addressing the client's declared endpoint, the
+timeout deadline
 stop that ends the process with the interrupted status, a SIGINT that stops the headless run's stalled round and ends
 the process with the interrupted status, a SIGINT that stops the REPL's stalled round and hands the loop back to its
 prompt, and a typed unknown-session rejection with exit 3. The binary's own unit tests cover the command
@@ -393,6 +397,137 @@ library unit tests, 81 `tui_render` cases, 30 binary unit tests, and 13 `termina
 `cargo nextest run --workspace` observed 790 tests run, 790 passed, and 2 skipped; the per-crate suites observed
 `intention-proto` 38, `intention-client` 26, `intention-engine` 80, and `intention-daemon` 42 (2 skipped). The acceptance
 gate is `make quick` during delivery and `make verify` before merge.
+
+### 2026 corrective-pass evidence
+
+The 2026 corrective pass closes the second business-logic rot audit (`/tmp/rot-audit_2.md`, MR-1…MR-31) without
+activating a slice: it corrects the facts the audit found and records every fact it leaves open in [Implementation
+Roadmap](11-implementation-roadmap.md)'s open-decisions record. It runs on the `slice-2/terminal-ux` branch (PR #67):
+the code waves tip at `5b33729`, the open-decisions record at `b3043ae`, and this section's runs were taken there. The
+pass carries the provider idle-deadline fix `0cadb8d` as its baseline. On that tip `make quick`
+reported clean `cargo fmt --all --check` and
+`cargo clippy --workspace --all-targets --locked --all-features -- -Dwarnings` runs, and
+`cargo nextest run --workspace --all-targets --locked --all-features` observed **858 tests run: 858 passed,
+2 skipped** across 44 binaries. The per-crate suites, each from
+`cargo nextest run --locked --all-features --all-targets -p <crate>`, observed `intention-proto` 52,
+`intention-client` 36, `intention-engine` 90, `intention-storage` 69, `intention-daemon` 48 (2 skipped),
+`intention-tools` 68, `intention-tui` 399, `intention-config` 19, `intention-transport` 14, `intention-providers` 57,
+and `intention-test-support` 6. `make verify` and the Linux/Windows CI jobs remain the merge gate; this wave ran
+`make quick` alone.
+
+The commits below carry the pass's new cases. Every name was observed passing in the workspace run above; a target is
+named only where a commit's cases span several, and each commit's MRs close with it.
+
+- `7cbaced fix(tui): submit the scripted prompt as one typed turn` (MR-7): `intention-tui` unit
+  `a_scripted_turn_leaves_as_one_turn_request`; `terminal_e2e` `a_slash_prefixed_prompt_reaches_the_session_as_a_turn`
+  and `a_prompt_ending_in_a_backslash_reaches_the_session_unchanged`.
+- `e3fdda5 fix(tui): stop the run when its deadline expires` (MR-9): `terminal_e2e`
+  `the_timeout_run_stops_the_stalled_round_and_exits_with_five`; the binary unit tests'
+  `a_deadline_without_a_terminal_status_reports_timed_out` (the exit-4 fallback).
+- `472dc04 refactor(tui): render the error type's own one-line form` (MR-17): the binary unit tests'
+  `the_one_line_error_form_is_the_types_own_display`.
+- `a9b0aa0 refactor(core): reconcile the client's committed rows and report by identity` (MR-10, MR-18, MR-20, MR-21,
+  MR-22): client `session_stream_contract` `state_reconciles_a_newer_read_by_row_identity`,
+  `state_reports_the_update_of_every_frame_kind`, `state_reconciliation_keeps_the_newest_retained_rows`,
+  `state_reports_appends_only_while_the_rows_at_the_epoch_stay_a_prefix`,
+  `state_walks_the_rows_after_a_reported_identity_past_the_retention_bound`,
+  `state_names_the_step_its_committed_assistant_row_superseded`; `intention-tui` unit
+  `the_adapter_renders_the_clients_reconciled_rows`, `a_second_lost_stream_asks_for_no_reconnect`,
+  `a_live_stream_resets_the_reconnect_budget`; binary unit `a_reported_row_that_was_drained_never_blocks_the_next_report`,
+  `every_row_newer_than_the_last_reported_id_is_reported_once`; `terminal_e2e`
+  `a_run_past_the_retention_bound_reports_every_committed_row` (the W0 long-run fixture, OD-20).
+- `768cdd2 fix(core): carry the client's typed session conditions and one continue resolution` (MR-8, MR-12): client
+  `session_stream_contract` `a_closed_stream_carries_the_clients_own_classification`, `client_contract`
+  `continue_session_reports_no_sessions_to_continue` and `continue_session_takes_the_first_listed_session`;
+  `intention-tui` unit `a_continuation_with_no_sessions_never_reaches_the_state`; binary unit
+  `a_composed_protocol_error_is_never_reported`; `terminal_e2e`
+  `a_continuation_with_no_sessions_exits_three_with_the_clients_failure` and
+  `a_stream_that_closes_before_a_terminal_status_reports_the_clients_failure`.
+- `669cf77 fix(tui): print a streamed step by its committed identity` (MR-11): binary unit
+  `a_text_sink_suppresses_only_the_step_it_streamed`,
+  `a_text_sink_prints_a_row_the_client_did_not_mark_superseded`,
+  `a_step_whose_committed_row_differs_by_one_character_prints_once`, and
+  `a_committed_row_beyond_the_retained_supersession_window_prints_once`.
+- `a41d63a test(daemon): follow the client's typed stream observation`: no new case; the daemon suites were
+  re-pointed at the client's typed stream observation.
+- `04f7c45 feat(core): carry the typed tool projection on the committed rows` (MR-1…MR-6): proto `m3_contracts`
+  `a_tool_call_projection_carries_every_typed_argument_shape`,
+  `a_tool_result_projection_carries_status_payload_and_metadata`,
+  `a_tool_row_projection_round_trips_inside_the_session_frame`; proto unit
+  `a_typed_payload_must_belong_to_the_rows_declared_identity`, `a_declared_and_an_undeclared_identity_never_conflate`,
+  `the_declared_tool_set_is_every_spelling_in_advertisement_order`; storage `sqlite_contracts`
+  `a_message_row_round_trips_its_typed_projection`, `a_tool_result_row_round_trips_its_typed_outcome`,
+  `a_projection_whose_identity_disagrees_with_its_row_is_refused`,
+  `an_undecodable_arguments_document_projects_no_typed_arguments`, `a_database_from_the_previous_stamp_is_discarded`;
+  engine `m3_engine` `a_committed_tool_call_row_carries_its_typed_arguments_projection`,
+  `a_committed_tool_result_row_carries_status_and_metadata`, `an_undecodable_call_row_commits_without_a_typed_projection`;
+  daemon `a_committed_tool_row_frame_carries_its_typed_projection`; tools `tool_contracts`
+  `the_advertised_specs_are_the_declared_tool_set_in_order`.
+- `a1676f0 refactor(tui): render the typed tool projection and close the untyped-decode gate` (MR-1…MR-6):
+  `tui_render` `a_glob_or_grep_exchange_draws_its_typed_matches`,
+  `a_mutation_or_execute_exchange_draws_its_typed_outcome_without_the_output`,
+  `an_undeclared_tool_row_names_its_absent_typed_kind`; `intention-tui` unit
+  `a_result_sentinel_is_never_rendered_as_an_entry`, `a_row_without_a_typed_kind_renders_the_malformed_note`,
+  `every_typed_tool_kind_has_its_own_presentation_arm`.
+- `760d507 chore(core): format the typed tool projection change`, `1606f5e chore(core): clear the strict lint gate on
+  the typed tool projection`, and `494452b chore(core): drop the tool contract's unused serde dependency`: no case.
+- `ce938d5 feat(core): carry usage, the effective model, the run times, and the open calls on the projections`
+  (MR-22, MR-24, MR-25, MR-26): proto `contracts` `a_run_projection_carries_its_durable_times_usage_and_open_calls`,
+  `a_terminal_run_projection_requires_its_finish_time`, `a_finish_time_precedes_its_start_time_never`,
+  `a_session_projection_carries_an_optional_provider_model`; storage `sqlite_contracts`
+  `a_run_projection_carries_usage_times_and_open_calls`, `a_terminal_run_projection_carries_its_finish_time`,
+  `a_subscription_snapshot_carries_the_effective_provider_model`,
+  `open_calls_track_committed_calls_without_a_committed_result`; daemon
+  `session_snapshots_carry_the_effective_provider_model`,
+  `a_tool_call_frame_is_followed_by_a_status_frame_naming_the_open_call`,
+  `a_tool_result_frame_is_followed_by_a_status_frame_clearing_it`.
+- `3f29a35 refactor(tui): render the committed run facts and drop the front-end stopwatch` (MR-22, MR-24, MR-26):
+  `tui_render` `the_status_row_renders_the_committed_duration_and_usage`, `the_input_badge_renders_the_projection_model`,
+  `the_input_badges_say_so_before_a_session_names_a_mode_or_model`; `intention-tui` unit
+  `an_orphan_result_never_cancels_a_live_call`, `a_call_of_another_run_never_names_this_runs_working_phase`,
+  `the_watch_names_the_open_calls_the_projection_reports`, `the_turn_timer_ends_with_the_runs_terminal_status`.
+- `b96c7cd fix(tui): derive the theme command values from the theme vocabulary` (MR-23): `intention-tui` unit
+  `every_declared_theme_value_names_a_theme` and `a_declared_theme_value_never_opens_the_picker`; structurally
+  `THEME_VALUES` is built from `Theme::ALL` and the app carries no `fn from_str` and no theme `debug_assert`.
+- `2b92f03 feat(core): declare the run-mode set and resolve the durable default` (MR-13, MR-14): proto unit
+  `every_declared_run_mode_round_trips`, `protocol_contracts` `a_create_command_may_omit_its_mode`; engine `m3_engine`
+  `the_core_default_resolves_absent_to_build`.
+- `08eac84 fix(tui): render the declared mode set and stop defaulting` (MR-13, MR-14): binary unit
+  `an_absent_mode_leaves_the_default_to_the_core` and `the_usage_and_rejection_spell_the_declared_mode_set`.
+- `9d8c46c feat(core): create a session with its first turn as one use case` (MR-19): proto `protocol_contracts`
+  `a_create_command_carries_an_optional_first_turn` and `a_create_acceptance_carries_the_first_turn_evidence`; engine
+  `m3_engine` `create_session_with_turn_commits_the_session_before_the_turn`,
+  `a_replayed_create_session_with_turn_returns_the_recorded_outcome`,
+  `a_same_key_with_different_content_is_a_typed_conflict`, `a_failed_turn_leaves_the_session_replayable`; daemon
+  `client_e2e` `a_create_with_turn_command_commits_session_then_turn`; client `client_contract`
+  `a_create_command_carries_its_first_turn`; `intention-tui` unit `a_prompt_with_no_session_is_one_create_command`
+  and `a_session_snapshot_never_sends_a_parked_prompt`; `terminal_e2e`
+  `a_first_prompt_never_lands_in_another_session_when_a_second_session_exists`.
+- `5b33729 feat(client): declare the endpoint instance and the daemon program sources` (MR-15, MR-16): client
+  `client_contract` `endpoint_discovery_prefers_a_declared_instance_and_falls_back_to_the_platform_default` and
+  `the_daemon_program_defaults_to_the_terminal_binary_sibling`; `terminal_e2e`
+  `the_binary_addresses_the_clients_declared_endpoint`; doc 03 states the declared client surfaces (`03:132-134`) and
+  the two wire protections with `WIRE_VERSION` at 1 (`03:194-198`).
+
+The pass's remaining commits are documentation. `27467bf docs: correct the terminal README and the root stop
+vocabulary` (MR-28, MR-30, MR-31) and `6a5358b docs(m5+): repair the stale run-frame names` (MR-27) carry no case:
+their evidence is the two self-tested `quality/check_docs.py` rules and one falsifiable `rg` line per claim, and
+`99973a8 docs(m5+): count the terminal e2e cases the crate ships` repaired the `terminal_e2e` tally this section
+supersedes. `b3043ae docs(m5+): record the open decisions of the second rot audit` writes the roadmap record,
+`62a7343 docs(tui): record the corrected terminal facts` rewrites both READMEs, and MR-29's W6 commit
+(`docs(m5+): reconcile the boundary catalogue with the closed defects`) is the wave's outstanding one: it rewrites doc
+03's catalogue so every remaining row names a live marker.
+
+Every MR-1…MR-31 is FIX. MR-1…MR-28 and MR-30/MR-31 carry the commits above; MR-29 is the W6 catalogue commit, whose
+sha the integrator records at the wave tip. The facts the pass leaves open live in that record: the six stub facts doc
+03's boundary table names (the execute-call fact on the session summary, the durable session title and its rename
+command, the durable
+favorite and archive flags, a session list paged past its bounded window, and a notice code or severity) and five
+alternatives a wave chose against instead of delivering — the durable streamed-step identity (OD-10), the run-captured
+provider model (OD-13), live per-round usage (OD-15), the in-UI launch failure (OD-23), and the sessionless
+`--continue` launch (OD-7). The two designs the pass rejected rather than deferred — the non-terminal interrupt stop
+(OD-9) and a configurable run-mode default (OD-5) — are not rows. `make verify` and `make docs-check architecture` stay
+the gate the merge step owes; this record measures `make quick`.
 
 ### Future package evidence
 

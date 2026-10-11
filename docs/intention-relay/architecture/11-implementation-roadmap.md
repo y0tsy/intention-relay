@@ -191,7 +191,17 @@ daemon fills from the run's resolved configuration in the one snapshot read behi
 subscription reply; and the status row and the badge render those facts instead of the front-end stubs they replace —
 the committed duration reads `Answered in 13s` from the projection's own times, the committed usage reads
 `ctx in 1200 out 300` (or `ctx not reported`), the badge names the session's model, and the half-second working word
-follows the projection's open-call count, so no front end pairs rows or measures a committed fact itself.
+follows the projection's open-call count, so no front end pairs rows or measures a committed fact itself. The slice's
+run-mode correction moves the vocabulary and its default into the core: `RunModeDto::ALL` declares the closed two-mode
+set, `RunModeDto::DEFAULT` is `Build`, the engine resolves an absent create-command mode to that constant, and the
+command grammar renders its usage and rejection text from the declared set, so an absent `--mode` leaves the durable
+policy to the core. The slice's create-and-first-turn correction makes a first prompt one command:
+`CreateSessionCommandDto` carries the optional `first_turn`, the durable session commits before that turn, a same-key
+replay returns the recorded outcome, a same-key retry with different content is a typed conflict, and a rejected first
+turn leaves the caller's durable session plus the typed rejection instead of a parked prompt. The slice's client-surface
+correction declares the endpoint instance and the daemon program in `intention-client`: discovery prefers a declared
+instance and falls back to the platform-default endpoint, and the launcher resolves the terminal binary's sibling
+`intention-daemon` program, so the binary carries no environment read and no installation-path inference of its own.
 -  **Slice 3 — Instruction sources and system context — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
 deployment instruction profile adapted from the legacy Antibusy static prompt set, user-authored fragments at user,
