@@ -209,7 +209,11 @@ MCP-method-catalog selections (architectures 19/18), and work/requeue after clie
 pass's adapter-facing tool projection — the typed tool contract in `intention-proto` and the typed projection on each
 committed tool row — is recorded as a Slice 2 retrospective correction, not an activation of this slice's
 tool-descriptor, tool-registry, or model-tool-loop contracts: the six-tool closed set and its typed projection are
-already live, and M11 keeps the registry, admission, and bridge work.
+already live, and M11 keeps the registry, admission, and bridge work. The pass records the adapter-local rules it
+deleted instead of deferring them: the composed `session_stream_closed`, `session_not_open`, and `no_sessions_error`
+fallbacks went with the client's own closed-stream classification and its typed continue failure in
+`intention-client`, so no front end composes a session condition; the pre-deletion anchors were
+`crates/intention-tui/src/headless.rs:343-347`, `:163-169`, and `:618-626` at base `99973a8`.
 -  **Slice 6 — UI foundation — last slice; not activated.** Session branching, reasoning/catalog delivery, and adapter
 boundaries (architectures 23/22 plus architecture 03's flat activity journal and notification list): `session_fork_v1`;
 normalized reasoning delivery; and the exact typed client/protocol surface M6 consumes. It also carries cross-workspace
