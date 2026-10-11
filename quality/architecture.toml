@@ -121,7 +121,7 @@ test_only_source_patterns = [
 "intention-daemon" = ["futures-util", "serde_json", "tempfile", "tokio"]
 "intention-engine" = ["futures-util"]
 "intention-providers" = ["async-openai", "futures-core", "futures-executor", "futures-util", "http", "openrouter-rs", "serde", "serde_json"]
-"intention-tools" = ["glob", "rustix", "serde", "serde_json", "tempfile"]
+"intention-tools" = ["glob", "rustix", "serde_json", "tempfile"]
 
 # Dependency edges of the non-production test crates, compared for equality
 # like the active production edges above.

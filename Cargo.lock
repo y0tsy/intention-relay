@@ -1001,7 +1001,6 @@ dependencies = [
  "glob",
  "intention-proto",
  "rustix",
- "serde",
  "serde_json",
  "tempfile",
 ]
