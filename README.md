@@ -158,7 +158,12 @@ The daemon resolves its configuration and state from platform-standard
 locations, recovers unfinished runs to `Interrupted` before serving, and
 prints only safe error codes on startup failure (exit status non-zero). The
 endpoint argument is a logical safe instance name; endpoint filesystem paths
-never appear in protocol DTOs or errors.
+never appear in protocol DTOs or errors. The terminal client resolves both
+surfaces through the declared `intention-client` values: it addresses the
+endpoint instance the `INTENTION_ENDPOINT` identifier names, falling back to
+the platform-default endpoint when the variable is absent, and launches the
+`intention-daemon` program installed beside its own executable, so the binary
+reads no environment and infers no path.
 
 The terminal client shares one command grammar across its three modes
 (`tui`, `repl`, `run <PROMPT>`, with `--workspace`, `--session`, `--continue`,

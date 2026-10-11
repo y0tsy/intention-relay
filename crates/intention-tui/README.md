@@ -222,22 +222,21 @@ Rules the panes keep:
   display rows shows its first fifteen and a marker naming the hidden ones, and
   each activation of that marker - or of `Ctrl+E` - reveals a hundred more.
 - A value the wire does not carry is an explicit `@todo(core)` placeholder
-  (the `mode` badge and the welcome overview's `AGENTS.md`, `MCPs`, and
-  `Skills` chips), never a fabricated one. The command hint band and the theme
-  picker are the surfaces with no placeholder at all: every band row - name,
-  description, and category, or value, description, and argument - is a
-  front-end registry fact, and every picker row is a theme fact, so nothing in
-  either can be a `@todo(core)`. The model badge and the usage segment are
-  projection facts, not placeholders: the badge names the effective model the
-  session snapshot carries, and the segment reads the terminal outcome's usage
-  (`ctx in 1200 out 300`, or `ctx not reported`).
-- The same `@todo(core)` marker also names work the front end still performs
-  that belongs to the core rather than a fact it lacks. The architecture
-  document's boundary table is the catalogue of those sites - the run-mode
-  default and its declared set in `src/cli.rs` and the parked first prompt in
-  `src/app/` - and each marker names what the core should own.
-  The crate's `@todo(hack)` markers name the work the adapter or the client
-  still owes separately, and are not part of that catalogue.
+  (the welcome overview's `AGENTS.md`, `MCPs`, and `Skills` chips), never a
+  fabricated one. The `mode` badge carries the same plate until a session
+  snapshot names the durable mode the session projection then carries. The
+  command hint band and the theme picker are the surfaces with no placeholder
+  at all: every band row - name, description, and category, or value,
+  description, and argument - is a front-end registry fact, and every picker
+  row is a theme fact, so nothing in either can be a `@todo(core)`. The model
+  badge and the usage segment are projection facts, not placeholders: the
+  badge names the effective model the session snapshot carries, and the
+  segment reads the terminal outcome's usage (`ctx in 1200 out 300`, or
+  `ctx not reported`).
+- Every `@todo(core)` marker that remains names a core fact the terminal lacks,
+  never work the front end performs for the core. The crate's `@todo(hack)`
+  markers name the work the adapter or the client still owes separately, and
+  are not part of that class.
 
 ## Palette
 
