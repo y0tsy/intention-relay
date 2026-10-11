@@ -165,6 +165,10 @@ impl ToolResultEvidenceDto {
 }
 
 /// Immutable outcome for an accepted user turn after committing it durably.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The started variant carries the committed run and message projections by value, so the caller reads the committed outcome from the transaction's return; boxing that public contract DTO would ripple through every consumer."
+)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AcceptedTurnOutcomeDto {
     /// The turn began a newly created run and committed its user message.

@@ -981,7 +981,7 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
             RunId::new(),
             MessageKindDto::ToolResult,
             evidence.content(),
-            answering.clone(),
+            answering,
         ),
         tool_message(
             session,
@@ -1009,7 +1009,7 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
                     paths: Vec::new(),
                     truncated: false,
                 })),
-                metadata.clone(),
+                metadata,
             ),
         ),
     ] {
@@ -1197,7 +1197,7 @@ fn an_undecodable_arguments_document_projects_no_typed_arguments() {
             run,
             MessageKindDto::ToolCall,
             r#"{"path":42}"#,
-            tool.clone(),
+            tool,
         ),
         3,
     );

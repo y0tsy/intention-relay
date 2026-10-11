@@ -247,6 +247,10 @@ impl Deadline {
 }
 
 /// The next observation of a live run subscription.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The frame variant carries the wire DTO by value, so the driver hands the decoded frame on without a second allocation; boxing it would add an indirection to the streaming loop the other states never pay for."
+)]
 #[derive(Debug)]
 enum Received {
     /// One committed or transient frame arrived.

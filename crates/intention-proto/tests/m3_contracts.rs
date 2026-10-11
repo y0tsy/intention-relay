@@ -641,7 +641,7 @@ fn a_tool_row_projection_round_trips_inside_the_session_frame() {
                 ToolCallRowDto::new(
                     call_id,
                     ToolIdentityDto::parse("read").expect("the fixture tool is declared"),
-                    Some(arguments.clone()),
+                    Some(arguments),
                 )
                 .expect("fixture call row is valid"),
             ),
@@ -658,7 +658,7 @@ fn a_tool_row_projection_round_trips_inside_the_session_frame() {
                         text: BoundedText::new("contents").expect("fixture text is bounded"),
                         truncated: false,
                     })),
-                    metadata.clone(),
+                    metadata,
                 )
                 .expect("fixture result row is valid"),
             ),

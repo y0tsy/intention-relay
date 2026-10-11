@@ -118,10 +118,10 @@ impl ToolIdentityDto {
                 "a tool identity must be non-blank and free of NUL bytes",
             ));
         }
-        match ToolId::parse(value) {
-            Ok(id) => Ok(Self::Declared(id)),
-            Err(_) => Ok(Self::Undeclared(value.to_owned())),
-        }
+        ToolId::parse(value).map_or_else(
+            |_| Ok(Self::Undeclared(value.to_owned())),
+            |id| Ok(Self::Declared(id)),
+        )
     }
 
     /// Returns the wire spelling of this identity.
@@ -1018,6 +1018,11 @@ impl ToolProcessStatus {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::expect_used,
+        reason = "Unit fixtures use expect to provide precise test failure messages."
+    )]
+
     use super::*;
 
     #[test]
