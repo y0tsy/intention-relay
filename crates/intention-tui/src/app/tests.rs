@@ -940,7 +940,10 @@ fn a_session_snapshot_never_sends_a_parked_prompt() {
     let mut state = AppState::new(None);
     type_text(&mut state, "hello");
     state.update(Action::InputSubmitted);
-    let effects = state.update(Action::SessionCreateFailed(failure()));
+    let effects = state.update(Action::SessionCreateFailed {
+        carried_first_turn: true,
+        error: failure(),
+    });
     assert!(effects.is_empty());
     assert!(
         state.error().is_some(),
@@ -2993,6 +2996,50 @@ fn a_turn_request_that_never_reached_a_run_leaves_no_phase() {
     assert!(
         state.error().is_some(),
         "the failure reaches the error line"
+    );
+}
+
+#[test]
+fn a_create_request_that_never_started_a_run_leaves_no_waiting_phase() {
+    // The waiting phase belongs to the run the one create command would have
+    // started: the rejection of a create that carried the first turn ends it,
+    // and the rejection of a create that carried no first turn never touches
+    // the phase of a live run the request did not start.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "hello");
+    state.update(Action::InputSubmitted);
+    assert_eq!(state.run_phase(), Some(RunPhase::Waiting));
+    state.update(Action::SessionCreateFailed {
+        carried_first_turn: true,
+        error: failure(),
+    });
+    assert_eq!(
+        state.run_phase(),
+        None,
+        "the waiting phase belonged to the run the failed create never started"
+    );
+    assert!(
+        state.error().is_some(),
+        "the failure reaches the error line"
+    );
+
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut live = running_session(session_id, run_id, RunStatusDto::Running);
+    live.update(Action::FrameReceived(delta(session_id, run_id, 0, "half")));
+    assert_eq!(live.run_phase(), Some(RunPhase::Answering));
+    live.update(Action::SessionCreateFailed {
+        carried_first_turn: false,
+        error: failure(),
+    });
+    assert_eq!(
+        live.run_phase(),
+        Some(RunPhase::Answering),
+        "a create that never started a run never clears the live run's phase"
+    );
+    assert!(
+        live.error().is_some(),
+        "the failure still reaches the error line"
     );
 }
 

@@ -60,13 +60,20 @@ pub async fn perform(
             .map(|accepted| Action::SettingsReceived(accepted.theme()))
             .map_err(|error| (Action::SettingsFailed(error.clone()), error)),
         Effect::CreateSession { first_turn } => {
+            let carried_first_turn = first_turn.is_some();
             let first_turn = match first_turn {
                 Some(content) => {
                     let turn = match CreateSessionFirstTurnDto::new(IdempotencyKey::new(), content)
                     {
                         Ok(turn) => turn,
                         Err(error) => {
-                            return Some(Err((Action::SessionCreateFailed(error.clone()), error)));
+                            return Some(Err((
+                                Action::SessionCreateFailed {
+                                    carried_first_turn,
+                                    error: error.clone(),
+                                },
+                                error,
+                            )));
                         }
                     };
                     Some(turn)
@@ -85,7 +92,15 @@ pub async fn perform(
                 .create_session(command)
                 .await
                 .map(|created| Action::SessionCreated(created.session_id()))
-                .map_err(|error| (Action::SessionCreateFailed(error.clone()), error))
+                .map_err(|error| {
+                    (
+                        Action::SessionCreateFailed {
+                            carried_first_turn,
+                            error: error.clone(),
+                        },
+                        error,
+                    )
+                })
         }
         Effect::SendTurn {
             session_id,

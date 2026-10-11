@@ -260,7 +260,10 @@ impl AppState {
             }
             Action::SessionSnapshotFailed(error) => self.apply_failure(&error),
             Action::SessionCreated(session_id) => self.apply_session_created(session_id),
-            Action::SessionCreateFailed(error) => self.apply_failure(&error),
+            Action::SessionCreateFailed {
+                carried_first_turn,
+                error,
+            } => self.apply_session_create_failed(carried_first_turn, &error),
             Action::SettingsReceived(theme) => self.apply_settings_received(theme),
             Action::SettingsFailed(error) => self.apply_settings_failed(&error),
             Action::ThemeSelected(theme) => self.apply_theme_selected(theme),

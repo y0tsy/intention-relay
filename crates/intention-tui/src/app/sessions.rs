@@ -95,6 +95,24 @@ impl AppState {
         vec![Effect::OpenSession(session_id)]
     }
 
+    /// Records a create request that never started the run it would have.
+    ///
+    /// The waiting phase belongs to the run the request would have started, so
+    /// a failed create that carried a first turn ends it, the same way a failed
+    /// turn send does; a create that carried no first turn never started a run,
+    /// so the phase of a live run the request did not ask for stays standing.
+    /// The failure itself becomes the error line.
+    pub(super) fn apply_session_create_failed(
+        &mut self,
+        carried_first_turn: bool,
+        error: &ErrorDto,
+    ) -> Vec<Effect> {
+        if carried_first_turn {
+            self.phase = None;
+        }
+        self.apply_failure(error)
+    }
+
     /// Records the request for a new session and asks for its creation.
     pub(super) fn request_new_session(&mut self) -> Vec<Effect> {
         self.note("creating a session".to_owned());

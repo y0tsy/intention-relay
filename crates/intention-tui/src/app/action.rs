@@ -114,7 +114,17 @@ pub enum Action {
     /// The daemon accepted a newly created session.
     SessionCreated(SessionId),
     /// Creating a session failed.
-    SessionCreateFailed(ErrorDto),
+    ///
+    /// The failure carries the fact the waiting phase needs: the create command
+    /// that carried the prompt started the run the phase describes, so its
+    /// rejection ends that phase, while a create without a first turn started
+    /// no run and leaves a live run's phase standing.
+    SessionCreateFailed {
+        /// Whether the failed command carried a first user turn.
+        carried_first_turn: bool,
+        /// The typed rejection.
+        error: ErrorDto,
+    },
     /// The daemon answered its effective terminal settings.
     ///
     /// The same action answers the startup read and a theme selection: the
@@ -289,7 +299,7 @@ impl Action {
                 | Self::SessionSnapshotLoaded(_)
                 | Self::SessionSnapshotFailed(_)
                 | Self::SessionCreated(_)
-                | Self::SessionCreateFailed(_)
+                | Self::SessionCreateFailed { .. }
                 | Self::SettingsReceived(_)
                 | Self::SettingsFailed(_)
                 | Self::SessionStreamOpened(_)
