@@ -263,6 +263,36 @@ specifications, contracts, and evidence stay owned by those milestones. M7 and M
 - A slice that cannot be completed atomically (contracts, tests, policy, and evidence together) is not accepted; the
   milestone remains on the prior accepted slice.
 
+### Open decisions
+
+The 2026 corrective pass closes the second business-logic rot audit; every fact it does not deliver is recorded here as
+an explicit open decision ([architecture 10](10-test-driven-delivery-and-verification.md)), consolidated from the ledger
+rows each wave recorded with its own commits. Each row names the fact, its owner — a slice this milestone still holds,
+or none — the anchor the deferring wave recorded (a live `@todo(core)` marker and the boundary-table row that documents
+it, or the site a wave deleted, marked *removed*) with the base the anchor was read at, and the re-audit status: `open`
+until the W7 five-lane re-audit fills `re-audited: L<n> <sha>`.
+
+| Open fact | Owner | Anchor (base) | Re-audit |
+| --- | --- | --- | --- |
+| the execute-call fact on the session summary (the browser's `Exec` tab) | no owner — deferred by owner on 2026-10-11 | `03-daemon-transport-and-adapters.md:561`; live `crates/intention-tui/src/app/browser.rs:15-16` (base `5b33729`) | open |
+| a durable session title and its rename command (the title column, its filter, and the `Ctrl+R` notice) | M5+ Slice 6, via [architecture 23](23-non-destructive-session-branching-and-regeneration.md) (not activated) | `03-daemon-transport-and-adapters.md:562`; live `crates/intention-tui/src/app/browser.rs:35-37,276,402` (base `5b33729`) | open |
+| a durable favorite flag (the `Favorites` tab) | no owner — deferred by owner on 2026-10-11 | `03-daemon-transport-and-adapters.md:563`; live `crates/intention-tui/src/app/browser.rs:19-21` (base `5b33729`) | open |
+| a durable archive flag and its command (the `Archived` tab and its `Ctrl+X` notice) | M5+ Slice 6, via [architecture 23](23-non-destructive-session-branching-and-regeneration.md) (not activated) | `03-daemon-transport-and-adapters.md:564`; live `crates/intention-tui/src/app/browser.rs:24-26,40-43` (base `5b33729`) | open |
+| a session list paged past its bounded window (the row counter's `+N omitted`) | no owner — deferred by owner on 2026-10-11 | `03-daemon-transport-and-adapters.md:565`; live `crates/intention-tui/src/tui/screens/sessions.rs:566-570` (base `5b33729`) | open |
+| a notice code or severity (a notice block's text-only body) | no owner — deferred by owner on 2026-10-11 | `03-daemon-transport-and-adapters.md:570`; live `crates/intention-tui/src/tui/panes/transcript.rs:438` (base `5b33729`) | open |
+| durable committed-row identity for streamed text (the durable `messages.step`/`MessageProjectionDto.step` alternative to the client-derived supersession; OD-10) | no owner — deferred by owner on 2026-10-11 | *removed* `crates/intention-tui/src/headless.rs:785` and `03-daemon-transport-and-adapters.md:573` (base `99973a8`) | open |
+| the run-captured provider model, the model that served each run (the alternative to the session projection's effective model; OD-13) | no owner — deferred by owner on 2026-10-11 | *removed* `crates/intention-tui/src/tui/panes/input.rs:63,127` and `03-daemon-transport-and-adapters.md:549` (base `62ce771`) | open |
+| live per-round usage (the alternative to publishing usage with the committed terminal outcome; OD-15) | no owner — deferred by owner on 2026-10-11 | *removed* `crates/intention-tui/src/tui/panes/status.rs:77` and `03-daemon-transport-and-adapters.md:548` (base `62ce771`) | open |
+| the in-UI rendering of a launch failure, a launch-failure `--continue` shown in the running front end instead of exiting 3 (OD-23) | no owner — deferred by owner on 2026-10-11 | *removed* `crates/intention-tui/src/repl.rs:60-65` and `crates/intention-tui/src/headless.rs:372` (base `99973a8`) | open |
+| the sessionless `--continue` launch, the alternative to the typed `no_sessions_to_continue` failure and exit 3 (OD-7) | no owner — deferred by owner on 2026-10-11 | *removed* `crates/intention-tui/src/app/state.rs:222` and `crates/intention-tui/src/headless.rs:161-167` (base `99973a8`); live spelling `crates/intention-client/src/lib.rs:421-425` (base `5b33729`) | open |
+
+Not entries, because the pass decided or delivered them: the endpoint instance and the daemon program (OD-16 declares
+them), the long-run `terminal_e2e` fixture (OD-20 measured it feasible and assigned it), the execute process exit status
+(delivered as the typed `ToolProcessStatus`), the configurable run-mode default (OD-5 chose the core constant; the
+config key is a rejected design, not a deferral), the non-terminal interrupt stop (OD-9 chose the terminal stop), and
+the acknowledged interrupt (OD-24 closed it: the committed terminal status frame acknowledges the stop). The composed
+adapter session fallbacks the pass deleted are not entries either: they are recorded above in the Slice 5 bullet.
+
 ## Milestone 6: Tauri bridge and primary desktop UI
 
 Goal: the first desktop adapters over the shared typed client, consuming the Milestone 5+ UI-foundation and

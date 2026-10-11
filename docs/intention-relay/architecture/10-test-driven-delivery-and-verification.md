@@ -194,7 +194,9 @@ explicit opt-in ([Quality Gates and Makefile](12-quality-gates-and-makefile.md))
 Each completed slice reports the architecture document, acceptance criteria, and tests it implements; the `make quick`,
 narrow, and `make verify` checks it ran; the outcome scenarios it covers; and every lint, coverage, feature,
 dependency, or architecture exception with its recorded rationale. Deliberately deferred behavior is recorded as an
-explicit open decision, never as omitted coverage. A cited live run reports its date, commit, provider, model, and
+explicit open decision, never as omitted coverage. The 2026 corrective pass consolidates every fact it leaves open in
+the [Implementation Roadmap](11-implementation-roadmap.md)'s open-decisions record, each with its owner, its anchor, and
+its re-audit status. A cited live run reports its date, commit, provider, model, and
 workflow run URL and never the credential; the opt-in live channel is additional evidence only and never a substitute
 for the mandatory hermetic gates ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
