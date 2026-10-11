@@ -132,10 +132,12 @@ signal-handling claim. Admission and interruption semantics are owned by [archit
 
 - daemon discovery and bootstrap coordination;
 - typed operations over domain identifiers, never wire DTOs in adapter signatures;
-- typed session-stream subscriptions;
+- typed session-stream subscriptions, the one reconciled committed-row list with its one retention bound, and the
+  frame-advance report a consumer follows;
+- the continue target an explicit continuation resolves, so no adapter re-derives it from a session list;
 - reconnect behavior;
 - snapshot recovery;
-- local transport error classification.
+- local transport error classification, including the closed stream an unobservable run reports.
 
 It must not contain Svelte, terminal, or domain workflow behavior.
 
@@ -366,9 +368,9 @@ text above is the live policy.
   transport, 3 typed rejection or failed run, 4 timeout with no observed terminal status, 5 interrupted run — and the
   binary writes its output through explicit writers, never through printing macros.
 - Launch rule and the welcome surface. A launch opens no session at all — not even the most recent one; a session
-  appears only for an explicit `--session ID`, for `--continue` (the newest session the daemon lists), for `/new`, for a
-  browser row, or for the first prompt, which creates the session it needs and sends the prompt as that session's first
-  turn. While no session is open and no committed row exists, the chat region shows the welcome surface instead of the
+  appears only for an explicit `--session ID`, for `--continue` (the newest session the daemon lists, and the client's
+  typed `no_sessions_to_continue` rejection when the store lists none), for `/new`, for a browser row, or for the first
+  prompt, which creates the session it needs and sends the prompt as that session's first turn. While no session is open and no committed row exists, the chat region shows the welcome surface instead of the
   transcript: the product lockup — `INTENTION` in the deep accent ink with a tracked muted `RELAY` after a fixed
   two-column gap — above a one-row overview whose chips are the binary's own version (`env!("CARGO_PKG_VERSION")`) and
   deliberate `@todo(core)` plates for `AGENTS.md`, `MCPs`, and `Skills`. The input block and the detail line keep the
@@ -567,14 +569,11 @@ lacks. Each site carries the same `@todo(core):` prefix and names what the core 
 | counts committed tool-call rows minus tool-result rows to decide what is in flight (`app/run.rs`) | the run's open tool calls |
 
 The `@todo(hack)` marker is the crate's own class for work the adapter or the client must still do, and it is not
-catalogued here. Its sites are protocol errors composed for conditions the core never
-reports and the process status they select (`headless.rs`), the run-stream recovery budget (`headless.rs`, kept as
-is by owner decision), streamed text matched to its committed row by text equality (`headless.rs`), the theme values
-re-spelled in the registry (`app/commands.rs`), the committed duration measured by the front end (`tui/mod.rs`), an
-absent `tool_id` defaulted to the empty string (`tui/panes/tools.rs`), the continue target re-derived
-(`app/sessions.rs`), the endpoint instance and the daemon program resolved by the binary (`main.rs`), and the
-untyped decode the architecture check cannot see (`tui/panes/tools.rs`). Each of those markers names the client or
-core surface that should replace it.
+catalogued here. Its sites are streamed text matched to its committed row by text equality (`headless.rs`), the theme
+values re-spelled in the registry (`app/commands.rs`), the committed duration measured by the front end (`tui/mod.rs`),
+an absent `tool_id` defaulted to the empty string (`tui/panes/tools.rs`), the endpoint instance and the daemon program
+resolved by the binary (`main.rs`), and the untyped decode the architecture check cannot see (`tui/panes/tools.rs`).
+Each of those markers names the client or core surface that should replace it.
 
 ### Frame cost
 

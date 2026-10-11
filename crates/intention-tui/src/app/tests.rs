@@ -562,30 +562,25 @@ fn listing_without_a_session_request_opens_nothing() {
 }
 
 #[test]
-fn listing_opens_the_most_recent_session_when_the_caller_asked_to_continue() {
-    let recent = SessionId::new();
-    let older = SessionId::new();
-    let mut state = AppState::new(None).continuing(true);
-    state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
-    let effects = state.update(Action::SessionsListed(summaries(vec![
-        summary(recent, 20),
-        summary(older, 10),
-    ])));
-    assert_eq!(
-        effects,
-        vec![Effect::OpenSession(recent)],
-        "an explicit continuation opens the newest session the daemon reports"
-    );
-}
-
-#[test]
-fn a_continuation_with_no_sessions_to_continue_opens_nothing() {
-    let mut state = AppState::new(None).continuing(true);
+fn a_continuation_with_no_sessions_never_reaches_the_state() {
+    // The client owns the continue rule, so the front end resolves a launch that
+    // asked to continue before any state exists, and the empty list is the
+    // client's typed `no_sessions_to_continue` failure - reported by the client
+    // contract case `continue_session_reports_no_sessions_to_continue` and the
+    // e2e case `a_continuation_with_no_sessions_exits_three_with_the_clients_failure`.
+    // The state re-derives nothing from a list, so an empty list is no state
+    // decision at all: it opens nothing and composes no failure of its own.
+    let mut state = AppState::new(None);
     state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
     let effects = state.update(Action::SessionsListed(summaries(Vec::new())));
-    assert!(effects.is_empty());
+    assert!(effects.is_empty(), "an empty list opens nothing");
     assert_eq!(state.session_id(), None);
     assert!(state.sessions_loaded());
+    assert_eq!(
+        state.error(),
+        None,
+        "the state composes no failure of its own"
+    );
 }
 
 #[test]

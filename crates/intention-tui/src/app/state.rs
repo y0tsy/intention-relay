@@ -24,13 +24,6 @@ use super::{
 /// are visible to the transition modules beside this one and to nothing else.
 pub struct AppState {
     pub(super) initial_session: Option<SessionId>,
-    /// Whether the caller explicitly asked to continue the newest session.
-    ///
-    /// It is the command line's `--continue`, and it is the only launch
-    /// request that opens a session the caller did not name. When the session
-    /// list arrives, the newest session it carries is opened; without the
-    /// request, a launch with no selected session opens nothing.
-    pub(super) continue_session: bool,
     /// The prompt a submission with no open session asked to send.
     ///
     /// A prompt is never rejected for the lack of a session: the session it
@@ -151,16 +144,15 @@ pub struct AppState {
 impl AppState {
     /// Creates the state a front end starts from, pinned to one session to open.
     ///
-    /// `initial_session` is the session the caller selected on the command line;
-    /// `None` opens nothing, so a launch shows the chat's welcome state until
-    /// the user asks for a session. A caller that wants the newest session
-    /// opened asks for it explicitly with [`AppState::continuing`]. The state
-    /// needs no terminal, daemon, or clock to exist.
+    /// `initial_session` is the session the caller selected on the command line,
+    /// or the session the client resolved for an explicit continuation; `None`
+    /// opens nothing, so a launch shows the chat's welcome state until the user
+    /// asks for a session. The state needs no terminal, daemon, or clock to
+    /// exist.
     #[must_use]
     pub const fn new(initial_session: Option<SessionId>) -> Self {
         Self {
             initial_session,
-            continue_session: false,
             pending_prompt: None,
             connection: ConnectionStatus::Connecting,
             screen: Screen::Chat,
@@ -196,18 +188,6 @@ impl AppState {
             reasoning_epoch: 0,
             quit: false,
         }
-    }
-
-    /// Returns the same state asking to continue the newest session, or not.
-    ///
-    /// The request is explicit: it is the command line's `--continue`, and it
-    /// is resolved when the daemon-ordered session list arrives. Without it - a
-    /// launch with no selected session - the state opens no session at all and
-    /// the chat shows its welcome state until the user asks for one.
-    #[must_use]
-    pub const fn continuing(mut self, continue_session: bool) -> Self {
-        self.continue_session = continue_session;
-        self
     }
 
     /// Returns the same state rendering through `theme`.

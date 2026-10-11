@@ -11,7 +11,9 @@ use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
-use intention_client::{IntentionClient, SessionStreamSubscription};
+use intention_client::{
+    IntentionClient, SessionStreamClient, SessionStreamSubscription, StreamStep,
+};
 use intention_proto::{
     ErrorDto, MessageId, MessageKindDto, MessageProjectionDto, RunId, RunModeDto, RunStatusDto,
     SessionFrameDto, SessionId, TextDeltaChannelDto, WorkspaceRootDto, run_status_is_terminal,
@@ -92,17 +94,20 @@ async fn drive<W: Write, E: Write>(
     if let Err(error) = driver.connect().await {
         return client_failure(&mut output, err, &error);
     }
-    match options.session() {
+    // The front end resolves the session it opens once, through the client: a
+    // selected session is read by its own snapshot, an explicit continuation
+    // resolves the target the daemon's list order names, and a launch that
+    // asked for neither creates the session it needs.
+    let opened = match options.session() {
         Some(session) => driver.show(session).await,
-        None if options.continue_session() => match driver.most_recent_session().await {
-            Ok(Some(session)) => driver.show(session).await,
-            Ok(None) => return client_failure(&mut output, err, &no_sessions_error()),
-            Err(error) => return client_failure(&mut output, err, &error),
+        None if options.continue_session() => match driver.continue_session().await {
+            Ok(session) => driver.show(session).await,
+            Err(error) => Err(error),
         },
         None => driver.create().await,
-    }
-    if driver.state().session_id().is_none() {
-        return client_failure(&mut output, err, &driver.session_failure());
+    };
+    if let Err(error) = opened {
+        return client_failure(&mut output, err, &error);
     }
 
     let deadline = Deadline::after(options.timeout(), Instant::now());
@@ -156,14 +161,6 @@ fn exit_status(outcome: RunOutcome) -> ExitStatus {
             ExitStatus::for_run_status(status).unwrap_or(ExitStatus::Rejected)
         }
     }
-}
-
-/// Returns the failure of a continuation with no session to continue.
-fn no_sessions_error() -> ErrorDto {
-    ErrorDto::validation(
-        "no_sessions_to_continue",
-        "the daemon reports no session to continue",
-    )
 }
 
 /// Returns the outcome of one reported run status, or `None` while it is live.
@@ -339,18 +336,6 @@ impl Driver {
         &self.state
     }
 
-    /// Returns the failure a session that did not open reports.
-    #[must_use]
-    pub fn session_failure(&self) -> ErrorDto {
-        // @todo(hack): the front end composes protocol errors for states the
-        // core never reports - `session_not_open` here, `no_sessions_to_continue`
-        // in `no_sessions_error`, and `session_stream_closed` in `pump_failure`;
-        // the client should carry these conditions as typed failures.
-        self.last_failure
-            .clone()
-            .unwrap_or_else(|| ErrorDto::validation("session_not_open", "no session is open"))
-    }
-
     /// Connects or bootstraps the shared client.
     ///
     /// # Errors
@@ -360,66 +345,80 @@ impl Driver {
         self.client.connect_or_bootstrap().await.map(|_health| ())
     }
 
-    /// Opens the session a front end starts from.
+    /// Connects and applies the bootstrap state of a launch that opens no session.
     ///
-    /// A selected session is read by its own snapshot. With no selection, no
-    /// session is opened unless the caller explicitly asked to continue: the
-    /// core's bootstrap path then reads the session list and opens the newest
-    /// session the daemon reports, and a launch that asked for neither opens
-    /// nothing.
+    /// The daemon's readiness, its session list, and its settings are read, and
+    /// no session is opened: the front end shows its welcome state until the
+    /// user asks for a session.
     ///
     /// # Errors
     ///
     /// Returns the typed client failure when the daemon cannot be reached.
-    pub async fn select(
-        &mut self,
-        session: Option<SessionId>,
-        continue_session: bool,
-    ) -> Result<(), ErrorDto> {
+    pub async fn bootstrap(&mut self) -> Result<(), ErrorDto> {
         let health = self.client.connect_or_bootstrap().await?;
-        match session {
-            Some(session) => self.show(session).await,
-            None => {
-                self.reset(None, continue_session);
-                self.apply(Action::Bootstrapped(health)).await;
-            }
-        }
-        self.note_reported_rows();
+        self.reset(None);
+        let _failure = self.apply(Action::Bootstrapped(health)).await;
         Ok(())
     }
 
-    /// Reads one known session's current snapshot into the core.
-    pub async fn show(&mut self, session: SessionId) {
-        self.reset(Some(session), false);
-        if let Some((action, _failure)) = self.perform(Effect::OpenSession(session)).await {
-            self.apply(action).await;
-        }
-        self.note_reported_rows();
-    }
-
-    /// Creates a new session from the driver's workspace and mode through the core.
-    pub async fn create(&mut self) {
-        self.reset(None, false);
-        self.apply(Action::NewSessionRequested).await;
-        self.note_reported_rows();
-    }
-
-    /// Returns the most recently updated session the daemon reports, if any.
+    /// Resolves the session a continuation opens.
+    ///
+    /// The resolution is the client's: the daemon's list order names the target,
+    /// and a list with no session is the client's own typed failure, which this
+    /// driver reports unchanged.
     ///
     /// # Errors
     ///
-    /// Returns the typed failure when the session list cannot be read.
-    pub async fn most_recent_session(&self) -> Result<Option<SessionId>, ErrorDto> {
-        self.client.most_recent_session().await
+    /// Returns `no_sessions_to_continue` when the daemon lists no session, or
+    /// the typed failure the session list read reported.
+    pub async fn continue_session(&self) -> Result<SessionId, ErrorDto> {
+        self.client.continue_session().await
     }
 
-    /// Records that the rows a session read carries are already reported.
+    /// Reads one known session's current snapshot into the core.
+    ///
+    /// The session is open exactly when this returns `Ok`; its identity is the
+    /// state's own, so a caller that needs it reads the state it holds.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed failure the session read reported.
+    pub async fn show(&mut self, session: SessionId) -> Result<(), ErrorDto> {
+        self.reset(Some(session));
+        let outcome = self.perform(Effect::OpenSession(session)).await;
+        let failure = match outcome {
+            Some((action, failure)) => {
+                let (next_failure, _reconnected) = self.apply(action).await;
+                failure.or(next_failure)
+            }
+            None => None,
+        };
+        self.finish_open(failure)
+    }
+
+    /// Creates a new session from the driver's workspace and mode through the core.
+    ///
+    /// The session is open exactly when this returns `Ok`; its identity is the
+    /// state's own, so a caller that needs it reads the state it holds.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed failure the creation or the open of the created session
+    /// reported.
+    pub async fn create(&mut self) -> Result<(), ErrorDto> {
+        self.reset(None);
+        let (failure, _reconnected) = self.apply(Action::NewSessionRequested).await;
+        self.finish_open(failure)
+    }
+
+    /// Records the rows a session read already carries and reports the open outcome.
     ///
     /// A session read re-reads the whole transcript, so the rows it carries are
     /// not new events for a reporter that has not run yet: the walk starts after
     /// the newest row the read carried.
-    fn note_reported_rows(&mut self) {
+    fn finish_open(&mut self, failure: Option<ErrorDto>) -> Result<(), ErrorDto> {
         self.reported_row = self.state.transcript().last().map(MessageProjectionDto::id);
+        failure.map_or(Ok(()), Err)
     }
 
     /// Sends one prompt as one typed user turn through the core.
@@ -547,9 +546,13 @@ impl Driver {
             },
         };
         match received {
-            Ok(Some(frame)) => Received::Frame(frame),
-            Ok(None) => {
+            Ok(StreamStep::Frame(frame)) => Received::Frame(frame),
+            Ok(StreamStep::Closed(error)) => {
+                // The client classified the closed connection: the front end
+                // ends the observation, and the classification is the failure a
+                // run that never reached a terminal status reports.
                 self.subscription = None;
+                self.record_failure(&error);
                 self.apply(Action::SessionStreamEnded).await;
                 Received::Closed
             }
@@ -650,13 +653,17 @@ impl Driver {
     }
 
     /// Returns the typed failure a run that cannot be observed reports.
+    ///
+    /// The failure is the one a stream loss or a failed recovery reported; a
+    /// recovery that spent its budget with no reported failure is the client's
+    /// own classification of a stream that is gone, so the adapter reports that
+    /// value instead of inventing a code of its own.
     fn pump_failure(&self) -> PumpFailure {
-        PumpFailure::Client(self.last_failure.clone().unwrap_or_else(|| {
-            ErrorDto::unavailable(
-                "session_stream_closed",
-                "the run stream closed before the run reported a terminal status",
-            )
-        }))
+        PumpFailure::Client(
+            self.last_failure
+                .clone()
+                .unwrap_or_else(SessionStreamClient::closed_stream_failure),
+        )
     }
 
     /// Keeps one typed failure for the caller's process status.
@@ -665,10 +672,8 @@ impl Driver {
     }
 
     /// Drops every session-scoped value a new selection replaces.
-    fn reset(&mut self, session: Option<SessionId>, continue_session: bool) {
-        self.state = AppState::new(session)
-            .continuing(continue_session)
-            .with_workspace_root(self.workspace_root.clone());
+    fn reset(&mut self, session: Option<SessionId>) {
+        self.state = AppState::new(session).with_workspace_root(self.workspace_root.clone());
         self.subscription = None;
         self.last_failure = None;
         self.reported_row = None;
@@ -1010,8 +1015,11 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicI64, Ordering};
 
-    use intention_client::{RETAINED_TRANSCRIPT_MESSAGES, SessionStreamState};
+    use intention_client::{
+        ProcessDaemonLauncher, RETAINED_TRANSCRIPT_MESSAGES, SessionStreamState,
+    };
     use intention_proto::MessageId;
+    use intention_test_support::daemon_process;
 
     /// Returns one fresh durable row identity for a committed fixture row.
     fn row_id() -> MessageId {
@@ -1153,6 +1161,44 @@ mod tests {
     /// Returns the text one report wrote into `buffer`.
     fn text_of(buffer: &[u8]) -> &str {
         std::str::from_utf8(buffer).expect("the report wrote UTF-8 text")
+    }
+
+    #[test]
+    fn a_composed_protocol_error_is_never_reported() {
+        // A stream that is gone with nothing reported is the client's own
+        // classification, and a recorded failure is reported exactly as the
+        // client returned it: the driver invents no code of its own for either.
+        let mut driver = offline_driver();
+        let PumpFailure::Client(closed) = driver.pump_failure() else {
+            unreachable!("a stream loss is a typed client failure")
+        };
+        assert_eq!(closed, SessionStreamClient::closed_stream_failure());
+        assert_eq!(closed.code(), "local_daemon_connection_unavailable");
+
+        let reported = ErrorDto::validation("storage_record_not_found", "no such session");
+        driver.record_failure(&reported);
+        let PumpFailure::Client(failure) = driver.pump_failure() else {
+            unreachable!("a recorded failure is a typed client failure")
+        };
+        assert_eq!(
+            failure, reported,
+            "the recorded failure is reported as it was"
+        );
+    }
+
+    /// Returns a driver that holds no live subscription.
+    fn offline_driver() -> Driver {
+        let endpoint = daemon_process::unique_endpoint("w1b-composed");
+        let launcher = ProcessDaemonLauncher::new("/nonexistent/intention-daemon")
+            .expect("the fixture program is a valid launcher program");
+        let client = IntentionClient::new(endpoint.clone(), Box::new(launcher));
+        Driver::new(
+            client,
+            endpoint,
+            WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
+                .expect("the temporary directory is an absolute workspace root"),
+            RunModeDto::Build,
+        )
     }
 
     #[test]

@@ -7,10 +7,8 @@
 
 use std::thread;
 
-use intention_client::{IntentionClient, SessionStreamSubscription};
-use intention_proto::{
-    DtoResult, ErrorDto, RunModeDto, SessionFrameDto, SessionId, WorkspaceRootDto,
-};
+use intention_client::{IntentionClient, SessionStreamSubscription, StreamStep};
+use intention_proto::{DtoResult, ErrorDto, RunModeDto, SessionId, WorkspaceRootDto};
 use intention_transport::LocalEndpoint;
 use tokio::sync::mpsc;
 
@@ -82,12 +80,44 @@ impl TuiOptions {
     }
 }
 
+/// Builds the current-thread runtime one front-end client call runs on.
+///
+/// # Errors
+///
+/// Returns an unavailable error when the runtime cannot be created.
+fn client_runtime() -> DtoResult<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| {
+            ErrorDto::unavailable(
+                "terminal_runtime_unavailable",
+                "the terminal runtime could not be created",
+            )
+        })
+}
+
+/// Resolves the session a continuation opens, through the client.
+///
+/// The client owns the continue rule, so the front end asks it once at startup
+/// instead of re-deriving the target from a session list. A daemon that lists no
+/// session is the client's typed failure, which the caller reports through its
+/// own startup path.
+///
+/// # Errors
+///
+/// Returns the client's typed continuation failure, or an unavailable error when
+/// the client runtime cannot be created.
+pub(super) fn resolve_continue(client: &IntentionClient) -> DtoResult<SessionId> {
+    client_runtime()?.block_on(client.continue_session())
+}
+
 /// One step of the client task: an effect to perform, or a live frame.
 enum Step {
     /// The next effect a front end asked for, or `None` once it left.
     Effect(Option<Effect>),
-    /// The next committed frame, or the end of the live subscription.
-    Frame(DtoResult<Option<SessionFrameDto>>),
+    /// The next observation of the live subscription.
+    Frame(DtoResult<StreamStep>),
 }
 
 /// The client task one revue front end drives through [`Effect`] values.
@@ -108,15 +138,7 @@ impl Driver {
         workspace_root: WorkspaceRootDto,
         mode: RunModeDto,
     ) -> DtoResult<Self> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|_| {
-                ErrorDto::unavailable(
-                    "terminal_runtime_unavailable",
-                    "the terminal runtime could not be created",
-                )
-            })?;
+        let runtime = client_runtime()?;
         let (effects, effect_requests) = mpsc::unbounded_channel();
         let (actions, action_events) = mpsc::unbounded_channel();
         thread::spawn(move || {
@@ -197,10 +219,12 @@ async fn drive(
                     .await
                     .map(|outcome| outcome.unwrap_or_else(|(action, _failure)| action))
             }
-            Step::Frame(Ok(Some(frame))) => Some(Action::FrameReceived(frame)),
-            Step::Frame(Ok(None)) => {
+            Step::Frame(Ok(StreamStep::Frame(frame))) => Some(Action::FrameReceived(frame)),
+            Step::Frame(Ok(StreamStep::Closed(error))) => {
+                // The client classified the closed connection, so the front end
+                // reports that classification instead of composing one.
                 live = None;
-                Some(Action::SessionStreamEnded)
+                Some(Action::SessionStreamFailed(error))
             }
             Step::Frame(Err(error)) => {
                 live = None;

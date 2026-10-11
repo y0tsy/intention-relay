@@ -15,14 +15,14 @@ use std::time::{Duration, Instant};
 
 use intention_proto::{
     CancelRunCommandDto, ClientRequestDto, CreateSessionAcceptedDto, CreateSessionCommandDto,
-    DaemonHealthDto, DtoResult, ErrorCategoryDto, ErrorDto, GetSessionSnapshotQueryDto,
-    IdempotencyKey, InterruptRunAcceptedDto, InterruptRunCommandDto, MessageId, MessageKindDto,
-    MessageProjectionDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto,
-    RunCancelledAcceptedDto, RunId, RunProjectionDto, RunStatusDto, SendUserTurnCommandDto,
-    SendUserTurnOutcomeDto, SessionFrameDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
-    SetTuiThemeCommandDto, SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto,
-    ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId, decode_response, encode_request,
-    parse_session_frame, run_status_is_terminal,
+    DaemonHealthDto, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto,
+    GetSessionSnapshotQueryDto, IdempotencyKey, InterruptRunAcceptedDto, InterruptRunCommandDto,
+    MessageId, MessageKindDto, MessageProjectionDto, ProtocolResultDto, RemoveTurnAcceptedDto,
+    RemoveTurnCommandDto, RunCancelledAcceptedDto, RunId, RunProjectionDto, RunStatusDto,
+    SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionId, SessionSnapshotDto,
+    SessionSummariesDto, SetTuiThemeCommandDto, SubscribeSessionCommandDto, TextDeltaChannelDto,
+    TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId, decode_response,
+    encode_request, parse_session_frame, run_status_is_terminal,
 };
 use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncMessageSender, LocalEndpoint,
@@ -326,24 +326,25 @@ impl IntentionClient {
         }
     }
 
-    /// Returns the session a continuation reads, if any session exists.
+    /// Resolves the session a continuation opens.
     ///
-    /// The daemon's session list is ordered by the recency contract: newest
-    /// durable update first, then session identity ascending. The first
-    /// summary is therefore the continue target, and a caller never re-derives
-    /// the maximum update time from the summaries it reads.
+    /// The daemon's list order is the recency contract: the first summary is the
+    /// continue target, so a caller never re-derives it from the summaries it
+    /// reads. A list with no session is the client's typed
+    /// `no_sessions_to_continue` failure - one resolution, one empty-list
+    /// outcome for every front end.
     ///
     /// # Errors
     ///
-    /// Returns the daemon's typed rejection, a typed transport or timeout error,
-    /// or an invalid-response error when the reply is not a session list.
-    pub async fn most_recent_session(&self) -> DtoResult<Option<SessionId>> {
-        Ok(self
-            .list_sessions()
-            .await?
-            .sessions()
-            .first()
-            .map(|summary| summary.session_id()))
+    /// Returns `no_sessions_to_continue`, the daemon's typed rejection, a typed
+    /// transport or timeout error, or an invalid-response error when the reply
+    /// is not a session list.
+    pub async fn continue_session(&self) -> DtoResult<SessionId> {
+        let sessions = self.list_sessions().await?;
+        match sessions.sessions().first() {
+            Some(summary) => Ok(summary.session_id()),
+            None => Err(no_sessions_to_continue()?),
+        }
     }
 
     /// Reads the effective terminal settings.
@@ -448,6 +449,16 @@ impl SessionStreamClient {
         Self { endpoint }
     }
 
+    /// Returns the client's classification of a stream the daemon closed.
+    ///
+    /// A caller that cannot observe the work it followed reports this value
+    /// instead of composing an error of its own: the condition is a local
+    /// transport one, and the client is what classifies it.
+    #[must_use]
+    pub fn closed_stream_failure() -> ErrorDto {
+        unavailable(CLOSED_STREAM_CODE)
+    }
+
     /// Connects, subscribes, and applies the authoritative first reply.
     ///
     /// The request carries the session identity alone; its correlated reply is
@@ -502,12 +513,25 @@ pub struct SessionStreamSubscription {
     state: SessionStreamState,
 }
 
-impl SessionStreamSubscription {
-    /// Receives, applies, and returns the next committed session-stream frame.
+/// One observation of a live session stream.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StreamStep {
+    /// One committed or transient frame.
+    Frame(SessionFrameDto),
+    /// The daemon closed the connection.
     ///
-    /// Returns `Ok(None)` once the daemon closes the stream; the caller then
-    /// re-reads current state by re-subscribing. Content and status frames are
-    /// applied to the committed state before they are returned.
+    /// The failure is the client's own local transport classification; a
+    /// re-subscribe re-reads current state, and a caller that cannot observe the
+    /// work it followed reports this value instead of composing one of its own.
+    Closed(ErrorDto),
+}
+
+impl SessionStreamSubscription {
+    /// Receives, applies, and returns the next observation of this stream.
+    ///
+    /// Content and status frames are applied to the committed state before they
+    /// are returned, and a connection the daemon closed is the client's own
+    /// classification rather than an error.
     ///
     /// # Errors
     ///
@@ -515,15 +539,19 @@ impl SessionStreamSubscription {
     /// mutating committed state. Live frames may be arbitrarily sparse, so this
     /// wait is intentionally unbounded; only the correlated reply waits carry a
     /// deadline.
-    pub async fn receive(&mut self) -> DtoResult<Option<SessionFrameDto>> {
+    pub async fn receive(&mut self) -> DtoResult<StreamStep> {
         let line = match self.receiver.receive_line().await {
             Ok(line) => line,
-            Err(error) if error.code() == "local_daemon_connection_unavailable" => return Ok(None),
+            Err(error) if error.code() == CLOSED_STREAM_CODE => {
+                return Ok(StreamStep::Closed(
+                    SessionStreamClient::closed_stream_failure(),
+                ));
+            }
             Err(error) => return Err(error),
         };
         let frame = parse_session_frame(&line)?;
         let _update = self.state.apply_frame(frame.clone())?;
-        Ok(Some(frame))
+        Ok(StreamStep::Frame(frame))
     }
 
     /// Returns the committed state of this fixed session scope.
@@ -532,6 +560,9 @@ impl SessionStreamSubscription {
         &self.state
     }
 }
+
+/// The code the client classifies a daemon-closed stream with.
+const CLOSED_STREAM_CODE: &str = "local_daemon_connection_unavailable";
 
 /// The number of newest committed transcript rows one subscription retains.
 ///
@@ -1083,6 +1114,23 @@ fn invalid_response() -> ErrorDto {
     ErrorDto::validation(
         "invalid_local_protocol_response",
         "the local daemon returned an unexpected protocol response",
+    )
+}
+
+/// Returns the client's typed failure for a continuation with no session.
+///
+/// # Errors
+///
+/// Returns the constructor's own validation error for a blank code or message;
+/// the constants here are non-blank, so the failure is the typed
+/// `no_sessions_to_continue`.
+fn no_sessions_to_continue() -> DtoResult<ErrorDto> {
+    ErrorDto::new(
+        "no_sessions_to_continue",
+        ErrorCategoryDto::NotFound,
+        "the daemon reports no session to continue",
+        ErrorRetryDto::Never,
+        None,
     )
 }
 

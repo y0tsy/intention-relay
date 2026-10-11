@@ -28,7 +28,9 @@ use intention_proto::{
     TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId, decode_request_line,
     encode_request,
 };
-use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, ProjectId, WorkspaceId};
+use intention_proto::{
+    DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, ProjectId, WorkspaceId,
+};
 use intention_proto::{
     MessageId, MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto,
 };
@@ -710,7 +712,7 @@ async fn list_sessions_round_trips_and_validates_the_reply() {
 }
 
 #[tokio::test]
-async fn most_recent_session_takes_the_first_listed_session() {
+async fn continue_session_takes_the_first_listed_session() {
     let _guard = fixture_guard();
     let newest = SessionId::new();
     let older = SessionId::new();
@@ -732,34 +734,36 @@ async fn most_recent_session_takes_the_first_listed_session() {
         FixtureResponse::Result(ProtocolResultDto::SessionsListed(summaries)),
         Arc::new(AtomicUsize::new(0)),
     )
-    .most_recent_session()
+    .continue_session()
     .await
-    .expect("a session list reply is a successful read");
+    .expect("a session list reply resolves the continue target");
     assert_eq!(
-        target,
-        Some(newest),
+        target, newest,
         "the continue target is the first session of the daemon's order"
     );
     server.await.expect("session list fixture server completes");
+}
 
+#[tokio::test]
+async fn continue_session_reports_no_sessions_to_continue() {
+    let _guard = fixture_guard();
     let empty_endpoint = endpoint();
     let empty = SessionSummariesDto::new(Vec::new(), 0).expect("an empty session list is coherent");
     let server = start_fixture_server(
         empty_endpoint.clone(),
         FixtureResponse::Result(ProtocolResultDto::SessionsListed(empty.clone())),
     );
-    assert_eq!(
-        client(
-            empty_endpoint,
-            FixtureResponse::Result(ProtocolResultDto::SessionsListed(empty)),
-            Arc::new(AtomicUsize::new(0)),
-        )
-        .most_recent_session()
-        .await
-        .expect("an empty session list is not a failure"),
-        None,
-        "no listed session means no continue target"
-    );
+    let error = client(
+        empty_endpoint,
+        FixtureResponse::Result(ProtocolResultDto::SessionsListed(empty)),
+        Arc::new(AtomicUsize::new(0)),
+    )
+    .continue_session()
+    .await
+    .expect_err("an empty session list has no continue target");
+    assert_eq!(error.code(), "no_sessions_to_continue");
+    assert_eq!(error.category(), ErrorCategoryDto::NotFound);
+    assert_eq!(error.retry(), ErrorRetryDto::Never);
     server.await.expect("empty list fixture server completes");
 }
 

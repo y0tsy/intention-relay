@@ -98,18 +98,21 @@ pub fn run_blocking(
     client: IntentionClient,
     endpoint: LocalEndpoint,
 ) -> DtoResult<()> {
+    // The front end resolves the session it opens once, through the client: an
+    // explicit continuation asks the client for the target, a selected session
+    // is used as it is, and a launch that asked for neither opens nothing.
+    let session = match options.session() {
+        Some(session) => Some(session),
+        None if options.continue_session() => Some(driver::resolve_continue(&client)?),
+        None => None,
+    };
     let driver = Driver::spawn(
         client,
         endpoint,
         options.workspace_root().clone(),
         options.mode(),
     )?;
-    let front_end = FrontEnd::new(
-        options.session(),
-        options.continue_session(),
-        options.workspace_root().clone(),
-        driver,
-    );
+    let front_end = FrontEnd::new(session, options.workspace_root().clone(), driver);
     front_end.start();
     App::builder()
         // @todo(revue): revue has no text-selection model, so the front end
@@ -371,19 +374,13 @@ struct FrontEnd {
 impl FrontEnd {
     /// Creates the front end of one session selection over one client task.
     ///
-    /// A launch with no selected session opens none unless the caller asked to
-    /// continue the newest one; either way the user can still ask for a session
+    /// `session` is the session this launch opens: the one the caller selected,
+    /// or the one the client resolved for an explicit continuation. A launch
+    /// that named neither opens none, and the user can still ask for a session
     /// later with `/new` or a row of the sessions browser.
-    fn new(
-        session: Option<SessionId>,
-        continue_session: bool,
-        workspace_root: WorkspaceRootDto,
-        driver: Driver,
-    ) -> Self {
+    fn new(session: Option<SessionId>, workspace_root: WorkspaceRootDto, driver: Driver) -> Self {
         Self {
-            state: AppState::new(session)
-                .continuing(continue_session)
-                .with_workspace_root(workspace_root),
+            state: AppState::new(session).with_workspace_root(workspace_root),
             driver,
             timer: TurnTimer::new(),
             pointer: Pointer { drag: None },

@@ -51,17 +51,20 @@ async fn converse<W: Write, E: Write>(
         Err(error) => return crate::startup_failure(&error, err),
     };
     let mut driver = Driver::new(client, endpoint, workspace_root, options.mode());
-    if let Err(error) = driver
-        .select(options.session(), options.continue_session())
-        .await
-    {
+    // The front end resolves the session it opens once, through the client: a
+    // selected session is read by its own snapshot, an explicit continuation
+    // resolves the target the daemon's list order names, and a launch that
+    // asked for neither opens nothing.
+    let opened = match options.session() {
+        Some(session) => driver.show(session).await,
+        None if options.continue_session() => match driver.continue_session().await {
+            Ok(session) => driver.show(session).await,
+            Err(error) => Err(error),
+        },
+        None => driver.bootstrap().await,
+    };
+    if let Err(error) = opened {
         return crate::startup_failure(&error, err);
-    }
-    // @todo(hack): `select` reports only connection failures, so a selected
-    // session that did not open is detected by re-inspecting the state and
-    // synthesizing its failure; the driver should return the open failure.
-    if options.session().is_some() && driver.state().session_id().is_none() {
-        return crate::startup_failure(&driver.session_failure(), err);
     }
 
     let mut lines = input_lines();
@@ -106,15 +109,19 @@ async fn converse<W: Write, E: Write>(
                 drain_active_turn(&mut driver, out, err, &mut interrupts).await;
                 break;
             }
-            Line::New => {
-                driver.create().await;
-                report_session(&driver, out, err);
-            }
-            Line::Session(argument) => match SessionId::parse(&argument) {
-                Ok(session) => {
-                    driver.show(session).await;
-                    report_session(&driver, out, err);
+            Line::New => match driver.create().await {
+                Ok(()) => report_open_session(&driver, out),
+                Err(error) => {
+                    let _ = writeln!(err, "error: {error}");
                 }
+            },
+            Line::Session(argument) => match SessionId::parse(&argument) {
+                Ok(session) => match driver.show(session).await {
+                    Ok(()) => report_open_session(&driver, out),
+                    Err(error) => {
+                        let _ = writeln!(err, "error: {error}");
+                    }
+                },
                 Err(_) => {
                     let _ = writeln!(
                         err,
@@ -245,15 +252,12 @@ async fn drain_active_turn<W: Write, E: Write>(
 }
 
 /// Reports the session one command left open.
-fn report_session(driver: &Driver, out: &mut impl Write, err: &mut impl Write) {
-    match driver.state().session_id() {
-        Some(session) => {
-            let _ = writeln!(out, "session {} open", short_identifier(session));
-        }
-        None => {
-            let error = driver.session_failure();
-            let _ = writeln!(err, "error: {error}");
-        }
+///
+/// A command that opened no session already wrote the typed failure the client
+/// reported, so this writes nothing of its own.
+fn report_open_session(driver: &Driver, out: &mut impl Write) {
+    if let Some(session) = driver.state().session_id() {
+        let _ = writeln!(out, "session {} open", short_identifier(session));
     }
 }
 

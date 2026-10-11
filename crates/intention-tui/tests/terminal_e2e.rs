@@ -194,6 +194,21 @@ impl TerminalHost {
     fn snapshot(&self, session_id: SessionId) -> SessionSnapshotDto {
         block_on(self.client.session_snapshot(session_id)).expect("the session snapshot reads")
     }
+
+    /// Replaces the endpoint path with a directory no daemon can bind again.
+    ///
+    /// Unlinking a bound Unix socket leaves the listener that already holds it
+    /// working and its established connections open, so the live stream keeps
+    /// flowing until the daemon dies; afterwards the path belongs to a directory
+    /// that no new daemon can bind and no client can connect to, which is what
+    /// makes a lost stream unrecoverable for the front end under test.
+    #[cfg(unix)]
+    fn occupy_endpoint(&self) {
+        let path = daemon_process::endpoint_socket_path(&self.endpoint)
+            .expect("the endpoint is a filesystem socket");
+        std::fs::remove_file(&path).expect("the endpoint socket is removed");
+        std::fs::create_dir(&path).expect("the endpoint path becomes a directory");
+    }
 }
 
 impl Drop for TerminalHost {
@@ -242,9 +257,10 @@ fn collect(child: &mut Child, deadline: Instant) -> CliOutput {
 fn wait_for_user_turn(host: &TerminalHost) -> SessionId {
     let deadline = Instant::now() + OBSERVE_DEADLINE;
     loop {
-        if let Some(session) =
-            block_on(host.client.most_recent_session()).expect("the session list reads")
-        {
+        // The client resolves the newest session: a daemon that lists none is
+        // its typed `no_sessions_to_continue` failure, which this wait polls
+        // through until the front end's session exists.
+        if let Ok(session) = block_on(host.client.continue_session()) {
             let snapshot = host.snapshot(session);
             if snapshot
                 .messages()
@@ -1047,6 +1063,55 @@ fn an_explicit_continuation_reuses_the_session_instead_of_creating_one() {
 }
 
 #[test]
+fn a_continuation_with_no_sessions_exits_three_with_the_clients_failure() {
+    // The store is empty, so no session exists to continue: the client resolves
+    // the continue rule and classifies the empty list itself, and the process
+    // reports that typed failure instead of a code the adapter composes.
+    let host = TerminalHost::new(ProviderEndpoint::scripted(), None);
+    let workspace = host.workspace_root();
+    let output = host.run(
+        &[
+            "run",
+            PROMPT,
+            "--continue",
+            "--format",
+            "json",
+            "--workspace",
+            &workspace,
+        ],
+        None,
+    );
+    assert_eq!(
+        output.code,
+        Some(3),
+        "an empty continue list is the client's typed rejection: {}",
+        output.stderr
+    );
+    assert!(
+        !output.stderr.contains("panicked"),
+        "the rejection is reported without a crash: {}",
+        output.stderr
+    );
+
+    let records = json_records(&output.stdout);
+    let error = records
+        .iter()
+        .find(|record| kind(record) == "error")
+        .expect("the empty continue list is reported as one typed error record");
+    assert_eq!(error["code"].as_str(), Some("no_sessions_to_continue"));
+    assert_eq!(error["category"].as_str(), Some("not_found"));
+    assert!(
+        !records.iter().any(|record| kind(record) == "result"),
+        "a rejected continuation reports no run result"
+    );
+    assert_eq!(
+        host.scripted_provider().request_count(),
+        0,
+        "a rejected continuation reaches no provider round"
+    );
+}
+
+#[test]
 fn every_new_command_creates_a_fresh_session_under_one_workspace_root() {
     let host = TerminalHost::new(ProviderEndpoint::scripted(), Some(WORKSPACE_FILE));
     let workspace = host.workspace_root();
@@ -1286,5 +1351,62 @@ fn an_unknown_session_is_rejected_with_a_typed_record_and_exit_three() {
         host.scripted_provider().request_count(),
         0,
         "a rejected session selection reaches no provider round"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_stream_that_closes_before_a_terminal_status_reports_the_clients_failure() {
+    // The daemon dies under a live run and cannot come back, because the
+    // endpoint path is occupied by a directory. The stream is gone, so the front
+    // end's one reconnect attempt fails and the run is unobservable: the process
+    // reports the client's own classification of the condition instead of a
+    // protocol error the daemon never sent.
+    let mut host = TerminalHost::new(ProviderEndpoint::stalled(), Some(WORKSPACE_FILE));
+    let workspace = host.workspace_root();
+    let mut child = host.spawn(&["run", PROMPT, "--format", "json", "--workspace", &workspace]);
+    let _session = wait_for_user_turn(&host);
+    host.occupy_endpoint();
+    daemon_process::kill(&mut host.daemon);
+
+    let output = collect(&mut child, Instant::now() + CLI_DEADLINE);
+    assert_eq!(
+        output.code,
+        Some(2),
+        "a lost stream with no recovery is the client's unavailable failure: {}",
+        output.stderr
+    );
+    assert!(
+        !output.stderr.contains("panicked"),
+        "the loss is reported without a crash: {}",
+        output.stderr
+    );
+
+    let records = json_records(&output.stdout);
+    let error = records
+        .iter()
+        .find(|record| kind(record) == "error")
+        .expect("the unobservable run is reported as one typed error record");
+    assert_eq!(error["category"].as_str(), Some("unavailable"));
+    // The reported failure is the client's own classification of the endpoint it
+    // cannot reach or relaunch; which of its two transport spellings that is
+    // depends on whether the program can be spawned at all, so the case pins the
+    // vocabulary rather than one spelling. The adapter composes no code of its
+    // own: the removed `session_stream_closed` spelling appears nowhere.
+    assert!(
+        error["code"]
+            .as_str()
+            .is_some_and(|code| code.starts_with("local_daemon_")),
+        "the record carries the client's transport classification: {}",
+        error["code"]
+    );
+    assert!(
+        !output.stdout.contains("session_stream_closed"),
+        "the adapter composes no error of its own: {}",
+        output.stdout
+    );
+    assert!(
+        !records.iter().any(|record| kind(record) == "result"),
+        "a run that never reported a terminal status reports no result"
     );
 }

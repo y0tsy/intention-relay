@@ -13,7 +13,7 @@ mod common;
 use common::{TEST_REPLY_BOUND, endpoint, message};
 
 use intention_client::{
-    FrameUpdate, RETAINED_TRANSCRIPT_MESSAGES, SessionStreamClient, SessionStreamState,
+    FrameUpdate, RETAINED_TRANSCRIPT_MESSAGES, SessionStreamClient, SessionStreamState, StreamStep,
 };
 use intention_proto::{
     ClientRequestDto, ConfigRevisionId, MessageKindDto, MessageProjectionDto, ProjectId,
@@ -773,26 +773,18 @@ async fn subscribe_delivers_current_state_then_live_content_and_status_frames() 
         MessageKindDto::User
     );
 
-    let content = subscription
-        .receive()
-        .await
-        .expect("content frame reads")
-        .expect("content frame is not a stream close");
+    let content = subscription.receive().await.expect("content frame reads");
     assert!(matches!(
         content,
-        SessionFrameDto::Content(ref row) if row.text() == "working"
+        StreamStep::Frame(SessionFrameDto::Content(ref row)) if row.text() == "working"
     ));
     assert_eq!(subscription.state().messages().len(), 2);
 
-    let status = subscription
-        .receive()
-        .await
-        .expect("status frame reads")
-        .expect("status frame is not a stream close");
+    let status = subscription.receive().await.expect("status frame reads");
     // The frame carries the committed projection itself; the fixture builds
     // each projection with fresh turn and config identities, so the assertion
     // checks the run scope and terminal status instead of object identity.
-    let SessionFrameDto::Status(projection) = status else {
+    let StreamStep::Frame(SessionFrameDto::Status(projection)) = status else {
         unreachable!("a status frame carries the committed run projection")
     };
     assert_eq!(projection.session_id(), session_id);
@@ -801,12 +793,59 @@ async fn subscribe_delivers_current_state_then_live_content_and_status_frames() 
     assert_eq!(subscription.state().status(), Some(RunStatusDto::Completed));
 
     assert!(
-        subscription
-            .receive()
+        matches!(
+            subscription
+                .receive()
+                .await
+                .expect("a closed stream reads as the client's classification"),
+            StreamStep::Closed(_)
+        ),
+        "the closed stream carries the client's own classification"
+    );
+    server.await.expect("scripted peer completes");
+}
+
+#[tokio::test]
+async fn a_closed_stream_carries_the_clients_own_classification() {
+    let endpoint = endpoint();
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+    let server = tokio::spawn(async move {
+        let connection = listener.accept().await.expect("peer accepts");
+        let (mut requests, mut messages) = connection.split();
+        let (request_id, _request) = receive_session_subscription(&mut requests).await;
+        messages
+            .send_message(&encode_reply(
+                request_id,
+                ProtocolResultDto::SessionSubscribed(snapshot(
+                    session_id,
+                    Some(run(session_id, run_id, RunStatusDto::Running)),
+                    Vec::new(),
+                )),
+            ))
             .await
-            .expect("a closed stream reads as a clean end")
-            .is_none(),
-        "the closed stream reports no further frames"
+            .expect("snapshot reply sends");
+        // Dropping the connection closes the stream while the run is live.
+    });
+
+    let client = SessionStreamClient::new(endpoint);
+    let mut subscription = client
+        .subscribe(SubscribeSessionCommandDto::new(session_id))
+        .await
+        .expect("current-state snapshot reply arrives");
+    let step = subscription
+        .receive()
+        .await
+        .expect("a closed connection is not a protocol error");
+    let StreamStep::Closed(error) = step else {
+        unreachable!("the peer closed the connection without sending a frame")
+    };
+    assert_eq!(error.code(), "local_daemon_connection_unavailable");
+    assert_eq!(
+        error,
+        SessionStreamClient::closed_stream_failure(),
+        "the closed stream reports the client's own classification, not a composed one"
     );
     server.await.expect("scripted peer completes");
 }

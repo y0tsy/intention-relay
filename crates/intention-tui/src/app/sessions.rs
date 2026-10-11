@@ -30,14 +30,15 @@ impl AppState {
         self.apply_failure(error)
     }
 
-    /// Replaces the session window and opens an explicitly continued session.
+    /// Replaces the session window.
     ///
     /// A launch with no session request opens nothing: the list is recorded and
     /// the chat keeps its welcome state until the user asks for a session (an
-    /// explicit `--continue`, `/new`, or a row of the sessions browser). The
-    /// one launch request that selects a session the caller did not name is
-    /// `--continue`, and it is honoured here, when the daemon-ordered list
-    /// arrives. A session already open is never re-opened by a list read.
+    /// explicit `/new` or a row of the sessions browser). A launch that asked to
+    /// continue never reaches this state with an unresolved target: the front
+    /// end resolves the continue rule through the client and hands the state the
+    /// session it chose, exactly like `--session`. A session already open is
+    /// never re-opened by a list read.
     pub(super) fn apply_sessions_listed(&mut self, summaries: &SessionSummariesDto) -> Vec<Effect> {
         self.sessions.clear();
         self.sessions.extend_from_slice(summaries.sessions());
@@ -47,22 +48,6 @@ impl AppState {
         // arrives while it is open re-selects its rows under the same filter.
         self.browser.refresh(&self.sessions);
         self.error = None;
-        // The daemon orders summaries by recency, and that order is the
-        // documented list contract, so the first one is the newest session the
-        // caller asked to continue. A session the caller selected wins: the
-        // command line rejects both requests together, and a selected session's
-        // snapshot may arrive before or after this list.
-        // @todo(hack): the continue target is re-derived here from the first listed summary, while
-        // the client's `most_recent_session` owns exactly that choice and states that a caller never
-        // re-derives it - the headless driver already calls the client. One binary should hold one
-        // implementation, so this state should ask the client for the continue target.
-        if self.continue_session
-            && self.session_id.is_none()
-            && self.initial_session.is_none()
-            && let Some(most_recent) = self.sessions.first()
-        {
-            return vec![Effect::OpenSession(most_recent.session_id())];
-        }
         Vec::new()
     }
 
