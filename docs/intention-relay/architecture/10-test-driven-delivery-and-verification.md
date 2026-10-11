@@ -275,7 +275,7 @@ paired-result, and
 front-trim replays, and the clipboard-free source audit. A run of
 `cargo nextest run -p intention-tui` observed 367 tests across four binaries, all passing: 245 library unit tests,
 81 `tui_render` cases, 30 binary unit tests, and 11 `terminal_e2e` cases. A run of `cargo nextest run --workspace`
-observed 766 tests run, 766 passed, and 2 skipped.
+observed 772 tests run, 772 passed, and 2 skipped.
 
 The per-crate self-checks are `cargo fmt -p intention-tui`, `cargo nextest run -p intention-tui`, and
 `cargo clippy -p intention-tui --all-targets`; the slice's acceptance gate is `make quick` during delivery and
@@ -290,8 +290,17 @@ platform shell adapter — `bash -c` on Unix and `cmd /C` on Windows — so pipe
 are ordinary tool semantics. The fixed thirty-second ceiling is removed: a call without a declared timeout has no
 deadline, and `READER_DRAIN_GRACE` is the one liveness bound, applied as a fixed pipe-collection window after the
 direct child is reaped. Tool-contract tests cover the pipeline, redirect, and compound-command semantics, a declared
-working directory and environment overlay, the declared timeout's lost interruption, and the background descendant
-that cannot extend the collection. A pathless `grep` searches from the workspace root, matching architectures 05 and 15.
+working directory and environment overlay, the declared timeout's own interruption cause (`InterruptCause::TimedOut`)
+with the notice that names the declared value, and the background descendant that cannot extend the collection. A
+pathless `grep` searches from the workspace root, matching architectures 05 and 15.
+
+A call cut by its own declared deadline is a `Partial` result, never a lost one: the tool names the deadline in the
+model-visible notice and commits `interruption=tool_timed_out` beside `declared_timeout_seconds` in the durable
+evidence, while a caller stop observed at the same moment stays the stop and the post-reap collection window keeps
+lost evidence. Engine tests drive a real `execute {"command":"sleep 5","timeout_seconds":1}` through the tool service
+and assert the cause, the notice, and both metadata entries; the storage contract proves those entries survive a
+reopen; the daemon end-to-end suite proves the real daemon answers the timed-out call with that notice and completes
+the run.
 
 Tool failures are now recoverable. The daemon's tool seam and the engine's durable local-tool lifecycle commit one
 call row plus exactly one terminal result per model call; a call whose arguments do not decode, an unknown tool name,
@@ -301,7 +310,7 @@ decode failure and the unknown tool each commit the call row and one guided resu
 call is answered with its guidance, executes exactly once, and is never retried; the daemon end-to-end suite proves
 the real daemon completes the run, delivers the guidance-bearing tool row, and asks the fake provider exactly once
 more. The terminal adapter reads the call's `command` and declared `cwd` for its execute facts. A run of
-`cargo nextest run --workspace` observed 766 tests run, 766 passed, and 2 skipped; the acceptance gate is `make quick`
+`cargo nextest run --workspace` observed 772 tests run, 772 passed, and 2 skipped; the acceptance gate is `make quick`
 during delivery and `make verify` before merge.
 
 ### Slice 2 step-reasoning correction

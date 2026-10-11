@@ -99,7 +99,9 @@ version; labels, executor handles, live readiness, and opaque owner resources ar
   text footer. `execute` runs with the user's ordinary OS authority and the workspace root as its default CWD, is not a
   sandbox, and claims no complete effect enumeration. A call without a declared timeout has no deadline: run
   cancellation and the child's own exit are its only stops, and one fixed pipe-collection window after the direct child
-  is reaped keeps a descendant that inherited the pipes from extending the call.
+  is reaped keeps a descendant that inherited the pipes from extending the call. A declared timeout that fires is the
+  call's own observed interruption: the tool terminates the program's process group and returns what the pipes captured
+  as a partial result whose notice names the deadline, so a fired deadline is never recorded as lost evidence.
 -  **`fetch_url`** is network retrieval only. The closed first request form permits only `GET` and `HEAD` over `HTTP` or
   `HTTPS`: no request body, header map, cookie jar, credential source, URL userinfo, or non-HTTP(S) scheme. Every
   HTTP(S) address is permitted, including public, private, and literal loopback; it is deliberately not a local-network
@@ -279,9 +281,11 @@ The tool lifecycle vocabulary is closed: `ToolLifecycleStatusDto` is `Admitted`,
 mapping one to one onto the matching terminal lifecycle member. The transition set is closed: none to `Admitted`;
 `Admitted` to `Cancelled`, `Started`, or `Rejected`; `Started` to `Completed`, `Failed`, or `Partial`. A `Partial`
 result records one execution that was interrupted before a final result, requires non-blank content exactly like a
-successful result, never terminalizes the run, and is never retried. Two interruption codes are recorded:
-`tool_cancelled` when the caller stopped the call and `tool_execution_interrupted` when the call lost its process
-evidence; the durable tag of a canonical partial document or terminal error is `partial`.
+successful result, never terminalizes the run, and is never retried. Three interruption codes are recorded:
+`tool_cancelled` when the caller stopped the call, `tool_timed_out` when the call's own declared deadline ended it, and
+`tool_execution_interrupted` when the call lost its process evidence; a call cut by its declared deadline also records
+`declared_timeout_seconds` beside its code, and the durable tag of a canonical partial document or terminal error is
+`partial`.
 
 Every interrupted call reaches the model with a bracketed daemon notice that follows the captured output in the
 tool-message content answering the call:
@@ -289,9 +293,14 @@ tool-message content answering the call:
 | Case | Notice |
 | --- | --- |
 | stopped with captured output | `[The tool call was stopped before a final result; the output above is partial.]` |
+| timed out with captured output | `[The tool call hit its declared timeout of <n>s and was terminated before a final result; the output above is partial.]` |
 | lost with captured output | `[The tool call did not receive a final result; the output above is partial.]` |
 | stopped without captured output | `[The tool call was stopped before a final result.]` |
+| timed out without captured output | `[The tool call hit its declared timeout of <n>s and was terminated before a final result.]` |
 | lost without captured output | `[The tool call did not receive a final result.]` |
+
+The timed-out notice carries the deadline the caller declared in whole seconds, so the model reads the timeout it set
+rather than lost evidence; a caller stop observed at the same moment stays the stop.
 
 A partial tool message answers its call exactly like a completed one and the loop continues; the notices render as
 user-role notice content with the text unchanged. Recovery reports a call whose latest committed state is started

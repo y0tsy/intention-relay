@@ -141,7 +141,10 @@ code is invented for signal termination.
 platform shell adapter (`bash -c` on Unix, `cmd /C` on Windows) is private tool code: pipelines, redirects, and
 compound commands are ordinary tool semantics, and no executable path or platform resource crosses a DTO boundary. A
 call without a declared timeout has no deadline; run cancellation and the child's own exit are its only stops, and the
-declared timeout is the one working deadline a call can carry. `READER_DRAIN_GRACE` bounds one pipe-collection window
+declared timeout is the one working deadline a call can carry. A fired declared deadline is its own observed cause: the
+tool terminates the program and returns the captured output as a partial result whose notice names the timeout, while a
+caller stop observed at the same moment stays the caller's stop, so the deadline never reads as lost evidence.
+`READER_DRAIN_GRACE` bounds one pipe-collection window
 after the direct child is reaped: a descendant that inherited the pipes can never extend the call, and a window that
 runs out stops the process group while keeping whatever the readers captured.
 

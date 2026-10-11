@@ -159,7 +159,10 @@ private platform shell adapter (`bash -c` on Unix, `cmd /C` on Windows) with opt
 `timeout_seconds` parameters, the fixed thirty-second ceiling is removed so a call without a declared timeout is
 bounded by cancellation alone and by one pipe-collection window after the direct child is reaped, a pathless `grep`
 searches from the workspace root, and a failed or undecodable call commits one durable `Failed` result whose bounded
-model-visible guidance answers the call before the loop continues. One more correction closes the slice's reasoning
+model-visible guidance answers the call before the loop continues. The slice also makes the declared deadline its own
+observable interruption: a fired `timeout_seconds` commits a `Partial` result whose notice names the timeout and whose
+durable evidence records `tool_timed_out` with the declared value, so a deadline never reads as lost evidence. One more
+correction closes the slice's reasoning
 gap: every completed step commits one assistant row whenever it produced text or reasoning, a reasoning-only row
 commits before its own step's tool rows carrying an empty `text` and the step's whole reasoning, and the context
 rebuild skips it, so a live transcript keeps a tool round's reasoning above its exchange and a reload shows that same
