@@ -246,7 +246,7 @@ colour of its own.
 | `accent` | `#F97316` | `#FB923C` | the primary accent: the focused frame, hotkeys |
 | `accent_deep` | `#C2410C` | `#FDBA74` | accent text on an accent wash, the welcome lockup's product word |
 | `scarlet` | `#DC2626` | `#5E5E60` | the secondary accent: active runs, failures |
-| `markdown_heading` | `#9A3412` | `#D2D2D4` | an assistant heading line |
+| `markdown_heading` | `#9A3412` | `#FAFAFC` | an assistant heading line |
 | `markdown_code` | `#7C2D12` | `#B2B2B4` | inline code and code blocks in an answer |
 | `markdown_link` | `#1D4ED8` | `#AAAAAC` | link text in an answer |
 | `reasoning_body` | `#8A7A66` | `#5A5A5C` | the dimmed chain-of-thought block |

@@ -39,7 +39,7 @@
 //! | [`Palette::accent`] | `#F97316` | `#FB923C` | the primary accent: the focused frame, hotkeys |
 //! | [`Palette::accent_deep`] | `#C2410C` | `#FDBA74` | accent text on an accent wash, the welcome lockup's product word |
 //! | [`Palette::scarlet`] | `#DC2626` | `#5E5E60` | the secondary accent: active runs, failures |
-//! | [`Palette::markdown_heading`] | `#9A3412` | `#D2D2D4` | an assistant heading line |
+//! | [`Palette::markdown_heading`] | `#9A3412` | `#FAFAFC` | an assistant heading line |
 //! | [`Palette::markdown_code`] | `#7C2D12` | `#B2B2B4` | inline code and code blocks in an answer |
 //! | [`Palette::markdown_link`] | `#1D4ED8` | `#AAAAAC` | link text in an answer |
 //! | [`Palette::reasoning_body`] | `#8A7A66` | `#5A5A5C` | the dimmed chain-of-thought block |
@@ -237,6 +237,12 @@ pub static LIGHT: Palette = Palette {
 /// grey: red equals green and blue sits two steps above red, one constant cool
 /// bias for the whole ramp. Nothing else here carries a hue, so a state on this
 /// theme reaches the reader through its word and glyph alone.
+///
+/// Value is the only separation the ramp has, so the parsed markdown inks keep
+/// a clear step from the body text they sit in: [`Palette::markdown_heading`]
+/// is brighter than the body it opens while [`Palette::markdown_code`] and
+/// [`Palette::markdown_link`] are dimmer, so a heading, a code span, and a link
+/// each read as itself without a hue to help them.
 pub static DARK: Palette = Palette {
     canvas: Color::rgb(0x0A, 0x0A, 0x0C),
     panel: Color::rgb(0x10, 0x10, 0x12),
@@ -265,7 +271,7 @@ pub static DARK: Palette = Palette {
     accent: Color::rgb(0xFB, 0x92, 0x3C),
     accent_deep: Color::rgb(0xFD, 0xBA, 0x74),
     scarlet: Color::rgb(0x5E, 0x5E, 0x60),
-    markdown_heading: Color::rgb(0xD2, 0xD2, 0xD4),
+    markdown_heading: Color::rgb(0xFA, 0xFA, 0xFC),
     markdown_code: Color::rgb(0xB2, 0xB2, 0xB4),
     markdown_link: Color::rgb(0xAA, 0xAA, 0xAC),
     reasoning_body: Color::rgb(0x5A, 0x5A, 0x5C),
