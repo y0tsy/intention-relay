@@ -23,6 +23,10 @@ use mimalloc::MiMalloc;
 
 use cli::{ExitStatus, Invocation, Options};
 
+// @todo(hack): the endpoint instance every request of this process addresses is selected by an
+// environment variable no document declares and no other adapter reads. Daemon discovery belongs to
+// the client, so this selection surface must be declared there or in the configuration, and the
+// binary should carry only what the client exposes.
 /// The environment variable that selects one local endpoint instance.
 ///
 /// The value is a safe endpoint instance identifier; an installation that shares
@@ -127,6 +131,10 @@ fn endpoint() -> DtoResult<LocalEndpoint> {
     }
 }
 
+// @todo(hack): the installation layout is decided here - the daemon program is assumed to be a
+// sibling of this binary - while the launcher seam takes any program string and daemon discovery
+// belongs to the client. The program source should be declared by the client or the configuration,
+// not inferred from this executable's own path.
 /// Resolves the daemon program the client launches when none is running.
 ///
 /// The daemon binary is the terminal binary's sibling in one installation

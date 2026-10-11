@@ -37,6 +37,10 @@
 //! raw text on the muted ink and a plate names what could not be read.
 
 use intention_proto::{MessageKindDto, MessageProjectionDto};
+// @todo(hack): the architecture check rejects one spelling of the untyped decode and this import
+// avoids it, so the check cannot see the JSON probing this pane does; the gate and the defect must
+// close together. The typed tool projection the markers below name removes the decoder, and with it
+// this dependency, from the pane.
 use serde_json::{Map, Value};
 
 use crate::tui::layout::{
@@ -79,6 +83,11 @@ const TOOL_BADGE_CHROME_COLUMNS: usize = 5;
 /// The prefix every plate line carries.
 const TOOL_PLATE_PREFIX: &str = "@todo(core): ";
 
+// @todo(core): a committed tool result carries text only, so these plates cannot show what the tool
+// actually did: no written byte count for `write`, no applied patch for `edit`, no process exit
+// status for `execute`, and no truncation flag the read preview could trust. The core should carry a
+// typed projection of each result beside its row - status and metadata - and the pane should render
+// that instead of a plate.
 /// The plate a document that is not one JSON object shows.
 const PLATE_MALFORMED: &str =
     "the arguments document is not one JSON object; the raw text is shown unparsed";

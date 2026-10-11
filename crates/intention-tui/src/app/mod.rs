@@ -73,6 +73,9 @@ pub fn short_identifier(identifier: impl std::fmt::Display) -> String {
         .collect()
 }
 
+// @todo(hack): the one-line safe form of a typed error is composed here, although the error owns
+// exactly that representation. The adapter should render what the type's own display writes instead
+// of re-spelling the pattern in a second place.
 /// Returns the single-line status text of one safe typed error.
 fn error_text(error: &ErrorDto) -> String {
     format!("{}: {}", error.code(), error.message())

@@ -52,6 +52,10 @@ impl AppState {
         // caller asked to continue. A session the caller selected wins: the
         // command line rejects both requests together, and a selected session's
         // snapshot may arrive before or after this list.
+        // @todo(hack): the continue target is re-derived here from the first listed summary, while
+        // the client's `most_recent_session` owns exactly that choice and states that a caller never
+        // re-derives it - the headless driver already calls the client. One binary should hold one
+        // implementation, so this state should ask the client for the continue target.
         if self.continue_session
             && self.session_id.is_none()
             && self.initial_session.is_none()
@@ -98,6 +102,10 @@ impl AppState {
         };
         // The session a submitted prompt asked for now exists: send the prompt
         // as its first turn.
+        // @todo(hack): the parked prompt is delivered to the first snapshot that arrives, so an
+        // explicit `--session` open or a browser row can claim it. Until the core owns
+        // create-session-and-first-turn, the prompt must be bound to the session id the creation
+        // asked for and held - or dropped, never redirected - for any other snapshot.
         if let Some(content) = self.pending_prompt.take() {
             effects.push(Effect::SendTurn {
                 session_id,

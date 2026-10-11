@@ -530,7 +530,22 @@ lacks. Each site carries the same `@todo(core):` prefix and names what the core 
 | matches a wire `tool_id` against the six tool names (`tui/panes/tools.rs`) | the closed set of tool ids and their typed kind |
 | decodes a tool call's arguments document and reads `path`, `offset`, `limit`, `pattern`, `scope`, `program`, and `args` (`tui/panes/tools.rs`) | typed tool-argument structs |
 | splits a tool result's text into a path list, a located hit, or a preview (`tui/panes/tools.rs`) | a typed tool result and its metadata |
-| parses `--mode` against hand-spelled `plan`/`build` (`cli.rs`) | the durable run-mode vocabulary |
+| resolves the default run policy of a created session (`cli.rs`) | the durable run-mode default |
+| spells the declared run-mode set in the flag's usage and rejection text (`cli.rs`) | a declared set on the run-mode vocabulary |
+| parks a prompt that has no session and sends it as the first turn of whichever snapshot arrives first (`app/input.rs`) | create-session-and-first-turn as one use case |
+| counts committed tool-call rows minus tool-result rows to decide what is in flight (`app/run.rs`) | the run's open tool calls |
+
+The `@todo(hack)` marker is the crate's own class for work the adapter or the client must still do, and it is not
+catalogued here. Its sites are the second transcript projection and the retention bound it re-applies
+(`app/run.rs`), reporting rows by position (`headless.rs`), protocol errors composed for conditions the core never
+reports and the process status they select (`headless.rs`), a prompt replayed as input characters (`headless.rs`),
+the run-stream recovery budget (`headless.rs`, kept as is by owner decision), streamed text matched to its
+committed row by text equality (`headless.rs`), the theme values re-spelled in the registry (`app/commands.rs`),
+the committed duration measured by the front end (`tui/mod.rs`), an absent `tool_id` defaulted to the empty string
+(`tui/panes/tools.rs`), the one-line error form recomposed (`app/mod.rs`), the continue target re-derived
+(`app/sessions.rs`), the endpoint instance and the daemon program resolved by the binary (`main.rs`), and the
+untyped decode the architecture check cannot see (`tui/panes/tools.rs`). Each of those markers names the client or
+core surface that should replace it.
 
 ### Frame cost
 

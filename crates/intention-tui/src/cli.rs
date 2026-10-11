@@ -195,6 +195,10 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, String> {
     let mut workspace = None;
     let mut session = None;
     let mut continue_session = false;
+    // @todo(core): the durable run policy of every session this binary creates defaults to `build`
+    // here, in the command grammar, because nothing else states a default. The default belongs to
+    // the core - the configuration or the daemon - the way the terminal theme's default comes from
+    // `config.toml`, and this flag should carry only a mode the caller actually spelled.
     let mut mode = RunModeDto::Build;
     let mut timeout = None;
     let mut format = None;
@@ -312,6 +316,10 @@ fn text(parser: &mut lexopt::Parser) -> Result<String, String> {
 /// # Errors
 ///
 /// Returns the usage message for a mode the grammar does not declare.
+// @todo(core): the declared set of durable run modes is hand-spelled in this rejection text and in
+// the usage block, so a mode added to the vocabulary can be missing from both. The core should
+// declare the set the way the terminal statuses declare theirs, and this flag should spell what that
+// declaration carries.
 fn mode_value(value: &str) -> Result<RunModeDto, String> {
     RunModeDto::parse(value).map_err(|_| format!("--mode must be plan or build, got '{value}'"))
 }

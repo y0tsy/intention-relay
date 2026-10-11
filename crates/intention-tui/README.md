@@ -204,9 +204,14 @@ Rules the panes keep:
   front-end registry fact, and every picker row is a theme fact, so nothing in
   either can be a `@todo(core)`.
 - The same `@todo(core)` marker also names work the front end still performs
-  that belongs to the core rather than a fact it lacks: the tool arguments and
-  result payloads `src/tui/panes/tools.rs` parses are the remaining site, and
-  each marker names what the core should own.
+  that belongs to the core rather than a fact it lacks. The architecture
+  document's boundary table is the catalogue of those sites - the tool
+  vocabulary, the argument document, and the result text in
+  `src/tui/panes/tools.rs`, the run-mode default and its declared set in
+  `src/cli.rs`, the parked first prompt in `src/app/`, and the in-flight tool
+  count in `src/app/run.rs` - and each marker names what the core should own.
+  The crate's `@todo(hack)` markers name the work the adapter or the client
+  still owes separately, and are not part of that catalogue.
 
 ## Palette
 

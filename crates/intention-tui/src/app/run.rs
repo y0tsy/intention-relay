@@ -18,6 +18,10 @@ const TOOL_WORKING_AFTER_MILLIS: u64 = 500;
 impl AppState {
     /// Mirrors a freshly opened subscription and appends the rows it was missing.
     pub(super) fn apply_run_stream_opened(&mut self, state: RunStreamState) -> Vec<Effect> {
+        // @todo(hack): the app keeps a second committed-transcript projection and answers a fresh
+        // subscription by appending the client's set difference at the tail, so the row order the
+        // pane shows is the adapter's own and the mirror must happen to be a prefix of the durable
+        // order. The client owns reconciliation; the pane should render the rows it reconciled.
         // The subscription snapshot is a fresh read of the run's rows: rows the
         // seeded transcript is missing (they committed after the session read)
         // are appended once, and rows it already carries are not repeated. The
@@ -45,6 +49,10 @@ impl AppState {
 
     /// Records a stream the daemon closed.
     pub(super) fn apply_run_stream_ended(&mut self) -> Vec<Effect> {
+        // @todo(hack): the stream that justified the live phase is gone, but the phase and the tool
+        // watch stay, so the status row can keep naming a working run this front end no longer
+        // observes. A stream that ends without a terminal status must clear the phase (and
+        // `apply_run_stream_failed` above must do the same), or the projection must carry liveness.
         self.run_stream = None;
         self.stream = StreamStatus::Ended;
         self.note("live updates ended".to_owned());
@@ -66,6 +74,10 @@ impl AppState {
                 // A content frame repeating the newest accepted row carries the
                 // identity of the row the snapshot already carried, so the two
                 // are the same committed row.
+                // @todo(hack): the newest-accepted-row idempotency rule is re-implemented here on
+                // the second projection, although the client applies the same rule to its own rows.
+                // Two copies mean a change to the rule reaches only one of them - and the copy the
+                // user reads is this one.
                 if self.transcript.last().map(MessageProjectionDto::id) != Some(message.id()) {
                     self.push_transcript_row(message);
                     self.trim_transcript();
@@ -177,6 +189,11 @@ impl AppState {
     /// that answers it. The elapsed value the front end last reported is the
     /// baseline the working threshold measures from, so a call that commits
     /// before any report has no baseline and never gets one invented for it.
+    // @todo(hack): the watch is incremented and decremented by row kind, while the transcript pane
+    // pairs a call with its answer by the call's identity - so an orphan or an out-of-order result
+    // cancels a call that is genuinely in flight, and the count spans every run in the transcript.
+    // Until the projection carries the open calls, pair the rows by their call id and filter to the
+    // live run.
     pub(super) const fn note_tool_call(&mut self) {
         if self.tools_in_flight == 0 {
             self.tool_wait_from = self.elapsed_millis;
@@ -204,6 +221,10 @@ impl AppState {
             .iter()
             .filter(|row| row.kind() == MessageKindDto::ToolResult)
             .count();
+        // @todo(core): the terminal still decides which tool calls are in flight by subtracting the
+        // committed result rows from the committed call rows over the whole transcript. The run's
+        // open calls are a run fact the daemon knows while it executes them, so the projection should
+        // carry them and the front end should derive the word, not the truth.
         self.tools_in_flight = calls.saturating_sub(results);
         if self.tools_in_flight == 0 {
             self.reset_tool_watch();

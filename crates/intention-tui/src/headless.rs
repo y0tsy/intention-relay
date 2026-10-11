@@ -261,6 +261,10 @@ pub struct Driver {
     state: AppState,
     subscription: Option<RunStreamSubscription>,
     last_failure: Option<ErrorDto>,
+    // @todo(hack): unreported rows are counted by position, so a committed row that the transcript
+    // mirror trims at its retention bound is never handed to the report and `run --format text|json`
+    // silently omits it. Rows have a durable identity and the app publishes an append epoch, so the
+    // reporter should track what it has reported by identity instead of by index.
     reported_rows: usize,
     reported_status: Option<RunStatusDto>,
 }

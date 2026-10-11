@@ -249,6 +249,10 @@ impl AppState {
     /// prompt as its first turn. A second prompt arriving while the first is
     /// still waiting for its session keeps its text on the input line instead
     /// of replacing the pending one.
+    // @todo(core): a prompt submitted with no open session is parked in the state here and then sent
+    // as the first turn of whichever session snapshot arrives first (see `sessions.rs`), so nothing
+    // binds it to the session this creation asked for. Creating a session and accepting its first
+    // turn is one application use case the daemon should own.
     fn start_session_for_prompt(&mut self, content: String) -> Vec<Effect> {
         if self.pending_prompt.is_some() {
             self.notice = Some("a session is already being created".to_owned());
