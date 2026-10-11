@@ -840,27 +840,32 @@ fn a_scripted_turn_leaves_as_one_turn_request() {
     assert_eq!(run_command(&mut state), Vec::new());
     assert_eq!(state.screen(), Screen::Theme);
 
-    // A prompt with no open session still starts the session it needs.
+    // A prompt with no open session creates the session it needs and commits
+    // the prompt as that session's first turn in one command.
     let mut state = AppState::new(None);
     assert_eq!(
         state.update(Action::TurnSubmitted {
             content: "hello".to_owned(),
         }),
-        vec![Effect::CreateSession],
-        "a scripted prompt with no session starts the session it needs"
+        vec![Effect::CreateSession {
+            first_turn: Some("hello".to_owned()),
+        }],
+        "a scripted prompt with no session is one create command carrying it"
     );
     assert_eq!(state.notice(), Some("creating a session"));
 }
 
 #[test]
-fn submitting_without_a_session_starts_one_for_the_prompt() {
+fn a_prompt_with_no_session_is_one_create_command() {
     let mut state = AppState::new(None);
     type_text(&mut state, "hello");
     let effects = state.update(Action::InputSubmitted);
     assert_eq!(
         effects,
-        vec![Effect::CreateSession],
-        "a prompt with no session starts the session it needs"
+        vec![Effect::CreateSession {
+            first_turn: Some("hello".to_owned()),
+        }],
+        "a prompt with no session is one create command carrying the prompt"
     );
     assert_eq!(state.input(), "");
     assert_eq!(state.cursor(), 0);
@@ -879,39 +884,59 @@ fn a_launch_with_no_session_request_keeps_the_welcome_and_the_first_prompt_creat
     assert_eq!(state.session_id(), None);
     assert!(state.transcript().is_empty());
 
-    // The first prompt starts the session it needs and is sent as its first
-    // turn once the created session opens.
+    // The first prompt starts the session it needs; the one command carries the
+    // prompt as the created session's first turn.
     type_text(&mut state, "hello");
     assert_eq!(
         state.update(Action::InputSubmitted),
-        vec![Effect::CreateSession]
+        vec![Effect::CreateSession {
+            first_turn: Some("hello".to_owned()),
+        }]
     );
     let created = SessionId::new();
     assert_eq!(
         state.update(Action::SessionCreated(created)),
         vec![Effect::OpenSession(created)]
     );
+    // Opening the created session subscribes it and sends nothing: the prompt
+    // already committed with the creation.
     assert_eq!(
         state.update(Action::SessionSnapshotLoaded(snapshot(
             created,
             None,
             Vec::new(),
         ))),
-        vec![
-            Effect::Subscribe {
-                session_id: created
-            },
-            Effect::SendTurn {
-                session_id: created,
-                content: "hello".to_owned(),
-            },
-        ],
-        "the created session carries the prompt as its first turn"
+        vec![Effect::Subscribe {
+            session_id: created
+        }],
+        "the created session's snapshot never re-sends the prompt"
     );
 }
 
 #[test]
-fn a_failed_session_creation_drops_the_prompt_it_was_starting() {
+fn a_session_snapshot_never_sends_a_parked_prompt() {
+    // A prompt that created a session committed with that one command, so the
+    // snapshot that opens any session sends no turn: the state holds no prompt
+    // to park.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "hello");
+    state.update(Action::InputSubmitted);
+    let created = SessionId::new();
+    state.update(Action::SessionCreated(created));
+    assert_eq!(
+        state.update(Action::SessionSnapshotLoaded(snapshot(
+            created,
+            None,
+            Vec::new(),
+        ))),
+        vec![Effect::Subscribe {
+            session_id: created
+        }],
+        "the created session's own snapshot sends no parked prompt"
+    );
+
+    // A failed creation leaves no prompt behind either: the next session opened
+    // is followed and never claimed by a prompt it did not ask for.
     let mut state = AppState::new(None);
     type_text(&mut state, "hello");
     state.update(Action::InputSubmitted);
@@ -921,16 +946,13 @@ fn a_failed_session_creation_drops_the_prompt_it_was_starting() {
         state.error().is_some(),
         "the failure reaches the error line"
     );
-    // The session a later snapshot opens is not the one the prompt asked for,
-    // so the prompt is gone and never fires against it.
     let other = SessionId::new();
-    let effects = state.update(Action::SessionSnapshotLoaded(snapshot(
-        other,
-        None,
-        Vec::new(),
-    )));
     assert_eq!(
-        effects,
+        state.update(Action::SessionSnapshotLoaded(snapshot(
+            other,
+            None,
+            Vec::new(),
+        ))),
         vec![Effect::Subscribe { session_id: other }],
         "a session opened after the failure carries no prompt but still follows the session"
     );
@@ -957,7 +979,7 @@ fn a_slash_new_command_creates_a_session() {
     let mut state = AppState::new(None);
     type_text(&mut state, "/new");
     let effects = run_command(&mut state);
-    assert_eq!(effects, vec![Effect::CreateSession]);
+    assert_eq!(effects, vec![Effect::CreateSession { first_turn: None }]);
     assert_eq!(state.input(), "");
     assert_eq!(state.cursor(), 0);
     assert_eq!(state.notice(), Some("creating a session"));
@@ -1174,7 +1196,7 @@ fn the_hint_menu_commits_the_highlighted_command_with_a_trailing_space() {
     let submitting = state.update(Action::InputSubmitted);
     assert_eq!(
         submitting,
-        vec![Effect::CreateSession],
+        vec![Effect::CreateSession { first_turn: None }],
         "the second press runs the completed command"
     );
 }
@@ -2943,22 +2965,15 @@ fn a_dispatched_turn_starts_the_waiting_phase() {
         "the run the request starts waits for its first streamed token"
     );
 
-    // The created session's own first turn leaves the same way: the snapshot
-    // that opens the created session returns the pending prompt's `SendTurn`.
+    // The created session's own first turn is the same request: the one create
+    // command that carries the prompt starts its run waiting too.
     let mut state = AppState::new(None);
     type_text(&mut state, "hello");
     state.update(Action::InputSubmitted);
-    let created = SessionId::new();
-    state.update(Action::SessionCreated(created));
-    state.update(Action::SessionSnapshotLoaded(snapshot(
-        created,
-        None,
-        Vec::new(),
-    )));
     assert_eq!(
         state.run_phase(),
         Some(RunPhase::Waiting),
-        "the prompt the snapshot sends starts its run waiting too"
+        "the create command that carries the first turn starts its run waiting"
     );
 }
 
@@ -3494,7 +3509,7 @@ fn creating_a_session_opens_it() {
     let session_id = SessionId::new();
     let mut state = AppState::new(None);
     let effects = state.update(Action::NewSessionRequested);
-    assert_eq!(effects, vec![Effect::CreateSession]);
+    assert_eq!(effects, vec![Effect::CreateSession { first_turn: None }]);
     let effects = state.update(Action::SessionCreated(session_id));
     assert_eq!(effects, vec![Effect::OpenSession(session_id)]);
     assert!(state.error().is_none());

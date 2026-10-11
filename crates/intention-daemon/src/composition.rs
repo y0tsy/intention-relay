@@ -19,7 +19,7 @@ use intention_config::{
 };
 #[cfg(test)]
 use intention_engine::ToolInvocationRequestDto;
-use intention_engine::{ApplicationService, SessionCommitObserver};
+use intention_engine::{ApplicationService, SessionCommitDto, SessionCommitObserver};
 use intention_proto::DaemonHealthDto;
 use intention_proto::{
     CancelRunCommandDto, ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto,
@@ -354,18 +354,33 @@ impl DaemonApplicationFacade {
 
     /// Creates one durable session and assembles its typed reply evidence.
     ///
+    /// The creation and the first turn the command carries commit inside one
+    /// command gate, so a prompt that needs a session is one command: the
+    /// session commits first and the turn is accepted against it. The committed
+    /// turn reaches `observer` the way every other durable commit does.
+    ///
     /// # Errors
     ///
-    /// Returns the typed durable failure when session creation is rejected.
-    pub fn create_session(&self, command: CreateSessionCommandDto) -> DtoResult<ProtocolResultDto> {
+    /// Returns the typed durable failure when session creation is rejected, or
+    /// the typed admission failure when a carried first turn is rejected.
+    pub fn create_session(
+        &self,
+        command: CreateSessionCommandDto,
+        observer: &dyn SessionCommitObserver,
+    ) -> DtoResult<ProtocolResultDto> {
         self.inner.command_gate.run(|| {
-            let projection =
-                ApplicationService::new(&self.inner.repository).create_session(command, now()?)?;
+            let created = ApplicationService::new(&self.inner.repository).create_session(
+                command,
+                self.inner.config_snapshot.clone(),
+                now()?,
+                observer,
+            )?;
             Ok(ProtocolResultDto::SessionCreated(
                 CreateSessionAcceptedDto::new(
-                    projection.project_id(),
-                    projection.workspace_id(),
-                    projection.session_id(),
+                    created.session().project_id(),
+                    created.session().workspace_id(),
+                    created.session().session_id(),
+                    created.first_turn().map(turn_acceptance),
                 ),
             ))
         })
@@ -496,29 +511,56 @@ impl DaemonApplicationFacade {
     }
 }
 
+/// A commit sink that records nothing.
+///
+/// A caller that drives the facade without a live host - the shared fixtures and
+/// the in-crate tests - still hands every committed value to the one
+/// publication seam, without asserting on what it observes.
+#[derive(Debug)]
+pub struct SilentCommitObserver;
+
+impl SilentCommitObserver {
+    /// Creates the silent sink.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for SilentCommitObserver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SessionCommitObserver for SilentCommitObserver {
+    fn observe_session_commit(&self, _committed: &SessionCommitDto) {}
+}
+
 /// Assembles the wire acceptance evidence of one committed user-turn outcome.
 ///
 /// The engine returns the committed durable outcome; the boundary that owns the
 /// typed wire vocabulary converts it once here.
 const fn turn_accepted(outcome: &AcceptedTurnOutcomeDto) -> ProtocolResultDto {
+    ProtocolResultDto::TurnAccepted(turn_acceptance(outcome))
+}
+
+/// Converts one committed durable turn outcome into its wire acceptance evidence.
+const fn turn_acceptance(outcome: &AcceptedTurnOutcomeDto) -> SendUserTurnAcceptedDto {
     match outcome {
-        AcceptedTurnOutcomeDto::Started { run, .. } => {
-            ProtocolResultDto::TurnAccepted(SendUserTurnAcceptedDto::new(
-                run.session_id(),
-                run.turn_id(),
-                SendUserTurnOutcomeDto::Started {
-                    run_id: run.run_id(),
-                    config_revision_id: run.config_revision_id(),
-                },
-            ))
-        }
-        AcceptedTurnOutcomeDto::Pending(turn) => {
-            ProtocolResultDto::TurnAccepted(SendUserTurnAcceptedDto::new(
-                turn.session_id(),
-                turn.turn_id(),
-                SendUserTurnOutcomeDto::Pending,
-            ))
-        }
+        AcceptedTurnOutcomeDto::Started { run, .. } => SendUserTurnAcceptedDto::new(
+            run.session_id(),
+            run.turn_id(),
+            SendUserTurnOutcomeDto::Started {
+                run_id: run.run_id(),
+                config_revision_id: run.config_revision_id(),
+            },
+        ),
+        AcceptedTurnOutcomeDto::Pending(turn) => SendUserTurnAcceptedDto::new(
+            turn.session_id(),
+            turn.turn_id(),
+            SendUserTurnOutcomeDto::Pending,
+        ),
     }
 }
 
@@ -762,13 +804,17 @@ mod tests {
 
     fn create(facade: &DaemonApplicationFacade, session_id: SessionId) {
         let accepted = facade
-            .create_session(CreateSessionCommandDto::new(
-                ProjectId::new(),
-                session_id,
-                WorkspaceId::new(),
-                fixture_workspace_root(),
-                Some(RunModeDto::Build),
-            ))
+            .create_session(
+                CreateSessionCommandDto::new(
+                    ProjectId::new(),
+                    session_id,
+                    WorkspaceId::new(),
+                    fixture_workspace_root(),
+                    Some(RunModeDto::Build),
+                    None,
+                ),
+                &SilentCommitObserver::new(),
+            )
             .expect("fixture session creates");
         assert!(matches!(accepted, ProtocolResultDto::SessionCreated(_)));
     }

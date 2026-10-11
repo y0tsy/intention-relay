@@ -2576,6 +2576,7 @@ mod tests {
                     WorkspaceId::new(),
                     fixture_workspace_root(),
                     Some(RunModeDto::Build),
+                    None,
                 ),
                 fixture_time(1),
             )

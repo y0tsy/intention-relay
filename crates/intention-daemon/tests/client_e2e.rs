@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 
 use intention_client::{SessionStreamClient, SessionStreamSubscription, StreamStep};
 use intention_proto::{
-    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunStatusDto,
-    SendUserTurnOutcomeDto, SessionFrameDto, SubscribeSessionCommandDto, ThemeDto, ToolIdentityDto,
-    WorkspaceRootDto, run_status_is_terminal,
+    CreateSessionCommandDto, CreateSessionFirstTurnDto, MessageKindDto, MessageProjectionDto,
+    RunModeDto, RunStatusDto, SendUserTurnOutcomeDto, SessionFrameDto, SubscribeSessionCommandDto,
+    ThemeDto, ToolIdentityDto, WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_proto::{IdempotencyKey, ProjectId, SessionId, WorkspaceId};
 use intention_test_support::daemon_process::{
@@ -222,6 +222,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
             WorkspaceId::new(),
             WorkspaceRootDto::parse(workspace_root).expect("workspace root is absolute"),
             Some(RunModeDto::Build),
+            None,
         ))
         .await
         .expect("the daemon accepts session creation");
@@ -437,6 +438,61 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
 }
 
 #[tokio::test]
+async fn a_create_with_turn_command_commits_session_then_turn() {
+    let host = E2eHost::new(
+        Some(("hello.txt", "hello from e2e")),
+        r#"{"path":"hello.txt"}"#,
+    );
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
+
+    // One command creates the session and commits the prompt it carries as that
+    // session's first turn: the client declares the session identity and the
+    // daemon accepts the turn against the session it just created.
+    let session_id = SessionId::new();
+    let created = client
+        .create_session(CreateSessionCommandDto::new(
+            ProjectId::new(),
+            session_id,
+            WorkspaceId::new(),
+            WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
+                .expect("workspace root is absolute"),
+            Some(RunModeDto::Build),
+            Some(
+                CreateSessionFirstTurnDto::new(IdempotencyKey::new(), "Read hello.txt")
+                    .expect("fixture first turn is valid"),
+            ),
+        ))
+        .await
+        .expect("the daemon accepts the combined creation");
+    assert_eq!(
+        created.session_id(),
+        session_id,
+        "the command's declared session identity is authoritative"
+    );
+    let accepted = created
+        .first_turn()
+        .expect("the acceptance carries the committed first turn");
+    assert_eq!(accepted.session_id(), session_id);
+    assert!(
+        matches!(accepted.outcome(), SendUserTurnOutcomeDto::Started { .. }),
+        "the created session's first turn starts its run"
+    );
+
+    // The prompt is durable in the session the one command created, so a fresh
+    // read names both the session and its committed first row.
+    let snapshot = client
+        .session_snapshot(session_id)
+        .await
+        .expect("the created session reads back");
+    assert!(
+        snapshot.messages().iter().any(|message| {
+            message.kind() == MessageKindDto::User && message.text() == "Read hello.txt"
+        }),
+        "the created session holds the prompt as its committed first turn"
+    );
+}
+
+#[tokio::test]
 async fn real_daemon_tool_loop_answers_a_failed_call_without_stopping() {
     let host = E2eHost::new(None, r#"{"path":"missing.txt"}"#);
     let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
@@ -450,6 +506,7 @@ async fn real_daemon_tool_loop_answers_a_failed_call_without_stopping() {
             WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
                 .expect("workspace root is absolute"),
             Some(RunModeDto::Build),
+            None,
         ))
         .await
         .expect("the daemon accepts session creation");
@@ -556,6 +613,7 @@ async fn real_daemon_reports_a_declared_execute_timeout_as_a_named_partial() {
             WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
                 .expect("workspace root is absolute"),
             Some(RunModeDto::Build),
+            None,
         ))
         .await
         .expect("the daemon accepts session creation");
@@ -643,6 +701,7 @@ async fn real_daemon_stops_a_running_tool_and_ends_the_run_interrupted() {
             WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
                 .expect("workspace root is absolute"),
             Some(RunModeDto::Build),
+            None,
         ))
         .await
         .expect("the daemon accepts session creation");
@@ -750,6 +809,7 @@ async fn real_daemon_commits_step_reasoning_above_its_tool_exchange() {
             WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
                 .expect("workspace root is absolute"),
             Some(RunModeDto::Build),
+            None,
         ))
         .await
         .expect("the daemon accepts session creation");

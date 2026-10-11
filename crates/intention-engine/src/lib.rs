@@ -14,10 +14,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
-    CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
-    NewMessageDto, PendingTurnProjectionDto, RemoveTurnCommandDto, RunProjectionDto,
-    SendUserTurnCommandDto, SessionProjectionDto, ToolCallRowDto, ToolIdentityDto, ToolInput,
-    ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
+    CreateSessionCommandDto, CreateSessionFirstTurnDto, InterruptRunCommandDto, MessageKindDto,
+    MessageProjectionDto, NewMessageDto, PendingTurnProjectionDto, RemoveTurnCommandDto,
+    RunProjectionDto, SendUserTurnCommandDto, SessionProjectionDto, ToolCallRowDto,
+    ToolIdentityDto, ToolInput, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto,
+    ToolResultStatusDto, ToolRowDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
 use intention_proto::{ToolCallDto, ToolCallId};
@@ -81,6 +82,44 @@ impl ToolInvocationRequestDto {
     pub fn with_cancellation(mut self, cancellation: RunCancellation) -> Self {
         self.cancellation = cancellation;
         self
+    }
+}
+
+/// The committed result of creating one durable session and its optional first turn.
+///
+/// `session` is the created session's committed projection and `first_turn` is
+/// the accepted outcome of the command's first turn, or `None` when the command
+/// carried none. The session is committed before the turn, so a rejected first
+/// turn still leaves the durable session this value names.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreatedSessionDto {
+    session: SessionProjectionDto,
+    first_turn: Option<AcceptedTurnOutcomeDto>,
+}
+
+impl CreatedSessionDto {
+    /// Creates the committed outcome of one combined creation.
+    #[must_use]
+    pub const fn new(
+        session: SessionProjectionDto,
+        first_turn: Option<AcceptedTurnOutcomeDto>,
+    ) -> Self {
+        Self {
+            session,
+            first_turn,
+        }
+    }
+
+    /// Returns the created session's committed projection.
+    #[must_use]
+    pub const fn session(&self) -> &SessionProjectionDto {
+        &self.session
+    }
+
+    /// Returns the accepted first turn, or `None` when the command carried none.
+    #[must_use]
+    pub const fn first_turn(&self) -> Option<&AcceptedTurnOutcomeDto> {
+        self.first_turn.as_ref()
     }
 }
 
@@ -316,7 +355,7 @@ where
         Self { repository }
     }
 
-    /// Creates a durable session and returns its committed projection.
+    /// Creates a durable session and accepts the first turn it carries.
     ///
     /// The command's declared run policy is resolved before the workspace
     /// binding and the durable write: an absent mode becomes the vocabulary's
@@ -330,19 +369,81 @@ where
     /// can be created under one root. A root with no binding keeps the
     /// command's identities and establishes the association.
     ///
+    /// The session commits before the turn, so a rejected first turn leaves the
+    /// durable session the client proposed and returns the typed rejection; no
+    /// rollback exists and the next command may target that same session.
+    /// Repeating an exactly-replayed command is this creation's replay: the
+    /// durable `session_already_exists` conflict reads the session back and the
+    /// turn path replays its own recorded outcome.
+    ///
     /// # Errors
     ///
     /// Returns the typed repository error when the binding cannot be read or
-    /// when durable session creation fails.
+    /// when the creation fails, or the typed admission error when the first
+    /// turn is rejected.
     pub fn create_session(
         &self,
         command: CreateSessionCommandDto,
+        config_snapshot: ConfigSnapshotDto,
         occurred_at: TimestampDto,
-    ) -> DtoResult<SessionProjectionDto> {
+        observer: &dyn SessionCommitObserver,
+    ) -> DtoResult<CreatedSessionDto> {
+        let first_turn = command.first_turn().cloned();
         let resolved = command.resolved_mode();
         let command = command.with_mode(resolved);
+        let session_id = command.session_id();
         let command = self.join_workspace_binding(command)?;
-        self.repository.create_session(command, occurred_at)
+        let session = match self.repository.create_session(command, occurred_at) {
+            Ok(session) => session,
+            Err(error) if error.code() == "session_already_exists" => {
+                self.repository.load_session_projection(session_id)?
+            }
+            Err(error) => return Err(error),
+        };
+        let first_turn = match first_turn {
+            Some(first_turn) => Some(self.accept_first_turn(
+                &first_turn,
+                session.session_id(),
+                config_snapshot,
+                occurred_at,
+                observer,
+            )?),
+            None => None,
+        };
+        Ok(CreatedSessionDto::new(session, first_turn))
+    }
+
+    /// Accepts one carried first turn against the session this creation made.
+    ///
+    /// The proposed run identity is the turn path's own derivation: the same
+    /// session and `IdempotencyKey` always name the same run, so a replayed
+    /// command replays the recorded acceptance instead of conflicting.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed validation error when the run identity is not
+    /// canonical, or the typed admission error when the turn is rejected.
+    fn accept_first_turn(
+        &self,
+        first_turn: &CreateSessionFirstTurnDto,
+        session_id: SessionId,
+        config_snapshot: ConfigSnapshotDto,
+        occurred_at: TimestampDto,
+        observer: &dyn SessionCommitObserver,
+    ) -> DtoResult<AcceptedTurnOutcomeDto> {
+        let proposed_run_id = RunId::parse(&first_turn.idempotency_key().to_string())?;
+        let command = SendUserTurnCommandDto::new(
+            session_id,
+            first_turn.idempotency_key(),
+            first_turn.content(),
+        )?;
+        self.send_user_turn(
+            command,
+            proposed_run_id,
+            config_snapshot,
+            occurred_at,
+            observer,
+        )
     }
 
     /// Returns `command` carrying the durable identity binding of its root.
@@ -366,6 +467,7 @@ where
             binding.workspace_id(),
             command.workspace_root().clone(),
             command.mode(),
+            command.first_turn().cloned(),
         ))
     }
 

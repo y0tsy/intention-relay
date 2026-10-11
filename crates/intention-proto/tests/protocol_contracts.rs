@@ -15,15 +15,15 @@ use common::{fixture_message, fixture_projection, fixture_workspace_root};
 
 use intention_proto::{
     CancelRunCommandDto, ClientRequestDto, CreateSessionAcceptedDto, CreateSessionCommandDto,
-    DaemonHealthDto, ErrorDto, GetSessionSnapshotQueryDto, InterruptRunAcceptedDto,
-    InterruptRunCommandDto, ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto,
-    RemoveTurnCommandDto, RunCancelledAcceptedDto, RunProjectionDto, RunStatusDto,
-    SendUserTurnAcceptedDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionFrameDto,
-    SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, SetTuiThemeCommandDto,
-    SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TuiSettingsDto,
-    TuiThemeAcceptedDto, decode_request_line, decode_response, encode_reply, encode_request,
-    parse_daemon_message, parse_session_frame, run_status_is_terminal,
-    validate_run_status_transition,
+    CreateSessionFirstTurnDto, DaemonHealthDto, ErrorDto, GetSessionSnapshotQueryDto,
+    InterruptRunAcceptedDto, InterruptRunCommandDto, ProtocolDaemonMessageDto, ProtocolResultDto,
+    RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunCancelledAcceptedDto, RunProjectionDto,
+    RunStatusDto, SendUserTurnAcceptedDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto,
+    SessionFrameDto, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto,
+    SetTuiThemeCommandDto, SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto,
+    ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, decode_request_line, decode_response,
+    encode_reply, encode_request, parse_daemon_message, parse_session_frame,
+    run_status_is_terminal, validate_run_status_transition,
 };
 use intention_proto::{ConfigRevisionId, IdempotencyKey, MessageKindDto, ProjectId, RunId};
 use intention_proto::{RunModeDto, SessionId, TimestampDto, TurnId, WorkspaceId};
@@ -105,6 +105,7 @@ fn fixture_requests(session_id: SessionId, run_id: RunId) -> Vec<ClientRequestDt
             WorkspaceId::new(),
             fixture_workspace_root(),
             Some(RunModeDto::Build),
+            None,
         )),
         ClientRequestDto::SendUserTurn(
             SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "hello")
@@ -128,6 +129,7 @@ fn fixture_results(session_id: SessionId, run_id: RunId) -> Vec<ProtocolResultDt
             ProjectId::new(),
             WorkspaceId::new(),
             session_id,
+            None,
         )),
         ProtocolResultDto::TurnAccepted(SendUserTurnAcceptedDto::new(
             session_id,
@@ -284,6 +286,7 @@ fn a_create_command_may_omit_its_mode() {
         WorkspaceId::new(),
         fixture_workspace_root(),
         Some(RunModeDto::Plan),
+        None,
     );
     let mut value = serde_json::to_value(&declared).expect("the command serializes");
     assert_eq!(value["mode"], "plan");
@@ -298,6 +301,98 @@ fn a_create_command_may_omit_its_mode() {
         decoded.resolved_mode(),
         RunModeDto::DEFAULT,
         "the core resolves an absent caller mode to the declared default"
+    );
+}
+
+#[test]
+fn a_create_command_carries_an_optional_first_turn() {
+    let session_id = SessionId::new();
+    let idempotency_key = IdempotencyKey::new();
+    let turn = CreateSessionFirstTurnDto::new(idempotency_key, "first prompt")
+        .expect("a non-blank first turn is valid");
+    let declared = CreateSessionCommandDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        fixture_workspace_root(),
+        None,
+        Some(turn),
+    );
+    let value = serde_json::to_value(&declared).expect("the command serializes");
+    assert_eq!(value["first_turn"]["content"], "first prompt");
+    assert_eq!(
+        value["first_turn"]["idempotency_key"],
+        serde_json::to_value(idempotency_key).expect("the key serializes")
+    );
+    let decoded: CreateSessionCommandDto =
+        serde_json::from_value(value).expect("the command decodes");
+    let first_turn = decoded.first_turn().expect("the turn round-trips");
+    assert_eq!(first_turn.idempotency_key(), idempotency_key);
+    assert_eq!(first_turn.content(), "first prompt");
+
+    // A command with no first turn omits the field entirely and decodes again.
+    let plain = CreateSessionCommandDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        fixture_workspace_root(),
+        None,
+        None,
+    );
+    let value = serde_json::to_value(&plain).expect("the command serializes");
+    assert!(
+        value.get("first_turn").is_none(),
+        "an absent first turn is not serialized"
+    );
+    let decoded: CreateSessionCommandDto =
+        serde_json::from_value(value).expect("the command decodes");
+    assert!(decoded.first_turn().is_none());
+
+    // A blank first turn is never a turn: the DTO rejects it on construction.
+    assert!(
+        CreateSessionFirstTurnDto::new(IdempotencyKey::new(), "   ").is_err(),
+        "blank first-turn content is rejected"
+    );
+    let blank = serde_json::json!({
+        "idempotency_key": IdempotencyKey::new(),
+        "content": " \n ",
+    });
+    assert!(
+        serde_json::from_value::<CreateSessionFirstTurnDto>(blank).is_err(),
+        "blank first-turn content is rejected on the wire too"
+    );
+}
+
+#[test]
+fn a_create_acceptance_carries_the_first_turn_evidence() {
+    let session_id = SessionId::new();
+    let turn = SendUserTurnAcceptedDto::new(
+        session_id,
+        TurnId::new(),
+        SendUserTurnOutcomeDto::Started {
+            run_id: RunId::new(),
+            config_revision_id: ConfigRevisionId::new(),
+        },
+    );
+    let accepted =
+        CreateSessionAcceptedDto::new(ProjectId::new(), WorkspaceId::new(), session_id, Some(turn));
+    assert_eq!(accepted.session_id(), session_id);
+    assert_eq!(
+        accepted.first_turn(),
+        Some(turn),
+        "the acceptance echoes the first turn's committed outcome"
+    );
+
+    let empty =
+        CreateSessionAcceptedDto::new(ProjectId::new(), WorkspaceId::new(), session_id, None);
+    assert!(
+        empty.first_turn().is_none(),
+        "an empty creation carries no first-turn evidence"
+    );
+    let value = serde_json::to_value(empty).expect("the acceptance serializes");
+    assert!(
+        value.get("first_turn").is_none(),
+        "an absent first turn is not serialized"
     );
 }
 

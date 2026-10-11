@@ -169,11 +169,13 @@ pub struct FakeRepository {
     /// Counts committed tool-result rows for `Send + Sync` observers that must
     /// not borrow this fixture; mirrors `tool_results`.
     pub committed_result_rows: AtomicUsize,
-    pub created: Mutex<Option<SessionProjectionDto>>,
+    pub created: Mutex<DtoResult<SessionProjectionDto>>,
     /// The durable identity binding this fixture reports for every root.
     pub workspace_binding: Mutex<Option<WorkspaceBindingDto>>,
     /// Every creation command the facade forwarded, in order.
     pub create_commands: Mutex<Vec<CreateSessionCommandDto>>,
+    /// The repository calls this fixture observed, in order.
+    pub calls: Mutex<Vec<&'static str>>,
     pub accepted: Mutex<DtoResult<AcceptedTurnOutcomeDto>>,
     pub accepted_inputs: Mutex<Vec<RecordedTurn>>,
     pub removed: Mutex<Option<PendingTurnProjectionDto>>,
@@ -210,9 +212,10 @@ impl FakeRepository {
             transitions: Mutex::new(Vec::new()),
             tool_results: Mutex::new(Vec::new()),
             committed_result_rows: AtomicUsize::new(0),
-            created: Mutex::new(None),
+            created: Mutex::new(Err(ErrorDto::unavailable("fixture_unused", "unused"))),
             workspace_binding: Mutex::new(None),
             create_commands: Mutex::new(Vec::new()),
+            calls: Mutex::new(Vec::new()),
             accepted: Mutex::new(Err(ErrorDto::unavailable("fixture_unused", "unused"))),
             accepted_inputs: Mutex::new(Vec::new()),
             removed: Mutex::new(None),
@@ -428,6 +431,10 @@ impl StorageRepositoryDto for FakeRepository {
         command: CreateSessionCommandDto,
         _occurred_at: TimestampDto,
     ) -> DtoResult<SessionProjectionDto> {
+        self.calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push("create_session");
         self.create_commands
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -436,9 +443,6 @@ impl StorageRepositoryDto for FakeRepository {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
-            .ok_or_else(|| {
-                ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
-            })
     }
 
     fn workspace_binding(
@@ -460,6 +464,10 @@ impl StorageRepositoryDto for FakeRepository {
         config_snapshot: ConfigSnapshotDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<AcceptedTurnOutcomeDto> {
+        self.calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push("accept_user_turn");
         self.accepted_inputs
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

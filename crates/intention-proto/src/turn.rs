@@ -21,13 +21,17 @@ pub struct CreateSessionCommandDto {
     workspace_root: WorkspaceRootDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mode: Option<RunModeDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    first_turn: Option<CreateSessionFirstTurnDto>,
 }
 
 impl CreateSessionCommandDto {
     /// Creates a typed durable session request with daemon-owned stable identities.
     ///
     /// `mode` is the run policy the caller declared, or `None` to leave the
-    /// durable default to the core.
+    /// durable default to the core. `first_turn` is the user turn the command
+    /// commits as the created session's first turn, or `None` to create an
+    /// empty session.
     #[must_use]
     pub const fn new(
         project_id: ProjectId,
@@ -35,6 +39,7 @@ impl CreateSessionCommandDto {
         workspace_id: WorkspaceId,
         workspace_root: WorkspaceRootDto,
         mode: Option<RunModeDto>,
+        first_turn: Option<CreateSessionFirstTurnDto>,
     ) -> Self {
         Self {
             project_id,
@@ -42,6 +47,7 @@ impl CreateSessionCommandDto {
             workspace_id,
             workspace_root,
             mode,
+            first_turn,
         }
     }
 
@@ -81,6 +87,15 @@ impl CreateSessionCommandDto {
         self.mode
     }
 
+    /// Returns the first user turn the command carries, if any.
+    ///
+    /// The turn joins the session this command creates; it carries no session
+    /// identity of its own.
+    #[must_use]
+    pub const fn first_turn(&self) -> Option<&CreateSessionFirstTurnDto> {
+        self.first_turn.as_ref()
+    }
+
     /// Returns the durable run policy of the session this command creates.
     ///
     /// An absent caller mode resolves to [`RunModeDto::DEFAULT`], the one core
@@ -98,6 +113,67 @@ impl CreateSessionCommandDto {
     pub const fn with_mode(mut self, mode: RunModeDto) -> Self {
         self.mode = Some(mode);
         self
+    }
+}
+
+/// One user turn a session-creation command carries as the session's first turn.
+///
+/// The turn names no session of its own: the session the command creates is the
+/// one it joins. Its content is validated the way every user turn's is, so a
+/// blank prompt is never a turn.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CreateSessionFirstTurnDto {
+    idempotency_key: IdempotencyKey,
+    content: String,
+}
+
+impl<'de> Deserialize<'de> for CreateSessionFirstTurnDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawCreateSessionFirstTurnDto {
+            idempotency_key: IdempotencyKey,
+            content: String,
+        }
+
+        let raw = RawCreateSessionFirstTurnDto::deserialize(deserializer)?;
+        Self::new(raw.idempotency_key, raw.content).map_err(de::Error::custom)
+    }
+}
+
+impl CreateSessionFirstTurnDto {
+    /// Creates a first turn with a non-empty user message.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the requested content is empty.
+    pub fn new(idempotency_key: IdempotencyKey, content: impl Into<String>) -> DtoResult<Self> {
+        let content = content.into();
+        if content.trim().is_empty() {
+            Err(ErrorDto::validation(
+                "invalid_turn_content",
+                "user turn content must not be empty",
+            ))
+        } else {
+            Ok(Self {
+                idempotency_key,
+                content,
+            })
+        }
+    }
+
+    /// Returns the caller-supplied repeatable-operation identity.
+    #[must_use]
+    pub const fn idempotency_key(&self) -> IdempotencyKey {
+        self.idempotency_key
+    }
+
+    /// Returns the requested user-authored content.
+    #[must_use]
+    pub fn content(&self) -> &str {
+        &self.content
     }
 }
 

@@ -24,14 +24,6 @@ use super::{
 /// are visible to the transition modules beside this one and to nothing else.
 pub struct AppState {
     pub(super) initial_session: Option<SessionId>,
-    /// The prompt a submission with no open session asked to send.
-    ///
-    /// A prompt is never rejected for the lack of a session: the session it
-    /// needs is created and opened, and the snapshot that opens it sends the
-    /// prompt as that session's first turn. A session creation or open that
-    /// fails drops the prompt, so it can never fire against a session it did
-    /// not ask for; its text stays recallable through the input history.
-    pub(super) pending_prompt: Option<String>,
     pub(super) connection: ConnectionStatus,
     /// The screen a front end renders.
     pub(super) screen: Screen,
@@ -158,7 +150,6 @@ impl AppState {
     pub const fn new(initial_session: Option<SessionId>) -> Self {
         Self {
             initial_session,
-            pending_prompt: None,
             connection: ConnectionStatus::Connecting,
             screen: Screen::Chat,
             theme: Theme::Light,
@@ -265,9 +256,9 @@ impl AppState {
                 self.rebase_run_phase();
                 effects
             }
-            Action::SessionSnapshotFailed(error) => self.apply_session_open_failure(&error),
+            Action::SessionSnapshotFailed(error) => self.apply_failure(&error),
             Action::SessionCreated(session_id) => self.apply_session_created(session_id),
-            Action::SessionCreateFailed(error) => self.apply_session_open_failure(&error),
+            Action::SessionCreateFailed(error) => self.apply_failure(&error),
             Action::SettingsReceived(theme) => self.apply_settings_received(theme),
             Action::SettingsFailed(error) => self.apply_settings_failed(&error),
             Action::ThemeSelected(theme) => self.apply_theme_selected(theme),
@@ -339,11 +330,13 @@ impl AppState {
         };
         // A turn request leaving for the network starts the run the row names:
         // the run that request begins is waiting for its first streamed token,
-        // and a previous run's phase never describes it.
-        if effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::SendTurn { .. }))
-        {
+        // and a previous run's phase never describes it. A creation that
+        // carries its first turn is such a request.
+        if effects.iter().any(|effect| match effect {
+            Effect::SendTurn { .. } => true,
+            Effect::CreateSession { first_turn } => first_turn.is_some(),
+            _ => false,
+        }) {
             self.apply_turn_dispatched();
         }
         effects

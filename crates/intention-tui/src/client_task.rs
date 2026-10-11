@@ -10,8 +10,8 @@
 
 use intention_client::{IntentionClient, SessionStreamClient, SessionStreamSubscription};
 use intention_proto::{
-    CreateSessionCommandDto, ErrorDto, IdempotencyKey, ProjectId, RunModeDto, SessionId,
-    SubscribeSessionCommandDto, WorkspaceId, WorkspaceRootDto,
+    CreateSessionCommandDto, CreateSessionFirstTurnDto, ErrorDto, IdempotencyKey, ProjectId,
+    RunModeDto, SessionId, SubscribeSessionCommandDto, WorkspaceId, WorkspaceRootDto,
 };
 use intention_transport::LocalEndpoint;
 
@@ -59,13 +59,27 @@ pub async fn perform(
             .await
             .map(|accepted| Action::SettingsReceived(accepted.theme()))
             .map_err(|error| (Action::SettingsFailed(error.clone()), error)),
-        Effect::CreateSession => {
+        Effect::CreateSession { first_turn } => {
+            let first_turn = match first_turn {
+                Some(content) => {
+                    let turn = match CreateSessionFirstTurnDto::new(IdempotencyKey::new(), content)
+                    {
+                        Ok(turn) => turn,
+                        Err(error) => {
+                            return Some(Err((Action::SessionCreateFailed(error.clone()), error)));
+                        }
+                    };
+                    Some(turn)
+                }
+                None => None,
+            };
             let command = CreateSessionCommandDto::new(
                 ProjectId::new(),
                 SessionId::new(),
                 WorkspaceId::new(),
                 workspace_root.clone(),
                 mode,
+                first_turn,
             );
             client
                 .create_session(command)

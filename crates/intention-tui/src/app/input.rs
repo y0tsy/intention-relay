@@ -207,12 +207,10 @@ impl AppState {
         }
         // The line the interactive path submitted is the input line's own: it
         // is recalled through the history and cleared here, while the turn the
-        // core sends is data. A prompt with no open session keeps its line
-        // handling in the creation branch `submit_turn` reaches.
-        if self.session_id.is_some() {
-            self.history.push(content.clone());
-            self.clear_input();
-        }
+        // core sends is data. Whether or not a session is open, the prompt is
+        // data to the core, which creates the session it needs.
+        self.history.push(content.clone());
+        self.clear_input();
         self.submit_turn(content)
     }
 
@@ -221,11 +219,19 @@ impl AppState {
     /// The prompt arrives as data: the input line, its history, the hint menu,
     /// and the slash grammar belong to the interactive path and never decide
     /// what a prompt means here, so a `/…` prompt is a turn and a trailing
-    /// backslash is not a line break. A prompt with no open session still starts
-    /// the session it needs and is sent as that session's first turn.
+    /// backslash is not a line break. A prompt with no open session creates the
+    /// session it needs and commits the prompt as that session's first turn in
+    /// one command.
     pub(super) fn submit_turn(&mut self, content: String) -> Vec<Effect> {
         let Some(session_id) = self.session_id else {
-            return self.start_session_for_prompt(content);
+            self.error = None;
+            // A new turn starts a new measurement: the previous turn's elapsed
+            // time never survives into the next run's status line.
+            self.elapsed_millis = None;
+            self.note("creating a session".to_owned());
+            return vec![Effect::CreateSession {
+                first_turn: Some(content),
+            }];
         };
         self.error = None;
         // A new turn starts a new measurement: the previous turn's elapsed time
@@ -258,33 +264,6 @@ impl AppState {
         self.input.replace_range(offset..offset + 1, "\n");
         self.refresh_menu();
         true
-    }
-
-    /// Starts the session one submitted prompt needs.
-    ///
-    /// The prompt is kept as the state's pending prompt and the session is
-    /// created and opened like `/new`; the snapshot that opens it sends the
-    /// prompt as its first turn. A second prompt arriving while the first is
-    /// still waiting for its session keeps its text on the input line instead
-    /// of replacing the pending one.
-    // @todo(core): a prompt submitted with no open session is parked in the state here and then sent
-    // as the first turn of whichever session snapshot arrives first (see `sessions.rs`), so nothing
-    // binds it to the session this creation asked for. Creating a session and accepting its first
-    // turn is one application use case the daemon should own.
-    fn start_session_for_prompt(&mut self, content: String) -> Vec<Effect> {
-        if self.pending_prompt.is_some() {
-            self.notice = Some("a session is already being created".to_owned());
-            return Vec::new();
-        }
-        self.history.push(content.clone());
-        self.clear_input();
-        self.error = None;
-        // A new turn starts a new measurement: the previous turn's elapsed time
-        // never survives into the next run's status line.
-        self.elapsed_millis = None;
-        self.note("creating a session".to_owned());
-        self.pending_prompt = Some(content);
-        vec![Effect::CreateSession]
     }
 
     /// Runs one slash command, spelled without its leading `/`.

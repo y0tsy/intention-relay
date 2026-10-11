@@ -17,7 +17,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use intention_config::ConfigSnapshotDto;
-use intention_daemon::DaemonApplicationFacade;
+use intention_daemon::{DaemonApplicationFacade, SilentCommitObserver};
 use intention_proto::{
     CreateSessionCommandDto, ProjectId, ProtocolResultDto, RunModeDto, SessionId, WorkspaceId,
     WorkspaceRootDto,
@@ -45,14 +45,18 @@ pub fn fixture_facade(
 /// Creates one fixture session rooted at the supplied workspace directory.
 pub fn create_session(facade: &DaemonApplicationFacade, session_id: SessionId, workspace: &Path) {
     let created = facade
-        .create_session(CreateSessionCommandDto::new(
-            ProjectId::new(),
-            session_id,
-            WorkspaceId::new(),
-            WorkspaceRootDto::parse(workspace.to_string_lossy().into_owned())
-                .expect("fixture workspace is absolute"),
-            Some(RunModeDto::Build),
-        ))
+        .create_session(
+            CreateSessionCommandDto::new(
+                ProjectId::new(),
+                session_id,
+                WorkspaceId::new(),
+                WorkspaceRootDto::parse(workspace.to_string_lossy().into_owned())
+                    .expect("fixture workspace is absolute"),
+                Some(RunModeDto::Build),
+                None,
+            ),
+            &SilentCommitObserver::new(),
+        )
         .expect("fixture session creates");
     assert!(matches!(created, ProtocolResultDto::SessionCreated(_)));
 }

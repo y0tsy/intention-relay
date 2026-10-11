@@ -374,7 +374,9 @@ text above is the live policy.
 - Launch rule and the welcome surface. A launch opens no session at all — not even the most recent one; a session
   appears only for an explicit `--session ID`, for `--continue` (the newest session the daemon lists, and the client's
   typed `no_sessions_to_continue` rejection when the store lists none), for `/new`, for a browser row, or for the first
-  prompt, which creates the session it needs and sends the prompt as that session's first turn. While no session is open and no committed row exists, the chat region shows the welcome surface instead of the
+  prompt, which creates the session it needs and commits the prompt as that session's first turn in one command: the
+  session commits first, and a rejected first turn leaves the durable session the caller proposed plus the typed
+  rejection, so no adapter ever parks or routes a prompt. While no session is open and no committed row exists, the chat region shows the welcome surface instead of the
   transcript: the product lockup — `INTENTION` in the deep accent ink with a tracked muted `RELAY` after a fixed
   two-column gap — above a one-row overview whose chips are the binary's own version (`env!("CARGO_PKG_VERSION")`) and
   deliberate `@todo(core)` plates for `AGENTS.md`, `MCPs`, and `Skills`. The input block and the detail line keep the
@@ -526,9 +528,13 @@ text above is the live policy.
   (`SESSION_LIST_ROWS`) and an `omitted` count, so the list is never silently truncated; storage owns the ordering and
   the count, and the daemon passes the result through unchanged. Tree and branching views remain Slice 6 work.
 - Session creation and the workspace root. `/new` and the first prompt create a session on the front end's workspace
-  root. A root resolves to its durable project/workspace binding when one exists, so session creation joins that binding
-  instead of proposing a new identity, one root carries an unbounded number of sessions, and storage still rejects a
-  different identity for an already-bound root (`workspace_root_conflict`).
+  root. A creation command also carries an optional first user turn, so a prompt with no open session is one command:
+  the durable session commits before that turn, which is accepted against the created session id, and a rejected first
+  turn leaves the durable session the caller proposed plus the typed rejection — no rollback and no parked prompt. The
+  command's declared `project_id`, `session_id`, and `workspace_id` proposals are authoritative; only the turn's
+  `RunId` derives from its idempotency key. A root resolves to its durable project/workspace binding when one exists,
+  so session creation joins that binding instead of proposing a new identity, one root carries an unbounded number of
+  sessions, and storage still rejects a different identity for an already-bound root (`workspace_root_conflict`).
 - Transient delta semantics. The session stream also carries `SessionFrameDto::TextDelta` frames, whose
   `TextDeltaFrameDto` names its session, run, model step, channel, and one coalesced chunk of that step's uncommitted
   text. The channel closes over the two things a step says before it is committed — the reasoning it thinks with and
@@ -558,13 +564,6 @@ fabricated value. The table below names each one, taken from the markers in the 
 | the welcome overview's `Skills` chip | skills support |
 | the `Ctrl+F` tree notice | session forks (Slice 6) |
 | a `notice` block's text-only body | a notice code or severity |
-
-A second marker class names work the terminal still performs that belongs to the core rather than a fact it
-lacks. Each site carries the same `@todo(core):` prefix and names what the core should own:
-
-| The terminal still | The core should own |
-| --- | --- |
-| parks a prompt that has no session and sends it as the first turn of whichever snapshot arrives first (`app/input.rs`) | create-session-and-first-turn as one use case |
 
 The `@todo(hack)` marker is the crate's own class for work the adapter or the client must still do, and it is not
 catalogued here. Its remaining site is the endpoint instance and the daemon program resolved by the binary

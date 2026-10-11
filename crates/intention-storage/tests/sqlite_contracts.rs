@@ -77,6 +77,7 @@ fn create_at(store: &SqliteStorageRepository, updated_at: i64) -> SessionId {
                 WorkspaceId::new(),
                 workspace_root(&session_id.to_string()),
                 Some(RunModeDto::Build),
+                None,
             ),
             time(updated_at),
         )
@@ -1669,6 +1670,7 @@ fn the_workspace_binding_reads_the_association_a_creation_established() {
                 workspace_id,
                 root.clone(),
                 Some(RunModeDto::Build),
+                None,
             ),
             time(1),
         )
@@ -1703,6 +1705,7 @@ fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
                     workspace_id,
                     root.clone(),
                     Some(RunModeDto::Build),
+                    None,
                 ),
                 time(1),
             )
@@ -1717,6 +1720,7 @@ fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
                     workspace_id,
                     root.clone(),
                     Some(RunModeDto::Build),
+                    None,
                 ),
                 time(1),
             )
@@ -1733,6 +1737,7 @@ fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
                     workspace_id,
                     workspace_root("conflict"),
                     Some(RunModeDto::Build),
+                    None,
                 ),
                 time(2),
             )
@@ -1748,6 +1753,7 @@ fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
                 WorkspaceId::new(),
                 root,
                 Some(RunModeDto::Build),
+                None,
             ),
             time(3),
         )
@@ -2756,6 +2762,7 @@ fn session_list_maps_every_durable_session_column() {
                 workspace,
                 root.clone(),
                 Some(RunModeDto::Plan),
+                None,
             ),
             time(7),
         )

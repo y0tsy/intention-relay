@@ -333,7 +333,14 @@ pub enum Effect {
     /// Read the current snapshot of one session.
     OpenSession(SessionId),
     /// Create a session from the front end's workspace and mode.
-    CreateSession,
+    ///
+    /// `first_turn` is the prompt the creation commits as the new session's
+    /// first turn, or `None` to create an empty session. The prompt never parks
+    /// in the state: the one command either commits it or rejects it.
+    CreateSession {
+        /// The first user turn's content, when a prompt asked for the session.
+        first_turn: Option<String>,
+    },
     /// Send one user turn with this content.
     SendTurn {
         /// The owning session.

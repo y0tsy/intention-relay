@@ -272,6 +272,7 @@ fn commands_round_trip_with_typed_identity_and_mode() {
         workspace_id,
         workspace_root(),
         Some(RunModeDto::Plan),
+        None,
     );
 
     assert_eq!(command.project_id(), project_id);

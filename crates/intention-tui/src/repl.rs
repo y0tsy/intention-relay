@@ -133,9 +133,9 @@ async fn converse<W: Write, E: Write>(
                 let _ = writeln!(err, "error: unknown command /{name}");
             }
             Line::Turn(turn) => {
-                // A prompt with no session open starts the session it needs:
-                // the core creates and opens one, then sends the prompt as its
-                // first turn.
+                // A prompt with no session open creates the session it needs
+                // and commits the prompt as that session's first turn in one
+                // command.
                 converse_turn(&mut driver, &turn, out, err, &mut interrupts).await;
             }
         }

@@ -21,12 +21,13 @@ use intention_client::{
 };
 use intention_proto::TimestampDto;
 use intention_proto::{
-    ClientRequestDto, ConfigRevisionId, CreateSessionCommandDto, DaemonHealthDto,
-    DaemonReadinessDto, InterruptRunAcceptedDto, ProtocolDaemonMessageDto, ProtocolResultDto,
-    RemoveTurnAcceptedDto, RunId, RunProjectionDto, RunStatusDto, SessionFrameDto, SessionId,
-    SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto,
-    TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId, decode_request_line,
-    encode_request,
+    ClientRequestDto, ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto,
+    CreateSessionFirstTurnDto, DaemonHealthDto, DaemonReadinessDto, IdempotencyKey,
+    InterruptRunAcceptedDto, ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto,
+    RunId, RunProjectionDto, RunStatusDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
+    SessionFrameDto, SessionId, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto,
+    TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId,
+    decode_request_line, encode_request,
 };
 use intention_proto::{
     DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, ProjectId, WorkspaceId,
@@ -152,6 +153,49 @@ fn start_fixture_server(
     tokio::spawn(serve_one_fixture_connection(listener, response))
 }
 
+/// Serves one combined creation, echoing its first turn into the acceptance.
+///
+/// The task returns the exact command it received, so the test asserts the
+/// outbound wire shape instead of only the parsed reply.
+fn start_first_turn_server(
+    endpoint: LocalEndpoint,
+    session_id: SessionId,
+) -> tokio::task::JoinHandle<CreateSessionCommandDto> {
+    let listener = AsyncLocalListener::bind(endpoint).expect("fixture listener binds");
+    tokio::spawn(async move {
+        let connection = listener.accept().await.expect("fixture client connects");
+        let (mut requests, mut messages) = connection.split();
+        let line = requests
+            .receive_line()
+            .await
+            .expect("fixture request arrives");
+        let request = decode_request_line(&line).expect("fixture request decodes");
+        let ClientRequestDto::CreateSession(command) = request.request().clone() else {
+            panic!("the client sends one create-session command")
+        };
+        let acceptance = CreateSessionAcceptedDto::new(
+            command.project_id(),
+            command.workspace_id(),
+            command.session_id(),
+            command.first_turn().map(|_| {
+                SendUserTurnAcceptedDto::new(
+                    session_id,
+                    TurnId::new(),
+                    SendUserTurnOutcomeDto::Pending,
+                )
+            }),
+        );
+        messages
+            .send_message(&ProtocolDaemonMessageDto::reply(
+                request.id(),
+                ProtocolResultDto::SessionCreated(acceptance),
+            ))
+            .await
+            .expect("fixture reply sends");
+        command
+    })
+}
+
 async fn serve_one_fixture_connection(listener: AsyncLocalListener, response: FixtureResponse) {
     let connection = listener.accept().await.expect("fixture client connects");
     serve_fixture_connection(connection, response).await;
@@ -225,6 +269,7 @@ fn fixture_create_command(session_id: SessionId) -> CreateSessionCommandDto {
         )
         .expect("fixture workspace root is valid"),
         Some(RunModeDto::Build),
+        None,
     )
 }
 
@@ -479,6 +524,46 @@ async fn command_rejection_is_typed() {
         "fixture_command_rejected"
     );
     server.await.expect("rejection fixture server completes");
+}
+
+#[tokio::test]
+async fn a_create_command_carries_its_first_turn() {
+    let _guard = fixture_guard();
+    let session_id = SessionId::new();
+    let idempotency_key = IdempotencyKey::new();
+    let command = CreateSessionCommandDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        fixture_workspace_root(),
+        Some(RunModeDto::Build),
+        Some(
+            CreateSessionFirstTurnDto::new(idempotency_key, "first prompt")
+                .expect("fixture first turn is valid"),
+        ),
+    );
+
+    let first_turn_endpoint = endpoint();
+    let server = start_first_turn_server(first_turn_endpoint.clone(), session_id);
+    let created = client(
+        first_turn_endpoint,
+        FixtureResponse::Disconnect,
+        Arc::new(AtomicUsize::new(0)),
+    )
+    .create_session(command.clone())
+    .await
+    .expect("the daemon accepts the combined creation");
+    assert_eq!(created.session_id(), session_id);
+    let first_turn = created
+        .first_turn()
+        .expect("the acceptance echoes the first turn");
+    assert_eq!(first_turn.session_id(), session_id);
+    assert_eq!(first_turn.outcome(), SendUserTurnOutcomeDto::Pending);
+    assert_eq!(
+        server.await.expect("first-turn fixture server completes"),
+        command,
+        "the client carries the first turn on the wire through its one create method"
+    );
 }
 
 #[tokio::test]

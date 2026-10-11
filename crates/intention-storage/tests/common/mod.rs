@@ -65,6 +65,7 @@ pub fn create_session(repository: &SqliteStorageRepository, label: &str) -> Sess
                 WorkspaceId::new(),
                 workspace_root(label),
                 Some(RunModeDto::Build),
+                None,
             ),
             time(1),
         )

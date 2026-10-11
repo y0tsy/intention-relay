@@ -20,13 +20,14 @@ use intention_proto::{
     ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
 };
 use intention_proto::{
-    ConfigRevisionId, CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto,
-    MessageProjectionDto, PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto,
-    RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto, WorkspaceRootDto,
+    ConfigRevisionId, CreateSessionCommandDto, CreateSessionFirstTurnDto, InterruptRunCommandDto,
+    MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, RemoveTurnCommandDto,
+    RunModeDto, RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto,
+    WorkspaceRootDto,
 };
 use intention_proto::{
-    ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, TimestampDto, ToolCallId, TurnId,
-    WorkspaceBindingDto, WorkspaceId,
+    ErrorCategoryDto, ErrorDto, ErrorRetryDto, IdempotencyKey, ProjectId, RunId, SessionId,
+    TimestampDto, ToolCallId, TurnId, WorkspaceBindingDto, WorkspaceId,
 };
 use intention_storage::{AcceptedTurnOutcomeDto, StartingRunModelContextDto};
 use intention_test_support::fixture_snapshot;
@@ -886,7 +887,7 @@ fn create_and_remove_workflows_map_committed_results() {
     *repository
         .created
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
     *repository
         .removed
         .lock()
@@ -901,12 +902,14 @@ fn create_and_remove_workflows_map_committed_results() {
         WorkspaceId::new(),
         workspace_root(),
         Some(RunModeDto::Build),
+        None,
     );
 
+    let observer = RecordingCommitObserver::new();
     let created = application
-        .create_session(create, fixture_time())
+        .create_session(create, fixture_snapshot(), fixture_time(), &observer)
         .expect("create maps");
-    assert_eq!(created.session_id(), session_id);
+    assert_eq!(created.session().session_id(), session_id);
     let removed = application
         .remove_turn(
             RemoveTurnCommandDto::new(session_id, pending_turn),
@@ -924,7 +927,7 @@ fn session_creation_joins_the_durable_binding_of_its_workspace_root() {
     *repository
         .created
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
     let bound_project = ProjectId::new();
     let bound_workspace = WorkspaceId::new();
     *repository
@@ -938,10 +941,16 @@ fn session_creation_joins_the_durable_binding_of_its_workspace_root() {
         WorkspaceId::new(),
         workspace_root(),
         Some(RunModeDto::Build),
+        None,
     );
 
     ApplicationService::new(&repository)
-        .create_session(create, fixture_time())
+        .create_session(
+            create,
+            fixture_snapshot(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
         .expect("create maps");
 
     let forwarded = repository
@@ -976,7 +985,7 @@ fn session_creation_keeps_its_identities_for_an_unbound_workspace_root() {
     *repository
         .created
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
     let project_id = ProjectId::new();
     let workspace_id = WorkspaceId::new();
     let create = CreateSessionCommandDto::new(
@@ -985,10 +994,16 @@ fn session_creation_keeps_its_identities_for_an_unbound_workspace_root() {
         workspace_id,
         workspace_root(),
         Some(RunModeDto::Plan),
+        None,
     );
 
     ApplicationService::new(&repository)
-        .create_session(create, fixture_time())
+        .create_session(
+            create,
+            fixture_snapshot(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
         .expect("create maps");
 
     let forwarded = repository
@@ -1013,17 +1028,23 @@ fn the_core_default_resolves_absent_to_build() {
     *repository
         .created
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
     let create = CreateSessionCommandDto::new(
         ProjectId::new(),
         session_id,
         WorkspaceId::new(),
         workspace_root(),
         None,
+        None,
     );
 
     ApplicationService::new(&repository)
-        .create_session(create, fixture_time())
+        .create_session(
+            create,
+            fixture_snapshot(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
         .expect("create maps");
 
     let forwarded = repository
@@ -1038,6 +1059,228 @@ fn the_core_default_resolves_absent_to_build() {
         "the core resolves a command that declares no mode to the durable default before the write"
     );
     assert_eq!(RunModeDto::DEFAULT, RunModeDto::Build);
+}
+
+/// Builds one combined creation command carrying a first turn.
+fn create_with_first_turn(
+    session_id: SessionId,
+    key: IdempotencyKey,
+    content: &str,
+) -> CreateSessionCommandDto {
+    CreateSessionCommandDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        workspace_root(),
+        Some(RunModeDto::Build),
+        Some(
+            CreateSessionFirstTurnDto::new(key, content)
+                .expect("fixture first-turn content is non-blank"),
+        ),
+    )
+}
+
+/// Builds the durable conflict the repository reports for a repeated session id.
+fn session_already_exists() -> ErrorDto {
+    ErrorDto::new(
+        "session_already_exists",
+        ErrorCategoryDto::Conflict,
+        "the durable session already exists",
+        ErrorRetryDto::Never,
+        None,
+    )
+    .expect("fixture conflict is valid")
+}
+
+/// Returns one pending first-turn outcome for its session.
+fn pending_first_turn(session_id: SessionId, content: &str) -> AcceptedTurnOutcomeDto {
+    AcceptedTurnOutcomeDto::Pending(
+        PendingTurnProjectionDto::new(session_id, TurnId::new(), content)
+            .expect("fixture pending turn is valid"),
+    )
+}
+
+#[test]
+fn create_session_with_turn_commits_the_session_before_the_turn() {
+    let session_id = SessionId::new();
+    let key = IdempotencyKey::new();
+    let repository = FakeRepository::with_accepted(Ok(pending_first_turn(session_id, "first")));
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
+    let observer = RecordingCommitObserver::new();
+    let created = ApplicationService::new(&repository)
+        .create_session(
+            create_with_first_turn(session_id, key, "first"),
+            fixture_snapshot(),
+            fixture_time(),
+            &observer,
+        )
+        .expect("the combined creation commits");
+    assert_eq!(created.session().session_id(), session_id);
+    assert!(matches!(
+        created.first_turn(),
+        Some(AcceptedTurnOutcomeDto::Pending(_))
+    ));
+    assert_eq!(
+        repository
+            .calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone(),
+        vec!["create_session", "accept_user_turn"],
+        "the durable session commits before its first turn"
+    );
+    let inputs = repository
+        .accepted_inputs
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(inputs.len(), 1, "one turn reaches the repository");
+    assert_eq!(
+        inputs[0].proposed_run_id(),
+        RunId::parse(&key.to_string()).expect("the key names a run identity"),
+        "the first turn's run identity derives from its idempotency key"
+    );
+}
+
+#[test]
+fn a_replayed_create_session_with_turn_returns_the_recorded_outcome() {
+    let session_id = SessionId::new();
+    let key = IdempotencyKey::new();
+    let pending = PendingTurnProjectionDto::new(session_id, TurnId::new(), "first")
+        .expect("fixture pending turn is valid");
+    let repository =
+        FakeRepository::with_accepted(Ok(AcceptedTurnOutcomeDto::Pending(pending.clone())));
+    // The first attempt already committed this session: the creation reports
+    // its durable conflict and the turn path replays the recorded outcome.
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Err(session_already_exists());
+    *repository
+        .loaded_projection
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+    let created = ApplicationService::new(&repository)
+        .create_session(
+            create_with_first_turn(session_id, key, "first"),
+            fixture_snapshot(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
+        .expect("a replay reads the durable session back");
+    assert_eq!(created.session().session_id(), session_id);
+    let Some(AcceptedTurnOutcomeDto::Pending(replayed)) = created.first_turn() else {
+        unreachable!("the replayed turn outcome is the recorded pending turn")
+    };
+    assert_eq!(replayed.turn_id(), pending.turn_id());
+    assert_eq!(
+        repository
+            .calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone(),
+        vec!["create_session", "accept_user_turn"],
+        "a replay still accepts the carried turn against the durable session"
+    );
+}
+
+#[test]
+fn a_same_key_with_different_content_is_a_typed_conflict() {
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::new(
+        "turn_idempotency_conflict",
+        ErrorCategoryDto::Conflict,
+        "the idempotency key is already bound to different content",
+        ErrorRetryDto::Never,
+        None,
+    )
+    .expect("fixture conflict is valid")));
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
+    let error = ApplicationService::new(&repository)
+        .create_session(
+            create_with_first_turn(session_id, IdempotencyKey::new(), "different"),
+            fixture_snapshot(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
+        .expect_err("a key bound to other content is a typed conflict");
+    assert_eq!(error.code(), "turn_idempotency_conflict");
+    assert_eq!(
+        repository
+            .create_commands
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len(),
+        1,
+        "the session committed before the turn was rejected"
+    );
+}
+
+#[test]
+fn a_failed_turn_leaves_the_session_replayable() {
+    let session_id = SessionId::new();
+    let key = IdempotencyKey::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable(
+        "turn_admission_unavailable",
+        "the turn could not be admitted",
+    )));
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
+    let application = ApplicationService::new(&repository);
+    let error = application
+        .create_session(
+            create_with_first_turn(session_id, key, "first"),
+            fixture_snapshot(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
+        .expect_err("the rejected first turn surfaces");
+    assert_eq!(error.code(), "turn_admission_unavailable");
+    assert_eq!(
+        repository
+            .create_commands
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len(),
+        1,
+        "the session stays durable although the carried turn was rejected"
+    );
+
+    // The next command targets the same durable session: the creation replays
+    // and the turn commits.
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Err(session_already_exists());
+    *repository
+        .loaded_projection
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+    *repository
+        .accepted
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Ok(pending_first_turn(session_id, "first"));
+    let replayed = application
+        .create_session(
+            create_with_first_turn(session_id, key, "first"),
+            fixture_snapshot(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
+        .expect("the durable session accepts the replayed turn");
+    assert_eq!(replayed.session().session_id(), session_id);
+    assert!(matches!(
+        replayed.first_turn(),
+        Some(AcceptedTurnOutcomeDto::Pending(_))
+    ));
 }
 
 #[test]

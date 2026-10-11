@@ -670,20 +670,27 @@ pub struct CreateSessionAcceptedDto {
     project_id: ProjectId,
     workspace_id: WorkspaceId,
     session_id: SessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    first_turn: Option<SendUserTurnAcceptedDto>,
 }
 
 impl CreateSessionAcceptedDto {
     /// Creates durable session acceptance evidence.
+    ///
+    /// `first_turn` echoes the accepted outcome of the command's first turn,
+    /// or `None` when the command carried none.
     #[must_use]
     pub const fn new(
         project_id: ProjectId,
         workspace_id: WorkspaceId,
         session_id: SessionId,
+        first_turn: Option<SendUserTurnAcceptedDto>,
     ) -> Self {
         Self {
             project_id,
             workspace_id,
             session_id,
+            first_turn,
         }
     }
 
@@ -703,6 +710,12 @@ impl CreateSessionAcceptedDto {
     #[must_use]
     pub const fn session_id(self) -> SessionId {
         self.session_id
+    }
+
+    /// Returns the accepted outcome of the command's first turn, if it carried one.
+    #[must_use]
+    pub const fn first_turn(self) -> Option<SendUserTurnAcceptedDto> {
+        self.first_turn
     }
 }
 

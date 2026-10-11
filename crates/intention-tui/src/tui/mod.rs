@@ -1106,7 +1106,7 @@ mod tests {
         );
         assert_eq!(
             effects,
-            vec![Effect::CreateSession],
+            vec![Effect::CreateSession { first_turn: None }],
             "the second Enter of the flow runs the command the menu completed"
         );
         assert_eq!(state.input(), "", "the command left the input line empty");

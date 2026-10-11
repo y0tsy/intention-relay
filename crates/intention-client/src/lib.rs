@@ -149,9 +149,10 @@ impl IntentionClient {
 
     /// Creates a durable session and returns the daemon's acceptance evidence.
     ///
-    /// The command carries no session identity to compare: the daemon assigns
-    /// the session, project, and workspace, so acceptance evidence is the only
-    /// thing the reply can be checked for.
+    /// The command carries the identities the caller proposes and, optionally,
+    /// the first user turn the creation commits as the session's first turn.
+    /// The acceptance echoes the created session identity and the accepted
+    /// first turn, when one was carried.
     ///
     /// # Errors
     ///

@@ -1013,6 +1013,79 @@ fn a_repl_prompt_creates_the_session_it_needs() {
         1,
         "the prompt created exactly the session it needed"
     );
+    let created = sessions.sessions()[0].session_id();
+    assert_eq!(
+        host.snapshot(created)
+            .messages()
+            .first()
+            .map(|message| (message.kind(), message.text().to_owned())),
+        Some((MessageKindDto::User, PROMPT.to_owned())),
+        "the prompt is the created session's committed first turn"
+    );
+}
+
+#[test]
+fn a_first_prompt_never_lands_in_another_session_when_a_second_session_exists() {
+    let host = TerminalHost::new(ProviderEndpoint::scripted(), Some(WORKSPACE_FILE));
+    let workspace = host.workspace_root();
+    // Seed one durable session, so the store lists more than the one the prompt
+    // needs and the danger MR-19 named - a prompt delivered to whichever
+    // session arrives first - is live.
+    let seeded = host.run(&["repl", "--workspace", &workspace], Some("/new\n/quit\n"));
+    assert_eq!(
+        seeded.code,
+        Some(0),
+        "the seeding REPL exits: {}",
+        seeded.stderr
+    );
+    let existing = block_on(host.client.list_sessions())
+        .expect("the session list reads")
+        .sessions()
+        .first()
+        .map(|summary| summary.session_id())
+        .expect("the seeded session is listed");
+    assert!(
+        host.snapshot(existing).messages().is_empty(),
+        "the seeded session starts empty"
+    );
+
+    // The first prompt with no session open creates its own session and commits
+    // the prompt there; the pre-existing session never receives it.
+    let script = format!("{PROMPT}\n/quit\n");
+    let output = host.run(&["repl", "--workspace", &workspace], Some(&script));
+    assert_eq!(output.code, Some(0), "the REPL exits: {}", output.stderr);
+    assert!(
+        !output.stderr.contains("error:"),
+        "the prompt reports no failure: {}",
+        output.stderr
+    );
+
+    let sessions = block_on(host.client.list_sessions()).expect("the session list reads");
+    assert_eq!(
+        sessions.sessions().len(),
+        2,
+        "the prompt created exactly one more session"
+    );
+    let created = sessions
+        .sessions()
+        .iter()
+        .map(|summary| summary.session_id())
+        .find(|session| *session != existing)
+        .expect("the prompt's session is listed beside the seeded one");
+    assert!(
+        host.snapshot(created)
+            .messages()
+            .iter()
+            .any(|message| { message.kind() == MessageKindDto::User && message.text() == PROMPT }),
+        "the created session holds the prompt as its first turn"
+    );
+    assert!(
+        host.snapshot(existing)
+            .messages()
+            .iter()
+            .all(|message| message.kind() != MessageKindDto::User),
+        "the pre-existing session never receives the prompt"
+    );
 }
 
 #[test]

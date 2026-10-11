@@ -8,7 +8,7 @@
 
 mod composition;
 
-pub use composition::DaemonApplicationFacade;
+pub use composition::{DaemonApplicationFacade, SilentCommitObserver};
 
 use std::{
     collections::HashMap,
@@ -1468,7 +1468,24 @@ fn dispatch_request(
             .facade
             .set_tui_theme(command.theme())
             .map(ProtocolResultDto::TuiThemeSet),
-        ClientRequestDto::CreateSession(command) => host.facade.create_session(command),
+        ClientRequestDto::CreateSession(command) => {
+            // The session and the first turn it carries commit through the same
+            // sink every other durable commit uses: a session's subscribers see
+            // the prompt and the run it opened before the model answers either.
+            // No run is admitted yet, so this path carries no delta window.
+            let observer = HostCommitObserver {
+                host: Arc::clone(host),
+                deltas: None,
+            };
+            let result = host.facade.create_session(command, &observer)?;
+            if let ProtocolResultDto::SessionCreated(accepted) = &result
+                && let Some(turn) = accepted.first_turn()
+                && let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome()
+            {
+                host.schedule_if_starting(turn.session_id(), run_id);
+            }
+            Ok(result)
+        }
         ClientRequestDto::SendUserTurn(command) => {
             // The accepted turn commits through the same sink every other
             // durable commit uses, so a session's subscribers see the prompt
@@ -1705,14 +1722,6 @@ mod tests {
             .expect("fixture endpoint is valid")
     }
 
-    /// A commit sink that records nothing: a test that accepts turns without a
-    /// live host still hands every committed row to the one publication seam.
-    struct SilentPublisher;
-
-    impl SessionCommitObserver for SilentPublisher {
-        fn observe_session_commit(&self, _committed: &SessionCommitDto) {}
-    }
-
     fn fixture_facade() -> (TempDir, DaemonApplicationFacade) {
         fixture_facade_with_driver(Arc::new(EmptyDriver))
     }
@@ -1816,21 +1825,25 @@ mod tests {
     fn create_and_start(facade: &DaemonApplicationFacade) -> (SessionId, RunId) {
         let session_id = SessionId::new();
         let created = facade
-            .create_session(CreateSessionCommandDto::new(
-                ProjectId::new(),
-                session_id,
-                WorkspaceId::new(),
-                WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
-                    .expect("fixture workspace is absolute"),
-                Some(RunModeDto::Build),
-            ))
+            .create_session(
+                CreateSessionCommandDto::new(
+                    ProjectId::new(),
+                    session_id,
+                    WorkspaceId::new(),
+                    WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
+                        .expect("fixture workspace is absolute"),
+                    Some(RunModeDto::Build),
+                    None,
+                ),
+                &SilentCommitObserver::new(),
+            )
             .expect("fixture session creates");
         assert!(matches!(created, ProtocolResultDto::SessionCreated(_)));
         let accepted = facade
             .send_user_turn(
                 SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "fixture turn")
                     .expect("fixture turn is valid"),
-                &SilentPublisher,
+                &SilentCommitObserver::new(),
             )
             .expect("fixture turn is accepted");
         let ProtocolResultDto::TurnAccepted(turn) = accepted else {
@@ -1927,14 +1940,18 @@ mod tests {
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(CompletedDriver));
         let session_id = SessionId::new();
         facade
-            .create_session(CreateSessionCommandDto::new(
-                ProjectId::new(),
-                session_id,
-                WorkspaceId::new(),
-                WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
-                    .expect("fixture workspace is absolute"),
-                Some(RunModeDto::Build),
-            ))
+            .create_session(
+                CreateSessionCommandDto::new(
+                    ProjectId::new(),
+                    session_id,
+                    WorkspaceId::new(),
+                    WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
+                        .expect("fixture workspace is absolute"),
+                    Some(RunModeDto::Build),
+                    None,
+                ),
+                &SilentCommitObserver::new(),
+            )
             .expect("fixture session creates");
         let endpoint = endpoint();
         let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");

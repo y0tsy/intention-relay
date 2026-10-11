@@ -41,7 +41,7 @@ fn fixture_started_at() -> TimestampDto {
 fn typed_results_carry_required_durable_evidence() {
     let session_id = SessionId::new();
     let workspace_id = WorkspaceId::new();
-    let created = CreateSessionAcceptedDto::new(ProjectId::new(), workspace_id, session_id);
+    let created = CreateSessionAcceptedDto::new(ProjectId::new(), workspace_id, session_id, None);
     let started = SendUserTurnAcceptedDto::new(
         session_id,
         TurnId::new(),

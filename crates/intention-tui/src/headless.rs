@@ -95,16 +95,17 @@ async fn drive<W: Write, E: Write>(
         return client_failure(&mut output, err, &error);
     }
     // The front end resolves the session it opens once, through the client: a
-    // selected session is read by its own snapshot, an explicit continuation
-    // resolves the target the daemon's list order names, and a launch that
-    // asked for neither creates the session it needs.
+    // selected session is read by its own snapshot, and an explicit continuation
+    // resolves the target the daemon's list order names. A launch that asked for
+    // neither opens nothing: the prompt creates the session it needs and commits
+    // itself as that session's first turn in one command.
     let opened = match options.session() {
         Some(session) => driver.show(session).await,
         None if options.continue_session() => match driver.continue_session().await {
             Ok(session) => driver.show(session).await,
             Err(error) => Err(error),
         },
-        None => driver.create().await,
+        None => Ok(()),
     };
     if let Err(error) = opened {
         return client_failure(&mut output, err, &error);

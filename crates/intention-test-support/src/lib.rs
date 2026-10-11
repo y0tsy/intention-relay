@@ -13,7 +13,7 @@ pub use crate::model_fixtures::{ScriptedDriver, run_ready};
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
-use intention_daemon::{DaemonApplicationFacade, TestHostLifecycle};
+use intention_daemon::{DaemonApplicationFacade, SilentCommitObserver, TestHostLifecycle};
 use intention_proto::{
     ConfigRevisionId, DtoResult, ProjectId, ProtocolResultDto, SchemaVersionDto, SessionId,
     TimestampDto, WorkspaceId,
@@ -108,6 +108,7 @@ fn fixture_session_command(session_id: SessionId) -> CreateSessionCommandDto {
         WorkspaceId::new(),
         fixture_workspace_root("m3-test-support"),
         Some(RunModeDto::Build),
+        None,
     )
 }
 
@@ -120,7 +121,10 @@ fn create_fixture_session(
     facade: &DaemonApplicationFacade,
     session_id: SessionId,
 ) -> DtoResult<()> {
-    match facade.create_session(fixture_session_command(session_id))? {
+    match facade.create_session(
+        fixture_session_command(session_id),
+        &SilentCommitObserver::new(),
+    )? {
         ProtocolResultDto::SessionCreated(_) => Ok(()),
         _ => unreachable!("fixture session creation answers with a session creation"),
     }

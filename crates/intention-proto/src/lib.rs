@@ -46,8 +46,9 @@ pub use tool::{
     ToolTimeoutSecondsDto, WriteInput, WriteResult,
 };
 pub use turn::{
-    CancelRunCommandDto, CreateSessionCommandDto, GetSessionSnapshotQueryDto,
-    InterruptRunCommandDto, RemoveTurnCommandDto, SendUserTurnCommandDto,
+    CancelRunCommandDto, CreateSessionCommandDto, CreateSessionFirstTurnDto,
+    GetSessionSnapshotQueryDto, InterruptRunCommandDto, RemoveTurnCommandDto,
+    SendUserTurnCommandDto,
 };
 pub use workspace::WorkspaceRootDto;
 

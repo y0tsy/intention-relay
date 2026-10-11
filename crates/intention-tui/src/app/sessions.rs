@@ -62,10 +62,6 @@ impl AppState {
     /// The snapshot is the client's read of the session's durable transcript:
     /// the state it returns is the front end's one row list, so the panes render
     /// exactly the rows the client read.
-    ///
-    /// The snapshot also sends the prompt a submission asked to start a session
-    /// for: that prompt is the session's first turn, and every other snapshot
-    /// leaves it pending.
     pub(super) fn apply_session_snapshot(&mut self, snapshot: SessionSnapshotDto) -> Vec<Effect> {
         let session_id = snapshot.session_id();
         let mode = snapshot.projection().mode();
@@ -89,20 +85,7 @@ impl AppState {
         self.error = None;
         // Opening a session records no notice: the status row already names the
         // session, and the notice line stays free for real transient events.
-        let mut effects = self.ensure_session_stream();
-        // The session a submitted prompt asked for now exists: send the prompt
-        // as its first turn.
-        // @todo(hack): the parked prompt is delivered to the first snapshot that arrives, so an
-        // explicit `--session` open or a browser row can claim it. Until the core owns
-        // create-session-and-first-turn, the prompt must be bound to the session id the creation
-        // asked for and held - or dropped, never redirected - for any other snapshot.
-        if let Some(content) = self.pending_prompt.take() {
-            effects.push(Effect::SendTurn {
-                session_id,
-                content,
-            });
-        }
-        effects
+        self.ensure_session_stream()
     }
 
     /// Opens the session the daemon just created.
@@ -112,20 +95,10 @@ impl AppState {
         vec![Effect::OpenSession(session_id)]
     }
 
-    /// Records a failure that ended the session a pending prompt asked for.
-    ///
-    /// A creation or open failure drops the pending prompt, so it can never
-    /// fire against a session it did not ask for; its text stays recallable
-    /// through the input history.
-    pub(super) fn apply_session_open_failure(&mut self, error: &ErrorDto) -> Vec<Effect> {
-        self.pending_prompt = None;
-        self.apply_failure(error)
-    }
-
     /// Records the request for a new session and asks for its creation.
     pub(super) fn request_new_session(&mut self) -> Vec<Effect> {
         self.note("creating a session".to_owned());
-        vec![Effect::CreateSession]
+        vec![Effect::CreateSession { first_turn: None }]
     }
 
     /// Re-reads current state from the daemon after a reconnect request.
