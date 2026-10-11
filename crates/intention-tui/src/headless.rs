@@ -107,8 +107,7 @@ async fn drive<W: Write, E: Write>(
     }
 
     let deadline = Deadline::after(options.timeout(), Instant::now());
-    driver.send_turn(prompt).await;
-    if let Some(error) = driver.last_failure().cloned() {
+    if let Some(error) = driver.send_turn(prompt).await {
         return client_failure(&mut output, err, &error);
     }
     // The signal waits begin with the run: a SIGINT before the turn reached the
@@ -330,12 +329,6 @@ impl Driver {
         &self.state
     }
 
-    /// Returns the last typed failure a performed effect reported, if any.
-    #[must_use]
-    pub const fn last_failure(&self) -> Option<&ErrorDto> {
-        self.last_failure.as_ref()
-    }
-
     /// Returns the failure a session that did not open reports.
     #[must_use]
     pub fn session_failure(&self) -> ErrorDto {
@@ -410,16 +403,19 @@ impl Driver {
         self.client.most_recent_session().await
     }
 
-    /// Sends one prompt as a user turn through the core.
-    // @todo(hack): the prompt is replayed as input characters so this driver can
-    // reuse the input path; the core should expose one typed turn submission so
-    // a scripted prompt is not simulated typing.
-    pub async fn send_turn(&mut self, content: &str) {
+    /// Sends one prompt as one typed user turn through the core.
+    ///
+    /// The prompt is data rather than simulated keystrokes, so the interactive
+    /// command registry never decides whether it is sent and a trailing
+    /// backslash is never a line break. Returns the typed failure the turn
+    /// reported, if any.
+    pub async fn send_turn(&mut self, content: &str) -> Option<ErrorDto> {
         self.last_failure = None;
-        for character in content.chars() {
-            self.state.update(Action::InputChar(character));
-        }
-        self.apply(Action::InputSubmitted).await;
+        self.apply(Action::TurnSubmitted {
+            content: content.to_owned(),
+        })
+        .await;
+        self.last_failure.clone()
     }
 
     /// Stops the run this driver observes as live.

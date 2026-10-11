@@ -331,6 +331,7 @@ impl AppState {
                 Vec::new()
             }
             Action::InputSubmitted => self.submit_input(),
+            Action::TurnSubmitted { content } => self.submit_turn(content),
             Action::ClearInput => self.clear_input_into_history(),
             Action::SessionsBrowserRequested => self.request_sessions_browser(),
             Action::SessionsBrowserClosed => self.close_sessions_browser(),

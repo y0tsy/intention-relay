@@ -182,6 +182,16 @@ pub enum Action {
     MenuAccept,
     /// The user submitted the input line.
     InputSubmitted,
+    /// One prompt arrived as data instead of as typed input.
+    ///
+    /// A scripted caller - the headless command, the line REPL - hands the turn
+    /// over directly, so the input line, its history, the hint menu, and the
+    /// slash grammar never decide what the prompt means: a `/…` prompt is a turn
+    /// and a trailing backslash is not a line break.
+    TurnSubmitted {
+        /// The prompt content, exactly as the caller supplied it.
+        content: String,
+    },
     /// The user cleared the input line, keeping its text recallable.
     ClearInput,
     /// The user asked for the sessions browser.

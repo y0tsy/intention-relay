@@ -702,6 +702,52 @@ fn submitting_a_turn_sends_its_trimmed_content_and_clears_the_input() {
 }
 
 #[test]
+fn a_scripted_turn_leaves_as_one_turn_request() {
+    // A scripted prompt is data: the interactive grammar never sees it, so a
+    // slash-prefixed prompt is a turn and nothing else runs.
+    let session_id = SessionId::new();
+    let mut state = opened_session(session_id, Vec::new());
+    let effects = state.update(Action::TurnSubmitted {
+        content: "/theme light".to_owned(),
+    });
+    assert_eq!(
+        effects,
+        vec![Effect::SendTurn {
+            session_id,
+            content: "/theme light".to_owned(),
+        }],
+        "a scripted prompt leaves as one turn request"
+    );
+    assert_eq!(
+        state.screen(),
+        Screen::Chat,
+        "a scripted prompt opens no picker"
+    );
+    assert_eq!(
+        state.input(),
+        "",
+        "a scripted prompt types nothing into the input line"
+    );
+
+    // The interactive path alone routes a slash line to the command registry.
+    let mut state = opened_session(session_id, Vec::new());
+    type_text(&mut state, "/theme");
+    assert_eq!(run_command(&mut state), Vec::new());
+    assert_eq!(state.screen(), Screen::Theme);
+
+    // A prompt with no open session still starts the session it needs.
+    let mut state = AppState::new(None);
+    assert_eq!(
+        state.update(Action::TurnSubmitted {
+            content: "hello".to_owned(),
+        }),
+        vec![Effect::CreateSession],
+        "a scripted prompt with no session starts the session it needs"
+    );
+    assert_eq!(state.notice(), Some("creating a session"));
+}
+
+#[test]
 fn submitting_without_a_session_starts_one_for_the_prompt() {
     let mut state = AppState::new(None);
     type_text(&mut state, "hello");

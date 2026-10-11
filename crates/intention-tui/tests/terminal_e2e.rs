@@ -796,6 +796,82 @@ fn a_multi_line_prompt_reaches_the_session_unchanged() {
 }
 
 #[test]
+fn a_slash_prefixed_prompt_reaches_the_session_as_a_turn() {
+    // The prompt is a turn and not an interactive command: `/theme light` must
+    // reach the session instead of opening the picker and writing a preference.
+    let host = TerminalHost::new(ProviderEndpoint::scripted(), Some(WORKSPACE_FILE));
+    let workspace = host.workspace_root();
+    let committed = block_on(host.client.tui_settings()).expect("the settings read");
+    let prompt = "/theme light";
+    let output = host.run(
+        &["run", prompt, "--format", "json", "--workspace", &workspace],
+        None,
+    );
+    assert_eq!(output.code, Some(0), "the run completes: {}", output.stderr);
+
+    let records = json_records(&output.stdout);
+    let result = records.last().expect("the run reports one final result");
+    assert_eq!(kind(result), "result", "the result record ends the output");
+    let session_id = SessionId::parse(
+        result["session_id"]
+            .as_str()
+            .expect("the result reports its session"),
+    )
+    .expect("the reported session identity is canonical");
+    let snapshot = host.snapshot(session_id);
+    let user = snapshot
+        .messages()
+        .iter()
+        .find(|message| message.kind() == MessageKindDto::User)
+        .expect("the prompt committed its user row");
+    assert_eq!(
+        user.text(),
+        prompt,
+        "a slash-prefixed prompt reaches the session as a turn"
+    );
+    let sessions = block_on(host.client.list_sessions()).expect("the session list reads");
+    assert_eq!(
+        sessions.sessions().len(),
+        1,
+        "the prompt created exactly the session it needed"
+    );
+    let after = block_on(host.client.tui_settings()).expect("the settings read");
+    assert_eq!(
+        after.theme(),
+        committed.theme(),
+        "a prompt never writes a theme preference"
+    );
+}
+
+#[test]
+fn a_prompt_ending_in_a_backslash_reaches_the_session_unchanged() {
+    // The backslash escape belongs to the interactive input line: a scripted
+    // prompt is data, so its trailing backslash is never a line break.
+    let host = TerminalHost::new(ProviderEndpoint::scripted(), Some(WORKSPACE_FILE));
+    let workspace = host.workspace_root();
+    let prompt = "keep the trailing backslash\\";
+    let output = host.run(&["run", prompt, "--workspace", &workspace], None);
+    assert_eq!(output.code, Some(0), "the run completes: {}", output.stderr);
+    let sessions = block_on(host.client.list_sessions()).expect("the session list reads");
+    let session = sessions
+        .sessions()
+        .first()
+        .map(|summary| summary.session_id())
+        .expect("the run created its session");
+    let snapshot = host.snapshot(session);
+    let user = snapshot
+        .messages()
+        .iter()
+        .find(|message| message.kind() == MessageKindDto::User)
+        .expect("the prompt committed its user row");
+    assert_eq!(
+        user.text(),
+        prompt,
+        "a trailing backslash is never a line break for a scripted prompt"
+    );
+}
+
+#[test]
 fn the_repl_streams_a_piped_turn_and_exits_on_quit() {
     let host = TerminalHost::new(ProviderEndpoint::scripted(), Some(WORKSPACE_FILE));
     let workspace = host.workspace_root();

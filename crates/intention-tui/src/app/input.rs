@@ -205,11 +205,28 @@ impl AppState {
             self.clear_input();
             return self.submit_command(&command);
         }
+        // The line the interactive path submitted is the input line's own: it
+        // is recalled through the history and cleared here, while the turn the
+        // core sends is data. A prompt with no open session keeps its line
+        // handling in the creation branch `submit_turn` reaches.
+        if self.session_id.is_some() {
+            self.history.push(content.clone());
+            self.clear_input();
+        }
+        self.submit_turn(content)
+    }
+
+    /// Sends one prompt as one user turn, or starts the session it needs.
+    ///
+    /// The prompt arrives as data: the input line, its history, the hint menu,
+    /// and the slash grammar belong to the interactive path and never decide
+    /// what a prompt means here, so a `/…` prompt is a turn and a trailing
+    /// backslash is not a line break. A prompt with no open session still starts
+    /// the session it needs and is sent as that session's first turn.
+    pub(super) fn submit_turn(&mut self, content: String) -> Vec<Effect> {
         let Some(session_id) = self.session_id else {
             return self.start_session_for_prompt(content);
         };
-        self.history.push(content.clone());
-        self.clear_input();
         self.error = None;
         // A new turn starts a new measurement: the previous turn's elapsed time
         // never survives into the next run's status line.

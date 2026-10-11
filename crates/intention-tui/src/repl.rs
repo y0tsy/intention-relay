@@ -187,8 +187,7 @@ async fn converse_turn<W: Write, E: Write>(
     err: &mut E,
     interrupts: &mut InterruptRequests,
 ) {
-    driver.send_turn(input).await;
-    if let Some(error) = driver.last_failure().cloned() {
+    if let Some(error) = driver.send_turn(input).await {
         let _ = writeln!(err, "error: {} ({})", error.message(), error.code());
         return;
     }
