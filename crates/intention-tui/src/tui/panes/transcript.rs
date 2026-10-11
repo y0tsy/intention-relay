@@ -8,9 +8,11 @@
 //!   because a user message is prose too (code fences, bold, and lists render);
 //! - a committed **assistant** row is its reasoning block (when the row carries
 //!   one) plus the answer block, which opens with its own monochrome marker;
-//! - a committed **tool** row is dispatched by its `tool_id` in [`super::tools`],
-//!   where the exchange a call and its result form is drawn once, at the call's
-//!   row, and its result row contributes no block;
+//! - a committed **tool** row renders its typed projection in [`super::tools`]:
+//!   the row's `ToolRowDto` carries the typed identity and payload, the call and
+//!   its result are paired by call identity, and the exchange is drawn once, at
+//!   the call's row, so a result row whose call is committed contributes no
+//!   block;
 //! - a committed **notice** row stays a plain line;
 //! - the live **provisional** tail is the step in flight: its reasoning block
 //!   and the answer block after it, each laid out through the very function

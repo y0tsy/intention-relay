@@ -172,9 +172,8 @@ impl AppState {
     /// argument word `/theme` opens is the same case from the other side.
     ///
     /// A prompt with no open session starts the session it needs instead of
-    /// being rejected: the state asks for a session creation and remembers the
-    /// prompt, and the snapshot that opens the created session sends it as the
-    /// first turn.
+    /// being rejected: the one create command carries the prompt as the created
+    /// session's first turn, so nothing is parked for a later snapshot to send.
     pub(super) fn submit_input(&mut self) -> Vec<Effect> {
         if self.insert_line_break() {
             return Vec::new();
