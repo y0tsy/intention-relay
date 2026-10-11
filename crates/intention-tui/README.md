@@ -46,10 +46,17 @@ chat the command hint band is `Esc`'s innermost layer: while it is open one
 press closes it and touches nothing else. The theme picker is the next layer:
 while its screen owns the window, `Esc` drops the preview and returns to the
 committed theme, so the chat's cancel, clear, and exit arms are unreachable.
-With the band closed and no picker open, `Esc` cancels a
+With the band closed and no picker open, `Esc` stops a
 live run in one press, clears a typed line into the recallable history on a
-second consecutive press, and exits when the line is empty; `Ctrl+C` keeps its
-layered interrupt, recall, and exit behavior.
+second consecutive press, and exits when the line is empty; `Ctrl+C` arms the
+same stop on its first press and fires it on the second, then falls back to the
+recall and exit layers. A run is live only while a live subscription observes
+it - a terminal status, a stream the daemon closed, or a connection that failed
+all end its liveness - so a daemon that died never keeps the stop, clear, and
+exit arms unreachable. The line front ends read SIGINT the same way: `Esc`'s
+and `Ctrl+C`'s stop is one `run.cancel`, the REPL stops the run and comes back
+to its prompt (a signal at the prompt leaves the loop like `/quit`), and
+`run <PROMPT>` reports the interrupted outcome with status 5.
 
 Sessions are reachable only through `/sessions`: the chat has no sidebar, and
 the docked panel carries the whole browser - the frame with the `Sessions` title,

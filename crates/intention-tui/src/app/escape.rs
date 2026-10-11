@@ -1,15 +1,15 @@
-//! The layered Esc: close the hint menu, cancel the live run, clear the typed
+//! The layered Esc: close the hint menu, stop the live run, clear the typed
 //! line, or exit.
 //!
 //! One key press on the chat screen means one of four things, decided by the
 //! state it finds and by the arm the previous press left:
 //!
 //! - the input's command hint menu is open: the press closes it and means
-//!   nothing else - no clear arm, no cancel, no exit - so dismissing the hint
+//!   nothing else - no clear arm, no stop, no exit - so dismissing the hint
 //!   list can never abandon the line or end the front end;
-//! - a run whose last known status is not terminal: the press cancels it
-//!   immediately, with no arming - a single press is the cancel, the way a
-//!   shell cancels a running command;
+//! - a run a live subscription observes: the press stops it immediately, with
+//!   no arming - a single press is the stop, the way a shell cancels a running
+//!   command;
 //! - a non-empty input line: the first press arms the clear with a notice, and
 //!   the second consecutive press abandons the line into the recallable history
 //!   and clears the input, exactly as one Ctrl+C press does;
@@ -21,12 +21,14 @@
 //! The sessions browser maps Esc to its own close action and the theme picker
 //! maps it to dropping its preview, each in its own keymap, so the three
 //! meanings never meet: while either surface owns the keyboard, the chat's
-//! cancel, clear, and exit arms are unreachable.
+//! stop, clear, and exit arms are unreachable.
+//!
+//! The run these arms read is the one [`AppState::live_run`] observes: a run
+//! whose subscription died no longer stops, clears, or exits on its behalf, so
+//! an unreachable daemon can never trap the front end.
 //!
 //! `Ctrl+Q` stays the one immediate exit; Esc exits only when there is no live
 //! run and nothing typed to clear first.
-
-use intention_proto::run_status_is_terminal;
 
 use super::{AppState, Effect};
 
@@ -43,13 +45,10 @@ impl AppState {
             self.escape_arm = false;
             return Vec::new();
         }
-        if self
-            .active_run
-            .is_some_and(|run| !run_status_is_terminal(run.status()))
-        {
-            // The cancel is a single press, so no arm survives it.
+        if self.live_run().is_some() {
+            // The stop is a single press, so no arm survives it.
             self.escape_arm = false;
-            return self.request_interrupt();
+            return self.request_cancel();
         }
         if !self.input.trim().is_empty() {
             if self.escape_arm {

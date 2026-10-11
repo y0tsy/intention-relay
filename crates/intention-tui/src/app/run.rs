@@ -2,8 +2,8 @@
 
 use intention_client::{RETAINED_TRANSCRIPT_MESSAGES, RunStreamState};
 use intention_proto::{
-    ErrorDto, MessageKindDto, MessageProjectionDto, RunStreamFrameDto, SendUserTurnOutcomeDto,
-    TextDeltaChannelDto, run_status_is_terminal,
+    ErrorDto, MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStreamFrameDto,
+    SendUserTurnOutcomeDto, TextDeltaChannelDto, run_status_is_terminal,
 };
 
 use super::{AppState, Effect, RunPhase, StreamStatus, short_identifier};
@@ -44,17 +44,21 @@ impl AppState {
     pub(super) fn apply_run_stream_failed(&mut self, error: &ErrorDto) -> Vec<Effect> {
         self.run_stream = None;
         self.stream = StreamStatus::Failed;
+        // The stream that justified the live phase is gone, so the phase and
+        // the tool watch clear with it: the status row never names a working
+        // run this front end no longer observes, and [`Self::live_run`] stops
+        // claiming one, which is what lets the exit and clear arms through.
+        self.phase = None;
+        self.reset_tool_watch();
         self.apply_failure(error)
     }
 
     /// Records a stream the daemon closed.
     pub(super) fn apply_run_stream_ended(&mut self) -> Vec<Effect> {
-        // @todo(hack): the stream that justified the live phase is gone, but the phase and the tool
-        // watch stay, so the status row can keep naming a working run this front end no longer
-        // observes. A stream that ends without a terminal status must clear the phase (and
-        // `apply_run_stream_failed` above must do the same), or the projection must carry liveness.
         self.run_stream = None;
         self.stream = StreamStatus::Ended;
+        self.phase = None;
+        self.reset_tool_watch();
         self.note("live updates ended".to_owned());
         Vec::new()
     }
@@ -242,24 +246,53 @@ impl AppState {
         self.tool_working = false;
     }
 
+    /// Returns the run this front end currently observes as live.
+    ///
+    /// A run counts as live only while a live subscription observes it: the
+    /// projection alone outlives the stream when the daemon dies, and a front
+    /// end that trusted it would keep offering to stop a run nobody runs any
+    /// more - and never reach its own exit and clear arms. A terminal status or
+    /// a lost subscription both end this run's liveness, and the status row
+    /// stops naming a working phase.
+    #[must_use]
+    pub fn live_run(&self) -> Option<RunProjectionDto> {
+        if self.stream != StreamStatus::Live {
+            return None;
+        }
+        self.active_run
+            .filter(|run| !run_status_is_terminal(run.status()))
+    }
+
     /// Requests the interruption of the active run, if one is live.
     pub(super) fn request_interrupt(&mut self) -> Vec<Effect> {
-        let Some(session_id) = self.session_id else {
-            self.notice = Some("no session is open".to_owned());
-            return Vec::new();
-        };
-        let active_run = self
-            .active_run
-            .filter(|run| !run_status_is_terminal(run.status()));
-        let Some(run) = active_run else {
+        let Some(run) = self.live_run() else {
             self.notice = Some("no active run to interrupt".to_owned());
             return Vec::new();
         };
-        self.note(format!(
-            "interrupting run {}",
-            short_identifier(run.run_id())
-        ));
-        vec![Effect::Interrupt {
+        if let Some(session_id) = self.session_id {
+            return vec![Effect::Interrupt {
+                session_id,
+                run_id: run.run_id(),
+            }];
+        }
+        Vec::new()
+    }
+
+    /// Requests that the live run stop for good.
+    ///
+    /// The stop is the terminal gesture: an accepted request ends the run, so
+    /// the notice names the stop instead of an interruption the model would
+    /// answer with another step.
+    pub(super) fn request_cancel(&mut self) -> Vec<Effect> {
+        let Some(run) = self.live_run() else {
+            self.notice = Some("no active run to stop".to_owned());
+            return Vec::new();
+        };
+        let Some(session_id) = self.session_id else {
+            return Vec::new();
+        };
+        self.note(format!("stopping run {}", short_identifier(run.run_id())));
+        vec![Effect::CancelRun {
             session_id,
             run_id: run.run_id(),
         }]
@@ -268,6 +301,12 @@ impl AppState {
     /// Records the accepted interrupt request.
     pub(super) fn apply_interrupt_accepted(&mut self) -> Vec<Effect> {
         self.note("interrupt accepted".to_owned());
+        Vec::new()
+    }
+
+    /// Records the accepted stop request.
+    pub(super) fn apply_run_cancel_accepted(&mut self) -> Vec<Effect> {
+        self.note("stop accepted".to_owned());
         Vec::new()
     }
 

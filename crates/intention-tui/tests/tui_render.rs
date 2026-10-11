@@ -1818,7 +1818,7 @@ fn the_armed_interrupt_notice_names_the_run_a_second_press_stops() {
     let mut app = TestApp::new(RevueView::new(&state));
     let pilot = Pilot::new(&mut app);
     let expected = format!(
-        "press Ctrl+C again to interrupt run {}",
+        "press Ctrl+C again to stop run {}",
         short_identifier(run_id)
     );
     pilot.assert_contains(&expected);

@@ -30,6 +30,34 @@ use crate::cli::{ExitStatus, Format, Options};
 // the timeout status name the real outcome.
 const INTERRUPT_GRACE: Duration = Duration::from_secs(2);
 
+/// The SIGINT requests one front end selects on while it waits.
+pub type InterruptRequests = tokio::sync::mpsc::UnboundedReceiver<()>;
+
+/// Returns the receiver that yields once per SIGINT the process is sent.
+///
+/// The signal must not end the process while a front end watches a run: the run
+/// would keep working in the daemon for a front end that is gone. Every wait in
+/// a front end selects on this receiver instead - a wait that observes a run
+/// stops it, and the wait that owns a line loop leaves the loop - so one signal
+/// does exactly one thing. The listener lives as long as the last receiver:
+/// dropping it ends the listener task.
+///
+/// # Panics
+///
+/// Panics outside a Tokio runtime, where the listener cannot be spawned.
+#[must_use]
+pub fn interrupt_requests() -> InterruptRequests {
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        while tokio::signal::ctrl_c().await.is_ok() {
+            if sender.send(()).is_err() {
+                break;
+            }
+        }
+    });
+    receiver
+}
+
 /// Runs one prompt and returns the process status the command ends with.
 pub fn run<W: Write, E: Write>(
     prompt: &str,
@@ -83,7 +111,10 @@ async fn drive<W: Write, E: Write>(
     if let Some(error) = driver.last_failure().cloned() {
         return client_failure(&mut output, err, &error);
     }
-    match driver.pump(&mut output, deadline).await {
+    // The signal waits begin with the run: a SIGINT before the turn reached the
+    // daemon keeps its own process default.
+    let mut interrupts = interrupt_requests();
+    match driver.pump(&mut output, deadline, &mut interrupts).await {
         Ok(outcome) => {
             let session = driver.state().session_id();
             let run = driver.state().active_run().map(|run| run.run_id());
@@ -222,6 +253,8 @@ enum Received {
     Empty,
     /// The wait deadline passed.
     Expired,
+    /// SIGINT reached the wait; the run it observes is stopped by its caller.
+    Interrupted,
 }
 
 /// One output sink for the observable events of a driven run.
@@ -389,10 +422,25 @@ impl Driver {
         self.apply(Action::InputSubmitted).await;
     }
 
+    /// Stops the run this driver observes as live.
+    ///
+    /// Returns whether a run was live to stop. A signal that reaches a driver
+    /// with no live run asks for nothing and changes nothing, so the waited-for
+    /// turn keeps streaming.
+    pub async fn request_stop(&mut self) -> bool {
+        if self.state.live_run().is_none() {
+            return false;
+        }
+        self.apply(Action::CancelRunRequested).await;
+        true
+    }
+
     /// Streams the live run until it ends or the deadline passes.
     ///
     /// A passed deadline interrupts the active run, waits the bounded grace, and
-    /// reports the timeout.
+    /// reports the timeout. SIGINT stops the run the driver observes instead of
+    /// ending the process: the loop keeps reading until the daemon reports the
+    /// stop it accepted, so no front end leaves a run working unwatched.
     ///
     /// # Errors
     ///
@@ -402,13 +450,14 @@ impl Driver {
         &mut self,
         events: &mut impl Report,
         deadline: Option<Deadline>,
+        interrupts: &mut InterruptRequests,
     ) -> Result<RunOutcome, PumpFailure> {
-        if let Some(outcome) = self.pump_until(events, deadline).await? {
+        if let Some(outcome) = self.pump_until(events, deadline, interrupts).await? {
             return Ok(outcome);
         }
         self.apply(Action::InterruptRequested).await;
         let grace = Deadline::after(Some(INTERRUPT_GRACE), Instant::now());
-        let _observed = self.pump_until(events, grace).await;
+        let _observed = self.pump_until(events, grace, interrupts).await;
         Ok(RunOutcome::TimedOut)
     }
 
@@ -417,6 +466,7 @@ impl Driver {
         &mut self,
         events: &mut impl Report,
         deadline: Option<Deadline>,
+        interrupts: &mut InterruptRequests,
     ) -> Result<Option<RunOutcome>, PumpFailure> {
         // @todo(hack): a closed or empty stream is recoverable exactly once; the
         // budget and the decision to fail after it live here because the run
@@ -427,7 +477,7 @@ impl Driver {
             if let Some(outcome) = terminal_outcome(self.state.run_status()) {
                 return Ok(Some(outcome));
             }
-            match self.next(deadline).await {
+            match self.next(deadline, interrupts).await {
                 Received::Frame(frame) => {
                     if let RunStreamFrameDto::TextDelta(delta) = &frame {
                         events
@@ -435,6 +485,12 @@ impl Driver {
                             .map_err(PumpFailure::Output)?;
                     }
                     self.apply(Action::FrameReceived(frame)).await;
+                }
+                Received::Interrupted => {
+                    // The signal reaches the loop that owns the state, which
+                    // stops the run it observes and keeps reading until the run
+                    // reports its own terminal status.
+                    let _stopped = self.request_stop().await;
                 }
                 Received::Expired => return Ok(None),
                 Received::Empty | Received::Closed => {
@@ -449,17 +505,31 @@ impl Driver {
     }
 
     /// Waits for the next observation of the live run subscription.
-    async fn next(&mut self, deadline: Option<Deadline>) -> Received {
+    ///
+    /// A SIGINT resolves as [`Received::Interrupted`] instead of ending the
+    /// process. A frame the subscription already holds is always taken first,
+    /// so a signal never discards state the run reported.
+    async fn next(
+        &mut self,
+        deadline: Option<Deadline>,
+        interrupts: &mut InterruptRequests,
+    ) -> Received {
         let Some(subscription) = self.subscription.as_mut() else {
             return Received::Empty;
         };
         let received = match deadline.map(|deadline| deadline.remaining(Instant::now())) {
-            Some(Some(wait)) => match tokio::time::timeout(wait, subscription.receive()).await {
-                Ok(received) => received,
-                Err(_expired) => return Received::Expired,
-            },
             Some(None) => return Received::Expired,
-            None => subscription.receive().await,
+            Some(Some(wait)) => tokio::select! {
+                biased;
+                received = subscription.receive() => received,
+                _ = interrupts.recv() => return Received::Interrupted,
+                () = tokio::time::sleep(wait) => return Received::Expired,
+            },
+            None => tokio::select! {
+                biased;
+                received = subscription.receive() => received,
+                _ = interrupts.recv() => return Received::Interrupted,
+            },
         };
         match received {
             Ok(Some(frame)) => Received::Frame(frame),

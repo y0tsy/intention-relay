@@ -5,6 +5,11 @@
 //! same driver and the same application state serve the headless command, so
 //! session, turn, transcript, and provisional-text behavior is identical in both
 //! line front ends.
+//!
+//! Ctrl+C belongs to this loop rather than to the process: while a run streams,
+//! the signal stops that run, and at the prompt it leaves the loop like `/quit`.
+//! A signal therefore never kills a process that would leave a run working in
+//! the daemon.
 
 use std::io::{BufRead, Write};
 
@@ -14,7 +19,9 @@ use intention_transport::LocalEndpoint;
 use intention_tui::app::short_identifier;
 
 use crate::cli::{ExitStatus, Options};
-use crate::headless::{Driver, PumpFailure, RunOutcome, TextReport};
+use crate::headless::{
+    Driver, InterruptRequests, PumpFailure, RunOutcome, TextReport, interrupt_requests,
+};
 
 /// Runs the line REPL until the input ends or the user quits.
 pub fn run<W: Write, E: Write>(
@@ -57,32 +64,46 @@ async fn converse<W: Write, E: Write>(
         return crate::startup_failure(&driver.session_failure(), err);
     }
 
-    let mut line = String::new();
+    let mut lines = input_lines();
+    let mut interrupts = interrupt_requests();
     loop {
         // @todo(hack): every REPL write is best-effort - a failed prompt, error,
         // or notice write is silently dropped and the loop continues as if the
         // user saw the line; one reporter should record the suppressed failure.
         let _ = write!(out, "> ");
         let _ = out.flush();
-        line.clear();
-        // The lock lives no longer than the read: the line loop awaits client
-        // work between two lines, and a held console lock must not travel there.
-        let read = std::io::stdin().lock().read_line(&mut line);
-        match read {
-            Ok(0) => {
-                drain_active_turn(&mut driver, out, err).await;
-                break;
+        let mut interrupted = false;
+        let line = tokio::select! {
+            biased;
+            line = lines.recv() => line,
+            _ = interrupts.recv() => {
+                interrupted = true;
+                None
             }
-            Ok(_) => {}
-            Err(_) => {
+        };
+        if interrupted {
+            // Ctrl+C leaves the line loop like `/quit`: the run this front end
+            // still observes is stopped first, so the daemon never keeps
+            // working for a loop that left.
+            let _stopped = driver.request_stop().await;
+            drain_active_turn(&mut driver, out, err, &mut interrupts).await;
+            break;
+        }
+        let Some(line) = line else {
+            drain_active_turn(&mut driver, out, err, &mut interrupts).await;
+            break;
+        };
+        let input = match line {
+            Input::Line(text) => text,
+            Input::Failed => {
                 let _ = writeln!(err, "error: the input line could not be read");
                 break;
             }
-        }
-        match Line::parse(&line) {
+        };
+        match Line::parse(&input) {
             Line::Blank => {}
             Line::Quit => {
-                drain_active_turn(&mut driver, out, err).await;
+                drain_active_turn(&mut driver, out, err, &mut interrupts).await;
                 break;
             }
             Line::New => {
@@ -108,11 +129,54 @@ async fn converse<W: Write, E: Write>(
                 // A prompt with no session open starts the session it needs:
                 // the core creates and opens one, then sends the prompt as its
                 // first turn.
-                converse_turn(&mut driver, &turn, out, err).await;
+                converse_turn(&mut driver, &turn, out, err, &mut interrupts).await;
             }
         }
     }
     ExitStatus::Completed
+}
+
+/// One prompt read the input thread produced.
+#[derive(Debug, Eq, PartialEq)]
+enum Input {
+    /// The thread read one line, its newline included.
+    Line(String),
+    /// The thread could not read the console, so no further line follows.
+    Failed,
+}
+
+/// Reads prompt lines on their own thread.
+///
+/// A blocking read of the console cannot notice a signal, and the line loop
+/// must wait for a line and for SIGINT at the same time: the thread owns the
+/// read and the console lock for the life of the front end - it is the only
+/// reader in the process - and sends every line it reads, so a signal reaches
+/// the loop while it waits.
+fn input_lines() -> tokio::sync::mpsc::UnboundedReceiver<Input> {
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        let mut buffer = String::new();
+        loop {
+            buffer.clear();
+            let read = std::io::stdin().lock().read_line(&mut buffer);
+            match read {
+                Ok(0) => break,
+                Ok(_) => {
+                    if sender
+                        .send(Input::Line(std::mem::take(&mut buffer)))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(_) => {
+                    let _ = sender.send(Input::Failed);
+                    break;
+                }
+            }
+        }
+    });
+    receiver
 }
 
 /// Sends one line as a user turn and streams the run to its end.
@@ -121,19 +185,25 @@ async fn converse_turn<W: Write, E: Write>(
     input: &str,
     out: &mut W,
     err: &mut E,
+    interrupts: &mut InterruptRequests,
 ) {
     driver.send_turn(input).await;
     if let Some(error) = driver.last_failure().cloned() {
         let _ = writeln!(err, "error: {} ({})", error.message(), error.code());
         return;
     }
-    stream_active_turn(driver, out, err).await;
+    stream_active_turn(driver, out, err, interrupts).await;
 }
 
 /// Streams the run the core currently owns to its terminal status.
-async fn stream_active_turn<W: Write, E: Write>(driver: &mut Driver, out: &mut W, err: &mut E) {
+async fn stream_active_turn<W: Write, E: Write>(
+    driver: &mut Driver,
+    out: &mut W,
+    err: &mut E,
+    interrupts: &mut InterruptRequests,
+) {
     let mut report = TextReport::new(out);
-    match driver.pump(&mut report, None).await {
+    match driver.pump(&mut report, None, interrupts).await {
         Ok(outcome) => {
             let _ = report.finish(outcome);
             if outcome == RunOutcome::Terminal(RunStatusDto::Failed)
@@ -160,13 +230,18 @@ async fn stream_active_turn<W: Write, E: Write>(driver: &mut Driver, out: &mut W
 // @todo(hack): the line loop must block on the live run before it returns so a
 // piped script's output is not truncated by the process exit; the run's
 // completion should own the process lifetime instead of the loop draining it.
-async fn drain_active_turn<W: Write, E: Write>(driver: &mut Driver, out: &mut W, err: &mut E) {
+async fn drain_active_turn<W: Write, E: Write>(
+    driver: &mut Driver,
+    out: &mut W,
+    err: &mut E,
+    interrupts: &mut InterruptRequests,
+) {
     let live = driver
         .state()
         .run_status()
         .is_some_and(|status| !run_status_is_terminal(status));
     if live {
-        stream_active_turn(driver, out, err).await;
+        stream_active_turn(driver, out, err, interrupts).await;
     }
 }
 

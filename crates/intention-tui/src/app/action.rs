@@ -156,6 +156,10 @@ pub enum Action {
     InterruptAccepted,
     /// Interrupting the active run failed.
     InterruptFailed(ErrorDto),
+    /// The daemon accepted one stop request.
+    RunCancelAccepted,
+    /// Stopping the active run failed.
+    RunCancelFailed(ErrorDto),
     /// The user typed one character into the input line.
     InputChar(char),
     /// The user deleted the character before the input cursor.
@@ -222,6 +226,8 @@ pub enum Action {
     EscapePressed,
     /// The user asked to interrupt the active run.
     InterruptRequested,
+    /// The user asked to stop the active run for good.
+    CancelRunRequested,
     /// The user asked to re-read current state from the daemon.
     ReconnectRequested,
     /// The view reported the transcript display rows one selection reaches.
@@ -287,6 +293,8 @@ impl Action {
                 | Self::TurnFailed(_)
                 | Self::InterruptAccepted
                 | Self::InterruptFailed(_)
+                | Self::RunCancelAccepted
+                | Self::RunCancelFailed(_)
         )
     }
 }
@@ -340,6 +348,16 @@ pub enum Effect {
         /// The owning session.
         session_id: SessionId,
         /// The interrupted run.
+        run_id: RunId,
+    },
+    /// Request that one run stop for good.
+    ///
+    /// The stop is terminal where the interruption is not: the daemon signals
+    /// the run's in-flight operation and the run ends `interrupted`.
+    CancelRun {
+        /// The owning session.
+        session_id: SessionId,
+        /// The stopped run.
         run_id: RunId,
     },
 }

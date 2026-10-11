@@ -310,6 +310,8 @@ impl AppState {
             Action::TurnFailed(error) => self.apply_turn_send_failed(&error),
             Action::InterruptAccepted => self.apply_interrupt_accepted(),
             Action::InterruptFailed(error) => self.apply_failure(&error),
+            Action::RunCancelAccepted => self.apply_run_cancel_accepted(),
+            Action::RunCancelFailed(error) => self.apply_failure(&error),
             Action::InputChar(character) => self.apply_input_char(character),
             Action::InputBackspace => self.apply_input_backspace(),
             Action::MoveInputCursor(movement) => {
@@ -345,6 +347,7 @@ impl AppState {
             Action::CtrlCPressed => self.apply_ctrl_c(),
             Action::EscapePressed => self.apply_escape(),
             Action::InterruptRequested => self.request_interrupt(),
+            Action::CancelRunRequested => self.request_cancel(),
             Action::ReconnectRequested => self.request_reconnect(),
             Action::SelectTranscriptRows { anchor, extent } => self.apply_selection(anchor, extent),
             Action::ExpandReasoning { row } => self.apply_expand_reasoning(row),

@@ -87,6 +87,11 @@ pub async fn perform(
             .await
             .map(|_accepted| Action::InterruptAccepted)
             .map_err(|error| (Action::InterruptFailed(error.clone()), error)),
+        Effect::CancelRun { session_id, run_id } => client
+            .cancel_run(session_id, run_id)
+            .await
+            .map(|_accepted| Action::RunCancelAccepted)
+            .map_err(|error| (Action::RunCancelFailed(error.clone()), error)),
         Effect::Subscribe { .. } | Effect::CloseStream => return None,
     };
     Some(outcome)

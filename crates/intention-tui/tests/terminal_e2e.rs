@@ -45,6 +45,12 @@ const OBSERVE_DEADLINE: Duration = Duration::from_secs(15);
 /// The poll interval of the bounded process and durable-effect waits.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
+/// The wait after a dispatched turn before a test signals the front end.
+///
+/// The wait covers the window between the committed user row and the signal
+/// handler the run's own waits install.
+const SIGNAL_WAIT: Duration = Duration::from_millis(500);
+
 /// The prompt every headless scenario sends.
 const PROMPT: &str = "read the fixture file";
 
@@ -161,24 +167,27 @@ impl TerminalHost {
             // The dropped handle closes the pipe; the line front ends read that
             // as end-of-input after the scripted lines.
         }
-        let stdout = child
-            .stdout
-            .take()
-            .expect("the piped stdout handle is present");
-        let stderr = child
-            .stderr
-            .take()
-            .expect("the piped stderr handle is present");
-        let stdout_reader = thread::spawn(move || read_all(stdout));
-        let stderr_reader = thread::spawn(move || read_all(stderr));
-        let status = wait_for_exit(&mut child, Instant::now() + CLI_DEADLINE);
-        let stdout = stdout_reader.join().expect("the stdout reader finishes");
-        let stderr = stderr_reader.join().expect("the stderr reader finishes");
-        CliOutput {
-            code: status.code(),
-            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&stderr).into_owned(),
-        }
+        collect(&mut child, Instant::now() + CLI_DEADLINE)
+    }
+
+    /// Spawns the real terminal binary with piped streams the test drives.
+    ///
+    /// The stdin pipe stays open: a line front end waits for its next line
+    /// while the test signals the running process.
+    fn spawn(&self, arguments: &[&str]) -> Child {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_intention-tui"));
+        command.args(arguments);
+        command.env("INTENTION_ENDPOINT", self.endpoint.instance_id());
+        redirect_directories(
+            &mut command,
+            self.config_home.path(),
+            self.state_home.path(),
+        );
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command.spawn().expect("the terminal binary spawns")
     }
 
     /// Reads the current durable snapshot of one session through the client.
@@ -226,6 +235,87 @@ struct CliOutput {
     code: Option<i32>,
     stdout: String,
     stderr: String,
+}
+
+/// Waits for one spawned front end and collects its two output streams.
+fn collect(child: &mut Child, deadline: Instant) -> CliOutput {
+    let stdout = child
+        .stdout
+        .take()
+        .expect("the piped stdout handle is present");
+    let stderr = child
+        .stderr
+        .take()
+        .expect("the piped stderr handle is present");
+    let stdout_reader = thread::spawn(move || read_all(stdout));
+    let stderr_reader = thread::spawn(move || read_all(stderr));
+    let status = wait_for_exit(child, deadline);
+    let stdout = stdout_reader.join().expect("the stdout reader finishes");
+    let stderr = stderr_reader.join().expect("the stderr reader finishes");
+    CliOutput {
+        code: status.code(),
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+    }
+}
+
+/// Waits for the turn one spawned front end sent to reach the daemon.
+///
+/// The committed user row proves the front end dispatched its prompt, and the
+/// wait that follows it lets the run stream open before the test signals.
+fn wait_for_user_turn(host: &TerminalHost) -> SessionId {
+    let deadline = Instant::now() + OBSERVE_DEADLINE;
+    loop {
+        if let Some(session) =
+            block_on(host.client.most_recent_session()).expect("the session list reads")
+        {
+            let snapshot = host.snapshot(session);
+            if snapshot
+                .messages()
+                .iter()
+                .any(|message| message.kind() == MessageKindDto::User)
+            {
+                thread::sleep(SIGNAL_WAIT);
+                return session;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the front end's turn reaches the daemon before the deadline"
+        );
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Sends SIGINT to one spawned front end, as the terminal itself would.
+#[cfg(unix)]
+fn send_sigint(child: &Child) {
+    let status = Command::new("kill")
+        .arg("-INT")
+        .arg(child.id().to_string())
+        .status()
+        .expect("the signal reaches the spawned process");
+    assert!(status.success(), "the signal is delivered");
+}
+
+/// Waits for the durable stop notice a stopped run commits.
+fn assert_stopped_run_is_durable(host: &TerminalHost, session: SessionId) {
+    let messages = host.snapshot(session).messages().to_vec();
+    assert_eq!(
+        messages
+            .last()
+            .map(|message| (message.kind(), message.text())),
+        Some((
+            MessageKindDto::Notice,
+            "[The run was stopped before a final answer.]"
+        )),
+        "the stop ends the run durably instead of leaving it running"
+    );
+    let active = host.snapshot(session).projection().active_run().is_none();
+    assert!(
+        active,
+        "the stop ends the run itself: an interrupt leaves the run active, a stop does not"
+    );
 }
 
 /// The provider endpoint one host's daemon is configured against.
@@ -944,6 +1034,80 @@ fn the_timeout_run_interrupts_the_stalled_round_and_exits_with_four() {
         RunStatusDto::Completed,
         "a stalled provider round cannot complete the run"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_sigint_stops_the_live_run_and_ends_the_headless_process_with_five() {
+    // SIGINT must not kill a front end that observes a run: the run would keep
+    // working in the daemon with nobody left watching it. The signal stops the
+    // run, the process reports the interrupted outcome it observed, and the
+    // stopped run is durable.
+    let host = TerminalHost::new(ProviderEndpoint::stalled(), Some(WORKSPACE_FILE));
+    let workspace = host.workspace_root();
+    let mut child = host.spawn(&["run", PROMPT, "--workspace", &workspace]);
+    let session = wait_for_user_turn(&host);
+
+    send_sigint(&child);
+    let output = collect(&mut child, Instant::now() + CLI_DEADLINE);
+
+    assert_eq!(
+        output.code,
+        Some(5),
+        "the stopped run ends the process with the interrupted status: {}",
+        output.stderr
+    );
+    assert!(
+        output.stdout.contains("run interrupted"),
+        "the front end reports the outcome it observed: {}",
+        output.stdout
+    );
+    assert_stopped_run_is_durable(&host, session);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_sigint_stops_the_live_run_and_returns_the_repl_to_its_prompt() {
+    let host = TerminalHost::new(ProviderEndpoint::stalled(), Some(WORKSPACE_FILE));
+    let workspace = host.workspace_root();
+    let mut child = host.spawn(&["repl", "--workspace", &workspace]);
+    let mut stdin = child
+        .stdin
+        .take()
+        .expect("the piped stdin handle is present");
+    stdin
+        .write_all(format!("{PROMPT}\n").as_bytes())
+        .expect("the prompt writes");
+    stdin.flush().expect("the prompt reaches the front end");
+    let session = wait_for_user_turn(&host);
+
+    send_sigint(&child);
+    // The stopped run hands the loop back to its prompt, which reads this line.
+    stdin
+        .write_all(b"/quit\n")
+        .expect("the quit command writes");
+    stdin.flush().expect("the command reaches the front end");
+    drop(stdin);
+    let output = collect(&mut child, Instant::now() + CLI_DEADLINE);
+
+    assert_eq!(
+        output.code,
+        Some(0),
+        "the loop leaves on its own command: {}",
+        output.stderr
+    );
+    assert!(
+        output.stdout.contains("run interrupted"),
+        "the streamed run reports the stop it observed: {}",
+        output.stdout
+    );
+    assert_eq!(
+        output.stdout.matches("> ").count(),
+        2,
+        "the prompt comes back after the stopped run: {}",
+        output.stdout
+    );
+    assert_stopped_run_is_durable(&host, session);
 }
 
 #[test]

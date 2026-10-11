@@ -1113,14 +1113,14 @@ fn the_hint_menu_closes_on_every_close_rule() {
     assert!(state.command_menu().is_none(), "no match, no menu");
 
     // Esc closes the menu and means nothing else: over a live run the press
-    // cancels nothing, so the run's own cancel still needs its own press.
+    // stops nothing, so the run's own stop still needs its own press.
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
     type_text(&mut state, "/n");
     assert!(state.command_menu().is_some());
     let closing = state.update(Action::EscapePressed);
-    assert!(closing.is_empty(), "closing the menu interrupts nothing");
+    assert!(closing.is_empty(), "closing the menu stops nothing");
     assert!(state.command_menu().is_none());
     assert_eq!(
         state.notice(),
@@ -1132,16 +1132,16 @@ fn the_hint_menu_closes_on_every_close_rule() {
         Some(RunStatusDto::Running),
         "closing the menu leaves the live run alone"
     );
-    let cancelling = state.update(Action::EscapePressed);
+    let stopping = state.update(Action::EscapePressed);
     assert!(
-        !cancelling.is_empty(),
-        "the run's cancel is the next press's own meaning"
+        !stopping.is_empty(),
+        "the run's stop is the next press's own meaning"
     );
     assert!(
         state
             .notice()
-            .is_some_and(|notice| notice.starts_with("interrupting run")),
-        "the second press cancels the run: {:?}",
+            .is_some_and(|notice| notice.starts_with("stopping run")),
+        "the second press stops the run: {:?}",
         state.notice()
     );
     assert!(!state.should_quit(), "closing the menu never exits");
@@ -2338,22 +2338,19 @@ fn interrupt_without_a_live_run_asks_for_nothing() {
 }
 
 #[test]
-fn the_first_ctrl_c_press_arms_the_interrupt_and_the_second_interrupts_the_run() {
+fn the_first_ctrl_c_press_arms_the_stop_and_the_second_stops_the_run() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
     let effects = state.update(Action::CtrlCPressed);
-    assert!(
-        effects.is_empty(),
-        "the first press only arms the interrupt"
-    );
+    assert!(effects.is_empty(), "the first press only arms the stop");
     let expected = format!(
-        "press Ctrl+C again to interrupt run {}",
+        "press Ctrl+C again to stop run {}",
         super::short_identifier(run_id)
     );
     assert_eq!(state.notice(), Some(expected.as_str()));
     let effects = state.update(Action::CtrlCPressed);
-    assert_eq!(effects, vec![Effect::Interrupt { session_id, run_id }]);
+    assert_eq!(effects, vec![Effect::CancelRun { session_id, run_id }]);
 }
 
 #[test]
@@ -2402,10 +2399,10 @@ fn any_other_user_action_disarms_the_ctrl_c_press() {
     let effects = state.update(Action::CtrlCPressed);
     assert!(
         effects.is_empty(),
-        "the wheel cancelled the armed interrupt and re-armed it"
+        "the wheel cancelled the armed stop and re-armed it"
     );
     let expected = format!(
-        "press Ctrl+C again to interrupt run {}",
+        "press Ctrl+C again to stop run {}",
         super::short_identifier(run_id)
     );
     assert_eq!(state.notice(), Some(expected.as_str()));
@@ -2423,7 +2420,7 @@ fn any_other_user_action_disarms_the_ctrl_c_press() {
 }
 
 #[test]
-fn the_runs_own_reports_leave_the_armed_interrupt_standing() {
+fn the_runs_own_reports_leave_the_armed_stop_standing() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
@@ -2431,7 +2428,7 @@ fn the_runs_own_reports_leave_the_armed_interrupt_standing() {
     state.update(Action::FrameReceived(delta(session_id, run_id, 0, "tok")));
     state.update(Action::ElapsedReported { millis: 200 });
     let effects = state.update(Action::CtrlCPressed);
-    assert_eq!(effects, vec![Effect::Interrupt { session_id, run_id }]);
+    assert_eq!(effects, vec![Effect::CancelRun { session_id, run_id }]);
 }
 
 #[test]
@@ -2446,13 +2443,10 @@ fn a_run_that_ended_between_two_presses_arms_the_exit_instead_of_quitting() {
         RunStatusDto::Completed,
     )));
     let effects = state.update(Action::CtrlCPressed);
-    assert!(
-        effects.is_empty(),
-        "the interrupt arm did not outlive its run"
-    );
+    assert!(effects.is_empty(), "the stop arm did not outlive its run");
     assert!(
         !state.should_quit(),
-        "an interrupt arm never becomes the exit arm"
+        "a stop arm never becomes the exit arm"
     );
     assert_eq!(state.notice(), Some("press Ctrl+C again to exit"));
 }
@@ -2472,17 +2466,17 @@ fn ctrl_q_stays_the_immediate_exit_while_the_ctrl_c_exit_is_armed() {
 }
 
 #[test]
-fn a_live_run_is_cancelled_by_one_esc_press_with_no_arming() {
+fn a_live_run_is_stopped_by_one_esc_press_with_no_arming() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
     let effects = state.update(Action::EscapePressed);
     assert_eq!(
         effects,
-        vec![Effect::Interrupt { session_id, run_id }],
-        "one press cancels the live run"
+        vec![Effect::CancelRun { session_id, run_id }],
+        "one press stops the live run"
     );
-    assert!(!state.should_quit(), "a cancel never exits");
+    assert!(!state.should_quit(), "a stop never exits");
 }
 
 #[test]
@@ -2556,20 +2550,20 @@ fn the_two_layered_keys_do_not_share_an_arm() {
 }
 
 #[test]
-fn the_esc_cancel_disarms_the_ctrl_c_arm() {
+fn the_esc_stop_disarms_the_ctrl_c_arm() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
     state.update(Action::CtrlCPressed);
     let effects = state.update(Action::EscapePressed);
-    assert_eq!(effects, vec![Effect::Interrupt { session_id, run_id }]);
+    assert_eq!(effects, vec![Effect::CancelRun { session_id, run_id }]);
     let effects = state.update(Action::CtrlCPressed);
     assert!(
         effects.is_empty(),
-        "the interrupt arm did not survive the Esc press"
+        "the stop arm did not survive the Esc press"
     );
     let expected = format!(
-        "press Ctrl+C again to interrupt run {}",
+        "press Ctrl+C again to stop run {}",
         super::short_identifier(run_id)
     );
     assert_eq!(state.notice(), Some(expected.as_str()));
@@ -2920,6 +2914,11 @@ fn a_closed_stream_drops_the_provisional_tail() {
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
     state.update(Action::FrameReceived(delta(session_id, run_id, 0, "half")));
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Answering),
+        "the delta named the phase of the run this state observes"
+    );
     state.update(Action::RunStreamEnded);
     assert_eq!(state.stream(), StreamStatus::Ended);
     assert_eq!(
@@ -2928,6 +2927,16 @@ fn a_closed_stream_drops_the_provisional_tail() {
         "transient text does not outlive its stream"
     );
     assert_eq!(state.notice(), Some("live updates ended"));
+    assert_eq!(
+        state.run_phase(),
+        None,
+        "the phase of a run nobody observes any more is not named"
+    );
+    assert_eq!(
+        state.live_run(),
+        None,
+        "a run without a live subscription is not a live run"
+    );
 }
 
 #[test]
@@ -2938,6 +2947,90 @@ fn a_failed_stream_reports_the_failure() {
     state.update(Action::RunStreamFailed(failure()));
     assert_eq!(state.stream(), StreamStatus::Failed);
     assert_eq!(state.provisional_text(), "");
+    assert!(state.error().is_some());
+    assert_eq!(
+        state.run_phase(),
+        None,
+        "a run this front end lost the stream for names no working phase"
+    );
+    assert_eq!(
+        state.live_run(),
+        None,
+        "a lost subscription never keeps offering to stop a run"
+    );
+}
+
+#[test]
+fn a_lost_subscription_lets_the_stop_clear_and_exit_arms_through() {
+    // The daemon died: the subscription is gone while the last known run
+    // status still reads `running`. The stop arms must not claim that run any
+    // more, because the front end can neither observe nor stop it.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    state.update(Action::RunStreamFailed(failure()));
+    assert_eq!(state.run_status(), Some(RunStatusDto::Running));
+
+    // Esc on an empty line exits instead of stopping an unobservable run.
+    let effects = state.update(Action::EscapePressed);
+    assert!(effects.is_empty(), "an unobservable run is never stopped");
+    assert!(
+        state.should_quit(),
+        "the dead daemon never traps the front end"
+    );
+
+    // Ctrl+C arms the exit, and its second press leaves: no stop is ever sent
+    // to the daemon that is not there.
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    state.update(Action::RunStreamFailed(failure()));
+    let first = state.update(Action::CtrlCPressed);
+    assert!(first.is_empty(), "the first press arms the exit");
+    assert!(!state.should_quit());
+    assert_eq!(state.notice(), Some("press Ctrl+C again to exit"));
+    let second = state.update(Action::CtrlCPressed);
+    assert!(second.is_empty(), "leaving the front end asks for nothing");
+    assert!(state.should_quit(), "the second press exits");
+}
+
+#[test]
+fn a_live_run_is_stopped_by_an_accepted_stop_notice() {
+    // `Esc` and `Ctrl+C` reach the same shared request: the notice names the
+    // stop, and only the daemon's accepted reply confirms it.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    let effects = state.update(Action::CancelRunRequested);
+    assert_eq!(effects, vec![Effect::CancelRun { session_id, run_id }]);
+    let expected = format!("stopping run {}", super::short_identifier(run_id));
+    assert_eq!(state.notice(), Some(expected.as_str()));
+    state.update(Action::RunCancelAccepted);
+    assert_eq!(state.notice(), Some("stop accepted"));
+}
+
+#[test]
+fn a_stop_without_a_live_run_asks_for_nothing() {
+    let session_id = SessionId::new();
+    let mut state = opened_session(session_id, Vec::new());
+    let effects = state.update(Action::CancelRunRequested);
+    assert!(effects.is_empty());
+    assert_eq!(state.notice(), Some("no active run to stop"));
+
+    // A run whose subscription died is not stoppable either.
+    let run_id = RunId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    state.update(Action::RunStreamFailed(failure()));
+    let effects = state.update(Action::CancelRunRequested);
+    assert!(effects.is_empty(), "a lost run is never stopped");
+    assert_eq!(state.notice(), Some("no active run to stop"));
+}
+
+#[test]
+fn a_failed_stop_reaches_the_error_line() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    let effects = state.update(Action::RunCancelFailed(failure()));
+    assert!(effects.is_empty(), "a failed stop asks for no client work");
     assert!(state.error().is_some());
 }
 
