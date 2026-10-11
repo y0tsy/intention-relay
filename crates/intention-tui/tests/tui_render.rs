@@ -23,7 +23,7 @@ use intention_proto::{
     SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto,
     TextDeltaFrameDto, TextResult, TimestampDto, ToolCallId, ToolCallRowDto, ToolIdentityDto,
     ToolInput, ToolProcessStatus, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto,
-    ToolResultStatusDto, ToolRowDto, TurnId, WorkspaceId, WorkspaceRelativePathDto,
+    ToolResultStatusDto, ToolRowDto, TurnId, UsageDto, WorkspaceId, WorkspaceRelativePathDto,
     WorkspaceRootDto, WriteResult,
 };
 use intention_tui::app::{
@@ -122,13 +122,33 @@ fn workspace_root() -> WorkspaceRootDto {
 
 /// Returns one run projection of the fixture session.
 fn run(session_id: SessionId, run_id: RunId, status: RunStatusDto) -> RunProjectionDto {
+    let started_at = TimestampDto::from_unix_seconds(NOW).expect("fixture timestamp is valid");
+    let finished_at = intention_proto::run_status_is_terminal(status).then_some(started_at);
+    run_with(session_id, run_id, status, None, started_at, finished_at, 0)
+}
+
+/// Returns one run projection carrying the committed facts a view renders.
+fn run_with(
+    session_id: SessionId,
+    run_id: RunId,
+    status: RunStatusDto,
+    usage: Option<UsageDto>,
+    started_at: TimestampDto,
+    finished_at: Option<TimestampDto>,
+    open_tool_calls: u32,
+) -> RunProjectionDto {
     RunProjectionDto::new(
         session_id,
         run_id,
         TurnId::new(),
         status,
         ConfigRevisionId::new(),
+        usage,
+        started_at,
+        finished_at,
+        open_tool_calls,
     )
+    .expect("fixture run projection is valid")
 }
 
 /// Returns one session snapshot with its active run and committed rows.
@@ -147,6 +167,18 @@ fn snapshot_in_mode(
     active_run: Option<RunProjectionDto>,
     messages: Vec<MessageProjectionDto>,
 ) -> SessionSnapshotDto {
+    snapshot_in_mode_with_model(session_id, mode, None, active_run, messages)
+}
+
+/// Returns one session snapshot whose projection declares `mode` and, when
+/// given, the effective provider model.
+fn snapshot_in_mode_with_model(
+    session_id: SessionId,
+    mode: RunModeDto,
+    model: Option<&str>,
+    active_run: Option<RunProjectionDto>,
+    messages: Vec<MessageProjectionDto>,
+) -> SessionSnapshotDto {
     let projection = SessionProjectionDto::new(
         ProjectId::new(),
         session_id,
@@ -158,6 +190,12 @@ fn snapshot_in_mode(
         Vec::new(),
     )
     .expect("the fixture session projection is coherent");
+    let projection = match model {
+        Some(model) => projection
+            .with_provider_model(model)
+            .expect("the fixture provider model is valid"),
+        None => projection,
+    };
     SessionSnapshotDto::with_projection(session_id, projection, messages)
         .expect("the fixture session snapshot is coherent")
 }
@@ -408,6 +446,24 @@ fn subscribe(state: &mut AppState, session_id: SessionId, run_id: RunId, status:
         Vec::new(),
     ));
     state.update(Action::SessionStreamOpened(stream));
+}
+
+/// Applies the committed run projection the daemon republishes after it commits
+/// a tool row.
+///
+/// The open-call count is that projection's own committed fact, so this is the
+/// frame that names a call in flight.
+fn publish_open_calls(state: &mut AppState, session_id: SessionId, run_id: RunId, open_calls: u32) {
+    let started_at = TimestampDto::from_unix_seconds(NOW).expect("fixture timestamp is valid");
+    state.update(Action::FrameReceived(SessionFrameDto::Status(run_with(
+        session_id,
+        run_id,
+        RunStatusDto::Running,
+        None,
+        started_at,
+        None,
+        open_calls,
+    ))));
 }
 
 /// Returns a connected session streaming one running run, with the session and
@@ -1817,29 +1873,31 @@ fn a_long_input_line_windows_around_the_cursor() {
 }
 
 #[test]
-fn the_input_badges_show_the_real_mode_and_the_model_placeholder() {
+fn the_input_badge_renders_the_projection_model() {
     let session_id = fixture_session(FIRST_SESSION);
     let mut state = listed_state(session_id, 0);
-    state.update(Action::SessionSnapshotLoaded(snapshot_in_mode(
+    state.update(Action::SessionSnapshotLoaded(snapshot_in_mode_with_model(
         session_id,
         RunModeDto::Plan,
+        Some("openrouter/fixture-model"),
         None,
         Vec::new(),
     )));
     let mut app = TestApp::new(RevueView::new(&state));
     let pilot = Pilot::new(&mut app);
     pilot.assert_contains(" plan ");
-    pilot.assert_contains("model @todo(core)");
+    pilot.assert_contains("openrouter/fixture-model");
+    pilot.assert_not_contains("model @todo(core)");
 }
 
 #[test]
-fn the_input_badges_say_so_before_a_session_names_a_mode() {
+fn the_input_badges_say_so_before_a_session_names_a_mode_or_model() {
     let mut state = AppState::new(None);
     state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
     let mut app = TestApp::new(RevueView::new(&state));
     let pilot = Pilot::new(&mut app);
     pilot.assert_contains("mode @todo(core)");
-    pilot.assert_contains("model @todo(core)");
+    pilot.assert_not_contains("model @todo(core)");
 }
 
 #[test]
@@ -1849,7 +1907,7 @@ fn the_status_row_reads_ready_session_and_mode() {
     let mut app = TestApp::new(RevueView::new(&state));
     let pilot = Pilot::new(&mut app);
     pilot.assert_contains("Ready · session 11111111 · build");
-    pilot.assert_contains("ctx @todo(core)");
+    pilot.assert_not_contains("ctx @todo(core)");
 }
 
 #[test]
@@ -1922,22 +1980,26 @@ fn the_armed_esc_clear_asks_for_a_second_press() {
 fn a_two_line_buffer_grows_the_input_block_and_shrinks_the_transcript() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let mut state = open_state(
+    let mut state = listed_state(session_id, 0);
+    state.update(Action::SessionSnapshotLoaded(snapshot_in_mode_with_model(
         session_id,
+        RunModeDto::Build,
+        Some("fixture-model"),
+        None,
         vec![row(
             session_id,
             run_id,
             MessageKindDto::Assistant,
             "the committed row",
         )],
-    );
+    )));
     let (single_badge, single_hint) = {
         let single = TestApp::with_size(
             RevueView::with_now(&state, NOW),
             WINDOW_WIDTH,
             WINDOW_HEIGHT,
         );
-        let (_, badge) = find_text(&single, "model @todo(core)");
+        let (_, badge) = find_text(&single, "fixture-model");
         let (_, hint) = find_text(&single, "enter sends | /new session | /sessions switch");
         (badge, hint)
     };
@@ -1964,7 +2026,7 @@ fn a_two_line_buffer_grows_the_input_block_and_shrinks_the_transcript() {
         first_line + 1,
         "one display row per buffer line, the cursor riding its own line"
     );
-    let (_, double_badge) = find_text(&double, "model @todo(core)");
+    let (_, double_badge) = find_text(&double, "fixture-model");
     let (_, double_hint) = find_text(&double, "enter sends | /new session | /sessions switch");
     assert_eq!(
         double_badge + 1,
@@ -2046,6 +2108,7 @@ fn a_tool_call_in_flight_past_half_a_second_shows_the_working_word() {
             ToolCallId::new(),
         ),
     )));
+    publish_open_calls(&mut state, session_id, run_id, 1);
     state.update(Action::ElapsedReported { millis: 2_600 });
     let mut app = TestApp::new(RevueView::new(&state));
     let pilot = Pilot::new(&mut app);
@@ -2072,6 +2135,7 @@ fn a_tool_call_under_half_a_second_keeps_the_answering_word() {
             ToolCallId::new(),
         ),
     )));
+    publish_open_calls(&mut state, session_id, run_id, 1);
     state.update(Action::ElapsedReported { millis: 2_400 });
     let mut app = TestApp::new(RevueView::new(&state));
     let pilot = Pilot::new(&mut app);
@@ -2093,6 +2157,7 @@ fn a_finished_tool_call_returns_the_row_to_the_answering_word() {
     state.update(Action::FrameReceived(SessionFrameDto::Content(
         tool_call_row(session_id, run_id, "read", "{}", call_id),
     )));
+    publish_open_calls(&mut state, session_id, run_id, 1);
     state.update(Action::ElapsedReported { millis: 2_700 });
     state.update(Action::FrameReceived(SessionFrameDto::Content(
         tool_result_row(
@@ -2103,6 +2168,7 @@ fn a_finished_tool_call_returns_the_row_to_the_answering_word() {
             call_id,
         ),
     )));
+    publish_open_calls(&mut state, session_id, run_id, 0);
     let mut app = TestApp::new(RevueView::new(&state));
     let pilot = Pilot::new(&mut app);
     pilot.assert_contains("Answering… 2.7s");
@@ -2120,20 +2186,59 @@ fn a_run_whose_elapsed_was_never_reported_keeps_the_word_alone() {
     );
     let mut app = TestApp::new(RevueView::new(&state));
     let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Thinking… · ctx @todo(core)");
+    pilot.assert_contains("Thinking…");
+    pilot.assert_not_contains("ctx");
 }
 
 #[test]
-fn a_finished_run_shows_its_measured_duration_in_tenths() {
+fn the_status_row_renders_the_committed_duration_and_usage() {
+    // The duration and the usage are the run projection's own committed facts:
+    // the live elapsed value the front end measured never stands in for them.
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = open_state(session_id, Vec::new());
-    subscribe(&mut state, session_id, run_id, RunStatusDto::Completed);
+    let started_at = TimestampDto::from_unix_seconds(NOW).expect("fixture timestamp is valid");
+    let finished_at =
+        TimestampDto::from_unix_seconds(NOW + 13).expect("fixture timestamp is valid");
+    let committed = run_with(
+        session_id,
+        run_id,
+        RunStatusDto::Completed,
+        Some(UsageDto::reported(1_200, 300, 1_500).expect("the fixture usage is consistent")),
+        started_at,
+        Some(finished_at),
+        0,
+    );
+    state.update(Action::SessionStreamOpened(
+        SessionStreamState::from_snapshot(snapshot(session_id, Some(committed), Vec::new())),
+    ));
     state.update(Action::ElapsedReported { millis: 13_400 });
-    let mut app = TestApp::new(RevueView::new(&state));
+    let mut app = TestApp::with_size(RevueView::new(&state), 120, WINDOW_HEIGHT);
     let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Answered in 13.4s");
-    pilot.assert_not_contains("13s");
+    pilot.assert_contains("Answered in 13s");
+    pilot.assert_contains("ctx in 1200 out 300");
+    pilot.assert_not_contains("13.4s");
+
+    // A run whose usage was never reported says so instead of showing a zero.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = open_state(session_id, Vec::new());
+    let committed = run_with(
+        session_id,
+        run_id,
+        RunStatusDto::Completed,
+        Some(UsageDto::NotReported),
+        started_at,
+        Some(finished_at),
+        0,
+    );
+    state.update(Action::SessionStreamOpened(
+        SessionStreamState::from_snapshot(snapshot(session_id, Some(committed), Vec::new())),
+    ));
+    let mut app = TestApp::with_size(RevueView::new(&state), 120, WINDOW_HEIGHT);
+    let pilot = Pilot::new(&mut app);
+    pilot.assert_contains("Answered in 13s");
+    pilot.assert_contains("ctx not reported");
 }
 
 #[test]
@@ -2266,7 +2371,7 @@ fn the_welcome_state_shows_the_lockup_and_the_overview_while_no_session_is_open(
     );
 
     let (_, overview_row) = find_text(&app, "AGENTS.md @todo(core)");
-    let (_, input_row) = find_text(&app, "model @todo(core)");
+    let (_, input_row) = find_text(&app, "mode @todo(core)");
     assert!(
         product_row < overview_row,
         "the overview sits below the lockup"
@@ -2293,7 +2398,7 @@ fn the_welcome_state_is_gone_once_a_session_is_open() {
     );
     assert!(app.find_text("Skills @todo(core)").is_none());
     let (_, transcript_row) = find_text(&app, "transcript");
-    let (_, input_row) = find_text(&app, "model @todo(core)");
+    let (_, input_row) = find_text(&app, " build ");
     assert!(transcript_row < input_row, "the pane keeps its region");
 }
 

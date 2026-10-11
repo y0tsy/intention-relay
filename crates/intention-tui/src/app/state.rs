@@ -59,6 +59,11 @@ pub struct AppState {
     pub(super) session_id: Option<SessionId>,
     /// The run policy mode of the open session's projection.
     pub(super) session_mode: Option<RunModeDto>,
+    /// The effective provider model the open session's projection names.
+    ///
+    /// The model is the daemon's resolved configuration selection: it fills the
+    /// session projection, so this front end renders it instead of guessing.
+    pub(super) session_model: Option<String>,
     /// The shared client's state of the open session, if any.
     ///
     /// The client owns the committed transcript - its rows, its one retention
@@ -73,14 +78,14 @@ pub struct AppState {
     /// was created, or the run it mirrors reached a terminal status. The
     /// terminal words come from the run projection's own status.
     pub(super) phase: Option<RunPhase>,
-    /// How many committed tool calls no committed result answers yet.
-    pub(super) tools_in_flight: usize,
-    /// The elapsed value the oldest in-flight tool call committed at.
+    /// How many open tool calls the run projection reports.
+    pub(super) tools_in_flight: u32,
+    /// The elapsed value the newest open tool call was first observed at.
     ///
     /// The value is the front end's own measurement, so the working threshold
-    /// is a subtraction on reported time and never a clock read here. A call
-    /// that commits before any report has no baseline, and the row never
-    /// invents one.
+    /// is a subtraction on reported time and never a clock read here. A run
+    /// whose projection reports an open call before any report has no
+    /// baseline, and the row never invents one.
     pub(super) tool_wait_from: Option<u64>,
     /// Whether an in-flight tool call is past the working threshold.
     pub(super) tool_working: bool,
@@ -164,6 +169,7 @@ impl AppState {
             browser: browser::SessionsBrowserState::new(),
             session_id: None,
             session_mode: None,
+            session_model: None,
             session_state: None,
             phase: None,
             tools_in_flight: 0,
@@ -450,6 +456,16 @@ impl AppState {
         self.session_mode
     }
 
+    /// Returns the effective provider model the open session's projection names.
+    ///
+    /// `None` before a session snapshot arrived; the model is the daemon's
+    /// resolved configuration selection, so the input badge shows the core's
+    /// value and never a guess.
+    #[must_use]
+    pub fn session_model(&self) -> Option<&str> {
+        self.session_model.as_deref()
+    }
+
     /// Returns the elapsed time the front end measured for the current or last turn.
     #[must_use]
     pub const fn elapsed_millis(&self) -> Option<u64> {
@@ -574,7 +590,7 @@ impl AppState {
         self.selection = None;
         self.reasoning_expansions.clear();
         self.reasoning_epoch += 1;
-        self.recount_tool_watch();
+        self.refresh_tool_watch();
     }
 
     /// Merges one read of a session's durable transcript into the client state.

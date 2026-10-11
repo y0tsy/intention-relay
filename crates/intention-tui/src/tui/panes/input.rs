@@ -57,11 +57,6 @@ pub(in crate::tui) const MIN_BLOCK_ROWS: u16 = BLOCK_FRAME + BADGE_ROWS + 1 + ST
 /// badge waits for it rather than guessing `build`.
 const MODE_PLACEHOLDER: &str = "mode @todo(core)";
 
-/// The model badge: the session projection carries no provider model.
-// @todo(core): the session projection carries no provider model, so this badge
-// stays an explicit placeholder rather than a fabricated model name.
-const MODEL_PLACEHOLDER: &str = "model @todo(core)";
-
 /// Returns the rows the input block needs for the state's buffer.
 ///
 /// A one-line buffer takes [`MIN_BLOCK_ROWS`] and every line break adds one
@@ -114,17 +109,25 @@ pub(in crate::tui) fn input_block(
         )
 }
 
-/// Returns the badge header: the session's real run mode and the model
-/// placeholder, each on its own badge wash.
+/// Returns the badge header: the session's real run mode and its effective
+/// provider model, each on its own badge wash.
+///
+/// The model is the daemon's resolved configuration selection and arrives with
+/// the snapshot, so a session the daemon has named shows it. A session no
+/// snapshot has named yet shows no model chip rather than a fabricated model.
 fn badge_row(state: &AppState, width: usize, palette: &'static Palette) -> RichText {
     let (mode, mode_ink) = state
         .session_mode()
         .map_or((MODE_PLACEHOLDER, palette.todo_ink), |mode| {
             (mode.as_str(), palette.badge_ink)
         });
+    let mut badges = vec![(mode, mode_ink)];
+    if let Some(model) = state.session_model() {
+        badges.push((model, palette.badge_ink));
+    }
     let mut text = RichText::new();
     let mut used = 0;
-    for (label, ink) in [(mode, mode_ink), (MODEL_PLACEHOLDER, palette.todo_ink)] {
+    for (label, ink) in badges {
         let chip = format!(" {label} ");
         let chip_width = display_width(&chip);
         let gap = usize::from(used > 0);

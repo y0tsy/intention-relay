@@ -45,13 +45,15 @@
 //!
 //! # The turn clock
 //!
-//! The application core is deliberately clock-free, so this front end times one
-//! turn itself: `TurnTimer` starts when the core returns the `SendTurn` effect,
-//! reports each changed tenth of a second while the turn is live, and ends on
-//! the terminal run status, each report arriving in the core as
-//! [`Action::ElapsedReported`]. The status row therefore formats a value the
-//! state carries instead of reading a clock, and the view stays a pure function
-//! of state.
+//! The application core is deliberately clock-free, so this front end times the
+//! live tail of one turn itself: `TurnTimer` starts when the core returns the
+//! `SendTurn` effect, reports each changed tenth of a second while the turn is
+//! live, and ends on the terminal run status, each report arriving in the core
+//! as [`Action::ElapsedReported`]. The final duration is not this front end's:
+//! the committed run projection carries its start and finish times, so the
+//! status row renders the committed whole seconds once the run is terminal. The
+//! view therefore formats values the state carries instead of reading a clock,
+//! and it stays a pure function of state.
 
 mod driver;
 mod keymap;
@@ -399,8 +401,9 @@ impl FrontEnd {
     /// Applies one action and asks the client task for the effects it returns.
     ///
     /// The timer's two ends live here: the `SendTurn` effect the core returns
-    /// starts it, and a terminal run status frame finishes it and feeds the
-    /// measurement back into the core as [`Action::ElapsedReported`].
+    /// starts it, and a terminal run status frame ends it. The final duration
+    /// is the committed projection's own times, so the ended measurement is
+    /// dropped instead of fed back into the core.
     fn apply(&mut self, action: Action) {
         let terminal = matches!(
             &action,
@@ -408,8 +411,8 @@ impl FrontEnd {
                 if run_status_is_terminal(run.status())
         );
         let effects = self.state.update(action);
-        if terminal && let Some(millis) = self.timer.finish(Instant::now()) {
-            self.state.update(Action::ElapsedReported { millis });
+        if terminal {
+            self.timer.stop();
         }
         for effect in effects {
             if matches!(&effect, Effect::SendTurn { .. }) {
@@ -500,11 +503,9 @@ const MILLIS_PER_TENTH: u64 = 100;
 ///
 /// It measures from the instant the front end dispatches `SendTurn` to the
 /// instant the run reports a terminal status, and reports changed tenths while
-/// the turn is live - the one granularity a running status row shows.
-// @todo(hack): the application core is deliberately clock-free, so this front
-// end measures the turn and feeds the value back as `Action::ElapsedReported`;
-// the live tenths must stay local, but the committed duration belongs to the
-// core, which knows the run's start and end.
+/// the turn is live - the one granularity a running status row shows. The final
+/// value is not reported: the committed run projection carries the run's own
+/// start and finish times, and the status row reads those in whole seconds.
 struct TurnTimer {
     /// The instant the current turn was dispatched, while one is in flight.
     started: Option<Instant>,
@@ -541,11 +542,14 @@ impl TurnTimer {
         Some(millis)
     }
 
-    /// Ends the measurement and returns its final elapsed value, if any.
-    fn finish(&mut self, now: Instant) -> Option<u64> {
-        let started = self.started.take()?;
+    /// Ends the measurement of a terminated turn, keeping no value.
+    ///
+    /// The committed run's start and finish times are the final duration the
+    /// status row shows, so the front end's own final measurement is dropped
+    /// and a later tick reports nothing.
+    const fn stop(&mut self) {
+        self.started = None;
         self.reported_millis = None;
-        elapsed_millis(started, now)
     }
 }
 
@@ -688,18 +692,15 @@ mod tests {
     }
 
     #[test]
-    fn the_turn_timer_ends_with_the_runs_final_measurement() {
+    fn the_turn_timer_ends_with_the_runs_terminal_status() {
         let start = Instant::now();
         let mut timer = TurnTimer::new();
         timer.start(start);
+        timer.stop();
         assert_eq!(
-            timer.finish(start + Duration::from_millis(13_000)),
-            Some(13_000)
-        );
-        assert_eq!(
-            timer.finish(start + Duration::from_millis(14_000)),
+            timer.due(start + Duration::from_millis(13_000)),
             None,
-            "a finished turn is measured once"
+            "a finished turn reports no further tenths"
         );
     }
 

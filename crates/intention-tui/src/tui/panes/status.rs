@@ -1,25 +1,30 @@
 //! The status pane: the human status row under the input and the detail line.
 //!
 //! The row names what the user acts on in words: the connection, the session,
-//! the session's run mode, the run's live phase, and the context-usage
-//! placeholder. The old debug vocabulary (`connected`, `run none`,
-//! `stream idle`, `stream closed`) described this front end's own plumbing and
-//! is gone: the stream is an implementation detail, and a run is described by
-//! what it is doing, not by the mirror's status word.
+//! the session's run mode, the run's live phase, and the committed token usage.
+//! The old debug vocabulary (`connected`, `run none`, `stream idle`,
+//! `stream closed`) described this front end's own plumbing and is gone: the
+//! stream is an implementation detail, and a run is described by what it is
+//! doing, not by the mirror's status word.
 //!
 //! The live phase is the shared state machine's own value: `Waiting…` from the
 //! moment a turn request leaves for the network, `Thinking…` when the reasoning
 //! stream starts, `Answering…` when the answer stream starts, and `Working…`
-//! while a tool call is in flight past the half-second threshold - a shorter
-//! call leaves the phase the one it found. A completed run reads
-//! `Answered in 13.4s`; the interrupted and failed runs keep their words. Every
-//! elapsed value reads in tenths of a second, live and final.
+//! while the run projection reports an open tool call past the half-second
+//! threshold - a shorter call leaves the phase the one it found. A completed run
+//! reads `Answered in 13s`, the committed run's whole seconds; the interrupted
+//! and failed runs keep their words. A live value reads in tenths of a second,
+//! because it is the front end's own measurement reported through
+//! `Action::ElapsedReported`; the final value is the committed projection's own
+//! start and finish times, so the row only formats values the state carries and
+//! the view stays a pure function of state.
 //!
-//! The elapsed value is the front end's measurement, reported through
-//! `Action::ElapsedReported`; the row only formats the value the state carries,
-//! so the view stays a pure function of state.
+//! The usage segment reads the committed `UsageDto` the run projection carries:
+//! `ctx in 1200 out 300`, or `ctx not reported` when the provider reported no
+//! usage. A run that has committed no usage yet carries no usage segment rather
+//! than a fabricated number.
 
-use intention_proto::RunStatusDto;
+use intention_proto::{RunProjectionDto, RunStatusDto, UsageDto};
 use revue::style::Color;
 use revue::widget::{RichText, Span, Style, Text};
 
@@ -69,12 +74,29 @@ const INTERRUPTED: &str = "Interrupted";
 /// The marker of a run that failed.
 const FAILED: &str = "Failed";
 
-/// The context-usage placeholder; the wire carries no token usage yet.
-// @todo(core): the run projection carries no token usage, so the status row
-// shows this placeholder instead of a fabricated count. The core would have to
-// carry a `UsageDto` (prompt, completion, and total tokens) on the run
-// projection for the row to show a real number.
-const CONTEXT_USAGE: &str = "ctx @todo(core)";
+/// Returns the usage segment one run reads as, when its projection carries a
+/// committed usage value.
+///
+/// The numbers are the committed provider-normalized counts: input tokens are
+/// the context the run was sent, output tokens what it produced. A run whose
+/// usage was not reported says so instead of showing a zero.
+fn usage_segment(run: Option<RunProjectionDto>) -> Option<String> {
+    match run?.usage()? {
+        UsageDto::NotReported => Some("ctx not reported".to_owned()),
+        UsageDto::Reported {
+            input_tokens,
+            output_tokens,
+            ..
+        } => Some(format!("ctx in {input_tokens} out {output_tokens}")),
+    }
+}
+
+/// Returns the committed whole seconds one terminated run took, when its
+/// projection carries both times.
+fn committed_seconds(run: RunProjectionDto) -> Option<i64> {
+    let finished = run.finished_at()?;
+    Some(finished.unix_seconds() - run.started_at().unix_seconds())
+}
 
 /// Returns the status row under the input: the human state of the session.
 pub(in crate::tui) fn status_row(state: &AppState, palette: &'static Palette) -> RichText {
@@ -101,14 +123,27 @@ pub(in crate::tui) fn status_row(state: &AppState, palette: &'static Palette) ->
     }
     let phase = state.run_phase();
     let status = state.run_status();
+    let projection = state.active_run();
     // A live phase names the run even before a refreshed projection arrives;
     // the status word covers every other run, terminal ones included.
     if phase.is_some() || status.is_some() {
         text = run(text, SEPARATOR, palette.ink_faint, palette);
-        text = run_phrase(text, phase, status, state.elapsed_millis(), palette);
+        text = run_phrase(
+            text,
+            phase,
+            status,
+            state.elapsed_millis(),
+            projection,
+            palette,
+        );
     }
-    text = run(text, SEPARATOR, palette.ink_faint, palette);
-    run(text, CONTEXT_USAGE, palette.todo_ink, palette)
+    // The committed usage is a run fact; a run that has not committed one yet
+    // shows no segment at all instead of a placeholder.
+    if let Some(usage) = usage_segment(projection) {
+        text = run(text, SEPARATOR, palette.ink_faint, palette);
+        text = run(text, &usage, palette.ink_muted, palette);
+    }
+    text
 }
 
 /// Returns the detail line: the failure, the notice, or the idle hint.
@@ -128,19 +163,21 @@ fn run(text: RichText, content: &str, ink: Color, palette: &'static Palette) -> 
     ))
 }
 
-/// Appends the phrase one run reads as, with its measured elapsed value.
+/// Appends the phrase one run reads as, with its live elapsed value or its
+/// committed duration.
 ///
 /// A live phase reads `Waiting… 0.4s`, `Thinking… 3.2s`, `Answering… 4.1s`, or
-/// `Working… 6.2s`; a completed run reads `Answered in 13.4s`; a failed one
-/// `Failed` (the typed error is the detail line), and an interrupted one
-/// `Interrupted`. Every elapsed value reads in tenths of a second, and a run
-/// whose elapsed value the front end never reported keeps the word without a
-/// number instead of showing a fabricated one.
+/// `Working… 6.2s`; a completed run reads `Answered in 13s` from the committed
+/// projection's own times; a failed one `Failed` (the typed error is the detail
+/// line), and an interrupted one `Interrupted`. A live value reads in tenths of
+/// a second, and a run whose live value the front end never reported keeps the
+/// word without a number instead of showing a fabricated one.
 fn run_phrase(
     text: RichText,
     phase: Option<RunPhase>,
     status: Option<RunStatusDto>,
     elapsed: Option<u64>,
+    projection: Option<RunProjectionDto>,
     palette: &'static Palette,
 ) -> RichText {
     if let Some(phase) = phase {
@@ -158,9 +195,9 @@ fn run_phrase(
     match status {
         Some(RunStatusDto::Completed) => {
             let mut text = run(text, ANSWERED, palette.success, palette);
-            if let Some(millis) = elapsed {
+            if let Some(seconds) = projection.and_then(committed_seconds) {
                 text = run(text, " in ", palette.success, palette);
-                text = run(text, &elapsed_tenths(millis), palette.timer_ink, palette);
+                text = run(text, &format!("{seconds}s"), palette.timer_ink, palette);
             }
             text
         }
@@ -186,10 +223,10 @@ const fn phase_word(phase: RunPhase) -> &'static str {
     }
 }
 
-/// Returns how one measured elapsed value reads: tenths of a second.
+/// Returns how one live measured elapsed value reads: tenths of a second.
 ///
-/// Live and final values read the same way, so a whole second never appears in
-/// the row.
+/// Only live values read this way; the committed final value reads in whole
+/// seconds from the run projection's own start and finish times.
 fn elapsed_tenths(millis: u64) -> String {
     format!("{:.1}s", millis as f64 / 1000.0)
 }

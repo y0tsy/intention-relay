@@ -2,8 +2,8 @@
 
 use intention_client::{FrameUpdate, SessionStreamState};
 use intention_proto::{
-    ErrorDto, MessageKindDto, RunProjectionDto, SendUserTurnOutcomeDto, SessionFrameDto,
-    TextDeltaChannelDto, run_status_is_terminal,
+    ErrorDto, RunProjectionDto, SendUserTurnOutcomeDto, SessionFrameDto, TextDeltaChannelDto,
+    run_status_is_terminal,
 };
 
 use super::{AppState, ConnectionStatus, Effect, RunPhase, StreamStatus, short_identifier};
@@ -125,16 +125,13 @@ impl AppState {
             Err(error) => return self.apply_failure(&error),
         };
         match frame {
-            SessionFrameDto::Content(message) => {
-                // The client accepted this committed row: the display state
-                // that follows the rows - the in-flight tool watch - moves with
-                // it.
-                if matches!(update, FrameUpdate::Row(_)) {
-                    self.note_row_committed(message.kind());
-                }
+            SessionFrameDto::Content(_) => {
                 // A row the client's retention bound dropped in front of the
                 // transcript is a replacement, never an append: every display
                 // row moved, so the selection and the expansions go with it.
+                // The in-flight tool watch does not move with a row: the
+                // projection the daemon republishes after a committed tool row
+                // is the fact that carries the run's open calls.
                 if self.transcript_appended_since(epoch).is_none() {
                     self.note_replacement();
                 }
@@ -158,6 +155,10 @@ impl AppState {
                     self.reset_tool_watch();
                 } else {
                     self.phase = self.phase.or(Some(RunPhase::Waiting));
+                    // The committed projection is the one fact that says how
+                    // many tool calls the run has open, so the watch follows
+                    // every live status the daemon publishes.
+                    self.refresh_tool_watch();
                 }
                 self.note(format!("run {}", run.status().as_str()));
             }
@@ -247,79 +248,34 @@ impl AppState {
     /// state, so the previous run's phase does not describe what they carry: a
     /// live run starts as waiting for the first token this state will see, and
     /// a terminal one carries no phase at all. The tool watch is re-read from
-    /// the rows the state now shows.
+    /// the projection the read carries.
     pub(super) fn rebase_run_phase(&mut self) {
         self.reset_tool_watch();
-        self.recount_tool_watch();
+        self.refresh_tool_watch();
         let live = self
             .run_status()
             .is_some_and(|status| !run_status_is_terminal(status));
         self.phase = live.then_some(RunPhase::Waiting);
     }
 
-    /// Moves the display state that follows one committed row.
+    /// Re-reads the in-flight tool watch from the run projection's open calls.
     ///
-    /// The rows themselves are the client's; this front end keeps only the
-    /// in-flight tool watch over them, so a committed row of the client's
-    /// transcript is what opens or closes the watch.
-    pub(super) const fn note_row_committed(&mut self, kind: MessageKindDto) {
-        match kind {
-            MessageKindDto::ToolCall => self.note_tool_call(),
-            MessageKindDto::ToolResult => self.note_tool_result(),
-            MessageKindDto::User | MessageKindDto::Assistant | MessageKindDto::Notice => {}
-        }
-    }
-
-    /// Records that one committed tool call joined the transcript.
-    ///
-    /// A tool call is in flight from its committed row until the result row
-    /// that answers it. The elapsed value the front end last reported is the
-    /// baseline the working threshold measures from, so a call that commits
-    /// before any report has no baseline and never gets one invented for it.
-    // @todo(hack): the watch is incremented and decremented by row kind, while the transcript pane
-    // pairs a call with its answer by the call's identity - so an orphan or an out-of-order result
-    // cancels a call that is genuinely in flight, and the count spans every run in the transcript.
-    // Until the projection carries the open calls, pair the rows by their call id and filter to the
-    // live run.
-    pub(super) const fn note_tool_call(&mut self) {
-        if self.tools_in_flight == 0 {
-            self.tool_wait_from = self.elapsed_millis;
-        }
-        self.tools_in_flight += 1;
-    }
-
-    /// Records that one committed tool result answered a call.
-    pub(super) const fn note_tool_result(&mut self) {
-        self.tools_in_flight = self.tools_in_flight.saturating_sub(1);
-        if self.tools_in_flight == 0 {
-            self.reset_tool_watch();
-        }
-    }
-
-    /// Re-reads the in-flight tool calls from the committed transcript.
-    pub(super) fn recount_tool_watch(&mut self) {
-        let calls = self
-            .transcript()
-            .iter()
-            .filter(|row| row.kind() == MessageKindDto::ToolCall)
-            .count();
-        let results = self
-            .transcript()
-            .iter()
-            .filter(|row| row.kind() == MessageKindDto::ToolResult)
-            .count();
-        // @todo(core): the terminal still decides which tool calls are in flight by subtracting the
-        // committed result rows from the committed call rows over the whole transcript. The run's
-        // open calls are a run fact the daemon knows while it executes them, so the projection should
-        // carry them and the front end should derive the word, not the truth.
-        self.tools_in_flight = calls.saturating_sub(results);
-        if self.tools_in_flight == 0 {
+    /// The count is the committed run's own fact - storage pairs its committed
+    /// call rows with their committed results by call identity - so this state
+    /// decides only the word. The elapsed value the front end last reported is
+    /// the baseline the working threshold measures from, so a call the
+    /// projection reports before any report has no baseline and never gets one
+    /// invented for it.
+    pub(super) fn refresh_tool_watch(&mut self) {
+        let open = self.active_run().map_or(0, |run| run.open_tool_calls());
+        if open == 0 {
             self.reset_tool_watch();
             return;
         }
-        if self.tool_wait_from.is_none() {
+        if self.tools_in_flight == 0 {
             self.tool_wait_from = self.elapsed_millis;
         }
+        self.tools_in_flight = open;
     }
 
     /// Ends the tool watch: no call is in flight.

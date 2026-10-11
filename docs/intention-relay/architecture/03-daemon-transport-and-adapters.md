@@ -432,20 +432,24 @@ text above is the live policy.
   carries its status word. The transcript's layout cache is keyed by the theme like the pane width, so a theme change
   replays the whole transcript exactly as a resize does.
 - Input block and status vocabulary. The input block is one focused frame around a badge header carrying the session's
-  durable mode (the `mode @todo(core)` placeholder until a snapshot names it) beside the `model @todo(core)`
-  placeholder, one display row per buffer line with the `█` block cursor and a window that keeps the cursor's line and
-  cell visible, and the run status row under it. A `\` immediately before `Enter` inserts a line break and never reaches
+  durable mode (the `mode @todo(core)` placeholder until a snapshot names it) beside the effective provider model the
+  session projection carries (absent until a snapshot names one), one display row per buffer line with the `█` block
+  cursor and a window that keeps the cursor's line and cell visible, and the run status row under it. A `\` immediately
+  before `Enter` inserts a line break and never reaches
   the buffer, so a prompt is typed over several lines; the block takes one more row per buffer line while the transcript
   gives up exactly those rows, no line count is capped, and a buffer taller than the block shows the window of lines
   that keeps the cursor's line visible. The status row reads in words — `Ready · session … · build · Working… 6.2s ·
-  ctx @todo(core)` — and names the live phase of the run: `Waiting…` from the moment the turn request leaves for the
+  ctx in 1200 out 300` — and names the live phase of the run: `Waiting…` from the moment the turn request leaves for the
   network, `Thinking…` when the reasoning stream starts, `Answering…` when the answer stream starts, and `Working…`
-  while a tool call has been in flight for more than half a second — a shorter call leaves the phase the one it found —
-  with `Answered in 13.4s` once the run reaches its terminal status. The removed debug vocabulary (`connected`,
-  `run none`, `stream idle`, `stream closed`) is gone: the stream is this front end's own plumbing, and a run is
-  described by what it is doing. Every elapsed value reads in tenths of a second, live and final. The elapsed value is
-  the front end's own measurement, reported to the core as `Action::ElapsedReported` so the view stays a pure function
-  of state, and the same value is what the half-second tool threshold measures against: the core stays clock-free.
+  while the run's committed projection reports a tool call in flight past half a second — a shorter call leaves the
+  phase the one it found. The row's committed facts are the projection's own, never a front-end measurement: a terminal
+  run reads `Answered in 13s` from the projection's start and finish times and its usage from the terminal outcome
+  (`ctx in 1200 out 300`, or `ctx not reported` when the provider reported none). The removed debug vocabulary
+  (`connected`, `run none`, `stream idle`, `stream closed`) is gone: the stream is this front end's own plumbing, and a
+  run is described by what it is doing. A live elapsed value reads in tenths of a second and the committed duration in
+  whole seconds. The elapsed value is the front end's own measurement, reported to the core as `Action::ElapsedReported`
+  so the view stays a pure function of state, and the same value is what the half-second tool threshold measures
+  against: the core stays clock-free, and the adapter measures nothing the committed projection already carries.
 - Terminal settings. `config.toml` supplies the default through its optional `[tui] theme` key (`light` or `dark`; an
   absent section and an absent key both mean light, and an unknown spelling is the typed `invalid_tui_theme` validation
   error, so nothing silently falls back). The daemon owns the runtime value as a single-row `tui_settings` override in
@@ -549,8 +553,6 @@ fabricated value. The table below names each one, taken from the markers in the 
 | the `Favorites` tab's empty state | a durable favorite flag |
 | the `Archived` tab's empty state and the `Ctrl+X` notice | a durable archive flag and its command |
 | the row counter's `+N omitted (core: paged list @todo)` | a session list that can be paged past its bounded window |
-| the `ctx @todo(core)` status run | token usage on the run projection |
-| the `model @todo(core)` badge | the provider model on the session projection |
 | the welcome overview's `AGENTS.md` chip | the instruction sources and their effective projection (Slice 3) |
 | the welcome overview's `MCPs` chip | MCP capability support |
 | the welcome overview's `Skills` chip | skills support |
@@ -562,15 +564,14 @@ lacks. Each site carries the same `@todo(core):` prefix and names what the core 
 
 | The terminal still | The core should own |
 | --- | --- |
-| counts committed tool-call rows minus tool-result rows to decide what is in flight (`app/run.rs`) | the run's open tool calls |
 | resolves the default run policy of a created session (`cli.rs`) | the durable run-mode default |
 | spells the declared run-mode set in the flag's usage and rejection text (`cli.rs`) | a declared set on the run-mode vocabulary |
 | parks a prompt that has no session and sends it as the first turn of whichever snapshot arrives first (`app/input.rs`) | create-session-and-first-turn as one use case |
 
 The `@todo(hack)` marker is the crate's own class for work the adapter or the client must still do, and it is not
-catalogued here. Its sites are the theme values re-spelled in the registry (`app/commands.rs`), the committed duration
-measured by the front end (`tui/mod.rs`), and the endpoint instance and the daemon program resolved by the binary
-(`main.rs`). Each of those markers names the client or core surface that should replace it.
+catalogued here. Its sites are the theme values re-spelled in the registry (`app/commands.rs`) and the endpoint
+instance and the daemon program resolved by the binary (`main.rs`). Each of those markers names the client or core
+surface that should replace it.
 
 ### Frame cost
 

@@ -78,16 +78,20 @@ The chat panel itself is the transcript (user messages as labelled cards,
 assistant answers as markdown under their `∷` marker, committed reasoning as a
 separate dimmed block, tool exchanges as framed blocks, daemon notices as their
 own `※` block), the input block (a badge header with the session's real mode and
-a model placeholder, one row per buffer line with a `█` block cursor, and the run
-status row under it), and the notice or error line. The status row reads
-in words - `Ready · session … · build · Working… 6.2s · ctx @todo(core)` - and
-names the run's live phase: `waiting` from the moment the turn request leaves
-for the network, `thinking` when the reasoning stream starts, `answering` when
-the answer stream starts, and `working` while a tool call has been in flight for
-more than half a second (a shorter call leaves the phase it found). A completed
-run reads `Answered in 13.4s`, and the interrupted and failed runs keep their
-words. Every elapsed value reads in tenths of a second, live and final; the
-value is measured by this front end's turn clock and reported to the core as
+the effective provider model its projection carries, one row per buffer line
+with a `█` block cursor, and the run status row under it), and the notice or
+error line. The status row reads in words - `Ready · session … · build ·
+Working… 6.2s · ctx in 1200 out 300` - and names the run's live phase: `waiting`
+from the moment the turn request leaves for the network, `thinking` when the
+reasoning stream starts, `answering` when the answer stream starts, and
+`working` while the run's committed projection reports a tool call in flight
+past half a second (a shorter call leaves the phase it found). A terminal run
+reads its committed facts - the duration from the projection's own times
+(`Answered in 13s`) and the usage from the terminal outcome
+(`ctx in 1200 out 300`, or `ctx not reported`) - and the interrupted and failed
+runs keep their words. A live elapsed value reads in tenths of a second and the
+committed duration in whole seconds; the live value is measured by this front
+end's turn clock and reported to the core as
 `Action::ElapsedReported`, so the view stays a pure function of state and the
 half-second tool threshold measures reported time instead of a clock in the core.
 A `\` immediately before `Enter` inserts a line break instead of submitting, and
@@ -218,18 +222,20 @@ Rules the panes keep:
   display rows shows its first fifteen and a marker naming the hidden ones, and
   each activation of that marker - or of `Ctrl+E` - reveals a hundred more.
 - A value the wire does not carry is an explicit `@todo(core)` placeholder
-  (`model`, `ctx`, and the welcome overview's `AGENTS.md`, `MCPs`, and
+  (the `mode` badge and the welcome overview's `AGENTS.md`, `MCPs`, and
   `Skills` chips), never a fabricated one. The command hint band and the theme
   picker are the surfaces with no placeholder at all: every band row - name,
   description, and category, or value, description, and argument - is a
   front-end registry fact, and every picker row is a theme fact, so nothing in
-  either can be a `@todo(core)`.
+  either can be a `@todo(core)`. The model badge and the usage segment are
+  projection facts, not placeholders: the badge names the effective model the
+  session snapshot carries, and the segment reads the terminal outcome's usage
+  (`ctx in 1200 out 300`, or `ctx not reported`).
 - The same `@todo(core)` marker also names work the front end still performs
   that belongs to the core rather than a fact it lacks. The architecture
   document's boundary table is the catalogue of those sites - the run-mode
-  default and its declared set in `src/cli.rs`, the parked first prompt in
-  `src/app/`, and the in-flight tool count in `src/app/run.rs` - and each
-  marker names what the core should own.
+  default and its declared set in `src/cli.rs` and the parked first prompt in
+  `src/app/` - and each marker names what the core should own.
   The crate's `@todo(hack)` markers name the work the adapter or the client
   still owes separately, and are not part of that catalogue.
 

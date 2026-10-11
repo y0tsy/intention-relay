@@ -688,13 +688,21 @@ mod tests {
 
     /// Returns one run projection of `session_id` in `status`.
     fn run(session_id: SessionId, run_id: RunId, status: RunStatusDto) -> RunProjectionDto {
+        let started_at = intention_proto::TimestampDto::from_unix_seconds(1_726_000_000)
+            .expect("fixture timestamp is valid");
+        let finished_at = intention_proto::run_status_is_terminal(status).then_some(started_at);
         RunProjectionDto::new(
             session_id,
             run_id,
             TurnId::new(),
             status,
             ConfigRevisionId::new(),
+            None,
+            started_at,
+            finished_at,
+            0,
         )
+        .expect("fixture run projection is valid")
     }
 
     /// Returns one live session-stream state over `messages`.

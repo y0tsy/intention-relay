@@ -69,6 +69,7 @@ impl AppState {
     pub(super) fn apply_session_snapshot(&mut self, snapshot: SessionSnapshotDto) -> Vec<Effect> {
         let session_id = snapshot.session_id();
         let mode = snapshot.projection().mode();
+        let model = snapshot.projection().provider_model().map(str::to_owned);
         let read = SessionStreamState::from_snapshot(snapshot);
         if let Err(error) = self.merge_transcript(read) {
             // The client classified the read as another session's: the front end
@@ -77,6 +78,7 @@ impl AppState {
         }
         self.session_id = Some(session_id);
         self.session_mode = Some(mode);
+        self.session_model = model;
         // A read replaces the rows the front end held, so every display-row
         // offset moved: the selection and the reasoning expansions go with it.
         self.note_replacement();

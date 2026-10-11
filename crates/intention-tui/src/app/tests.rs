@@ -47,13 +47,33 @@ fn workspace_root() -> WorkspaceRootDto {
 }
 
 fn run(session_id: SessionId, run_id: RunId, status: RunStatusDto) -> RunProjectionDto {
+    run_in(session_id, run_id, status, None, 0)
+}
+
+/// Returns one run projection with the committed usage and open calls a test
+/// needs, and a finish time exactly when `status` is terminal.
+fn run_in(
+    session_id: SessionId,
+    run_id: RunId,
+    status: RunStatusDto,
+    usage: Option<intention_proto::UsageDto>,
+    open_tool_calls: u32,
+) -> RunProjectionDto {
+    let started_at =
+        TimestampDto::from_unix_seconds(1_726_000_000).expect("fixture timestamp is valid");
+    let finished_at = intention_proto::run_status_is_terminal(status).then_some(started_at);
     RunProjectionDto::new(
         session_id,
         run_id,
         TurnId::new(),
         status,
         ConfigRevisionId::new(),
+        usage,
+        started_at,
+        finished_at,
+        open_tool_calls,
     )
+    .expect("fixture run projection is valid")
 }
 
 fn session_projection(
@@ -443,8 +463,10 @@ fn running_session(session_id: SessionId, run_id: RunId, status: RunStatusDto) -
 /// committed at the reported elapsed value `at`, with the fixture identities.
 ///
 /// The commit's elapsed value is the baseline the working threshold measures
-/// from: reporting `at` before the row is what pins the baseline a test then
-/// advances past or stays under.
+/// from: reporting `at` before the projection names the open call is what pins
+/// the baseline a test then advances past or stays under. The projection the
+/// daemon republishes after a committed tool row is the fact that names the
+/// open call, exactly as it arrives on the wire.
 fn tool_call_in_flight(at: u64) -> (AppState, SessionId, RunId, ToolCallId) {
     let session_id = SessionId::new();
     let run_id = RunId::new();
@@ -467,7 +489,24 @@ fn tool_call_in_flight(at: u64) -> (AppState, SessionId, RunId, ToolCallId) {
             call_id,
         ),
     );
+    publish_open_calls(&mut state, session_id, run_id, 1);
     (state, session_id, run_id, call_id)
+}
+
+/// Applies the committed run projection the daemon republishes after it commits
+/// a tool row.
+///
+/// The open-call count is the projection's own committed fact, so this is the
+/// only frame that names a call in flight.
+fn publish_open_calls(state: &mut AppState, session_id: SessionId, run_id: RunId, open_calls: u32) {
+    let effects = state.update(Action::FrameReceived(SessionFrameDto::Status(run_in(
+        session_id,
+        run_id,
+        RunStatusDto::Running,
+        None,
+        open_calls,
+    ))));
+    assert!(effects.is_empty(), "a status frame asks for no client work");
 }
 
 #[test]
@@ -2957,6 +2996,7 @@ fn a_tool_call_in_flight_past_half_a_second_names_the_working_phase() {
         &mut state,
         tool_result_row(session_id, run_id, "read", "the file", call_id),
     );
+    publish_open_calls(&mut state, session_id, run_id, 0);
     assert_eq!(
         state.run_phase(),
         Some(RunPhase::Answering),
@@ -2986,12 +3026,14 @@ fn one_result_leaves_the_watch_while_another_call_is_in_flight() {
         &mut state,
         tool_call_row(session_id, run_id, "glob", "{}", second),
     );
+    publish_open_calls(&mut state, session_id, run_id, 2);
     state.update(Action::ElapsedReported { millis: 1_700 });
     assert_eq!(state.run_phase(), Some(RunPhase::Working));
     commit_row(
         &mut state,
         tool_result_row(session_id, run_id, "read", "the file", first),
     );
+    publish_open_calls(&mut state, session_id, run_id, 1);
     assert_eq!(
         state.run_phase(),
         Some(RunPhase::Working),
@@ -3001,7 +3043,92 @@ fn one_result_leaves_the_watch_while_another_call_is_in_flight() {
         &mut state,
         tool_result_row(session_id, run_id, "glob", "the files", second),
     );
+    publish_open_calls(&mut state, session_id, run_id, 0);
     assert_eq!(state.run_phase(), Some(RunPhase::Answering));
+}
+
+#[test]
+fn the_watch_names_the_open_calls_the_projection_reports() {
+    // The committed count alone drives the watch: no row this test commits
+    // tells the front end anything about a call in flight.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
+    state.update(Action::FrameReceived(delta(
+        session_id,
+        run_id,
+        0,
+        "the answer",
+    )));
+    state.update(Action::ElapsedReported { millis: 1_000 });
+    publish_open_calls(&mut state, session_id, run_id, 1);
+    state.update(Action::ElapsedReported { millis: 1_700 });
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Working),
+        "the projection's open call names the working phase"
+    );
+    publish_open_calls(&mut state, session_id, run_id, 0);
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Answering),
+        "a projection reporting no open calls ends the watch"
+    );
+}
+
+#[test]
+fn an_orphan_result_never_cancels_a_live_call() {
+    // A committed result whose call never committed changes nothing: the
+    // projection still reports the live call, so the watch stays.
+    let (mut state, session_id, run_id, call_id) = tool_call_in_flight(2_000);
+    state.update(Action::ElapsedReported { millis: 2_600 });
+    assert_eq!(state.run_phase(), Some(RunPhase::Working));
+    commit_row(
+        &mut state,
+        tool_result_row(session_id, run_id, "read", "the file", ToolCallId::new()),
+    );
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Working),
+        "a result row alone never speaks for the live call"
+    );
+    publish_open_calls(&mut state, session_id, run_id, 1);
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Working),
+        "the projection still counts the live call"
+    );
+    commit_row(
+        &mut state,
+        tool_result_row(session_id, run_id, "read", "the file", call_id),
+    );
+    publish_open_calls(&mut state, session_id, run_id, 0);
+    assert_eq!(state.run_phase(), Some(RunPhase::Answering));
+}
+
+#[test]
+fn a_call_of_another_run_never_names_this_runs_working_phase() {
+    let (mut state, session_id, ..) = tool_call_in_flight(2_000);
+    state.update(Action::ElapsedReported { millis: 2_600 });
+    assert_eq!(state.run_phase(), Some(RunPhase::Working));
+
+    // The next run of the same session reports its own open-call count: the
+    // previous run's call is not this run's fact.
+    let next_run = RunId::new();
+    let effects = state.update(Action::FrameReceived(SessionFrameDto::Status(run_in(
+        session_id,
+        next_run,
+        RunStatusDto::Running,
+        None,
+        1,
+    ))));
+    assert!(effects.is_empty(), "a status frame asks for no client work");
+    state.update(Action::ElapsedReported { millis: 2_700 });
+    assert_eq!(
+        state.run_phase(),
+        Some(RunPhase::Waiting),
+        "the new run's own projection starts its watch from nothing"
+    );
 }
 
 #[test]
@@ -3019,11 +3146,12 @@ fn a_tool_call_before_any_elapsed_report_never_names_working() {
         &mut state,
         tool_call_row(session_id, run_id, "read", "{}", ToolCallId::new()),
     );
+    publish_open_calls(&mut state, session_id, run_id, 1);
     state.update(Action::ElapsedReported { millis: 10_000 });
     assert_eq!(
         state.run_phase(),
         Some(RunPhase::Answering),
-        "a call that committed before any report has no baseline to measure"
+        "a call the projection named before any report has no baseline to measure"
     );
 }
 
