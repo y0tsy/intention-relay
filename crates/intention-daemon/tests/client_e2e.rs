@@ -49,12 +49,23 @@ struct E2eHost {
 impl E2eHost {
     /// Creates a fresh isolated fixture and spawns its first daemon process.
     fn new(workspace_file: Option<(&str, &str)>, tool_arguments: &str) -> Self {
-        Self::with_tool_round_reasoning(workspace_file, tool_arguments, &[])
+        Self::with_tool_round("read", workspace_file, tool_arguments, &[])
     }
 
     /// Creates a fresh isolated fixture whose tool round streams `reasoning`
     /// before the tool call it emits.
     fn with_tool_round_reasoning(
+        workspace_file: Option<(&str, &str)>,
+        tool_arguments: &str,
+        reasoning: &[&str],
+    ) -> Self {
+        Self::with_tool_round("read", workspace_file, tool_arguments, reasoning)
+    }
+
+    /// Creates a fresh isolated fixture whose tool round calls `tool_name` with
+    /// `tool_arguments` and streams `reasoning` before that call.
+    fn with_tool_round(
+        tool_name: &str,
         workspace_file: Option<(&str, &str)>,
         tool_arguments: &str,
         reasoning: &[&str],
@@ -66,7 +77,7 @@ impl E2eHost {
             std::fs::write(workspace.path().join(name), content).expect("workspace fixture writes");
         }
         let credential = format!("fixture-credential-{}", std::process::id());
-        let provider = FakeProvider::start_with_round_reasoning(tool_arguments, reasoning);
+        let provider = FakeProvider::start_tool_round(tool_name, tool_arguments, reasoning);
         let config_document = fixture_config_document(provider.port(), &credential);
         write_config_document(config_home.path(), &config_document);
         let endpoint = unique_endpoint("e2e");
@@ -516,6 +527,90 @@ async fn real_daemon_tool_loop_answers_a_failed_call_without_stopping() {
             && messages[2].text().contains("tool_read_failed"),
         "the durable failed result carries the model-visible guidance: {}",
         messages[2].text()
+    );
+    assert_eq!(messages[3].text(), "done");
+}
+
+#[tokio::test]
+async fn real_daemon_reports_a_declared_execute_timeout_as_a_named_partial() {
+    // The call's own deadline ends the command, and the durable result the
+    // model reads names the timeout instead of reading as lost evidence.
+    let arguments = if cfg!(windows) {
+        r#"{"command":"ping -n 5 127.0.0.1","timeout_seconds":1}"#
+    } else {
+        r#"{"command":"sleep 5","timeout_seconds":1}"#
+    };
+    let host = E2eHost::with_tool_round("execute", None, arguments, &[]);
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
+
+    let session_id = SessionId::new();
+    client
+        .create_session(CreateSessionCommandDto::new(
+            ProjectId::new(),
+            session_id,
+            WorkspaceId::new(),
+            WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
+                .expect("workspace root is absolute"),
+            RunModeDto::Build,
+        ))
+        .await
+        .expect("the daemon accepts session creation");
+
+    let outcome = client
+        .send_user_turn(
+            session_id,
+            IdempotencyKey::new(),
+            "Run a long command".to_owned(),
+        )
+        .await
+        .expect("user turn is accepted");
+    let SendUserTurnOutcomeDto::Started { run_id, .. } = outcome else {
+        panic!("first turn starts a run, got: {outcome:?}")
+    };
+
+    let stream_client = RunStreamClient::new(host.endpoint.clone());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let observation =
+        observe_run_until_terminal(&stream_client, session_id, run_id, deadline).await;
+    assert_eq!(
+        observation.subscription.state().status(),
+        Some(RunStatusDto::Completed),
+        "the declared deadline ends the call, not the run"
+    );
+    assert_eq!(
+        host.provider.request_count(),
+        2,
+        "the partial call is answered with its notice and the loop continues once"
+    );
+    assert_eq!(host.provider.excess_count(), 0);
+
+    let session_snapshot = client
+        .session_snapshot(session_id)
+        .await
+        .expect("session snapshot reads");
+    let messages = session_snapshot.messages();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.kind())
+            .collect::<Vec<_>>(),
+        vec![
+            MessageKindDto::User,
+            MessageKindDto::ToolCall,
+            MessageKindDto::ToolResult,
+            MessageKindDto::Assistant,
+        ],
+        "the timed-out call is answered and the loop continues to a completed answer"
+    );
+    assert_eq!(messages[1].tool_id(), Some("execute"));
+    let result = messages[2].text();
+    assert!(
+        result.contains("hit its declared timeout of 1s and was terminated before a final result"),
+        "the durable result names the deadline the model set: {result}"
+    );
+    assert!(
+        !result.contains("did not receive a final result"),
+        "a declared deadline never reaches the model as lost evidence: {result}"
     );
     assert_eq!(messages[3].text(), "done");
 }

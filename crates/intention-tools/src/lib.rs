@@ -26,35 +26,62 @@ mod timeout_tests {
     use std::process::Command;
 
     #[test]
-    fn a_declared_timeout_is_classified_as_a_lost_interruption() {
+    fn a_declared_timeout_is_classified_as_its_own_declared_deadline() {
         let mut command = if cfg!(windows) {
             let mut command = Command::new("ping");
-            command.args(["-n", "3", "127.0.0.1"]);
+            command.args(["-n", "5", "127.0.0.1"]);
             command
         } else {
             let mut command = Command::new("sleep");
-            command.arg("1");
+            command.arg("5");
             command
         };
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         let child = command.spawn().expect("spawn timeout fixture");
+        let declared = ToolTimeoutSecondsDto::new(1).expect("one second is a valid timeout");
         let started = Instant::now();
-        let result = bounded_output_with_timeout(
-            child,
-            CancellationSignal::new(),
-            Some(Duration::from_millis(25)),
+        let result = bounded_output_with_timeout(child, CancellationSignal::new(), Some(declared));
+        assert!(
+            matches!(
+                result,
+                Err(ExecuteFailure::Interrupted {
+                    cause: InterruptCause::TimedOut(timeout),
+                    ..
+                }) if timeout == declared
+            ),
+            "a fired declared deadline is its own cause, never lost evidence"
         );
-        assert!(matches!(
-            result,
-            Err(ExecuteFailure::Interrupted {
-                cause: InterruptCause::Lost,
-                ..
-            })
-        ));
         // The declared timeout is the controlling invariant: the tool must
         // return promptly even when the pipe readers are descheduled by a
         // loaded machine; the assertion stays deliberately loose.
         assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn an_observed_cancellation_outranks_a_declared_deadline() {
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("ping");
+            command.args(["-n", "5", "127.0.0.1"]);
+            command
+        } else {
+            let mut command = Command::new("sleep");
+            command.arg("5");
+            command
+        };
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = command.spawn().expect("spawn cancelled fixture");
+        let declared = ToolTimeoutSecondsDto::new(1).expect("one second is a valid timeout");
+        // The stop is already observed when the collection starts, so the
+        // caller's stop is the cause even though a deadline was declared.
+        let result =
+            bounded_output_with_timeout(child, CancellationSignal::cancelled(), Some(declared));
+        assert!(matches!(
+            result,
+            Err(ExecuteFailure::Interrupted {
+                cause: InterruptCause::Stopped,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -256,7 +283,7 @@ struct BoundedOutput {
 fn bounded_output(
     child: Child,
     cancellation: CancellationSignal,
-    timeout: Option<Duration>,
+    timeout: Option<ToolTimeoutSecondsDto>,
 ) -> Result<BoundedOutput, ExecuteFailure> {
     bounded_output_with_timeout(child, cancellation, timeout)
 }
@@ -442,8 +469,8 @@ enum ExecuteFailure {
     },
 }
 
-/// Classifies one observed interruption: an explicit cancellation is a stop,
-/// anything else (deadline, stalled drain, failed wait) is lost evidence.
+/// Classifies one observed interruption that carries no declared deadline: an
+/// explicit cancellation is a stop, anything else is lost evidence.
 fn interruption_cause(cancellation: &CancellationSignal) -> InterruptCause {
     if cancellation.is_cancelled() {
         InterruptCause::Stopped
@@ -452,10 +479,26 @@ fn interruption_cause(cancellation: &CancellationSignal) -> InterruptCause {
     }
 }
 
+/// Classifies the interruption of the call's own declared deadline.
+///
+/// A cancellation observed at the same moment stays the caller's stop: the
+/// stop is the more specific fact, and the declared deadline is the cause only
+/// when nothing else stopped the call.
+fn deadline_cause(
+    cancellation: &CancellationSignal,
+    timeout: ToolTimeoutSecondsDto,
+) -> InterruptCause {
+    if cancellation.is_cancelled() {
+        InterruptCause::Stopped
+    } else {
+        InterruptCause::TimedOut(timeout)
+    }
+}
+
 fn bounded_output_with_timeout(
     mut child: Child,
     cancellation: CancellationSignal,
-    timeout: Option<Duration>,
+    timeout: Option<ToolTimeoutSecondsDto>,
 ) -> Result<BoundedOutput, ExecuteFailure> {
     let child_id = child.id();
     let progress = Arc::new(ReaderProgress::default());
@@ -486,7 +529,7 @@ fn bounded_output_with_timeout(
     let mut pipes = PipeReaders::new(stdout, stderr, progress);
     // A declared timeout is the only deadline a program observation has; an
     // absent one leaves the call bounded by cancellation alone.
-    let deadline = timeout.map(|timeout| Instant::now() + timeout);
+    let deadline = timeout.map(|timeout| Instant::now() + Duration::from_secs(timeout.as_secs()));
     loop {
         if cancellation.is_cancelled()
             || deadline.is_some_and(|deadline| Instant::now() >= deadline)
@@ -494,7 +537,10 @@ fn bounded_output_with_timeout(
             // The direct child is killed and, on Unix, its whole process
             // group, so a backgrounded descendant that inherited the pipes
             // cannot keep the reader threads alive after the tool returns.
-            let cause = interruption_cause(&cancellation);
+            let cause = timeout.map_or_else(
+                || interruption_cause(&cancellation),
+                |declared| deadline_cause(&cancellation, declared),
+            );
             terminate_process_tree(&mut child, child_id);
             let _ = child.wait();
             // The interruption is already observed: the collection keeps
@@ -1049,7 +1095,7 @@ pub const EXECUTE_INPUT_SCHEMA: &str = r#"{
     "timeout_seconds": {
       "type": "integer",
       "minimum": 1,
-      "description": "Optional per-call timeout; without it the command runs until it finishes or the run is cancelled."
+      "description": "Optional per-call deadline in whole seconds. Without it the command runs until it finishes or the run is cancelled; when it elapses the command is terminated and the call returns the captured output as a partial result whose notice names the timeout."
     }
   },
   "required": ["command"]
@@ -1572,28 +1618,48 @@ fn append_truncation_marker(content: &mut String, truncated: bool) {
 /// Renders the durable partial result of one interrupted dispatch.
 ///
 /// The captured output precedes the exact interruption notice selected by doc
-/// 15 for the stopped/lost and captured/uncaptured cases.
+/// 15 for the cause and the captured/uncaptured cases: a caller stop names the
+/// stop, the call's own declared deadline names the timeout it hit, and an
+/// interruption without a declared deadline stays lost evidence.
 ///
 /// # Errors
 ///
 /// Returns a validation error when the captured output cannot render.
 pub fn partial_tool_result_content(
-    stopped: bool,
+    cause: InterruptCause,
     result: Option<&ToolResult>,
 ) -> DtoResult<String> {
-    let notice = match (stopped, result.is_some()) {
-        (true, true) => {
+    let (with_output, without_output) = match cause {
+        InterruptCause::Stopped => (
             "[The tool call was stopped before a final result; the output above is partial.]"
+                .to_owned(),
+            "[The tool call was stopped before a final result.]".to_owned(),
+        ),
+        InterruptCause::TimedOut(declared) => {
+            let seconds = declared.as_secs();
+            (
+                format!(
+                    "[The tool call hit its declared timeout of {seconds}s and was terminated before a final result; the output above is partial.]"
+                ),
+                format!(
+                    "[The tool call hit its declared timeout of {seconds}s and was terminated before a final result.]"
+                ),
+            )
         }
-        (false, true) => {
+        InterruptCause::Lost => (
             "[The tool call did not receive a final result; the output above is partial.]"
-        }
-        (true, false) => "[The tool call was stopped before a final result.]",
-        (false, false) => "[The tool call did not receive a final result.]",
+                .to_owned(),
+            "[The tool call did not receive a final result.]".to_owned(),
+        ),
+    };
+    let notice = if result.is_some() {
+        with_output
+    } else {
+        without_output
     };
     match result {
         Some(result) => Ok(format!("{}\n{notice}", render_tool_result_content(result)?)),
-        None => Ok(notice.to_owned()),
+        None => Ok(notice),
     }
 }
 
@@ -1711,7 +1777,7 @@ mod tool_result_renderer_tests {
         // The interrupted path renders through the same projection, so a
         // pre-empted empty search still answers its call with content.
         assert_eq!(
-            partial_tool_result_content(true, Some(&empty_glob))
+            partial_tool_result_content(InterruptCause::Stopped, Some(&empty_glob))
                 .expect("a stopped empty search renders"),
             "[no paths]\n[The tool call was stopped before a final result; the output above is partial.]"
         );
@@ -1724,20 +1790,58 @@ mod tool_result_renderer_tests {
             truncated: false,
         });
         assert_eq!(
-            partial_tool_result_content(true, Some(&captured)).expect("partial content renders"),
+            partial_tool_result_content(InterruptCause::Stopped, Some(&captured))
+                .expect("partial content renders"),
             "half a line\n[The tool call was stopped before a final result; the output above is partial.]"
         );
         assert_eq!(
-            partial_tool_result_content(false, Some(&captured)).expect("partial content renders"),
+            partial_tool_result_content(InterruptCause::Lost, Some(&captured))
+                .expect("partial content renders"),
             "half a line\n[The tool call did not receive a final result; the output above is partial.]"
         );
         assert_eq!(
-            partial_tool_result_content(true, None).expect("partial content renders"),
+            partial_tool_result_content(InterruptCause::Stopped, None)
+                .expect("partial content renders"),
             "[The tool call was stopped before a final result.]"
         );
         assert_eq!(
-            partial_tool_result_content(false, None).expect("partial content renders"),
+            partial_tool_result_content(InterruptCause::Lost, None)
+                .expect("partial content renders"),
             "[The tool call did not receive a final result.]"
+        );
+    }
+
+    #[test]
+    fn a_declared_timeout_renders_its_own_notice_with_the_declared_value() {
+        let captured = ToolResult::Read(TextResult {
+            text: bounded("half a line"),
+            truncated: false,
+        });
+        let timed_out =
+            InterruptCause::TimedOut(ToolTimeoutSecondsDto::new(3).expect("three seconds"));
+        assert_eq!(
+            partial_tool_result_content(timed_out, Some(&captured))
+                .expect("partial content renders"),
+            "half a line\n[The tool call hit its declared timeout of 3s and was terminated before a final result; the output above is partial.]"
+        );
+        assert_eq!(
+            partial_tool_result_content(timed_out, None).expect("partial content renders"),
+            "[The tool call hit its declared timeout of 3s and was terminated before a final result.]"
+        );
+        // The deadline never reads as lost evidence or as a caller stop.
+        let timed_out_notice =
+            partial_tool_result_content(timed_out, None).expect("partial content renders");
+        assert!(!timed_out_notice.contains("did not receive a final result"));
+        assert!(!timed_out_notice.contains("was stopped"));
+    }
+
+    #[test]
+    fn every_interruption_cause_records_its_own_durable_code() {
+        assert_eq!(InterruptCause::Stopped.code(), "tool_cancelled");
+        assert_eq!(InterruptCause::Lost.code(), "tool_execution_interrupted");
+        assert_eq!(
+            InterruptCause::TimedOut(ToolTimeoutSecondsDto::new(1).expect("one second")).code(),
+            "tool_timed_out"
         );
     }
 }
@@ -1747,9 +1851,29 @@ mod tool_result_renderer_tests {
 pub enum InterruptCause {
     /// Cancellation was observed while the tool was running.
     Stopped,
-    /// The tool lost its process evidence: deadline, stalled pipes, or a
+    /// The call's own declared deadline fired: the tool terminated the program
+    /// at the timeout its caller declared and kept whatever output was
+    /// captured, so the deadline is an observed cause rather than lost
+    /// evidence.
+    TimedOut(ToolTimeoutSecondsDto),
+    /// The tool lost its process evidence: a stalled pipe collection or a
     /// failed wait probe.
     Lost,
+}
+
+impl InterruptCause {
+    /// Returns the durable interruption code one cause records.
+    ///
+    /// The code vocabulary is closed to the three causes: a caller stop, the
+    /// call's own declared deadline, and lost process evidence.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Stopped => "tool_cancelled",
+            Self::TimedOut(_) => "tool_timed_out",
+            Self::Lost => "tool_execution_interrupted",
+        }
+    }
 }
 
 /// Outcome of one admitted tool dispatch.
@@ -1872,9 +1996,7 @@ fn execute_tool(
     let child = command
         .spawn()
         .map_err(|error| shell::spawn_failure(&error))?;
-    let timeout = input
-        .timeout_seconds
-        .map(|seconds| Duration::from_secs(seconds.as_secs()));
+    let timeout = input.timeout_seconds;
     let output = match bounded_output(child, cancellation, timeout) {
         Ok(output) => output,
         Err(ExecuteFailure::ReadFailed) => {

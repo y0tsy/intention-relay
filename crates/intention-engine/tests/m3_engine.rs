@@ -115,6 +115,15 @@ fn started_execute_arguments() -> String {
     }
 }
 
+/// The arguments of an execute call whose own declared deadline ends the call.
+fn timed_out_execute_arguments() -> String {
+    if cfg!(windows) {
+        r#"{"command":"ping -n 5 127.0.0.1","timeout_seconds":1}"#.to_owned()
+    } else {
+        r#"{"command":"sleep 5","timeout_seconds":1}"#.to_owned()
+    }
+}
+
 #[test]
 fn local_tool_success_records_admission_and_completion() {
     let root = hello_tool_root("success");
@@ -1163,10 +1172,21 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
         ToolResultStatusDto::Partial,
     );
     // The terminal Partial commit classifies the interrupted call with the
-    // exact stopped notice and never records a completed row.
+    // exact stopped notice, records the caller's stop, and never records a
+    // completed row.
     assert_eq!(
         repository.committed_results()[0].content(),
         "[The tool call was stopped before a final result.]"
+    );
+    let stopped = &repository.committed_results()[0];
+    assert_eq!(
+        stopped
+            .metadata()
+            .iter()
+            .map(|entry| (entry.key(), entry.value()))
+            .collect::<Vec<_>>(),
+        vec![("interruption", "tool_cancelled")],
+        "a stopped call records the caller's stop as its durable cause"
     );
     assert_eq!(repository.completed_result_count(), 0);
     publisher.assert_call_row_then_one_terminal();
@@ -1224,13 +1244,85 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
         "execute",
         ToolResultStatusDto::Partial,
     );
-    // The terminal Partial commit keeps the captured output and never records
-    // a completed row.
+    // The terminal Partial commit keeps the captured output, records the
+    // caller's stop, and never records a completed row.
     let partial = &repository.committed_results()[0];
     assert!(partial.content().contains("stdout:"));
     assert!(partial.content().contains(
         "[The tool call was stopped before a final result; the output above is partial.]"
     ));
+    assert_eq!(
+        partial
+            .metadata()
+            .iter()
+            .map(|entry| (entry.key(), entry.value()))
+            .collect::<Vec<_>>(),
+        vec![("interruption", "tool_cancelled")],
+        "an interrupted process keeps the caller's stop as its durable cause"
+    );
+    assert_eq!(repository.completed_result_count(), 0);
+    publisher.assert_call_row_then_one_terminal();
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A call cut by its own declared deadline is a Partial outcome whose notice
+/// names the timeout and whose durable evidence records the deadline it hit.
+#[test]
+fn a_declared_execute_timeout_records_its_deadline_as_partial_evidence() {
+    let root = hello_tool_root("declared-timeout");
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let call_id = ToolCallId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let publisher = TerminalOrderingProbe::new(&repository);
+    let outcome = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            ToolInvocationRequestDto::new(
+                hello_workspace(&root),
+                session_id,
+                run_id,
+                call_id,
+                "execute",
+                fixture_time(),
+            )
+            .with_arguments_json(timed_out_execute_arguments()),
+            &publisher,
+        )
+        .expect("a declared timeout is a partial outcome");
+    let ToolResultOutcomeDto::Partial { content } = outcome else {
+        unreachable!("a declared timeout must interrupt the invocation");
+    };
+    assert!(
+        content.contains("hit its declared timeout of 1s and was terminated before a final result"),
+        "the model reads the declared deadline it hit: {content}"
+    );
+    assert!(
+        !content.contains("did not receive a final result"),
+        "a declared deadline never reads as lost evidence: {content}"
+    );
+    assert_single_terminal_result(
+        &repository,
+        session_id,
+        run_id,
+        call_id,
+        "execute",
+        ToolResultStatusDto::Partial,
+    );
+    let partial = &repository.committed_results()[0];
+    assert!(partial.content().contains("hit its declared timeout of 1s"));
+    assert_eq!(
+        partial
+            .metadata()
+            .iter()
+            .map(|entry| (entry.key(), entry.value()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("interruption", "tool_timed_out"),
+            ("declared_timeout_seconds", "1"),
+        ],
+        "the durable row names the cause and the deadline it hit"
+    );
     assert_eq!(repository.completed_result_count(), 0);
     publisher.assert_call_row_then_one_terminal();
 

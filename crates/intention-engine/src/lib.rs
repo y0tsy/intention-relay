@@ -160,9 +160,9 @@ where
             Ok(ToolDispatchOutcome::Interrupted { cause, partial }) => {
                 // An interrupted dispatch is a durable partial outcome, not a
                 // typed failure: the call ends with whatever output was
-                // captured and the run continues with the next model step.
-                let stopped = cause == InterruptCause::Stopped || cancellation.is_cancelled();
-                let content = partial_tool_result_content(stopped, partial.as_ref())?;
+                // captured, its cause and declared deadline stay durable
+                // evidence, and the run continues with the next model step.
+                let content = partial_tool_result_content(cause, partial.as_ref())?;
                 self.commit_tool_result(
                     session_id,
                     run_id,
@@ -170,7 +170,7 @@ where
                     &tool_id,
                     ToolResultStatusDto::Partial,
                     content.clone(),
-                    Vec::new(),
+                    interruption_metadata(cause)?,
                     occurred_at,
                     publisher,
                 )?;
@@ -463,6 +463,30 @@ fn tool_result_metadata(result: &ToolResult) -> DtoResult<Vec<ToolResultMetadata
     } else {
         Ok(Vec::new())
     }
+}
+
+/// Builds the durable interruption evidence of one partial tool result.
+///
+/// The cause records its own closed code, and a call cut by its declared
+/// deadline also records the deadline it hit, so the durable row names exactly
+/// what stopped the call without carrying any captured content.
+///
+/// # Errors
+///
+/// Returns a validation error only when the static code entry or the declared
+/// deadline is rejected, which the metadata constructor cannot do.
+fn interruption_metadata(cause: InterruptCause) -> DtoResult<Vec<ToolResultMetadataEntryDto>> {
+    let mut entries = vec![ToolResultMetadataEntryDto::new(
+        "interruption",
+        cause.code(),
+    )?];
+    if let InterruptCause::TimedOut(declared) = cause {
+        entries.push(ToolResultMetadataEntryDto::new(
+            "declared_timeout_seconds",
+            declared.as_secs().to_string(),
+        )?);
+    }
+    Ok(entries)
 }
 
 fn schedule_from_context(

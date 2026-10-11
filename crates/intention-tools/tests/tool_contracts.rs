@@ -12,7 +12,7 @@ use intention_tools::{
     BoundedText, CancellationSignal, EditInput, EnvVarDto, EnvVarNameDto, ExecuteInput, GlobInput,
     GrepInput, GrepScope, InterruptCause, ReadInput, ShellCommandTextDto, TextResult,
     ToolDispatchOutcome, ToolId, ToolInput, ToolResult, ToolTimeoutSecondsDto, WriteInput,
-    model_visible_descriptors,
+    model_visible_descriptors, partial_tool_result_content,
 };
 
 /// Builds one `execute` input running `command` through the platform shell.
@@ -1152,8 +1152,9 @@ fn execute_reports_a_declared_working_directory_and_environment() {
     }
 }
 
-/// A declared timeout is a working deadline; it interrupts the call as lost
-/// evidence and keeps whatever output was captured.
+/// A declared timeout is the call's own working deadline: it ends the call as a
+/// partial result whose notice names the timeout instead of reading as lost
+/// evidence.
 #[test]
 fn execute_honors_a_declared_timeout() {
     let root_dir = fixture_dir("execute-timeout");
@@ -1163,23 +1164,32 @@ fn execute_honors_a_declared_timeout() {
     } else {
         "sleep 5"
     };
+    let declared = ToolTimeoutSecondsDto::new(1).expect("timeout");
     let input = ToolInput::Execute(ExecuteInput {
         command: ShellCommandTextDto::new(command).expect("command"),
         cwd: None,
         env: Vec::new(),
-        timeout_seconds: Some(ToolTimeoutSecondsDto::new(1).expect("timeout")),
+        timeout_seconds: Some(declared),
     });
     let started = std::time::Instant::now();
     let outcome = service
         .dispatch_with_cancellation(input, CancellationSignal::new())
         .expect("a declared timeout is an outcome, not an error");
-    assert!(matches!(
-        outcome,
-        ToolDispatchOutcome::Interrupted {
-            cause: InterruptCause::Lost,
-            ..
-        }
-    ));
+    let ToolDispatchOutcome::Interrupted { cause, partial } = outcome else {
+        unreachable!("a declared timeout must interrupt the dispatch")
+    };
+    assert_eq!(cause, InterruptCause::TimedOut(declared));
+    assert_eq!(cause.code(), "tool_timed_out");
+    let content = partial_tool_result_content(cause, partial.as_ref())
+        .expect("the partial content of a timed-out call renders");
+    assert!(
+        content.contains("hit its declared timeout of 1s and was terminated before a final result"),
+        "the model reads the declared deadline it hit: {content}"
+    );
+    assert!(
+        !content.contains("did not receive a final result"),
+        "a declared deadline never reads as lost evidence: {content}"
+    );
     assert!(
         started.elapsed() < std::time::Duration::from_secs(10),
         "a declared timeout returns promptly"

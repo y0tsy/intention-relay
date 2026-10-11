@@ -1386,8 +1386,11 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
         ],
     ]);
-    let stopped_notice = intention_tools::partial_tool_result_content(true, None)
-        .expect("the stopped-call notice renders");
+    let stopped_notice = intention_tools::partial_tool_result_content(
+        intention_tools::InterruptCause::Stopped,
+        None,
+    )
+    .expect("the stopped-call notice renders");
     let port = ScriptedPort::new(vec![Ok(ToolResultOutcomeDto::partial(
         stopped_notice.clone(),
     )

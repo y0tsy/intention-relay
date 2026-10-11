@@ -953,6 +953,64 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
     );
 }
 
+/// A partial result's interruption cause and declared deadline survive the
+/// write and a reopen in order.
+#[test]
+fn partial_tool_result_evidence_rereads_with_its_interruption_metadata() {
+    let (directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "run");
+    let call_id = ToolCallId::new();
+    let evidence = ToolResultEvidenceDto::new(
+        session,
+        run,
+        call_id,
+        "execute",
+        ToolResultStatusDto::Partial,
+        "stdout:\n\nstderr:\n\n[The tool call hit its declared timeout of 1s and was terminated before a final result; the output above is partial.]",
+        vec![
+            ToolResultMetadataEntryDto::new("interruption", "tool_timed_out")
+                .expect("fixture metadata is valid"),
+            ToolResultMetadataEntryDto::new("declared_timeout_seconds", "1")
+                .expect("fixture metadata is valid"),
+        ],
+        time(4),
+    )
+    .expect("partial tool result evidence is valid");
+    let message = NewMessageDto::new(
+        session,
+        Some(run),
+        MessageKindDto::ToolResult,
+        evidence.content(),
+        None,
+        Some(call_id),
+        Some("execute".to_owned()),
+    )
+    .expect("answering row is valid");
+    store
+        .write_tool_result(evidence.clone(), message)
+        .expect("partial evidence and its transcript row commit atomically");
+    drop(store);
+
+    let reread = reopen(&directory)
+        .load_tool_result(session, run, call_id)
+        .expect("partial evidence rereads after reopen");
+    assert_eq!(reread, evidence);
+    assert_eq!(
+        reread
+            .metadata()
+            .iter()
+            .map(|entry| (entry.key(), entry.value()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("interruption", "tool_timed_out"),
+            ("declared_timeout_seconds", "1"),
+        ],
+        "the cause and the declared deadline it hit survive the reopen in order"
+    );
+}
+
 #[test]
 fn finish_run_commits_terminal_outcome_and_is_idempotent() {
     let (directory, store) = repository();

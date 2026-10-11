@@ -28,11 +28,12 @@ pub fn fixture_config_document(port: u16, credential: &str) -> String {
 
 /// A fake OpenAI-compatible provider serving two scripted SSE rounds.
 ///
-/// The first request receives a tool-call round for the `read` tool carrying
-/// the tool arguments the fixture supplied, the second (whose body carries the
-/// tool result) receives a text round, and any further request receives an
-/// HTTP 500 and is counted as excess traffic. Either round may stream the
-/// thinking channel before the content it precedes.
+/// The first request receives a tool-call round for the tool the fixture named
+/// (`read` unless it names another), carrying the tool arguments the fixture
+/// supplied, the second (whose body carries the tool result) receives a text
+/// round, and any further request receives an HTTP 500 and is counted as excess
+/// traffic. Either round may stream the thinking channel before the content it
+/// precedes.
 ///
 /// A text round streams the reasoning chunks the fixture scripted before the
 /// answer they inform, exactly as a thinking provider does, so the same script
@@ -53,7 +54,18 @@ impl FakeProvider {
     /// Panics when the loopback listener or the provider thread cannot start.
     #[must_use]
     pub fn start(tool_arguments: &str) -> Self {
-        Self::scripted(tool_arguments, &[], &[])
+        Self::scripted("read", tool_arguments, &[], &[])
+    }
+
+    /// Starts a fake provider whose tool round calls `tool_name` with
+    /// `tool_arguments` and streams `reasoning` chunks before that call.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the loopback listener or the provider thread cannot start.
+    #[must_use]
+    pub fn start_tool_round(tool_name: &str, tool_arguments: &str, reasoning: &[&str]) -> Self {
+        Self::scripted(tool_name, tool_arguments, reasoning, &[])
     }
 
     /// Starts a fake provider whose text round streams `reasoning` chunks
@@ -64,7 +76,7 @@ impl FakeProvider {
     /// Panics when the loopback listener or the provider thread cannot start.
     #[must_use]
     pub fn start_with_reasoning(tool_arguments: &str, reasoning: &[&str]) -> Self {
-        Self::scripted(tool_arguments, &[], reasoning)
+        Self::scripted("read", tool_arguments, &[], reasoning)
     }
 
     /// Starts a fake provider whose tool round streams `reasoning` chunks
@@ -75,7 +87,7 @@ impl FakeProvider {
     /// Panics when the loopback listener or the provider thread cannot start.
     #[must_use]
     pub fn start_with_round_reasoning(tool_arguments: &str, reasoning: &[&str]) -> Self {
-        Self::scripted(tool_arguments, reasoning, &[])
+        Self::scripted("read", tool_arguments, reasoning, &[])
     }
 
     /// Starts a fake provider on one loopback port with its own listener thread.
@@ -83,7 +95,12 @@ impl FakeProvider {
     /// # Panics
     ///
     /// Panics when the loopback listener or the provider thread cannot start.
-    fn scripted(tool_arguments: &str, tool_round_reasoning: &[&str], reasoning: &[&str]) -> Self {
+    fn scripted(
+        tool_name: &str,
+        tool_arguments: &str,
+        tool_round_reasoning: &[&str],
+        reasoning: &[&str],
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("provider binds");
         let port = listener
             .local_addr()
@@ -95,6 +112,7 @@ impl FakeProvider {
         let thread_requests = Arc::clone(&requests);
         let thread_excess = Arc::clone(&excess);
         let thread_stop = Arc::clone(&stop);
+        let thread_tool_name = tool_name.to_owned();
         let tool_body = serde_json::to_string(&serde_json::json!({
             "id": "chatcmpl-client-e2e-1",
             "object": "chat.completion.chunk",
@@ -107,7 +125,7 @@ impl FakeProvider {
                         "index": 0,
                         "id": "call_1",
                         "type": "function",
-                        "function": {"name": "read", "arguments": tool_arguments},
+                        "function": {"name": tool_name, "arguments": tool_arguments},
                     }],
                 },
                 "finish_reason": "tool_calls",
@@ -178,6 +196,7 @@ impl FakeProvider {
                             stream,
                             &thread_requests,
                             &thread_excess,
+                            &thread_tool_name,
                             &tool_response,
                             &text_response,
                         ),
@@ -227,6 +246,7 @@ fn handle_provider_request(
     mut stream: TcpStream,
     requests: &AtomicUsize,
     excess: &AtomicUsize,
+    tool_name: &str,
     tool_response: &str,
     text_response: &str,
 ) {
@@ -241,8 +261,9 @@ fn handle_provider_request(
     let body_text = String::from_utf8_lossy(&body);
     if request_number == 1 {
         assert!(
-            body_text.contains(r#""tools":["#) && body_text.contains(r#""name":"read""#),
-            "the first provider request advertises tools including read: {body_text}"
+            body_text.contains(r#""tools":["#)
+                && body_text.contains(&format!(r#""name":"{tool_name}""#)),
+            "the first provider request advertises tools including {tool_name}: {body_text}"
         );
     }
     if request_number <= 2 {
