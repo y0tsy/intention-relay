@@ -2,11 +2,12 @@
 //!
 //! One binary serves the three terminal front ends the slice declares: the
 //! fullscreen UI, the interactive REPL, and the headless prompt command. The
-//! binary resolves the process-level seams every front end shares — the local
-//! endpoint, the daemon launcher, the workspace root, and the session runtime —
-//! and dispatches exactly one front end. Command-line rejections and startup
-//! failures go through explicit writers and the closed exit-status set of
-//! [`cli`], and the process status is the value `main` returns.
+//! binary consults the process-level seams every front end shares — the local
+//! endpoint and the daemon launcher the client declares, the workspace root,
+//! and the session runtime — and dispatches exactly one front end.
+//! Command-line rejections and startup failures go through explicit writers and
+//! the closed exit-status set of [`cli`], and the process status is the value
+//! `main` returns.
 
 mod cli;
 mod headless;
@@ -16,22 +17,12 @@ use std::io::{IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
-use intention_client::{IntentionClient, ProcessDaemonLauncher};
+use intention_client::{IntentionClient, ProcessDaemonLauncher, endpoint_discovery};
 use intention_proto::{DtoResult, ErrorDto, WorkspaceRootDto};
 use intention_transport::LocalEndpoint;
 use mimalloc::MiMalloc;
 
 use cli::{ExitStatus, Invocation, Options};
-
-// @todo(hack): the endpoint instance every request of this process addresses is selected by an
-// environment variable no document declares and no other adapter reads. Daemon discovery belongs to
-// the client, so this selection surface must be declared there or in the configuration, and the
-// binary should carry only what the client exposes.
-/// The environment variable that selects one local endpoint instance.
-///
-/// The value is a safe endpoint instance identifier; an installation that shares
-/// a machine with another daemon addresses its own endpoint with it.
-const ENDPOINT_VARIABLE: &str = "INTENTION_ENDPOINT";
 
 /// The binary's process-wide allocator.
 ///
@@ -96,17 +87,17 @@ fn run_tui(
     }
 }
 
-/// Resolves the local endpoint and builds the shared client with its launcher.
+/// Builds the shared client from the surfaces the client declares.
+///
+/// The local endpoint instance and the daemon program source are the client's
+/// declared inputs; the binary carries no environment read and no installation
+/// path inference.
 fn open_client(err: &mut impl Write) -> Result<(IntentionClient, LocalEndpoint), ExitStatus> {
-    let endpoint = match endpoint() {
+    let endpoint = match endpoint_discovery() {
         Ok(endpoint) => endpoint,
         Err(error) => return Err(startup_failure(&error, err)),
     };
-    let program = match daemon_program() {
-        Ok(program) => program,
-        Err(error) => return Err(startup_failure(&error, err)),
-    };
-    let launcher = match ProcessDaemonLauncher::new(program) {
+    let launcher = match ProcessDaemonLauncher::platform_default() {
         Ok(launcher) => launcher,
         Err(error) => return Err(startup_failure(&error, err)),
     };
@@ -114,48 +105,6 @@ fn open_client(err: &mut impl Write) -> Result<(IntentionClient, LocalEndpoint),
         IntentionClient::new(endpoint.clone(), Box::new(launcher)),
         endpoint,
     ))
-}
-
-/// Resolves the local endpoint the front end talks to.
-///
-/// # Errors
-///
-/// Returns the typed endpoint failure when the configured instance identifier is
-/// unsafe or the platform runtime directory cannot be determined.
-fn endpoint() -> DtoResult<LocalEndpoint> {
-    match std::env::var(ENDPOINT_VARIABLE) {
-        Ok(instance_id) if !instance_id.trim().is_empty() => {
-            LocalEndpoint::from_instance_id(instance_id)
-        }
-        _ => LocalEndpoint::platform_default(),
-    }
-}
-
-// @todo(hack): the installation layout is decided here - the daemon program is assumed to be a
-// sibling of this binary - while the launcher seam takes any program string and daemon discovery
-// belongs to the client. The program source should be declared by the client or the configuration,
-// not inferred from this executable's own path.
-/// Resolves the daemon program the client launches when none is running.
-///
-/// The daemon binary is the terminal binary's sibling in one installation
-/// directory, so a development build and an installed pair both resolve without
-/// configuration.
-///
-/// # Errors
-///
-/// Returns an unavailable error when the running executable has no resolvable
-/// sibling daemon program.
-fn daemon_program() -> DtoResult<String> {
-    let unavailable = || {
-        ErrorDto::unavailable(
-            "daemon_program_unavailable",
-            "the daemon program could not be resolved",
-        )
-    };
-    let executable = std::env::current_exe().map_err(|_| unavailable())?;
-    let directory = executable.parent().ok_or_else(unavailable)?;
-    let program = directory.join(format!("intention-daemon{}", std::env::consts::EXE_SUFFIX));
-    program.to_str().map(str::to_owned).ok_or_else(unavailable)
 }
 
 /// Resolves the workspace root one front end creates sessions with.

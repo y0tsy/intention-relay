@@ -37,6 +37,49 @@ const STREAM_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 /// The request identity of the single request one connection carries.
 const REQUEST_ID: u64 = 1;
 
+/// The environment variable that declares one local endpoint instance.
+///
+/// The value is a safe endpoint instance identifier; an installation that
+/// shares a machine with another daemon addresses its own endpoint with it.
+/// The variable is a declared client surface: the terminal binary and the
+/// process end-to-end seam both resolve the endpoint through it, and no adapter
+/// carries a second spelling.
+pub const ENDPOINT_VARIABLE: &str = "INTENTION_ENDPOINT";
+
+/// Resolves the local endpoint the calling process addresses.
+///
+/// The declared instance identifier in [`ENDPOINT_VARIABLE`], when present and
+/// non-blank, wins; with no declared instance the platform-default endpoint is
+/// used.
+///
+/// # Errors
+///
+/// Returns the typed `invalid_local_endpoint_instance` failure when the
+/// declared instance identifier is unsafe, or a typed unavailable failure when
+/// the platform runtime directory cannot be determined.
+pub fn endpoint_discovery() -> DtoResult<LocalEndpoint> {
+    endpoint_from_declared(std::env::var(ENDPOINT_VARIABLE).ok().as_deref())
+}
+
+/// Resolves one local endpoint from an optional declared instance identifier.
+///
+/// The pure half of [`endpoint_discovery`]: a non-blank declared identifier
+/// wins and its absence uses the platform-default endpoint.
+///
+/// # Errors
+///
+/// Returns the typed `invalid_local_endpoint_instance` failure when the
+/// declared instance identifier is unsafe, or a typed unavailable failure when
+/// the platform runtime directory cannot be determined.
+pub fn endpoint_from_declared(declared: Option<&str>) -> DtoResult<LocalEndpoint> {
+    match declared {
+        Some(instance_id) if !instance_id.trim().is_empty() => {
+            LocalEndpoint::from_instance_id(instance_id)
+        }
+        _ => LocalEndpoint::platform_default(),
+    }
+}
+
 /// Launches a daemon process after bootstrap has acquired the startup lock.
 pub trait DaemonLauncher: Send + Sync {
     /// Starts one daemon host for `endpoint`.
@@ -70,6 +113,41 @@ impl ProcessDaemonLauncher {
         }
         Ok(Self { program })
     }
+
+    /// Resolves the daemon program installed beside this process's binary.
+    ///
+    /// The daemon binary is the sibling of the running executable in one
+    /// installation directory, so a development build and an installed pair
+    /// both resolve without configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed `daemon_program_unavailable` failure when the running
+    /// executable has no resolvable sibling daemon program.
+    pub fn platform_default() -> DtoResult<Self> {
+        let executable = std::env::current_exe().map_err(|_| daemon_program_unavailable())?;
+        Self::new(daemon_program_beside(&executable)?)
+    }
+}
+
+/// Returns the daemon program path beside one executable path.
+///
+/// The pure sibling rule behind [`ProcessDaemonLauncher::platform_default`]: the
+/// program is the `intention-daemon` binary in the executable's own directory,
+/// carrying the platform executable suffix.
+///
+/// # Errors
+///
+/// Returns the typed `daemon_program_unavailable` failure when the executable
+/// path has no parent directory or the resolved program is not valid UTF-8
+/// text.
+pub fn daemon_program_beside(executable: &Path) -> DtoResult<String> {
+    let directory = executable.parent().ok_or_else(daemon_program_unavailable)?;
+    let program = directory.join(format!("intention-daemon{}", std::env::consts::EXE_SUFFIX));
+    program
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(daemon_program_unavailable)
 }
 
 impl DaemonLauncher for ProcessDaemonLauncher {
@@ -1158,6 +1236,14 @@ fn stream_reply_timeout() -> ErrorDto {
 
 fn unavailable(code: &'static str) -> ErrorDto {
     ErrorDto::unavailable(code, "the local daemon connection is unavailable")
+}
+
+/// Returns the typed failure for a daemon program the client cannot resolve.
+fn daemon_program_unavailable() -> ErrorDto {
+    ErrorDto::unavailable(
+        "daemon_program_unavailable",
+        "the daemon program could not be resolved",
+    )
 }
 
 fn startup_lock_timeout() -> ErrorDto {

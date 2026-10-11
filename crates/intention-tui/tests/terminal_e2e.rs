@@ -4,8 +4,8 @@
 //! streams and drives it against a real daemon process, whose provider endpoint
 //! is either the scripted fake provider or a listener that never answers. The
 //! daemon is spawned by the fixture, so the binary reaches it through the
-//! `INTENTION_ENDPOINT` process seam and never needs the sibling daemon program
-//! or a terminal. The assertions cover the observable process contract: the
+//! client-declared `ENDPOINT_VARIABLE` process seam and never needs the sibling
+//! daemon program or a terminal. The assertions cover the observable process contract: the
 //! closed exit-status set, the NDJSON and text output, the committed
 //! transcript, and the durable effect of the deadline interrupt.
 
@@ -23,7 +23,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use intention_client::{IntentionClient, RETAINED_TRANSCRIPT_MESSAGES};
+use intention_client::{ENDPOINT_VARIABLE, IntentionClient, RETAINED_TRANSCRIPT_MESSAGES};
 use intention_proto::{MessageKindDto, SessionId, SessionSnapshotDto};
 use intention_test_support::daemon_process::{
     self, spawn_daemon, unique_endpoint, wait_until_ready, write_config_document,
@@ -141,7 +141,7 @@ impl TerminalHost {
     fn run(&self, arguments: &[&str], input: Option<&str>) -> CliOutput {
         let mut command = Command::new(env!("CARGO_BIN_EXE_intention-tui"));
         command.args(arguments);
-        command.env("INTENTION_ENDPOINT", self.endpoint.instance_id());
+        command.env(ENDPOINT_VARIABLE, self.endpoint.instance_id());
         redirect_directories(
             &mut command,
             self.config_home.path(),
@@ -177,7 +177,7 @@ impl TerminalHost {
     fn spawn(&self, arguments: &[&str]) -> Child {
         let mut command = Command::new(env!("CARGO_BIN_EXE_intention-tui"));
         command.args(arguments);
-        command.env("INTENTION_ENDPOINT", self.endpoint.instance_id());
+        command.env(ENDPOINT_VARIABLE, self.endpoint.instance_id());
         redirect_directories(
             &mut command,
             self.config_home.path(),
@@ -843,6 +843,28 @@ fn the_text_run_streams_the_answer_and_reports_completion() {
     assert!(
         !output.stdout.contains("\"record\""),
         "the text format writes no NDJSON records"
+    );
+}
+
+#[test]
+fn the_binary_addresses_the_clients_declared_endpoint() {
+    let host = TerminalHost::new(ProviderEndpoint::scripted(), Some(WORKSPACE_FILE));
+    let platform = LocalEndpoint::platform_default().expect("the platform default resolves");
+    assert_ne!(
+        host.endpoint.instance_id(),
+        platform.instance_id(),
+        "the fixture endpoint differs from the platform default, so a completed run proves the binary reads the declared variable"
+    );
+    let workspace = host.workspace_root();
+    // `TerminalHost::run` addresses the daemon through the client's declared
+    // `ENDPOINT_VARIABLE` surface; the process reaches this fixture daemon and
+    // completes its run only by reading that declared endpoint.
+    let output = host.run(&["run", PROMPT, "--workspace", &workspace], None);
+    assert_eq!(output.code, Some(0), "the run completes: {}", output.stderr);
+    assert!(
+        output.stdout.contains(COMMITTED_TEXT),
+        "the committed row reaches the process over the declared endpoint: {}",
+        output.stdout
     );
 }
 

@@ -13,11 +13,13 @@ mod common;
 
 use common::{TEST_REPLY_BOUND, endpoint, message};
 
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use intention_client::{
     DaemonLauncher, IntentionClient, ProcessDaemonLauncher, SessionStreamState,
+    daemon_program_beside, endpoint_from_declared,
 };
 use intention_proto::TimestampDto;
 use intention_proto::{
@@ -355,6 +357,50 @@ fn process_launcher_and_client_construction_reject_invalid_configuration() {
             .expect_err("missing binary must return a safe launch error")
             .code(),
         "local_daemon_launch_failed"
+    );
+}
+
+#[test]
+fn endpoint_discovery_prefers_a_declared_instance_and_falls_back_to_the_platform_default() {
+    let declared =
+        endpoint_from_declared(Some("declared-instance")).expect("a safe instance resolves");
+    assert_eq!(
+        declared.instance_id(),
+        "declared-instance",
+        "a declared instance identifier wins over the platform default"
+    );
+
+    let platform = LocalEndpoint::platform_default().expect("the platform default resolves");
+    let omitted = endpoint_from_declared(None).expect("no declared instance resolves");
+    assert_eq!(
+        omitted.instance_id(),
+        platform.instance_id(),
+        "no declared instance uses the platform-default endpoint"
+    );
+    let blank = endpoint_from_declared(Some("   ")).expect("a blank instance resolves");
+    assert_eq!(
+        blank.instance_id(),
+        platform.instance_id(),
+        "a blank declared instance falls back to the platform default"
+    );
+}
+
+#[test]
+fn the_daemon_program_defaults_to_the_terminal_binary_sibling() {
+    let directory = std::env::temp_dir();
+    let executable = directory.join("intention-tui");
+    let expected = directory.join(format!("intention-daemon{}", std::env::consts::EXE_SUFFIX));
+    let program = daemon_program_beside(&executable).expect("the sibling daemon program resolves");
+    assert_eq!(
+        Path::new(&program),
+        expected.as_path(),
+        "the daemon program is the executable's sibling"
+    );
+    assert_eq!(
+        daemon_program_beside(Path::new(""))
+            .expect_err("an executable path with no parent is unavailable")
+            .code(),
+        "daemon_program_unavailable"
     );
 }
 

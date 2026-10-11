@@ -49,10 +49,14 @@ pub const MAX_TRANSCRIPT_SNAPSHOT_BYTES: usize = MAX_MESSAGE_BYTES - MAX_MESSAGE
 
 /// The single live local wire version.
 ///
-/// The byte is part of the platform-default endpoint name, so a daemon left
-/// over from an earlier build owns a different endpoint and a current client
-/// never reaches it; a peer that answers on the current endpoint with foreign
-/// bytes fails closed with the typed `stale_daemon_protocol` error instead.
+/// Two protections cover a peer from another build. The byte is part of the
+/// platform-default endpoint name, so a daemon whose build declared a different
+/// value owns a different endpoint and a current client never reaches it. The
+/// byte itself stays 1 while the wire evolves in place, so the protection on
+/// the shared endpoint is the fail-closed typed decode: a peer that answers on
+/// the current endpoint with bytes this build cannot decode fails closed with
+/// the typed `stale_daemon_protocol` error instead of being reached as a
+/// compatible peer.
 pub const WIRE_VERSION: u8 = 1;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);

@@ -130,7 +130,9 @@ signal-handling claim. Admission and interruption semantics are owned by [archit
 
 `intention-client` is the only supported client-side integration path for local adapters. It owns:
 
-- daemon discovery and bootstrap coordination;
+- daemon discovery and bootstrap coordination, including the declared endpoint instance the process addresses (the
+  `INTENTION_ENDPOINT` identifier, falling back to the platform-default endpoint) and the daemon program source it
+  launches (the terminal binary's sibling `intention-daemon` program by default);
 - typed operations over domain identifiers, never wire DTOs in adapter signatures;
 - typed session-stream subscriptions, the one reconciled committed-row list with its one retention bound, and the
   frame-advance report a consumer follows;
@@ -175,7 +177,8 @@ sequenceDiagram
 1. The adapter first attempts a connection without spawning anything.
 2. A cross-platform `fs4` advisory startup lock prevents duplicate daemon launches.
 3. The lock holder rechecks availability before creating a daemon.
-4. It launches the daemon process only when the recheck still finds no daemon.
+4. It launches the daemon process only when the recheck still finds no daemon, with the program source the client
+   declares: by default the terminal binary's sibling `intention-daemon` program.
 5.  Readiness requires one correlated health request answered with `DaemonHealthDto`, so the answer itself is the
    ready state; process existence is not readiness.
 6. Startup errors are typed and safe to render.
@@ -188,11 +191,12 @@ sequenceDiagram
 There is no handshake, no version negotiation, and no capability DTO, feature flag, family gate, or connection mode:
 the typed request enum is the whole protocol, and both peers are built from this source tree.
 
-A stale daemon from an earlier build is detected by the endpoint name: the single live wire version is a byte in the
-platform-default instance identifier (`WIRE_VERSION`), so an earlier daemon owns a different endpoint and is never
-reached. A peer that answers on the current endpoint with foreign bytes fails closed with the typed
-`stale_daemon_protocol` error (`category: unavailable`); the adapter should offer a safe restart/reconnect action and
-never silently reinterpret mismatched payloads.
+Two protections cover a peer from another build. The single live wire version is a byte in the platform-default
+instance identifier (`WIRE_VERSION`), so a daemon whose build declared a different value owns a different endpoint
+and is never reached. The byte itself stays 1 while the wire evolves in place, so the protection on the shared
+endpoint is the fail-closed decode: a peer that answers on the current endpoint with bytes this build cannot decode
+is rejected with the typed `stale_daemon_protocol` error (`category: unavailable`) instead of being reinterpreted.
+The adapter should offer a safe restart/reconnect action and never silently reinterpret mismatched payloads.
 
 The client sends typed requests, and committed frames arrive on the same connection after a session subscription. The
 client applies live frames after the result it received and re-reads current state after a reconnect.
@@ -566,8 +570,7 @@ fabricated value. The table below names each one, taken from the markers in the 
 | a `notice` block's text-only body | a notice code or severity |
 
 The `@todo(hack)` marker is the crate's own class for work the adapter or the client must still do, and it is not
-catalogued here. Its remaining site is the endpoint instance and the daemon program resolved by the binary
-(`main.rs`), and the marker names the client or core surface that should replace it.
+catalogued here.
 
 ### Frame cost
 
