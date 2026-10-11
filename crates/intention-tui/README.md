@@ -217,7 +217,7 @@ Rules the panes keep:
   display rows shows its first fifteen and a marker naming the hidden ones, and
   each activation of that marker - or of `Ctrl+E` - reveals a hundred more.
 - A value the wire does not carry is an explicit `@todo(core)` placeholder
-  (`mode`, `model`, `ctx`, and the welcome overview's `AGENTS.md`, `MCPs`, and
+  (`model`, `ctx`, and the welcome overview's `AGENTS.md`, `MCPs`, and
   `Skills` chips), never a fabricated one. The command hint band and the theme
   picker are the surfaces with no placeholder at all: every band row - name,
   description, and category, or value, description, and argument - is a
@@ -344,8 +344,9 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
    others in `src/tui/screens/sessions.rs::columns`, then render it in
    `row_text`. Shares are percentages of the flexible width, so the table
    stretches with the card; the title column takes what they leave. A value the
-   core does not carry yet is a `MISSING_*` placeholder with a `// @todo(core)`
-   comment naming what is missing.
+   core does not carry yet is an explicit `@todo(core)` plate named by a
+   constant such as `EXEC_REASON`, `RENAME_NOTICE`, or `MODE_PLACEHOLDER`,
+   never a fabricated value.
 3. Filtering, ordering, and the cursor clamp stay in
    `SessionsBrowserState::refresh`: the view lays rows out and decides nothing.
 
