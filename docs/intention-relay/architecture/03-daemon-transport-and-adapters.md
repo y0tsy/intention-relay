@@ -39,7 +39,7 @@ Every message is one UTF-8 JSON line terminated by a newline. A client request i
 `ProtocolRequestDto { id: u64, request: ClientRequestDto }`; a daemon reply is `ProtocolDaemonMessageDto::Reply`
 carrying `ProtocolReplyDto { id: u64, result: ProtocolResultDto }`; a rejection is `ProtocolDaemonMessageDto::Rejection`
 carrying `ProtocolRejectionDto { id: Option<u64>, error: ErrorDto }`; and a committed frame is
-`ProtocolDaemonMessageDto::Frame(RunStreamFrameDto)`. `ClientRequestDto` and `ProtocolResultDto` are the whole operation
+`ProtocolDaemonMessageDto::Frame(SessionFrameDto)`. `ClientRequestDto` and `ProtocolResultDto` are the whole operation
 table: a request variant is the operation, and the reply variant is its typed result. No method-name string, no
 `serde_json::Value`, and no untyped map crosses the boundary.
 
@@ -55,7 +55,7 @@ table: a request variant is the operation, and the reply variant is its typed re
 | `ListSessions` | none | `SessionsListed` |
 | `GetTuiSettings` | none | `TuiSettings` |
 | `SetTuiTheme` | `SetTuiThemeCommandDto` | `TuiThemeSet` |
-| `SubscribeRun` | `SubscribeRunCommandDto` | `RunSubscribed` |
+| `SubscribeSession` | `SubscribeSessionCommandDto` | `SessionSubscribed` |
 
 The terminal theme is a presentation-only wire value: `ThemeDto` is the durable `light`/`dark` spelling,
 `TuiSettingsDto` is the daemon's effective theme a client renders with, and `TuiThemeAcceptedDto` is the stored
@@ -100,13 +100,18 @@ and a dropped listener never unlinks its endpoint. Its required transport test t
 connections, ordered correlated request/reply exchanges, concurrent reader/writer use, frame delivery, framing safety
 outcomes, and Windows named-pipe multi-message fixtures under `cfg(windows)`.
 
-### Persistent subscriptions and the run stream
+### Persistent subscriptions and the session live stream
 
-A subscription is an ordinary typed request. `SubscribeRun` returns the current run state as its correlated result, and
-later committed state arrives as `RunStreamFrameDto` frames with `kind` `content` (one committed transcript row) or
-`status` (the committed `RunProjectionDto`, never a delta) and no positions. A re-subscribing client re-reads current
-state and continues live; there is no cursor, event tail, or resynchronization. Unknown or cross-session runs are typed
-rejections. A run stream never uses a filtered `SessionSnapshotDto`.
+A subscription is an ordinary typed request. `SubscribeSession` returns the current session snapshot as its correlated
+result, and later committed state arrives as `SessionFrameDto` frames with `kind` `content` (one committed transcript
+row), `kind` `status` (the committed `RunProjectionDto`, never a delta), or `kind` `text_delta` (one coalesced chunk of
+the active run's uncommitted text) and no positions. Only the `text_delta` frame is transient; the other two carry
+committed values. One subscription follows one session and carries every row committed in it, whoever committed it -
+this window's turn, another window's turn, or the daemon's own lifecycle - so a second window on the same session sees a
+turn it did not send without asking for anything. A re-subscribing client re-reads current state and continues live;
+there is no cursor, event tail, or resynchronization. An unknown session is a typed rejection, cross-session frames are
+rejected without mutating the client's projection, and a session with no active run stays subscribed and silent until
+something commits.
 
 `intention-daemon` owns one private Tokio runtime and serves the typed wire from one `AsyncLocalListener`. Each
 subscriber has a private bounded outgoing queue (`SUBSCRIBER_QUEUE_CAPACITY`, 64), its own writer path, and a bounded
@@ -127,7 +132,7 @@ signal-handling claim. Admission and interruption semantics are owned by [archit
 
 - daemon discovery and bootstrap coordination;
 - typed operations over domain identifiers, never wire DTOs in adapter signatures;
-- typed run-stream subscriptions;
+- typed session-stream subscriptions;
 - reconnect behavior;
 - snapshot recovery;
 - local transport error classification.
@@ -187,23 +192,24 @@ reached. A peer that answers on the current endpoint with foreign bytes fails cl
 `stale_daemon_protocol` error (`category: unavailable`); the adapter should offer a safe restart/reconnect action and
 never silently reinterpret mismatched payloads.
 
-The client sends typed requests, and committed frames arrive on the same connection after a run subscription. The client
-applies live frames after the result it received and re-reads current state after a reconnect.
+The client sends typed requests, and committed frames arrive on the same connection after a session subscription. The
+client applies live frames after the result it received and re-reads current state after a reconnect.
 
 ### Current-state session read
 
 There is exactly one session read: `GetSessionSnapshot` returns the **current durable projection snapshot** for the
-session. It is not a retained connection and not a live event feed. Committed values are published only through the
-daemon host's commit-observation path. Persistent delivery exists only for the separate run-scoped DTOs, never for
-filtered session state.
+session. It is not a retained connection and not a live event feed, and the very same `SessionSnapshotDto` is the
+snapshot a subscription answers with: one shape serves the one-shot read and the stream's opening state. Committed values
+are published only through the daemon host's commit-observation path, and every committed row of a session is published
+to that session's subscribers.
 
-A session projection cannot express filtered run state. A request that asks for a specific run uses the run-scoped
-subscription contract instead; a session request never falls back to mixing run and session state.
+A session projection names the session's active run at the moment of the read, and that run's projection arrives as a
+status frame when it changes. No scoped run read exists beside the session read: one run's state is read through the
+session it belongs to.
 
 ## Subscription and reconnect
 
-A subscription is associated with a session and optional run scope. The client holds at most one active subscription
-per scope.
+A subscription is scoped to one session, and the client holds at most one active subscription per session.
 
 ```mermaid
 sequenceDiagram
@@ -211,14 +217,14 @@ sequenceDiagram
   participant CL as Client
   participant DM as Daemon
 
-  AD->>CL: Subscribe
+  AD->>CL: Subscribe to the open session
   CL->>DM: Subscription request
-  DM-->>CL: Current-state snapshot
+  DM-->>CL: Current-state session snapshot
   DM-->>CL: Later committed frames
-  Note over AD,DM: Request connection is closed
-  AD->>CL: Recover after disconnect
-  CL->>DM: New subscription request
-  DM-->>CL: Current-state snapshot
+  Note over CL,DM: Requests and frames share the one connection
+  AD->>CL: Recover after a lost stream
+  CL->>DM: One reconnect, then the subscription again
+  DM-->>CL: Current-state session snapshot
   CL-->>AD: Consistent state or cleared projection
 ```
 
@@ -227,6 +233,10 @@ sequenceDiagram
 - Adapters render committed state; a reconnect re-reads current state instead of replaying a tail.
 - Duplicate or stale frames do not mutate a projection that already reflects newer committed state.
 - Adapters never synthesize server state or ordering.
+- One window, one session stream: two terminal windows on the same session follow it independently, so a turn sent in
+  either reaches both, and either one can stop the run they both observe.
+- A lost stream is not a dead end: the front end asks for exactly one reconnect - bootstrap, open the session, subscribe
+  again - reports a failed reconnect's typed error, and stays usable with its exit arms reachable.
 
 ## M3 durable authority
 
@@ -241,7 +251,7 @@ credential-free configuration revisions, platform-native temporary workspace roo
 known sessions, then calls only the hidden facade injection seam and the daemon's hidden one-connection dispatch seam.
 TUI and daemon binary tests do not own a parallel fixture protocol or a fixture startup CLI mode. M3 does not implement
 idle shutdown, an explicit daemon-stop command, or model or provider execution; M4 persistent delivery is provided
-through the separate run-scoped subscription contract.
+through the session live stream.
 
 ## Tauri bridge
 
@@ -289,7 +299,7 @@ follow-up run.
 | Permission boundary | Socket/pipe permission integration test. | A different OS user cannot connect. |
 | Stale peer | Client/server compatibility test. | An earlier-build daemon owns a different endpoint name, and a foreign peer on the current endpoint fails with the typed `stale_daemon_protocol` error. |
 | Wire conformance | Typed-wire contract and rewritten transport integration tests. | Every request kind round-trips with its named result kind, malformed lines are answered with typed rejections, and frames carry committed values without positions. |
-| Reconnect | Subscription integration test, including run-scoped requests. | A new request receives the current durable snapshot, a reconnect re-reads current state, and no request claims replayed history. |
+| Reconnect | Subscription integration test. | A new request receives the current durable snapshot, a reconnect re-reads current state, and no request claims replayed history. |
 | Restart | Persisted active-run recovery test. | Recovery completes before ready; every pre-existing unfinished run becomes `interrupted`, pending turns stay durable input, and no provider/tool call resumes. |
 | State location | Platform-state path fixture. | The database resolves under AppData/platform state and fails safely without an absolute platform directory, never using CWD. |
 | Adapter isolation | Dependency/contract test. | Tauri and TUI have no direct runtime/storage implementation dependency. |
@@ -319,8 +329,8 @@ This section records the landed model; the text above is the live policy.
 - Publication from committed values. A committed transcript row is published as the row the commit returned, and a
   committed status is published as the committed run projection the status transition just wrote (the commit carries the
   status value alone). The scoped durable reread proof is removed; the live-after-commit ordering rule is unchanged.
-- No cursors and no resync. `SubscribeRunCommandDto` carries only its session and run scope, the subscription result is
-  the current run state, and a re-subscribing client re-reads current state. The `RunResyncDto`, `RunSnapshotFrameDto`,
+- No cursors and no resync. `SubscribeSessionCommandDto` carries only its session scope, the subscription result is
+  the current session state, and a re-subscribing client re-reads current state. The `RunResyncDto`, `RunSnapshotFrameDto`,
   `RunEventTailPageDto`, and cursor DTOs are removed.
 - One typed wire. The JSON-RPC dialect, the method table, the hello handshake, protocol version negotiation, and the
   per-payload `schema_version` fields are removed; `ClientRequestDto` and `ProtocolResultDto` are the operation table,
@@ -347,7 +357,9 @@ text above is the live policy.
   with the interrupted status — so no terminal front end lets a signal kill the process while a run it was watching
   keeps working in the daemon. At the REPL prompt the same signal leaves the loop the way `/quit` does, after stopping
   a run the loop still observes. Every wait in a line front end selects on one SIGINT receiver, so one press does
-  exactly one thing.
+  exactly one thing. Because a window follows its session's stream rather than one run, the run a gesture reaches is the
+  session's active run whoever started it: a stop from a second window on the same session ends the run both windows
+  observe.
 - Closed typed process status. Every mode ends with one of the closed statuses — 0 completed, 1 usage, 2 daemon or
   transport, 3 typed rejection or failed run, 4 timeout after an interrupt, 5 interrupted run — and the binary writes
   its output through explicit writers, never through printing macros.
@@ -504,7 +516,7 @@ text above is the live policy.
   root. A root resolves to its durable project/workspace binding when one exists, so session creation joins that binding
   instead of proposing a new identity, one root carries an unbounded number of sessions, and storage still rejects a
   different identity for an already-bound root (`workspace_root_conflict`).
-- Transient delta semantics. The run stream also carries `RunStreamFrameDto::TextDelta` frames, whose
+- Transient delta semantics. The session stream also carries `SessionFrameDto::TextDelta` frames, whose
   `TextDeltaFrameDto` names its session, run, model step, channel, and one coalesced chunk of that step's uncommitted
   text. The channel closes over the two things a step says before it is committed — the reasoning it thinks with and
   the answer it produces — so a provider's reasoning stream reaches the front end without a second frame shape, and
@@ -512,7 +524,9 @@ text above is the live policy.
   delta is never persisted and never replayed: a re-subscribing client receives committed state only. A step's pending
   deltas flush before that step's committed
   `content` frames, reasoning ahead of answer, a committed assistant row replaces both channels in the client, and a
-  run without subscribers drops its deltas — the committed transcript row stays the only authority.
+  run without subscribers drops its deltas — the committed transcript row stays the only authority. A delta reaches the
+  projected run alone: the channel carries every run of the session, so a window applies a chunk only while its frame
+  names the run that window currently projects.
 
 ### The `@todo(core)` boundary
 

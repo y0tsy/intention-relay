@@ -363,10 +363,10 @@ provider work. Historical M4 runs remain readable with no synthetic manifests.
 `NotReported`, never a zero count. Reconnect, inheritance, and tree aggregation must not charge or count the
 same source `RunId` twice. There is no price, currency, or inferred cost.
 
-Initial reasoning delivery is an unconditional part of the ordinary run subscription: the correlated `SubscribeRun`
-current-state snapshot carries the committed `messages` rows (assistant text and whole reasoning), then the daemon
-streams live `run.frame` notifications with `kind` `content` or `status`, so a client never receives live reasoning
-before the initial snapshot completes. The snapshot exposes reasoning only in the same ordinary run-subscription
+Initial reasoning delivery is an unconditional part of the ordinary session subscription: the correlated
+`SubscribeSession` current-state snapshot carries the committed `messages` rows (assistant text and whole reasoning),
+then the daemon streams live session frames with `kind` `content` or `status`, so a client never receives live reasoning
+before the initial snapshot completes. The snapshot exposes reasoning only in the same ordinary session-subscription
 visibility class as live frames, with no duplicate or out-of-order frames; unavailable or incomplete
 history is a typed error rather than a partial snapshot the client must guess at. Reconnect re-reads current state;
 there is no event tail, cursor, or resynchronization. Legacy M4 runs retain existing subscription behavior.

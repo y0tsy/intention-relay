@@ -120,10 +120,11 @@ message text, or cross-turn transfer. `intention-proto` owns the shared safe usa
 provider-error values; `intention-providers` re-exports them for its consumers. Native SDK decoding and JSON values
 may exist only inside the owning provider implementation before being normalized to those DTOs.
 
-Run-scoped delivery is a current-state stream: `SubscribeRunCommandDto` receives its correlated result as the current
-run state, and subsequent uncorrelated `RunStreamFrameDto` values carry `kind` `content` (one committed transcript row)
-or `kind` `status` (the committed `RunProjectionDto`, never a delta) with no positions or cursors. A re-subscribing
-client re-reads current state and continues live; there is no event tail, resync, or catch-up position.
+Live session delivery is a current-state stream: `SubscribeSessionCommandDto` receives its correlated result as the
+current session snapshot, and subsequent uncorrelated `SessionFrameDto` values carry `kind` `content` (one committed
+transcript row), `kind` `status` (the committed `RunProjectionDto`, never a delta), or `kind` `text_delta` (one coalesced
+chunk of the active run's uncommitted text) with no positions or cursors. A re-subscribing client re-reads current state
+and continues live; there is no event tail, resync, or catch-up position.
 
 ## Validation ownership
 

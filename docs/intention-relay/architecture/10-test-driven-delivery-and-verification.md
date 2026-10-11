@@ -217,7 +217,7 @@ truncation. Protocol contract tests cover the transient `TextDelta` frame, its c
 empty text on the wire. Engine
 tests prove the `ModelTextDeltaPort` observes every provider text chunk with its model-step index and channel — the
 answer channel and the reasoning channel the same step thinks with — persists nothing,
-and leaves run behavior unchanged when unattached. Client tests prove `list_sessions` and the `RunStreamState`
+and leaves run behavior unchanged when unattached. Client tests prove `list_sessions` and the `SessionStreamState`
 buffers, one per channel: a delta for a new step replaces the previous step's buffer, and a committed assistant row or a
 fresh subscription clears both. Daemon tests prove `ListSessions` dispatch, per-channel delta coalescing, the order of the
 two channels, and that the step's pending deltas flush before its committed frames.
@@ -362,6 +362,34 @@ the terminal run status are durable, and the REPL prompt comes back for the next
 `cargo nextest run -p intention-tui` observed 375 tests across four binaries, all passing, and
 `cargo nextest run --workspace` observed 783 tests run, 783 passed, and 2 skipped; the acceptance gate is `make quick`
 during delivery and `make verify` before merge.
+
+### Slice 2 live-session-stream correction
+
+The reported defect — two terminal windows on one session, a turn sent in one producing nothing in the other — is closed
+as a core correction rather than a terminal workaround: the run-scoped subscription is replaced by one live channel per
+session, and every committed row of that session is published to it. Protocol contract tests carry
+`SubscribeSessionCommandDto`, `ClientRequestDto::SubscribeSession`, `ProtocolResultDto::SessionSubscribed`, and
+`SessionFrameDto` with `content`, `status`, and `text_delta` decode, and the closed result-kind set swaps
+`run_subscribed` for `session_subscribed` without a compatibility path. Client tests prove the session scope: the
+subscription snapshot is an ordinary `SessionSnapshotDto`, a content frame of another run of the same session applies,
+another session's frame is rejected without mutation, a delta reaches only the projected run, and the newest-row dedupe
+and transcript bound survive. Engine tests prove the turn path hands the committed user row and the `Starting` status to
+the one commit observer exactly once, and that a queued turn publishes its acceptance alone. Daemon tests prove the
+subscription registry is keyed by session: two subscribers on one session both receive the accepted user row, the run's
+status transitions, the assistant row, the step's transient deltas, and the terminal status; a subscriber of another
+session receives nothing; an unknown session is refused with `storage_record_not_found` and is never registered; queue
+overflow closes one subscriber only. The client-driven end-to-end suite proves the reported scenario itself: client A
+subscribes to the session, client B sends a turn over a second connection, A observes the row, the status frames, the
+answer, and the terminal status, and a stop from A publishes its notice and terminal status to B. In the terminal crate,
+`AppState` tests prove opening a session always asks for its session stream, an accepted turn on a live stream asks for
+nothing, a run another window started becomes the projected run with its own phase and is stoppable from this window, a
+row another window committed joins the transcript, a cross-session frame is still a scope failure, a lost stream clears
+the phase and tool watch and asks for exactly one reconnect, and the stop, clear, and exit arms stay reachable after a
+failed stream. A run of `cargo nextest run -p intention-tui` observed 379 tests across four binaries, all passing: 255
+library unit tests, 81 `tui_render` cases, 30 binary unit tests, and 13 `terminal_e2e` cases. A run of
+`cargo nextest run --workspace` observed 790 tests run, 790 passed, and 2 skipped; the per-crate suites observed
+`intention-proto` 38, `intention-client` 26, `intention-engine` 80, and `intention-daemon` 42 (2 skipped). The acceptance
+gate is `make quick` during delivery and `make verify` before merge.
 
 ### Future package evidence
 

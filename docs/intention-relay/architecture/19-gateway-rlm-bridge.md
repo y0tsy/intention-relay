@@ -190,7 +190,7 @@ BridgeInvocationAcceptedDto
 ```
 
 One attached peer sends correlated attachment, invocation, operation-read, and run-control commands; the daemon sends
-correlated responses and uncorrelated `RunStreamFrameDto` values over the same persistent local connection. The
+correlated responses and uncorrelated `SessionFrameDto` values over the same persistent local connection. The
 first-scope bounds are transport and liveness safeguards only:
 
 - **1 MiB** per local frame;

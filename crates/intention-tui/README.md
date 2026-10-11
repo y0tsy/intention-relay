@@ -53,7 +53,15 @@ same stop on its first press and fires it on the second, then falls back to the
 recall and exit layers. A run is live only while a live subscription observes
 it - a terminal status, a stream the daemon closed, or a connection that failed
 all end its liveness - so a daemon that died never keeps the stop, clear, and
-exit arms unreachable. The line front ends read SIGINT the same way: `Esc`'s
+exit arms unreachable. A live channel follows the session, not one run: opening a
+session opens one `SubscribeSession` stream that carries every committed row of
+that session, the active run's projection, and the active run's transient text,
+whoever committed them - this window's turn, another window's turn, or the
+daemon's own lifecycle - so two terminal windows on the same session both show a
+turn sent in either one and either window can stop the run they both observe. A
+lost stream asks for exactly one reconnect (bootstrap, open the session,
+subscribe again) and a failed reconnect reports its typed error with the exit
+arms still reachable. The line front ends read SIGINT the same way: `Esc`'s
 and `Ctrl+C`'s stop is one `run.cancel`, the REPL stops the run and comes back
 to its prompt (a signal at the prompt leaves the loop like `/quit`), and
 `run <PROMPT>` reports the interrupted outcome with status 5.
@@ -391,17 +399,18 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
 3. Add the one `client_task::perform` arm in `src/client_task.rs` that turns
    the effect into its client call and the outcome into its action; a
    subscription-shaped behavior adds an opener beside
-   `client_task::open_subscription` instead, and an effect that only moves a
-   front-end resource (`Subscribe`, `CloseStream`) returns `None` there while
-   each driver handles it.
+   `client_task::open_session_subscription` instead, and an effect that only
+   moves a front-end resource (`Subscribe`) returns `None` there while each
+   driver handles it.
 4. Show the new state with a pane, a status line, or neither.
 
 ### A new front end or mode
 
 1. Add the command to `src/main.rs::dispatch` and parse it in `src/cli.rs`.
 2. Drive `intention_tui::app::AppState` through `update`, performing request
-   effects with `intention_tui::client_task::perform` and `open_subscription`.
-   A fullscreen front end follows the wiring in `src/tui/mod.rs`.
+   effects with `intention_tui::client_task::perform` and
+   `open_session_subscription`. A fullscreen front end follows the wiring in
+   `src/tui/mod.rs`.
 
 ### Where the tests go
 

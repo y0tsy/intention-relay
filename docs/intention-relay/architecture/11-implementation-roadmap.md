@@ -115,11 +115,11 @@ replaced by the nine current-state tables (`projects`, `workspace_roots`, `sessi
 is the nine newtypes (`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`,
 `IdempotencyKey`, and the durable transcript row `MessageId`), with model steps and tool groups addressed by plain
 indices and mutating operations by `IdempotencyKey`; every state change commits in one SQLite transaction and the
-daemon publishes `run.frame`
-notifications built from the committed values; the single live wire version is a byte in the endpoint name with no
-cursors, and a re-subscribing client receives current run state and bounded recent messages, then continues live;
-`intention-client` is an asynchronous client with its blocking API removed that covers connect/health, session
-snapshots, run subscriptions, and the command surface, and whose `intention-tui` proof adapter is migrated
+daemon publishes session frames
+built from the committed values; the single live wire version is a byte in the endpoint name with no
+cursors, and a re-subscribing client receives the current session state and its bounded recent messages, then continues
+live; `intention-client` is an asynchronous client with its blocking API removed that covers connect/health, session
+snapshots, session subscriptions, and the command surface, and whose `intention-tui` proof adapter is migrated
 mechanically; the daemon
 end-to-end suite drives that client (`client_e2e`) instead of the low-level transport; the tool cycle is one direct
 sequence of identity check, durable call row, workspace binding, dispatch, and durable terminal row; the nine-production-crate consolidation and the removal of the composition facade landed, so
@@ -172,7 +172,13 @@ order. The last correction gives the slice a terminal stop and a liveness rule: 
 stop is durable and never silently does nothing while committed work stays committed; every terminal front end reaches
 it — `Esc` in one press, `Ctrl+C` on the arm's second press, and SIGINT in the line front ends (the REPL stops the run
 and returns to its prompt, `run <PROMPT>` reports the interrupted outcome) — and a run counts as live only while a live
-subscription observes it, so a daemon that died cannot hold a front end's stop, clear, and exit arms.
+subscription observes it, so a daemon that died cannot hold a front end's stop, clear, and exit arms. The slice's
+closing correction makes that one live channel follow the session instead of one run:
+`SubscribeSession` returns the session snapshot and then carries every committed row, the active run's projection, and
+the active run's transient text, so two windows on one session both show a turn sent in either one, a window opened while
+the session was idle stays live into the next run, and either window can stop the run they both observe; a lost stream
+asks for exactly one reconnect through the session it has open and reports a failed reconnect's typed error instead of
+retrying in a loop.
 -  **Slice 3 — Instruction sources and system context — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
 deployment instruction profile adapted from the legacy Antibusy static prompt set, user-authored fragments at user,
