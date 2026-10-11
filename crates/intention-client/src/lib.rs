@@ -18,11 +18,11 @@ use intention_proto::{
     DaemonHealthDto, DtoResult, ErrorCategoryDto, ErrorDto, GetSessionSnapshotQueryDto,
     IdempotencyKey, InterruptRunAcceptedDto, InterruptRunCommandDto, MessageId, MessageKindDto,
     MessageProjectionDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto,
-    RunCancelledAcceptedDto, RunId, RunProjectionDto, RunStatusDto, RunStreamFrameDto,
-    RunSubscriptionSnapshotDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId,
-    SessionSnapshotDto, SessionSummariesDto, SetTuiThemeCommandDto, SubscribeRunCommandDto,
-    TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId,
-    decode_response, encode_request, parse_run_frame, run_status_is_terminal,
+    RunCancelledAcceptedDto, RunId, RunProjectionDto, RunStatusDto, SendUserTurnCommandDto,
+    SendUserTurnOutcomeDto, SessionFrameDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
+    SetTuiThemeCommandDto, SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto,
+    ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId, decode_response, encode_request,
+    parse_session_frame, run_status_is_terminal,
 };
 use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncMessageSender, LocalEndpoint,
@@ -32,7 +32,7 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
 const STARTUP_RETRY: Duration = Duration::from_millis(25);
 /// Bounded wait for one correlated command or query reply.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-/// Bounded wait for the correlated first reply to a run-stream subscription.
+/// Bounded wait for the correlated first reply to a session-stream subscription.
 const STREAM_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 /// The request identity of the single request one connection carries.
 const REQUEST_ID: u64 = 1;
@@ -433,16 +433,16 @@ impl IntentionClient {
     }
 }
 
-/// An asynchronous facade for dedicated run-stream subscriptions.
+/// An asynchronous facade for dedicated session-stream subscriptions.
 ///
 /// It shares the one local link: requests flow to the daemon, and committed
-/// `run.frame` values flow back.
-pub struct RunStreamClient {
+/// session frames flow back.
+pub struct SessionStreamClient {
     endpoint: LocalEndpoint,
 }
 
-impl RunStreamClient {
-    /// Creates a run-stream client for one local endpoint.
+impl SessionStreamClient {
+    /// Creates a session-stream client for one local endpoint.
     #[must_use]
     pub const fn new(endpoint: LocalEndpoint) -> Self {
         Self { endpoint }
@@ -450,9 +450,10 @@ impl RunStreamClient {
 
     /// Connects, subscribes, and applies the authoritative first reply.
     ///
-    /// The request carries only the session and run identity; its correlated
-    /// reply is the current run state, and later committed state arrives as
-    /// live `run.frame` messages on the same connection.
+    /// The request carries the session identity alone; its correlated reply is
+    /// the current session snapshot, and every later committed row, active-run
+    /// status, and transient delta arrives as a live frame on the same
+    /// connection - whoever committed it in the session.
     ///
     /// # Errors
     ///
@@ -461,23 +462,23 @@ impl RunStreamClient {
     /// before the bounded deadline.
     pub async fn subscribe(
         &self,
-        subscription: SubscribeRunCommandDto,
-    ) -> DtoResult<RunStreamSubscription> {
+        subscription: SubscribeSessionCommandDto,
+    ) -> DtoResult<SessionStreamSubscription> {
         let session_id = subscription.session_id();
-        let run_id = subscription.run_id();
         let connection = AsyncLocalClientConnection::connect(&self.endpoint).await?;
         let (mut sender, mut receiver) = connection.split();
-        let request = encode_request(REQUEST_ID, ClientRequestDto::SubscribeRun(subscription));
+        let request = encode_request(REQUEST_ID, ClientRequestDto::SubscribeSession(subscription));
         sender.send_message(&request).await?;
         let line = tokio::time::timeout(STREAM_REPLY_TIMEOUT, receiver.receive_line())
             .await
             .map_err(|_| stream_reply_timeout())??;
-        let ProtocolResultDto::RunSubscribed(snapshot) = decode_response(&line, REQUEST_ID)? else {
+        let ProtocolResultDto::SessionSubscribed(snapshot) = decode_response(&line, REQUEST_ID)?
+        else {
             return Err(invalid_response());
         };
-        let mut state = RunStreamState::new(session_id, run_id);
+        let mut state = SessionStreamState::new(session_id);
         state.apply_initial(snapshot)?;
-        Ok(RunStreamSubscription {
+        Ok(SessionStreamSubscription {
             sender,
             receiver,
             state,
@@ -485,8 +486,8 @@ impl RunStreamClient {
     }
 }
 
-/// An established run-stream subscription with opaque transport resources.
-pub struct RunStreamSubscription {
+/// An established session-stream subscription with opaque transport resources.
+pub struct SessionStreamSubscription {
     /// The send direction is retained so the connection keeps both halves
     /// open while committed frames arrive on the receive direction.
     #[expect(
@@ -495,11 +496,11 @@ pub struct RunStreamSubscription {
     )]
     sender: AsyncMessageSender,
     receiver: AsyncMessageReceiver,
-    state: RunStreamState,
+    state: SessionStreamState,
 }
 
-impl RunStreamSubscription {
-    /// Receives, applies, and returns the next committed run-stream frame.
+impl SessionStreamSubscription {
+    /// Receives, applies, and returns the next committed session-stream frame.
     ///
     /// Returns `Ok(None)` once the daemon closes the stream; the caller then
     /// re-reads current state by re-subscribing. Content and status frames are
@@ -511,20 +512,20 @@ impl RunStreamSubscription {
     /// mutating committed state. Live frames may be arbitrarily sparse, so this
     /// wait is intentionally unbounded; only the correlated reply waits carry a
     /// deadline.
-    pub async fn receive(&mut self) -> DtoResult<Option<RunStreamFrameDto>> {
+    pub async fn receive(&mut self) -> DtoResult<Option<SessionFrameDto>> {
         let line = match self.receiver.receive_line().await {
             Ok(line) => line,
             Err(error) if error.code() == "local_daemon_connection_unavailable" => return Ok(None),
             Err(error) => return Err(error),
         };
-        let frame = parse_run_frame(&line)?;
+        let frame = parse_session_frame(&line)?;
         self.state.apply_frame(frame.clone())?;
         Ok(Some(frame))
     }
 
-    /// Returns the committed state of this fixed run scope.
+    /// Returns the committed state of this fixed session scope.
     #[must_use]
-    pub const fn state(&self) -> &RunStreamState {
+    pub const fn state(&self) -> &SessionStreamState {
         &self.state
     }
 }
@@ -536,25 +537,25 @@ impl RunStreamSubscription {
 /// re-subscribe re-reads the bounded current-state snapshot.
 pub const RETAINED_TRANSCRIPT_MESSAGES: usize = 256;
 
-/// The committed state of one fixed run scope.
+/// The committed state of one fixed session scope.
 ///
-/// The subscription reply is the current run snapshot, and every later frame
-/// carries the committed value of its own scope: a content frame appends its
-/// committed transcript row and a status frame replaces the committed run
-/// projection. There are no cursors and no positions: a status frame is
-/// idempotent because it replaces the whole run, and a content frame is
-/// idempotent for the newest accepted row by the durable row identity it
-/// carries, so no accepted row is shown twice. The retained transcript keeps
-/// the newest [`RETAINED_TRANSCRIPT_MESSAGES`] rows, and
-/// [`RunStreamState::missing_rows`] reconciles another read of the same durable
-/// transcript with this one. Transient provisional text is not committed
-/// state: each of the current model step's two text channels is held in its
-/// own buffer for that step only and is dropped as soon as the step's assistant
-/// row commits.
+/// The subscription reply is the current session snapshot, and every later
+/// frame carries the committed value of its own scope: a content frame appends
+/// its committed transcript row - of any run the session committed - and a
+/// status frame replaces the session's active-run projection. There are no
+/// cursors and no positions: a status frame is idempotent because it replaces
+/// the whole projection, and a content frame is idempotent for the newest
+/// accepted row by the durable row identity it carries, so no accepted row is
+/// shown twice. The retained transcript keeps the newest
+/// [`RETAINED_TRANSCRIPT_MESSAGES`] rows, and
+/// [`SessionStreamState::missing_rows`] reconciles another read of the same
+/// durable transcript with this one. Transient provisional text is not
+/// committed state: each of the active run's current model step's two text
+/// channels is held in its own buffer for that step only and is dropped as soon
+/// as the step's assistant row commits.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RunStreamState {
+pub struct SessionStreamState {
     session_id: SessionId,
-    run_id: RunId,
     run: Option<RunProjectionDto>,
     messages: Vec<MessageProjectionDto>,
     /// The model step the provisional buffers currently belong to, if any.
@@ -565,13 +566,12 @@ pub struct RunStreamState {
     provisional_reasoning: String,
 }
 
-impl RunStreamState {
-    /// Creates empty local state fixed to one session and run.
+impl SessionStreamState {
+    /// Creates empty local state fixed to one session.
     #[must_use]
-    pub const fn new(session_id: SessionId, run_id: RunId) -> Self {
+    pub const fn new(session_id: SessionId) -> Self {
         Self {
             session_id,
-            run_id,
             run: None,
             messages: Vec::new(),
             provisional_step: None,
@@ -583,16 +583,16 @@ impl RunStreamState {
     /// Applies the correlated first reply for this subscription.
     ///
     /// A snapshot replaces every value held before it, including any transient
-    /// provisional text.
+    /// provisional text and any run projection of another read.
     ///
     /// # Errors
     ///
     /// Returns a typed scoped-response error without mutation when the snapshot
-    /// belongs to another session or run.
-    pub fn apply_initial(&mut self, snapshot: RunSubscriptionSnapshotDto) -> DtoResult<()> {
-        self.ensure_scope(snapshot.run().session_id(), Some(snapshot.run().run_id()))?;
-        let mut next = Self::new(self.session_id, self.run_id);
-        next.run = Some(*snapshot.run());
+    /// belongs to another session.
+    pub fn apply_initial(&mut self, snapshot: SessionSnapshotDto) -> DtoResult<()> {
+        self.ensure_scope(snapshot.session_id())?;
+        let mut next = Self::new(self.session_id);
+        next.run = snapshot.projection().active_run();
         next.messages = snapshot.messages().to_vec();
         next.retain_newest();
         *self = next;
@@ -620,28 +620,27 @@ impl RunStreamState {
             .collect()
     }
 
-    /// Applies one uncorrelated run-stream frame.
+    /// Applies one uncorrelated session-stream frame.
     ///
     /// A provisional text delta is best-effort advance notice: it mutates only
-    /// the transient buffer of the channel it names and never the committed run
-    /// or transcript. A terminal status frame ends the run and drops both
-    /// buffers with it.
+    /// the transient buffer of the channel it names and never the committed
+    /// projection or transcript. A terminal status frame ends the run it names
+    /// and drops both buffers with it.
     ///
     /// # Errors
     ///
     /// Returns a typed scoped-response error without mutation for a frame that
-    /// belongs to another session or run scope, and an invalid-response error
-    /// for a status frame received before the subscription snapshot.
-    pub fn apply_frame(&mut self, frame: RunStreamFrameDto) -> DtoResult<()> {
+    /// belongs to another session.
+    pub fn apply_frame(&mut self, frame: SessionFrameDto) -> DtoResult<()> {
         match frame {
-            RunStreamFrameDto::Content(message) => self.apply_content(message),
-            RunStreamFrameDto::Status(run) => self.apply_status(run),
-            RunStreamFrameDto::TextDelta(delta) => self.apply_text_delta(delta),
+            SessionFrameDto::Content(message) => self.apply_content(message),
+            SessionFrameDto::Status(run) => self.apply_status(run),
+            SessionFrameDto::TextDelta(delta) => self.apply_text_delta(delta),
         }
     }
 
     fn apply_content(&mut self, message: MessageProjectionDto) -> DtoResult<()> {
-        self.ensure_scope(message.session_id(), message.run_id())?;
+        self.ensure_scope(message.session_id())?;
         // The committed assistant row of a step supersedes both its channels'
         // provisional text, so neither buffer outlives its own step.
         if message.kind() == MessageKindDto::Assistant {
@@ -659,7 +658,17 @@ impl RunStreamState {
     }
 
     fn apply_text_delta(&mut self, delta: TextDeltaFrameDto) -> DtoResult<()> {
-        self.ensure_scope(delta.session_id(), Some(delta.run_id()))?;
+        self.ensure_scope(delta.session_id())?;
+        // Transient text belongs to the session's current run: a delta of a run
+        // this state no longer projects is a cadence frame that crossed its
+        // run's own terminal commit, so it changes nothing.
+        if self
+            .run
+            .as_ref()
+            .is_none_or(|run| run.run_id() != delta.run_id())
+        {
+            return Ok(());
+        }
         // A delta for a new step replaces both buffers: the previous step's
         // advance notice is stale once the run moves on.
         if self.provisional_step != Some(delta.step()) {
@@ -694,10 +703,10 @@ impl RunStreamState {
     }
 
     fn apply_status(&mut self, run: RunProjectionDto) -> DtoResult<()> {
-        self.ensure_scope(run.session_id(), Some(run.run_id()))?;
-        if self.run.is_none() {
-            return Err(invalid_response());
-        }
+        self.ensure_scope(run.session_id())?;
+        // The first status of a run the session did not carry yet is exactly
+        // how a window learns that a run started elsewhere, so a status frame
+        // is accepted whenever it belongs to the session.
         // A terminal status ends the run: the daemon discards its unpublished
         // delta windows, so no advance notice may outlive the run.
         if run_status_is_terminal(run.status()) {
@@ -707,8 +716,8 @@ impl RunStreamState {
         Ok(())
     }
 
-    fn ensure_scope(&self, session_id: SessionId, run_id: Option<RunId>) -> DtoResult<()> {
-        if session_id == self.session_id && run_id.is_none_or(|run_id| run_id == self.run_id) {
+    fn ensure_scope(&self, session_id: SessionId) -> DtoResult<()> {
+        if session_id == self.session_id {
             Ok(())
         } else {
             Err(scope_error())
@@ -719,12 +728,6 @@ impl RunStreamState {
     #[must_use]
     pub const fn session_id(&self) -> SessionId {
         self.session_id
-    }
-
-    /// Returns the fixed run identity.
-    #[must_use]
-    pub const fn run_id(&self) -> RunId {
-        self.run_id
     }
 
     /// Returns the current run projection, once a snapshot has been accepted.
@@ -909,8 +912,8 @@ fn invalid_response() -> ErrorDto {
 
 fn scope_error() -> ErrorDto {
     ErrorDto::validation(
-        "invalid_run_subscription",
-        "run subscription data belongs to another run scope",
+        "invalid_session_subscription",
+        "session subscription data belongs to another session scope",
     )
 }
 
@@ -923,8 +926,8 @@ fn request_timeout() -> ErrorDto {
 
 fn stream_reply_timeout() -> ErrorDto {
     ErrorDto::unavailable(
-        "run_stream_reply_timeout",
-        "the local daemon did not answer the run-stream request in time",
+        "session_stream_reply_timeout",
+        "the local daemon did not answer the session-stream request in time",
     )
 }
 

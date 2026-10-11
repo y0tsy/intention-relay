@@ -37,7 +37,7 @@ use intention_proto::TurnId;
 #[cfg(feature = "test-support")]
 use intention_proto::{
     ClientRequestDto, InterruptRunCommandDto, ProtocolDaemonMessageDto, ProtocolResultDto,
-    RunStreamFrameDto, RunSubscriptionSnapshotDto, SubscribeRunCommandDto, TextDeltaChannelDto,
+    SessionFrameDto, SessionSnapshotDto, SubscribeSessionCommandDto, TextDeltaChannelDto,
     decode_response, encode_request, run_status_is_terminal,
 };
 use intention_proto::{IdempotencyKey, RunId, SessionId};
@@ -319,19 +319,18 @@ async fn send_request_through_host(
 /// run projection and the run's transcript rows, so a fixture needs no
 /// daemon-internal read path to observe a run that has left the active slot.
 #[cfg(feature = "test-support")]
-async fn run_snapshot_through_host(
+async fn session_snapshot_through_host(
     endpoint: &LocalEndpoint,
     session_id: SessionId,
-    run_id: RunId,
-) -> RunSubscriptionSnapshotDto {
+) -> SessionSnapshotDto {
     let response = send_request_through_host(
         endpoint,
         1,
-        ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, run_id)),
+        ClientRequestDto::SubscribeSession(SubscribeSessionCommandDto::new(session_id)),
     )
     .await;
-    let ProtocolResultDto::RunSubscribed(snapshot) = response else {
-        panic!("the host answers a run subscription with the current snapshot")
+    let ProtocolResultDto::SessionSubscribed(snapshot) = response else {
+        panic!("the host answers a session subscription with the current snapshot")
     };
     snapshot
 }
@@ -470,11 +469,15 @@ async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
         .expect("the continuation completes"),
         "the exact registered execution task completes"
     );
-    // A run that left the active slot is read from the host's current-state
-    // subscription snapshot: its terminal status and transcript rows are the
-    // committed values the daemon serves.
-    let completed = run_snapshot_through_host(&endpoint, session_id, run_id).await;
-    assert_eq!(completed.run().status(), RunStatusDto::Completed);
+    // A run that left the active slot is no longer the session's active run:
+    // its terminal status reached the subscription as a status frame while the
+    // run was live, and the current state that follows carries its committed
+    // rows.
+    let completed = session_snapshot_through_host(&endpoint, session_id).await;
+    assert!(
+        completed.projection().active_run().is_none(),
+        "a completed run leaves the session's active slot"
+    );
     assert!(completed.messages().iter().any(|message| {
         message.kind() == MessageKindDto::Assistant && message.text() == "live response"
     }));
@@ -633,11 +636,10 @@ async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
         .expect("the continuing execution completes"),
         "the exact run execution completes"
     );
-    let completed = run_snapshot_through_host(&endpoint, session_id, run_id).await;
-    assert_eq!(
-        completed.run().status(),
-        RunStatusDto::Completed,
-        "one run carries the whole continuous session"
+    let completed = session_snapshot_through_host(&endpoint, session_id).await;
+    assert!(
+        completed.projection().active_run().is_none(),
+        "one run carries the whole continuous session and leaves the active slot when it completes"
     );
     assert_eq!(driver.executions(), 2);
     server.await.expect("host accepts first and pending peers");
@@ -669,7 +671,7 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
     let first_server = tokio::spawn(async move {
         first_host_server.serve_connections(listener, 2).await;
     });
-    let first_run = send_user_turn_through_host(&first_endpoint, session_id).await;
+    send_user_turn_through_host(&first_endpoint, session_id).await;
     tokio::time::timeout(Duration::from_secs(1), first_driver.entered.notified())
         .await
         .expect("first host reaches an in-flight provider stream");
@@ -732,7 +734,7 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
     requests
         .send_message(&encode_request(
             1,
-            ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, first_run)),
+            ClientRequestDto::SubscribeSession(SubscribeSessionCommandDto::new(session_id)),
         ))
         .await
         .expect("restart snapshot request sends");
@@ -745,26 +747,32 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
     requests
         .send_message(&encode_request(
             2,
-            ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, RunId::new())),
+            ClientRequestDto::SubscribeSession(SubscribeSessionCommandDto::new(SessionId::new())),
         ))
         .await
-        .expect("unknown-run request sends");
+        .expect("unknown-session request sends");
     let error_line = messages
         .receive_line()
         .await
         .expect("restart error response arrives");
-    let transport_error =
-        decode_response(&error_line, 2).expect_err("an unknown run is refused with a typed error");
+    let transport_error = decode_response(&error_line, 2)
+        .expect_err("an unknown session is refused with a typed error");
     let initial_frame_json =
         serde_json::to_string(&initial_frame).expect("initial frame serializes");
     let transport_error_json = serde_json::to_string(&transport_error).expect("error serializes");
-    let ProtocolResultDto::RunSubscribed(snapshot) = &initial_frame else {
+    let ProtocolResultDto::SessionSubscribed(snapshot) = &initial_frame else {
         panic!("restart subscription answers with the current snapshot")
     };
-    assert_eq!(
-        snapshot.run().status(),
-        RunStatusDto::Interrupted,
-        "the restarted daemon serves the interrupted run's current state"
+    assert!(
+        snapshot.projection().active_run().is_none(),
+        "recovery left the interrupted run terminal, so the session carries no active run"
+    );
+    assert!(
+        snapshot
+            .messages()
+            .iter()
+            .any(|message| message.kind() == MessageKindDto::User),
+        "the interrupted run's transcript is the durable evidence the restart serves"
     );
     assert!(
         !snapshot
@@ -778,7 +786,8 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
         .await
         .expect("restart host accepts stream peer");
     restart_host.shutdown().await;
-    let projection_json = serde_json::to_string(snapshot.run()).expect("projection serializes");
+    let projection_json =
+        serde_json::to_string(snapshot.projection()).expect("projection serializes");
     let transcript_json =
         serde_json::to_string(snapshot.messages()).expect("transcript rows serialize");
     for output in [
@@ -825,7 +834,7 @@ async fn streamed_provider_text_reaches_a_subscriber_before_its_committed_row_an
     subscriber_requests
         .send_message(&encode_request(
             1,
-            ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, run_id)),
+            ClientRequestDto::SubscribeSession(SubscribeSessionCommandDto::new(session_id)),
         ))
         .await
         .expect("subscription request sends");
@@ -836,7 +845,7 @@ async fn streamed_provider_text_reaches_a_subscriber_before_its_committed_row_an
     assert!(
         matches!(
             decode_response(&reply, 1).expect("subscription reply decodes"),
-            ProtocolResultDto::RunSubscribed(_)
+            ProtocolResultDto::SessionSubscribed(_)
         ),
         "a live subscription is what transient frames are published to"
     );
@@ -845,7 +854,7 @@ async fn streamed_provider_text_reaches_a_subscriber_before_its_committed_row_an
 
     // The stream ends with the committed assistant row and the terminal status,
     // so every frame the run published was received in its publication order.
-    let mut received: Vec<RunStreamFrameDto> = Vec::new();
+    let mut received: Vec<SessionFrameDto> = Vec::new();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let ProtocolDaemonMessageDto::Frame(frame) = receive_message(&mut frames).await else {
@@ -853,7 +862,7 @@ async fn streamed_provider_text_reaches_a_subscriber_before_its_committed_row_an
             };
             let terminal = matches!(
                 &frame,
-                RunStreamFrameDto::Status(run) if run_status_is_terminal(run.status())
+                SessionFrameDto::Status(run) if run_status_is_terminal(run.status())
             );
             received.push(frame);
             if terminal {
@@ -867,7 +876,7 @@ async fn streamed_provider_text_reaches_a_subscriber_before_its_committed_row_an
     let published: Vec<(u32, String)> = received
         .iter()
         .filter_map(|frame| match frame {
-            RunStreamFrameDto::TextDelta(delta) => {
+            SessionFrameDto::TextDelta(delta) => {
                 assert_eq!(delta.session_id(), session_id);
                 assert_eq!(delta.run_id(), run_id);
                 Some((delta.step(), delta.text().to_owned()))
@@ -887,7 +896,7 @@ async fn streamed_provider_text_reaches_a_subscriber_before_its_committed_row_an
         .iter()
         .enumerate()
         .find_map(|(index, frame)| match frame {
-            RunStreamFrameDto::Content(message) if message.kind() == MessageKindDto::Assistant => {
+            SessionFrameDto::Content(message) if message.kind() == MessageKindDto::Assistant => {
                 Some((index, message.text().to_owned()))
             }
             _ => None,
@@ -895,7 +904,7 @@ async fn streamed_provider_text_reaches_a_subscriber_before_its_committed_row_an
         .expect("the run commits its assistant row");
     let newest_delta = received
         .iter()
-        .rposition(|frame| matches!(frame, RunStreamFrameDto::TextDelta(_)))
+        .rposition(|frame| matches!(frame, SessionFrameDto::TextDelta(_)))
         .expect("every advertised delta is a received frame");
     assert!(
         newest_delta < committed_index,
@@ -915,7 +924,7 @@ async fn streamed_provider_text_reaches_a_subscriber_before_its_committed_row_an
     // A bounded read window past the terminal frame proves the transient path
     // publishes nothing behind the committed row: the coalescing cadence keeps
     // ticking for the run's last step, and its window is already drained.
-    let mut trailing: Vec<RunStreamFrameDto> = Vec::new();
+    let mut trailing: Vec<SessionFrameDto> = Vec::new();
     let _late = tokio::time::timeout(Duration::from_millis(150), async {
         loop {
             if let ProtocolDaemonMessageDto::Frame(frame) = receive_message(&mut frames).await {
@@ -927,14 +936,17 @@ async fn streamed_provider_text_reaches_a_subscriber_before_its_committed_row_an
     assert!(
         !trailing
             .iter()
-            .any(|frame| matches!(frame, RunStreamFrameDto::TextDelta(_))),
+            .any(|frame| matches!(frame, SessionFrameDto::TextDelta(_))),
         "no provisional text follows the committed row it belongs to"
     );
 
     // Transient means never durable: the current-state snapshot the host serves
     // carries the committed row alone, with no provisional fragment anywhere.
-    let snapshot = run_snapshot_through_host(&endpoint, session_id, run_id).await;
-    assert_eq!(snapshot.run().status(), RunStatusDto::Completed);
+    let snapshot = session_snapshot_through_host(&endpoint, session_id).await;
+    assert!(
+        snapshot.projection().active_run().is_none(),
+        "the run completed before the current-state read, so it left the active slot"
+    );
     assert_eq!(
         snapshot
             .messages()
@@ -982,7 +994,7 @@ async fn both_channels_of_a_step_reach_a_subscriber_before_the_row_they_become()
     subscriber_requests
         .send_message(&encode_request(
             1,
-            ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, run_id)),
+            ClientRequestDto::SubscribeSession(SubscribeSessionCommandDto::new(session_id)),
         ))
         .await
         .expect("subscription request sends");
@@ -993,14 +1005,14 @@ async fn both_channels_of_a_step_reach_a_subscriber_before_the_row_they_become()
     assert!(
         matches!(
             decode_response(&reply, 1).expect("subscription reply decodes"),
-            ProtocolResultDto::RunSubscribed(_)
+            ProtocolResultDto::SessionSubscribed(_)
         ),
         "a live subscription is what transient frames are published to"
     );
 
     release.notify_one();
 
-    let mut received: Vec<RunStreamFrameDto> = Vec::new();
+    let mut received: Vec<SessionFrameDto> = Vec::new();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let ProtocolDaemonMessageDto::Frame(frame) = receive_message(&mut frames).await else {
@@ -1008,7 +1020,7 @@ async fn both_channels_of_a_step_reach_a_subscriber_before_the_row_they_become()
             };
             let terminal = matches!(
                 &frame,
-                RunStreamFrameDto::Status(run) if run_status_is_terminal(run.status())
+                SessionFrameDto::Status(run) if run_status_is_terminal(run.status())
             );
             received.push(frame);
             if terminal {
@@ -1022,7 +1034,7 @@ async fn both_channels_of_a_step_reach_a_subscriber_before_the_row_they_become()
     let channels: Vec<(TextDeltaChannelDto, String)> = received
         .iter()
         .filter_map(|frame| match frame {
-            RunStreamFrameDto::TextDelta(delta) => {
+            SessionFrameDto::TextDelta(delta) => {
                 assert_eq!(delta.session_id(), session_id);
                 assert_eq!(delta.run_id(), run_id);
                 assert_eq!(delta.step(), 0, "one provider round is one model step");
@@ -1053,7 +1065,7 @@ async fn both_channels_of_a_step_reach_a_subscriber_before_the_row_they_become()
         .iter()
         .enumerate()
         .find_map(|(index, frame)| match frame {
-            RunStreamFrameDto::Content(message) if message.kind() == MessageKindDto::Assistant => {
+            SessionFrameDto::Content(message) if message.kind() == MessageKindDto::Assistant => {
                 Some((index, message.clone()))
             }
             _ => None,
@@ -1061,7 +1073,7 @@ async fn both_channels_of_a_step_reach_a_subscriber_before_the_row_they_become()
         .expect("the run commits its assistant row");
     let newest_delta = received
         .iter()
-        .rposition(|frame| matches!(frame, RunStreamFrameDto::TextDelta(_)))
+        .rposition(|frame| matches!(frame, SessionFrameDto::TextDelta(_)))
         .expect("every advertised delta is a received frame");
     assert!(
         newest_delta < committed_index,
@@ -1089,7 +1101,7 @@ async fn both_channels_of_a_step_reach_a_subscriber_before_the_row_they_become()
 
     // Transient means never durable: the current-state snapshot carries the
     // committed row alone, with no provisional fragment of either channel.
-    let snapshot = run_snapshot_through_host(&endpoint, session_id, run_id).await;
+    let snapshot = session_snapshot_through_host(&endpoint, session_id).await;
     let snapshot_json = serde_json::to_string(&snapshot).expect("the current snapshot serializes");
     assert!(
         !snapshot_json.contains("text_delta"),

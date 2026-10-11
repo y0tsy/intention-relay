@@ -18,11 +18,11 @@ use intention_proto::{
     DaemonHealthDto, ErrorDto, GetSessionSnapshotQueryDto, InterruptRunAcceptedDto,
     InterruptRunCommandDto, ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto,
     RemoveTurnCommandDto, RunCancelledAcceptedDto, RunProjectionDto, RunStatusDto,
-    RunStreamFrameDto, RunSubscriptionSnapshotDto, SendUserTurnAcceptedDto, SendUserTurnCommandDto,
-    SendUserTurnOutcomeDto, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto,
-    SetTuiThemeCommandDto, SubscribeRunCommandDto, TextDeltaChannelDto, TextDeltaFrameDto,
-    ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, decode_request_line, decode_response,
-    encode_reply, encode_request, parse_daemon_message, parse_run_frame, run_status_is_terminal,
+    SendUserTurnAcceptedDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionFrameDto,
+    SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, SetTuiThemeCommandDto,
+    SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TuiSettingsDto,
+    TuiThemeAcceptedDto, decode_request_line, decode_response, encode_reply, encode_request,
+    parse_daemon_message, parse_session_frame, run_status_is_terminal,
     validate_run_status_transition,
 };
 use intention_proto::{ConfigRevisionId, IdempotencyKey, MessageKindDto, ProjectId, RunId};
@@ -50,14 +50,6 @@ fn fixture_snapshot(session_id: SessionId, run_id: RunId) -> SessionSnapshotDto 
         vec![fixture_message(session_id, run_id)],
     )
     .expect("fixture snapshot is valid")
-}
-
-fn fixture_run_snapshot(session_id: SessionId, run_id: RunId) -> RunSubscriptionSnapshotDto {
-    RunSubscriptionSnapshotDto::new(
-        fixture_run(session_id, run_id),
-        vec![fixture_message(session_id, run_id)],
-    )
-    .expect("fixture run snapshot is valid")
 }
 
 fn fixture_session_summary(session_id: SessionId, run_id: RunId) -> SessionSummaryDto {
@@ -96,7 +88,7 @@ const fn result_kind(request: &ClientRequestDto) -> &'static str {
         ClientRequestDto::ListSessions => "sessions_listed",
         ClientRequestDto::GetTuiSettings => "tui_settings",
         ClientRequestDto::SetTuiTheme(_) => "tui_theme_set",
-        ClientRequestDto::SubscribeRun(_) => "run_subscribed",
+        ClientRequestDto::SubscribeSession(_) => "session_subscribed",
     }
 }
 
@@ -121,7 +113,7 @@ fn fixture_requests(session_id: SessionId, run_id: RunId) -> Vec<ClientRequestDt
         ClientRequestDto::ListSessions,
         ClientRequestDto::GetTuiSettings,
         ClientRequestDto::SetTuiTheme(SetTuiThemeCommandDto::new(ThemeDto::Dark)),
-        ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, run_id)),
+        ClientRequestDto::SubscribeSession(SubscribeSessionCommandDto::new(session_id)),
     ]
 }
 
@@ -145,7 +137,7 @@ fn fixture_results(session_id: SessionId, run_id: RunId) -> Vec<ProtocolResultDt
         ProtocolResultDto::SessionsListed(fixture_session_summaries(session_id, run_id)),
         ProtocolResultDto::TuiSettings(TuiSettingsDto::new(ThemeDto::Dark)),
         ProtocolResultDto::TuiThemeSet(TuiThemeAcceptedDto::new(ThemeDto::Dark)),
-        ProtocolResultDto::RunSubscribed(fixture_run_snapshot(session_id, run_id)),
+        ProtocolResultDto::SessionSubscribed(fixture_snapshot(session_id, run_id)),
     ]
 }
 
@@ -207,7 +199,7 @@ fn every_result_round_trips_through_the_typed_reply() {
         let decoded = decode_response(&line, id).expect("the correlated reply decodes");
         assert_eq!(decoded, result);
         assert_eq!(
-            parse_run_frame(&line)
+            parse_session_frame(&line)
                 .expect_err("a reply is never accepted as a frame")
                 .code(),
             "invalid_local_protocol_response"
@@ -257,8 +249,8 @@ fn rejections_carry_the_request_identity_and_surface_the_typed_error() {
 fn frames_carry_committed_values_without_positions() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let content = RunStreamFrameDto::Content(fixture_message(session_id, run_id));
-    let status = RunStreamFrameDto::Status(fixture_run(session_id, run_id));
+    let content = SessionFrameDto::Content(fixture_message(session_id, run_id));
+    let status = SessionFrameDto::Status(fixture_run(session_id, run_id));
 
     for (frame, kind) in [(&content, "content"), (&status, "status")] {
         let message = ProtocolDaemonMessageDto::frame(frame.clone());
@@ -271,7 +263,7 @@ fn frames_carry_committed_values_without_positions() {
             !line.contains("cursor") && !line.contains("sequence"),
             "a committed frame carries no position"
         );
-        assert_eq!(parse_run_frame(&line).expect("frame parses"), *frame);
+        assert_eq!(parse_session_frame(&line).expect("frame parses"), *frame);
         assert!(
             decode_response(&line, 1).is_err(),
             "a frame is never accepted as a correlated reply"
@@ -420,7 +412,7 @@ fn text_delta_frames_round_trip_as_transient_chunks() {
     assert_eq!(TextDeltaChannelDto::Answer.as_str(), "answer");
     assert_eq!(TextDeltaChannelDto::Reasoning.as_str(), "reasoning");
 
-    let frame = RunStreamFrameDto::TextDelta(delta);
+    let frame = SessionFrameDto::TextDelta(delta);
     let message = ProtocolDaemonMessageDto::frame(frame.clone());
     let line = serde_json::to_string(&message).expect("text delta frame serializes");
     let value: serde_json::Value = serde_json::from_str(&line).expect("frame line is JSON");
@@ -432,7 +424,7 @@ fn text_delta_frames_round_trip_as_transient_chunks() {
         !line.contains("cursor") && !line.contains("sequence"),
         "a text delta carries no stream position"
     );
-    assert_eq!(parse_run_frame(&line).expect("frame parses"), frame);
+    assert_eq!(parse_session_frame(&line).expect("frame parses"), frame);
     assert!(
         decode_response(&line, 1).is_err(),
         "a text delta is never accepted as a correlated reply"
@@ -440,7 +432,7 @@ fn text_delta_frames_round_trip_as_transient_chunks() {
 
     // The reasoning channel is the same frame with another discriminator: one
     // shape, two channels, and no second kind of transient frame.
-    let reasoning = RunStreamFrameDto::TextDelta(
+    let reasoning = SessionFrameDto::TextDelta(
         TextDeltaFrameDto::new(
             session_id,
             run_id,
@@ -458,11 +450,11 @@ fn text_delta_frames_round_trip_as_transient_chunks() {
         "reasoning"
     );
     assert_eq!(
-        parse_run_frame(&line).expect("the reasoning frame parses"),
+        parse_session_frame(&line).expect("the reasoning frame parses"),
         reasoning
     );
     assert!(
-        serde_json::from_str::<RunStreamFrameDto>(
+        serde_json::from_str::<SessionFrameDto>(
             r#"{"kind":"text_delta","data":{"session_id":"11111111-1111-4111-8111-111111111111","run_id":"22222222-2222-4222-8222-222222222222","step":0,"text":"no channel"}}"#
         )
         .is_err(),
@@ -512,7 +504,7 @@ fn session_summaries_and_text_deltas_validate_their_required_shape() {
         "invalid_text_delta"
     );
     assert!(
-        serde_json::from_str::<RunStreamFrameDto>(
+        serde_json::from_str::<SessionFrameDto>(
             r#"{"kind":"text_delta","data":{"session_id":"11111111-1111-4111-8111-111111111111","run_id":"11111111-1111-4111-8111-111111111111","step":0,"text":""}}"#
         )
         .is_err(),
@@ -531,7 +523,7 @@ fn malformed_wire_lines_fail_closed() {
         "a closed result table rejects unknown kinds"
     );
     assert!(
-        serde_json::from_str::<RunStreamFrameDto>(r#"{"kind":"unknown","data":{}}"#).is_err(),
+        serde_json::from_str::<SessionFrameDto>(r#"{"kind":"unknown","data":{}}"#).is_err(),
         "a closed frame table rejects unknown kinds"
     );
     assert!(

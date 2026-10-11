@@ -13,9 +13,8 @@ use common::{
 };
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
-    ModelRunCommitDto, ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto,
-    ModelRunExecutionService, ModelTextDeltaPort, RunCancellation, ToolExecutionPort,
-    ToolResultOutcomeDto,
+    ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto, ModelRunExecutionService,
+    ModelTextDeltaPort, RunCancellation, SessionCommitDto, ToolExecutionPort, ToolResultOutcomeDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TextDeltaChannelDto};
 use intention_proto::{MessageKindDto, RunProjectionDto, RunStatusDto};
@@ -168,7 +167,7 @@ fn observer_receives_only_committed_transcript_rows_and_statuses() {
     );
     assert_eq!(
         commits[0],
-        ModelRunCommitDto::Status {
+        SessionCommitDto::Status {
             session_id,
             run_id,
             status: RunStatusDto::Running,
@@ -176,7 +175,7 @@ fn observer_receives_only_committed_transcript_rows_and_statuses() {
     );
     let committed = repository.committed_messages();
     assert_eq!(committed.len(), 1);
-    assert_eq!(commits[1], ModelRunCommitDto::Content(committed[0].clone()));
+    assert_eq!(commits[1], SessionCommitDto::Content(committed[0].clone()));
     assert_eq!(committed[0].session_id(), session_id);
     assert_eq!(committed[0].run_id(), Some(run_id));
     assert_eq!(committed[0].kind(), MessageKindDto::Assistant);
@@ -184,7 +183,7 @@ fn observer_receives_only_committed_transcript_rows_and_statuses() {
     assert!(committed[0].id().value() > 0);
     assert_eq!(
         commits[2],
-        ModelRunCommitDto::Status {
+        SessionCommitDto::Status {
             session_id,
             run_id,
             status: RunStatusDto::Completed,
@@ -244,7 +243,7 @@ fn observer_receives_no_content_when_a_message_commit_fails() {
         observer
             .commits()
             .iter()
-            .all(|commit| !matches!(commit, ModelRunCommitDto::Content(_))),
+            .all(|commit| !matches!(commit, SessionCommitDto::Content(_))),
         "an uncommitted row is never published"
     );
     assert!(
@@ -1313,7 +1312,7 @@ fn text_delta_port_observes_both_channels_with_their_model_step_index() {
 /// Cross-run comparable durable evidence of one fixture execution.
 type RoundEvidence = (
     Vec<(MessageKindDto, String)>,
-    Vec<ModelRunCommitDto>,
+    Vec<SessionCommitDto>,
     Vec<RunStatusDto>,
 );
 

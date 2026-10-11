@@ -105,7 +105,7 @@ where
     /// # Errors
     ///
     /// Returns the typed storage error when a durable row cannot commit.
-    pub fn invoke_local_tool_with_publication<P: ModelRunCommitObserver>(
+    pub fn invoke_local_tool_with_publication<P: SessionCommitObserver>(
         &self,
         input: ToolInvocationRequestDto,
         publisher: &P,
@@ -220,7 +220,7 @@ where
         clippy::too_many_arguments,
         reason = "One flat call payload keeps the single call-row commit at one call site."
     )]
-    fn append_tool_call<P: ModelRunCommitObserver>(
+    fn append_tool_call<P: SessionCommitObserver>(
         &self,
         session_id: SessionId,
         run_id: RunId,
@@ -240,7 +240,7 @@ where
             Some(tool_id.to_owned()),
         )?;
         let committed = self.repository.append_message(message, occurred_at)?;
-        publisher.observe_model_run_commit(&ModelRunCommitDto::Content(committed.clone()));
+        publisher.observe_session_commit(&SessionCommitDto::Content(committed.clone()));
         Ok(committed)
     }
 
@@ -257,7 +257,7 @@ where
         clippy::too_many_arguments,
         reason = "One flat terminal-result payload keeps the single transaction at one call site."
     )]
-    fn commit_tool_result<P: ModelRunCommitObserver>(
+    fn commit_tool_result<P: SessionCommitObserver>(
         &self,
         session_id: SessionId,
         run_id: RunId,
@@ -291,7 +291,7 @@ where
         let committed = self
             .repository
             .write_tool_result(evidence.clone(), message)?;
-        publisher.observe_model_run_commit(&ModelRunCommitDto::Content(committed));
+        publisher.observe_session_commit(&SessionCommitDto::Content(committed));
         Ok(evidence)
     }
 
@@ -356,6 +356,12 @@ where
     /// so acceptance never schedules work itself and a post-commit scheduling
     /// failure cannot change the committed acceptance result.
     ///
+    /// The committed acceptance reaches `observer` the way every other durable
+    /// commit does: a started turn hands over its committed user row and the
+    /// run status it opened, and a pending turn hands over nothing, because a
+    /// queued turn has no transcript row yet - its row commits when it joins
+    /// the run context.
+    ///
     /// `proposed_run_id` must be a deterministic function of the command's own
     /// identity: the same session and `IdempotencyKey` must always propose the
     /// same [`RunId`], because the repository compares it when it replays an
@@ -373,15 +379,28 @@ where
         proposed_run_id: RunId,
         config_snapshot: ConfigSnapshotDto,
         occurred_at: TimestampDto,
+        observer: &dyn SessionCommitObserver,
     ) -> DtoResult<AcceptedTurnOutcomeDto> {
-        self.repository.accept_user_turn(
+        let accepted = self.repository.accept_user_turn(
             command.session_id(),
             command.idempotency_key(),
             command.content(),
             proposed_run_id,
             config_snapshot,
             occurred_at,
-        )
+        )?;
+        if let AcceptedTurnOutcomeDto::Started { run, message } = &accepted {
+            // The prompt reaches a session subscriber before the run it opened:
+            // a reader that shows the row first never displays an answer before
+            // the turn it answers.
+            observer.observe_session_commit(&SessionCommitDto::Content(message.clone()));
+            observer.observe_session_commit(&SessionCommitDto::Status {
+                session_id: run.session_id(),
+                run_id: run.run_id(),
+                status: run.status(),
+            });
+        }
+        Ok(accepted)
     }
 
     /// Removes one not-yet-seen pending turn and returns its committed projection.

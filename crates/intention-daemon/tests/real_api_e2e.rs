@@ -55,7 +55,7 @@ use std::process::Child;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use intention_client::{IntentionClient, ProcessDaemonLauncher, RunStreamClient};
+use intention_client::{IntentionClient, ProcessDaemonLauncher, SessionStreamClient};
 use intention_config::{
     ConfigPathDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto,
 };
@@ -64,7 +64,7 @@ use intention_proto::{
     RunStatusDto, WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_proto::{IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId};
-use intention_proto::{SendUserTurnOutcomeDto, SessionSnapshotDto, SubscribeRunCommandDto};
+use intention_proto::{SendUserTurnOutcomeDto, SessionSnapshotDto, SubscribeSessionCommandDto};
 use intention_test_support::daemon_process::{
     config_path, spawn_daemon, unique_endpoint, write_config_document,
 };
@@ -672,26 +672,22 @@ enum RunObservation {
 async fn collect_terminal_run(
     endpoint: &LocalEndpoint,
     session_id: SessionId,
-    run_id: RunId,
     deadline: Instant,
 ) -> RunObservation {
     tokio::time::timeout_at(
         tokio::time::Instant::from_std(deadline),
-        collect_run_frames(endpoint, session_id, run_id),
+        collect_run_frames(endpoint, session_id),
     )
     .await
     .unwrap_or_else(|_| panic!("the run reaches a terminal status before the deadline"))
 }
 
-/// Reads one run stream until its terminal status or a closed connection.
-async fn collect_run_frames(
-    endpoint: &LocalEndpoint,
-    session_id: SessionId,
-    run_id: RunId,
-) -> RunObservation {
-    let client = RunStreamClient::new(endpoint.clone());
+/// Reads the session stream until its active run reaches a terminal status or
+/// the connection closes.
+async fn collect_run_frames(endpoint: &LocalEndpoint, session_id: SessionId) -> RunObservation {
+    let client = SessionStreamClient::new(endpoint.clone());
     let Ok(mut subscription) = client
-        .subscribe(SubscribeRunCommandDto::new(session_id, run_id))
+        .subscribe(SubscribeSessionCommandDto::new(session_id))
         .await
     else {
         return RunObservation::Lost("the run subscription failed".to_owned());
@@ -767,21 +763,17 @@ async fn drive_tool_turn_with(
         prepare();
         let session_id = SessionId::new();
         create_session(host, session_id, &format!("{tool} turn {attempt}")).await;
-        let run_id = send_user_turn(&host.endpoint, session_id, prompt).await;
-        let observed = match collect_terminal_run(
-            &host.endpoint,
-            session_id,
-            run_id,
-            Instant::now() + TURN_DEADLINE,
-        )
-        .await
-        {
-            RunObservation::Terminal(observed) => *observed,
-            RunObservation::Lost(reason) => {
-                last_gap = Some(reason);
-                continue;
-            }
-        };
+        send_user_turn(&host.endpoint, session_id, prompt).await;
+        let observed =
+            match collect_terminal_run(&host.endpoint, session_id, Instant::now() + TURN_DEADLINE)
+                .await
+            {
+                RunObservation::Terminal(observed) => *observed,
+                RunObservation::Lost(reason) => {
+                    last_gap = Some(reason);
+                    continue;
+                }
+            };
         if observed.status() != RunStatusDto::Completed {
             // A failed live turn is model noise: the live model can answer
             // without a usable tool call, and an unparsable call terminalizes
@@ -1063,22 +1055,20 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_survives_resta
         &edit_run,
         &execute_run,
     ];
-    let run_id = read_run.run.run_id();
 
     host.restart_daemon();
     let _client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE).await;
-    let stream_client = RunStreamClient::new(host.endpoint.clone());
+    let stream_client = SessionStreamClient::new(host.endpoint.clone());
     let subscription = tokio::time::timeout_at(
         tokio::time::Instant::from_std(Instant::now() + RESUBSCRIBE_DEADLINE),
-        stream_client.subscribe(SubscribeRunCommandDto::new(read_session, run_id)),
+        stream_client.subscribe(SubscribeSessionCommandDto::new(read_session)),
     )
     .await
     .unwrap_or_else(|_| panic!("the post-restart subscription reply arrives before the deadline"))
     .expect("the post-restart subscription reply is valid");
-    assert_eq!(
-        subscription.state().status(),
-        Some(RunStatusDto::Completed),
-        "the restarted daemon serves the completed run"
+    assert!(
+        subscription.state().status().is_none(),
+        "the restarted daemon serves the completed run as terminal, so the session carries no active run"
     );
     assert_eq!(
         subscription.state().messages(),
@@ -1095,7 +1085,6 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_survives_resta
         if let RunObservation::Terminal(observed) = collect_terminal_run(
             &host.endpoint,
             read_session,
-            run_id,
             Instant::now() + RESUBSCRIBE_DEADLINE,
         )
         .await
@@ -1176,16 +1165,11 @@ async fn real_provider_rejects_invalid_credential_without_leak() {
 
     let session_id = SessionId::new();
     create_session(&host, session_id, "the invalid-credential run").await;
-    let run_id = send_user_turn(&host.endpoint, session_id, "Reply with a short greeting.").await;
+    send_user_turn(&host.endpoint, session_id, "Reply with a short greeting.").await;
     let mut observed = None;
     for _ in 1..=TOOL_TURN_ATTEMPTS {
-        if let RunObservation::Terminal(terminal) = collect_terminal_run(
-            &host.endpoint,
-            session_id,
-            run_id,
-            Instant::now() + TURN_DEADLINE,
-        )
-        .await
+        if let RunObservation::Terminal(terminal) =
+            collect_terminal_run(&host.endpoint, session_id, Instant::now() + TURN_DEADLINE).await
         {
             observed = Some(*terminal);
             break;

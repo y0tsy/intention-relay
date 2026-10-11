@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
-    ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort, RunCancellation,
+    ModelSleepFuture, ModelTimePort, RunCancellation, SessionCommitDto, SessionCommitObserver,
     ToolExecutionPort, ToolResultOutcomeDto,
 };
 use intention_proto::{
@@ -767,7 +767,7 @@ impl ModelTimePort for ImmediateTime {
 
 /// Records every committed transcript row and run status.
 pub struct RecordingCommitObserver {
-    commits: Mutex<Vec<ModelRunCommitDto>>,
+    commits: Mutex<Vec<SessionCommitDto>>,
 }
 
 impl RecordingCommitObserver {
@@ -781,7 +781,7 @@ impl RecordingCommitObserver {
 
     /// Returns every observed commit in publication order.
     #[must_use]
-    pub fn commits(&self) -> Vec<ModelRunCommitDto> {
+    pub fn commits(&self) -> Vec<SessionCommitDto> {
         self.commits
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -789,8 +789,8 @@ impl RecordingCommitObserver {
     }
 }
 
-impl ModelRunCommitObserver for RecordingCommitObserver {
-    fn observe_model_run_commit(&self, committed: &ModelRunCommitDto) {
+impl SessionCommitObserver for RecordingCommitObserver {
+    fn observe_session_commit(&self, committed: &SessionCommitDto) {
         self.commits
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

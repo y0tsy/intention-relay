@@ -42,7 +42,7 @@ test_targets = ["transport_integration"]
 [crate_declarations."intention-client"]
 role = "active"
 responsibility = "Shared bootstrap, dispatch, subscription, and reconnect client for adapters."
-test_targets = ["client_contract", "run_stream_contract"]
+test_targets = ["client_contract", "session_stream_contract"]
 
 [crate_declarations."intention-daemon"]
 role = "active"

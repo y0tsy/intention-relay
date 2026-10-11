@@ -14,8 +14,8 @@ use common::{
 use futures_util::{StreamExt, stream};
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
-    ModelRunCommitDto, ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto,
-    ModelRunExecutionService, ModelSleepFuture, ModelTimePort, RunCancellation, ToolExecutionPort,
+    ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto, ModelRunExecutionService,
+    ModelSleepFuture, ModelTimePort, RunCancellation, SessionCommitDto, ToolExecutionPort,
     ToolResultOutcomeDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto, ToolCallId};
@@ -1490,7 +1490,7 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
     assert_eq!(
         commits
             .iter()
-            .filter(|commit| matches!(commit, ModelRunCommitDto::Status { .. }))
+            .filter(|commit| matches!(commit, SessionCommitDto::Status { .. }))
             .count(),
         2,
         "the running and completed statuses are observed"
@@ -1498,14 +1498,14 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
     assert_eq!(
         commits
             .iter()
-            .filter(|commit| matches!(commit, ModelRunCommitDto::Content(_)))
+            .filter(|commit| matches!(commit, SessionCommitDto::Content(_)))
             .count(),
         2,
         "each committed assistant step is observed exactly once"
     );
     assert_eq!(
         commits.last(),
-        Some(&ModelRunCommitDto::Status {
+        Some(&SessionCommitDto::Status {
             session_id,
             run_id,
             status: RunStatusDto::Completed,

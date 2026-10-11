@@ -12,19 +12,19 @@ use std::sync::{Mutex, PoisonError};
 use common::{FakeRepository, RecordingCommitObserver, row_id, workspace_root};
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
-    ApplicationService, ModelMessageDto, ModelRoleDto, ModelRunCommitDto, ModelRunCommitObserver,
-    RunCancellation, ToolInvocationRequestDto, ToolResultOutcomeDto,
+    ApplicationService, ModelMessageDto, ModelRoleDto, RunCancellation, SessionCommitDto,
+    SessionCommitObserver, ToolInvocationRequestDto, ToolResultOutcomeDto,
 };
 use intention_proto::{
-    CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
-    PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
-    SendUserTurnCommandDto, SessionProjectionDto, WorkspaceRootDto,
+    ConfigRevisionId, CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto,
+    MessageProjectionDto, PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto,
+    RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto, WorkspaceRootDto,
 };
 use intention_proto::{
     ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, TimestampDto, ToolCallId, TurnId,
     WorkspaceBindingDto, WorkspaceId,
 };
-use intention_storage::{StartingRunModelContextDto, ToolResultStatusDto};
+use intention_storage::{AcceptedTurnOutcomeDto, StartingRunModelContextDto, ToolResultStatusDto};
 use intention_test_support::fixture_snapshot;
 use intention_tools::WorkspaceRoot;
 
@@ -299,6 +299,89 @@ fn unknown_tool_calls_commit_a_guided_failure_instead_of_stopping() {
 }
 
 #[test]
+fn an_accepted_turn_publishes_its_committed_row_and_run_once() {
+    // The turn path hands its committed values to the same sink the model-run
+    // and tool paths use: a session's subscribers see the prompt row first and
+    // then the run it started, exactly once each.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let message = MessageProjectionDto::new(
+        row_id(),
+        session_id,
+        Some(run_id),
+        MessageKindDto::User,
+        "hello",
+        None,
+        None,
+        None,
+    )
+    .expect("fixture user row is valid");
+    let run = RunProjectionDto::new(
+        session_id,
+        run_id,
+        TurnId::new(),
+        RunStatusDto::Starting,
+        ConfigRevisionId::new(),
+    );
+    let repository = FakeRepository::with_accepted(Ok(AcceptedTurnOutcomeDto::Started {
+        run,
+        message: message.clone(),
+    }));
+    let observer = RecordingCommitObserver::new();
+    let accepted = ApplicationService::new(&repository)
+        .send_user_turn(
+            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "hello")
+                .expect("command is valid"),
+            run_id,
+            fixture_snapshot(),
+            fixture_time(),
+            &observer,
+        )
+        .expect("the accepted turn is returned");
+    assert!(matches!(accepted, AcceptedTurnOutcomeDto::Started { .. }));
+    assert_eq!(
+        observer.commits(),
+        vec![
+            SessionCommitDto::Content(message),
+            SessionCommitDto::Status {
+                session_id,
+                run_id,
+                status: RunStatusDto::Starting,
+            },
+        ],
+        "the committed prompt row precedes the run it started"
+    );
+}
+
+#[test]
+fn a_queued_turn_publishes_its_acceptance_alone() {
+    // A queued turn has no transcript row yet: it becomes visible to a
+    // session's subscribers when its row commits as it joins the run, so this
+    // path publishes nothing at acceptance.
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Ok(AcceptedTurnOutcomeDto::Pending(
+        PendingTurnProjectionDto::new(session_id, TurnId::new(), "queued")
+            .expect("fixture pending turn is valid"),
+    )));
+    let observer = RecordingCommitObserver::new();
+    let accepted = ApplicationService::new(&repository)
+        .send_user_turn(
+            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "queued")
+                .expect("command is valid"),
+            RunId::new(),
+            fixture_snapshot(),
+            fixture_time(),
+            &observer,
+        )
+        .expect("the queued turn is returned");
+    assert!(matches!(accepted, AcceptedTurnOutcomeDto::Pending(_)));
+    assert!(
+        observer.commits().is_empty(),
+        "a queued turn commits no row and publishes nothing"
+    );
+}
+
+#[test]
 fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection() {
     let command = SendUserTurnCommandDto::new(SessionId::new(), IdempotencyKey::new(), "hello")
         .expect("command is valid");
@@ -309,7 +392,13 @@ fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection
         "the durable session refused the turn",
     )));
     let error = ApplicationService::new(&repository)
-        .send_user_turn(command, proposed_run_id, config.clone(), fixture_time())
+        .send_user_turn(
+            command,
+            proposed_run_id,
+            config.clone(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
         .expect_err("admission failure is propagated");
     assert_eq!(error.code(), "turn_admission_unavailable");
     let inputs = repository
@@ -982,9 +1071,9 @@ impl<'a> TerminalOrderingProbe<'a> {
     }
 }
 
-impl ModelRunCommitObserver for TerminalOrderingProbe<'_> {
-    fn observe_model_run_commit(&self, commit: &ModelRunCommitDto) {
-        let ModelRunCommitDto::Content(message) = commit else {
+impl SessionCommitObserver for TerminalOrderingProbe<'_> {
+    fn observe_session_commit(&self, commit: &SessionCommitDto) {
+        let SessionCommitDto::Content(message) = commit else {
             return;
         };
         self.results_at_publish

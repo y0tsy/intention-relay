@@ -17,17 +17,17 @@ use intention_config::{
     ConfigPathResolver, ConfigSnapshotDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto,
     ResolvedConfigDto, StartupProviderMaterial,
 };
-use intention_engine::ApplicationService;
 #[cfg(test)]
-use intention_engine::{ModelRunCommitObserver, ToolInvocationRequestDto};
+use intention_engine::ToolInvocationRequestDto;
+use intention_engine::{ApplicationService, SessionCommitObserver};
 use intention_proto::DaemonHealthDto;
 use intention_proto::{
     CancelRunCommandDto, ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto,
     DtoResult, ErrorDto, InterruptRunAcceptedDto, InterruptRunCommandDto, ProtocolResultDto,
-    RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunCancelledAcceptedDto, RunId, RunProjectionDto,
-    SchemaVersionDto, SendUserTurnAcceptedDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto,
-    SessionId, SessionProjectionDto, SessionSnapshotDto, SessionSummariesDto, ThemeDto,
-    TimestampDto, TuiSettingsDto, TuiThemeAcceptedDto,
+    RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunCancelledAcceptedDto, RunId, SchemaVersionDto,
+    SendUserTurnAcceptedDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId,
+    SessionProjectionDto, SessionSnapshotDto, SessionSummariesDto, ThemeDto, TimestampDto,
+    TuiSettingsDto, TuiThemeAcceptedDto,
 };
 #[cfg(test)]
 use intention_proto::{ProjectId, RunModeDto, WorkspaceId, WorkspaceRootDto};
@@ -313,8 +313,8 @@ impl DaemonApplicationFacade {
     /// This is the single session read: recent transcript rows are bounded by
     /// the retained delivery bound and the byte budget derived from the
     /// transport envelope cap, which charges the encoded projection as well as
-    /// the transcript rows. The run-scoped read is the dedicated run
-    /// subscription, which the daemon host answers from the same repository.
+    /// the transcript rows. The same snapshot answers a session subscription,
+    /// which the daemon host reads from this same method.
     ///
     /// # Errors
     ///
@@ -373,10 +373,18 @@ impl DaemonApplicationFacade {
     /// conflict. Both identities are canonical UUIDs, so one caller identity
     /// selects exactly one run.
     ///
+    /// `observer` receives the committed acceptance the way every other durable
+    /// commit reaches the host's one sink, so a session's subscribers learn of
+    /// the turn and the run it started.
+    ///
     /// # Errors
     ///
     /// Returns the typed admission failure when the turn is rejected.
-    pub fn send_user_turn(&self, command: SendUserTurnCommandDto) -> DtoResult<ProtocolResultDto> {
+    pub fn send_user_turn(
+        &self,
+        command: SendUserTurnCommandDto,
+        observer: &dyn SessionCommitObserver,
+    ) -> DtoResult<ProtocolResultDto> {
         self.inner.command_gate.run(|| {
             let proposed_run_id = RunId::parse(&command.idempotency_key().to_string())?;
             let outcome = ApplicationService::new(&self.inner.repository).send_user_turn(
@@ -384,6 +392,7 @@ impl DaemonApplicationFacade {
                 proposed_run_id,
                 self.inner.config_snapshot.clone(),
                 now()?,
+                observer,
             )?;
             Ok(turn_accepted(&outcome))
         })
@@ -586,25 +595,6 @@ pub fn bounded_snapshot_messages(
     Ok(messages)
 }
 
-/// Trims one run subscription transcript to the budget its projection leaves.
-///
-/// The run snapshot carries the same whole-message contract as the session
-/// snapshot, so its committed projection is charged before the transcript rows
-/// are measured.
-///
-/// # Errors
-///
-/// Returns the typed local encode failure when the projection or a transcript
-/// row cannot be encoded.
-pub fn bounded_run_snapshot_messages(
-    run: &RunProjectionDto,
-    messages: Vec<intention_proto::MessageProjectionDto>,
-) -> DtoResult<Vec<intention_proto::MessageProjectionDto>> {
-    let mut counter = CountingWriter(0);
-    serde_json::to_writer(&mut counter, run).map_err(|_| encode_failure())?;
-    bounded_snapshot_messages(counter.0, messages)
-}
-
 /// Counts the encoded bytes one session projection adds to its snapshot.
 ///
 /// # Errors
@@ -706,7 +696,7 @@ mod tests {
 
     use super::*;
 
-    use intention_engine::{ModelRunCommitDto, RunCancellation};
+    use intention_engine::{RunCancellation, SessionCommitDto};
     use intention_proto::{
         MessageId, MessageKindDto, MessageProjectionDto, NewMessageDto, SendUserTurnCommandDto,
     };
@@ -813,6 +803,7 @@ mod tests {
                 content,
             )
             .expect("fixture user turn is valid"),
+            &RecordingPublisher::new(),
         )
     }
 
@@ -859,7 +850,7 @@ mod tests {
             .expect("fixture user turn is valid");
 
         let initial = facade
-            .send_user_turn(command.clone())
+            .send_user_turn(command.clone(), &RecordingPublisher::new())
             .expect("the first user turn is accepted");
         let ProtocolResultDto::TurnAccepted(initial_turn) = initial else {
             unreachable!("the first user turn returns user-turn evidence")
@@ -877,7 +868,7 @@ mod tests {
         // key, so a repeated command proposes the identity the durable turn
         // already recorded and replays its outcome instead of conflicting.
         let replayed = facade
-            .send_user_turn(command)
+            .send_user_turn(command, &RecordingPublisher::new())
             .expect("a repeated command replays its recorded outcome");
         let ProtocolResultDto::TurnAccepted(replayed_turn) = replayed else {
             unreachable!("the replay returns user-turn evidence")
@@ -899,7 +890,7 @@ mod tests {
         let conflicting = SendUserTurnCommandDto::new(session_id, key, "different turn")
             .expect("fixture user turn is valid");
         let error = facade
-            .send_user_turn(conflicting)
+            .send_user_turn(conflicting, &RecordingPublisher::new())
             .expect_err("one key bound to different content conflicts");
         assert_eq!(error.code(), "turn_idempotency_conflict");
     }
@@ -1427,9 +1418,9 @@ mod tests {
         }
     }
 
-    impl ModelRunCommitObserver for RecordingPublisher {
-        fn observe_model_run_commit(&self, committed: &ModelRunCommitDto) {
-            if let ModelRunCommitDto::Content(message) = committed {
+    impl SessionCommitObserver for RecordingPublisher {
+        fn observe_session_commit(&self, committed: &SessionCommitDto) {
+            if let SessionCommitDto::Content(message) = committed {
                 self.publications
                     .lock()
                     .expect("publication lock is available")

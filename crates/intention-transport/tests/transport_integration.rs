@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use intention_proto::{
-    ClientRequestDto, ErrorDto, ProtocolDaemonMessageDto, RunStreamFrameDto, decode_request_line,
-    decode_response, encode_request, parse_run_frame,
+    ClientRequestDto, ErrorDto, ProtocolDaemonMessageDto, SessionFrameDto, decode_request_line,
+    decode_response, encode_request, parse_session_frame,
 };
 use intention_transport::{AsyncLocalClientConnection, AsyncLocalListener, LocalEndpoint};
 use tempfile::TempDir;
@@ -52,8 +52,8 @@ fn unavailable_message(id: u64) -> ProtocolDaemonMessageDto {
 fn status_frame(
     session_id: intention_proto::SessionId,
     run_id: intention_proto::RunId,
-) -> RunStreamFrameDto {
-    RunStreamFrameDto::Status(intention_proto::RunProjectionDto::new(
+) -> SessionFrameDto {
+    SessionFrameDto::Status(intention_proto::RunProjectionDto::new(
         session_id,
         run_id,
         intention_proto::TurnId::new(),
@@ -106,8 +106,8 @@ async fn async_connection_preserves_correlated_replies_then_uncorrelated_stream_
     );
     let line = messages.receive_line().await.expect("stream frame arrives");
     assert!(matches!(
-        parse_run_frame(&line).expect("stream frame parses"),
-        RunStreamFrameDto::Status(run)
+        parse_session_frame(&line).expect("stream frame parses"),
+        SessionFrameDto::Status(run)
             if run.session_id() == session_id && run.run_id() == run_id
     ));
     server.await.expect("server task completes");

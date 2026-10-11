@@ -4,7 +4,7 @@
 //! transport, drive it with the real asynchronous client, and execute a real
 //! `read` tool through the production model-tool loop against a fake
 //! OpenAI-compatible provider. They prove the committed transcript rows, the
-//! run status, and live `run.frame` publication, restart the daemon, and prove
+//! run status, and live session-frame publication, restart the daemon, and prove
 //! the same durable run is replayed as current state without re-executing the
 //! tool.
 
@@ -17,13 +17,13 @@
 use std::process::Child;
 use std::time::{Duration, Instant};
 
-use intention_client::{RunStreamClient, RunStreamSubscription};
+use intention_client::{SessionStreamClient, SessionStreamSubscription};
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunStatusDto,
-    RunStreamFrameDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto, ThemeDto, WorkspaceRootDto,
-    run_status_is_terminal,
+    SendUserTurnOutcomeDto, SessionFrameDto, SubscribeSessionCommandDto, ThemeDto,
+    WorkspaceRootDto, run_status_is_terminal,
 };
-use intention_proto::{IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId};
+use intention_proto::{IdempotencyKey, ProjectId, SessionId, WorkspaceId};
 use intention_test_support::daemon_process::{
     self, spawn_daemon, unique_endpoint, wait_until_ready, write_config_document,
 };
@@ -129,10 +129,10 @@ impl Drop for E2eHost {
 /// One live run observation: the subscription, the correlated current-state
 /// snapshot it carried, and every later frame the subscriber received.
 struct LiveRunObservation {
-    subscription: RunStreamSubscription,
+    subscription: SessionStreamSubscription,
     snapshot_status: Option<RunStatusDto>,
     snapshot_messages: Vec<MessageProjectionDto>,
-    frames: Vec<RunStreamFrameDto>,
+    frames: Vec<SessionFrameDto>,
 }
 
 impl LiveRunObservation {
@@ -145,27 +145,27 @@ impl LiveRunObservation {
     fn received_status_frame(&self) -> bool {
         self.frames
             .iter()
-            .any(|frame| matches!(frame, RunStreamFrameDto::Status(_)))
+            .any(|frame| matches!(frame, SessionFrameDto::Status(_)))
     }
 }
 
-/// Subscribes to one run's current state and drives the live stream until the
-/// run reports a terminal status.
+/// Subscribes to one session's current state and drives the live stream until
+/// its active run reports a terminal status.
 ///
-/// The correlated first reply is the current-state snapshot; every later
-/// committed content or status change arrives as a live `run.frame` on the
-/// same subscription. A re-subscribing client re-reads current state and
-/// continues live, so both the snapshot and the frames are authoritative.
+/// The correlated first reply is the current-state session snapshot; every
+/// later committed row, run status change, and transient delta arrives as a
+/// live session frame on the same subscription. A re-subscribing client
+/// re-reads current state and continues live, so both the snapshot and the
+/// frames are authoritative.
 async fn observe_run_until_terminal(
-    client: &RunStreamClient,
+    client: &SessionStreamClient,
     session_id: SessionId,
-    run_id: RunId,
     deadline: Instant,
 ) -> LiveRunObservation {
     let mut subscription = client
-        .subscribe(SubscribeRunCommandDto::new(session_id, run_id))
+        .subscribe(SubscribeSessionCommandDto::new(session_id))
         .await
-        .expect("run subscription arrives");
+        .expect("session subscription arrives");
     let snapshot_status = subscription.state().status();
     let snapshot_messages = subscription.state().messages().to_vec();
     let mut frames = Vec::new();
@@ -238,12 +238,11 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
         panic!("first turn starts a run, got: {outcome:?}")
     };
 
-    let stream_client = RunStreamClient::new(host.endpoint.clone());
+    let stream_client = SessionStreamClient::new(host.endpoint.clone());
     let live_deadline = Instant::now() + Duration::from_secs(30);
     // Subscribe immediately after acceptance: the subscription snapshot is the
-    // current run state, and every later commit arrives as a live frame.
-    let observation =
-        observe_run_until_terminal(&stream_client, session_id, run_id, live_deadline).await;
+    // session's current state, and every later commit arrives as a live frame.
+    let observation = observe_run_until_terminal(&stream_client, session_id, live_deadline).await;
     let state = observation.subscription.state();
     assert_eq!(
         state.status(),
@@ -271,7 +270,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
         assert!(
             observation.frames.iter().any(|frame| matches!(
                 frame,
-                RunStreamFrameDto::Content(message)
+                SessionFrameDto::Content(message)
                     if message.kind() == MessageKindDto::Assistant && message.text() == "done"
             )),
             "the committed assistant content is published as a live content frame"
@@ -301,7 +300,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
         assert!(
             observation.frames.iter().any(|frame| matches!(
                 frame,
-                RunStreamFrameDto::Content(message)
+                SessionFrameDto::Content(message)
                     if message.kind() == MessageKindDto::ToolResult
             )),
             "the committed tool result is published as a live content frame"
@@ -381,39 +380,33 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
     );
 
     // Restart the daemon against the identical environment and state, then
-    // prove the completed run is replayed as current state without any
-    // provider re-execution.
+    // prove the completed run's committed transcript is replayed as current
+    // state without any provider re-execution. A completed run is terminal, so
+    // the session carries no active run and there is no live frame left to
+    // wait for: the rows are the state a fresh read returns.
     host.restart_daemon();
     let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
-    let replayed = observe_run_until_terminal(
-        &stream_client,
-        session_id,
-        run_id,
-        Instant::now() + Duration::from_secs(15),
-    )
-    .await;
-    assert_eq!(
-        replayed.snapshot_status,
-        Some(RunStatusDto::Completed),
-        "the restarted daemon replays the completed run as its current state"
+    let replayed = client
+        .session_snapshot(session_id)
+        .await
+        .expect("replayed session snapshot reads");
+    assert!(
+        replayed.projection().active_run().is_none(),
+        "the restarted daemon serves the completed run as terminal, so the session carries no active run"
     );
-    let replayed_messages = replayed.subscription.state().messages();
+    let replayed_messages = replayed.messages();
     assert_eq!(
         replayed_messages.len(),
         4,
-        "the replayed run snapshot carries the complete committed transcript"
+        "the replayed session snapshot carries the complete committed transcript"
     );
     assert_eq!(
         replayed_messages[2].text(),
         "hello from e2e",
         "the durable tool result replays unchanged"
     );
-    let replayed_session = client
-        .session_snapshot(session_id)
-        .await
-        .expect("replayed session snapshot reads");
     assert_eq!(
-        replayed_session
+        replayed
             .messages()
             .iter()
             .map(|message| (message.kind(), message.text()))
@@ -463,14 +456,13 @@ async fn real_daemon_tool_loop_answers_a_failed_call_without_stopping() {
         )
         .await
         .expect("user turn is accepted");
-    let SendUserTurnOutcomeDto::Started { run_id, .. } = outcome else {
+    let SendUserTurnOutcomeDto::Started { .. } = outcome else {
         panic!("first turn starts a run, got: {outcome:?}")
     };
 
-    let stream_client = RunStreamClient::new(host.endpoint.clone());
+    let stream_client = SessionStreamClient::new(host.endpoint.clone());
     let deadline = Instant::now() + Duration::from_secs(30);
-    let observation =
-        observe_run_until_terminal(&stream_client, session_id, run_id, deadline).await;
+    let observation = observe_run_until_terminal(&stream_client, session_id, deadline).await;
     assert_eq!(
         observation.subscription.state().status(),
         Some(RunStatusDto::Completed),
@@ -564,14 +556,13 @@ async fn real_daemon_reports_a_declared_execute_timeout_as_a_named_partial() {
         )
         .await
         .expect("user turn is accepted");
-    let SendUserTurnOutcomeDto::Started { run_id, .. } = outcome else {
+    let SendUserTurnOutcomeDto::Started { .. } = outcome else {
         panic!("first turn starts a run, got: {outcome:?}")
     };
 
-    let stream_client = RunStreamClient::new(host.endpoint.clone());
+    let stream_client = SessionStreamClient::new(host.endpoint.clone());
     let deadline = Instant::now() + Duration::from_secs(30);
-    let observation =
-        observe_run_until_terminal(&stream_client, session_id, run_id, deadline).await;
+    let observation = observe_run_until_terminal(&stream_client, session_id, deadline).await;
     assert_eq!(
         observation.subscription.state().status(),
         Some(RunStatusDto::Completed),
@@ -682,10 +673,9 @@ async fn real_daemon_stops_a_running_tool_and_ends_the_run_interrupted() {
     assert_eq!(stopped.session_id(), session_id);
     assert_eq!(stopped.run_id(), run_id);
 
-    let stream_client = RunStreamClient::new(host.endpoint.clone());
+    let stream_client = SessionStreamClient::new(host.endpoint.clone());
     let deadline = Instant::now() + Duration::from_secs(30);
-    let observation =
-        observe_run_until_terminal(&stream_client, session_id, run_id, deadline).await;
+    let observation = observe_run_until_terminal(&stream_client, session_id, deadline).await;
     assert_eq!(
         observation.subscription.state().status(),
         Some(RunStatusDto::Interrupted),
@@ -757,14 +747,13 @@ async fn real_daemon_commits_step_reasoning_above_its_tool_exchange() {
         )
         .await
         .expect("user turn is accepted");
-    let SendUserTurnOutcomeDto::Started { run_id, .. } = outcome else {
+    let SendUserTurnOutcomeDto::Started { .. } = outcome else {
         panic!("first turn starts a run, got: {outcome:?}")
     };
 
-    let stream_client = RunStreamClient::new(host.endpoint.clone());
+    let stream_client = SessionStreamClient::new(host.endpoint.clone());
     let deadline = Instant::now() + Duration::from_secs(30);
-    let observation =
-        observe_run_until_terminal(&stream_client, session_id, run_id, deadline).await;
+    let observation = observe_run_until_terminal(&stream_client, session_id, deadline).await;
     assert_eq!(
         observation.subscription.state().status(),
         Some(RunStatusDto::Completed),

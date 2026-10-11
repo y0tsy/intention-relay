@@ -436,7 +436,7 @@ pub enum ModelRunExecutionOutcomeDto {
 /// observer receives neither a repository transaction nor provider/runtime
 /// resources, so it cannot publish an uncommitted mutation.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ModelRunCommitDto {
+pub enum SessionCommitDto {
     /// One committed transcript row.
     Content(MessageProjectionDto),
     /// One committed run status.
@@ -456,9 +456,9 @@ pub enum ModelRunCommitDto {
 /// from the committed values the repository returned. The model-run executor
 /// and the tool-invocation path both hand their committed rows to this one
 /// sink, so publication observes only durable values and never fails a commit.
-pub trait ModelRunCommitObserver: Send + Sync {
+pub trait SessionCommitObserver: Send + Sync {
     /// Observes one committed transcript row or run status.
-    fn observe_model_run_commit(&self, commit: &ModelRunCommitDto);
+    fn observe_session_commit(&self, commit: &SessionCommitDto);
 }
 
 /// DTO-only executor over injected storage, selected driver, time port,
@@ -471,7 +471,7 @@ pub struct ModelRunExecutionService<'a, Repository, Driver: ?Sized, Time> {
     repository: &'a Repository,
     driver: &'a Driver,
     time: &'a Time,
-    observer: &'a dyn ModelRunCommitObserver,
+    observer: &'a dyn SessionCommitObserver,
     tool_executor: &'a dyn ToolExecutionPort,
     /// Unattached by default, so a run observes nothing that is not wired.
     text_delta: Option<&'a dyn ModelTextDeltaPort>,
@@ -487,7 +487,7 @@ where
     ///
     /// Provider-emitted tool calls always execute through the supplied
     /// `ToolExecutionPort`, and every committed value is handed to the
-    /// supplied [`ModelRunCommitObserver`]; neither collaborator has a
+    /// supplied [`SessionCommitObserver`]; neither collaborator has a
     /// fallback. The transient text-delta observation starts unattached and is
     /// added with [`Self::with_text_delta_port`].
     #[must_use]
@@ -495,7 +495,7 @@ where
         repository: &'a Repository,
         driver: &'a Driver,
         time: &'a Time,
-        observer: &'a dyn ModelRunCommitObserver,
+        observer: &'a dyn SessionCommitObserver,
         tool_executor: &'a dyn ToolExecutionPort,
     ) -> Self {
         Self {
@@ -1278,13 +1278,13 @@ where
     /// Publishes one committed transcript row.
     fn publish_content(&self, message: &MessageProjectionDto) {
         self.observer
-            .observe_model_run_commit(&ModelRunCommitDto::Content(message.clone()));
+            .observe_session_commit(&SessionCommitDto::Content(message.clone()));
     }
 
     /// Publishes one committed run status.
     fn publish_status(&self, session_id: SessionId, run_id: RunId, status: RunStatusDto) {
         self.observer
-            .observe_model_run_commit(&ModelRunCommitDto::Status {
+            .observe_session_commit(&SessionCommitDto::Status {
                 session_id,
                 run_id,
                 status,

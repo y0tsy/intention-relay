@@ -16,15 +16,17 @@ use common::{TEST_REPLY_BOUND, endpoint, message};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use intention_client::{DaemonLauncher, IntentionClient, ProcessDaemonLauncher, RunStreamState};
+use intention_client::{
+    DaemonLauncher, IntentionClient, ProcessDaemonLauncher, SessionStreamState,
+};
 use intention_proto::TimestampDto;
 use intention_proto::{
     ClientRequestDto, ConfigRevisionId, CreateSessionCommandDto, DaemonHealthDto,
     DaemonReadinessDto, InterruptRunAcceptedDto, ProtocolDaemonMessageDto, ProtocolResultDto,
-    RemoveTurnAcceptedDto, RunId, RunProjectionDto, RunStatusDto, RunStreamFrameDto,
-    RunSubscriptionSnapshotDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
-    SessionSummaryDto, TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TuiSettingsDto,
-    TuiThemeAcceptedDto, TurnId, decode_request_line, encode_request,
+    RemoveTurnAcceptedDto, RunId, RunProjectionDto, RunStatusDto, SessionFrameDto, SessionId,
+    SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto,
+    TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId, decode_request_line,
+    encode_request,
 };
 use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, ProjectId, WorkspaceId};
 use intention_proto::{
@@ -53,19 +55,32 @@ fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
         ProjectId::new(),
         session_id,
         WorkspaceId::new(),
-        intention_proto::WorkspaceRootDto::parse(
-            std::env::temp_dir()
-                .join("intention-client-fixture-workspace")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("fixture workspace root is valid"),
+        fixture_workspace_root(),
         RunModeDto::Build,
         None,
         None,
         Vec::new(),
     )
     .expect("fixture projection is valid")
+}
+
+/// Returns the same fixture projection with one active run.
+fn fixture_projection_with_run(
+    session_id: SessionId,
+    run_id: RunId,
+    status: RunStatusDto,
+) -> SessionProjectionDto {
+    SessionProjectionDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        fixture_workspace_root(),
+        RunModeDto::Build,
+        None,
+        Some(fixture_run(session_id, run_id, status)),
+        Vec::new(),
+    )
+    .expect("fixture projection with a run is valid")
 }
 
 #[derive(Clone)]
@@ -239,12 +254,13 @@ fn fixture_snapshot(
     session_id: SessionId,
     run_id: RunId,
     messages: Vec<MessageProjectionDto>,
-) -> RunSubscriptionSnapshotDto {
-    RunSubscriptionSnapshotDto::new(
-        fixture_run(session_id, run_id, RunStatusDto::Running),
+) -> SessionSnapshotDto {
+    SessionSnapshotDto::with_projection(
+        session_id,
+        fixture_projection_with_run(session_id, run_id, RunStatusDto::Running),
         messages,
     )
-    .expect("fixture run snapshot is valid")
+    .expect("fixture session snapshot is valid")
 }
 
 fn fixture_delta(session_id: SessionId, run_id: RunId, step: u32, text: &str) -> TextDeltaFrameDto {
@@ -839,7 +855,7 @@ async fn tui_settings_and_theme_selection_round_trip_and_validate_the_reply() {
 fn state_tracks_provisional_text_per_model_step() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let mut state = RunStreamState::new(session_id, run_id);
+    let mut state = SessionStreamState::new(session_id);
     let committed = message(session_id, Some(run_id), MessageKindDto::User, "build it");
     state
         .apply_initial(fixture_snapshot(
@@ -852,12 +868,12 @@ fn state_tracks_provisional_text_per_model_step() {
 
     // Deltas of one step append to each other.
     state
-        .apply_frame(RunStreamFrameDto::TextDelta(fixture_delta(
+        .apply_frame(SessionFrameDto::TextDelta(fixture_delta(
             session_id, run_id, 0, "Hel",
         )))
         .expect("first delta applies");
     state
-        .apply_frame(RunStreamFrameDto::TextDelta(fixture_delta(
+        .apply_frame(SessionFrameDto::TextDelta(fixture_delta(
             session_id, run_id, 0, "lo",
         )))
         .expect("second delta of the same step applies");
@@ -868,24 +884,21 @@ fn state_tracks_provisional_text_per_model_step() {
         "provisional deltas never touch the committed transcript"
     );
 
-    // A delta for another scope is rejected without mutation.
-    assert_eq!(
-        state
-            .apply_frame(RunStreamFrameDto::TextDelta(fixture_delta(
-                session_id,
-                RunId::new(),
-                0,
-                "stray",
-            )))
-            .expect_err("a delta from another run is rejected")
-            .code(),
-        "invalid_run_subscription"
-    );
+    // A delta of a run this state no longer projects is a cadence frame that
+    // crossed its run's own terminal commit: it changes nothing.
+    state
+        .apply_frame(SessionFrameDto::TextDelta(fixture_delta(
+            session_id,
+            RunId::new(),
+            0,
+            "stray",
+        )))
+        .expect("a delta of another run of the session applies as a no-op");
     assert_eq!(state.provisional_text(), "Hello");
 
     // A delta for a new step replaces the buffer.
     state
-        .apply_frame(RunStreamFrameDto::TextDelta(fixture_delta(
+        .apply_frame(SessionFrameDto::TextDelta(fixture_delta(
             session_id, run_id, 1, "next",
         )))
         .expect("a delta of the next step applies");
@@ -913,19 +926,19 @@ fn state_tracks_provisional_text_per_model_step() {
 fn state_clears_provisional_text_on_the_committed_assistant_row() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let mut state = RunStreamState::new(session_id, run_id);
+    let mut state = SessionStreamState::new(session_id);
     state
         .apply_initial(fixture_snapshot(session_id, run_id, Vec::new()))
         .expect("fixture snapshot applies");
     state
-        .apply_frame(RunStreamFrameDto::TextDelta(fixture_delta(
+        .apply_frame(SessionFrameDto::TextDelta(fixture_delta(
             session_id, run_id, 0, "half",
         )))
         .expect("provisional delta applies");
     assert_eq!(state.provisional_text(), "half");
 
     state
-        .apply_frame(RunStreamFrameDto::Content(message(
+        .apply_frame(SessionFrameDto::Content(message(
             session_id,
             Some(run_id),
             MessageKindDto::Notice,
@@ -939,7 +952,7 @@ fn state_clears_provisional_text_on_the_committed_assistant_row() {
     );
 
     state
-        .apply_frame(RunStreamFrameDto::Content(message(
+        .apply_frame(SessionFrameDto::Content(message(
             session_id,
             Some(run_id),
             MessageKindDto::Assistant,
@@ -959,12 +972,12 @@ fn state_clears_provisional_text_on_the_committed_assistant_row() {
 fn state_clears_provisional_reasoning_on_the_committed_reasoning_only_row() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let mut state = RunStreamState::new(session_id, run_id);
+    let mut state = SessionStreamState::new(session_id);
     state
         .apply_initial(fixture_snapshot(session_id, run_id, Vec::new()))
         .expect("fixture snapshot applies");
     state
-        .apply_frame(RunStreamFrameDto::TextDelta(fixture_reasoning_delta(
+        .apply_frame(SessionFrameDto::TextDelta(fixture_reasoning_delta(
             session_id, run_id, 0, "thinking",
         )))
         .expect("provisional reasoning applies");
@@ -974,7 +987,7 @@ fn state_clears_provisional_reasoning_on_the_committed_reasoning_only_row() {
     // the same step, so the provisional reasoning is superseded by the row
     // that now carries it.
     state
-        .apply_frame(RunStreamFrameDto::Content(
+        .apply_frame(SessionFrameDto::Content(
             MessageProjectionDto::new(
                 MessageId::new(1).expect("fixture row identity is valid"),
                 session_id,
@@ -1000,7 +1013,7 @@ fn state_clears_provisional_reasoning_on_the_committed_reasoning_only_row() {
 fn state_buffers_the_reasoning_channel_apart_from_the_answer() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let mut state = RunStreamState::new(session_id, run_id);
+    let mut state = SessionStreamState::new(session_id);
     state
         .apply_initial(fixture_snapshot(session_id, run_id, Vec::new()))
         .expect("fixture snapshot applies");
@@ -1016,7 +1029,7 @@ fn state_buffers_the_reasoning_channel_apart_from_the_answer() {
         fixture_delta(session_id, run_id, 0, "answer"),
     ] {
         state
-            .apply_frame(RunStreamFrameDto::TextDelta(delta))
+            .apply_frame(SessionFrameDto::TextDelta(delta))
             .expect("a delta of the current step applies");
     }
     assert_eq!(state.provisional_reasoning(), "weighing");
@@ -1028,7 +1041,7 @@ fn state_buffers_the_reasoning_channel_apart_from_the_answer() {
 
     // A delta of the next step replaces both channels' buffers.
     state
-        .apply_frame(RunStreamFrameDto::TextDelta(fixture_reasoning_delta(
+        .apply_frame(SessionFrameDto::TextDelta(fixture_reasoning_delta(
             session_id, run_id, 1, "then",
         )))
         .expect("the next step's reasoning applies");
@@ -1041,7 +1054,7 @@ fn state_buffers_the_reasoning_channel_apart_from_the_answer() {
 
     // The step's committed assistant row supersedes both channels at once.
     state
-        .apply_frame(RunStreamFrameDto::Content(message(
+        .apply_frame(SessionFrameDto::Content(message(
             session_id,
             Some(run_id),
             MessageKindDto::Assistant,
@@ -1059,17 +1072,17 @@ fn state_clears_provisional_text_when_the_run_reaches_a_terminal_status() {
     let run_id = RunId::new();
 
     // A non-terminal status frame keeps the current step's advance notice.
-    let mut state = RunStreamState::new(session_id, run_id);
+    let mut state = SessionStreamState::new(session_id);
     state
         .apply_initial(fixture_snapshot(session_id, run_id, Vec::new()))
         .expect("fixture snapshot applies");
     state
-        .apply_frame(RunStreamFrameDto::TextDelta(fixture_delta(
+        .apply_frame(SessionFrameDto::TextDelta(fixture_delta(
             session_id, run_id, 0, "half",
         )))
         .expect("provisional delta applies");
     state
-        .apply_frame(RunStreamFrameDto::Status(fixture_run(
+        .apply_frame(SessionFrameDto::Status(fixture_run(
             session_id,
             run_id,
             RunStatusDto::Running,
@@ -1088,19 +1101,19 @@ fn state_clears_provisional_text_when_the_run_reaches_a_terminal_status() {
         RunStatusDto::Completed,
         RunStatusDto::Interrupted,
     ] {
-        let mut state = RunStreamState::new(session_id, run_id);
+        let mut state = SessionStreamState::new(session_id);
         state
             .apply_initial(fixture_snapshot(session_id, run_id, Vec::new()))
             .expect("fixture snapshot applies");
         state
-            .apply_frame(RunStreamFrameDto::TextDelta(fixture_delta(
+            .apply_frame(SessionFrameDto::TextDelta(fixture_delta(
                 session_id, run_id, 0, "half",
             )))
             .expect("provisional delta applies");
         assert_eq!(state.provisional_text(), "half");
 
         state
-            .apply_frame(RunStreamFrameDto::Status(fixture_run(
+            .apply_frame(SessionFrameDto::Status(fixture_run(
                 session_id, run_id, terminal,
             )))
             .expect("a terminal status frame applies");
