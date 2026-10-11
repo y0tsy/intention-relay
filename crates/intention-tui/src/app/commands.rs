@@ -40,11 +40,12 @@ pub struct ArgumentSpec {
 }
 
 impl ArgumentSpec {
-    /// Returns the declared value one word names, however the word is spelled.
-    fn value_named(self, word: &str) -> Option<&'static ValueSpec> {
+    /// Returns the position of the declared value one word names, however the
+    /// word is spelled.
+    fn value_position(self, word: &str) -> Option<usize> {
         self.values
             .iter()
-            .find(|value| value.value.eq_ignore_ascii_case(word))
+            .position(|value| value.value.eq_ignore_ascii_case(word))
     }
 
     /// Returns the accepted values as the notices spell them: `light or dark`.
@@ -90,22 +91,30 @@ pub enum CommandAction {
 
 /// The values `/theme` accepts, in the order the picker draws its rows.
 ///
-/// The spellings and descriptions are the theme's own vocabulary, so the
+/// The list is derived from [`Theme::ALL`], so the command surface cannot
+/// declare a value the theme vocabulary does not carry, nor call a theme by a
+/// name of its own: a theme added to `ALL` extends this declaration, and the
 /// command surface and the picker panel can never disagree about what the two
 /// themes are called or which surface each one paints.
-// @todo(hack): the values are re-spelled here from `Theme::as_str`, and only a
-// `debug_assert!` in `input.rs` keeps the two vocabularies in sync; the
-// registry should derive its values from the theme vocabulary itself.
-static THEME_VALUES: [ValueSpec; 2] = [
-    ValueSpec {
-        value: Theme::Light.as_str(),
-        description: Theme::Light.description(),
-    },
-    ValueSpec {
-        value: Theme::Dark.as_str(),
-        description: Theme::Dark.description(),
-    },
-];
+static THEME_VALUES: [ValueSpec; Theme::ALL.len()] = theme_values();
+
+/// Returns the theme vocabulary as the declared values of `/theme`.
+const fn theme_values() -> [ValueSpec; Theme::ALL.len()] {
+    let mut values = [ValueSpec {
+        value: "",
+        description: "",
+    }; Theme::ALL.len()];
+    let mut position = 0;
+    while position < Theme::ALL.len() {
+        let theme = Theme::ALL[position];
+        values[position] = ValueSpec {
+            value: theme.as_str(),
+            description: theme.description(),
+        };
+        position += 1;
+    }
+    values
+}
 
 /// The one argument `/theme` declares.
 static THEME_ARGUMENT: [ArgumentSpec; 1] = [ArgumentSpec {
@@ -486,7 +495,7 @@ impl CommandMenu {
         match self.kind {
             MenuKind::Command => command_named(&self.filter).is_some(),
             MenuKind::Argument(argument) => {
-                self.filter.is_empty() || argument.value_named(&self.filter).is_some()
+                self.filter.is_empty() || argument.value_position(&self.filter).is_some()
             }
         }
     }
@@ -518,9 +527,10 @@ pub enum MenuMove {
 pub struct CommandInvocation {
     /// The command the line named.
     spec: CommandSpec,
-    /// The resolved value of each declared argument, in declaration order;
-    /// `None` for an optional argument the line omitted.
-    values: Vec<Option<&'static ValueSpec>>,
+    /// The position of each declared argument's resolved value within that
+    /// argument's declaration, in declaration order; `None` for an optional
+    /// argument the line omitted.
+    values: Vec<Option<usize>>,
 }
 
 impl CommandInvocation {
@@ -536,11 +546,26 @@ impl CommandInvocation {
     /// which is the order the words on the line fill.
     #[must_use]
     pub fn value(&self, index: usize) -> Option<&'static str> {
-        self.values
-            .get(index)
-            .copied()
-            .flatten()
+        let position = self.value_index(index)?;
+        self.spec
+            .arguments
+            .get(index)?
+            .values
+            .get(position)
             .map(|value| value.value)
+    }
+
+    /// Returns the position of the value the declared argument at `index` was
+    /// given within that argument's declaration, or `None` when the line
+    /// omitted the argument.
+    ///
+    /// The position is the value's own place in the declaration, which is what
+    /// a transition reads when the declaration is derived from the vocabulary
+    /// the value's meaning lives in: the value's position there is its
+    /// position here.
+    #[must_use]
+    pub fn value_index(&self, index: usize) -> Option<usize> {
+        self.values.get(index).copied().flatten()
     }
 }
 
@@ -649,8 +674,8 @@ fn resolve_arguments(spec: CommandSpec, words: &[&str]) -> CommandResolution {
                 }
                 values.push(None);
             }
-            Some(word) => match argument.value_named(word) {
-                Some(value) => values.push(Some(value)),
+            Some(word) => match argument.value_position(word) {
+                Some(position) => values.push(Some(position)),
                 None => {
                     return CommandResolution::UnknownValue {
                         argument: *argument,
@@ -783,6 +808,12 @@ mod tests {
         assert_eq!(invocation.spec(), command_named("theme").expect("theme"));
         assert_eq!(invocation.value(0), Some("dark"));
         assert_eq!(invocation.value(1), None, "no second argument is declared");
+        assert_eq!(
+            invocation.value_index(0),
+            Some(1),
+            "the resolved value carries its own position in the declaration"
+        );
+        assert_eq!(invocation.value_index(1), None);
 
         let invocation = resolve_command("theme DARK")
             .into_invocation()
@@ -792,11 +823,17 @@ mod tests {
             Some("dark"),
             "the canonical spelling is what a caller sees"
         );
+        assert_eq!(invocation.value_index(0), Some(1));
 
         let invocation = resolve_command("theme")
             .into_invocation()
             .expect("the argument is optional");
         assert_eq!(invocation.value(0), None);
+        assert_eq!(
+            invocation.value_index(0),
+            None,
+            "an omitted argument carries no position"
+        );
     }
 
     #[test]

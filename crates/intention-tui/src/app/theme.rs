@@ -7,10 +7,10 @@
 //! The two names are the whole vocabulary here; the palette module turns one
 //! of them into the roles a frame paints, so no view reads the theme itself.
 //!
-//! The parser is deliberately total: it reads one name however it is spelled
-//! and answers `None` for anything else, so a caller that maps an external
-//! spelling onto a theme decides what an unknown name means without this type
-//! inventing a fallback of its own.
+//! [`Theme::ALL`] is the whole vocabulary: the registry derives `/theme`'s
+//! declared values from it, so a name this type does not carry is not a name
+//! the command surface can declare, and a declared value always applies its
+//! theme.
 //!
 //! The committed theme is the daemon's value, never the terminal's guess: the
 //! settings read and every selection round trip through the daemon, and only
@@ -84,29 +84,6 @@ impl Theme {
         match self {
             Self::Light => Self::Dark,
             Self::Dark => Self::Dark,
-        }
-    }
-
-    /// Returns the theme one name selects, however the name is spelled, or
-    /// `None` for a name no theme answers to.
-    ///
-    /// The comparison is case-insensitive and ignores nothing else: the
-    /// terminal's two names are the whole vocabulary, and an unknown name is
-    /// the caller's to interpret rather than a value this type guesses at.
-    #[must_use]
-    #[allow(
-        clippy::should_implement_trait,
-        reason = "The parser is total and answers None for an unknown name, so it \
-                  cannot be `std::str::FromStr`, whose error type would add a \
-                  failure case the terminal's own vocabulary does not have."
-    )]
-    pub const fn from_str(name: &str) -> Option<Self> {
-        if name.eq_ignore_ascii_case(Self::Light.as_str()) {
-            Some(Self::Light)
-        } else if name.eq_ignore_ascii_case(Self::Dark.as_str()) {
-            Some(Self::Dark)
-        } else {
-            None
         }
     }
 }
@@ -209,30 +186,6 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::Theme;
-
-    #[test]
-    fn the_theme_parser_reads_both_names_however_they_are_spelled() {
-        assert_eq!(Theme::from_str("light"), Some(Theme::Light));
-        assert_eq!(Theme::from_str("Light"), Some(Theme::Light));
-        assert_eq!(Theme::from_str("LIGHT"), Some(Theme::Light));
-        assert_eq!(Theme::from_str("dark"), Some(Theme::Dark));
-        assert_eq!(Theme::from_str("DaRk"), Some(Theme::Dark));
-        assert_eq!(
-            Theme::from_str("light "),
-            None,
-            "a name the vocabulary does not carry is not trimmed into one"
-        );
-        assert_eq!(Theme::from_str("dunkel"), None);
-        assert_eq!(Theme::from_str(""), None);
-    }
-
-    #[test]
-    fn every_theme_round_trips_through_its_own_name() {
-        for theme in [Theme::Light, Theme::Dark] {
-            assert_eq!(Theme::from_str(theme.as_str()), Some(theme));
-        }
-        assert_eq!(Theme::default(), Theme::Light, "the terminal starts light");
-    }
 
     #[test]
     fn the_picker_rows_walk_without_wrapping() {

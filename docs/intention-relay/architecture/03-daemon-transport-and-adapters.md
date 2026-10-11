@@ -569,9 +569,8 @@ lacks. Each site carries the same `@todo(core):` prefix and names what the core 
 | parks a prompt that has no session and sends it as the first turn of whichever snapshot arrives first (`app/input.rs`) | create-session-and-first-turn as one use case |
 
 The `@todo(hack)` marker is the crate's own class for work the adapter or the client must still do, and it is not
-catalogued here. Its sites are the theme values re-spelled in the registry (`app/commands.rs`) and the endpoint
-instance and the daemon program resolved by the binary (`main.rs`). Each of those markers names the client or core
-surface that should replace it.
+catalogued here. Its remaining site is the endpoint instance and the daemon program resolved by the binary
+(`main.rs`), and the marker names the client or core surface that should replace it.
 
 ### Frame cost
 

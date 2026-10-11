@@ -311,17 +311,11 @@ impl AppState {
             commands::CommandAction::SessionsBrowser => self.request_sessions_browser(),
             commands::CommandAction::Theme => {
                 // `/theme`'s one argument is the first the command declares: a
-                // value applies that theme, and its absence opens the picker.
-                // The declared values are the theme vocabulary itself, so the
-                // assertion names the invariant a registry edit would break.
-                let spelled = invocation.value(0);
-                let selected = spelled.and_then(Theme::from_str);
-                debug_assert!(
-                    spelled.is_none() || selected.is_some(),
-                    "every value /theme declares is a theme name"
-                );
-                match selected {
-                    Some(theme) => self.apply_theme_selected(theme),
+                // declared value selects its theme, and only the argument's
+                // absence opens the picker. The declaration is derived from
+                // `Theme::ALL`, so the value's position in it is its theme's.
+                match invocation.value_index(0) {
+                    Some(position) => self.apply_theme_selected(Theme::ALL[position]),
                     None => self.request_theme_picker(),
                 }
             }

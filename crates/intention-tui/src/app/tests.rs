@@ -1560,6 +1560,69 @@ fn the_theme_command_applies_a_theme_name_however_it_is_spelled() {
 }
 
 #[test]
+fn every_declared_theme_value_names_a_theme() {
+    for theme in Theme::ALL {
+        let name = theme.as_str();
+        let uppercase = name.to_uppercase();
+        for typed in [name, uppercase.as_str()] {
+            let mut state = AppState::new(None);
+            type_text(&mut state, &format!("/theme {typed}"));
+            let effects = run_command(&mut state);
+            assert_eq!(
+                effects,
+                vec![Effect::PersistTheme(theme)],
+                "/theme {typed} applies {theme:?} however the name is spelled"
+            );
+            assert_eq!(
+                state.screen(),
+                Screen::Chat,
+                "a declared value applies its theme instead of opening the picker"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_declared_theme_value_never_opens_the_picker() {
+    // The registry's declared values are the theme vocabulary by construction:
+    // each one selects the theme at its own position in `Theme::ALL` instead of
+    // falling back to the picker the way an unknown name once did.
+    let theme = COMMANDS
+        .iter()
+        .find(|command| command.name == "theme")
+        .expect("the theme command is registered");
+    let values = theme.arguments[0].values;
+    assert_eq!(
+        values.len(),
+        Theme::ALL.len(),
+        "the declaration derives one value per theme"
+    );
+    for (position, value) in values.iter().enumerate() {
+        let mut state = AppState::new(None);
+        type_text(&mut state, &format!("/theme {}", value.value));
+        let effects = run_command(&mut state);
+        assert_eq!(
+            effects,
+            vec![Effect::PersistTheme(Theme::ALL[position])],
+            "/theme {} selects the theme its declaration derives from",
+            value.value
+        );
+        assert_ne!(
+            state.screen(),
+            Screen::Theme,
+            "/theme {} selects a theme instead of opening the picker",
+            value.value
+        );
+    }
+
+    // The omitted argument is the picker's only path.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/theme");
+    run_command(&mut state);
+    assert_eq!(state.screen(), Screen::Theme);
+}
+
+#[test]
 fn the_theme_command_notices_an_unknown_value_and_an_extra_word() {
     let mut state = AppState::new(None);
     type_text(&mut state, "/theme purple");
