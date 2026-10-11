@@ -5,15 +5,20 @@
 //! feature), so code fences, bold, lists, and tables render in either place.
 //! Every line the parser produces becomes one or more [`LaidOutRow`] values:
 //!
-//! - a heading keeps the parser's `#` marker and takes [`Palette::markdown_heading`],
+//! - a heading drops the parser's `#` marker and takes
+//!   [`Palette::markdown_heading`] with the parser's bold,
 //! - `**strong**` keeps the parser's bold modifier,
 //! - a table keeps the parser's box-drawing grid, laid out as an aligned block,
 //! - inline code and links keep [`Palette::markdown_code`] and
 //!   [`Palette::markdown_link`].
 //!
 //! The widget's FIGlet headings stay off on purpose: big art would multiply a
-//! heading's display rows and make the transcript's row budget lie. The `#`
-//! marker plus the heading ink reads as a heading in one row.
+//! heading's display rows and make the transcript's row budget lie. A heading
+//! is therefore its own text in the heading ink, bold, on one row: the parser
+//! writes its `#`-repeat into a segment of its own, and the pane leaves that
+//! segment out, so a heading never reads as a hash-prefixed line of prose. A
+//! `#` the parser read as text - one without the space that separates a marker
+//! from its heading - is content and stays on screen.
 //!
 //! The widget itself draws fixed lines and clips anything wider than its area,
 //! so this module re-lays the parsed lines out at the caller's width instead: a
@@ -42,13 +47,18 @@
 use revue::style::Color;
 use revue::text::char_width;
 use revue::widget::Markdown;
-use revue::widget::markdown::Line;
+use revue::widget::markdown::{Line, StyledText};
 
-use crate::tui::layout::{CONTINUATION_INDENT, LaidOutRow, RowBuilder, RowStyleId};
+use crate::tui::layout::{
+    CONTINUATION_INDENT, LaidOutRow, RowBuilder, RowStyleId, WIDGET_NEUTRALS,
+};
 use crate::tui::palette::Palette;
 
 /// The box-drawing glyphs that open an atomic grid or rule line.
 const GRID_OPENERS: [char; 4] = ['┌', '├', '└', '│'];
+
+/// How many `#` characters the parser writes at most in a heading marker.
+const HEADING_MARKER_MAX_LEVEL: usize = 6;
 
 /// Returns the display rows of one markdown block at `width`, painted on
 /// `surface`.
@@ -86,25 +96,57 @@ fn line_rows(
     rows: &mut Vec<LaidOutRow>,
     palette: &'static Palette,
 ) {
-    if is_empty_line(line) {
+    let body = heading_body(line);
+    if is_empty_line(body) {
         rows.push(LaidOutRow::blank(surface));
         return;
     }
-    if is_grid_line(line) {
-        rows.push(grid_row(line, surface, palette));
+    if is_grid_line(body) {
+        rows.push(grid_row(body, surface, palette));
         return;
     }
-    rows.extend(wrapped_rows(line, width, surface, palette));
+    rows.extend(wrapped_rows(body, width, surface, palette));
+}
+
+/// Returns the segments of one line without a heading marker.
+///
+/// The widget prefixes a heading with its own `#`-repeat in a segment of its
+/// own, and the pane never paints it: a heading reads as a heading through its
+/// ink and the parser's bold, not through a hash prefix. Any other line is laid
+/// out exactly as the parser wrote it.
+fn heading_body(line: &Line) -> &[StyledText] {
+    match line.segments.split_first() {
+        Some((first, rest)) if is_heading_marker(first) => rest,
+        _ => &line.segments,
+    }
+}
+
+/// Returns whether one segment is nothing but a heading marker.
+///
+/// The marker is the parser's `#`-repeat of at most six characters, the space
+/// that separates it from the heading's text, and nothing else, written in one
+/// of the widget's own neutral tones. A segment carrying any other character is
+/// content - a `#` that CommonMark reads as text - and stays visible.
+fn is_heading_marker(segment: &StyledText) -> bool {
+    let text = segment.text.as_str();
+    let Some(hashes) = text.find(|character| character != '#') else {
+        return false;
+    };
+    hashes > 0
+        && hashes <= HEADING_MARKER_MAX_LEVEL
+        && text[hashes..].trim_start_matches(' ').is_empty()
+        && text[hashes..].starts_with(' ')
+        && segment.fg.is_some_and(|fg| WIDGET_NEUTRALS.contains(&fg))
 }
 
 /// Returns whether one parsed line paints no character.
-fn is_empty_line(line: &Line) -> bool {
-    line.segments.iter().all(|segment| segment.text.is_empty())
+fn is_empty_line(segments: &[StyledText]) -> bool {
+    segments.iter().all(|segment| segment.text.is_empty())
 }
 
 /// Returns whether one line is a box-drawing grid line the pane never wraps.
-fn is_grid_line(line: &Line) -> bool {
-    line.segments
+fn is_grid_line(segments: &[StyledText]) -> bool {
+    segments
         .iter()
         .flat_map(|segment| segment.text.chars())
         .next()
@@ -112,9 +154,9 @@ fn is_grid_line(line: &Line) -> bool {
 }
 
 /// Returns one atomic grid row: the line laid out whole, never wrapped.
-fn grid_row(line: &Line, surface: Color, palette: &'static Palette) -> LaidOutRow {
+fn grid_row(segments: &[StyledText], surface: Color, palette: &'static Palette) -> LaidOutRow {
     let mut row = RowBuilder::new();
-    for segment in &line.segments {
+    for segment in segments {
         row.push(
             &segment.text,
             RowStyleId::of_parsed(segment.fg, segment.modifier, palette),
@@ -126,14 +168,14 @@ fn grid_row(line: &Line, surface: Color, palette: &'static Palette) -> LaidOutRo
 /// Returns the display rows of one wrapped line, with the continuation indent
 /// on every row after the first.
 fn wrapped_rows(
-    line: &Line,
+    segments: &[StyledText],
     width: usize,
     surface: Color,
     palette: &'static Palette,
 ) -> Vec<LaidOutRow> {
     let mut wrapped: Vec<RowBuilder> = Vec::new();
     let mut row = RowBuilder::new();
-    for segment in &line.segments {
+    for segment in segments {
         let style = RowStyleId::of_parsed(segment.fg, segment.modifier, palette);
         let mut rest = segment.text.as_str();
         while !rest.is_empty() {
@@ -214,7 +256,7 @@ mod tests {
 
     use revue::render::Modifier;
 
-    use super::{GRID_OPENERS, rows};
+    use super::{GRID_OPENERS, HEADING_MARKER_MAX_LEVEL, rows};
     use crate::tui::layout::{LaidOutRow, RowStyleId};
     use crate::tui::palette::Palette;
 
@@ -275,8 +317,8 @@ mod tests {
         // break itself opens, which carries the character that broke the row
         // before it. The deleted glyph pipeline did exactly this, so the span
         // walk does too.
-        let laid_out = rows("# Heading", 3, LIGHT.panel, LIGHT);
-        assert_eq!(text(&laid_out), "#\n  He\n  a\n  d\n  i\n  n\n  g");
+        let laid_out = rows("Heading", 3, LIGHT.panel, LIGHT);
+        assert_eq!(text(&laid_out), "Hea\n  d\n  i\n  n\n  g");
     }
 
     #[test]
@@ -324,19 +366,57 @@ mod tests {
     }
 
     #[test]
-    fn a_heading_keeps_its_marker_and_the_heading_ink() {
+    fn a_heading_drops_its_marker_and_reads_as_a_heading() {
         let laid_out = rows("# A heading", 40, LIGHT.panel, LIGHT);
-        assert_eq!(text(&laid_out), "# A heading");
+        assert_eq!(text(&laid_out), "A heading");
         assert_eq!(
             roles(&laid_out),
             vec![(
-                "# A heading".to_owned(),
-                vec![
-                    RowStyleId::Divider(Modifier::empty()),
-                    RowStyleId::Heading(Modifier::BOLD),
-                ],
+                "A heading".to_owned(),
+                vec![RowStyleId::Heading(Modifier::BOLD)],
             )]
         );
+    }
+
+    #[test]
+    fn every_heading_level_drops_its_marker_and_keeps_its_text() {
+        for level in 1..=HEADING_MARKER_MAX_LEVEL {
+            let source = format!("{} Heading {level}", "#".repeat(level));
+            let laid_out = rows(&source, 40, LIGHT.panel, LIGHT);
+            assert_eq!(
+                text(&laid_out),
+                format!("Heading {level}"),
+                "the level {level} marker is never painted"
+            );
+            assert_eq!(
+                roles(&laid_out),
+                vec![(
+                    format!("Heading {level}"),
+                    vec![RowStyleId::Heading(Modifier::BOLD)],
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn a_hash_the_parser_read_as_text_stays_on_screen() {
+        let source = "#Heading without the space\n\n####### seven hashes";
+        let laid_out = rows(source, 40, LIGHT.panel, LIGHT);
+        assert_eq!(
+            text(&laid_out),
+            "#Heading without the space\n####### seven hashes",
+            "only a segment that is nothing but a marker is dropped"
+        );
+    }
+
+    #[test]
+    fn a_heading_with_no_text_keeps_its_one_blank_row() {
+        let laid_out = rows("## \n\nafter", 40, LIGHT.panel, LIGHT);
+        assert!(
+            laid_out[0].is_blank(),
+            "the empty heading still counts its parsed line"
+        );
+        assert_eq!(text(&laid_out), "\nafter");
     }
 
     #[test]

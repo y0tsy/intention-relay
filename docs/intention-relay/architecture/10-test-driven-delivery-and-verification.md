@@ -236,7 +236,8 @@ The terminal crate itself carries a render suite and a process end-to-end suite.
 render-free `AppState` through revue's own test app in seventy-nine cases: the welcome surface (the lockup and the
 overview, gone once a session opens, the launch that lists sessions but opens none, and the state that never covers a
 reported row), the chat panel, the transcript blocks (the
-labelled user card and the markdown inside it, the markdown answer, the heading, the bold phrase, the aligned table,
+labelled user card and the markdown inside it, the markdown answer, the heading (its text painted without the parser's
+`#` marker), the bold phrase, the aligned table,
 the committed reasoning block with its collapsed marker and its chunked expansion, the blank gap row, the streaming
 tail laid out row for row like the committed answer block it becomes, the live reasoning segment laid out like the
 committed reasoning block it becomes, the framed tool blocks for `read`, `glob`, `grep`, `write`, `edit`, `execute`, and an unknown
@@ -266,13 +267,13 @@ ranking and menu
 transitions, the hint band's row arithmetic and columns, the keymap, both themes' palette roles and the documented
 opacity, distinctness, `error`/`scarlet` alias, cross-theme, and dark-monochrome rules, the
 wheel mapping, the left-button pointer's press, drag, release, marker expansion, and edge scrolling, the turn clock, the
-browser geometry and row helpers, the markdown layout, the per-tool block dispatch, the marker and notice layout, the
+browser geometry and row helpers, the markdown layout and the heading marker it drops, the per-tool block dispatch, the marker and notice layout, the
 transcript layout cache's append-only fast path, width change, theme change, replacement, reasoning expansion,
 paired-result, and
 front-trim replays, and the clipboard-free source audit. A run of
-`cargo nextest run -p intention-tui` observed 359 tests across four binaries, all passing: 240 library unit tests,
+`cargo nextest run -p intention-tui` observed 362 tests across four binaries, all passing: 243 library unit tests,
 79 `tui_render` cases, 29 binary unit tests, and 11 `terminal_e2e` cases. A run of `cargo nextest run --workspace`
-observed 741 tests run, 741 passed, and 2 skipped.
+observed 744 tests run, 744 passed, and 2 skipped.
 
 The per-crate self-checks are `cargo fmt -p intention-tui`, `cargo nextest run -p intention-tui`, and
 `cargo clippy -p intention-tui --all-targets`; the slice's acceptance gate is `make quick` during delivery and

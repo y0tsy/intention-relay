@@ -1556,8 +1556,13 @@ fn an_assistant_heading_reads_as_a_heading() {
     let mut app = TestApp::new(RevueView::new(&state));
     let (heading_x, heading_row) = find_text(&app, "Answer");
     let pilot = Pilot::new(&mut app);
-    pilot.assert_line_contains(heading_row, "# Answer");
+    pilot.assert_line_contains(heading_row, "Answer");
     pilot.assert_contains("body text");
+    assert!(
+        !app.get_line(heading_row).contains('#'),
+        "a heading paints its text without the parser's marker: {}",
+        app.get_line(heading_row)
+    );
     let heading = app
         .buffer()
         .get(heading_x, heading_row)

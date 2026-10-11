@@ -382,8 +382,10 @@ text above is the live policy.
   switch), and the window is anchored so the screen does not move when rows are revealed.
 - Markdown. An answer and a user card both go through revue's own `Markdown` parser (the `markdown` feature) with the
   palette inks for headings, code, and links, `syntax_highlight` off, and FIGlet headings off on purpose: big art would
-  multiply a heading's display rows and make the transcript's row budget lie, so a heading keeps the parser's `#`
-  marker and the heading ink. A table keeps the parser's own atomic box-drawing grid — a grid line is clipped, never
+  multiply a heading's display rows and make the transcript's row budget lie, so a heading is its own text in the
+  heading ink and the parser's bold, on one row. The parser writes a heading's `#`-repeat into a segment of its own and
+  the pane leaves that segment out, so a heading never reads as a hash-prefixed line of prose; a `#` the parser read as
+  text stays on screen. A table keeps the parser's own atomic box-drawing grid — a grid line is clipped, never
   wrapped, because wrapping it would shred the alignment the table exists to show.
 - One colour system, two themes. `src/tui/palette.rs` is the single source of colours: `palette::of(theme)` resolves
   one `Palette` value once per frame from the state's effective theme, and every pane reads the roles of the reference

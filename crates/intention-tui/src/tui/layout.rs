@@ -66,7 +66,8 @@ pub(in crate::tui) fn marker_text(glyph: &str, text: &str) -> String {
 const BLOCK_GAP: usize = 1;
 
 /// The widget's own neutral inks, mapped onto the palette's divider ink.
-const WIDGET_NEUTRALS: [Color; 3] = [theme::DISABLED_FG, theme::DARK_GRAY, theme::PLACEHOLDER_FG];
+pub(in crate::tui) const WIDGET_NEUTRALS: [Color; 3] =
+    [theme::DISABLED_FG, theme::DARK_GRAY, theme::PLACEHOLDER_FG];
 
 /// One transcript display row in the neutral layout.
 ///
@@ -147,8 +148,8 @@ impl RowStyleId {
     /// Returns the id of one parsed markdown segment.
     ///
     /// A segment with no colour is body text. The widget's own neutrals (its
-    /// grid and rule tone and the placeholder tone of a heading marker and a
-    /// quote) become the palette's divider ink; every other colour the parser
+    /// grid and rule tones, and the tone it writes a marker the pane drops in)
+    /// become the palette's divider ink; every other colour the parser
     /// carries is compared against the resolved palette, because the parser was
     /// configured from those very roles.
     pub(in crate::tui) fn of_parsed(
