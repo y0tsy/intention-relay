@@ -22,13 +22,12 @@ use intention_tui::client_task;
 
 use crate::cli::{ExitStatus, Format, Options};
 
-/// The bounded wait after a deadline interrupt before the process ends with the
-/// timeout status, letting the daemon publish the effect of the interrupt.
-// @todo(hack): the interrupt is best-effort: nothing on the wire tells the front
-// end that the daemon applied it, so the run gets a fixed two-second grace and
-// whatever the grace observes is discarded. An acknowledged interrupt would let
-// the timeout status name the real outcome.
-const INTERRUPT_GRACE: Duration = Duration::from_secs(2);
+/// The bounded wait for the terminal status the deadline's stop commits.
+///
+/// The stop is the terminal gesture every front end uses, and the committed
+/// terminal status frame is its acknowledgement: the grace bounds how long the
+/// process waits for that frame before it reports the timeout fallback.
+const STOP_GRACE: Duration = Duration::from_secs(2);
 
 /// The SIGINT requests one front end selects on while it waits.
 pub type InterruptRequests = tokio::sync::mpsc::UnboundedReceiver<()>;
@@ -174,12 +173,21 @@ fn terminal_outcome(status: Option<RunStatusDto>) -> Option<RunOutcome> {
         .map(RunOutcome::Terminal)
 }
 
+/// Returns the outcome one passed deadline ends with.
+///
+/// The grace waits for the terminal status the stop the deadline issued
+/// commits, so the timeout fallback is reported only when the grace observed no
+/// status at all.
+fn deadline_outcome(observed: Option<RunOutcome>) -> RunOutcome {
+    observed.unwrap_or(RunOutcome::TimedOut)
+}
+
 /// The terminal end of one driven run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunOutcome {
     /// The run reported one terminal status.
     Terminal(RunStatusDto),
-    /// The wait deadline passed after a best-effort interrupt.
+    /// The grace expired with no terminal status observed.
     TimedOut,
 }
 
@@ -433,10 +441,12 @@ impl Driver {
 
     /// Streams the live run until it ends or the deadline passes.
     ///
-    /// A passed deadline interrupts the active run, waits the bounded grace, and
-    /// reports the timeout. SIGINT stops the run the driver observes instead of
-    /// ending the process: the loop keeps reading until the daemon reports the
-    /// stop it accepted, so no front end leaves a run working unwatched.
+    /// A passed deadline stops the run the driver observes with the same
+    /// command every stop gesture uses, waits the bounded grace for the
+    /// terminal status that stop commits, and reports the status it observed.
+    /// SIGINT stops the run the driver observes instead of ending the process:
+    /// the loop keeps reading until the daemon reports the stop it accepted, so
+    /// no front end leaves a run working unwatched.
     ///
     /// # Errors
     ///
@@ -451,10 +461,10 @@ impl Driver {
         if let Some(outcome) = self.pump_until(events, deadline, interrupts).await? {
             return Ok(outcome);
         }
-        self.apply(Action::InterruptRequested).await;
-        let grace = Deadline::after(Some(INTERRUPT_GRACE), Instant::now());
-        let _observed = self.pump_until(events, grace, interrupts).await;
-        Ok(RunOutcome::TimedOut)
+        self.apply(Action::CancelRunRequested).await;
+        let grace = Deadline::after(Some(STOP_GRACE), Instant::now());
+        let observed = self.pump_until(events, grace, interrupts).await?;
+        Ok(deadline_outcome(observed))
     }
 
     /// Reads run frames until the run ends or the wait deadline passes.
@@ -1096,6 +1106,25 @@ mod tests {
         assert_eq!(
             RunOutcome::Terminal(RunStatusDto::Completed).as_str(),
             "completed"
+        );
+    }
+
+    #[test]
+    fn a_deadline_without_a_terminal_status_reports_timed_out() {
+        assert_eq!(
+            deadline_outcome(None),
+            RunOutcome::TimedOut,
+            "the grace waits for the terminal status the deadline's stop commits, so a grace that observes none is the fallback"
+        );
+        assert_eq!(
+            exit_status(deadline_outcome(None)),
+            ExitStatus::Timeout,
+            "the fallback is the process's own timeout status"
+        );
+        assert_eq!(
+            deadline_outcome(Some(RunOutcome::Terminal(RunStatusDto::Interrupted))),
+            RunOutcome::Terminal(RunStatusDto::Interrupted),
+            "the terminal status the grace observed is reported instead of the timeout"
         );
     }
 

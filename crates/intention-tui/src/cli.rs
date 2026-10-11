@@ -34,7 +34,7 @@ options:
   --session ID        open an existing session by its durable identifier
   --continue          continue the most recently updated session
   --mode plan|build   run policy of a created session (default: build)
-  --timeout SECS      interrupt the run when it does not finish within SECS
+  --timeout SECS      stop the run when it does not finish within SECS
   --format text|json  run output format: progressive text or NDJSON records
   -h, --help          print this help
 ";
@@ -118,8 +118,8 @@ pub enum Invocation {
 /// The closed set of process statuses the terminal client returns.
 ///
 /// The codes are the slice contract: `0` completed, `1` usage, `2` daemon or
-/// transport, `3` typed rejection or failed run, `4` timeout after a
-/// best-effort interrupt, and `5` interrupted run.
+/// transport, `3` typed rejection or failed run, `4` the wait deadline expired
+/// with no terminal status observed, and `5` interrupted run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExitStatus {
     /// The run completed.
@@ -130,7 +130,8 @@ pub enum ExitStatus {
     Daemon,
     /// The daemon rejected the operation or the run ended failed.
     Rejected,
-    /// The run wait deadline expired after a best-effort interrupt.
+    /// The run wait deadline expired and no terminal status arrived within the
+    /// grace.
     Timeout,
     /// The run ended interrupted.
     Interrupted,

@@ -24,7 +24,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use intention_client::IntentionClient;
-use intention_proto::{MessageKindDto, RunStatusDto, SessionId, SessionSnapshotDto};
+use intention_proto::{MessageKindDto, SessionId, SessionSnapshotDto};
 use intention_test_support::daemon_process::{
     self, spawn_daemon, unique_endpoint, wait_until_ready, write_config_document,
 };
@@ -193,30 +193,6 @@ impl TerminalHost {
     /// Reads the current durable snapshot of one session through the client.
     fn snapshot(&self, session_id: SessionId) -> SessionSnapshotDto {
         block_on(self.client.session_snapshot(session_id)).expect("the session snapshot reads")
-    }
-
-    /// Waits for the interrupt notice one interrupted call commits.
-    ///
-    /// The interrupt itself is a registered run signal the daemon answers with
-    /// a durable notice row, so the notice is the observable effect a test can
-    /// reach; the stalled round after it cannot produce a final result.
-    fn wait_for_interrupt_notice(&self, session_id: SessionId) -> SessionSnapshotDto {
-        let deadline = Instant::now() + OBSERVE_DEADLINE;
-        loop {
-            let snapshot = self.snapshot(session_id);
-            if snapshot
-                .messages()
-                .iter()
-                .any(|message| message.kind() == MessageKindDto::Notice)
-            {
-                return snapshot;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "the interrupt commits its durable notice before the deadline"
-            );
-            thread::sleep(POLL_INTERVAL);
-        }
     }
 }
 
@@ -1047,7 +1023,10 @@ fn the_repl_exits_on_input_eof() {
 }
 
 #[test]
-fn the_timeout_run_interrupts_the_stalled_round_and_exits_with_four() {
+fn the_timeout_run_stops_the_stalled_round_and_exits_with_five() {
+    // The deadline issues the terminal stop - the same command every stop
+    // gesture uses - so the process reports the terminal status the stop
+    // committed instead of a timeout of its own.
     let host = TerminalHost::new(ProviderEndpoint::stalled(), Some(WORKSPACE_FILE));
     let workspace = host.workspace_root();
     let started = Instant::now();
@@ -1066,22 +1045,26 @@ fn the_timeout_run_interrupts_the_stalled_round_and_exits_with_four() {
     );
     assert_eq!(
         output.code,
-        Some(4),
-        "the deadline ends the process with the timeout status: {}",
+        Some(5),
+        "the deadline stops the run and the process reports the stop it observed: {}",
         output.stderr
     );
     assert!(
         started.elapsed() < Duration::from_secs(20),
-        "the deadline and its bounded interrupt grace end the wait"
+        "the deadline and its bounded stop grace end the wait"
     );
 
     let records = json_records(&output.stdout);
     let result = records.last().expect("the run reports one final result");
     assert_eq!(kind(result), "result", "the result record ends the output");
-    assert_eq!(result["outcome"].as_str(), Some("timed_out"));
+    assert_eq!(
+        result["outcome"].as_str(),
+        Some("interrupted"),
+        "the result reports the terminal status the deadline's stop committed"
+    );
     assert!(
         !records.iter().any(|record| kind(record) == "error"),
-        "a timed-out run reports its outcome instead of an error record"
+        "a stopped run reports its outcome instead of an error record"
     );
     let session_id = SessionId::parse(
         result["session_id"]
@@ -1090,26 +1073,7 @@ fn the_timeout_run_interrupts_the_stalled_round_and_exits_with_four() {
     )
     .expect("the reported session identity is canonical");
 
-    let snapshot = host.wait_for_interrupt_notice(session_id);
-    let notice = snapshot
-        .messages()
-        .iter()
-        .find(|message| message.kind() == MessageKindDto::Notice)
-        .expect("the interrupted call commits its durable notice");
-    assert_eq!(
-        notice.text(),
-        "[The call was stopped before a final result.]",
-        "the durable notice is the engine's interruption notice"
-    );
-    let active = snapshot
-        .projection()
-        .active_run()
-        .expect("the stalled run is still the session's active run");
-    assert_ne!(
-        active.status(),
-        RunStatusDto::Completed,
-        "a stalled provider round cannot complete the run"
-    );
+    assert_stopped_run_is_durable(&host, session_id);
 }
 
 #[cfg(unix)]
