@@ -274,12 +274,17 @@ pub trait Report {
     /// Returns the output failure.
     fn delta(&mut self, step: u32, channel: TextDeltaChannelDto, text: &str) -> io::Result<()>;
 
-    /// Reports one committed transcript row.
+    /// Reports one committed transcript row and the model step it superseded.
+    ///
+    /// The identity is the client's: `superseded_step` is the step whose
+    /// streamed text this row became, so a sink that already wrote that step's
+    /// provisional text asks for the identity instead of comparing text, and a
+    /// row the client marks as no step at all is never suppressed.
     ///
     /// # Errors
     ///
     /// Returns the output failure.
-    fn row(&mut self, row: &MessageProjectionDto) -> io::Result<()>;
+    fn row(&mut self, row: &MessageProjectionDto, superseded_step: Option<u32>) -> io::Result<()>;
 
     /// Reports one observed run lifecycle status.
     ///
@@ -570,10 +575,14 @@ impl Driver {
     /// The row walk is by durable identity: the client's retention bound can
     /// drop a row this reporter already reported without moving the rows it has
     /// not, so every row committed past the bound is still reported exactly
-    /// once.
+    /// once. Every row carries the supersession identity the client holds for
+    /// it, so a sink decides what to print from that identity and never from
+    /// text.
     fn report_pending(&mut self, events: &mut impl Report) -> Result<(), PumpFailure> {
         for row in self.state.transcript_after(self.reported_row) {
-            events.row(row).map_err(PumpFailure::Output)?;
+            events
+                .row(row, self.state.superseded_step(row.id()))
+                .map_err(PumpFailure::Output)?;
             self.reported_row = Some(row.id());
         }
         let status = self.state.run_status();
@@ -728,10 +737,10 @@ impl<W: Write> Report for Output<'_, W> {
         }
     }
 
-    fn row(&mut self, row: &MessageProjectionDto) -> io::Result<()> {
+    fn row(&mut self, row: &MessageProjectionDto, superseded_step: Option<u32>) -> io::Result<()> {
         match self {
-            Self::Text(report) => report.row(row),
-            Self::Json(report) => report.row(row),
+            Self::Text(report) => report.row(row, superseded_step),
+            Self::Json(report) => report.row(row, superseded_step),
         }
     }
 
@@ -746,9 +755,10 @@ impl<W: Write> Report for Output<'_, W> {
 /// The progressive human output of one run.
 ///
 /// The streamed provisional answer text is written as it arrives. A committed
-/// assistant row that repeats the streamed text of its step supersedes that
-/// text instead of printing it twice, which is the committed-row rule of the
-/// terminal model applied to a pipe.
+/// assistant row the client marks as the text of the step this sink streamed
+/// supersedes that text instead of printing it twice, which is the
+/// committed-row rule of the terminal model applied to a pipe: the sink keeps
+/// exactly one entry - the last step it streamed - and never matches text.
 ///
 /// The reasoning channel is not written: this format reports the transcript's
 /// prose, and a committed row's reasoning is never printed either, so a step's
@@ -756,8 +766,12 @@ impl<W: Write> Report for Output<'_, W> {
 /// carries both channels for a consumer that wants them.
 pub struct TextReport<W> {
     writer: W,
-    step: Option<u32>,
-    streamed: String,
+    /// The last model step this sink streamed provisional answer text for.
+    ///
+    /// It is the one entry the supersession rule needs: a step's committed row
+    /// precedes the next step's deltas, so no other step can be ahead of the
+    /// sink's streamed text.
+    streamed_step: Option<u32>,
     at_line_start: bool,
 }
 
@@ -766,8 +780,7 @@ impl<W: Write> TextReport<W> {
     pub const fn new(writer: W) -> Self {
         Self {
             writer,
-            step: None,
-            streamed: String::new(),
+            streamed_step: None,
             at_line_start: true,
         }
     }
@@ -798,32 +811,27 @@ impl<W: Write> Report for TextReport<W> {
         if channel == TextDeltaChannelDto::Reasoning {
             return Ok(());
         }
-        if self.step != Some(step) {
-            self.step = Some(step);
-            self.streamed.clear();
-        }
-        self.streamed.push_str(text);
+        // The sink keeps one entry: the step whose text it last streamed, which
+        // is the only step a committed row can still supersede.
+        self.streamed_step = Some(step);
         self.writer.write_all(text.as_bytes())?;
         self.writer.flush()?;
         self.at_line_start = text.ends_with('\n');
         Ok(())
     }
 
-    fn row(&mut self, row: &MessageProjectionDto) -> io::Result<()> {
+    fn row(&mut self, row: &MessageProjectionDto, superseded_step: Option<u32>) -> io::Result<()> {
         if row.kind() == MessageKindDto::User {
             // The caller supplied the prompt, so repeating it as a transcript
             // row would echo the input instead of reporting the run.
             return Ok(());
         }
-        // @todo(hack): streamed text is matched to its committed row by string
-        // equality because a delta names only its model step, never the
-        // committed row it will become, so a committed row that repeats the
-        // streamed text for another reason is suppressed too; the client should
-        // mark the row a stream supersedes.
-        let supersedes = row.kind() == MessageKindDto::Assistant
-            && !self.streamed.is_empty()
-            && row.text() == self.streamed;
-        self.streamed.clear();
+        // Only the step this sink streamed is suppressed, and only when the
+        // client marks this row as that step's committed text: a row the client
+        // does not mark - because it became another step, or because the
+        // client's window dropped the identity - prints in full, whatever its
+        // text happens to repeat.
+        let supersedes = superseded_step.is_some_and(|step| Some(step) == self.streamed_step);
         self.end_line()?;
         if supersedes {
             return Ok(());
@@ -988,7 +996,9 @@ impl<W: Write> Report for JsonReport<W> {
         .write(&mut self.writer)
     }
 
-    fn row(&mut self, row: &MessageProjectionDto) -> io::Result<()> {
+    fn row(&mut self, row: &MessageProjectionDto, _superseded_step: Option<u32>) -> io::Result<()> {
+        // The machine format reports every committed row and every transient
+        // delta by design, so a supersession suppresses nothing here.
         Record::Message {
             kind: row.kind().as_str(),
             text: row.text(),
@@ -1388,7 +1398,7 @@ mod tests {
             .expect("the reasoning delta writes");
         sink.delta(0, TextDeltaChannelDto::Answer, "hi")
             .expect("the answer delta writes");
-        sink.row(&row(MessageKindDto::Assistant, "hi"))
+        sink.row(&row(MessageKindDto::Assistant, "hi"), Some(0))
             .expect("the row writes");
         sink.status(RunStatusDto::Running)
             .expect("the status writes");
@@ -1423,12 +1433,65 @@ mod tests {
             .delta(0, TextDeltaChannelDto::Answer, "world")
             .expect("the delta writes");
         report
-            .row(&row(MessageKindDto::Assistant, "hello world"))
+            .row(&row(MessageKindDto::Assistant, "hello world"), Some(0))
             .expect("the row writes");
         report
             .finish(RunOutcome::Terminal(RunStatusDto::Completed))
             .expect("the status writes");
         assert_eq!(text_of(&buffer), "hello world\nrun completed\n");
+    }
+
+    #[test]
+    fn a_step_whose_committed_row_differs_by_one_character_prints_once() {
+        // The identity decides, never the text: the client marked this row as
+        // the step this sink streamed, so the answer is already on the pipe.
+        let mut buffer = Vec::new();
+        let mut report = TextReport::new(&mut buffer);
+        report
+            .delta(0, TextDeltaChannelDto::Answer, "the answer.")
+            .expect("the delta writes");
+        report
+            .row(&row(MessageKindDto::Assistant, "the answer"), Some(0))
+            .expect("the row writes");
+        assert_eq!(text_of(&buffer), "the answer.\n");
+    }
+
+    #[test]
+    fn a_text_sink_suppresses_only_the_step_it_streamed() {
+        // The one-entry bound, on the equal-text defect: the row repeats the
+        // text this sink streamed but the client marks it as another step, so
+        // it is a row of its own and prints.
+        let mut buffer = Vec::new();
+        let mut report = TextReport::new(&mut buffer);
+        report
+            .delta(0, TextDeltaChannelDto::Answer, "done")
+            .expect("the delta writes");
+        report
+            .row(&row(MessageKindDto::Assistant, "done"), Some(1))
+            .expect("the row writes");
+        assert_eq!(text_of(&buffer), "done\nassistant: done\n");
+    }
+
+    #[test]
+    fn a_committed_row_beyond_the_retained_supersession_window_prints_once() {
+        // The client's window dropped the identity with the row it belonged to,
+        // so the row arrives unmarked: the sink prints it once, in full, and
+        // never guesses from text.
+        let mut buffer = Vec::new();
+        let mut report = TextReport::new(&mut buffer);
+        report
+            .delta(0, TextDeltaChannelDto::Answer, "a long streamed answer")
+            .expect("the delta writes");
+        report
+            .row(
+                &row(MessageKindDto::Assistant, "a long streamed answer"),
+                None,
+            )
+            .expect("the row writes");
+        assert_eq!(
+            text_of(&buffer),
+            "a long streamed answer\nassistant: a long streamed answer\n"
+        );
     }
 
     #[test]
@@ -1442,7 +1505,7 @@ mod tests {
             .delta(0, TextDeltaChannelDto::Answer, "the answer")
             .expect("the answer delta writes");
         report
-            .row(&row(MessageKindDto::Assistant, "the answer"))
+            .row(&row(MessageKindDto::Assistant, "the answer"), Some(0))
             .expect("the row writes");
         assert_eq!(
             text_of(&buffer),
@@ -1459,10 +1522,10 @@ mod tests {
             .delta(0, TextDeltaChannelDto::Reasoning, "weighing the call")
             .expect("the reasoning delta writes");
         report
-            .row(&reasoning_row("", "weighing the call"))
+            .row(&reasoning_row("", "weighing the call"), Some(0))
             .expect("the row writes");
         report
-            .row(&row(MessageKindDto::Notice, "step finished"))
+            .row(&row(MessageKindDto::Notice, "step finished"), None)
             .expect("the row writes");
         assert_eq!(
             text_of(&buffer),
@@ -1472,17 +1535,19 @@ mod tests {
     }
 
     #[test]
-    fn a_text_sink_prints_a_committed_row_the_stream_did_not_carry() {
+    fn a_text_sink_prints_a_row_the_client_did_not_mark_superseded() {
+        // The row the client marks as no step at all is a row of its own: the
+        // pipe prints it in full, whatever its text happens to repeat.
         let mut buffer = Vec::new();
         let mut report = TextReport::new(&mut buffer);
         report
             .delta(0, TextDeltaChannelDto::Answer, "partial")
             .expect("the delta writes");
         report
-            .row(&row(MessageKindDto::Assistant, "partial and more"))
+            .row(&row(MessageKindDto::Assistant, "partial and more"), None)
             .expect("the row writes");
         report
-            .row(&row(MessageKindDto::Notice, "step finished"))
+            .row(&row(MessageKindDto::Notice, "step finished"), None)
             .expect("the row writes");
         assert_eq!(
             text_of(&buffer),
@@ -1495,13 +1560,13 @@ mod tests {
         let mut buffer = Vec::new();
         let mut report = TextReport::new(&mut buffer);
         report
-            .row(&row(MessageKindDto::User, "hello"))
+            .row(&row(MessageKindDto::User, "hello"), None)
             .expect("the row writes");
         report
             .delta(0, TextDeltaChannelDto::Answer, "answer")
             .expect("the delta writes");
         report
-            .row(&row(MessageKindDto::Assistant, "answer"))
+            .row(&row(MessageKindDto::Assistant, "answer"), Some(0))
             .expect("the row writes");
         report
             .finish(RunOutcome::TimedOut)
@@ -1520,7 +1585,7 @@ mod tests {
             .delta(1, TextDeltaChannelDto::Answer, "second")
             .expect("the delta writes");
         report
-            .row(&row(MessageKindDto::Assistant, "second"))
+            .row(&row(MessageKindDto::Assistant, "second"), Some(1))
             .expect("the row writes");
         assert_eq!(text_of(&buffer), "firstsecond\n");
     }

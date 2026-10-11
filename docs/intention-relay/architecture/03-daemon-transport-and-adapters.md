@@ -569,11 +569,11 @@ lacks. Each site carries the same `@todo(core):` prefix and names what the core 
 | counts committed tool-call rows minus tool-result rows to decide what is in flight (`app/run.rs`) | the run's open tool calls |
 
 The `@todo(hack)` marker is the crate's own class for work the adapter or the client must still do, and it is not
-catalogued here. Its sites are streamed text matched to its committed row by text equality (`headless.rs`), the theme
-values re-spelled in the registry (`app/commands.rs`), the committed duration measured by the front end (`tui/mod.rs`),
-an absent `tool_id` defaulted to the empty string (`tui/panes/tools.rs`), the endpoint instance and the daemon program
-resolved by the binary (`main.rs`), and the untyped decode the architecture check cannot see (`tui/panes/tools.rs`).
-Each of those markers names the client or core surface that should replace it.
+catalogued here. Its sites are the theme values re-spelled in the registry (`app/commands.rs`), the committed duration
+measured by the front end (`tui/mod.rs`), an absent `tool_id` defaulted to the empty string (`tui/panes/tools.rs`), the
+endpoint instance and the daemon program resolved by the binary (`main.rs`), and the untyped decode the architecture
+check cannot see (`tui/panes/tools.rs`). Each of those markers names the client or core surface that should replace
+it.
 
 ### Frame cost
 
