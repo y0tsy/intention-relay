@@ -471,12 +471,24 @@ impl CommandMenu {
 
     /// Returns whether this band has no word to complete.
     ///
-    /// The empty argument word is the one band with nothing to complete: the
-    /// command is already complete and none of its argument is typed, so Enter
-    /// runs the command - `/theme` opens the picker - while Tab still completes
-    /// the value the band highlights.
-    pub(crate) const fn completes_nothing(&self) -> bool {
-        matches!(self.kind, MenuKind::Argument(_)) && self.filter.is_empty()
+    /// A band has nothing to complete when the line already says what the word
+    /// it ranks is worth: the typed word spells one registered command
+    /// (`/sessions`), one of an argument's declared values (`/theme light`,
+    /// however the case is typed, exactly as the submission path accepts it),
+    /// or the argument word is still empty so the command itself is complete.
+    /// Enter runs such a line instead of spending a press on the row's trailing
+    /// space, while Tab still completes the row the band highlights.
+    ///
+    /// The rule reads the word, not the highlight: an exact word is the user's
+    /// own text, so Enter keeps it, and the highlight only decides what an
+    /// incomplete word completes to.
+    pub(crate) fn completes_nothing(&self) -> bool {
+        match self.kind {
+            MenuKind::Command => command_named(&self.filter).is_some(),
+            MenuKind::Argument(argument) => {
+                self.filter.is_empty() || argument.value_named(&self.filter).is_some()
+            }
+        }
     }
 
     /// Moves the highlight one row towards `direction`, bounded by the list.
@@ -940,6 +952,53 @@ mod tests {
         assert_eq!(
             menu.highlighted().expect("a row is highlighted").label(),
             "/sessions"
+        );
+    }
+
+    #[test]
+    fn a_word_that_already_spells_its_row_has_nothing_to_complete() {
+        // The complete command word: Enter runs it instead of appending the
+        // row's trailing space.
+        assert!(
+            menu_of("/sessions")
+                .expect("the complete word still opens the band")
+                .completes_nothing()
+        );
+        assert!(
+            !menu_of("/sess")
+                .expect("the prefix opens the band")
+                .completes_nothing(),
+            "an abbreviated word still has a completion to spend"
+        );
+        assert!(
+            !menu_of("/")
+                .expect("a bare slash opens the band")
+                .completes_nothing(),
+            "a bare slash completes the highlighted command"
+        );
+
+        // The complete value word, in whichever case the submission path
+        // accepts, and the omitted argument the command itself completes.
+        assert!(
+            menu_of("/theme light")
+                .expect("the complete value opens the band")
+                .completes_nothing()
+        );
+        assert!(
+            menu_of("/theme LIGHT")
+                .expect("the value matches however it is cased")
+                .completes_nothing()
+        );
+        assert!(
+            !menu_of("/theme l")
+                .expect("the value prefix opens the band")
+                .completes_nothing()
+        );
+        assert!(
+            menu_of("/theme ")
+                .expect("the omitted argument opens the band")
+                .completes_nothing(),
+            "the command is complete and no argument is typed"
         );
     }
 

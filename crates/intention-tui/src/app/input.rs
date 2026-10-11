@@ -164,9 +164,12 @@ impl AppState {
     /// prompt is typed without being submitted and the backslash itself never
     /// reaches the submitted buffer.
     ///
-    /// An open band claims Enter for its completion, except for the empty
-    /// argument word an omitted optional argument opens: that band has nothing
-    /// to complete, so Enter runs the command itself.
+    /// An open band claims Enter only while its word is incomplete: the press
+    /// then completes the word the user is typing, so the caret lands past the
+    /// command with one space ready for its arguments. A word that already
+    /// spells the command (`/sessions`) or a declared value (`/theme light`)
+    /// has nothing left to complete, so Enter runs the line - and the empty
+    /// argument word `/theme` opens is the same case from the other side.
     ///
     /// A prompt with no open session starts the session it needs instead of
     /// being rejected: the state asks for a session creation and remembers the
@@ -176,14 +179,12 @@ impl AppState {
         if self.insert_line_break() {
             return Vec::new();
         }
-        // The band owns Enter while it is open: the press completes the word
-        // the user is typing instead of running it, so a line that already
-        // spells a complete command needs its second Enter to run, and the
-        // caret always lands past the command with one space ready for its
-        // arguments. The one band that has nothing to complete is the empty
-        // argument word: the command is already complete and none of the
-        // argument is typed, so Enter runs the command - `/theme` opens the
-        // picker - while Tab still completes the value it highlights.
+        // The band owns Enter while its word is incomplete: the press
+        // completes the word the user is typing instead of running it, so an
+        // abbreviated line grows to its command or value first. A word that
+        // already spells the command or a declared value has nothing left to
+        // complete, so Enter runs the line - one press for `/sessions`, not
+        // two - while Tab still completes the row the band highlights.
         if let Some(menu) = self.command_menu.as_ref()
             && !menu.completes_nothing()
         {

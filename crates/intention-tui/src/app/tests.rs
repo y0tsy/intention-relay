@@ -299,15 +299,10 @@ fn type_text(state: &mut AppState, text: &str) {
 
 /// Runs one typed slash command the way the keyboard does.
 ///
-/// The first Enter completes the open hint menu into `/<name> `, the second
-/// submits the completed line: a line that already spells a complete command
-/// needs both presses, and the completing press runs nothing.
+/// A line that already spells a complete command runs on its own Enter press:
+/// the open band has nothing left to complete, so the press an abbreviation
+/// spends on its completion is the press that runs the command here.
 fn run_command(state: &mut AppState) -> Vec<Effect> {
-    let completing = state.update(Action::InputSubmitted);
-    assert!(
-        completing.is_empty(),
-        "the press that completes the command runs nothing"
-    );
     state.update(Action::InputSubmitted)
 }
 
@@ -1035,6 +1030,65 @@ fn the_hint_menu_commits_the_highlighted_command_with_a_trailing_space() {
 }
 
 #[test]
+fn a_word_that_already_spells_its_command_or_value_runs_on_one_enter() {
+    // `/sessions`: the word names the command outright, so the band has
+    // nothing left to complete and the press runs it instead of appending the
+    // row's trailing space.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/sessions");
+    assert!(
+        state.command_menu().is_some(),
+        "the complete word is still offered by the band"
+    );
+    assert_eq!(
+        state.update(Action::InputSubmitted),
+        vec![Effect::ListSessions],
+        "one Enter runs the command the word already spells"
+    );
+    assert_eq!(state.screen(), Screen::Sessions);
+    assert_eq!(state.input(), "", "a command never stays in the input line");
+
+    // `/theme LIGHT`: a declared value spelled in full is complete too, in
+    // whichever case the submission path accepts.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/theme LIGHT");
+    assert!(state.command_menu().is_some(), "the value is still offered");
+    assert_eq!(
+        state.update(Action::InputSubmitted),
+        vec![Effect::PersistTheme(Theme::Light)],
+        "one Enter applies the value the word already spells"
+    );
+    assert_eq!(state.input(), "");
+
+    // An abbreviated word still completes first, and its completion runs on
+    // the next press.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/sess");
+    let completing = state.update(Action::InputSubmitted);
+    assert!(completing.is_empty(), "an abbreviated word completes first");
+    assert_eq!(state.input(), "/sessions ");
+    assert_eq!(
+        state.update(Action::InputSubmitted),
+        vec![Effect::ListSessions],
+        "the completed line runs on its own press"
+    );
+
+    // Tab still completes the highlighted row for a word that is complete.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/sessions");
+    state.update(Action::MenuAccept);
+    assert_eq!(
+        state.input(),
+        "/sessions ",
+        "Tab completes the highlighted row's trailing space"
+    );
+    assert_eq!(
+        state.update(Action::InputSubmitted),
+        vec![Effect::ListSessions]
+    );
+}
+
+#[test]
 fn the_hint_menu_closes_on_every_close_rule() {
     // The slash removed.
     let mut state = AppState::new(None);
@@ -1306,16 +1360,8 @@ fn the_sessions_command_opens_the_browser_and_refreshes_the_list() {
 fn the_theme_command_opens_the_picker_without_an_argument() {
     let mut state = AppState::new(None);
     type_text(&mut state, "/theme");
-    let completing = state.update(Action::InputSubmitted);
-    assert!(completing.is_empty(), "the completing press runs nothing");
-    assert_eq!(state.input(), "/theme ");
-    assert!(
-        state.command_menu().is_some(),
-        "the blank after a declared argument opens its word"
-    );
-
-    // The empty argument word has nothing to complete, so Enter runs the
-    // command itself instead of writing the value its highlight points at.
+    // The word already spells the command, so the band has nothing to complete
+    // and the press that would append its trailing space runs it instead.
     let effects = state.update(Action::InputSubmitted);
     assert!(
         effects.is_empty(),

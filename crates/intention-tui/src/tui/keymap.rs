@@ -164,15 +164,14 @@ mod tests {
 
     /// Returns a state whose screen is the theme picker.
     ///
-    /// The picker is opened the way the keyboard opens it: `/theme` completes
-    /// into the command with its argument word still empty, and the next Enter
-    /// runs the command the empty word has nothing to complete for.
+    /// The picker is opened the way the keyboard opens it: `/theme` already
+    /// spells the command, so its own Enter press runs it and the command's
+    /// omitted argument opens the picker.
     fn picker_state() -> AppState {
         let mut state = AppState::new(None);
         for character in "/theme".chars() {
             state.update(Action::InputChar(character));
         }
-        state.update(Action::InputSubmitted);
         state.update(Action::InputSubmitted);
         assert_eq!(state.screen(), Screen::Theme);
         state

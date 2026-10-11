@@ -1388,7 +1388,7 @@ fn a_window_too_short_for_the_band_keeps_the_input_and_shows_no_band() {
 /// Returns the chat state whose theme picker is open.
 fn picker_state() -> AppState {
     let mut state = typed_state("/theme");
-    state.update(Action::InputSubmitted);
+    // The word already spells the command, so its own Enter press runs it.
     state.update(Action::InputSubmitted);
     assert_eq!(
         state.screen(),
