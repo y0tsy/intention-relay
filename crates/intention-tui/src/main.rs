@@ -212,7 +212,7 @@ fn console_attached() -> bool {
 
 /// Reports one safe typed startup failure and returns its process status.
 pub(crate) fn startup_failure(error: &ErrorDto, err: &mut impl Write) -> ExitStatus {
-    let _ = writeln!(err, "error: {} ({})", error.message(), error.code());
+    let _ = writeln!(err, "error: {error}");
     ExitStatus::for_error(error)
 }
 

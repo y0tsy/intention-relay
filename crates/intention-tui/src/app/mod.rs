@@ -35,8 +35,6 @@ pub use state::AppState;
 pub use theme::Theme;
 pub use transcript::TranscriptSelection;
 
-use intention_proto::ErrorDto;
-
 /// The surface of the one window that owns the keyboard.
 ///
 /// The terminal front end has exactly one window: the chat is always drawn, and
@@ -71,12 +69,4 @@ pub fn short_identifier(identifier: impl std::fmt::Display) -> String {
         .chars()
         .take(SHORT_IDENTIFIER_CHARS)
         .collect()
-}
-
-// @todo(hack): the one-line safe form of a typed error is composed here, although the error owns
-// exactly that representation. The adapter should render what the type's own display writes instead
-// of re-spelling the pattern in a second place.
-/// Returns the single-line status text of one safe typed error.
-fn error_text(error: &ErrorDto) -> String {
-    format!("{}: {}", error.code(), error.message())
 }

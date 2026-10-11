@@ -668,9 +668,7 @@ impl<'a, W: Write> Output<'a, W> {
     /// Writes one safe typed failure in the selected format.
     fn error(&mut self, err: &mut impl Write, error: &ErrorDto) -> io::Result<()> {
         match self {
-            Self::Text(_report) => {
-                writeln!(err, "error: {} ({})", error.message(), error.code())
-            }
+            Self::Text(_report) => writeln!(err, "error: {error}"),
             Self::Json(report) => report.error(error),
         }
     }
@@ -1125,6 +1123,39 @@ mod tests {
             deadline_outcome(Some(RunOutcome::Terminal(RunStatusDto::Interrupted))),
             RunOutcome::Terminal(RunStatusDto::Interrupted),
             "the terminal status the grace observed is reported instead of the timeout"
+        );
+    }
+
+    #[test]
+    fn the_one_line_error_form_is_the_types_own_display() {
+        let error = ErrorDto::validation("fixture_failure", "the fixture step failed");
+        let line = error.to_string();
+
+        // The application's error line is the type's own one-line form.
+        let mut state = intention_tui::app::AppState::new(None);
+        state.update(intention_tui::app::Action::SessionsListFailed(
+            error.clone(),
+        ));
+        assert_eq!(state.error(), Some(line.as_str()));
+
+        // The process surface writes that form after its own label, in the text
+        // sink and at startup alike.
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut output = Output::new(Format::Text, &mut out);
+        output
+            .error(&mut err, &error)
+            .expect("the text sink writes the error line");
+        assert_eq!(
+            String::from_utf8(err).expect("the error line is UTF-8"),
+            format!("error: {line}\n")
+        );
+
+        let mut startup = Vec::new();
+        let _status = crate::startup_failure(&error, &mut startup);
+        assert_eq!(
+            String::from_utf8(startup).expect("the startup line is UTF-8"),
+            format!("error: {line}\n")
         );
     }
 

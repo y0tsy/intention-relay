@@ -13,7 +13,7 @@ use intention_proto::{
 
 use super::{
     Action, BrowserRow, BrowserTab, CommandMenu, ConnectionStatus, Effect, RunPhase, Screen,
-    StreamStatus, Theme, TranscriptSelection, browser, ctrl_c, error_text, transcript,
+    StreamStatus, Theme, TranscriptSelection, browser, ctrl_c, transcript,
 };
 
 /// Every value one terminal session holds, with no terminal attached.
@@ -745,9 +745,9 @@ impl AppState {
     ///
     /// Shared by every transition module: a failed client call keeps the
     /// failure's typed code and safe message in the state instead of returning
-    /// an error.
+    /// an error, and the line is the error type's own one-line form.
     pub(super) fn apply_failure(&mut self, error: &ErrorDto) -> Vec<Effect> {
-        self.error = Some(error_text(error));
+        self.error = Some(error.to_string());
         Vec::new()
     }
 

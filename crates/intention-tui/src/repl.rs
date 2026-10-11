@@ -188,7 +188,7 @@ async fn converse_turn<W: Write, E: Write>(
     interrupts: &mut InterruptRequests,
 ) {
     if let Some(error) = driver.send_turn(input).await {
-        let _ = writeln!(err, "error: {} ({})", error.message(), error.code());
+        let _ = writeln!(err, "error: {error}");
         return;
     }
     stream_active_turn(driver, out, err, interrupts).await;
@@ -212,7 +212,7 @@ async fn stream_active_turn<W: Write, E: Write>(
             }
         }
         Err(PumpFailure::Client(error)) => {
-            let _ = writeln!(err, "error: {} ({})", error.message(), error.code());
+            let _ = writeln!(err, "error: {error}");
         }
         Err(PumpFailure::Output(_error)) => {
             let _ = writeln!(err, "error: the run output could not be written");
@@ -252,7 +252,7 @@ fn report_session(driver: &Driver, out: &mut impl Write, err: &mut impl Write) {
         }
         None => {
             let error = driver.session_failure();
-            let _ = writeln!(err, "error: {} ({})", error.message(), error.code());
+            let _ = writeln!(err, "error: {error}");
         }
     }
 }
