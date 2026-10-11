@@ -1048,7 +1048,6 @@ mod tests {
             text,
             None,
             None,
-            None,
         )
         .expect("the fixture row is coherent")
     }
@@ -1140,7 +1139,6 @@ mod tests {
             text,
             None,
             None,
-            None,
         )
         .expect("the fixture row is coherent")
     }
@@ -1155,7 +1153,6 @@ mod tests {
             MessageKindDto::Assistant,
             text,
             Some(reasoning.to_owned()),
-            None,
             None,
         )
         .expect("the fixture reasoning row is coherent")

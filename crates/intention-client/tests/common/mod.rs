@@ -46,7 +46,6 @@ pub fn message(
         text,
         None,
         None,
-        None,
     )
     .expect("fixture transcript row is valid")
 }

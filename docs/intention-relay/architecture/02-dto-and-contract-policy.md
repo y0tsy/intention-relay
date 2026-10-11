@@ -21,7 +21,7 @@ A DTO is a stable contract, not merely any serializable struct.
 | Persistence DTO | Storage-safe representation of a record or projection. | `RunProjectionDto`, `MessageProjectionDto`. |
 | Provider DTO | Provider-neutral model request/stream/error contract, including advertised tool definitions and the transient same-run reasoning attachment. | `ModelRequestDto`, `ModelToolDefinitionDto`, `AssistantReasoningDto`, `ModelEventDto`. |
 | Runtime execution DTO | Immutable selected execution input, safe terminal outcome, and provider-neutral time and transient text-delta ports over injected provider/storage contracts. | `ModelRunExecutionInputDto`, `ModelRunExecutionOutcomeDto`, `ModelTimePort`, `ModelTextDeltaPort`. |
-| Tool DTO | Typed tool invocation, bounded result and interruption outcome, and durable result evidence. | `ToolInput`, `ToolResult`, `ToolResultEvidenceDto`. |
+| Tool DTO | Typed tool invocation, bounded result and interruption outcome, durable result evidence, and the typed projection each committed tool row carries. | `ToolId`, `ToolInput`, `ToolResult`, `ToolResultEvidenceDto`, `ToolRowDto`. |
 | Config DTO | Parsed, validated, resolved, and revisioned TOML configuration. | `ResolvedConfigDto`, `ConfigSnapshotDto`. |
 | Presentation DTO | Explicit adapter projection, if transport DTO is not appropriate for display. | None today; adapters render transport projections directly. |
 

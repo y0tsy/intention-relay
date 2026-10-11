@@ -24,10 +24,10 @@ use intention_proto::{
     WorkspaceRootDto,
 };
 use intention_proto::{
-    DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, RunId,
-    SessionId, ThemeDto, TimestampDto, ToolCallId, UsageDto, run_status_is_terminal,
+    DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, RunId, SessionId, ThemeDto, TimestampDto,
+    ToolCallId, ToolResultMetadataEntryDto, ToolResultStatusDto, UsageDto,
+    run_status_is_terminal,
 };
-use serde::{Deserialize, Deserializer, Serialize, de};
 
 mod sqlite;
 
@@ -50,112 +50,6 @@ const MAX_TURN_CONTENT_BYTES: usize = 512 * 1024;
 /// are reported through the projection's omitted count instead of being
 /// materialised.
 const MAX_PENDING_TURN_PROJECTION_BYTES: usize = MAX_TURN_CONTENT_BYTES;
-
-/// The terminal outcome recorded for one local tool result.
-///
-/// The taxonomy is deliberately closed to terminal outcomes: a call records
-/// exactly one result row, and admission, rejection, and start evidence are
-/// not persisted.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolResultStatusDto {
-    /// The tool completed and produced a normalized safe result.
-    Completed,
-    /// The tool reported a safe failure outcome.
-    Failed,
-    /// The tool stopped before a final outcome; its captured output is partial.
-    Partial,
-}
-
-impl ToolResultStatusDto {
-    /// Returns the canonical durable string representation of this tool result status.
-    ///
-    /// The representation is persisted verbatim, so it must stay byte-identical
-    /// across releases.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-            Self::Partial => "partial",
-        }
-    }
-
-    /// Parses the canonical durable string representation of a tool result status.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe internal error when `value` is not a declared durable tool result status.
-    pub fn parse(value: &str) -> DtoResult<Self> {
-        match value {
-            "completed" => Ok(Self::Completed),
-            "failed" => Ok(Self::Failed),
-            "partial" => Ok(Self::Partial),
-            _ => Err(ErrorDto::new(
-                "invalid_tool_result_status",
-                ErrorCategoryDto::Internal,
-                "the durable tool result status is not declared",
-                ErrorRetryDto::Never,
-                None,
-            )?),
-        }
-    }
-}
-
-/// One credential-free structured metadata entry of a tool result.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ToolResultMetadataEntryDto {
-    key: String,
-    value: String,
-}
-
-impl<'de> Deserialize<'de> for ToolResultMetadataEntryDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawToolResultMetadataEntryDto {
-            key: String,
-            value: String,
-        }
-
-        let raw = RawToolResultMetadataEntryDto::deserialize(deserializer)?;
-        Self::new(raw.key, raw.value).map_err(de::Error::custom)
-    }
-}
-
-impl ToolResultMetadataEntryDto {
-    /// Creates one metadata entry with a non-blank key.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the key is blank or either field
-    /// contains a NUL character.
-    pub fn new(key: impl Into<String>, value: impl Into<String>) -> DtoResult<Self> {
-        let key = key.into();
-        let value = value.into();
-        if key.trim().is_empty() || key.contains('\0') || value.contains('\0') {
-            return Err(ErrorDto::validation(
-                "invalid_tool_result_metadata",
-                "tool result metadata must have a non-blank key",
-            ));
-        }
-        Ok(Self { key, value })
-    }
-
-    /// Returns the stable metadata key.
-    #[must_use]
-    pub fn key(&self) -> &str {
-        &self.key
-    }
-
-    /// Returns the metadata value.
-    #[must_use]
-    pub fn value(&self) -> &str {
-        &self.value
-    }
-}
 
 /// Typed durable evidence of one committed local tool result.
 ///

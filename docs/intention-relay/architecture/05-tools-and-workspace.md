@@ -6,14 +6,15 @@ This document specifies typed core tools, `WorkspaceRoot` addressing semantics, 
 
 ## Tool ownership
 
-`intention-tools` owns:
+The typed tool contract lives in `intention-proto` ([architecture 02](02-dto-and-contract-policy.md)): the closed
+`ToolId`, the typed input and result families, the tool-result lifecycle status with its metadata entries, and the
+typed call/result projection every committed tool row carries. `intention-tools` owns:
 
-- typed tool identity and metadata;
-- input and output DTO contracts;
-- the six core tool contracts and their model-visible spec match;
-- execution interfaces.
+- the six declared tools' model-facing JSON Schema descriptors and their model-visible spec match;
+- the execution interfaces over the typed input, including the workspace-root binding each invocation receives.
 
-Tools are domain/runtime capabilities, not UI commands. An adapter only renders tool results returned by the daemon.
+Tools are domain/runtime capabilities, not UI commands. An adapter only renders the committed tool rows the daemon
+publishes, and their typed projection is what it renders.
 
 ## Core tool contract
 
@@ -40,7 +41,7 @@ ToolDispatchOutcome
 
 Every model-visible tool declares `input_schema`: the code-owned JSON Schema text for its typed model parameters.
 `intention_tools::model_visible_descriptors()` returns exactly those six tool specs in advertisement order, and
-`intention_tools::spec(id)` is the single place where a tool's identity, description, and schema are defined. Ordinary
+`intention_tools::spec(id)` is the single place where a tool's description and input schema are defined. Ordinary
 model requests advertise that set as typed tool definitions
 ([architecture 08](08-model-protocol-and-providers.md)).
 
@@ -132,10 +133,10 @@ returns its captured output as a partial result when stopped.
 `ToolService::dispatch_with_cancellation(input, cancellation)` returns a typed `ToolDispatchOutcome`
 (`completed(ToolResult)` or `interrupted(cause, partial)`), and the application renders each completed result into the
 bounded, redacted text its durable rows carry. There are no compatibility wrappers without cancellation and no second
-invocation or result-boundary entry. Every executed program is classified by a typed `ToolProcessStatus` (`success`,
-`non_zero` with its numeric code, or `signal` with its recorded signal). The execute result's text rendering is derived
-from that same typed status, so the text and the typed classification can never disagree and no arbitrary sentinel exit
-code is invented for signal termination.
+invocation or result-boundary entry. Every executed program is classified by the proto's typed `ToolProcessStatus`
+(`success`, `non_zero` with its numeric code, or `signal` with its recorded signal), which rides the execute result on
+the committed row. The execute result's text rendering is derived from that same typed status, so the text and the
+typed classification can never disagree and no arbitrary sentinel exit code is invented for signal termination.
 
 `execute` takes one `ShellCommandTextDto` plus optional typed launch parameters (`cwd`, `env`, `timeout_seconds`). The
 platform shell adapter (`bash -c` on Unix, `cmd /C` on Windows) is private tool code: pipelines, redirects, and
@@ -150,10 +151,10 @@ runs out stops the process group while keeping whatever the readers captured.
 
 ## Execution order and extension points
 
-The application owns the base tool pipeline as one direct typed sequence: commit the tool-call row with the model's
-exact arguments document, decode the typed input identity, bind the workspace root, dispatch once through
-`intention-tools`, commit the terminal result row (completed, partial, or failed with its bounded guidance) with its
-answering transcript row, and publish the committed row. `intention-tools` owns no registration, ordering, phase,
+The application owns the base tool pipeline as one direct typed sequence: decode the model's exact arguments document
+once into the typed input, commit the tool-call row with that document and its typed projection, bind the workspace
+root, dispatch once through `intention-tools`, commit the terminal result row (completed, partial, or failed with its
+bounded guidance) with its typing and its answering transcript row, and publish the committed row. `intention-tools` owns no registration, ordering, phase,
 context, or dispatcher mechanism, and the production path has no phase dispatch site.
 
 WorkspaceRoot binding, VFR transformation, Headroom compression, and Plan-mode authorization are therefore ordinary
@@ -220,18 +221,21 @@ ordinary Plan `write` and `edit` remain denied.
 
 ## Slice 1.5 tool contract
 
-Slice 1.5 makes JSON Schema text the tool contract, and the merged `intention-tools` crate owns the six tool contracts
-and the workspace anchor that enforce it.
+Slice 1.5 makes JSON Schema text the tool contract, the proto's typed tool contract names the six tools and shapes
+their inputs and results, and the merged `intention-tools` crate owns the six tools' descriptors and the workspace
+anchor that enforce it.
 
 - Schema text, not DTO type names. Each model-visible tool declares its argument schema in `input_schema` as code-owned
   JSON Schema text, and that text is the contract the model sees.
 - Runtime validation before any effect. `ToolInput::from_arguments_json` matches the model-visible tool name and decodes
-  the raw argument object into the typed payload after the durable call row commits and before any external effect,
-  with `unknown_tool` for any other name and `invalid_tool_input_json` for malformed arguments. A rejection follows the
+  the raw argument object into the typed payload before the call row commits and before any external effect, with
+  `unknown_tool` for any other name and `invalid_tool_input_json` for malformed arguments; the committed call row then
+  carries that typed projection. A rejection follows the
   same recoverable failure path as any other failed call: one durable guided `Failed` result answers the call and the
   run continues. Results are built only through the typed payload constructors, so a
   shape mismatch never reaches the durable result.
 - JSON only here. Tool inputs and outputs are JSON objects. Invocations, results, durable tool evidence, and every other
   contract above stay typed DTOs, and `serde_json::Value` stays prohibited in production code.
-- One direct sequence. The application validates the identity, commits the call row, binds the workspace root,
-  dispatches once, commits the terminal row, and publishes it, with no phase dispatch between those steps.
+- One direct sequence. The application decodes the identity and the arguments once, commits the call row with its typed
+  projection, binds the workspace root, dispatches once, commits the terminal row with its typing, and publishes it,
+  with no phase dispatch between those steps.

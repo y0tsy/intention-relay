@@ -24,7 +24,11 @@ use intention_proto::{
     ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, TimestampDto, ToolCallId, TurnId,
     WorkspaceBindingDto, WorkspaceId,
 };
-use intention_storage::{AcceptedTurnOutcomeDto, StartingRunModelContextDto, ToolResultStatusDto};
+use intention_proto::{
+    BoundedText, TextResult, ToolCallRowDto, ToolIdentityDto, ToolInput, ToolResult,
+    ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
+};
+use intention_storage::{AcceptedTurnOutcomeDto, StartingRunModelContextDto};
 use intention_test_support::fixture_snapshot;
 use intention_tools::WorkspaceRoot;
 
@@ -153,7 +157,10 @@ fn local_tool_success_records_admission_and_completion() {
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].kind(), MessageKindDto::ToolCall);
     assert_eq!(messages[0].tool_call_id(), Some(call));
-    assert_eq!(messages[0].tool_id(), Some("read"));
+    assert_eq!(
+        messages[0].tool_id().map(ToolIdentityDto::wire_name),
+        Some("read")
+    );
     assert_eq!(messages[1].kind(), MessageKindDto::ToolResult);
     assert_eq!(messages[1].text(), "hello");
     let results = repository.committed_results();
@@ -290,7 +297,10 @@ fn unknown_tool_calls_commit_a_guided_failure_instead_of_stopping() {
     let messages = repository.committed_messages();
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].kind(), MessageKindDto::ToolCall);
-    assert_eq!(messages[0].tool_id(), Some("frobnicate"));
+    assert_eq!(
+        messages[0].tool_id().map(ToolIdentityDto::wire_name),
+        Some("frobnicate")
+    );
     assert_eq!(messages[1].kind(), MessageKindDto::ToolResult);
     assert_eq!(messages[1].text(), content);
     let results = repository.committed_results();
@@ -311,7 +321,6 @@ fn an_accepted_turn_publishes_its_committed_row_and_run_once() {
         Some(run_id),
         MessageKindDto::User,
         "hello",
-        None,
         None,
         None,
     )
@@ -454,17 +463,33 @@ fn tool_row_fixture(
     text: &str,
     call_id: ToolCallId,
 ) -> MessageProjectionDto {
-    MessageProjectionDto::new(
-        row_id(),
-        session_id,
-        Some(run_id),
-        kind,
-        text,
-        None,
-        Some(call_id),
-        Some("read".to_owned()),
-    )
-    .expect("fixture tool row is valid")
+    let identity = ToolIdentityDto::parse("read").expect("the fixture tool is declared");
+    let tool = match kind {
+        MessageKindDto::ToolCall => ToolRowDto::Call(
+            ToolCallRowDto::new(
+                call_id,
+                identity,
+                ToolInput::from_arguments_json("read", text).ok(),
+            )
+            .expect("fixture call row is valid"),
+        ),
+        MessageKindDto::ToolResult => ToolRowDto::Result(
+            ToolResultRowDto::new(
+                call_id,
+                identity,
+                ToolResultStatusDto::Completed,
+                Some(ToolResult::Read(TextResult {
+                    text: BoundedText::new(text).expect("fixture text is bounded"),
+                    truncated: false,
+                })),
+                Vec::new(),
+            )
+            .expect("fixture result row is valid"),
+        ),
+        _ => unreachable!("the tool-row fixture serves tool and result rows"),
+    };
+    MessageProjectionDto::new(row_id(), session_id, Some(run_id), kind, text, None, Some(tool))
+        .expect("fixture tool row is valid")
 }
 
 /// Asserts that every replayed assistant tool-call message stays answered by
@@ -509,7 +534,6 @@ fn starting_run_context_rebuilds_the_committed_tool_exchange() {
                 "Read hello.txt",
                 None,
                 None,
-                None,
             )
             .expect("context message is valid"),
             tool_row_fixture(
@@ -534,7 +558,6 @@ fn starting_run_context_rebuilds_the_committed_tool_exchange() {
                 "done",
                 None,
                 None,
-                None,
             )
             .expect("context message is valid"),
             MessageProjectionDto::new(
@@ -543,7 +566,6 @@ fn starting_run_context_rebuilds_the_committed_tool_exchange() {
                 Some(run_id),
                 MessageKindDto::User,
                 "latest",
-                None,
                 None,
                 None,
             )
@@ -604,7 +626,6 @@ fn starting_run_context_skips_reasoning_only_assistant_rows() {
                 "first user",
                 None,
                 None,
-                None,
             )
             .expect("context message is valid"),
             // A completed step that reasoned without answering: durable
@@ -617,7 +638,6 @@ fn starting_run_context_skips_reasoning_only_assistant_rows() {
                 "",
                 Some("step reasoning".to_owned()),
                 None,
-                None,
             )
             .expect("a reasoning-only assistant row is coherent"),
             MessageProjectionDto::new(
@@ -628,7 +648,6 @@ fn starting_run_context_skips_reasoning_only_assistant_rows() {
                 "the answer",
                 None,
                 None,
-                None,
             )
             .expect("context message is valid"),
             MessageProjectionDto::new(
@@ -637,7 +656,6 @@ fn starting_run_context_skips_reasoning_only_assistant_rows() {
                 Some(run_id),
                 MessageKindDto::User,
                 "current user",
-                None,
                 None,
                 None,
             )
@@ -691,7 +709,6 @@ fn starting_run_context_omits_unpaired_tool_rows() {
                 "first",
                 None,
                 None,
-                None,
             )
             .expect("context message is valid"),
             // A committed call whose result never committed: the crash window.
@@ -732,7 +749,6 @@ fn starting_run_context_omits_unpaired_tool_rows() {
                 "done",
                 None,
                 None,
-                None,
             )
             .expect("context message is valid"),
             MessageProjectionDto::new(
@@ -741,7 +757,6 @@ fn starting_run_context_omits_unpaired_tool_rows() {
                 Some(run_id),
                 MessageKindDto::User,
                 "latest",
-                None,
                 None,
                 None,
             )
@@ -1120,7 +1135,10 @@ fn assert_single_terminal_result(
         .last()
         .expect("the terminal result commits with its answering row");
     assert_eq!(answering.kind(), MessageKindDto::ToolResult);
-    assert_eq!(answering.tool_id(), Some(tool_id));
+    assert_eq!(
+        answering.tool_id().map(ToolIdentityDto::wire_name),
+        Some(tool_id)
+    );
     assert_eq!(answering.text(), terminal.content());
 }
 
@@ -1432,7 +1450,10 @@ fn tool_call_row_commits_the_canonical_arguments_document() {
     let messages = repository.committed_messages();
     assert_eq!(messages[0].kind(), MessageKindDto::ToolCall);
     assert_eq!(messages[0].text(), r#"{"path":"hello.txt"}"#);
-    assert_eq!(messages[0].tool_id(), Some("read"));
+    assert_eq!(
+        messages[0].tool_id().map(ToolIdentityDto::wire_name),
+        Some("read")
+    );
 
     // A caller without the model's arguments still commits the call row; the
     // undecodable call is answered by one terminal Failed result instead of
@@ -1478,7 +1499,6 @@ fn starting_context(
                 "first",
                 None,
                 None,
-                None,
             )
             .expect("context message is valid"),
             MessageProjectionDto::new(
@@ -1489,7 +1509,6 @@ fn starting_context(
                 "answer",
                 None,
                 None,
-                None,
             )
             .expect("context message is valid"),
             MessageProjectionDto::new(
@@ -1498,7 +1517,6 @@ fn starting_context(
                 Some(run_id),
                 MessageKindDto::User,
                 "latest",
-                None,
                 None,
                 None,
             )
@@ -1544,5 +1562,138 @@ fn committed_tool_result_content_preserves_control_characters_as_text() {
     assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
     assert_eq!(results[0].content(), "\u{8}\t\u{c}\r");
     assert_eq!(repository.committed_messages()[1].text(), "\u{8}\t\u{c}\r");
+    let _ = fs::remove_dir_all(root);
+}
+
+/// One committed call row carries the typed arguments the dispatch decoded, so
+/// no consumer re-decodes the arguments document the row also carries as text.
+#[test]
+fn a_committed_tool_call_row_carries_its_typed_arguments_projection() {
+    let root = hello_tool_root("typed-call");
+    let session = SessionId::new();
+    let run = RunId::new();
+    let call = ToolCallId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let result = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            ToolInvocationRequestDto::new(
+                hello_workspace(&root),
+                session,
+                run,
+                call,
+                "read",
+                fixture_time(),
+            )
+            .with_arguments_json(read_arguments("hello.txt")),
+            &RecordingCommitObserver::new(),
+        )
+        .expect("tool succeeds");
+    assert_eq!(completed_outcome(result), "hello");
+
+    let messages = repository.committed_messages();
+    let Some(ToolRowDto::Call(evidence)) = messages[0].tool() else {
+        unreachable!("the committed call row carries its typed call evidence")
+    };
+    assert_eq!(evidence.call_id(), call);
+    assert_eq!(evidence.tool_id().wire_name(), "read");
+    let expected = ToolInput::from_arguments_json("read", &read_arguments("hello.txt"))
+        .expect("fixture arguments decode");
+    assert_eq!(
+        evidence.arguments(),
+        Some(&expected),
+        "the committed projection is the decode the dispatch ran"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A call whose arguments document never decoded still commits its own durable
+/// identity without inventing typed arguments for it, and its failure is a
+/// model-visible result row with no payload.
+#[test]
+fn an_undecodable_call_row_commits_without_a_typed_projection() {
+    let root = hello_tool_root("undecodable-call");
+    let session = SessionId::new();
+    let run = RunId::new();
+    let call = ToolCallId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let outcome = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            ToolInvocationRequestDto::new(
+                hello_workspace(&root),
+                session,
+                run,
+                call,
+                "read",
+                fixture_time(),
+            )
+            .with_arguments_json(r#"{"path":42}"#),
+            &RecordingCommitObserver::new(),
+        )
+        .expect("an undecodable call is a durable, model-visible failure");
+    let ToolResultOutcomeDto::Failed { error, .. } = outcome else {
+        unreachable!("an undecodable call fails the invocation");
+    };
+    assert_eq!(error.code(), "invalid_tool_input_json");
+
+    let messages = repository.committed_messages();
+    let Some(ToolRowDto::Call(evidence)) = messages[0].tool() else {
+        unreachable!("the committed call row carries its typed call evidence")
+    };
+    assert_eq!(evidence.tool_id().wire_name(), "read");
+    assert!(
+        evidence.arguments().is_none(),
+        "no typed arguments are invented for a document that never decoded"
+    );
+    let Some(ToolRowDto::Result(result)) = messages[1].tool() else {
+        unreachable!("the answering row carries its typed result evidence")
+    };
+    assert_eq!(result.status(), ToolResultStatusDto::Failed);
+    assert!(result.result().is_none(), "a failed result carries no payload");
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The terminal result row carries the typed payload together with the
+/// lifecycle status and the approved metadata the engine recorded.
+#[test]
+fn a_committed_tool_result_row_carries_status_and_metadata() {
+    let root = hello_tool_root("typed-result");
+    // A read past the tool's output bound is truncated, which the engine
+    // records as approved metadata; the typed payload carries the same flag.
+    std::fs::write(root.join("large.txt"), "x".repeat(64 * 1024 + 1)).expect("large fixture");
+    let session = SessionId::new();
+    let run = RunId::new();
+    let call = ToolCallId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let result = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            ToolInvocationRequestDto::new(
+                hello_workspace(&root),
+                session,
+                run,
+                call,
+                "read",
+                fixture_time(),
+            )
+            .with_arguments_json(read_arguments("large.txt")),
+            &RecordingCommitObserver::new(),
+        )
+        .expect("tool succeeds");
+    assert!(completed_outcome(result).contains("[truncated]"));
+
+    let messages = repository.committed_messages();
+    let Some(ToolRowDto::Result(evidence)) = messages[1].tool() else {
+        unreachable!("the answering row carries its typed result evidence")
+    };
+    assert_eq!(evidence.status(), ToolResultStatusDto::Completed);
+    assert_eq!(
+        evidence.metadata().iter().map(|entry| (entry.key(), entry.value())).collect::<Vec<_>>(),
+        vec![("truncated", "true")],
+        "the approved metadata rides the committed projection"
+    );
+    let Some(ToolResult::Read(payload)) = evidence.result() else {
+        unreachable!("a completed read result carries its typed read payload")
+    };
+    assert!(payload.truncated, "the typed payload carries the same flag");
+    assert_eq!(payload.text.as_str(), "x".repeat(64 * 1024));
     let _ = fs::remove_dir_all(root);
 }

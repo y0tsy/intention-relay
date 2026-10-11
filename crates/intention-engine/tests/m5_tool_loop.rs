@@ -2251,7 +2251,6 @@ fn pending_user_message(
         content,
         None,
         None,
-        None,
     )
     .expect("fixture pending message is valid")
 }

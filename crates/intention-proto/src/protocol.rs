@@ -1099,7 +1099,6 @@ mod tests {
             "fixture notice",
             None,
             None,
-            None,
         )
         .expect("fixture message is valid")
     }

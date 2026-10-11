@@ -21,7 +21,7 @@ use intention_client::{SessionStreamClient, SessionStreamSubscription, StreamSte
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunStatusDto,
     SendUserTurnOutcomeDto, SessionFrameDto, SubscribeSessionCommandDto, ThemeDto,
-    WorkspaceRootDto, run_status_is_terminal,
+    ToolIdentityDto, WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_proto::{IdempotencyKey, ProjectId, SessionId, WorkspaceId};
 use intention_test_support::daemon_process::{
@@ -333,7 +333,10 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
         "the committed transcript records the turn, the read call, its result, and the assistant step"
     );
     assert_eq!(messages[0].text(), "Read hello.txt");
-    assert_eq!(messages[1].tool_id(), Some("read"));
+    assert_eq!(
+        messages[1].tool_id().map(ToolIdentityDto::wire_name),
+        Some("read")
+    );
     assert_eq!(
         messages[1].text(),
         r#"{"path":"hello.txt"}"#,
@@ -342,7 +345,10 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
     let call_id = messages[1]
         .tool_call_id()
         .expect("the tool call row carries its identity");
-    assert_eq!(messages[2].tool_id(), Some("read"));
+    assert_eq!(
+        messages[2].tool_id().map(ToolIdentityDto::wire_name),
+        Some("read")
+    );
     assert_eq!(messages[2].tool_call_id(), Some(call_id));
     assert_eq!(
         messages[2].text(),
@@ -503,7 +509,10 @@ async fn real_daemon_tool_loop_answers_a_failed_call_without_stopping() {
         "the failed call is answered and the loop continues to a completed answer"
     );
     assert_eq!(messages[0].text(), "Read missing.txt");
-    assert_eq!(messages[1].tool_id(), Some("read"));
+    assert_eq!(
+        messages[1].tool_id().map(ToolIdentityDto::wire_name),
+        Some("read")
+    );
     assert_eq!(
         messages[1].text(),
         r#"{"path":"missing.txt"}"#,
@@ -512,7 +521,10 @@ async fn real_daemon_tool_loop_answers_a_failed_call_without_stopping() {
     let call_id = messages[1]
         .tool_call_id()
         .expect("the tool call row carries its identity");
-    assert_eq!(messages[2].tool_id(), Some("read"));
+    assert_eq!(
+        messages[2].tool_id().map(ToolIdentityDto::wire_name),
+        Some("read")
+    );
     assert_eq!(messages[2].tool_call_id(), Some(call_id));
     assert!(
         messages[2].text().starts_with("the tool call failed\n")
@@ -593,7 +605,10 @@ async fn real_daemon_reports_a_declared_execute_timeout_as_a_named_partial() {
         ],
         "the timed-out call is answered and the loop continues to a completed answer"
     );
-    assert_eq!(messages[1].tool_id(), Some("execute"));
+    assert_eq!(
+        messages[1].tool_id().map(ToolIdentityDto::wire_name),
+        Some("execute")
+    );
     let result = messages[2].text();
     assert!(
         result.contains("hit its declared timeout of 1s and was terminated before a final result"),

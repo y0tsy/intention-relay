@@ -117,10 +117,10 @@ by `quality/architecture.toml` under phase `slice2`.
 
 | Target crate | Absorbs | Owns |
 | --- | --- | --- |
-| `intention-proto` | `intention-proto`, `intention-protocol`, `intention-domain` | Identity newtypes, shared value types, schema versions, run lifecycle and projection values, the typed public protocol DTOs, and their typed serde payloads. |
+| `intention-proto` | `intention-proto`, `intention-protocol`, `intention-domain` | Identity newtypes, shared value types, schema versions, run lifecycle and projection values, the typed public protocol DTOs, their typed serde payloads, and the typed tool contract (the closed `ToolId`, the typed input and result families, and each committed tool row's typed projection). |
 | `intention-config` | `intention-config` | TOML parsing, validation, resolved configuration, and credential-free snapshots. |
 | `intention-engine` | `intention-application`, `intention-runtime` | Commands, queries, semantic use-case workflows, deterministic lifecycle decisions, interruption handling, and recovery. |
-| `intention-tools` | `intention-tools`, `intention-workspace`, `intention-hooks` | Tool identity and contracts, WorkspaceRoot policy, and the cancellation-aware dispatch surface. |
+| `intention-tools` | `intention-tools`, `intention-workspace`, `intention-hooks` | The declared tools' model-facing JSON Schema descriptors, the cancellation-aware dispatch surface, and the `WorkspaceRoot` addressing policy, over the proto's typed tool contract. |
 | `intention-providers` | `intention-model`, `intention-provider-openrouter`, `intention-provider-generic-chat` | The provider-neutral model contract and both concrete SDK translation adapters. |
 | `intention-storage` | `intention-storage`, `intention-storage-sqlite` | Repository contracts and the bundled SQLite single-schema implementation. |
 | `intention-transport` | `intention-transport` | Socket/pipe framing, the typed server/client wire, and subscriptions. |

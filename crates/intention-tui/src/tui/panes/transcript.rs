@@ -571,10 +571,11 @@ mod tests {
 
     use intention_client::SessionStreamState;
     use intention_proto::{
-        ConfigRevisionId, MessageId, MessageKindDto, MessageProjectionDto, ProjectId, RunId,
-        RunModeDto, RunProjectionDto, RunStatusDto, SessionFrameDto, SessionId,
+        BoundedText, ConfigRevisionId, MessageId, MessageKindDto, MessageProjectionDto, ProjectId,
+        RunId, RunModeDto, RunProjectionDto, RunStatusDto, SessionFrameDto, SessionId,
         SessionProjectionDto, SessionSnapshotDto, TextDeltaChannelDto, TextDeltaFrameDto,
-        ToolCallId, TurnId, WorkspaceId, WorkspaceRootDto,
+        TextResult, ToolCallId, ToolCallRowDto, ToolIdentityDto, ToolInput, ToolResult,
+        ToolResultRowDto, ToolResultStatusDto, ToolRowDto, TurnId, WorkspaceId, WorkspaceRootDto,
     };
     use revue::render::Modifier;
 
@@ -616,7 +617,6 @@ mod tests {
             text,
             None,
             None,
-            None,
         )
         .expect("the fixture user row is coherent")
     }
@@ -636,7 +636,6 @@ mod tests {
             text,
             reasoning.map(str::to_owned),
             None,
-            None,
         )
         .expect("the fixture assistant row is coherent")
     }
@@ -649,6 +648,32 @@ mod tests {
         text: &str,
         call_id: ToolCallId,
     ) -> MessageProjectionDto {
+        let identity =
+            ToolIdentityDto::parse("read").expect("the fixture tool identity is well-formed");
+        let tool = match kind {
+            MessageKindDto::ToolCall => ToolRowDto::Call(
+                ToolCallRowDto::new(
+                    call_id,
+                    identity,
+                    ToolInput::from_arguments_json("read", text).ok(),
+                )
+                .expect("the fixture call row is coherent"),
+            ),
+            MessageKindDto::ToolResult => ToolRowDto::Result(
+                ToolResultRowDto::new(
+                    call_id,
+                    identity,
+                    ToolResultStatusDto::Completed,
+                    Some(ToolResult::Read(TextResult {
+                        text: BoundedText::new(text).expect("the fixture text is bounded"),
+                        truncated: false,
+                    })),
+                    Vec::new(),
+                )
+                .expect("the fixture result row is coherent"),
+            ),
+            _ => unreachable!("the tool-row fixture serves tool rows"),
+        };
         MessageProjectionDto::new(
             row_id(),
             session_id,
@@ -656,8 +681,7 @@ mod tests {
             kind,
             text,
             None,
-            Some(call_id),
-            Some("read".to_owned()),
+            Some(tool),
         )
         .expect("the fixture tool row is coherent")
     }

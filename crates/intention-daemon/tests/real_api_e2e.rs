@@ -61,7 +61,7 @@ use intention_config::{
 };
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto,
-    RunStatusDto, WorkspaceRootDto, run_status_is_terminal,
+    RunStatusDto, ToolIdentityDto, WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_proto::{IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId};
 use intention_proto::{SendUserTurnOutcomeDto, SessionSnapshotDto, SubscribeSessionCommandDto};
@@ -588,7 +588,8 @@ impl ObservedRun {
     /// Reports whether the run committed the named tool call row.
     fn has_tool_call(&self, tool: &str) -> bool {
         self.messages.iter().any(|message| {
-            message.kind() == MessageKindDto::ToolCall && message.tool_id() == Some(tool)
+            message.kind() == MessageKindDto::ToolCall
+                && message.tool_id().map(ToolIdentityDto::wire_name) == Some(tool)
         })
     }
 
@@ -600,7 +601,7 @@ impl ObservedRun {
             if message.kind() != MessageKindDto::ToolCall {
                 continue;
             }
-            if let Some(name) = message.tool_id()
+            if let Some(name) = message.tool_id().map(ToolIdentityDto::wire_name)
                 && !names.contains(&name)
             {
                 names.push(name);
@@ -618,7 +619,8 @@ impl ObservedRun {
         self.messages
             .iter()
             .filter(|message| {
-                message.kind() == MessageKindDto::ToolCall && message.tool_id() == Some(tool)
+                message.kind() == MessageKindDto::ToolCall
+                    && message.tool_id().map(ToolIdentityDto::wire_name) == Some(tool)
             })
             .map(MessageProjectionDto::text)
             .collect()
@@ -635,10 +637,10 @@ impl ObservedRun {
             .iter()
             .filter(|result| {
                 result.kind() == MessageKindDto::ToolResult
-                    && result.tool_id() == Some(tool)
+                    && result.tool_id().map(ToolIdentityDto::wire_name) == Some(tool)
                     && self.messages.iter().any(|call| {
                         call.kind() == MessageKindDto::ToolCall
-                            && call.tool_id() == Some(tool)
+                            && call.tool_id().map(ToolIdentityDto::wire_name) == Some(tool)
                             && call.tool_call_id() == result.tool_call_id()
                     })
             })
@@ -676,7 +678,7 @@ async fn collect_terminal_run(
 ) -> RunObservation {
     tokio::time::timeout_at(
         tokio::time::Instant::from_std(deadline),
-        collect_run_frames(endpoint, session_id),
+        collect_session_frames(endpoint, session_id),
     )
     .await
     .unwrap_or_else(|_| panic!("the run reaches a terminal status before the deadline"))
@@ -684,7 +686,7 @@ async fn collect_terminal_run(
 
 /// Reads the session stream until its active run reaches a terminal status or
 /// the connection closes.
-async fn collect_run_frames(endpoint: &LocalEndpoint, session_id: SessionId) -> RunObservation {
+async fn collect_session_frames(endpoint: &LocalEndpoint, session_id: SessionId) -> RunObservation {
     let client = SessionStreamClient::new(endpoint.clone());
     let Ok(mut subscription) = client
         .subscribe(SubscribeSessionCommandDto::new(session_id))

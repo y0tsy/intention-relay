@@ -117,9 +117,10 @@ and recreated from scratch, that discard is the only version gate, and there is 
 
 - normalized current-state tables for projects, workspace roots, sessions, runs, and turns;
 - the `messages` transcript for user content, assistant content, reasoning text, tool-call and tool-result messages, and
-notices;
-- one `tool_results` row per completed tool call, holding the typed outcome, bounded redacted content, and process exit
-evidence;
+notices, each committed tool row carrying its typed tool projection — the call's decoded arguments, or the result's
+payload and kind — in that row's `projection_json`;
+- one `tool_results` row per completed tool call, holding its lifecycle status, bounded redacted content, and approved
+metadata, and remaining the single durable home of those three;
 -  credential-free canonical configuration revisions keyed by `ConfigRevisionId`; the same revision ID with an equal
 revision is idempotent, while the same ID with a different revision fails with a typed conflict; and
 - one single-row `tui_settings` override holding the terminal theme the presentation layer renders with.
@@ -130,7 +131,10 @@ and `messages_session_run_id_id` indexes that serve the transcript reads. The `t
 carries one accepted turn with its proposed run and configuration revision and a closed `state` in `started`,
 `pending`, `appended`, or `removed`. The `tui_settings` table is the singleton settings row (`id = 1` with its `theme`
 text); adding it moved the single schema stamp from 2 to 3, so a database created under the previous stamp is
-discarded and recreated like any other schema change, with no migration. Ordering is SQLite row insertion order —
+discarded and recreated like any other schema change, with no migration. The `messages` table carries the committed
+typed tool projection in `projection_json`, and the `runs` table no longer carries the untyped `provider_kind` and
+`model` columns; that change moved the stamp from 3 to 4, so a database created under stamp 3 is discarded and
+recreated like any other schema change, with no migration. Ordering is SQLite row insertion order —
 `messages.id` for the transcript — and there is no separate event log, snapshot, or ordering authority.
 
 The terminal theme override is presentation-only: it is written in one immediate transaction, it records no

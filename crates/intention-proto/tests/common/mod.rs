@@ -44,7 +44,6 @@ pub fn fixture_message(session_id: SessionId, run_id: RunId) -> MessageProjectio
         "fixture notice",
         None,
         None,
-        None,
     )
     .expect("fixture message is valid")
 }

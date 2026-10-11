@@ -12,13 +12,18 @@ publication follows the committed values rather than a separate reread, and each
 code-owned input JSON Schema text. This design activates no registry table: a new tool is a new `ToolId` variant with
 its own contract. Ordinary runs and Build Autopilot admit compatible tools without
 per-action confirmation; Plan denies ordinary `write`/`edit`, while Plan `execute` is advisory-guided and
-non-sandboxed.
+non-sandboxed. The typed half of the tool layer is the proto's tool contract
+([architecture 02](02-dto-and-contract-policy.md)): the closed `ToolId`, the typed input and result families, and the
+typed projection each committed tool row carries. That move is adapter-facing only and activates none of this
+document's registry, admission, bridge, or MCP contracts.
 
 ## Ownership and one capability path
 
-`intention-tools` owns tool identity, common typed contracts, the six live tool contracts, and their model-visible spec
-match. The composition root alone assembles the model-visible set; the daemon owns active-run binding, durable
-orchestration, and post-commit publication; domain owns typed JSON record shapes, not implementation selection.
+`intention-proto` owns the typed tool contract — the closed `ToolId`, the typed input and result families, and each
+committed row's typed projection. `intention-tools` owns the six live tools' model-facing JSON Schema descriptors and
+their model-visible spec match. The composition root alone assembles the model-visible set; the daemon owns active-run
+binding, durable orchestration, and post-commit publication; the proto owns typed JSON record shapes, not
+implementation selection.
 
 Providers, models, adapters, bridge/kernel code, child work, MCP sources, Skills, and primitive owners cannot create a
 second tool collection, private model-function collection, direct primitive path, persistence authority, or publication
@@ -44,7 +49,7 @@ ToolSpec
   input_schema   (code-owned input JSON Schema text)
 ```
 
-`intention_tools::spec(id)` is the one place where a tool's identity, description, and schema are defined, and
+`intention_tools::spec(id)` is the one place where a tool's description and input schema are defined, and
 `intention_tools::model_visible_descriptors()` returns exactly the six specs in advertisement order. There is no
 registry table, no reserved slot, no descriptor revision, and no duplicate-registration outcome to reject: a name that
 is not one of the six `ToolId` values is `unknown_tool` before any effect.

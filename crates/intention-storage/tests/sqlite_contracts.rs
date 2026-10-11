@@ -19,12 +19,15 @@ use intention_proto::{
     RunId, SchemaVersionDto, SessionId, ThemeDto, ToolCallId, UsageDto, WorkspaceId,
 };
 use intention_proto::{
-    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, NewMessageDto,
-    PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
+    BoundedText, CreateSessionCommandDto, ExecuteResult, MessageKindDto, MessageProjectionDto,
+    NewMessageDto, PathsResult, PendingTurnProjectionDto, ReadInput, RemoveTurnCommandDto,
+    RunModeDto, RunProjectionDto, RunStatusDto, TextResult, ToolCallRowDto, ToolIdentityDto,
+    ToolInput, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto,
+    ToolRowDto, WorkspaceRelativePathDto,
 };
 use intention_storage::{
     AcceptedTurnOutcomeDto, RunOutcomeDto, SqliteStorageRepository, StorageRepositoryDto,
-    ToolResultEvidenceDto, ToolResultMetadataEntryDto, ToolResultStatusDto,
+    ToolResultEvidenceDto,
 };
 use tempfile::TempDir;
 
@@ -145,6 +148,71 @@ fn outcome(
     .expect("fixture run outcome is valid")
 }
 
+/// Returns the parsed identity of a declared fixture tool.
+fn identity(wire_name: &str) -> ToolIdentityDto {
+    ToolIdentityDto::parse(wire_name).expect("the fixture tool name is a declared tool")
+}
+
+/// Returns the typed arguments of one declared `read` fixture call.
+fn read_arguments(path: &str) -> ToolInput {
+    ToolInput::Read(ReadInput {
+        path: WorkspaceRelativePathDto::parse(path).expect("the fixture path is workspace-relative"),
+    })
+}
+
+/// Builds one typed call-row fixture for a declared tool.
+fn call_row(call_id: ToolCallId, tool: ToolIdentityDto, arguments: Option<ToolInput>) -> ToolRowDto {
+    ToolRowDto::Call(
+        ToolCallRowDto::new(call_id, tool, arguments).expect("fixture call row is valid"),
+    )
+}
+
+/// Returns one typed `read` payload carrying `text`.
+fn read_result(text: &str) -> ToolResult {
+    ToolResult::Read(TextResult {
+        text: BoundedText::new(text).expect("fixture read text is bounded"),
+        truncated: false,
+    })
+}
+
+/// Returns one typed `execute` payload carrying the output a stopped call
+/// captured, with no terminal process status.
+fn partial_execute_result(text: &str) -> ToolResult {
+    ToolResult::Execute(ExecuteResult {
+        text: TextResult {
+            text: BoundedText::new(text).expect("fixture execute text is bounded"),
+            truncated: false,
+        },
+        process: None,
+    })
+}
+
+/// Builds one typed result-row fixture for a declared tool.
+fn result_row(
+    call_id: ToolCallId,
+    tool: ToolIdentityDto,
+    status: ToolResultStatusDto,
+    result: Option<ToolResult>,
+    metadata: Vec<ToolResultMetadataEntryDto>,
+) -> ToolRowDto {
+    ToolRowDto::Result(
+        ToolResultRowDto::new(call_id, tool, status, result, metadata)
+            .expect("fixture result row is valid"),
+    )
+}
+
+/// Builds one committed tool-row message for the fixture call sites.
+fn tool_message(
+    session: SessionId,
+    run: RunId,
+    kind: MessageKindDto,
+    text: &str,
+    tool: ToolRowDto,
+) -> NewMessageDto {
+    NewMessageDto::new(session, Some(run), kind, text, None, Some(tool))
+        .expect("fixture tool row is valid")
+}
+
 #[test]
 fn current_database_reopen_preserves_committed_rows() {
     let directory = TempDir::new().expect("temporary directory exists");
@@ -241,6 +309,50 @@ fn a_stale_schema_stamp_discards_the_database_once_and_recreates_it() {
             .session_id(),
         session
     );
+}
+
+/// A database from the immediately previous stamped schema (stamp 3) is
+/// discarded exactly like any other stale stamp and recreated at stamp 4.
+#[test]
+fn a_database_from_the_previous_stamp_is_discarded() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    let store = open(&directory);
+    let session = create(&store);
+    drop(store);
+
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for stamp mutation");
+    connection
+        .execute_batch(
+            "CREATE TABLE previous_stamp_marker (id INTEGER PRIMARY KEY);
+             PRAGMA user_version = 3;",
+        )
+        .expect("the previous stamp applies");
+    drop(connection);
+
+    let recreated = open(&directory);
+    assert_eq!(
+        recreated
+            .load_session_projection(session)
+            .expect_err("the discarded database no longer holds its rows")
+            .code(),
+        "storage_record_not_found"
+    );
+    drop(recreated);
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("recreated database reopens for inspection");
+    let stamp: i32 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("the recreated stamp reads");
+    assert_eq!(stamp, 4, "the recreated database carries the current stamp");
+    let marker: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'previous_stamp_marker'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("previous-stamp object lookup runs");
+    assert_eq!(marker, 0, "the previous stamp's objects are gone");
 }
 
 #[test]
@@ -699,23 +811,23 @@ fn append_message_and_transcript_reads_obey_bounds_and_order() {
             "answer",
             Some("why".to_owned()),
             None,
-            None,
         )
         .expect("assistant row is valid"),
         3,
     );
     let _ = append(
         &store,
-        NewMessageDto::new(
+        tool_message(
             session,
-            Some(run),
+            run,
             MessageKindDto::ToolCall,
             r#"{"path":"src/lib.rs"}"#,
-            None,
-            Some(call_id),
-            Some("read".to_owned()),
-        )
-        .expect("tool call row is valid"),
+            call_row(
+                call_id,
+                identity("read"),
+                Some(read_arguments("src/lib.rs")),
+            ),
+        ),
         3,
     );
 
@@ -790,16 +902,8 @@ fn append_message_and_transcript_reads_obey_bounds_and_order() {
     assert_eq!(
         store
             .append_message(
-                NewMessageDto::new(
-                    other,
-                    Some(run),
-                    MessageKindDto::User,
-                    "foreign",
-                    None,
-                    None,
-                    None,
-                )
-                .expect("foreign row is valid"),
+                NewMessageDto::new(other, Some(run), MessageKindDto::User, "foreign", None, None)
+                    .expect("foreign row is valid"),
                 time(5),
             )
             .expect_err("a transcript row cannot address another session's run")
@@ -815,6 +919,9 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
     let run = RunId::new();
     let _ = accept(&store, session, IdempotencyKey::new(), run, "run");
     let call_id = ToolCallId::new();
+    let metadata = vec![
+        ToolResultMetadataEntryDto::new("truncated", "false").expect("fixture metadata is valid"),
+    ];
     let evidence = ToolResultEvidenceDto::new(
         session,
         run,
@@ -822,74 +929,70 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
         "read",
         ToolResultStatusDto::Completed,
         r#"{"result":"read","value":{"text":"hello","truncated":false}}"#,
-        vec![
-            ToolResultMetadataEntryDto::new("truncated", "false")
-                .expect("fixture metadata is valid"),
-        ],
+        metadata.clone(),
         time(4),
     )
     .expect("tool result evidence is valid");
-    let message = NewMessageDto::new(
+    let answering = result_row(
+        call_id,
+        identity("read"),
+        ToolResultStatusDto::Completed,
+        Some(read_result("hello")),
+        metadata.clone(),
+    );
+    let message = tool_message(
         session,
-        Some(run),
+        run,
         MessageKindDto::ToolResult,
         evidence.content(),
-        None,
-        Some(call_id),
-        Some("read".to_owned()),
-    )
-    .expect("answering row is valid");
+        answering.clone(),
+    );
     for mismatched in [
-        NewMessageDto::new(
-            session,
-            Some(run),
-            MessageKindDto::Assistant,
-            "not a result",
-            None,
-            None,
-            None,
-        )
-        .expect("assistant row is valid"),
-        NewMessageDto::new(
+        NewMessageDto::new(session, Some(run), MessageKindDto::Assistant, "not a result", None, None)
+            .expect("assistant row is valid"),
+        tool_message(
             SessionId::new(),
-            Some(run),
+            run,
             MessageKindDto::ToolResult,
             evidence.content(),
-            None,
-            Some(call_id),
-            Some("read".to_owned()),
-        )
-        .expect("cross-session row is structurally valid"),
-        NewMessageDto::new(
+            answering.clone(),
+        ),
+        tool_message(
             session,
-            Some(RunId::new()),
+            RunId::new(),
             MessageKindDto::ToolResult,
             evidence.content(),
-            None,
-            Some(call_id),
-            Some("read".to_owned()),
-        )
-        .expect("cross-run row is structurally valid"),
-        NewMessageDto::new(
+            answering.clone(),
+        ),
+        tool_message(
             session,
-            Some(run),
+            run,
             MessageKindDto::ToolResult,
             evidence.content(),
-            None,
-            Some(ToolCallId::new()),
-            Some("read".to_owned()),
-        )
-        .expect("cross-call row is structurally valid"),
-        NewMessageDto::new(
+            result_row(
+                ToolCallId::new(),
+                identity("read"),
+                ToolResultStatusDto::Completed,
+                Some(read_result("hello")),
+                metadata.clone(),
+            ),
+        ),
+        tool_message(
             session,
-            Some(run),
+            run,
             MessageKindDto::ToolResult,
             evidence.content(),
-            None,
-            Some(call_id),
-            Some("glob".to_owned()),
-        )
-        .expect("cross-tool row is structurally valid"),
+            result_row(
+                call_id,
+                identity("glob"),
+                ToolResultStatusDto::Completed,
+                Some(ToolResult::Glob(PathsResult {
+                    paths: Vec::new(),
+                    truncated: false,
+                })),
+                metadata.clone(),
+            ),
+        ),
     ] {
         assert_eq!(
             store
@@ -978,16 +1081,19 @@ fn partial_tool_result_evidence_rereads_with_its_interruption_metadata() {
         time(4),
     )
     .expect("partial tool result evidence is valid");
-    let message = NewMessageDto::new(
+    let message = tool_message(
         session,
-        Some(run),
+        run,
         MessageKindDto::ToolResult,
         evidence.content(),
-        None,
-        Some(call_id),
-        Some("execute".to_owned()),
-    )
-    .expect("answering row is valid");
+        result_row(
+            call_id,
+            identity("execute"),
+            ToolResultStatusDto::Partial,
+            Some(partial_execute_result("stdout:\n\nstderr:\n")),
+            evidence.metadata().to_vec(),
+        ),
+    );
     store
         .write_tool_result(evidence.clone(), message)
         .expect("partial evidence and its transcript row commit atomically");
@@ -1009,6 +1115,219 @@ fn partial_tool_result_evidence_rereads_with_its_interruption_metadata() {
         ],
         "the cause and the declared deadline it hit survive the reopen in order"
     );
+}
+
+#[test]
+fn a_message_row_round_trips_its_typed_projection() {
+    let (directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "run");
+    let call_id = ToolCallId::new();
+    let tool = call_row(
+        call_id,
+        identity("read"),
+        Some(read_arguments("src/lib.rs")),
+    );
+    let committed = append(
+        &store,
+        tool_message(
+            session,
+            run,
+            MessageKindDto::ToolCall,
+            r#"{"path":"src/lib.rs"}"#,
+            tool.clone(),
+        ),
+        3,
+    );
+    assert_eq!(committed.tool(), Some(&tool));
+    assert_eq!(committed.tool_call_id(), Some(call_id));
+    assert_eq!(
+        committed.tool_id().map(ToolIdentityDto::wire_name),
+        Some("read")
+    );
+    drop(store);
+
+    let reread = reopen(&directory)
+        .load_recent_messages(session, 10)
+        .expect("the transcript rereads");
+    let row = reread.last().expect("the committed row rereads");
+    assert_eq!(
+        row.tool(),
+        Some(&tool),
+        "the typed projection survives the reopen byte for byte"
+    );
+}
+
+#[test]
+fn an_undecodable_arguments_document_projects_no_typed_arguments() {
+    let (directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "run");
+    let call_id = ToolCallId::new();
+    // The engine commits the call before dispatch, so a document that never
+    // decoded to typed arguments commits with its own identity and no
+    // arguments; the storage boundary stores that projection instead of
+    // decoding the document a second time.
+    let tool = call_row(call_id, identity("read"), None);
+    let _ = append(
+        &store,
+        tool_message(
+            session,
+            run,
+            MessageKindDto::ToolCall,
+            r#"{"path":42}"#,
+            tool.clone(),
+        ),
+        3,
+    );
+    drop(store);
+
+    let reread = reopen(&directory)
+        .load_recent_messages(session, 10)
+        .expect("the transcript rereads");
+    let Some(ToolRowDto::Call(call)) = reread.last().and_then(MessageProjectionDto::tool) else {
+        unreachable!("the committed tool-call row carries its call evidence")
+    };
+    assert!(
+        call.arguments().is_none(),
+        "the undecodable document projects no typed arguments"
+    );
+    assert_eq!(call.tool_id(), &identity("read"));
+}
+
+#[test]
+fn a_tool_result_row_round_trips_its_typed_outcome() {
+    let (directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "run");
+    let cases = [
+        result_row(
+            ToolCallId::new(),
+            identity("read"),
+            ToolResultStatusDto::Completed,
+            Some(read_result("hello")),
+            vec![
+                ToolResultMetadataEntryDto::new("bytes", "5")
+                    .expect("fixture metadata is valid"),
+            ],
+        ),
+        result_row(
+            ToolCallId::new(),
+            identity("glob"),
+            ToolResultStatusDto::Failed,
+            None,
+            Vec::new(),
+        ),
+        result_row(
+            ToolCallId::new(),
+            identity("execute"),
+            ToolResultStatusDto::Partial,
+            Some(partial_execute_result("captured")),
+            Vec::new(),
+        ),
+    ];
+    for tool in &cases {
+        let ToolRowDto::Result(row) = tool else {
+            unreachable!("the fixtures are result rows")
+        };
+        let evidence = ToolResultEvidenceDto::new(
+            session,
+            run,
+            tool.call_id(),
+            tool.tool_id().wire_name(),
+            row.status(),
+            "rendered content",
+            row.metadata().to_vec(),
+            time(4),
+        )
+        .expect("fixture evidence is valid");
+        store
+            .write_tool_result(
+                evidence,
+                tool_message(
+                    session,
+                    run,
+                    MessageKindDto::ToolResult,
+                    "rendered content",
+                    tool.clone(),
+                ),
+            )
+            .expect("evidence and its transcript row commit atomically");
+    }
+    drop(store);
+
+    let reread = reopen(&directory)
+        .load_run_messages(session, run, 10)
+        .expect("the transcript rereads");
+    let tool_rows = reread
+        .iter()
+        .filter_map(MessageProjectionDto::tool)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tool_rows,
+        cases.iter().collect::<Vec<_>>(),
+        "every committed status, payload, and metadata rereads unchanged"
+    );
+}
+
+#[test]
+fn a_projection_whose_identity_disagrees_with_its_row_is_refused() {
+    assert_eq!(
+        disagreeing_projection_error(|_row_call| {
+            call_row(
+                ToolCallId::new(),
+                identity("read"),
+                Some(read_arguments("src/lib.rs")),
+            )
+        }),
+        "storage_decode_failed",
+        "the projection's call identity must be the row's tool_call_id"
+    );
+    assert_eq!(
+        disagreeing_projection_error(|row_call| call_row(row_call, identity("write"), None)),
+        "storage_decode_failed",
+        "the projection's tool identity must be the row's tool_id"
+    );
+}
+
+/// Commits one handwritten tool-call row whose typed projection disagrees with
+/// the row's own identity columns and returns the transcript read's error code.
+fn disagreeing_projection_error(mutate: impl FnOnce(ToolCallId) -> ToolRowDto) -> String {
+    let (directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "run");
+    let row_call = ToolCallId::new();
+    let projection =
+        serde_json::to_string(&mutate(row_call)).expect("the fixture projection serializes");
+    drop(store);
+
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for the handwritten row");
+    connection
+        .execute(
+            "INSERT INTO messages(session_id, run_id, kind, text, reasoning, tool_call_id, tool_id, projection_json, created_at)              VALUES (?1, ?2, 'tool_call', ?3, NULL, ?4, ?5, ?6, ?7)",
+            sqlite::params![
+                session.to_string(),
+                run.to_string(),
+                r#"{"path":"src/lib.rs"}"#,
+                row_call.to_string(),
+                "read",
+                projection,
+                5
+            ],
+        )
+        .expect("the disagreeing row inserts");
+    drop(connection);
+
+    reopen(&directory)
+        .load_recent_messages(session, 10)
+        .expect_err("a projection that disagrees with its row is refused")
+        .code()
+        .to_owned()
 }
 
 #[test]
@@ -1543,7 +1862,32 @@ fn messages_transcript_indexes_and_stamp_are_current() {
     let stamp: i32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("the schema stamp reads");
-    assert_eq!(stamp, 3, "the created database carries the current stamp");
+    assert_eq!(stamp, 4, "the created database carries the current stamp");
+    let columns = |table: &str| {
+        let mut statement = connection
+            .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+            .expect("table info prepares");
+        let names = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("table info reads")
+            .map(|row| row.expect("column name reads"))
+            .collect::<Vec<_>>();
+        drop(statement);
+        names
+    };
+    assert!(
+        columns("messages")
+            .iter()
+            .any(|name| name == "projection_json"),
+        "the current schema carries the typed tool projection column"
+    );
+    let run_columns = columns("runs");
+    assert!(
+        !run_columns
+            .iter()
+            .any(|name| name == "provider_kind" || name == "model"),
+        "the removed run provider columns stay removed: {run_columns:?}"
+    );
     let mut statement = connection
         .prepare("SELECT name FROM sqlite_master WHERE type='index' ORDER BY name")
         .expect("index catalogue prepares");
@@ -1598,7 +1942,7 @@ fn messages_transcript_indexes_and_stamp_are_current() {
     let stamp: i32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("the recreated stamp reads");
-    assert_eq!(stamp, 3, "the recreated database carries the current stamp");
+    assert_eq!(stamp, 4, "the recreated database carries the current stamp");
 }
 
 #[test]
@@ -1837,7 +2181,6 @@ fn terminal_runs_reject_pending_turns_messages_and_tool_results() {
                     "late answer",
                     None,
                     None,
-                    None,
                 )
                 .expect("late row is valid"),
                 time(5),
@@ -1862,16 +2205,19 @@ fn terminal_runs_reject_pending_turns_messages_and_tool_results() {
         store
             .write_tool_result(
                 evidence,
-                NewMessageDto::new(
+                tool_message(
                     session,
-                    Some(run),
+                    run,
                     MessageKindDto::ToolResult,
                     r#"{"result":"read"}"#,
-                    None,
-                    Some(call_id),
-                    Some("read".to_owned()),
-                )
-                .expect("answering row is valid"),
+                    result_row(
+                        call_id,
+                        identity("read"),
+                        ToolResultStatusDto::Completed,
+                        Some(read_result("read")),
+                        Vec::new(),
+                    ),
+                ),
             )
             .expect_err("a terminal run accepts no tool result")
             .code(),
@@ -1913,7 +2259,6 @@ fn session_snapshot_reads_projection_and_transcript_in_one_call() {
             Some(run),
             MessageKindDto::Assistant,
             "answer",
-            None,
             None,
             None,
         )
@@ -2121,7 +2466,6 @@ fn session_list_maps_every_durable_session_column() {
                 None,
                 MessageKindDto::Notice,
                 text,
-                None,
                 None,
                 None,
             )

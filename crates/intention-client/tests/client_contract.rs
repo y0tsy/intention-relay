@@ -1008,7 +1008,6 @@ fn state_clears_provisional_reasoning_on_the_committed_reasoning_only_row() {
                 "",
                 Some("thinking".to_owned()),
                 None,
-                None,
             )
             .expect("a reasoning-only assistant row is coherent"),
         ))

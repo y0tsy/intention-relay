@@ -264,7 +264,6 @@ fn state_dedupes_the_newest_row_and_bounds_the_transcript() {
         "the row the snapshot already carried",
         None,
         None,
-        None,
     )
     .expect("fixture repeated row is valid");
     state

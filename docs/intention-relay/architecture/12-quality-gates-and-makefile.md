@@ -104,7 +104,7 @@ a threshold authority.
   an undeclared skip, a stale declaration, or a collected crate absent from the snapshot fails the run.
 - The tool contract families' move into the exempt `intention-proto` is a coverage-position change, not a policy change:
   `quality/coverage.toml` keeps its tiers, floors, and exclusions, and the moved families' cases are carried by
-  `intention-proto`'s declared `contracts` and `protocol_contracts` targets.
+  `intention-proto`'s declared `contracts`, `m3_contracts`, and `protocol_contracts` targets.
 
 ## Cargo feature policy
 
@@ -175,6 +175,7 @@ fixtures themselves live with their checkers.
 | Missing, conflicting, or incomplete crate classification metadata | `make architecture`. |
 | Undeclared or stale workspace, external, or named-test-target declaration | `make architecture`. |
 | Forbidden crate dependency or import | `make architecture`. |
+| Untyped-decode import shape hidden from the raw-text scan | `make architecture` (the `[forbidden] source_patterns` shapes and the checker's own `self_test_source_patterns` fixture). |
 | DTO/SDK implementation leak | `make architecture`. |
 | Coverage below a crate's tier floor | `make coverage`. |
 | Undeclared or stale coverage skip declaration | `make coverage`. |

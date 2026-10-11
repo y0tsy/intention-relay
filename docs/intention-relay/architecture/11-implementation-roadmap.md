@@ -179,7 +179,11 @@ closing correction makes that one live channel follow the session instead of one
 the active run's transient text, so two windows on one session both show a turn sent in either one, a window opened while
 the session was idle stays live into the next run, and either window can stop the run they both observe; a lost stream
 asks for exactly one reconnect through the session it has open and reports a failed reconnect's typed error instead of
-retrying in a loop.
+retrying in a loop. The slice's tool-projection correction completes the retrospective tool work: the typed tool
+contract — the closed `ToolId`, the typed input and result families, and each committed tool row's typed projection —
+lives in `intention-proto`, the engine decodes the model's arguments document once and commits the typed row, and the
+pane renders that projection with no JSON decode and no result re-parse. That correction is adapter-facing only: it
+activates no registry, admission, bridge, or MCP contract, so Slice 5's tool-layer contracts stay unactivated.
 -  **Slice 3 — Instruction sources and system context — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
 deployment instruction profile adapted from the legacy Antibusy static prompt set, user-authored fragments at user,
@@ -201,7 +205,11 @@ the `provider_profile_tombstoned` wire code.
 -  **Slice 5 — Goal domain — not activated.** The Goal domain (architecture 28). The slice also activates the
 tool-descriptor, tool-registry, and model-tool-loop contracts as amended under [architecture
 15](15-tool-registry-and-model-tool-loop.md), the bridge-invocation and
-MCP-method-catalog selections (architectures 19/18), and work/requeue after client disconnection.
+MCP-method-catalog selections (architectures 19/18), and work/requeue after client disconnection. The 2026 corrective
+pass's adapter-facing tool projection — the typed tool contract in `intention-proto` and the typed projection on each
+committed tool row — is recorded as a Slice 2 retrospective correction, not an activation of this slice's
+tool-descriptor, tool-registry, or model-tool-loop contracts: the six-tool closed set and its typed projection are
+already live, and M11 keeps the registry, admission, and bridge work.
 -  **Slice 6 — UI foundation — last slice; not activated.** Session branching, reasoning/catalog delivery, and adapter
 boundaries (architectures 23/22 plus architecture 03's flat activity journal and notification list): `session_fork_v1`;
 normalized reasoning delivery; and the exact typed client/protocol surface M6 consumes. It also carries cross-workspace

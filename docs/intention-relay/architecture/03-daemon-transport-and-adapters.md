@@ -387,12 +387,13 @@ text above is the live policy.
   a committed `assistant` row is its committed reasoning block — collapsed beyond fifteen display rows and closed by an
   accent rule — plus the markdown answer when the step answered, and a reasoning-only row draws its reasoning block
   alone, with no empty answer line. A committed `tool_call`/`tool_result` pair, paired by `tool_call_id`, is one
-  framed block dispatched by its `tool_id`: `read`, `glob`, and `grep` are parsed in full, as the arguments' field
-  summary plus a bounded twelve-display-row preview closed by its `… N more rows` marker, on the block's own tool
-  surface, border, badge ink, and muted result ink; `write`, `edit`, and `execute` show the badge plus the visible
-  `@todo(core)` plate, and none of the three prints its result row's text, with an `execute` result refused before the
-  per-type dispatch and never rendered in any form. An object, a raw string, malformed JSON, a missing result row, an
-  orphan result, and an unknown `tool_id` all degrade to a block or a plate, never a panic. A committed `notice` row
+  framed block dispatched by the row's typed tool kind: the badge and the preview render the call's typed argument
+  facts, the result renders the typed payload — bounded to twelve display rows and closed by its `… N more rows`
+  marker — together with its lifecycle status and its approved metadata, on the block's own tool surface, border,
+  badge ink, and muted result ink; nothing re-reads the arguments document or the result text, and an `execute` result
+  is refused before the per-type dispatch and never rendered in any form. A call without a committed result row, an
+  orphan result, an undeclared wire identity, an arguments document that never decoded, and a row that reached the
+  renderer without typed evidence each degrade to an explicit note, never a panic and never an invented identity. A committed `notice` row
   renders as its own block through a dedicated path: its marker rides the notice's first line with the answer's hanging
   indent, on the notice surface and ink, and never through the markdown pipeline. Exactly one blank row separates two
   consecutive blocks, and the display-row window counts those gap rows like any other row.

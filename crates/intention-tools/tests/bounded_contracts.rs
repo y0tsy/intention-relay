@@ -12,11 +12,11 @@
 mod common;
 
 use common::{DispatchCompleted, fixture_dir, relative, service};
-use intention_proto::WorkspaceRelativePathDto;
-use intention_tools::{
-    BoundedText, CancellationSignal, EditInput, GlobInput, GrepInput, GrepMatch, GrepScope,
-    ToolInput, ToolResult, WriteInput,
+use intention_proto::{
+    BoundedText, EditInput, GlobInput, GrepInput, GrepMatch, GrepScope, ToolInput, ToolResult,
+    WorkspaceRelativePathDto, WriteInput,
 };
+use intention_tools::CancellationSignal;
 use serde_json::json;
 
 /// Returns the serialized cost the shared search window charges for one

@@ -15,6 +15,7 @@ mod model;
 mod projection;
 pub mod protocol;
 mod run;
+mod tool;
 mod turn;
 mod workspace;
 
@@ -36,6 +37,13 @@ pub use protocol::{
 pub use run::{
     RunModeDto, RunProjectionDto, RunStatusDto, run_status_is_terminal,
     validate_run_status_transition,
+};
+pub use tool::{
+    BoundedText, EditInput, EnvVarDto, EnvVarNameDto, ExecuteInput, ExecuteResult, GlobInput,
+    GrepInput, GrepMatch, GrepResult, GrepScope, PathsResult, ReadInput, ShellCommandTextDto,
+    TextResult, ToolCallRowDto, ToolId, ToolIdentityDto, ToolInput, ToolProcessStatus, ToolResult,
+    ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
+    ToolTimeoutSecondsDto, WriteInput, WriteResult,
 };
 pub use turn::{
     CancelRunCommandDto, CreateSessionCommandDto, GetSessionSnapshotQueryDto,

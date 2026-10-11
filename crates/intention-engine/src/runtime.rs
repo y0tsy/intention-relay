@@ -878,7 +878,6 @@ where
             RUN_STOP_NOTICE,
             None,
             None,
-            None,
         )?;
         let committed = self.repository.append_message(message, self.time.now())?;
         self.publish_content(&committed);
@@ -906,7 +905,6 @@ where
             Some(input.run_id),
             MessageKindDto::Notice,
             INTERRUPT_NOTICE,
-            None,
             None,
             None,
         )?;
@@ -1197,7 +1195,6 @@ where
             MessageKindDto::Assistant,
             std::mem::take(pending_text),
             reasoning.map(str::to_owned),
-            None,
             None,
         )?;
         let committed = self.repository.append_message(message, self.time.now())?;

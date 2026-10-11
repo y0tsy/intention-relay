@@ -699,8 +699,8 @@ mod tests {
     use intention_engine::{RunCancellation, SessionCommitDto};
     use intention_proto::{
         MessageId, MessageKindDto, MessageProjectionDto, NewMessageDto, SendUserTurnCommandDto,
+        ToolResultStatusDto,
     };
-    use intention_storage::ToolResultStatusDto;
     use tempfile::TempDir;
 
     fn test_facade() -> (TempDir, DaemonApplicationFacade) {
@@ -1049,7 +1049,6 @@ mod tests {
                 text,
                 None,
                 None,
-                None,
             )
             .expect("fixture transcript row is valid")
         };
@@ -1315,7 +1314,6 @@ mod tests {
             Some(run_id),
             MessageKindDto::Assistant,
             text,
-            None,
             None,
             None,
         )

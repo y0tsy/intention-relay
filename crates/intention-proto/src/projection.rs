@@ -7,7 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
     ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, MessageId, ProjectId,
-    RunId, SessionId, ToolCallId, TurnId, WorkspaceId,
+    RunId, SessionId, ToolCallId, ToolIdentityDto, ToolRowDto, TurnId, WorkspaceId,
 };
 use crate::{RunModeDto, RunProjectionDto, WorkspaceRootDto};
 
@@ -345,19 +345,18 @@ pub struct NewMessageDto {
     kind: MessageKindDto,
     text: String,
     reasoning: Option<String>,
-    tool_call_id: Option<ToolCallId>,
-    tool_id: Option<String>,
+    tool: Option<ToolRowDto>,
 }
 
 impl NewMessageDto {
     /// Creates one coherent transcript row for commit.
     ///
-    /// A user or notice row carries non-blank content and no tool identity; an
+    /// A user or notice row carries non-blank content and no tool evidence; an
     /// assistant row carries non-blank text, non-blank reasoning, or both, and
-    /// no tool identity; a tool-call row carries its call identity, its wire tool
-    /// name, and the canonical arguments document; a tool-result row carries its
-    /// call identity, its wire tool name, and non-blank content. Only assistant
-    /// rows may carry reasoning text.
+    /// no tool evidence; a tool-call row carries its typed call evidence in
+    /// `tool` and the canonical arguments document as its text; a tool-result
+    /// row carries its typed result evidence in `tool` and non-blank content
+    /// answering the call. Only assistant rows may carry reasoning text.
     ///
     /// # Errors
     ///
@@ -369,25 +368,17 @@ impl NewMessageDto {
         kind: MessageKindDto,
         text: impl Into<String>,
         reasoning: Option<String>,
-        tool_call_id: Option<ToolCallId>,
-        tool_id: Option<String>,
+        tool: Option<ToolRowDto>,
     ) -> DtoResult<Self> {
         let text = text.into();
-        validate_message_row(
-            kind,
-            &text,
-            reasoning.as_deref(),
-            tool_call_id,
-            tool_id.as_deref(),
-        )?;
+        validate_message_row(kind, &text, reasoning.as_deref(), tool.as_ref())?;
         Ok(Self {
             session_id,
             run_id,
             kind,
             text,
             reasoning,
-            tool_call_id,
-            tool_id,
+            tool,
         })
     }
 
@@ -421,16 +412,22 @@ impl NewMessageDto {
         self.reasoning.as_deref()
     }
 
-    /// Returns the tool-call identity carried by a tool row.
+    /// Returns the typed tool evidence a tool row carries.
     #[must_use]
-    pub const fn tool_call_id(&self) -> Option<ToolCallId> {
-        self.tool_call_id
+    pub const fn tool(&self) -> Option<&ToolRowDto> {
+        self.tool.as_ref()
     }
 
-    /// Returns the wire tool name carried by a tool row.
+    /// Returns the tool-call identity carried by a tool row.
     #[must_use]
-    pub fn tool_id(&self) -> Option<&str> {
-        self.tool_id.as_deref()
+    pub fn tool_call_id(&self) -> Option<ToolCallId> {
+        self.tool.as_ref().map(ToolRowDto::call_id)
+    }
+
+    /// Returns the typed tool identity carried by a tool row.
+    #[must_use]
+    pub fn tool_id(&self) -> Option<&ToolIdentityDto> {
+        self.tool.as_ref().map(ToolRowDto::tool_id)
     }
 }
 
@@ -438,7 +435,8 @@ impl NewMessageDto {
 ///
 /// The transcript is the canonical record of user, assistant, tool-call,
 /// tool-result, and notice content; a row carries its durable row identity, no
-/// event position, no projection identity, and no provider resource.
+/// event position, no provider resource, and - for a tool row - the typed tool
+/// evidence the row's own commit recorded.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct MessageProjectionDto {
     id: MessageId,
@@ -447,8 +445,8 @@ pub struct MessageProjectionDto {
     kind: MessageKindDto,
     text: String,
     reasoning: Option<String>,
-    tool_call_id: Option<ToolCallId>,
-    tool_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool: Option<ToolRowDto>,
 }
 
 impl<'de> Deserialize<'de> for MessageProjectionDto {
@@ -467,9 +465,7 @@ impl<'de> Deserialize<'de> for MessageProjectionDto {
             #[serde(default)]
             reasoning: Option<String>,
             #[serde(default)]
-            tool_call_id: Option<ToolCallId>,
-            #[serde(default)]
-            tool_id: Option<String>,
+            tool: Option<ToolRowDto>,
         }
 
         let raw = RawMessageProjectionDto::deserialize(deserializer)?;
@@ -480,8 +476,7 @@ impl<'de> Deserialize<'de> for MessageProjectionDto {
             raw.kind,
             raw.text,
             raw.reasoning,
-            raw.tool_call_id,
-            raw.tool_id,
+            raw.tool,
         )
         .map_err(de::Error::custom)
     }
@@ -490,21 +485,17 @@ impl<'de> Deserialize<'de> for MessageProjectionDto {
 impl MessageProjectionDto {
     /// Creates one coherent committed transcript row.
     ///
-    /// A user or notice row carries non-blank content and no tool identity; an
+    /// A user or notice row carries non-blank content and no tool evidence; an
     /// assistant row carries non-blank text, non-blank reasoning, or both, and
-    /// no tool identity; a tool-call row carries its call identity, its wire tool
-    /// name, and the canonical arguments document; a tool-result row carries its
-    /// call identity, its wire tool name, and non-blank content. Only assistant
-    /// rows may carry reasoning text.
+    /// no tool evidence; a tool-call row carries its typed call evidence in
+    /// `tool` and the canonical arguments document as its text; a tool-result
+    /// row carries its typed result evidence in `tool` and non-blank content
+    /// answering the call. Only assistant rows may carry reasoning text.
     ///
     /// # Errors
     ///
     /// Returns a validation error when the row violates those rules or any
     /// carried value contains a NUL byte.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "This public wire constructor keeps the whole transcript row in one validating call."
-    )]
     pub fn new(
         message_id: MessageId,
         session_id: SessionId,
@@ -512,17 +503,10 @@ impl MessageProjectionDto {
         kind: MessageKindDto,
         text: impl Into<String>,
         reasoning: Option<String>,
-        tool_call_id: Option<ToolCallId>,
-        tool_id: Option<String>,
+        tool: Option<ToolRowDto>,
     ) -> DtoResult<Self> {
         let text = text.into();
-        validate_message_row(
-            kind,
-            &text,
-            reasoning.as_deref(),
-            tool_call_id,
-            tool_id.as_deref(),
-        )?;
+        validate_message_row(kind, &text, reasoning.as_deref(), tool.as_ref())?;
         Ok(Self {
             id: message_id,
             session_id,
@@ -530,8 +514,7 @@ impl MessageProjectionDto {
             kind,
             text,
             reasoning,
-            tool_call_id,
-            tool_id,
+            tool,
         })
     }
 
@@ -571,16 +554,22 @@ impl MessageProjectionDto {
         self.reasoning.as_deref()
     }
 
-    /// Returns the tool-call identity carried by a tool row.
+    /// Returns the typed tool evidence a tool row carries.
     #[must_use]
-    pub const fn tool_call_id(&self) -> Option<ToolCallId> {
-        self.tool_call_id
+    pub const fn tool(&self) -> Option<&ToolRowDto> {
+        self.tool.as_ref()
     }
 
-    /// Returns the wire tool name carried by a tool row.
+    /// Returns the tool-call identity carried by a tool row.
     #[must_use]
-    pub fn tool_id(&self) -> Option<&str> {
-        self.tool_id.as_deref()
+    pub fn tool_call_id(&self) -> Option<ToolCallId> {
+        self.tool.as_ref().map(ToolRowDto::call_id)
+    }
+
+    /// Returns the typed tool identity carried by a tool row.
+    #[must_use]
+    pub fn tool_id(&self) -> Option<&ToolIdentityDto> {
+        self.tool.as_ref().map(ToolRowDto::tool_id)
     }
 }
 
@@ -595,8 +584,7 @@ fn validate_message_row(
     kind: MessageKindDto,
     text: &str,
     reasoning: Option<&str>,
-    tool_call_id: Option<ToolCallId>,
-    tool_id: Option<&str>,
+    tool: Option<&ToolRowDto>,
 ) -> DtoResult<()> {
     if text.contains('\0') || reasoning.is_some_and(|value| value.contains('\0')) {
         return Err(ErrorDto::validation(
@@ -604,13 +592,9 @@ fn validate_message_row(
             "transcript content must be free of NUL bytes",
         ));
     }
-    let tool_identity = tool_call_id.is_some() && tool_id.is_some_and(|id| !id.trim().is_empty());
     let shape_valid = match kind {
         MessageKindDto::User | MessageKindDto::Notice => {
-            !text.trim().is_empty()
-                && reasoning.is_none()
-                && tool_call_id.is_none()
-                && tool_id.is_none()
+            !text.trim().is_empty() && reasoning.is_none() && tool.is_none()
         }
         MessageKindDto::Assistant => {
             // A step's assistant row carries the text it answered with, the
@@ -618,12 +602,15 @@ fn validate_message_row(
             // without answering still commits its reasoning as its own row,
             // while a row with neither carries nothing and is rejected.
             (!text.trim().is_empty() || reasoning.is_some_and(|value| !value.trim().is_empty()))
-                && tool_call_id.is_none()
-                && tool_id.is_none()
+                && tool.is_none()
         }
-        MessageKindDto::ToolCall => tool_identity && reasoning.is_none(),
+        MessageKindDto::ToolCall => {
+            reasoning.is_none() && matches!(tool, Some(ToolRowDto::Call(_)))
+        }
         MessageKindDto::ToolResult => {
-            tool_identity && reasoning.is_none() && !text.trim().is_empty()
+            reasoning.is_none()
+                && !text.trim().is_empty()
+                && matches!(tool, Some(ToolRowDto::Result(_)))
         }
     };
     if !shape_valid {

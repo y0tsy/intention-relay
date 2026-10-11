@@ -2141,7 +2141,6 @@ mod tests {
                     "x".repeat(intention_transport::MAX_MESSAGE_BYTES),
                     None,
                     None,
-                    None,
                 )
                 .expect("fixture assistant row is valid"),
                 TimestampDto::from_unix_seconds(3).expect("fixture timestamp is valid"),
@@ -2538,7 +2537,6 @@ mod tests {
             "live row",
             None,
             None,
-            None,
         )
         .expect("fixture transcript row is valid");
 
@@ -2625,7 +2623,6 @@ mod tests {
             "snapshot row",
             None,
             None,
-            None,
         )
         .expect("fixture transcript row is valid");
         let snapshot_row = host
@@ -2663,7 +2660,6 @@ mod tests {
             Some(run_id),
             MessageKindDto::Assistant,
             "distinct row",
-            None,
             None,
             None,
         )
@@ -2840,7 +2836,7 @@ mod tests {
 
     #[test]
     fn daemon_tool_decoder_covers_every_advertised_model_visible_tool() {
-        use intention_tools::ToolInput;
+        use intention_proto::ToolInput;
         let advertised = intention_tools::model_visible_descriptors();
         for descriptor in &advertised {
             let name = descriptor.id().as_str();
@@ -2872,5 +2868,77 @@ mod tests {
                 "the daemon decodes the unexposed tool {name}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_committed_tool_row_frame_carries_its_typed_projection() {
+        // The publication path republishes the committed row the storage
+        // boundary returned, typed projection and all: the daemon neither
+        // decodes the arguments document nor re-encodes the projection.
+        use intention_proto::{
+            ToolCallId, ToolCallRowDto, ToolIdentityDto, ToolInput, ToolRowDto,
+        };
+
+        let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
+        let (session_id, run_id) = create_and_start(&facade);
+        let host = new_host(facade);
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
+        let (close, _closed) = tokio::sync::watch::channel(false);
+        assert!(host.register_subscriber(
+            SubscribeSessionCommandDto::new(session_id),
+            sender,
+            close,
+            1,
+            None,
+        ));
+        assert!(matches!(
+            receiver.recv().await,
+            Some(ProtocolDaemonMessageDto::Reply(_))
+        ));
+
+        let call_id = ToolCallId::new();
+        let call = ToolRowDto::Call(
+            ToolCallRowDto::new(
+                call_id,
+                ToolIdentityDto::parse("read").expect("the fixture tool is declared"),
+                Some(
+                    ToolInput::from_arguments_json("read", r#"{"path":"hello.txt"}"#)
+                        .expect("the fixture arguments decode"),
+                ),
+            )
+            .expect("the fixture call row is valid"),
+        );
+        let committed = host
+            .facade
+            .repository()
+            .append_message(
+                NewMessageDto::new(
+                    session_id,
+                    Some(run_id),
+                    MessageKindDto::ToolCall,
+                    r#"{"path":"hello.txt"}"#,
+                    None,
+                    Some(call.clone()),
+                )
+                .expect("the fixture tool row is valid"),
+                TimestampDto::from_unix_seconds(2).expect("the fixture timestamp is valid"),
+            )
+            .expect("the fixture tool-call row commits");
+        host.publish_content(&committed);
+
+        let delivered = receiver
+            .recv()
+            .await
+            .expect("the committed tool row is delivered");
+        let ProtocolDaemonMessageDto::Frame(SessionFrameDto::Content(row)) = delivered else {
+            unreachable!("the published frame is the committed tool row")
+        };
+        assert_eq!(row.kind(), MessageKindDto::ToolCall);
+        assert_eq!(row.id(), committed.id());
+        assert_eq!(
+            row.tool(),
+            Some(&call),
+            "the frame carries the committed typed projection unchanged"
+        );
     }
 }

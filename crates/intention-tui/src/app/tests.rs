@@ -7,11 +7,13 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use intention_client::SessionStreamState;
 use intention_proto::{
-    ConfigRevisionId, DaemonHealthDto, ErrorDto, MessageId, MessageKindDto, MessageProjectionDto,
-    ProjectId, RunId, RunModeDto, RunProjectionDto, RunStatusDto, SendUserTurnOutcomeDto,
-    SessionFrameDto, SessionId, SessionProjectionDto, SessionSnapshotDto, SessionSummariesDto,
-    SessionSummaryDto, TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TimestampDto, ToolCallId,
-    TurnId, WorkspaceId, WorkspaceRootDto,
+    BoundedText, ConfigRevisionId, DaemonHealthDto, ErrorDto, ExecuteResult, GrepResult, MessageId,
+    MessageKindDto, MessageProjectionDto, PathsResult, ProjectId, RunId, RunModeDto,
+    RunProjectionDto, RunStatusDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionId,
+    SessionProjectionDto, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto,
+    TextDeltaFrameDto, TextResult, ThemeDto, TimestampDto, ToolCallId, ToolCallRowDto, ToolId,
+    ToolIdentityDto, ToolInput, ToolProcessStatus, ToolResult, ToolResultRowDto,
+    ToolResultStatusDto, ToolRowDto, TurnId, WorkspaceId, WorkspaceRootDto, WriteResult,
 };
 
 use super::{
@@ -190,7 +192,6 @@ fn user_row(session_id: SessionId, run_id: Option<RunId>, text: &str) -> Message
         text,
         None,
         None,
-        None,
     )
     .expect("the fixture user row is coherent")
 }
@@ -202,7 +203,6 @@ fn assistant_row(session_id: SessionId, run_id: RunId, text: &str) -> MessagePro
         Some(run_id),
         MessageKindDto::Assistant,
         text,
-        None,
         None,
         None,
     )
@@ -224,9 +224,40 @@ fn reasoning_row(
         text,
         Some(reasoning.to_owned()),
         None,
-        None,
     )
     .expect("the fixture reasoning row is coherent")
+}
+
+/// Returns one parsed fixture tool identity.
+fn identity(tool_id: &str) -> ToolIdentityDto {
+    ToolIdentityDto::parse(tool_id).expect("the fixture tool identity is well-formed")
+}
+
+/// Returns one typed result payload of the declared `tool_id` fixture.
+fn payload(tool_id: ToolId, content: &str) -> ToolResult {
+    match tool_id {
+        ToolId::Read => ToolResult::Read(TextResult {
+            text: BoundedText::new(content).expect("the fixture text is bounded"),
+            truncated: false,
+        }),
+        ToolId::Glob => ToolResult::Glob(PathsResult {
+            paths: Vec::new(),
+            truncated: false,
+        }),
+        ToolId::Grep => ToolResult::Grep(GrepResult {
+            matches: Vec::new(),
+            truncated: false,
+        }),
+        ToolId::Write => ToolResult::Write(WriteResult { bytes: 0 }),
+        ToolId::Edit => ToolResult::Edit(WriteResult { bytes: 0 }),
+        ToolId::Execute => ToolResult::Execute(ExecuteResult {
+            text: TextResult {
+                text: BoundedText::new(content).expect("the fixture text is bounded"),
+                truncated: false,
+            },
+            process: Some(ToolProcessStatus::Success),
+        }),
+    }
 }
 
 /// Returns one committed tool-call row carrying `arguments` for `call_id`.
@@ -237,6 +268,14 @@ fn tool_call_row(
     arguments: &str,
     call_id: ToolCallId,
 ) -> MessageProjectionDto {
+    let tool = ToolRowDto::Call(
+        ToolCallRowDto::new(
+            call_id,
+            identity(tool_id),
+            ToolInput::from_arguments_json(tool_id, arguments).ok(),
+        )
+        .expect("the fixture call row is coherent"),
+    );
     MessageProjectionDto::new(
         row_id(),
         session_id,
@@ -244,13 +283,13 @@ fn tool_call_row(
         MessageKindDto::ToolCall,
         arguments,
         None,
-        Some(call_id),
-        Some(tool_id.to_owned()),
+        Some(tool),
     )
     .expect("the fixture tool-call row is coherent")
 }
 
-/// Returns one committed tool-result row carrying `content` for `call_id`.
+/// Returns one committed completed tool-result row carrying `content` for
+/// `call_id`.
 fn tool_result_row(
     session_id: SessionId,
     run_id: RunId,
@@ -258,6 +297,17 @@ fn tool_result_row(
     content: &str,
     call_id: ToolCallId,
 ) -> MessageProjectionDto {
+    let id = ToolId::parse(tool_id).expect("the fixture tool is one of the declared tools");
+    let tool = ToolRowDto::Result(
+        ToolResultRowDto::new(
+            call_id,
+            identity(tool_id),
+            ToolResultStatusDto::Completed,
+            Some(payload(id, content)),
+            Vec::new(),
+        )
+        .expect("the fixture result row is coherent"),
+    );
     MessageProjectionDto::new(
         row_id(),
         session_id,
@@ -265,8 +315,7 @@ fn tool_result_row(
         MessageKindDto::ToolResult,
         content,
         None,
-        Some(call_id),
-        Some(tool_id.to_owned()),
+        Some(tool),
     )
     .expect("the fixture tool-result row is coherent")
 }

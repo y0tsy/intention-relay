@@ -1,9 +1,12 @@
 //! Typed, bounded contracts for workspace tools and the workspace addressing
 //! anchor.
 
-use intention_proto::{DtoResult, WorkspaceRelativePathDto};
-use serde::{Deserialize, Serialize};
-use std::fmt::{Display, Formatter};
+use intention_proto::{
+    BoundedText, DtoResult, EditInput, ExecuteInput, ExecuteResult, GlobInput, GrepInput,
+    GrepMatch, GrepResult, GrepScope, PathsResult, ReadInput, TextResult, ToolId, ToolInput,
+    ToolProcessStatus, ToolResult, ToolTimeoutSecondsDto, WorkspaceRelativePathDto, WriteInput,
+    WriteResult,
+};
 use std::process::{Child, Stdio};
 use std::sync::{
     Arc, Condvar, Mutex, MutexGuard, PoisonError,
@@ -216,43 +219,6 @@ impl CancellationSignal {
 
 pub const TOOL_SCHEMA_VERSION: u16 = 1;
 
-/// Typed terminal classification for one executed program.
-///
-/// Per the external-attempt taxonomy, a known non-zero exit or known signal
-/// termination is a normalized program result carried on the typed output, not
-/// a transport-level tool failure. Lost terminal evidence (cancellation,
-/// timeout) classifies as an interrupted dispatch whose captured output, when
-/// any, stays partial.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ToolProcessStatus {
-    Success,
-    NonZero { code: i32 },
-    Signal { signal: i32 },
-}
-
-impl ToolProcessStatus {
-    /// Classifies a finished child-process status.
-    #[must_use]
-    pub fn classify(status: std::process::ExitStatus) -> Self {
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::ExitStatusExt;
-            if let Some(signal) = status.signal() {
-                return Self::Signal { signal };
-            }
-        }
-        match status.code() {
-            Some(0) => Self::Success,
-            Some(code) => Self::NonZero { code },
-            // A reaped child always reports either a recorded signal (checked
-            // above on Unix) or a numeric exit code (Windows always reports
-            // one); a status with neither cannot occur.
-            None => unreachable!("child status has neither signal nor exit code"),
-        }
-    }
-}
-
 fn bounded_lossy(bytes: &[u8]) -> (String, bool) {
     if bytes.len() <= MAX_TOOL_OUTPUT_BYTES {
         return (String::from_utf8_lossy(bytes).into_owned(), false);
@@ -450,9 +416,14 @@ impl PartialOutput {
             "stdout:\n{stdout}\nstderr:\n{stderr}{}",
             if self.truncated { "\n[truncated]" } else { "" }
         );
-        Ok(ToolResult::Execute(TextResult {
-            text: BoundedText::new(text)?,
-            truncated: self.truncated,
+        Ok(ToolResult::Execute(ExecuteResult {
+            text: TextResult {
+                text: BoundedText::new(text)?,
+                truncated: self.truncated,
+            },
+            // An interrupted collection observed no finished program, so it
+            // carries no terminal classification rather than inventing one.
+            process: None,
         }))
     }
 }
@@ -944,38 +915,6 @@ fn read_bounded(
     }
 }
 
-/// The fixed set of tools exposed by the product boundary.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolId {
-    Read,
-    Write,
-    Edit,
-    Execute,
-    Glob,
-    Grep,
-}
-
-impl ToolId {
-    /// Returns the stable wire name.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Read => "read",
-            Self::Glob => "glob",
-            Self::Grep => "grep",
-            Self::Write => "write",
-            Self::Edit => "edit",
-            Self::Execute => "execute",
-        }
-    }
-}
-impl Display for ToolId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 /// Static specification of one tool.
 ///
 /// The specification carries the three strings the model boundary consumes:
@@ -1182,346 +1121,12 @@ pub const fn spec(id: ToolId) -> ToolSpec {
 }
 
 /// Returns the model-visible tool specifications in advertisement order.
+///
+/// The declared set is [`ToolId::ALL`], so a seventh tool is one core variant
+/// and one spec match arm, never a second hand-list here.
 #[must_use]
 pub fn model_visible_descriptors() -> Vec<ToolSpec> {
-    vec![
-        spec(ToolId::Read),
-        spec(ToolId::Write),
-        spec(ToolId::Edit),
-        spec(ToolId::Execute),
-        spec(ToolId::Glob),
-        spec(ToolId::Grep),
-    ]
-}
-
-/// Bounded text accepted by tool contracts.
-///
-/// Deserialization is validating: JSON arriving at the daemon tool boundary
-/// cannot bypass the constructor's NUL check (PR24-023).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(transparent)]
-pub struct BoundedText(String);
-impl BoundedText {
-    /// # Errors
-    ///
-    /// Returns a validation error when the text contains a NUL byte.
-    pub fn new(value: impl Into<String>) -> DtoResult<Self> {
-        let value = value.into();
-        if value.contains('\0') {
-            Err(intention_proto::ErrorDto::validation(
-                "invalid_tool_text",
-                "tool text contains NUL",
-            ))
-        } else {
-            Ok(Self(value))
-        }
-    }
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for BoundedText {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Self::new(value).map_err(|error| {
-            serde::de::Error::custom(format!("invalid tool text ({})", error.code()))
-        })
-    }
-}
-
-/// Typed tool input family.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "tool", content = "input", rename_all = "snake_case")]
-pub enum ToolInput {
-    Read(ReadInput),
-    Glob(GlobInput),
-    Grep(GrepInput),
-    Write(WriteInput),
-    Edit(EditInput),
-    Execute(ExecuteInput),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ReadInput {
-    pub path: WorkspaceRelativePathDto,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct GlobInput {
-    pub pattern: BoundedText,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct GrepInput {
-    pub pattern: BoundedText,
-    #[serde(default)]
-    pub scope: Option<GrepScope>,
-    #[serde(default)]
-    pub path: Option<WorkspaceRelativePathDto>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum GrepScope {
-    File { path: WorkspaceRelativePathDto },
-    Directory { path: WorkspaceRelativePathDto },
-    Workspace,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct WriteInput {
-    pub path: WorkspaceRelativePathDto,
-    pub content: BoundedText,
-    #[serde(default)]
-    pub expected_content: Option<BoundedText>,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct EditInput {
-    pub path: WorkspaceRelativePathDto,
-    pub old: BoundedText,
-    pub new: BoundedText,
-    #[serde(default)]
-    pub expected_content: Option<BoundedText>,
-}
-/// Validated shell command text for the `execute` tool.
-///
-/// The text is the model's command exactly as given; the platform shell that
-/// interprets it and the executable path behind it are code-owned tool
-/// semantics and never cross a public DTO boundary.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(transparent)]
-pub struct ShellCommandTextDto(String);
-
-impl ShellCommandTextDto {
-    /// # Errors
-    ///
-    /// Returns a validation error when the command is blank or contains a NUL byte.
-    pub fn new(value: impl Into<String>) -> DtoResult<Self> {
-        let value = value.into();
-        if value.trim().is_empty() || value.contains('\0') {
-            Err(intention_proto::ErrorDto::validation(
-                "invalid_tool_text",
-                "tool text must be non-blank and free of NUL bytes",
-            ))
-        } else {
-            Ok(Self(value))
-        }
-    }
-    /// Returns the command text.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for ShellCommandTextDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Self::new(value).map_err(serde::de::Error::custom)
-    }
-}
-
-/// A validated environment variable name for the `execute` tool.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(transparent)]
-pub struct EnvVarNameDto(String);
-
-impl EnvVarNameDto {
-    /// # Errors
-    ///
-    /// Returns a validation error when the name is blank or carries '=', a NUL
-    /// byte, or a control character.
-    pub fn new(value: impl Into<String>) -> DtoResult<Self> {
-        let value = value.into();
-        let invalid = value.trim().is_empty()
-            || value.contains('=')
-            || value.contains('\0')
-            || value.chars().any(char::is_control);
-        if invalid {
-            Err(intention_proto::ErrorDto::validation(
-                "invalid_tool_env",
-                "environment variable name is invalid",
-            ))
-        } else {
-            Ok(Self(value))
-        }
-    }
-    /// Returns the variable name.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for EnvVarNameDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Self::new(value).map_err(serde::de::Error::custom)
-    }
-}
-
-/// One environment variable a call overlays on the inherited environment.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct EnvVarDto {
-    pub name: EnvVarNameDto,
-    pub value: BoundedText,
-}
-
-/// A non-zero per-call timeout for the `execute` tool.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(transparent)]
-pub struct ToolTimeoutSecondsDto(u64);
-
-impl ToolTimeoutSecondsDto {
-    /// # Errors
-    ///
-    /// Returns a validation error when the value is zero.
-    pub fn new(seconds: u64) -> DtoResult<Self> {
-        if seconds == 0 {
-            Err(intention_proto::ErrorDto::validation(
-                "invalid_tool_timeout",
-                "timeout seconds must be at least one",
-            ))
-        } else {
-            Ok(Self(seconds))
-        }
-    }
-    /// Returns the number of seconds.
-    #[must_use]
-    pub const fn as_secs(self) -> u64 {
-        self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for ToolTimeoutSecondsDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = u64::deserialize(deserializer)?;
-        Self::new(value).map_err(serde::de::Error::custom)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ExecuteInput {
-    pub command: ShellCommandTextDto,
-    #[serde(default)]
-    pub cwd: Option<WorkspaceRelativePathDto>,
-    #[serde(default)]
-    pub env: Vec<EnvVarDto>,
-    #[serde(default)]
-    pub timeout_seconds: Option<ToolTimeoutSecondsDto>,
-}
-
-impl ToolInput {
-    /// Decodes raw model arguments into the typed input of one exposed tool.
-    ///
-    /// The wire name is the decoding authority: only the six exposed tools
-    /// decode, each through its own typed input DTO; every other name is
-    /// rejected as unknown, so a tool the product does not expose is never
-    /// reachable through raw model arguments.
-    ///
-    /// # Errors
-    ///
-    /// Returns `unknown_tool` when the name is not an exposed tool, and
-    /// `invalid_tool_input_json` when the arguments are malformed or do not
-    /// match the tool's typed input.
-    pub fn from_arguments_json(tool_id: &str, arguments_json: &str) -> DtoResult<Self> {
-        let input = match tool_id {
-            "read" => serde_json::from_str::<ReadInput>(arguments_json).map(Self::Read),
-            "write" => serde_json::from_str::<WriteInput>(arguments_json).map(Self::Write),
-            "edit" => serde_json::from_str::<EditInput>(arguments_json).map(Self::Edit),
-            "execute" => serde_json::from_str::<ExecuteInput>(arguments_json).map(Self::Execute),
-            "glob" => serde_json::from_str::<GlobInput>(arguments_json).map(Self::Glob),
-            "grep" => serde_json::from_str::<GrepInput>(arguments_json).map(Self::Grep),
-            _ => return Err(unknown_tool()),
-        };
-        input.map_err(|_| {
-            intention_proto::ErrorDto::validation(
-                "invalid_tool_input_json",
-                "tool arguments are not valid typed input",
-            )
-        })
-    }
-
-    /// Returns the concrete tool this input belongs to.
-    #[must_use]
-    pub const fn tool_id(&self) -> ToolId {
-        match self {
-            Self::Read(_) => ToolId::Read,
-            Self::Glob(_) => ToolId::Glob,
-            Self::Grep(_) => ToolId::Grep,
-            Self::Write(_) => ToolId::Write,
-            Self::Edit(_) => ToolId::Edit,
-            Self::Execute(_) => ToolId::Execute,
-        }
-    }
-}
-
-/// Returns the stable error for a name the product does not expose as a tool.
-fn unknown_tool() -> intention_proto::ErrorDto {
-    intention_proto::ErrorDto::validation(
-        "unknown_tool",
-        "tool is not registered for model invocation",
-    )
-}
-
-/// Typed tool result family.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "result", content = "value", rename_all = "snake_case")]
-pub enum ToolResult {
-    Read(TextResult),
-    Glob(PathsResult),
-    Grep(GrepResult),
-    Write(WriteResult),
-    Edit(WriteResult),
-    Execute(TextResult),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct TextResult {
-    pub text: BoundedText,
-    pub truncated: bool,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct GrepResult {
-    pub matches: Vec<GrepMatch>,
-    /// Whether a dropped read window, an oversized line, or the retained
-    /// serialized-match window cut content; the byte window, not a match
-    /// count, bounds the result.
-    #[serde(default)]
-    pub truncated: bool,
-}
-/// One workspace-relative match; its serialized size is charged against the
-/// shared search-result window.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct GrepMatch {
-    pub path: WorkspaceRelativePathDto,
-    pub line: u64,
-    pub column: u64,
-    pub fragment: BoundedText,
-}
-/// Workspace-relative path list produced by a glob search.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PathsResult {
-    /// Paths retained inside the shared search-result window.
-    pub paths: Vec<WorkspaceRelativePathDto>,
-    /// Whether the byte window cut further matching paths.
-    #[serde(default)]
-    pub truncated: bool,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct WriteResult {
-    pub bytes: u64,
+    ToolId::ALL.iter().copied().map(spec).collect()
 }
 
 /// Canonical model-visible content of an empty path list.
@@ -1530,6 +1135,19 @@ const NO_PATHS_PLACEHOLDER: &str = "[no paths]";
 const NO_MATCHES_PLACEHOLDER: &str = "[no matches]";
 /// Canonical model-visible content of an empty text result.
 const EMPTY_TEXT_PLACEHOLDER: &str = "[empty]";
+
+/// Renders one bounded text projection into its canonical model-visible
+/// content: an empty projection shows the empty placeholder and truncated
+/// content keeps its explicit marker.
+fn bounded_text_content(value: &TextResult) -> String {
+    let mut content = if value.text.as_str().trim().is_empty() {
+        EMPTY_TEXT_PLACEHOLDER.to_owned()
+    } else {
+        value.text.as_str().to_owned()
+    };
+    append_truncation_marker(&mut content, value.truncated);
+    content
+}
 
 /// Renders one typed tool result into its bounded model-visible content.
 ///
@@ -1549,15 +1167,8 @@ const EMPTY_TEXT_PLACEHOLDER: &str = "[empty]";
 /// readable content".
 pub fn render_tool_result_content(result: &ToolResult) -> DtoResult<String> {
     let content = match result {
-        ToolResult::Read(value) | ToolResult::Execute(value) => {
-            let mut content = if value.text.as_str().trim().is_empty() {
-                EMPTY_TEXT_PLACEHOLDER.to_owned()
-            } else {
-                value.text.as_str().to_owned()
-            };
-            append_truncation_marker(&mut content, value.truncated);
-            content
-        }
+        ToolResult::Read(value) => bounded_text_content(value),
+        ToolResult::Execute(value) => bounded_text_content(&value.text),
         ToolResult::Glob(value) => {
             let mut content = if value.paths.is_empty() {
                 NO_PATHS_PLACEHOLDER.to_owned()
@@ -1690,9 +1301,12 @@ mod tool_result_renderer_tests {
             render_tool_result_content(&read).expect("read content renders"),
             "hello"
         );
-        let truncated = ToolResult::Execute(TextResult {
-            text: bounded("done"),
-            truncated: true,
+        let truncated = ToolResult::Execute(ExecuteResult {
+            text: TextResult {
+                text: bounded("done"),
+                truncated: true,
+            },
+            process: Some(ToolProcessStatus::Success),
         });
         assert_eq!(
             render_tool_result_content(&truncated).expect("execute content renders"),
@@ -2026,9 +1640,12 @@ fn execute_tool(
         if truncated { "\n[truncated]" } else { "" }
     );
     Ok(ToolDispatchOutcome::Completed(ToolResult::Execute(
-        TextResult {
-            text: BoundedText::new(text)?,
-            truncated,
+        ExecuteResult {
+            text: TextResult {
+                text: BoundedText::new(text)?,
+                truncated,
+            },
+            process: Some(process_status),
         },
     )))
 }

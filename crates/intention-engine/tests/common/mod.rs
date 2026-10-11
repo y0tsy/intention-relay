@@ -28,13 +28,13 @@ use intention_proto::{
     CreateSessionCommandDto, DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, MessageId,
     MessageProjectionDto, NewMessageDto, PendingTurnProjectionDto, ProjectId, RemoveTurnCommandDto,
     RunId, RunModeDto, RunProjectionDto, RunStatusDto, SessionId, SessionProjectionDto,
-    SessionSummariesDto, ThemeDto, TimestampDto, ToolCallId, TurnId, UsageDto, WorkspaceBindingDto,
-    WorkspaceId, WorkspaceRootDto,
+    SessionSummariesDto, ThemeDto, TimestampDto, ToolCallId, ToolResultStatusDto, TurnId, UsageDto,
+    WorkspaceBindingDto, WorkspaceId, WorkspaceRootDto,
 };
 use intention_providers::ToolCallDto;
 use intention_storage::{
     AcceptedTurnOutcomeDto, RunOutcomeDto, StartingRunModelContextDto, StorageRepositoryDto,
-    ToolResultEvidenceDto, ToolResultStatusDto,
+    ToolResultEvidenceDto,
 };
 use intention_test_support::fixture_snapshot;
 
@@ -337,8 +337,7 @@ impl FakeRepository {
             message.kind(),
             message.text(),
             message.reasoning().map(str::to_owned),
-            message.tool_call_id(),
-            message.tool_id().map(str::to_owned),
+            message.tool().cloned(),
         )
     }
 

@@ -16,17 +16,15 @@ use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
     NewMessageDto, PendingTurnProjectionDto, RemoveTurnCommandDto, RunProjectionDto,
-    SendUserTurnCommandDto, SessionProjectionDto,
+    SendUserTurnCommandDto, SessionProjectionDto, ToolCallRowDto, ToolIdentityDto, ToolInput,
+    ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
 use intention_proto::{ToolCallDto, ToolCallId};
-use intention_storage::{
-    AcceptedTurnOutcomeDto, StorageRepositoryDto, ToolResultEvidenceDto,
-    ToolResultMetadataEntryDto, ToolResultStatusDto,
-};
+use intention_storage::{AcceptedTurnOutcomeDto, StorageRepositoryDto, ToolResultEvidenceDto};
 use intention_tools::{
-    InterruptCause, ToolDispatchOutcome, ToolInput, ToolResult, ToolService, WorkspaceRoot,
-    partial_tool_result_content, render_tool_result_content, tool_failure_guidance,
+    InterruptCause, ToolDispatchOutcome, ToolService, WorkspaceRoot, partial_tool_result_content,
+    render_tool_result_content, tool_failure_guidance,
 };
 
 /// Complete engine command for one local tool invocation.
@@ -120,14 +118,23 @@ where
             cancellation,
             arguments_json,
         } = input;
+        // One decode: the typed value the dispatch runs is exactly the typed
+        // value the committed call row carries, so the durable evidence and the
+        // effect cannot disagree and no second decode exists.
+        let decoded = ToolInput::from_arguments_json(&tool_id, &arguments_json);
+        let projection = match &decoded {
+            Ok(decoded) => {
+                ToolCallRowDto::new(call_id, ToolIdentityDto::parse(&tool_id)?, Some(decoded.clone()))?
+            }
+            Err(_) => ToolCallRowDto::new(call_id, ToolIdentityDto::parse(&tool_id)?, None)?,
+        };
         // The tool-call row commits before any effect: the model's requested
         // call is durable evidence even when its arguments never decode.
         self.append_tool_call(
             session_id,
             run_id,
-            call_id,
-            &tool_id,
             &arguments_json,
+            ToolRowDto::Call(projection),
             occurred_at,
             publisher,
         )?;
@@ -137,7 +144,7 @@ where
         // A call whose arguments do not decode is a known, model-visible
         // failure: the durable result answers it with bounded guidance and the
         // run continues, so the model can correct the call.
-        let decoded = match ToolInput::from_arguments_json(&tool_id, &arguments_json) {
+        let decoded = match decoded {
             Ok(decoded) => decoded,
             Err(error) => {
                 let content = tool_failure_guidance(&tool_id, &error);
@@ -147,6 +154,7 @@ where
                     call_id,
                     &tool_id,
                     ToolResultStatusDto::Failed,
+                    None,
                     content.clone(),
                     Vec::new(),
                     occurred_at,
@@ -169,6 +177,7 @@ where
                     call_id,
                     &tool_id,
                     ToolResultStatusDto::Partial,
+                    partial,
                     content.clone(),
                     interruption_metadata(cause)?,
                     occurred_at,
@@ -184,6 +193,7 @@ where
                     call_id,
                     &tool_id,
                     ToolResultStatusDto::Failed,
+                    None,
                     content.clone(),
                     Vec::new(),
                     occurred_at,
@@ -202,6 +212,7 @@ where
             call_id,
             &tool_id,
             ToolResultStatusDto::Completed,
+            Some(value),
             content.clone(),
             metadata,
             occurred_at,
@@ -216,17 +227,12 @@ where
     /// # Errors
     ///
     /// Returns a typed validation or storage error when the row cannot commit.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "One flat call payload keeps the single call-row commit at one call site."
-    )]
     fn append_tool_call<P: SessionCommitObserver>(
         &self,
         session_id: SessionId,
         run_id: RunId,
-        call_id: ToolCallId,
-        tool_id: &str,
         arguments_json: &str,
+        tool: ToolRowDto,
         occurred_at: TimestampDto,
         publisher: &P,
     ) -> DtoResult<MessageProjectionDto> {
@@ -236,8 +242,7 @@ where
             MessageKindDto::ToolCall,
             arguments_json,
             None,
-            Some(call_id),
-            Some(tool_id.to_owned()),
+            Some(tool),
         )?;
         let committed = self.repository.append_message(message, occurred_at)?;
         publisher.observe_session_commit(&SessionCommitDto::Content(committed.clone()));
@@ -248,7 +253,8 @@ where
     /// hands that committed row to the commit sink.
     ///
     /// Exactly one transaction writes the `tool_results` row and the
-    /// `tool_result` message the model reads.
+    /// `tool_result` message the model reads; the message carries the same
+    /// typed status, payload, and metadata the evidence row stores.
     ///
     /// # Errors
     ///
@@ -264,11 +270,19 @@ where
         call_id: ToolCallId,
         tool_id: &str,
         status: ToolResultStatusDto,
+        result: Option<ToolResult>,
         content: String,
         metadata: Vec<ToolResultMetadataEntryDto>,
         occurred_at: TimestampDto,
         publisher: &P,
     ) -> DtoResult<ToolResultEvidenceDto> {
+        let projection = ToolResultRowDto::new(
+            call_id,
+            ToolIdentityDto::parse(tool_id)?,
+            status,
+            result,
+            metadata.clone(),
+        )?;
         let evidence = ToolResultEvidenceDto::new(
             session_id,
             run_id,
@@ -285,8 +299,7 @@ where
             MessageKindDto::ToolResult,
             content,
             None,
-            Some(call_id),
-            Some(tool_id.to_owned()),
+            Some(ToolRowDto::Result(projection)),
         )?;
         let committed = self
             .repository
@@ -485,7 +498,8 @@ where
 /// rejected, which the metadata constructor cannot do.
 fn tool_result_metadata(result: &ToolResult) -> DtoResult<Vec<ToolResultMetadataEntryDto>> {
     let truncated = match result {
-        ToolResult::Read(value) | ToolResult::Execute(value) => value.truncated,
+        ToolResult::Read(value) => value.truncated,
+        ToolResult::Execute(value) => value.text.truncated,
         ToolResult::Glob(value) => value.truncated,
         ToolResult::Grep(value) => value.truncated,
         ToolResult::Write(_) | ToolResult::Edit(_) => false,
@@ -613,7 +627,7 @@ fn model_context_messages(rows: &[MessageProjectionDto]) -> DtoResult<Vec<ModelM
                 {
                     let call = ToolCallDto::new(
                         call_id,
-                        row.tool_id().ok_or_else(incomplete_tool_row)?,
+                        row.tool_id().ok_or_else(incomplete_tool_row)?.wire_name(),
                         row.text(),
                     )?;
                     messages.push(ModelMessageDto::assistant_tool_calls(None, vec![call])?);
@@ -670,11 +684,11 @@ mod tests {
     )]
 
     use super::tool_result_metadata;
-    use intention_tools::ToolResult;
+    use intention_proto::{PathsResult, ToolResult, WriteResult};
 
     #[test]
     fn truncation_is_reported_as_approved_metadata() {
-        let truncated = ToolResult::Glob(intention_tools::PathsResult {
+        let truncated = ToolResult::Glob(PathsResult {
             paths: Vec::new(),
             truncated: true,
         });
@@ -682,7 +696,7 @@ mod tests {
         assert_eq!(metadata.len(), 1);
         assert_eq!(metadata[0].key(), "truncated");
         assert_eq!(metadata[0].value(), "true");
-        let complete = ToolResult::Write(intention_tools::WriteResult { bytes: 1 });
+        let complete = ToolResult::Write(WriteResult { bytes: 1 });
         assert!(
             tool_result_metadata(&complete)
                 .expect("complete metadata is valid")

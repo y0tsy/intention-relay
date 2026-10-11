@@ -12,11 +12,13 @@ mod common;
 use common::{fixture_message, fixture_projection};
 
 use intention_proto::{
-    ConfigRevisionId, CreateSessionAcceptedDto, InterruptRunAcceptedDto, MessageId, MessageKindDto,
-    MessageProjectionDto, PendingTurnProjectionDto, ProtocolResultDto, RemoveTurnAcceptedDto,
-    RunId, RunModeDto, RunProjectionDto, RunStatusDto, SendUserTurnAcceptedDto,
-    SendUserTurnOutcomeDto, SessionProjectionDto, SessionSnapshotDto, ToolCallId, TurnId,
-    WorkspaceRootDto, validate_run_status_transition,
+    BoundedText, ConfigRevisionId, CreateSessionAcceptedDto, InterruptRunAcceptedDto, MessageId,
+    MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, ProtocolResultDto,
+    RemoveTurnAcceptedDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto,
+    SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionProjectionDto, SessionSnapshotDto,
+    ExecuteResult, TextResult, ToolCallId, ToolCallRowDto, ToolId, ToolIdentityDto, ToolInput,
+    ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
+    TurnId, WorkspaceRootDto, validate_run_status_transition,
 };
 use intention_proto::{ProjectId, SessionId, WorkspaceId};
 
@@ -363,6 +365,33 @@ fn run_status_state_machine_accepts_only_declared_edges() {
 
 #[test]
 fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
+    fn read_call(call_id: ToolCallId) -> ToolRowDto {
+        ToolRowDto::Call(
+            ToolCallRowDto::new(
+                call_id,
+                ToolIdentityDto::parse("read").expect("the fixture tool is declared"),
+                None,
+            )
+            .expect("fixture call row is valid"),
+        )
+    }
+
+    fn read_result(call_id: ToolCallId) -> ToolRowDto {
+        ToolRowDto::Result(
+            ToolResultRowDto::new(
+                call_id,
+                ToolIdentityDto::parse("read").expect("the fixture tool is declared"),
+                ToolResultStatusDto::Completed,
+                Some(ToolResult::Read(TextResult {
+                    text: BoundedText::new("contents").expect("fixture text is bounded"),
+                    truncated: false,
+                })),
+                Vec::new(),
+            )
+            .expect("fixture result row is valid"),
+        )
+    }
+
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let call_id = ToolCallId::new();
@@ -370,8 +399,7 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
     let row = |kind: MessageKindDto,
                text: &str,
                reasoning: Option<&str>,
-               tool_call_id: Option<ToolCallId>,
-               tool_id: Option<&str>| {
+               tool: Option<ToolRowDto>| {
         MessageProjectionDto::new(
             message_id,
             session_id,
@@ -379,128 +407,85 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
             kind,
             text,
             reasoning.map(str::to_owned),
-            tool_call_id,
-            tool_id.map(str::to_owned),
+            tool,
         )
     };
 
-    assert!(row(MessageKindDto::User, "hello", None, None, None).is_ok());
-    assert!(row(MessageKindDto::User, " ", None, None, None).is_err());
-    assert!(row(MessageKindDto::User, "hello", Some("thought"), None, None).is_err());
-    assert!(
-        row(
-            MessageKindDto::User,
-            "hello",
-            None,
-            Some(call_id),
-            Some("read")
-        )
-        .is_err()
-    );
+    assert!(row(MessageKindDto::User, "hello", None, None).is_ok());
+    assert!(row(MessageKindDto::User, " ", None, None).is_err());
+    assert!(row(MessageKindDto::User, "hello", Some("thought"), None).is_err());
+    assert!(row(MessageKindDto::User, "hello", None, Some(read_call(call_id))).is_err());
 
+    assert!(row(MessageKindDto::Assistant, "answer", Some("reasoning"), None).is_ok());
+    assert!(row(MessageKindDto::Assistant, "", None, None).is_err());
     assert!(
-        row(
-            MessageKindDto::Assistant,
-            "answer",
-            Some("reasoning"),
-            None,
-            None
-        )
-        .is_ok()
-    );
-    assert!(row(MessageKindDto::Assistant, "", None, None, None).is_err());
-    assert!(
-        row(MessageKindDto::Assistant, "", Some("reasoning"), None, None).is_ok(),
+        row(MessageKindDto::Assistant, "", Some("reasoning"), None).is_ok(),
         "a reasoning-only step commits its reasoning as its own row"
     );
     assert!(
-        row(MessageKindDto::Assistant, "  ", Some("  "), None, None).is_err(),
+        row(MessageKindDto::Assistant, "  ", Some("  "), None).is_err(),
         "a row with neither text nor reasoning carries nothing"
     );
-    assert!(
-        row(
-            MessageKindDto::Assistant,
-            "answer",
-            None,
-            Some(call_id),
-            Some("read")
-        )
-        .is_err()
-    );
+    assert!(row(MessageKindDto::Assistant, "answer", None, Some(read_call(call_id))).is_err());
 
     assert!(
-        row(
-            MessageKindDto::ToolCall,
-            "{}",
-            None,
-            Some(call_id),
-            Some("read")
-        )
-        .is_ok()
+        row(MessageKindDto::ToolCall, "{}", None, Some(read_call(call_id))).is_ok(),
+        "a tool-call row carries its typed call projection"
     );
     assert!(
         row(
             MessageKindDto::ToolCall,
             "{}",
             Some("reasoning"),
-            Some(call_id),
-            Some("read")
+            Some(read_call(call_id))
         )
-        .is_err()
+        .is_err(),
+        "a call row carries no reasoning text"
     );
-    assert!(row(MessageKindDto::ToolCall, "{}", None, None, Some("read")).is_err());
+    assert!(
+        row(MessageKindDto::ToolCall, "{}", None, None).is_err(),
+        "a call row without its typed projection is refused"
+    );
     assert!(
         row(
             MessageKindDto::ToolCall,
             "{}",
             None,
-            Some(call_id),
-            Some(" ")
+            Some(read_result(call_id))
         )
-        .is_err()
+        .is_err(),
+        "a result projection never answers a call row"
     );
 
+    assert!(row(MessageKindDto::ToolResult, "contents", None, Some(read_result(call_id))).is_ok());
+    assert!(
+        row(MessageKindDto::ToolResult, " ", None, Some(read_result(call_id))).is_err(),
+        "an answering row carries its content"
+    );
+    assert!(
+        row(MessageKindDto::ToolResult, "contents", None, None).is_err(),
+        "a result row without its typed projection is refused"
+    );
     assert!(
         row(
             MessageKindDto::ToolResult,
             "contents",
             None,
-            Some(call_id),
-            Some("read")
+            Some(read_call(call_id))
         )
-        .is_ok()
-    );
-    assert!(
-        row(
-            MessageKindDto::ToolResult,
-            " ",
-            None,
-            Some(call_id),
-            Some("read")
-        )
-        .is_err()
-    );
-    assert!(row(MessageKindDto::ToolResult, "contents", None, None, None).is_err());
-
-    assert!(row(MessageKindDto::Notice, "notice", None, None, None).is_ok());
-    assert!(
-        row(
-            MessageKindDto::Notice,
-            "notice",
-            None,
-            Some(call_id),
-            Some("read")
-        )
-        .is_err()
+        .is_err(),
+        "a call projection never answers a result row"
     );
 
-    assert!(row(MessageKindDto::User, "bad\0text", None, None, None).is_err());
+    assert!(row(MessageKindDto::Notice, "notice", None, None).is_ok());
+    assert!(row(MessageKindDto::Notice, "notice", None, Some(read_call(call_id))).is_err());
+
+    assert!(row(MessageKindDto::User, "bad\0text", None, None).is_err());
     assert!(
         row(
             MessageKindDto::Assistant,
             "answer",
             Some("bad\0thought"),
-            None,
             None
         )
         .is_err()
@@ -514,7 +499,6 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
             "unbound notice",
             None,
             None,
-            None,
         )
         .is_ok()
     );
@@ -523,8 +507,7 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
         MessageKindDto::ToolCall,
         "{\"path\":\"src/lib.rs\"}",
         None,
-        Some(call_id),
-        Some("read"),
+        Some(read_call(call_id)),
     )
     .expect("tool-call row is valid");
     let decoded: MessageProjectionDto =
@@ -534,22 +517,36 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
     assert_eq!(decoded.id(), message_id);
     assert_eq!(decoded.kind(), MessageKindDto::ToolCall);
     assert_eq!(decoded.tool_call_id(), Some(call_id));
-    assert_eq!(decoded.tool_id(), Some("read"));
+    assert_eq!(
+        decoded.tool_id().map(ToolIdentityDto::wire_name),
+        Some("read")
+    );
     assert_eq!(decoded.text(), "{\"path\":\"src/lib.rs\"}");
 
     let mut additive = serde_json::to_value(&round_trip).expect("row serializes to JSON");
     additive["future_additive_field"] = serde_json::json!(true);
     assert!(serde_json::from_value::<MessageProjectionDto>(additive).is_ok());
 
-    // This wire form omits the optional run_id and reasoning fields and relies on their defaults.
+    // This wire form omits the optional run_id and reasoning fields and relies
+    // on their defaults while carrying its typed tool projection.
     assert!(
         serde_json::from_value::<MessageProjectionDto>(serde_json::json!({
             "id": 7,
             "session_id": session_id,
             "kind": "tool_result",
             "text": "contents",
-            "tool_call_id": call_id,
-            "tool_id": "read"
+            "tool": {
+                "row": "result",
+                "value": {
+                    "call_id": call_id,
+                    "tool_id": "read",
+                    "status": "completed",
+                    "result": {
+                        "result": "read",
+                        "value": {"text": "contents", "truncated": false}
+                    }
+                }
+            }
         }))
         .is_ok()
     );
@@ -560,7 +557,6 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
         None,
         MessageKindDto::Notice,
         "a notice",
-        None,
         None,
         None,
     )
@@ -580,4 +576,242 @@ fn transcript_rows_validate_their_closed_kind_shape_and_wire_round_trips() {
         }))
         .is_err()
     );
+}
+
+/// One committed tool row's typed projection survives the session frame's wire
+/// form unchanged, for both a call with typed arguments and a completed result
+/// with its status and metadata.
+#[test]
+fn a_tool_row_projection_round_trips_inside_the_session_frame() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let call_id = ToolCallId::new();
+    let arguments = ToolInput::from_arguments_json("read", "{\"path\":\"src/lib.rs\"}")
+        .expect("fixture arguments decode");
+    let metadata = vec![
+        ToolResultMetadataEntryDto::new("truncated", "false").expect("fixture metadata is valid"),
+    ];
+    let rows = [
+        (
+            MessageKindDto::ToolCall,
+            "{\"path\":\"src/lib.rs\"}",
+            ToolRowDto::Call(
+                ToolCallRowDto::new(
+                    call_id,
+                    ToolIdentityDto::parse("read").expect("the fixture tool is declared"),
+                    Some(arguments.clone()),
+                )
+                .expect("fixture call row is valid"),
+            ),
+        ),
+        (
+            MessageKindDto::ToolResult,
+            "contents",
+            ToolRowDto::Result(
+                ToolResultRowDto::new(
+                    call_id,
+                    ToolIdentityDto::parse("read").expect("the fixture tool is declared"),
+                    ToolResultStatusDto::Completed,
+                    Some(ToolResult::Read(TextResult {
+                        text: BoundedText::new("contents").expect("fixture text is bounded"),
+                        truncated: false,
+                    })),
+                    metadata.clone(),
+                )
+                .expect("fixture result row is valid"),
+            ),
+        ),
+    ];
+    for (index, (kind, text, tool)) in rows.into_iter().enumerate() {
+        let row = MessageProjectionDto::new(
+            MessageId::new(i64::try_from(index).expect("fixture index fits") + 1)
+                .expect("fixture row identity is valid"),
+            session_id,
+            Some(run_id),
+            kind,
+            text,
+            None,
+            Some(tool.clone()),
+        )
+        .expect("fixture row is valid");
+        let decoded: MessageProjectionDto =
+            serde_json::from_str(&serde_json::to_string(&row).expect("row serializes"))
+                .expect("row decodes");
+        assert_eq!(decoded, row);
+        assert_eq!(decoded.tool(), Some(&tool));
+        assert_eq!(decoded.tool_call_id(), Some(call_id));
+        assert_eq!(
+            decoded.tool_id().map(ToolIdentityDto::wire_name),
+            Some("read")
+        );
+    }
+}
+
+/// Every typed argument shape the six declared tools carry decodes into the
+/// call row its projection commits, and arguments of another tool's shape are
+/// refused rather than attached to the wrong identity.
+#[test]
+fn a_tool_call_projection_carries_every_typed_argument_shape() {
+    let documents = [
+        ("read", r#"{"path":"src/lib.rs"}"#),
+        (
+            "write",
+            r#"{"path":"src/lib.rs","content":"new","expected_content":"old"}"#,
+        ),
+        ("edit", r#"{"path":"src/lib.rs","old":"a","new":"b"}"#),
+        (
+            "execute",
+            r#"{"command":"cargo test","cwd":"src","env":[{"name":"MODE","value":"check"}],"timeout_seconds":5}"#,
+        ),
+        ("glob", r#"{"pattern":"**/*.rs"}"#),
+        (
+            "grep",
+            r#"{"pattern":"needle","scope":{"kind":"workspace"},"path":"src"}"#,
+        ),
+    ];
+    let mut identities = Vec::new();
+    for (tool_id, document) in documents {
+        let arguments =
+            ToolInput::from_arguments_json(tool_id, document).expect("fixture arguments decode");
+        assert_eq!(arguments.tool_id().as_str(), tool_id);
+        let call_id = ToolCallId::new();
+        let row = ToolRowDto::Call(
+            ToolCallRowDto::new(
+                call_id,
+                ToolIdentityDto::parse(tool_id).expect("the fixture tool is declared"),
+                Some(arguments.clone()),
+            )
+            .expect("fixture call row is valid"),
+        );
+        assert_eq!(row.call_id(), call_id);
+        assert_eq!(row.tool_id().wire_name(), tool_id);
+        assert_eq!(row.call().and_then(ToolCallRowDto::arguments), Some(&arguments));
+        let decoded: ToolRowDto =
+            serde_json::from_str(&serde_json::to_string(&row).expect("the row serializes"))
+                .expect("the row decodes");
+        assert_eq!(decoded, row, "{tool_id} round-trips its typed arguments");
+        identities.push(row.tool_id().wire_name().to_owned());
+    }
+    assert_eq!(
+        identities,
+        ToolId::ALL
+            .iter()
+            .map(|id| id.as_str().to_owned())
+            .collect::<Vec<_>>(),
+        "every declared tool carries an argument shape"
+    );
+
+    let read = ToolInput::from_arguments_json("read", r#"{"path":"src/lib.rs"}"#)
+        .expect("fixture arguments decode");
+    assert_eq!(
+        ToolCallRowDto::new(
+            ToolCallId::new(),
+            ToolIdentityDto::parse("glob").expect("the fixture tool is declared"),
+            Some(read),
+        )
+        .expect_err("arguments must belong to the row's declared tool")
+        .code(),
+        "invalid_tool_projection"
+    );
+    assert_eq!(
+        ToolCallRowDto::new(
+            ToolCallId::new(),
+            ToolIdentityDto::parse("mystery").expect("an undeclared identity is well-formed"),
+            Some(ToolInput::from_arguments_json("read", r#"{"path":"src/lib.rs"}"#).expect("decodes")),
+        )
+        .expect_err("an undeclared identity carries no typed arguments")
+        .code(),
+        "invalid_tool_projection"
+    );
+}
+
+/// One result projection carries the typed payload with the lifecycle status
+/// and the approved metadata, and its status rules are closed.
+#[test]
+fn a_tool_result_projection_carries_status_payload_and_metadata() {
+    let call_id = ToolCallId::new();
+    let metadata = vec![
+        ToolResultMetadataEntryDto::new("truncated", "true").expect("fixture metadata is valid"),
+    ];
+    let completed = ToolResultRowDto::new(
+        call_id,
+        ToolIdentityDto::parse("read").expect("the fixture tool is declared"),
+        ToolResultStatusDto::Completed,
+        Some(ToolResult::Read(TextResult {
+            text: BoundedText::new("contents").expect("fixture text is bounded"),
+            truncated: true,
+        })),
+        metadata.clone(),
+    )
+    .expect("a completed result carries its typed payload");
+    assert_eq!(completed.status(), ToolResultStatusDto::Completed);
+    assert_eq!(completed.metadata(), metadata.as_slice());
+    assert_eq!(
+        completed.result(),
+        Some(&ToolResult::Read(TextResult {
+            text: BoundedText::new("contents").expect("fixture text is bounded"),
+            truncated: true,
+        }))
+    );
+    let row = ToolRowDto::Result(completed);
+    let decoded: ToolRowDto =
+        serde_json::from_str(&serde_json::to_string(&row).expect("the row serializes"))
+            .expect("the row decodes");
+    assert_eq!(decoded, row);
+
+    let read_payload = ToolResult::Read(TextResult {
+        text: BoundedText::new("contents").expect("fixture text is bounded"),
+        truncated: false,
+    });
+    assert_eq!(
+        ToolResultRowDto::new(
+            call_id,
+            ToolIdentityDto::parse("read").expect("the fixture tool is declared"),
+            ToolResultStatusDto::Completed,
+            None,
+            Vec::new(),
+        )
+        .expect_err("a completed result carries its typed payload")
+        .code(),
+        "invalid_tool_projection"
+    );
+    assert_eq!(
+        ToolResultRowDto::new(
+            call_id,
+            ToolIdentityDto::parse("read").expect("the fixture tool is declared"),
+            ToolResultStatusDto::Failed,
+            Some(read_payload.clone()),
+            Vec::new(),
+        )
+        .expect_err("a failed result carries no payload")
+        .code(),
+        "invalid_tool_projection"
+    );
+    assert_eq!(
+        ToolResultRowDto::new(
+            call_id,
+            ToolIdentityDto::parse("glob").expect("the fixture tool is declared"),
+            ToolResultStatusDto::Completed,
+            Some(read_payload),
+            Vec::new(),
+        )
+        .expect_err("a payload must belong to the row's declared tool")
+        .code(),
+        "invalid_tool_projection"
+    );
+    let partial = ToolResultRowDto::new(
+        call_id,
+        ToolIdentityDto::parse("execute").expect("the fixture tool is declared"),
+        ToolResultStatusDto::Partial,
+        Some(ToolResult::Execute(ExecuteResult {
+            text: TextResult {
+                text: BoundedText::new("captured").expect("fixture text is bounded"),
+                truncated: false,
+            },
+            process: None,
+        })),
+        Vec::new(),
+    )
+    .expect("a partial result may carry the output it captured");
+    assert_eq!(partial.status(), ToolResultStatusDto::Partial);
 }

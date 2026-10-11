@@ -7,12 +7,14 @@
 mod common;
 
 use common::{DispatchCompleted, fixture_dir, service};
-use intention_proto::WorkspaceRelativePathDto;
+use intention_proto::{
+    BoundedText, EditInput, EnvVarDto, EnvVarNameDto, ExecuteInput, ExecuteResult, GlobInput, GrepInput,
+    GrepScope, ReadInput, ShellCommandTextDto, TextResult, ToolId, ToolInput, ToolResult,
+    ToolTimeoutSecondsDto, WorkspaceRelativePathDto, WriteInput,
+};
 use intention_tools::{
-    BoundedText, CancellationSignal, EditInput, EnvVarDto, EnvVarNameDto, ExecuteInput, GlobInput,
-    GrepInput, GrepScope, InterruptCause, ReadInput, ShellCommandTextDto, TextResult,
-    ToolDispatchOutcome, ToolId, ToolInput, ToolResult, ToolTimeoutSecondsDto, WriteInput,
-    model_visible_descriptors, partial_tool_result_content,
+    CancellationSignal, InterruptCause, ToolDispatchOutcome, model_visible_descriptors,
+    partial_tool_result_content,
 };
 
 /// Builds one `execute` input running `command` through the platform shell.
@@ -32,7 +34,7 @@ fn execute_uses_workspace_cwd_and_returns_typed_result() {
     let service = service(&root_dir);
     let command = if cfg!(windows) { "cd" } else { "pwd" };
     let result = service.dispatch_completed(execute_command(command), CancellationSignal::new());
-    let ToolResult::Execute(result) = result else {
+    let ToolResult::Execute(ExecuteResult { text: result, .. }) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
     let expected_root = std::fs::canonicalize(&root)
@@ -127,7 +129,7 @@ fn tool_service_covers_nonzero_execute_as_normalized_result() {
     // A known non-zero exit is a normalized program result on the typed
     // output path, not a transport-level error.
     let result = service.dispatch_completed(execute_command("exit 2"), CancellationSignal::new());
-    let ToolResult::Execute(result) = result else {
+    let ToolResult::Execute(ExecuteResult { text: result, .. }) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
     assert!(result.text.as_str().contains("exit_code:2"));
@@ -171,7 +173,7 @@ fn execute_cancellation_is_classified_as_a_stopped_interruption() {
         unreachable!("cancellation must interrupt the dispatch");
     };
     assert_eq!(cause, InterruptCause::Stopped);
-    let Some(ToolResult::Execute(value)) = partial else {
+    let Some(ToolResult::Execute(ExecuteResult { text: value, .. })) = partial else {
         unreachable!("the stopped execute captures the output of its collected pipes")
     };
     // Captured output keeps the completed rendering without the exit status
@@ -593,7 +595,7 @@ fn execute_success_reports_stderr_and_typed_success_status() {
         "printf err >&2"
     };
     let result = service.dispatch_completed(execute_command(command), CancellationSignal::new());
-    let ToolResult::Execute(result) = result else {
+    let ToolResult::Execute(ExecuteResult { text: result, .. }) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
     assert!(result.text.as_str().contains("stderr:\nerr"));
@@ -619,7 +621,7 @@ fn execute_inherits_the_invoking_environment() {
         "test -n \"$PATH\""
     };
     let result = service.dispatch_completed(execute_command(command), CancellationSignal::new());
-    let ToolResult::Execute(result) = result else {
+    let ToolResult::Execute(ExecuteResult { text: result, .. }) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
     assert!(
@@ -683,7 +685,7 @@ fn execute_reports_signal_termination_as_known_terminal_result() {
     let service = service(&root_dir);
     let result =
         service.dispatch_completed(execute_command("kill -TERM $$"), CancellationSignal::new());
-    let ToolResult::Execute(result) = result else {
+    let ToolResult::Execute(ExecuteResult { text: result, .. }) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
     // Signal termination renders from the typed status; there is no invented
@@ -730,7 +732,7 @@ fn execute_formats_success_and_truncates_both_streams() {
         }),
         CancellationSignal::new(),
     );
-    let ToolResult::Execute(small) = small else {
+    let ToolResult::Execute(ExecuteResult { text: small, .. }) = small else {
         unreachable!("dispatch returned a non-execute result")
     };
     assert!(!small.truncated);
@@ -748,7 +750,7 @@ fn execute_formats_success_and_truncates_both_streams() {
         }),
         CancellationSignal::new(),
     );
-    let ToolResult::Execute(value) = result else {
+    let ToolResult::Execute(ExecuteResult { text: value, .. }) = result else {
         unreachable!()
     };
     assert!(value.text.as_str().contains("stdout:"));
@@ -798,18 +800,18 @@ fn exact_typed_errors_cover_search_edit_and_spawn_failures() {
         execute_command("not-a-real-program"),
         CancellationSignal::new(),
     );
-    let ToolResult::Execute(result) = result else {
+    let ToolResult::Execute(ExecuteResult { text: result, .. }) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
     assert!(result.text.as_str().contains("exit_code:"));
     assert!(!result.text.as_str().contains("exit_code:0"));
 }
 
-/// The advertised list is the six exposed tools in order, each carrying a
-/// description and a model-facing input schema, and every advertised wire
-/// name decodes through the typed input authority.
+/// The advertised list is exactly the declared tool set in its advertisement
+/// order, each carrying a description and a model-facing input schema, and
+/// every advertised wire name decodes through the typed input authority.
 #[test]
-fn model_visible_descriptors_are_the_six_exposed_tools_in_order() {
+fn the_advertised_specs_are_the_declared_tool_set_in_order() {
     let expected = [
         ToolId::Read,
         ToolId::Write,
@@ -818,6 +820,11 @@ fn model_visible_descriptors_are_the_six_exposed_tools_in_order() {
         ToolId::Glob,
         ToolId::Grep,
     ];
+    assert_eq!(
+        expected,
+        ToolId::ALL,
+        "the fixture spells the whole declared tool set in advertisement order"
+    );
     let visible = model_visible_descriptors();
     assert_eq!(visible.len(), expected.len());
     for (spec, id) in visible.into_iter().zip(expected) {
@@ -1073,7 +1080,7 @@ fn dispatched_results_are_typed_and_redacted_for_every_concrete_tool() {
                 assert_eq!(value.matches[0].line, 1);
                 assert!(!value.truncated);
             }
-            (ToolResult::Execute(value), ToolId::Execute) => {
+            (ToolResult::Execute(ExecuteResult { text: value, .. }), ToolId::Execute) => {
                 assert!(value.text.as_str().contains("ok"));
                 assert!(!value.truncated);
             }
@@ -1093,7 +1100,7 @@ fn execute_runs_pipelines_redirects_and_compound_commands() {
         execute_command("printf 'b\\na\\n' | sort > sorted.txt && printf done"),
         CancellationSignal::new(),
     );
-    let ToolResult::Execute(result) = result else {
+    let ToolResult::Execute(ExecuteResult { text: result, .. }) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
     assert!(
@@ -1131,7 +1138,7 @@ fn execute_reports_a_declared_working_directory_and_environment() {
         timeout_seconds: None,
     });
     let result = service.dispatch_completed(input, CancellationSignal::new());
-    let ToolResult::Execute(result) = result else {
+    let ToolResult::Execute(ExecuteResult { text: result, .. }) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
     assert!(
