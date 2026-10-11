@@ -281,7 +281,10 @@ The tool lifecycle vocabulary is closed: `ToolLifecycleStatusDto` is `Admitted`,
 mapping one to one onto the matching terminal lifecycle member. The transition set is closed: none to `Admitted`;
 `Admitted` to `Cancelled`, `Started`, or `Rejected`; `Started` to `Completed`, `Failed`, or `Partial`. A `Partial`
 result records one execution that was interrupted before a final result, requires non-blank content exactly like a
-successful result, never terminalizes the run, and is never retried. Three interruption codes are recorded:
+successful result, never terminalizes the run, and is never retried. A run-level stop is not a tool outcome:
+`run.cancel` cancels a call in flight with the same stopped `Partial` result and notice, keeps a result that committed
+before the stop was honored, and ends the run `Interrupted` at its execution's next boundary instead of asking the
+model again. Three interruption codes are recorded:
 `tool_cancelled` when the caller stopped the call, `tool_timed_out` when the call's own declared deadline ended it, and
 `tool_execution_interrupted` when the call lost its process evidence; a call cut by its declared deadline also records
 `declared_timeout_seconds` beside its code, and the durable tag of a canonical partial document or terminal error is

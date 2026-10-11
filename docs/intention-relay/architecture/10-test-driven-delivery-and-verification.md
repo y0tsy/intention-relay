@@ -250,15 +250,19 @@ argument's name in the trailing column), the theme picker panel (its `Theme` tit
 description, the committed row's `> ` marker moving to the previewed row, its `enter apply | esc revert` legend, and a
 window too short for the panel keeping the input's rows), the same chat and welcome screens painted under both themes,
 a two-line buffer growing the input block and shrinking the transcript, the armed `Esc`
-clear and the `Ctrl+C` clear, exit, and interrupt notices, the human status row, transcript scrolling, and the docked
+clear and the `Ctrl+C` clear, exit, and stop notices, the stop the daemon's accepted reply confirms, the stop a
+lost subscription refuses to send, and the run whose stream died ending its own liveness, the human status row,
+transcript scrolling, and the docked
 sessions panel (its frame and embedded title, the tab radio row, the search bar, the table header, columns, cursor
 marker, and resize reflow, the footer legend and row counter, and the stub tabs' `@todo` empty state).
 `tests/terminal_e2e.rs` spawns the
-real binary against a real daemon and the scripted fake provider in eleven cases: NDJSON transient deltas before the
+real binary against a real daemon and the scripted fake provider in thirteen cases: NDJSON transient deltas before the
 committed row, the channel-tagged reasoning deltas that precede the answer they inform, progressive text output and
 completion, both REPL paths (a piped turn and input EOF), the prompt that creates the session it needs, an explicit
 continuation that reuses its session instead of creating one, every `/new` run creating a fresh session under one
-workspace root, a multi-line prompt reaching the session unchanged, the timeout interrupt with exit 4, and a typed
+workspace root, a multi-line prompt reaching the session unchanged, the timeout interrupt with exit 4, a SIGINT that
+stops the headless run's stalled round and ends the process with the interrupted status, a SIGINT that stops the REPL's
+stalled round and hands the loop back to its prompt, and a typed
 unknown-session rejection with exit 3. The binary's own unit tests cover the command
 grammar, the exit-status mapping, the workspace-root resolution, the REPL line loop, and the headless formats, drivers,
 and wait deadlines, including the reasoning-only row the text report leaves unwritten. The crate's inline unit tests cover the `AppState` transitions, the settings load and theme
@@ -274,9 +278,9 @@ reasoning-only row that owns one block with no answer line and the reasoning pla
 transcript layout cache's append-only fast path, width change, theme change, replacement, reasoning expansion,
 paired-result, and
 front-trim replays, and the clipboard-free source audit. A run of
-`cargo nextest run -p intention-tui` observed 369 tests across four binaries, all passing: 247 library unit tests,
-81 `tui_render` cases, 30 binary unit tests, and 11 `terminal_e2e` cases. A run of `cargo nextest run --workspace`
-observed 774 tests run, 774 passed, and 2 skipped.
+`cargo nextest run -p intention-tui` observed 375 tests across four binaries, all passing: 251 library unit tests,
+81 `tui_render` cases, 30 binary unit tests, and 13 `terminal_e2e` cases. A run of `cargo nextest run --workspace`
+observed 783 tests run, 783 passed, and 2 skipped.
 
 The per-crate self-checks are `cargo fmt -p intention-tui`, `cargo nextest run -p intention-tui`, and
 `cargo clippy -p intention-tui --all-targets`; the slice's acceptance gate is `make quick` during delivery and
@@ -311,7 +315,7 @@ decode failure and the unknown tool each commit the call row and one guided resu
 call is answered with its guidance, executes exactly once, and is never retried; the daemon end-to-end suite proves
 the real daemon completes the run, delivers the guidance-bearing tool row, and asks the fake provider exactly once
 more. The terminal adapter reads the call's `command` and declared `cwd` for its execute facts. A run of
-`cargo nextest run --workspace` observed 774 tests run, 774 passed, and 2 skipped; the acceptance gate is `make quick`
+`cargo nextest run --workspace` observed 783 tests run, 783 passed, and 2 skipped; the acceptance gate is `make quick`
 during delivery and `make verify` before merge.
 
 ### Slice 2 step-reasoning correction
@@ -328,6 +332,36 @@ and pins both the live stream order and the committed order — `assistant(reaso
 and the answering `assistant` row. The terminal render suite proves a reasoning-only row draws its reasoning block
 alone with no `∷` answer line, that a reasoned tool round paints its reasoning above the exchange it precedes, and that
 the headless text report writes no assistant line for a reasoning-only row.
+
+### Slice 2 run stop and live-run liveness
+
+A run can now be stopped for good, and no front end can be trapped by a run it cannot reach. Protocol contract tests
+carry `CancelRunCommandDto`, `ClientRequestDto::CancelRun`, `RunCancelledAcceptedDto`, and
+`ProtocolResultDto::RunCancelled` over the closed request and result vocabularies, so the wire has one terminal stop
+beside the interrupt that keeps a run alive. The engine owns the stop itself: `RunCancellation` carries it, five
+execution boundaries honour it — the loop top, a finished step, an interrupted step, the failed arm, and the boundary
+after a tool batch — and the honoured stop commits `[The run was stopped before a final answer.]` before
+`finish_run(Interrupted)`. `m5_tool_loop` proves a stop that arrives while the round select waits ends the run with one
+provider execution, one terminal commit, and the stop notice alone, and a stop the tool port raises while it answers
+its first call keeps that committed result and ends the run at the batch boundary instead of asking the model again.
+The daemon's end-to-end suite drives a real `execute {"command":"sleep 10"}` through the real daemon and stops it
+mid-flight: the run finishes `interrupted`, the tool result is the bounded partial with its stopped notice, the fake
+provider is asked exactly once, and the session's next turn is accepted. A stop whose run has no registered execution
+is terminalized durably `interrupted` the way recovery writes it, so the request never silently does nothing.
+
+The terminal front ends select SIGINT instead of dying from it. `AppState::live_run` is the one liveness rule — a live
+subscription and a non-terminal status — and the stream-loss handlers clear the phase and the tool watch, so a daemon
+that died ends the run's liveness instead of holding the front end's stop, clear, and exit arms. `Esc` stops a live run
+in one press, `Ctrl+C` arms the stop and fires it on the second, and the line front ends wire the same request to a
+SIGINT receiver every wait selects on: the REPL stops the live run and returns to its prompt (a signal at the prompt
+leaves the loop like `/quit`), and `run <PROMPT>` reports the interrupted outcome with status 5. Inline unit tests cover
+the stop request and its notice, the stop a live subscription refuses to send, the accepted and failed stop reports, and
+the liveness the stream-loss handlers end. `tests/terminal_e2e.rs` proves both process contracts against a real daemon
+with a stalled provider: the SIGINT stops the round, the process ends with the interrupted status, the stop notice and
+the terminal run status are durable, and the REPL prompt comes back for the next line. A run of
+`cargo nextest run -p intention-tui` observed 375 tests across four binaries, all passing, and
+`cargo nextest run --workspace` observed 783 tests run, 783 passed, and 2 skipped; the acceptance gate is `make quick`
+during delivery and `make verify` before merge.
 
 ### Future package evidence
 

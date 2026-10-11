@@ -41,8 +41,9 @@ filesystem-dependent validation, provider call, or other external action runs in
 committed state.
 6. A user turn accepted while a run is active is recorded pending and joins that run's live context at the next model
 boundary; it never starts a second run.
-7. `Interrupted` is a recovery-only terminal status: an unfinished run becomes `Interrupted` on restart and never
-silently resumes, while `run.interrupt` leaves the live run `Running` and continues its work.
+7. `Interrupted` is the terminal status of a run that never finished: an unfinished run becomes `Interrupted` on restart
+and never silently resumes, and `run.cancel` ends the live run the same way, while `run.interrupt` leaves the live run
+`Running` and continues its work.
 8. The transcript is the durable record of user, assistant, and notice content; every completed tool call has exactly
 one structured `tool_results` row.
 9. A stopped model answer is durable: the text a step produced before the stop is committed as the assistant message
@@ -60,6 +61,7 @@ stateDiagram
   Running --> Completed: terminal model result
   Running --> Failed: unrecoverable error
   Running --> Interrupted: daemon restart
+  Running --> Interrupted: run.cancel
   Completed --> [*]
   Failed --> [*]
   Interrupted --> [*]
@@ -68,8 +70,9 @@ stateDiagram
 Interruption is not a run state. `run.interrupt` is accepted only for an exact active run, commits no durable status
 change, commits the stopped model answer's text with the `[interrupted]` marker before the durable notice message for
 the stopped provider stream or tool call, resets the run's cancellation signal, and the run continues with its next
-model step; `Cancelling` and `Cancelled` no longer exist, and `Interrupted`
-remains recovery-only. The closed status vocabulary is `Starting`, `Running`, `Completed`, `Failed`, and
+model step; `Cancelling` and `Cancelled` no longer exist, and the only endings that write `Interrupted` are recovery
+for an unfinished run and the terminal `run.cancel` stop. The closed status vocabulary is `Starting`, `Running`,
+`Completed`, `Failed`, and
 `Interrupted`; the live path creates every run in `Starting`, and a terminal repository transition commits its state
 change in one transaction.
 
@@ -193,7 +196,9 @@ The daemon task and interruption registries are keyed by exact `(SessionId, RunI
 serialize through that registry: a host inserts a provider-neutral cancellation signal before spawning a newly admitted
 durable `Starting` run and deduplicates repeated admission. `run.interrupt` validates the exact active run, then signals
 that exact task; an interrupt that arrives before admission finds no in-flight operation to stop, changes no durable
-state, and the run's next boundary continues normally. A tool call interrupted before it starts is answered with the
+state, and the run's next boundary continues normally. `run.cancel` takes the same registry with the opposite intent:
+a registered execution's signal carries the stop, so the run ends `Interrupted` at its next boundary, and an active run
+no registered execution owns is terminalized durably `Interrupted` by the host, so a stop never silently does nothing. A tool call interrupted before it starts is answered with the
 stopped-tool-call notice as a `Partial` result, so no effect starts and the assistant tool-call message stays answered.
 The fixed notice for a stopped provider stream or another call without its own result is
 `[The call was stopped before a final result.]`; the tool-call notices are owned by [architecture
@@ -202,6 +207,16 @@ The fixed notice for a stopped provider stream or another call without its own r
 command path, which rejects it with `invalid_interrupt_dispatch`.
 An interrupt that arrives during a retry wait records the notice and starts the next attempt immediately. The executor
 owns suppression of late results from the stopped call. Recovery never admits old work to a provider.
+
+`run.cancel` is the terminal stop and the only command that ends a live run. It is accepted only for an exact active
+run (`active_run_not_found` otherwise) and lands at the execution's next boundary — the round select, the step finish,
+a retry wait, a tool batch, or the loop top — so committed work stays committed: a provider round in flight is
+cancelled, a tool batch whose results already committed is answered before the stop is honored, and the run commits the
+fixed `[The run was stopped before a final answer.]` notice through the same terminal-transition transaction as every
+other ending before it finishes `Interrupted`. A stopped run never continues: no successor round, no retry, and no
+second provider request. A stop whose run has no registered execution — its task returned while the run stayed active —
+is terminalized durably `Interrupted` the way recovery writes it, so the request never silently does nothing, and a run
+that is already terminal makes it a no-op.
 
 A filesystem-dependent validation must finish before the transition transaction, and any stale result becomes a
 typed known pre-effect outcome rather than an unrecorded second external check inside the transaction.

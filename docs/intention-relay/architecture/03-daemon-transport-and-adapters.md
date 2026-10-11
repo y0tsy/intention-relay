@@ -49,6 +49,7 @@ table: a request variant is the operation, and the reply variant is its typed re
 | `SendUserTurn` | `SendUserTurnCommandDto` | `TurnAccepted` |
 | `RemoveTurn` | `RemoveTurnCommandDto` | `TurnRemoved` |
 | `InterruptRun` | `InterruptRunCommandDto` | `RunInterrupted` |
+| `CancelRun` | `CancelRunCommandDto` | `RunCancelled` |
 | `GetSessionSnapshot` | `GetSessionSnapshotQueryDto` | `SessionSnapshot` |
 | `GetDaemonHealth` | none | `DaemonHealth` |
 | `ListSessions` | none | `SessionsListed` |
@@ -340,6 +341,13 @@ text above is the live policy.
   `--format text|json` belong to `run` alone, and `--session` with `--continue` is a usage rejection. The three modes
   are contract-equivalent over one `intention-client` surface, and no presentation logic enters the daemon: the daemon
   exposes no terminal mode, no output format, and no renderer state.
+- Stop, and what a signal means. `run.cancel` is the terminal stop behind every stop gesture: the fullscreen chat's
+  `Esc` stops a live run in one press and its `Ctrl+C` arms the same stop, while the line front ends turn SIGINT into
+  exactly that request — the REPL stops the run and returns to its prompt, and `run` reports the interrupted outcome
+  with the interrupted status — so no terminal front end lets a signal kill the process while a run it was watching
+  keeps working in the daemon. At the REPL prompt the same signal leaves the loop the way `/quit` does, after stopping
+  a run the loop still observes. Every wait in a line front end selects on one SIGINT receiver, so one press does
+  exactly one thing.
 - Closed typed process status. Every mode ends with one of the closed statuses — 0 completed, 1 usage, 2 daemon or
   transport, 3 typed rejection or failed run, 4 timeout after an interrupt, 5 interrupted run — and the binary writes
   its output through explicit writers, never through printing macros.
@@ -464,15 +472,18 @@ text above is the live policy.
   rename, archive, and tree notices whose core support does not exist yet, `Esc` closes the browser, reverts the
   picker's preview, or layers the chat's band, cancel, clear, and exit meanings, and `Ctrl+Q` always exits immediately.
   `Esc` on the chat closes the command hint band first while it is
-  open and touches nothing else; with the band closed it is the cancel, clear, and exit key: a live run is
-  cancelled by a single press with no arming, a non-empty line arms the clear on the first press and needs a second
+  open and touches nothing else; with the band closed it is the stop, clear, and exit key: a live run is
+  stopped by a single press with no arming, a non-empty line arms the clear on the first press and needs a second
   consecutive press to abandon the line into the recallable history, exactly as one `Ctrl+C` press does, and an empty
-  line exits. `Ctrl+C` is layered: with an active run, the first press arms the
-  interrupt and shows its notice while a second consecutive press interrupts the run; with no run and a non-empty
-  input, the press pushes the line into the recallable history and clears it; with no run and an empty input, the first
+  line exits. `Ctrl+C` is layered: with a live run, the first press arms the
+  stop and shows its notice while a second consecutive press stops the run; with no live run and a non-empty
+  input, the press pushes the line into the recallable history and clears it; with no live run and an empty input, the first
   press arms the exit and a second consecutive press quits; any other user action disarms, while a live run's own
-  reports — committed rows, transient deltas, and elapsed ticks — leave an armed interrupt standing, so an armed
-  interrupt whose run ended by itself re-arms as the exit instead of quitting. The two arming states are separate: one
+  reports — committed rows, transient deltas, and elapsed ticks — leave an armed stop standing, so an armed
+  stop whose run ended by itself re-arms as the exit instead of quitting. A run is live only while a live subscription
+  observes it: a terminal status, a stream the daemon closed, or a connection that failed all end its liveness, so the
+  stop is offered only for a run this front end can reach and a daemon that died never keeps the clear and exit arms
+  unreachable. The two arming states are separate: one
   key's press disarms the other arm but never counts as its second press. `Home` and `End` move inside the line the
   cursor is on, while `Left` and `Right` cross line breaks like any other character. The mouse wheel is the scrolling
   and navigation input, and mouse capture is on so a notch reaches the front end: in the chat it moves the transcript

@@ -146,7 +146,7 @@ window, `Enter` committing through the daemon, and `Esc` reverting), the daemon-
 configuration revision), a committed transcript laid out once and cached per pane width, theme, and transcript
 version, a
 wheel-driven transcript, and layered `Ctrl+C` and `Esc` (an arming press, then
-a consecutive interrupting, history-pushing, or quitting press; a single `Esc` cancels a live run). Session creation
+a consecutive stopping, history-pushing, or quitting press; a single `Esc` stops a live run). Session creation
 resolves the
 durable workspace binding of its root, so one root carries an unbounded number of sessions. The slice also froze the
 terminal client contract: TUI, REPL, and headless modes are contract-equivalent over one `intention-client` surface,
@@ -167,7 +167,12 @@ correction closes the slice's reasoning
 gap: every completed step commits one assistant row whenever it produced text or reasoning, a reasoning-only row
 commits before its own step's tool rows carrying an empty `text` and the step's whole reasoning, and the context
 rebuild skips it, so a live transcript keeps a tool round's reasoning above its exchange and a reload shows that same
-order.
+order. The last correction gives the slice a terminal stop and a liveness rule: `run.cancel` ends an exact active run
+`Interrupted` at its execution's next boundary with `[The run was stopped before a final answer.]` committed first, so a
+stop is durable and never silently does nothing while committed work stays committed; every terminal front end reaches
+it — `Esc` in one press, `Ctrl+C` on the arm's second press, and SIGINT in the line front ends (the REPL stops the run
+and returns to its prompt, `run <PROMPT>` reports the interrupted outcome) — and a run counts as live only while a live
+subscription observes it, so a daemon that died cannot hold a front end's stop, clear, and exit arms.
 -  **Slice 3 — Instruction sources and system context — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
 deployment instruction profile adapted from the legacy Antibusy static prompt set, user-authored fragments at user,

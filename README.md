@@ -166,7 +166,13 @@ The terminal client shares one command grammar across its three modes
 `intention-client`, renders the step's answer and reasoning as separate
 transient delta channels until the committed row replaces them, and ends with a
 closed typed status set: 0 completed, 1 usage, 2 daemon or transport, 3 typed
-rejection or failed run, 4 timeout after an interrupt, 5 interrupted run. The
+rejection or failed run, 4 timeout after an interrupt, 5 interrupted run. A run
+ends for good through the daemon's `run.cancel`, never by killing a front end:
+`Esc` stops a live run in one press and `Ctrl+C` arms the same stop, the line
+front ends turn SIGINT into that same request — the REPL stops the run and
+returns to its prompt, and `run <PROMPT>` reports the interrupted outcome — and
+a run counts as live only while a live subscription observes it, so a daemon
+that died never traps the exit keys. The
 interactive modes open no session at launch: the fullscreen UI starts on its
 welcome surface, and a session appears only for an explicit
 `--session`/`--continue`, `/new`, a browser row, or the first prompt, which
@@ -349,8 +355,9 @@ What `main` does not yet provide (all of it is documented roadmap work):
   previewing picker panel) and the daemon-owned effective theme,
   caches the committed transcript layout,
   streams the live tail through the same block functions as the committed rows,
-  and layers `Ctrl+C` and `Esc` into consecutive-press arms for interrupting,
-  history-pushing, and quitting (a single `Esc` cancels a live run).
+  and layers `Ctrl+C` and `Esc` into stop, history-pushing, and quitting arms (a
+  single `Esc` stops a live run, and a run counts as live only while a live
+  subscription observes it).
 - Out of scope for v1: Web/remote transport, multi-user access, sandboxed
   execution, and automatic run resumption.
 
