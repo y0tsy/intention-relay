@@ -390,8 +390,8 @@ beyond the nine identity newtypes and the plain step and group indices.
 
 ## Dependencies and non-goals
 
-This document depends on the one-capability-path rules. It retains the future `sub_agent` tool contract, admission, and
-generic tool-effect boundary. Architecture 18 owns the future `mcp` tool's source/discovery/capability/invocation
+This document depends on the one-capability-path rules. It retains the `sub_agent` tool contract, admission, and
+generic tool-effect boundary, which the third slice of Milestone 5+ delivers. Architecture 18 owns the future `mcp` tool's source/discovery/capability/invocation
 semantics; this document retains tool identity, admission, and generic loop ownership. Architecture 19 owns
 Gateway/RLM attachment, grants, bridge operation correlation, and bridge-visible delivery; its ingress must use this
 document's frozen tool selection, admission, `ToolCallId`, start/result state, and publication from the commit

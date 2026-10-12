@@ -32,7 +32,7 @@ Do **not** use this skill for:
 - implementing a milestone from an already approved specification;
 - a generic plan that is not governed by this repository's Intention Relay documentation;
 - a read-only audit, code review, or a request only to enumerate milestones;
-- a physical M7 plan artifact, which is product behavior owned by `intention-plans`, not a Droid planning document;
+- a physical plan artifact (M5+ Slice 3), which is product behavior owned by `intention-plans`, not a Droid planning document;
 - an unrelated Factory, BYOK, CI, or environment failure unless the user explicitly includes it in the milestone scope.
 
 Do not treat a legacy implementation detail as a target-architecture decision. The architecture documents override legacy implementation details; the selected legacy baseline is only user-facing behavior evidence.
@@ -135,7 +135,7 @@ Use this structure:
 - <later milestone or excluded work>
 ```
 
-Do not create, edit, or store a pre-draft in the repository during discovery. Do not confuse it with M7 physical plans.
+Do not create, edit, or store a pre-draft in the repository during discovery. Do not confuse it with the slice's physical plan artifacts.
 
 ## 5. Consolidate the draft
 
