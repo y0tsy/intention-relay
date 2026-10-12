@@ -20,9 +20,9 @@ use std::{
 };
 
 use intention_engine::{
-    ApplicationService, ModelRunExecutionService, ModelSleepFuture, ModelTextDeltaPort,
-    ModelTimePort, RunCancellation, SessionCommitDto, SessionCommitObserver, ToolExecutionPort,
-    ToolInvocationRequestDto, ToolResultOutcomeDto, fail_starting_run,
+    ApplicationService, ModelRunExecutionOutcomeDto, ModelRunExecutionService, ModelSleepFuture,
+    ModelTextDeltaPort, ModelTimePort, RunCancellation, SessionCommitDto, SessionCommitObserver,
+    ToolExecutionPort, ToolInvocationRequestDto, ToolResultOutcomeDto, fail_starting_run,
 };
 use intention_proto::{
     CancelRunCommandDto, ClientRequestDto, DtoResult, ErrorDto, MessageKindDto, RunId,
@@ -208,6 +208,27 @@ type HostRecorder = NoopExecutionRecorder;
 #[cfg(any(test, feature = "test-support"))]
 type HostRecorder = RecordingExecutionRecorder;
 
+/// Reports one finished execution's terminal failure on stderr.
+///
+/// The reason of a failed run is durable in the run's own outcome columns, and
+/// no client-visible projection carries it: a run that failed is otherwise
+/// indistinguishable from one that was stopped, for every client and for the
+/// fixture suites that drive a real daemon. The line names the safe code and
+/// message the run recorded, so the daemon's only observable log carries what
+/// the durable state knows.
+#[allow(
+    clippy::print_stderr,
+    reason = "A failed run's reason is durable but carried by no client-visible projection, so the daemon's log is the only place it can be observed."
+)]
+fn report_execution_failure(result: &DtoResult<ModelRunExecutionOutcomeDto>) {
+    let error = match result {
+        Err(error) => error,
+        Ok(ModelRunExecutionOutcomeDto::Failed { error, .. }) => error,
+        Ok(ModelRunExecutionOutcomeDto::Completed { .. }) => return,
+    };
+    eprintln!("run_failed: {}: {}", error.code(), error.message());
+}
+
 struct HostState {
     facade: DaemonApplicationFacade,
     data: Mutex<HostData>,
@@ -297,6 +318,7 @@ impl HostState {
             .execute(input)
             .await;
             deltas.finish();
+            report_execution_failure(&result);
             // An executor error must never leave a non-terminal durable run
             // without an owner (PR24-012/013): a still-active run is
             // terminalized as `Failed` with the executor's stable error code.
