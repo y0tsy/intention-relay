@@ -530,6 +530,15 @@ provider model (OD-13), live per-round usage (OD-15), the in-UI launch failure (
 (OD-9) and a configurable run-mode default (OD-5) — are not rows. `make verify` and `make docs-check architecture` stay
 the gate the merge step owes; this record measures `make quick`.
 
+The five-lane re-audit then read the frozen tip `79082b4` and found every MR-1…MR-31 fixed under the audit's own criteria,
+with the roadmap's whole open-decisions record re-checked and every row stamped `re-audited: L5 79082b4`. It also found
+two defects in the code this pass had just written, and fixed them before acceptance: `87786d7` bounds a lost stream to
+its one reconnect and restores the budget only from a delivered frame, `ef5dc69` ends the waiting phase a rejected create
+started, `67e5423` corrects the live continue-failure name and the `docs-check` rule list, and `19f8ba3` repairs two
+stale mechanism comments. The owner then withdrew a rejected design rather than ledgering it: `40c2dc3` removes the
+non-terminal interrupt command end to end, and `0227953` spells the theme registry with the wire vocabulary so the
+adapter re-declares nothing. `make quick` at that closing tip runs 855 passed and 2 skipped.
+
 ### Future package evidence
 
 Evidence obligations for systems that are not activated are owned by their documents; this document keeps only the
