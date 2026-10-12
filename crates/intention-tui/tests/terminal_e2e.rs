@@ -37,7 +37,19 @@ use tempfile::TempDir;
 const DAEMON_DEADLINE: Duration = Duration::from_secs(20);
 
 /// The bounded window one spawned terminal process has to exit in.
+///
+/// The bound catches a hang, never a performance budget: every interactive
+/// scenario exits well inside it, and the one fixture that scripts a hundred
+/// provider rounds derives its own bound from them with [`run_deadline`].
 const CLI_DEADLINE: Duration = Duration::from_secs(30);
+
+/// What one scripted provider round may add to a heavy scenario's wait.
+///
+/// The loaded Windows runner spends about a quarter of a second per round of
+/// real provider, tool, and commit work, so one allowance per round is more than
+/// twice the slowest round observed and would still cover a fixture that paced
+/// every one of them.
+const ROUND_WAIT: Duration = Duration::from_millis(500);
 
 /// The bounded window one post-run durable observation has to appear in.
 ///
@@ -173,6 +185,15 @@ impl TerminalHost {
     /// A supplied input is written and the pipe is closed, so a line front end
     /// reads it as a script and then as end-of-input.
     fn run(&self, arguments: &[&str], input: Option<&str>) -> CliOutput {
+        self.run_within(arguments, input, CLI_DEADLINE)
+    }
+
+    /// Runs the real terminal binary within one caller-supplied bound.
+    ///
+    /// The bound catches a hang. A scenario whose fixture performs far more work
+    /// than the interactive default expects passes the bound its own work needs,
+    /// which [`run_deadline`] derives from the fixture's round count.
+    fn run_within(&self, arguments: &[&str], input: Option<&str>, bound: Duration) -> CliOutput {
         let mut command = Command::new(env!("CARGO_BIN_EXE_intention-tui"));
         command.args(arguments);
         command.env(ENDPOINT_VARIABLE, self.endpoint.instance_id());
@@ -201,7 +222,7 @@ impl TerminalHost {
             // The dropped handle closes the pipe; the line front ends read that
             // as end-of-input after the scripted lines.
         }
-        collect(&mut child, Instant::now() + CLI_DEADLINE)
+        collect(&mut child, bound)
     }
 
     /// Spawns the real terminal binary with piped streams the test drives.
@@ -264,8 +285,21 @@ struct CliOutput {
     stderr: String,
 }
 
-/// Waits for one spawned front end and collects its two output streams.
-fn collect(child: &mut Child, deadline: Instant) -> CliOutput {
+/// Returns the process-wait bound one run of `provider_rounds` rounds is allowed.
+///
+/// The interactive default catches a hang for a scenario that walks a handful of
+/// rounds. A run that commits more rows than the client retains walks one tool
+/// round per committed pair plus the answer that ends it, and every one of those
+/// rounds is real provider, tool, and commit work, so its bound grows with the
+/// count the fixture scripts: the default plus [`ROUND_WAIT`] per round. The
+/// derivation is that count, so the bound cannot drift from the work.
+fn run_deadline(provider_rounds: usize) -> Duration {
+    let rounds = u32::try_from(provider_rounds).expect("a fixture's round count fits the wait");
+    CLI_DEADLINE + ROUND_WAIT * rounds
+}
+
+/// Waits for one spawned front end within its bound and collects its output.
+fn collect(child: &mut Child, bound: Duration) -> CliOutput {
     let stdout = child
         .stdout
         .take()
@@ -276,7 +310,7 @@ fn collect(child: &mut Child, deadline: Instant) -> CliOutput {
         .expect("the piped stderr handle is present");
     let stdout_reader = thread::spawn(move || read_all(stdout));
     let stderr_reader = thread::spawn(move || read_all(stderr));
-    let status = wait_for_exit(child, deadline);
+    let status = wait_for_exit(child, bound);
     let stdout = stdout_reader.join().expect("the stdout reader finishes");
     let stderr = stderr_reader.join().expect("the stderr reader finishes");
     CliOutput {
@@ -450,8 +484,9 @@ fn redirect_directories(command: &mut Command, config_home: &Path, state_home: &
     }
 }
 
-/// Waits for one child process within a bounded window and reaps it on expiry.
-fn wait_for_exit(child: &mut Child, deadline: Instant) -> ExitStatus {
+/// Waits for one child process within its bound and reaps it on expiry.
+fn wait_for_exit(child: &mut Child, bound: Duration) -> ExitStatus {
+    let deadline = Instant::now() + bound;
     loop {
         if let Some(status) = child
             .try_wait()
@@ -464,7 +499,7 @@ fn wait_for_exit(child: &mut Child, deadline: Instant) -> ExitStatus {
             let _ = child.wait();
             panic!(
                 "the terminal client exits within {} seconds",
-                CLI_DEADLINE.as_secs()
+                bound.as_secs()
             );
         }
         thread::sleep(POLL_INTERVAL);
@@ -686,11 +721,17 @@ fn a_run_past_the_retention_bound_reports_every_committed_row() {
         committed > RETAINED_TRANSCRIPT_MESSAGES,
         "the fixture run crosses the client's retention bound"
     );
+    // The provider serves one round per tool round, plus the answer that ends
+    // the run. That count is the work this run performs, so it is both the
+    // request count asserted below and the derivation of the wait this heavy
+    // scenario is allowed.
+    let requests = rounds + 1;
     let host = TerminalHost::new(ProviderEndpoint::rounds(rounds), Some(WORKSPACE_FILE));
     let workspace = host.workspace_root();
-    let output = host.run(
+    let output = host.run_within(
         &["run", PROMPT, "--format", "json", "--workspace", &workspace],
         None,
+        run_deadline(requests),
     );
     assert_eq!(
         output.code,
@@ -750,7 +791,7 @@ fn a_run_past_the_retention_bound_reports_every_committed_row() {
     assert_eq!(result["outcome"].as_str(), Some("completed"));
     assert_eq!(
         host.scripted_provider().request_count(),
-        rounds + 1,
+        requests,
         "the provider serves every tool round and the answer that ends the run"
     );
     assert_eq!(
@@ -1382,7 +1423,7 @@ fn a_sigint_stops_the_live_run_and_ends_the_headless_process_with_five() {
     let session = wait_for_user_turn(&host);
 
     send_sigint(&child);
-    let output = collect(&mut child, Instant::now() + CLI_DEADLINE);
+    let output = collect(&mut child, CLI_DEADLINE);
 
     assert_eq!(
         output.code,
@@ -1421,7 +1462,7 @@ fn a_sigint_stops_the_live_run_and_returns_the_repl_to_its_prompt() {
         .expect("the quit command writes");
     stdin.flush().expect("the command reaches the front end");
     drop(stdin);
-    let output = collect(&mut child, Instant::now() + CLI_DEADLINE);
+    let output = collect(&mut child, CLI_DEADLINE);
 
     assert_eq!(
         output.code,
@@ -1512,7 +1553,7 @@ fn a_stream_that_closes_before_a_terminal_status_reports_the_clients_failure() {
     host.occupy_endpoint();
     daemon_process::kill(&mut host.daemon);
 
-    let output = collect(&mut child, Instant::now() + CLI_DEADLINE);
+    let output = collect(&mut child, CLI_DEADLINE);
     assert_eq!(
         output.code,
         Some(2),
