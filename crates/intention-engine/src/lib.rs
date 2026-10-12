@@ -781,7 +781,10 @@ mod tests {
     )]
 
     use super::tool_result_metadata;
-    use intention_proto::{PathsResult, ToolResult, WriteResult};
+    use intention_proto::{
+        BoundedText, ExecuteResult, GrepResult, PathsResult, TextResult, ToolProcessStatus,
+        ToolResult, WriteResult,
+    };
 
     #[test]
     fn truncation_is_reported_as_approved_metadata() {
@@ -799,5 +802,31 @@ mod tests {
                 .expect("complete metadata is valid")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn execute_and_grep_truncation_report_approved_metadata() {
+        let executed = ToolResult::Execute(ExecuteResult {
+            text: TextResult {
+                text: BoundedText::new("cut output").expect("fixture output is valid"),
+                truncated: true,
+            },
+            process: Some(ToolProcessStatus::Success),
+        });
+        let searched = ToolResult::Grep(GrepResult {
+            matches: Vec::new(),
+            truncated: true,
+        });
+        for result in [executed, searched] {
+            let metadata = tool_result_metadata(&result).expect("truncation metadata is valid");
+            assert_eq!(
+                metadata
+                    .iter()
+                    .map(|entry| (entry.key(), entry.value()))
+                    .collect::<Vec<_>>(),
+                vec![("truncated", "true")],
+                "a result cut by its own bound carries the approved entry"
+            );
+        }
     }
 }

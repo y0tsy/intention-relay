@@ -1941,3 +1941,172 @@ fn a_committed_tool_result_row_carries_status_and_metadata() {
     assert_eq!(payload.text.as_str(), "x".repeat(64 * 1024));
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn active_run_returns_the_exact_active_run_and_rejects_every_other_lookup() {
+    // The terminal stop resolves through this lookup: only the session's own
+    // exact active run may be addressed, so another run identity and a session
+    // with no active run answer the same typed rejection.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let active = RunProjectionDto::new(
+        session_id,
+        run_id,
+        TurnId::new(),
+        RunStatusDto::Running,
+        fixture_snapshot().revision_id(),
+        None,
+        fixture_time(),
+        None,
+        0,
+    )
+    .expect("fixture run projection is coherent");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .loaded_projection
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) =
+        Some(projection(session_id, Some(active), Vec::new()));
+
+    let service = ApplicationService::new(&repository);
+    assert_eq!(
+        service
+            .active_run(session_id, run_id)
+            .expect("the session's exact active run is returned")
+            .run_id(),
+        run_id
+    );
+    assert_eq!(
+        service
+            .active_run(session_id, RunId::new())
+            .expect_err("a run the session does not own is never its active run")
+            .code(),
+        "active_run_not_found"
+    );
+
+    *repository
+        .loaded_projection
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+    assert_eq!(
+        service
+            .active_run(session_id, run_id)
+            .expect_err("a session without an active run has none to address")
+            .code(),
+        "active_run_not_found"
+    );
+}
+
+#[test]
+fn a_failed_creation_propagates_without_accepting_its_first_turn() {
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Err(ErrorDto::unavailable(
+        "storage_busy",
+        "the durable store is locked",
+    ));
+
+    let error = ApplicationService::new(&repository)
+        .create_session(
+            create_with_first_turn(session_id, IdempotencyKey::new(), "first"),
+            fixture_snapshot(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
+        .expect_err("a creation failure other than the replay conflict is propagated");
+    assert_eq!(error.code(), "storage_busy");
+    assert_eq!(
+        repository
+            .calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone(),
+        vec!["create_session"],
+        "a failed creation never reaches the first turn it carried"
+    );
+}
+
+#[test]
+fn starting_run_context_replays_committed_notices_to_the_model() {
+    // A notice is durable transcript evidence the model must see: the rebuilt
+    // context carries it as a notice-role message in committed order.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let context = StartingRunModelContextDto::new(
+        session_id,
+        run_id,
+        fixture_snapshot(),
+        vec![
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                None,
+                MessageKindDto::User,
+                "read the file",
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                Some(run_id),
+                MessageKindDto::Notice,
+                intention_engine::INTERRUPT_NOTICE,
+                None,
+                None,
+            )
+            .expect("a committed notice row is coherent"),
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                Some(run_id),
+                MessageKindDto::User,
+                "continue",
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+        ],
+    )
+    .expect("fixture context is valid");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .starting_context
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(context);
+
+    let scheduled = ApplicationService::new(&repository)
+        .schedule_starting_run(session_id, run_id, RunCancellation::new())
+        .expect("a committed notice schedules the next run");
+    let messages = scheduled.request().messages();
+    assert_eq!(messages.len(), 3, "every committed row replays in order");
+    assert_eq!(messages[0].role(), ModelRoleDto::User);
+    assert_eq!(messages[1].role(), ModelRoleDto::Notice);
+    assert_eq!(messages[1].content(), intention_engine::INTERRUPT_NOTICE);
+    assert_eq!(messages[2].role(), ModelRoleDto::User);
+    assert_eq!(messages[2].content(), "continue");
+}
+
+#[test]
+fn a_tool_call_carrying_a_nul_never_commits_evidence() {
+    // Durable transcript rows are NUL-free, so a model call whose arguments
+    // carry one cannot leave a call row: the invocation fails closed and
+    // commits neither the call nor a result.
+    let root = hello_tool_root("nul-arguments");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let error = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt")
+                .with_arguments_json("{\"path\":\"hel\0lo.txt\"}"),
+            &RecordingCommitObserver::new(),
+        )
+        .expect_err("a call whose evidence cannot commit fails closed");
+    assert_eq!(error.code(), "invalid_message");
+    assert!(repository.committed_messages().is_empty());
+    assert!(repository.committed_results().is_empty());
+    let _ = fs::remove_dir_all(root);
+}
