@@ -133,7 +133,7 @@ model, system-prompt, and provider-profile parameters are deliberately absent an
 delivers one window — the chat panel and the sessions panel docked to the window's bottom rows, never an overlay — over
 one light/dark palette system that is the sole colour system, with a welcome surface (the product lockup and the
 version/`AGENTS.md`/`MCPs`/`Skills` overview) while no session is open — a launch opens no session, not even the most
-recent one — a multi-line input block that grows a row per buffer line, user cards and assistant answers rendered as
+recent one — a multi-line input block that grows with its buffer up to its share of the panel, user cards and assistant answers rendered as
 markdown, committed reasoning as its own block, the leading-slash command registry with the hint band it feeds above
 the input block (a ranked, filtered `/new`, `/sessions`, and `/theme` list whose registry declares each command's
 arguments, so the argument word lists the declared `light`/`dark` values in the same three columns; the input history

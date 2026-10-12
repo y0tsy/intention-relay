@@ -445,8 +445,9 @@ text above is the live policy.
   cursor and a window that keeps the cursor's line and cell visible, and the run status row under it. A `\` immediately
   before `Enter` inserts a line break and never reaches
   the buffer, so a prompt is typed over several lines; the block takes one more row per buffer line while the transcript
-  gives up exactly those rows, no line count is capped, and a buffer taller than the block shows the window of lines
-  that keeps the cursor's line visible. The status row reads in words — `Ready · session … · build · Working… 6.2s ·
+  gives up exactly those rows, up to the share the body sets — a third of the rows the block competes for, and never
+  fewer than three buffer lines beside its own chrome — and a buffer taller than that, or taller than the body, shows
+  the window of lines that keeps the cursor's line visible. The status row reads in words — `Ready · session … · build · Working… 6.2s ·
   ctx in 1200 out 300` — and names the live phase of the run: `Waiting…` from the moment the turn request leaves for the
   network, `Thinking…` when the reasoning stream starts, `Answering…` when the answer stream starts, and `Working…`
   while the run's committed projection reports a tool call in flight past half a second — a shorter call leaves the
@@ -458,6 +459,21 @@ text above is the live policy.
   whole seconds. The elapsed value is the front end's own measurement, reported to the core as `Action::ElapsedReported`
   so the view stays a pure function of state, and the same value is what the half-second tool threshold measures
   against: the core stays clock-free, and the adapter measures nothing the committed projection already carries.
+- Pastes. A paste is one edit, never a string of keystrokes the line applies one at a time: the terminal owns the
+  clipboard and delivers the text, this front end reads no clipboard of its own, and the paste enters the line at once.
+  What the line shows is decided by the paste's own size, never by timing: a text of up to four hundred characters and
+  up to eight lines is inserted exactly as it arrived, and a larger one is kept outside the buffer behind one labelled
+  line — `[pasted <head>... <n> lines]`, whose head is the paste's first fifty characters with its line breaks and tabs
+  read as spaces and the terminal's own framing dropped, and whose count is the paste's line count. The label is one
+  unit for the caret and the delete: `←` and `→` leave it on the side they were heading for and `Backspace` takes it
+  whole, so no press lands inside it and no label is left standing for nothing. The submission path expands every label
+  it finds back into the text it stands for, in the order the line spells them, so the session receives the paste and
+  never its summary, while the history keeps the line as the user saw it. A terminal that delivers a paste without the
+  bracketed-paste markers types it into the application instead; the front end then holds those presses until their own
+  text has grown past the size one label stands for — two presses within five milliseconds open the run, its characters
+  keep collecting across the pauses a terminal's own chunked delivery leaves, and the `Enter` a paste carried stays its
+  line break while the `Enter` the user presses afterwards submits the line — so the keystrokes reach the line as the one
+  paste they are, never as a row per line.
 - Terminal settings. `config.toml` supplies the default through its optional `[tui] theme` key (`light` or `dark`; an
   absent section and an absent key both mean light, and an unknown spelling is the typed `invalid_tui_theme` validation
   error, so nothing silently falls back). The daemon owns the runtime value as a single-row `tui_settings` override in
@@ -490,7 +506,9 @@ text above is the live policy.
   caret is in the command word, and the declared values of the argument word the caret is in — `[Value] [Description]
   [Argument]` in the same three columns — with the same rule: a prefix beats an ordered subsequence, then registry or
   declaration order, at most five rows with an overflow report for the rest, and an empty filter lists every row. `Up`
-  and `Down` move the band's highlight while it is open and walk the input history only once it is closed. `Tab`
+  and `Down` carry the meaning the state gives them: they move the band's highlight while it is open, the caret across
+  the buffer's lines whenever a line waits in that direction, and the input history at the buffer's first and last line,
+  so a multi-line prompt is navigable before the history is reachable. `Tab`
   completes the highlighted row — the name or the value plus one trailing space — and `Enter` completes an abbreviated
   word the same way. A word that already spells its command (`/sessions`) or one of the argument's declared values
   (`/theme light`, in whichever case the submission path accepts) has nothing left to complete, so `Enter` runs the
@@ -528,7 +546,8 @@ text above is the live policy.
   the selection to the row the pointer reaches, and a wheel notch while the button is held adds the same fast step. The
   transcript reserves a one-column gutter for revue's vendored scroll view, which renders a native scrollbar, so content
   above the window stays visible natively. The application performs no clipboard work of any kind: copying is the
-  terminal emulator's business, and the crate carries no copy path. The trade-off is the terminal's own drag-selection:
+  terminal emulator's business, pasting is its own delivery of the text the user asked for, and the crate carries
+  neither a copy path nor a clipboard read. The trade-off is the terminal's own drag-selection:
   while capture is on, selecting text with the mouse needs Shift held.
 - Session listing. `ListSessions` returns `SessionsListed` with the recency-ordered summary window
   (`SESSION_LIST_ROWS`) and an `omitted` count, so the list is never silently truncated; storage owns the ordering and

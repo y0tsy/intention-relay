@@ -539,6 +539,26 @@ stale mechanism comments. The owner then withdrew a rejected design rather than 
 non-terminal interrupt command end to end, and `0227953` spells the theme registry with the wire vocabulary so the
 adapter re-declares nothing. `make quick` at that closing tip runs 855 passed and 2 skipped.
 
+The input field's own rework then landed on top (`c0c203c`): the input line takes a paste as the one edit it is however
+the terminal delivers it - a bracketed paste at once, a typed one through the front end's own detector, both decided by
+the paste's size rather than by timing - the block stops growing at its share of the panel's body and windows the lines
+around the caret, and the vertical arrows give the caret a meaning across the buffer's lines before they walk the input
+history. Its cases: `intention-tui` unit
+`a_paste_past_the_size_the_line_can_show_arrives_as_one_labelled_line`, `a_paste_the_line_can_show_is_inserted_as_text`,
+`a_label_shows_the_paste_s_head_without_the_framing_a_terminal_carried`,
+`the_carriage_returns_of_a_windows_paste_are_not_content`,
+`two_pastes_with_one_label_expand_in_the_order_the_line_spells_them`, `backspace_removes_a_whole_paste_label`,
+`the_horizontal_caret_moves_step_over_a_paste_label`, `the_caret_moves_make_a_label_one_unbreakable_unit`,
+`the_vertical_arrows_move_the_caret_across_the_buffer_s_lines`,
+`the_vertical_arrows_report_the_line_that_waits_in_their_direction`; the detector's own
+`a_run_of_presses_enters_the_line_as_one_paste`, `a_press_a_hand_s_pause_separates_is_the_typed_input_it_was`,
+`a_typing_press_settles_the_press_before_it`, `the_chunks_of_one_paste_settle_as_one_paste`,
+`a_paste_the_line_could_hold_waits_the_paste_gap_too`, `the_enter_that_closes_a_paste_does_not_submit_it`, and
+`the_user_s_own_event_ends_a_run_at_once`; the panel's
+`the_panel_spends_its_body_on_the_transcript_the_menu_the_input_block_and_the_detail_line` holds the block's share of
+the body. `make quick` on that tip observed 877 tests run: 877 passed, 2 skipped across 44 binaries, and
+`cargo nextest run -p intention-tui` observed 417 tests across four binaries.
+
 ### Future package evidence
 
 Evidence obligations for systems that are not activated are owned by their documents; this document keeps only the

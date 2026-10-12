@@ -95,8 +95,28 @@ end's turn clock and reported to the core as
 `Action::ElapsedReported`, so the view stays a pure function of state and the
 half-second tool threshold measures reported time instead of a clock in the core.
 A `\` immediately before `Enter` inserts a line break instead of submitting, and
-the backslash never reaches the buffer; the block grows a row per buffer line
-while the transcript gives up exactly those rows, with no line cap.
+the backslash never reaches the buffer; the block grows a row per buffer line up
+to the share the panel's body sets - a third of the rows it competes for, and
+never fewer than three buffer lines beside its own chrome - and then shows the
+window of lines that keeps the caret's line visible, so the transcript gives up
+exactly the rows the block takes and no more.
+
+A paste is one edit and never a row per line. The terminal owns the clipboard and
+delivers the text (this front end reads none), and the paste's own size decides
+what the line shows: up to four hundred characters and eight lines enter the line
+exactly as they arrived, and a larger paste is kept outside the buffer behind one
+labelled line, `[pasted <head>... <n> lines]`, whose head is the paste's first
+fifty characters with its line breaks and tabs read as spaces and the terminal's
+framing dropped. `←` and `→` step over a label and `Backspace` takes it whole, so
+no press lands inside it; submitting the line expands every label back into the
+text it stands for, in the order the line spells them, so the session receives the
+paste and the history keeps the line the user saw. A terminal that writes a paste
+into the application without the bracketed-paste markers is handled by the front
+end's own detector (`src/tui/paste.rs`): two presses within five milliseconds open
+a run whose characters keep collecting across the pauses a terminal's chunked
+delivery leaves, the `Enter` such a paste carried stays its line break, the `Enter`
+the user presses afterwards submits the line, and the run reaches the line as one
+paste.
 
 The command surface is one registry (`src/app/commands.rs`) and the hint band it
 feeds: `/new` (Session), `/sessions` (Navigation), and `/theme` (Appearance) are
@@ -128,8 +148,9 @@ rather than taking the input's rows. The filter ranks a row that starts with the
 typed text above one whose characters appear in order (`/ssn` finds
 `/sessions`), ordered by rank and then by registry or declaration order so the
 list never reorders while typing, and an empty filter matches everything.
-`Up`/`Down` move the highlight while the band is open; the input history walks
-only once it is closed. `Tab` commits the highlighted row - a command name or an
+`Up`/`Down` move the highlight while the band is open, the caret across the
+buffer's lines whenever a line waits that way, and the input history at the
+buffer's first and last line. `Tab` commits the highlighted row - a command name or an
 argument value plus one trailing space - and `Enter` completes an abbreviated
 word the same way. A word that already spells the command (`/sessions`) or one of
 the argument's declared values (`/theme light`, in whichever case the submission
