@@ -334,8 +334,7 @@ impl Script {
     }
 }
 
-/// Claims one scripted round for one accepted connection, answers it, and
-/// settles the connection before it is dropped.
+/// Claims one scripted round for one accepted connection and answers it.
 ///
 /// The connection is the round: the client opens exactly one connection per
 /// provider request. The round is claimed once the connection has carried a
@@ -345,6 +344,22 @@ impl Script {
 /// The request and the response each declare their own lengths, so neither peer
 /// depends on how the socket ends: the read bound below ends a stalled read, it
 /// never ends a round.
+///
+/// Returning here is the connection's whole teardown, and an explicit one must
+/// not come back. The answer above is written but not yet read, so a teardown
+/// here races the client's read of it: `shutdown(Both)`, and the close that
+/// follows it, answer with a reset on Windows whenever a byte is still unread or
+/// still in flight, and a reset discards the response bytes the peer has not
+/// consumed. The client then reports the round it was reading as a provider
+/// stream that failed, and the run ends failed at a round this script had
+/// already answered - a failure the fixture caused itself. It is a race, so it
+/// takes whichever round the client's read loses, which is not every round.
+///
+/// The drop this return performs has nothing to reset for: the body read above
+/// consumed exactly the bytes the request declared, so the receive side is
+/// empty, and the response declared its own length, so no reader waits on the
+/// close to learn that its answer ended. The socket keeps the default linger, so
+/// the close sends what the answer queued and then the FIN.
 fn handle_provider_request(
     mut stream: TcpStream,
     requests: &AtomicUsize,
@@ -352,55 +367,36 @@ fn handle_provider_request(
     script: &Script,
 ) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    if let Some(head) = read_request_head(&mut stream) {
-        let request_number = requests.fetch_add(1, Ordering::AcqRel) + 1;
-        let body = read_request_body(&mut stream, &head);
-        // The provider paces each scripted round so the test's subscriber can
-        // attach before the committed state for that round is published.
-        if script.pace_every_round || request_number == 1 {
-            thread::sleep(ROUND_PACE);
-        }
-        // The assertion is the fixture's own self-check of one request it read,
-        // so it only runs for a body that arrived: the answer below is the
-        // round's answer either way.
-        if request_number == 1
-            && let Some(body) = &body
-        {
-            let body_text = String::from_utf8_lossy(body);
-            assert!(
-                body_text.contains(r#""tools":["#)
-                    && body_text.contains(&format!(r#""name":"{}""#, script.tool_name)),
-                "the first provider request advertises tools including {}: {body_text}",
-                script.tool_name
-            );
-        }
-        if request_number > script.tool_rounds + 1 {
-            excess.fetch_add(1, Ordering::AcqRel);
-        }
-        write_response(&mut stream, &script.response(request_number));
+    let Some(head) = read_request_head(&mut stream) else {
+        // A connection that carried no request is not a round: it is dropped
+        // unanswered, and the request that never arrived stays unserved.
+        return;
+    };
+    let request_number = requests.fetch_add(1, Ordering::AcqRel) + 1;
+    let body = read_request_body(&mut stream, &head);
+    // The provider paces each scripted round so the test's subscriber can
+    // attach before the committed state for that round is published.
+    if script.pace_every_round || request_number == 1 {
+        thread::sleep(ROUND_PACE);
     }
-    settle_connection(&mut stream);
-}
-
-/// Settles one answered connection before the fixture drops it.
-///
-/// The drain consumes whatever request bytes are still unread - none, for a
-/// request the fixture read in full - and the shutdown sends the FIN
-/// explicitly: a socket closed with unread inbound data is reset instead of
-/// closed, and a Windows reset can discard a response the peer has not consumed
-/// yet. The drain never blocks, so a peer that holds the connection open cannot
-/// delay the fixture's one accepting thread, and no part of the exchange
-/// depends on this close.
-fn settle_connection(stream: &mut TcpStream) {
-    let _ = stream.set_nonblocking(true);
-    let mut scratch = [0_u8; 4096];
-    loop {
-        match stream.read(&mut scratch) {
-            Ok(read) if read > 0 => {}
-            Ok(_) | Err(_) => break,
-        }
+    // The assertion is the fixture's own self-check of one request it read, so
+    // it only runs for a body that arrived: the answer below is the round's
+    // answer either way.
+    if request_number == 1
+        && let Some(body) = &body
+    {
+        let body_text = String::from_utf8_lossy(body);
+        assert!(
+            body_text.contains(r#""tools":["#)
+                && body_text.contains(&format!(r#""name":"{}""#, script.tool_name)),
+            "the first provider request advertises tools including {}: {body_text}",
+            script.tool_name
+        );
     }
-    let _ = stream.shutdown(std::net::Shutdown::Both);
+    if request_number > script.tool_rounds + 1 {
+        excess.fetch_add(1, Ordering::AcqRel);
+    }
+    write_response(&mut stream, &script.response(request_number));
 }
 
 fn write_response(stream: &mut TcpStream, response: &str) {
