@@ -93,9 +93,11 @@ pub enum CommandAction {
 ///
 /// The list is derived from [`Theme::ALL`], so the command surface cannot
 /// declare a value the theme vocabulary does not carry, nor call a theme by a
-/// name of its own: a theme added to `ALL` extends this declaration, and the
-/// command surface and the picker panel can never disagree about what the two
-/// themes are called or which surface each one paints.
+/// name of its own: each value is spelled by the wire vocabulary itself
+/// (`ThemeDto::as_str`), the same word the setting is serialized with. A theme
+/// added to `ALL` extends this declaration, and the command surface and the
+/// picker panel can never disagree about what the two themes are called or
+/// which surface each one paints.
 static THEME_VALUES: [ValueSpec; Theme::ALL.len()] = theme_values();
 
 /// Returns the theme vocabulary as the declared values of `/theme`.
@@ -108,7 +110,7 @@ const fn theme_values() -> [ValueSpec; Theme::ALL.len()] {
     while position < Theme::ALL.len() {
         let theme = Theme::ALL[position];
         values[position] = ValueSpec {
-            value: theme.as_str(),
+            value: theme.dto().as_str(),
             description: theme.description(),
         };
         position += 1;

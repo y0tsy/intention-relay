@@ -39,12 +39,17 @@ impl Theme {
     /// Every theme, in the order the picker draws its rows.
     pub const ALL: [Self; 2] = [Self::Light, Self::Dark];
 
-    /// Returns the theme's stable lowercase name.
+    /// Returns the wire vocabulary value that spells this theme.
+    ///
+    /// The conversion is const so a registry derived from [`Self::ALL`] takes
+    /// its declared spelling from [`ThemeDto::as_str`], and the `From<Theme>`
+    /// conversion delegates here, so a theme and its wire value are matched in
+    /// one place.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    pub const fn dto(self) -> ThemeDto {
         match self {
-            Self::Light => "light",
-            Self::Dark => "dark",
+            Self::Light => ThemeDto::Light,
+            Self::Dark => ThemeDto::Dark,
         }
     }
 
@@ -101,10 +106,7 @@ impl From<ThemeDto> for Theme {
 impl From<Theme> for ThemeDto {
     /// Returns the wire value one theme is spelled as.
     fn from(theme: Theme) -> Self {
-        match theme {
-            Theme::Light => Self::Light,
-            Theme::Dark => Self::Dark,
-        }
+        theme.dto()
     }
 }
 

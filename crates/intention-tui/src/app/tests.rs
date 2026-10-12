@@ -1587,7 +1587,7 @@ fn the_theme_command_applies_a_theme_name_however_it_is_spelled() {
 #[test]
 fn every_declared_theme_value_names_a_theme() {
     for theme in Theme::ALL {
-        let name = theme.as_str();
+        let name = ThemeDto::from(theme).as_str();
         let uppercase = name.to_uppercase();
         for typed in [name, uppercase.as_str()] {
             let mut state = AppState::new(None);
