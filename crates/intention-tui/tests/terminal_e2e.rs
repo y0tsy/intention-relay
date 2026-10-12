@@ -18,7 +18,7 @@
 use std::future::Future;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -89,6 +89,12 @@ struct TerminalHost {
     workspace: TempDir,
     provider: ProviderEndpoint,
     daemon: Option<Child>,
+    /// The file the spawned daemon writes both of its output streams to.
+    ///
+    /// The daemon's log is where a failed run's safe reason is observable: the
+    /// reason is durable in the run's own outcome, and no client-visible
+    /// projection carries it, so the run's JSON output cannot name it.
+    daemon_log: PathBuf,
     endpoint: LocalEndpoint,
     client: IntentionClient,
 }
@@ -108,7 +114,14 @@ impl TerminalHost {
         }
         write_config_document(config_home.path(), &provider.config_document());
         let endpoint = unique_endpoint("d1-terminal");
-        let daemon = spawn_daemon(&endpoint, config_home.path(), state_home.path(), None, &[]);
+        let daemon_log = state_home.path().join("daemon.log");
+        let daemon = spawn_daemon(
+            &endpoint,
+            config_home.path(),
+            state_home.path(),
+            Some(daemon_log.as_path()),
+            &[],
+        );
         let client = block_on(wait_until_ready(
             &endpoint,
             Instant::now() + DAEMON_DEADLINE,
@@ -119,9 +132,25 @@ impl TerminalHost {
             workspace,
             provider,
             daemon: Some(daemon),
+            daemon_log,
             endpoint,
             client,
         }
+    }
+
+    /// Renders one finished front end and this host's daemon output.
+    ///
+    /// The JSON format reports a run's own account of a failure on standard
+    /// output, and the daemon's log carries the safe reason of a run that
+    /// failed, which no client-visible projection holds: a status assertion
+    /// that named neither would hide the account of the very failure it
+    /// reports.
+    fn failure_diagnostic(&self, output: &CliOutput) -> String {
+        let daemon = std::fs::read_to_string(&self.daemon_log).unwrap_or_default();
+        format!(
+            "stderr={} stdout={} daemon={}",
+            output.stderr, output.stdout, daemon
+        )
     }
 
     /// Returns the scripted provider serving this host's daemon.
@@ -233,18 +262,6 @@ struct CliOutput {
     code: Option<i32>,
     stdout: String,
     stderr: String,
-}
-
-impl CliOutput {
-    /// Renders both output streams of the finished process for one diagnostic.
-    ///
-    /// The JSON format reports a run's own account of a failure on standard
-    /// output - the typed error record and the result that ends the output - so
-    /// a status assertion that named only standard error would hide the account
-    /// of the very failure it reports.
-    fn diagnostic(&self) -> String {
-        format!("stderr={} stdout={}", self.stderr, self.stdout)
-    }
 }
 
 /// Waits for one spawned front end and collects its two output streams.
@@ -510,7 +527,7 @@ fn the_json_run_reports_transient_deltas_before_the_committed_row() {
         "the run completes after {} provider requests and {} excess requests: {}",
         host.scripted_provider().request_count(),
         host.scripted_provider().excess_count(),
-        output.diagnostic()
+        host.failure_diagnostic(&output)
     );
     assert!(output.stderr.is_empty(), "stderr: {}", output.stderr);
 
@@ -681,7 +698,7 @@ fn a_run_past_the_retention_bound_reports_every_committed_row() {
         "the run completes after {} provider requests and {} excess requests: {}",
         host.scripted_provider().request_count(),
         host.scripted_provider().excess_count(),
-        output.diagnostic()
+        host.failure_diagnostic(&output)
     );
     assert!(output.stderr.is_empty(), "stderr: {}", output.stderr);
 
