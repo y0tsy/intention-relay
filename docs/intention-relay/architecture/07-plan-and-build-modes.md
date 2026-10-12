@@ -191,7 +191,7 @@ stateDiagram
   Abandoned --> [*]
 ```
 
-The plan vocabulary is not defined today; it arrives with the plan milestone (M7). The durable transition rules above
+The plan vocabulary is not defined today; it arrives with M5+ Slice 3. The durable transition rules above
 are enforced by the plan lifecycle owner when plan mode is implemented, so no pre-emptive domain transition validator
 is kept for them.
 
@@ -200,7 +200,8 @@ creates and starts a fresh Build Autopilot run in the same Session, after the Pl
 run gets a new `RunId`, immutable Build/Autopilot policy snapshot, exact approved plan reference, and safe context
 projection. It does not resume the Plan stream or provider request. An optional implementation-handoff operation may
 instead create a new Session from a frozen full safe context snapshot; it is separate from run continuation and does
-not transfer live resources or authority.
+not transfer live resources or authority. The default same-Session continuation is delivered by M5+ Slice 3, while the
+optional handoff's delivery is M5+ Slice 6, whose frozen fork records carry the materialized instruction projection.
 
 ## Required tests and outcomes
 

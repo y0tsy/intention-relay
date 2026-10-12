@@ -60,9 +60,9 @@ named here (`intention-domain`, `intention-protocol`, `intention-application`, `
 | `intention-config` | TOML parsing, validation, resolved configuration and revision DTOs. | Types, domain as needed. |
 | `intention-providers` | Provider-neutral model DTOs and driver trait plus both SDK translation adapters. | Config, proto, and shared value types. |
 | `intention-tools` | Tool identity and core tool contracts with JSON Schema argument text, the static six-tool spec match, and the WorkspaceRoot addressing anchor. | Proto. |
-| `intention-vfr` (created at M8) | VFR transform, mapping, expansion/raw-read tools. | Tools, domain, types. |
-| `intention-headroom` (created at M8) | Headroom compression, CCR contracts, retrieve tool. | Tools, storage contracts, domain, types. |
-| `intention-plans` (created at M7) | Plan artifacts, hidden frontmatter, Plan/Build policy. | Tools, storage contracts, domain, types. |
+| `intention-vfr` (created at M7) | VFR transform, mapping, expansion/raw-read tools. | Tools, domain, types. |
+| `intention-headroom` (created at M7) | Headroom compression, CCR contracts, retrieve tool. | Tools, storage contracts, domain, types. |
+| `intention-plans` (created at M5+ Slice 3) | Plan artifacts, hidden frontmatter, Plan/Build policy. | Tools, storage contracts, domain, types. |
 | `intention-transport` | Socket/pipe framing, server/client protocol, subscriptions. | Protocol, types. |
 | `intention-client` | Bootstrap, connection, dispatch, subscription, reconnect. | Protocol, transport, types. |
 | `intention-daemon` | One durable composition holder (`DaemonApplicationFacade`) that selects and connects the configuration snapshot, SQLite storage, and the provider driver, plus the daemon host and binary. | All selected concrete implementations. |
@@ -130,7 +130,7 @@ by `quality/architecture.toml` under phase `slice2`.
 Retained outside the nine production crates: the `intention-tui` adapter crate — since Slice 2 the terminal
 application, one binary with a fullscreen revue UI, an interactive REPL, and a headless prompt mode over the shared
 client — and the non-production `intention-test-support` fixture crate. The future crates are created at their
-milestones: `intention-tauri` (M6), `intention-plans` (M7), and `intention-vfr` and `intention-headroom` (M8).
+milestones: `intention-tauri` (M6), `intention-plans` (M5+ Slice 3), and `intention-vfr` and `intention-headroom` (M7).
 
 Rules the target map fixes:
 

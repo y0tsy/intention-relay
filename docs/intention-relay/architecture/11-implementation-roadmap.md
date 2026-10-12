@@ -20,7 +20,7 @@ M0-M5 are closed. Their per-milestone sections and the `docs/intention-relay/clo
 removed as dead historical artifacts by `eeff780`, and both remain recoverable from repository history:
 `git show eeff780^:docs/intention-relay/architecture/11-implementation-roadmap.md` for the sections and
 `git show eeff780^:docs/intention-relay/closeout/` for the evidence. The milestones below therefore record the
-remaining plan (M6-M12); the delivered behavior of M0-M5 is described by the architecture documents themselves.
+remaining plan (M6-M11); the delivered behavior of M0-M5 is described by the architecture documents themselves.
 
 ## Dependency graph
 
@@ -34,27 +34,21 @@ flowchart TD
   P --> E[M5 Tools and workspace]
   E --> K[M5+ Post-M5 alignment]
   K --> F[M6 Tauri bridge UI]
-  K --> G[M7 Plan Build artifacts]
-  K --> H[M8 VFR Headroom]
-  K --> M[M11 Tool loop and bridge]
-  M --> N[M12 Capabilities and context]
-  K --> I[M9 End to end hardening]
+  K --> H[M7 VFR Headroom]
+  K --> M[M10 Tool selection bridge]
+  M --> N[M11 Capabilities and context]
+  K --> I[M8 End to end hardening]
   P --> F[M6 Tauri bridge UI]
-  P --> G[M7 Plan Build artifacts]
-  P --> H[M8 VFR Headroom]
-  P --> I[M9 End to end hardening]
+  P --> H[M7 VFR Headroom]
+  P --> I[M8 End to end hardening]
   B --> D
   C --> D
   A --> E
   D --> F
-  E --> G
-  C --> G
-  D --> G
   E --> H
   C --> H
   D --> H
   F --> I
-  G --> I
   H --> I
   N --> I
 ```
@@ -74,13 +68,17 @@ The coverage policy is the per-crate tiers declared in `quality/coverage.toml`
 
 ## Milestone 5+: Post-M5 retrospective alignment
 
-**Activation home for the complete post-M5 stack; hard prerequisite for M6-M9.** It does not renumber, replace, or claim
-delivery of Milestones 6-9; it is their declared prerequisite in the dependency graph and activates only preparatory
-foundation work, including the terminal presentation foundation, never direct M6-M9 boundary implementation. The
-remaining post-M4 package implementations are not part
-of its slices: they are delivered by Milestones 11 and 12, which consume this milestone's foundation.
-The activation decision is the Milestone 5+ package, extended by [architecture
-30](30-instruction-sources-and-system-context.md) for the third slice.
+**Activation home for the complete post-M5 stack; hard prerequisite for M6-M8 and M10-M11.** Owner directive
+2026-10-12: Slice 3 absorbs the former M7 milestone — except the optional implementation handoff, delivered by Slice 6 —
+and the `sub_agent` tool path of the former M11; the remaining milestones renumber in sequence, so the former M8 is M7,
+the former M9 is M8, the former M11 is M10, and the former M12 is M11. This milestone is the declared prerequisite of
+the remaining milestones in the dependency graph and activates only foundation work, including the terminal presentation
+foundation and the Slice 3 agent-operation scope, never their direct boundary implementation. The remaining post-M4
+package implementations are not part of its slices: they are delivered by Milestones 10 and 11, which consume this
+milestone's foundation. The activation decision is the Milestone 5+ package, extended by [architecture
+30](30-instruction-sources-and-system-context.md) for the third slice's instruction channel, [architecture
+07](07-plan-and-build-modes.md) for its Plan/Build modes and physical plans, and [architecture
+15](15-tool-registry-and-model-tool-loop.md) for its `sub_agent` tool contract.
 
 ### Slices
 
@@ -211,7 +209,7 @@ instance and falls back to the platform-default endpoint, and the launcher resol
   Verification](10-test-driven-delivery-and-verification.md). The quality phase keeps its `slice2` name: closing a slice
   changes no crate classification, so `quality/architecture.toml`, `quality/coverage.toml`, and the checker that pins the
   live slice move together only when Slice 3 activates its own.
--  **Slice 3 — Instruction sources and system context — not activated.** The instruction channel of
+-  **Slice 3 — Agent operation — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
 deployment instruction profile adapted from the legacy Antibusy static prompt set, user-authored fragments at user,
 project, and session scope edited at the filesystem level, workspace `AGENTS.md` project instructions read through the
@@ -219,8 +217,25 @@ project, and session scope edited at the filesystem level, workspace `AGENTS.md`
 reserved `Mode` and `Vfr` contributions owned by architectures 07 and 06; immutable profile revisions with typed
 identity; deterministic assembly and the effective instruction projection, frozen at admission, delivered through the
 existing `system_context` channel, materialized into fork, plan, and handoff records, and recorded as safe usage
-provenance; closed safe failures, channel closure, and safe observability. Its activating specification declares the
-instruction contract families as typed serde JSON contracts and changes no earlier slice.
+provenance; closed safe failures, channel closure, and safe observability. The slice also carries the Plan/Build half of
+[architecture 07](07-plan-and-build-modes.md): the Plan/Build run policy, with Build Autopilot as the single
+user-authorized unrestricted Build policy; physical plan artifacts at
+`<AppData>/sessions/<session-id>/plans/<plan-number>/plan.md` with zero-based per-session numbers, controlled hidden
+YAML frontmatter, and committed revisions; the plan submission, approval, rejection, and supersede lifecycle, where an
+approval pins one exact revision and, by default, immediately starts a fresh same-Session Build Autopilot run with a new
+`RunId`; ordinary project `write`/`edit` denied in Plan mode while `execute` stays available, advisory-guided, and
+audited, its focus instruction being the `Mode` contribution this same slice assembles; and the `intention-plans` crate
+with the `plan_submit` ToolId variant, its own spec, and its typed input. The optional implementation handoff to a new
+Session stays Slice 6 work. The slice also carries the `sub_agent` tool path of
+[architecture 15](15-tool-registry-and-model-tool-loop.md): the closed `ToolId` variant whose typed input carries the
+bounded markdown task and the selected mode; `Sync` holds the call open until the child run's terminal markdown answer,
+and `Async` ends it immediately with a `Deferred` outcome carrying the child session handle; a child run is an ordinary
+run with its own lifecycle, tool loop, cancellation, and no-resume rules, and its terminal answer commits as one durable
+child-result fact bound to the same `ToolCallId` and delivered once into the parent's next fresh model request. The
+`sub_agent` tool activates on the live six-tool admission path and activates no registry, bridge, or MCP contract: the
+frozen tool selection, tool admission, and Gateway/RLM bridge stay with Milestone 10. Its activating specification
+declares the instruction contract families as typed serde JSON contracts, activates the `sub_agent` tool contract and
+the Plan/Build policy on the live tool path, and changes no earlier slice.
 -  **Slice 4 — Control plane — not activated.** The cluster and provider session selection (architectures 25/29/22):
 controlled live reload, credential rotation, provider health checks, model discovery, pricing policy, provider profile
 UI and raw-TOML/configuration editing, arbitrary authentication headers, session defaults and per-turn/fork overrides,
@@ -236,21 +251,24 @@ MCP-method-catalog selections (architectures 19/18), and work/requeue after clie
 pass's adapter-facing tool projection — the typed tool contract in `intention-proto` and the typed projection on each
 committed tool row — is recorded as a Slice 2 retrospective correction, not an activation of this slice's
 tool-descriptor, tool-registry, or model-tool-loop contracts: the six-tool closed set and its typed projection are
-already live, and M11 keeps the registry, admission, and bridge work. The pass records the adapter-local rules it
+already live, and M10 keeps the selection, admission, and bridge work. The pass records the adapter-local rules it
 deleted instead of deferring them: the composed `session_stream_closed`, `session_not_open`, and `no_sessions_to_continue`
 fallbacks went with the client's own closed-stream classification and its typed continue failure in
 `intention-client`, so no front end composes a session condition; the pre-deletion anchors were
 `crates/intention-tui/src/headless.rs:343-347`, `:163-169`, and `:618-626` at base `99973a8`.
 -  **Slice 6 — UI foundation — last slice; not activated.** Session branching, reasoning/catalog delivery, and adapter
 boundaries (architectures 23/22 plus architecture 03's flat activity journal and notification list): `session_fork_v1`;
-normalized reasoning delivery; and the exact typed client/protocol surface M6 consumes. It also carries cross-workspace
-clone/rebind (architecture 23) and the physical deletion/GC retention policy for historical work under architecture 04's
-retention rules.
+normalized reasoning delivery; and the exact typed client/protocol surface M6 consumes. It also carries the optional
+implementation handoff after plan approval, which creates an independent Session from a frozen safe context,
+materializes the instruction projection into its frozen records, and may start a fresh Build Autopilot run
+(architecture 23);
+cross-workspace clone/rebind (architecture 23); and the physical deletion/GC retention policy for historical work under
+architecture 04's retention rules.
 
 ### Exit criteria
 
--  M5+ exit proves M6, M7, M8, and M9 can each begin against stable contracts without any retroactive protocol, DTO,
-schema, crate-boundary, migration, or quality-policy change.
+-  M5+ exit proves M6, M7, M8, M10, and M11 can each begin against stable contracts without any retroactive protocol,
+DTO, schema, crate-boundary, migration, or quality-policy change.
 -  M3/M4 startup-only configuration, recorded revisions, sessions, runs, and bytes remain authoritative and unchanged;
 SQLite storage is the single live schema created directly on open.
 -  Slice 1.5 preserves durable meaning: the single storage schema is created on open under one integer stamp, where a
@@ -265,14 +283,16 @@ specification must prove that non-authority.
 passes `make quick`, `make verify`, and Linux/Windows CI.
 -  No slice ships half-ready: every activated contract ships with its version, owner, tests, policy mapping,
 storage/schema treatment, and evidence together.
--  No M6-M9 boundary behavior is implemented, and no second runtime, registry, persistence authority, or sandbox is
-introduced.
--  The third slice proves instruction text is advisory-only, typed, and materialized for frozen context, with no
-untrusted material entering the instruction channel and no authority created
-([architecture 30](30-instruction-sources-and-system-context.md)).
--  Milestones 11 and 12 are this milestone's successors for the remaining post-M4 packages; their activating
-specifications, contracts, and evidence stay owned by those milestones. M7 and M8 consume only the declared `Mode` and
-`Vfr` contributions while M12 keeps the Skill and context-disclosure boundary.
+-  No remaining-milestone boundary behavior is implemented, and no second runtime, registry, persistence authority, or
+sandbox is introduced.
+-  The third slice proves instruction text is advisory-only, typed, and materialized for frozen context, that Plan-mode
+mutation denial is enforced and audited while Plan `execute` stays advisory-guided, and that a `sub_agent` child run
+stays an ordinary run, with no untrusted material entering the instruction channel and no authority created
+([architecture 30](30-instruction-sources-and-system-context.md), [architecture 07](07-plan-and-build-modes.md)).
+-  Milestones 10 and 11 are this milestone's successors for the remaining post-M4 packages; their activating
+specifications, contracts, and evidence stay owned by those milestones. M7 consumes only the declared `Vfr`
+contribution, the third slice consumes the declared `Mode` contribution, and M11 keeps the Skill and
+context-disclosure boundary.
 
 ### Failure semantics
 
@@ -315,7 +335,7 @@ adapter session fallbacks the pass deleted are not entries either: they are reco
 ## Milestone 6: Tauri bridge and primary desktop UI
 
 Goal: the first desktop adapters over the shared typed client, consuming the Milestone 5+ UI-foundation and
-instruction-source slices.
+agent-operation slices.
 
 ### Deliver
 
@@ -340,45 +360,7 @@ consumed here, while the durable `SessionProviderProfileChanged` delivery stays 
 - no Tauri crate imports application/runtime/storage implementation APIs;
 - adapters satisfy mapping-contract and smoke/outcome requirements rather than a misleading aggregate UI line target.
 
-## Milestone 7: Plan/Build policies, physical plans, and Build Autopilot
-
-Goal: Plan/Build run policy and physical plan artifacts over the daemon-owned model-tool loop, which this milestone
-consumes and never redefines.
-
-### Deliver
-
-- Plan/Build run policy; Build Autopilot as the single user-authorized unrestricted Build policy;
--  plan allocation, AppData structure, zero-based numbers, YAML frontmatter and revisions; model-safe body projection;
-the plan submission/approval/rejection state flow;
-- Plan-mode normal filesystem mutation restrictions;
--  Plan `execute` availability with advisory focus instruction and trusted-local audit; the focus instruction is the
-`Mode` contribution of [architecture 30](30-instruction-sources-and-system-context.md);
--  automatic same-Session fresh Build start after approval, and the optional full-context implementation handoff to a
-new Session.
-
-### Tests first
-
-- plan allocation and revision tests;
-- frontmatter hidden/model-capture test;
-- Plan write/edit deny/allow tests;
-- lifecycle transition and durable approval tests;
-- Plan `execute` focus/audit tests;
-- same-Session approval-to-fresh-Build tests with a new `RunId` and pinned plan revision;
-- optional handoff snapshot, lineage, redaction, and no-live-state-transfer tests;
--  coverage fixtures for plan policy and artifact integrity under the per-crate tier floors
-([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
-
-### Exit criteria
-
--  a Plan-mode agent can iteratively edit its physical plan body, but cannot use ordinary write/edit tools to modify a
-project file;
-- Plan `execute` remains available and is not represented as a sandbox; model context excludes plan frontmatter;
--  approving a plan starts Build Autopilot in the same Session with a new `RunId`; the optional handoff creates an
-independent Session from a safe frozen context;
--  plan policy/artifact crates meet their declared tier floors
-([Quality Gates and Makefile](12-quality-gates-and-makefile.md)) with mandatory captured-context and denial scenarios.
-
-## Milestone 8: VFR and Headroom extensions
+## Milestone 7: VFR and Headroom extensions
 
 Goal: independently enabled extensions over the base tool pipeline.
 
@@ -406,9 +388,9 @@ with typed expiry behavior afterward;
 - base tools do not import VFR or Headroom implementation crates;
 -  extension crates meet their declared tier floors ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
-## Milestone 9: Hardening and acceptance verification
+## Milestone 8: Hardening and acceptance verification
 
-**Final hardening gate for every milestone in this roadmap, including Milestones 11 and 12.** It closes the v1 outcome
+**Final hardening gate for every milestone in this roadmap, including Milestones 10 and 11.** It closes the v1 outcome
 scenarios, the open policy decisions, and the documentation reconciliation for every delivered milestone.
 
 ### Deliver
@@ -431,7 +413,7 @@ include/import policy, and non-Unix configuration permissions;
 
 -  the full result-oriented scenario suite from [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md);
-- the real-binary daemon-host model-tool-loop outcome test; the broader M9 scenario suite remains;
+- the real-binary daemon-host model-tool-loop outcome test; the broader M8 scenario suite remains;
 -  a recorded opt-in live-provider e2e run against a real provider API
 ([Quality Gates and Makefile](12-quality-gates-and-makefile.md); manual, non-hermetic, never blocking) reporting date,
 commit,
@@ -448,35 +430,35 @@ necessary;
 - no unapproved architectural, lint, coverage, feature, or dependency exception remains implicit;
 -  every public DTO and crate boundary agrees with the architecture documentation or the documentation is updated in the
 same change;
--  every milestone, M0-M5 (in repository history) and M6-M9 and Milestones 11-12 (as recorded artifacts), records its
+-  every milestone, M0-M5 (in repository history) and M6-M8 and Milestones 10-11 (as recorded artifacts), records its
 acceptance evidence, and the `make ci` run covers them;
 - `make ci` passes from a clean environment using only pinned inputs.
 
-## Milestone 11: Tool registry, model-tool loop, and Gateway/RLM bridge
+## Milestone 10: Tool selection, admission, and Gateway/RLM bridge
 
-**Depends on Milestone 5+ as foundation.** It delivers the post-M4 tool-registry and Gateway/RLM bridge packages
-(architectures 15/19), and the worker/process supervision topology
-direction. It starts only when an
-activating specification per [architecture 12](12-quality-gates-and-makefile.md) is accepted.
+**Depends on Milestone 5+ as foundation.** The model-tool loop itself is live since Milestone 5 and Slice 1.5: this
+milestone consumes it and never redefines it. It delivers the remaining [architecture
+15](15-tool-registry-and-model-tool-loop.md) contracts — the frozen tool selection and tool admission over the live
+six-tool layer — the Gateway/RLM bridge packages (architecture 19), and the worker/process supervision topology
+direction. It starts only when an activating specification per [architecture
+12](12-quality-gates-and-makefile.md) is accepted.
 
 ### Deliver
 
--  the closed `ToolId` set and its code-owned spec match, where a new tool id is a new `ToolId` variant with its own
-spec (architecture 15);
--  the model-tool loop: sequential steps, one ordered group per tool-calling step, durable `ToolCall`/`ToolResult`
-evidence, no-retry and no-resume recovery, and current-state tool-result delivery (architecture 15);
+-  the frozen tool selection and tool admission over the live six-tool `ToolId` set and its code-owned spec match, where
+a new tool id stays a new `ToolId` variant with its own spec (architecture 15);
 -  bridge attachment and typed handshake, the ephemeral daemon-issued grant, immutable bridge-contract selection,
-durable operation correlation, the one-path ingress into registry admission and tool-loop facts (including `sub_agent`
-ingress), re-subscription reading current state, cancellation propagation, recovery, and the closed `bridge_*`
-failures (architecture 19);
+durable operation correlation, the one-path ingress into selection admission and tool-loop facts (including the
+already-delivered `sub_agent` ingress), re-subscription reading current state, cancellation propagation, recovery, and
+the closed `bridge_*` failures (architecture 19);
 -  worker/process supervision topology, never a second runtime, registry, persistence authority, or sandbox (architecture 03);
 -  crate ownership and coverage declarations under [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations for every activated family.
 
 ### Tests first
 
-- registry slot, descriptor-revision, and registry-revision fixtures;
-- loop step/group fixtures plus the ordered-group shape matrix and effect-evidence fault injection;
+- frozen-selection and tool-admission fixtures, plus the ordered-group shape matrix and effect-evidence fault injection
+over the live loop;
 - bridge grant, operation correlation, re-subscription reading current state, cancellation, slow-peer, and no-bypass
 fixtures;
 - supervision-topology fixtures;
@@ -484,9 +466,9 @@ fixtures;
 
 ### Acceptance outcomes
 
--  every tool call travels the frozen descriptor path and produces durable evidence exactly once, with no retry of an
-interrupted call;
--  bridge ingress cannot bypass registry admission, `ToolCallId`, start/result evidence, or post-commit reread
+-  every tool call travels the frozen selection and admission path and produces durable evidence exactly once, with no
+retry of an interrupted call;
+-  bridge ingress cannot bypass selection admission, `ToolCallId`, start/result evidence, or post-commit reread
 publication;
 - no ordinary M3/M4/M5 tool path, denial, or re-subscription read changes meaning.
 
@@ -498,9 +480,9 @@ verify`, and Linux/Windows CI;
 - M3/M4 bytes and retained RLM history remain unchanged;
 - the milestone's activation evidence is recorded.
 
-## Milestone 12: Capabilities and context — MCP, kernel, and Skills/context
+## Milestone 11: Capabilities and context — MCP, kernel, and Skills/context
 
-**Depends on Milestone 11.** It delivers the post-M4 MCP, kernel, and context packages (architectures 18/20/21), the
+**Depends on Milestone 10.** It delivers the post-M4 MCP, kernel, and context packages (architectures 18/20/21), the
 project script library of [architecture
 20](20-ipython-kernel-lifecycle.md), and the architecture 22 provider work that remains
 not activated: the `responses` driver, `SafeHeader` live wire injection, and the
@@ -560,7 +542,7 @@ record gains authority;
 
 The v1 implementation phase is ready to claim architectural completion only when:
 
-- every milestone acceptance outcome has evidence (M0-M5 in repository history, M6-M9 and Milestones 11-12 as
+- every milestone acceptance outcome has evidence (M0-M5 in repository history, M6-M8 and Milestones 10-11 as
 recorded artifacts);
 - Tauri and TUI/REPL use the same typed client/protocol in real integration tests;
 - all critical architecture rules have automated protection or documented, approved justification;
