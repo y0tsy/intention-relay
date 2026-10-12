@@ -40,6 +40,10 @@ const DAEMON_DEADLINE: Duration = Duration::from_secs(20);
 const CLI_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The bounded window one post-run durable observation has to appear in.
+///
+/// The durable observation it bounds belongs to the signal scenarios, so the
+/// constant is gated with them.
+#[cfg(unix)]
 const OBSERVE_DEADLINE: Duration = Duration::from_secs(15);
 
 /// The poll interval of the bounded process and durable-effect waits.
@@ -49,6 +53,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(20);
 ///
 /// The wait covers the window between the committed user row and the signal
 /// handler the run's own waits install.
+#[cfg(unix)]
 const SIGNAL_WAIT: Duration = Duration::from_millis(500);
 
 /// The prompt every headless scenario sends.
@@ -173,7 +178,9 @@ impl TerminalHost {
     /// Spawns the real terminal binary with piped streams the test drives.
     ///
     /// The stdin pipe stays open: a line front end waits for its next line
-    /// while the test signals the running process.
+    /// while the test signals the running process. Only the signal scenarios
+    /// drive a process this way.
+    #[cfg(unix)]
     fn spawn(&self, arguments: &[&str]) -> Child {
         let mut command = Command::new(env!("CARGO_BIN_EXE_intention-tui"));
         command.args(arguments);
@@ -254,6 +261,7 @@ fn collect(child: &mut Child, deadline: Instant) -> CliOutput {
 ///
 /// The committed user row proves the front end dispatched its prompt, and the
 /// wait that follows it lets the run stream open before the test signals.
+#[cfg(unix)]
 fn wait_for_user_turn(host: &TerminalHost) -> SessionId {
     let deadline = Instant::now() + OBSERVE_DEADLINE;
     loop {
