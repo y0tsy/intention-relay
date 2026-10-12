@@ -11,7 +11,8 @@ Makefile](12-quality-gates-and-makefile.md); test-first and outcome-verification
 Verification](10-test-driven-delivery-and-verification.md).
 
 The systems of documents 15 and 18-30 and of Slices 3-6 are not activated, and each activation requires an accepted
-activating specification ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
+activating specification ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)). Slice 2 is closed: it merged
+into `main` as `0fd8ad5` (PR #67).
 
 ## Closed milestones (M0-M5)
 
@@ -125,7 +126,7 @@ end-to-end suite drives that client (`client_e2e`) instead of the low-level tran
 sequence of identity check, durable call row, workspace binding, dispatch, and durable terminal row; the nine-production-crate consolidation and the removal of the composition facade landed, so
 the daemon host calls the engine directly; and the single storage schema is created on open under one integer stamp,
 where a stamp bump discards and recreates the database with no migration or compatibility path.
--  **Slice 2 — Terminal UX — activated.** The terminal application over the existing typed client and daemon
+-  **Slice 2 — Terminal UX — closed.** The terminal application over the existing typed client and daemon
 ([architecture 03](03-daemon-transport-and-adapters.md)) landed as one `intention-tui` binary with three modes — a
 full-screen revue-based TUI, a mandatory interactive REPL, and a headless command that invokes one prompt with prompt
 text, workspace, session continuation, run mode, streaming output, timeout, and a script-friendly output format; the
@@ -202,6 +203,14 @@ turn leaves the caller's durable session plus the typed rejection instead of a p
 correction declares the endpoint instance and the daemon program in `intention-client`: discovery prefers a declared
 instance and falls back to the platform-default endpoint, and the launcher resolves the terminal binary's sibling
 `intention-daemon` program, so the binary carries no environment read and no installation-path inference of its own.
+
+  The slice is closed. It merged into `main` as one squash commit, `0fd8ad5` (PR #67), with all six CI jobs green on the
+  merged head, `make quick` observing 877 tests run, 877 passed, and 2 skipped across 44 binaries, and `make check`
+  clean; the delivered behavior and the corrective pass that followed it are recorded by
+  [architecture 03](03-daemon-transport-and-adapters.md) and [Test-Driven Delivery and
+  Verification](10-test-driven-delivery-and-verification.md). The quality phase keeps its `slice2` name: closing a slice
+  changes no crate classification, so `quality/architecture.toml`, `quality/coverage.toml`, and the checker that pins the
+  live slice move together only when Slice 3 activates its own.
 -  **Slice 3 — Instruction sources and system context — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
 deployment instruction profile adapted from the legacy Antibusy static prompt set, user-authored fragments at user,
