@@ -111,7 +111,7 @@ pub struct AppState {
     pub(super) command_menu: Option<CommandMenu>,
     /// The arm the last Ctrl+C press left for the next consecutive press.
     ///
-    /// The arm names which press armed it: an interrupt arm fires only while
+    /// The arm names which press armed it: a stop arm fires only while
     /// its run is still live, and an exit arm fires only when the input line is
     /// still empty and no run is live, so a state the press no longer matches
     /// starts a fresh sequence instead of firing a stale one.
@@ -276,8 +276,6 @@ impl AppState {
             Action::TurnAccepted(outcome) => self.apply_turn_accepted(outcome),
             Action::ElapsedReported { millis } => self.apply_elapsed_reported(millis),
             Action::TurnFailed(error) => self.apply_turn_send_failed(&error),
-            Action::InterruptAccepted => self.apply_interrupt_accepted(),
-            Action::InterruptFailed(error) => self.apply_failure(&error),
             Action::RunCancelAccepted => self.apply_run_cancel_accepted(),
             Action::RunCancelFailed(error) => self.apply_failure(&error),
             Action::InputChar(character) => self.apply_input_char(character),
@@ -315,7 +313,6 @@ impl AppState {
             Action::NewSessionRequested => self.request_new_session(),
             Action::CtrlCPressed => self.apply_ctrl_c(),
             Action::EscapePressed => self.apply_escape(),
-            Action::InterruptRequested => self.request_interrupt(),
             Action::CancelRunRequested => self.request_cancel(),
             Action::SelectTranscriptRows { anchor, extent } => self.apply_selection(anchor, extent),
             Action::ExpandReasoning { row } => self.apply_expand_reasoning(row),

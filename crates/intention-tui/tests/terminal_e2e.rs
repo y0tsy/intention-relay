@@ -304,10 +304,7 @@ fn assert_stopped_run_is_durable(host: &TerminalHost, session: SessionId) {
         "the stop ends the run durably instead of leaving it running"
     );
     let active = host.snapshot(session).projection().active_run().is_none();
-    assert!(
-        active,
-        "the stop ends the run itself: an interrupt leaves the run active, a stop does not"
-    );
+    assert!(active, "the stop ends the run itself");
 }
 
 /// The provider endpoint one host's daemon is configured against.

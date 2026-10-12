@@ -110,11 +110,6 @@ pub async fn perform(
             .await
             .map(Action::TurnAccepted)
             .map_err(|error| (Action::TurnFailed(error.clone()), error)),
-        Effect::Interrupt { session_id, run_id } => client
-            .interrupt_run(session_id, run_id)
-            .await
-            .map(|_accepted| Action::InterruptAccepted)
-            .map_err(|error| (Action::InterruptFailed(error.clone()), error)),
         Effect::CancelRun { session_id, run_id } => client
             .cancel_run(session_id, run_id)
             .await

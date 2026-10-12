@@ -42,8 +42,7 @@ committed state.
 6. A user turn accepted while a run is active is recorded pending and joins that run's live context at the next model
 boundary; it never starts a second run.
 7. `Interrupted` is the terminal status of a run that never finished: an unfinished run becomes `Interrupted` on restart
-and never silently resumes, and `run.cancel` ends the live run the same way, while `run.interrupt` leaves the live run
-`Running` and continues its work.
+and never silently resumes, and `run.cancel` ends the live run the same way.
 8. The transcript is the durable record of user, assistant, and notice content; every completed tool call has exactly
 one structured `tool_results` row.
 9. A stopped model answer is durable: the text a step produced before the stop is committed as the assistant message
@@ -67,12 +66,9 @@ stateDiagram
   Interrupted --> [*]
 ```
 
-Interruption is not a run state. `run.interrupt` is accepted only for an exact active run, commits no durable status
-change, commits the stopped model answer's text with the `[interrupted]` marker before the durable notice message for
-the stopped provider stream or tool call, resets the run's cancellation signal, and the run continues with its next
-model step; `Cancelling` and `Cancelled` no longer exist, and the only endings that write `Interrupted` are recovery
-for an unfinished run and the terminal `run.cancel` stop. The closed status vocabulary is `Starting`, `Running`,
-`Completed`, `Failed`, and
+Interruption is not a run state. `Cancelling` and `Cancelled` no longer exist, and the only endings that write
+`Interrupted` are recovery for an unfinished run and the terminal `run.cancel` stop. The closed status vocabulary is
+`Starting`, `Running`, `Completed`, `Failed`, and
 `Interrupted`; the live path creates every run in `Starting`, and a terminal repository transition commits its state
 change in one transaction.
 
@@ -196,21 +192,16 @@ typed field through its proto parser, so an undecodable `runs.status` or `messag
 `invalid_run_status` or `invalid_message_kind` instead of a storage-local decode code. Raw TOML, configuration paths,
 credentials, and SQLite resources never cross this DTO-only read boundary.
 
-The daemon task and interruption registries are keyed by exact `(SessionId, RunId)`. Admission and interruption
+The daemon task registry is keyed by exact `(SessionId, RunId)`. Admission and the stop
 serialize through that registry: a host inserts a provider-neutral cancellation signal before spawning a newly admitted
-durable `Starting` run and deduplicates repeated admission. `run.interrupt` validates the exact active run, then signals
-that exact task; an interrupt that arrives before admission finds no in-flight operation to stop, changes no durable
-state, and the run's next boundary continues normally. `run.cancel` takes the same registry with the opposite intent:
+durable `Starting` run and deduplicates repeated admission. `run.cancel` takes the same registry:
 a registered execution's signal carries the stop, so the run ends `Interrupted` at its next boundary, and an active run
 no registered execution owns is terminalized durably `Interrupted` by the host, so a stop never silently does nothing. A tool call interrupted before it starts is answered with the
 stopped-tool-call notice as a `Partial` result, so no effect starts and the assistant tool-call message stays answered.
 The fixed notice for a stopped provider stream or another call without its own result is
 `[The call was stopped before a final result.]`; the tool-call notices are owned by [architecture
-15](15-tool-registry-and-model-tool-loop.md). `run.interrupt` is accepted only for an exact active run
-(`active_run_not_found` otherwise), reports the session position, and is never dispatched through the synchronous
-command path, which rejects it with `invalid_interrupt_dispatch`.
-An interrupt that arrives during a retry wait records the notice and starts the next attempt immediately. The executor
-owns suppression of late results from the stopped call. Recovery never admits old work to a provider.
+15](15-tool-registry-and-model-tool-loop.md). The executor owns suppression of late results from the stopped call.
+Recovery never admits old work to a provider.
 
 `run.cancel` is the terminal stop and the only command that ends a live run. It is accepted only for an exact active
 run (`active_run_not_found` otherwise) and lands at the execution's next boundary — the round select, the step finish,
@@ -243,7 +234,6 @@ tool and run evidence is evidence of intent and observed state, not proof of ext
 | Single-transaction state changes | SQLite fault-injection outcome tests after each write stage. | Each injected failure rolls back: no partial row, run status, or transcript record persists. |
 | Canonical config revision IDs | SQLite config-revision contract test. | An equal credential-free revision for the same `ConfigRevisionId` is idempotent; a different revision for that ID fails with a typed conflict. |
 | Transcript round trip | Storage and runtime tests over user, assistant, tool, and notice messages. | Assistant rows carry whole reasoning text, tool results correlate by unique `tool_call_id`, and model context rebuilds from committed rows only. |
-| Interruption stays non-terminal | Runtime test. | An interrupt of an in-flight provider stream or tool call records the notice, resets the signal, leaves the run `Running`, and the next model step proceeds; `Cancelling` and `Cancelled` have no transition. |
 | Pending boundary join | Runtime and SQLite contract tests. | Pending turns are appended as ordered user messages and marked `appended` in one durable commit; the run continues without promotion or a second run. |
 | Recovery before ready | Composition restart fixture with an unfinished run. | Every unfinished run becomes `Interrupted` before readiness; no external work resumes. |
 | Current-schema creation and config persistence | SQLite current-schema and configuration-revision persistence fixtures. | The complete current schema is created directly on open, and only credential-free revision data persists. |

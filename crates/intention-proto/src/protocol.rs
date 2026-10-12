@@ -12,10 +12,9 @@ use std::collections::BTreeSet;
 
 use crate::{
     CancelRunCommandDto, ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorCategoryDto,
-    ErrorDto, ErrorRetryDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto,
-    MessageProjectionDto, ProjectId, RemoveTurnCommandDto, RunId, RunModeDto, RunProjectionDto,
-    SendUserTurnCommandDto, SessionId, SessionProjectionDto, TimestampDto, TurnId, WorkspaceId,
-    WorkspaceRootDto,
+    ErrorDto, ErrorRetryDto, GetSessionSnapshotQueryDto, MessageProjectionDto, ProjectId,
+    RemoveTurnCommandDto, RunId, RunModeDto, RunProjectionDto, SendUserTurnCommandDto, SessionId,
+    SessionProjectionDto, TimestampDto, TurnId, WorkspaceId, WorkspaceRootDto,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -585,8 +584,6 @@ pub enum ClientRequestDto {
     SendUserTurn(SendUserTurnCommandDto),
     /// Requests removal of a not-yet-seen pending user turn.
     RemoveTurn(RemoveTurnCommandDto),
-    /// Requests interruption of an active daemon-owned run's current operation.
-    InterruptRun(InterruptRunCommandDto),
     /// Requests that an active daemon-owned run stop for good.
     CancelRun(CancelRunCommandDto),
     /// Obtains the latest durable session projection.
@@ -646,8 +643,6 @@ pub enum ProtocolResultDto {
     TurnAccepted(SendUserTurnAcceptedDto),
     /// A pending user turn was removed.
     TurnRemoved(RemoveTurnAcceptedDto),
-    /// An interruption request was accepted for a run.
-    RunInterrupted(InterruptRunAcceptedDto),
     /// A stop request was accepted for a run.
     RunCancelled(RunCancelledAcceptedDto),
     /// A current durable session projection.
@@ -801,33 +796,6 @@ impl RemoveTurnAcceptedDto {
     #[must_use]
     pub const fn turn_id(self) -> TurnId {
         self.turn_id
-    }
-}
-
-/// Typed acceptance evidence for a run interruption request.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct InterruptRunAcceptedDto {
-    session_id: SessionId,
-    run_id: RunId,
-}
-
-impl InterruptRunAcceptedDto {
-    /// Creates complete interruption acceptance evidence.
-    #[must_use]
-    pub const fn new(session_id: SessionId, run_id: RunId) -> Self {
-        Self { session_id, run_id }
-    }
-
-    /// Returns the owning session identity.
-    #[must_use]
-    pub const fn session_id(self) -> SessionId {
-        self.session_id
-    }
-
-    /// Returns the interrupted run identity.
-    #[must_use]
-    pub const fn run_id(self) -> RunId {
-        self.run_id
     }
 }
 
@@ -1240,7 +1208,7 @@ mod tests {
 
         let request = encode_request(
             3,
-            ClientRequestDto::InterruptRun(InterruptRunCommandDto::new(session_id, run_id)),
+            ClientRequestDto::CancelRun(CancelRunCommandDto::new(session_id, run_id)),
         );
         let line = serde_json::to_string(&request).expect("request serializes");
         let decoded = decode_request_line(&line).expect("request decodes");

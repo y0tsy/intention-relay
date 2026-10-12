@@ -12,13 +12,13 @@ mod common;
 use common::{fixture_message, fixture_projection};
 
 use intention_proto::{
-    BoundedText, ConfigRevisionId, CreateSessionAcceptedDto, ExecuteResult,
-    InterruptRunAcceptedDto, MessageId, MessageKindDto, MessageProjectionDto,
-    PendingTurnProjectionDto, ProtocolResultDto, RemoveTurnAcceptedDto, RunId, RunModeDto,
-    RunProjectionDto, RunStatusDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
-    SessionProjectionDto, SessionSnapshotDto, TextResult, TimestampDto, ToolCallId, ToolCallRowDto,
-    ToolId, ToolIdentityDto, ToolInput, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto,
-    ToolResultStatusDto, ToolRowDto, TurnId, WorkspaceRootDto, validate_run_status_transition,
+    BoundedText, ConfigRevisionId, CreateSessionAcceptedDto, ExecuteResult, MessageId,
+    MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, ProtocolResultDto,
+    RemoveTurnAcceptedDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto,
+    SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionProjectionDto, SessionSnapshotDto,
+    TextResult, TimestampDto, ToolCallId, ToolCallRowDto, ToolId, ToolIdentityDto, ToolInput,
+    ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
+    TurnId, WorkspaceRootDto, validate_run_status_transition,
 };
 use intention_proto::{ProjectId, SessionId, WorkspaceId};
 
@@ -53,14 +53,12 @@ fn typed_results_carry_required_durable_evidence() {
     let pending =
         SendUserTurnAcceptedDto::new(session_id, TurnId::new(), SendUserTurnOutcomeDto::Pending);
     let removed = RemoveTurnAcceptedDto::new(session_id, TurnId::new());
-    let interrupted = InterruptRunAcceptedDto::new(session_id, RunId::new());
 
     for result in [
         ProtocolResultDto::SessionCreated(created),
         ProtocolResultDto::TurnAccepted(started),
         ProtocolResultDto::TurnAccepted(pending),
         ProtocolResultDto::TurnRemoved(removed),
-        ProtocolResultDto::RunInterrupted(interrupted),
     ] {
         let encoded = serde_json::to_string(&result).expect("result serializes");
         assert!(

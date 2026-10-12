@@ -25,11 +25,11 @@ use intention_proto::TimestampDto;
 use intention_proto::{
     ClientRequestDto, ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto,
     CreateSessionFirstTurnDto, DaemonHealthDto, DaemonReadinessDto, IdempotencyKey,
-    InterruptRunAcceptedDto, ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto,
-    RunId, RunProjectionDto, RunStatusDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
-    SessionFrameDto, SessionId, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto,
-    TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId,
-    decode_request_line, encode_request,
+    ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto, RunId, RunProjectionDto,
+    RunStatusDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionId,
+    SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto,
+    TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId, decode_request_line,
+    encode_request,
 };
 use intention_proto::{
     DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, ProjectId, WorkspaceId,
@@ -698,30 +698,6 @@ async fn correlated_replies_are_scope_checked() {
         .remove_turn(session_id, TurnId::new())
         .await
         .expect_err("a removal of another turn is not this request's answer")
-        .code(),
-        "invalid_local_protocol_response"
-    );
-    server.await.expect("scope fixture server completes");
-
-    // An interruption for another run is not this request's answer.
-    let interrupted_endpoint = endpoint();
-    let server = start_fixture_server(
-        interrupted_endpoint.clone(),
-        FixtureResponse::Result(ProtocolResultDto::RunInterrupted(
-            InterruptRunAcceptedDto::new(session_id, RunId::new()),
-        )),
-    );
-    assert_eq!(
-        client(
-            interrupted_endpoint,
-            FixtureResponse::Result(ProtocolResultDto::RunInterrupted(
-                InterruptRunAcceptedDto::new(session_id, RunId::new()),
-            )),
-            Arc::new(AtomicUsize::new(0)),
-        )
-        .interrupt_run(session_id, RunId::new())
-        .await
-        .expect_err("an interruption of another run is not this request's answer")
         .code(),
         "invalid_local_protocol_response"
     );

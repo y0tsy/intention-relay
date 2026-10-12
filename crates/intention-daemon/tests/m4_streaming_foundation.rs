@@ -36,9 +36,9 @@ use intention_proto::SendUserTurnOutcomeDto;
 use intention_proto::TurnId;
 #[cfg(feature = "test-support")]
 use intention_proto::{
-    ClientRequestDto, InterruptRunCommandDto, ProtocolDaemonMessageDto, ProtocolResultDto,
-    SessionFrameDto, SessionSnapshotDto, SubscribeSessionCommandDto, TextDeltaChannelDto,
-    decode_response, encode_request, run_status_is_terminal,
+    ClientRequestDto, ProtocolDaemonMessageDto, ProtocolResultDto, SessionFrameDto,
+    SessionSnapshotDto, SubscribeSessionCommandDto, TextDeltaChannelDto, decode_response,
+    encode_request, run_status_is_terminal,
 };
 use intention_proto::{IdempotencyKey, RunId, SessionId};
 use intention_proto::{MessageKindDto, RunStatusDto, SendUserTurnCommandDto};
@@ -356,21 +356,6 @@ async fn send_user_turn_through_host(endpoint: &LocalEndpoint, session_id: Sessi
 }
 
 #[cfg(feature = "test-support")]
-async fn interrupt_run_through_host(
-    endpoint: &LocalEndpoint,
-    session_id: SessionId,
-    run_id: RunId,
-) {
-    let response = send_request_through_host(
-        endpoint,
-        1,
-        ClientRequestDto::InterruptRun(InterruptRunCommandDto::new(session_id, run_id)),
-    )
-    .await;
-    assert!(matches!(response, ProtocolResultDto::RunInterrupted(_)));
-}
-
-#[cfg(feature = "test-support")]
 async fn send_pending_turn_through_host(endpoint: &LocalEndpoint, session_id: SessionId) -> TurnId {
     let response = send_request_through_host(
         endpoint,
@@ -389,102 +374,6 @@ async fn send_pending_turn_through_host(endpoint: &LocalEndpoint, session_id: Se
         "the host answers the pending turn with its durable identity"
     );
     turn.turn_id()
-}
-
-#[cfg(feature = "test-support")]
-#[tokio::test]
-async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
-    let driver = Arc::new(BlockingDriver::new());
-    let (_directory, facade, _snapshot) = fixture_facade("foundation", driver.clone());
-    let session_id = SessionId::new();
-    create_session(&facade, session_id, &std::env::temp_dir());
-    let endpoint = LocalEndpoint::from_instance_id(format!("m4-host-interrupt-{}", RunId::new()))
-        .expect("fixture endpoint is valid");
-    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
-    let host = intention_daemon::test_host_lifecycle(facade.clone());
-    let host_server = host.clone();
-    let server = tokio::spawn(async move {
-        host_server.serve_connections(listener, 3).await;
-    });
-    let run_id = send_user_turn_through_host(&endpoint, session_id).await;
-    tokio::time::timeout(Duration::from_secs(1), driver.entered.notified())
-        .await
-        .expect("driver begins the blocked stream");
-    interrupt_run_through_host(&endpoint, session_id, run_id).await;
-    // The interrupted round ends with a durable notice, so the interrupted
-    // signal is replaced and the same run admits its continuation instead of
-    // reaching a terminal cancellation.
-    tokio::time::timeout(Duration::from_secs(2), driver.entered.notified())
-        .await
-        .expect("the same run continues after the interruption notice");
-    // The interrupt travels through the host's blocking dispatch and a durable
-    // validation read, so under load it can land after the continuation round
-    // already started: the invariant is that the run continues (never a
-    // terminal cancellation) and that the signal was cleared exactly once, not
-    // the wall-clock number of rounds that began.
-    assert!(
-        driver.executions() >= 2,
-        "the interrupted run starts its continuation round"
-    );
-    let continuing = facade
-        .session_snapshot(session_id)
-        .expect("continuing run state reads");
-    assert_eq!(
-        continuing
-            .projection()
-            .active_run()
-            .expect("the interrupted run stays active")
-            .status(),
-        RunStatusDto::Running
-    );
-    assert_eq!(
-        continuing
-            .messages()
-            .iter()
-            .filter(|message| {
-                message.kind() == MessageKindDto::Notice && message.text() == INTERRUPT_NOTICE
-            })
-            .count(),
-        1,
-        "the run's signal is cleared once, so the interruption records exactly one notice"
-    );
-    let requests = driver.requests();
-    assert_eq!(requests[1].run_id(), run_id);
-    assert!(
-        requests[1]
-            .messages()
-            .iter()
-            .any(|message| message.role() == ModelRoleDto::Notice),
-        "the continuation carries the interruption notice"
-    );
-
-    // Releasing the continuation completes the original run.
-    driver.release.notify_one();
-    assert!(
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            host.wait_for_execution_completion(session_id, run_id),
-        )
-        .await
-        .expect("the continuation completes"),
-        "the exact registered execution task completes"
-    );
-    // A run that left the active slot is no longer the session's active run:
-    // its terminal status reached the subscription as a status frame while the
-    // run was live, and the current state that follows carries its committed
-    // rows.
-    let completed = session_snapshot_through_host(&endpoint, session_id).await;
-    assert!(
-        completed.projection().active_run().is_none(),
-        "a completed run leaves the session's active slot"
-    );
-    assert!(completed.messages().iter().any(|message| {
-        message.kind() == MessageKindDto::Assistant && message.text() == "live response"
-    }));
-    server
-        .await
-        .expect("host accepts command and interrupt peers");
-    host.shutdown().await;
 }
 
 #[cfg(feature = "test-support")]

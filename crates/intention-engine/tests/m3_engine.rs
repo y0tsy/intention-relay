@@ -20,10 +20,9 @@ use intention_proto::{
     ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
 };
 use intention_proto::{
-    ConfigRevisionId, CreateSessionCommandDto, CreateSessionFirstTurnDto, InterruptRunCommandDto,
-    MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, RemoveTurnCommandDto,
-    RunModeDto, RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto,
-    WorkspaceRootDto,
+    ConfigRevisionId, CreateSessionCommandDto, CreateSessionFirstTurnDto, MessageKindDto,
+    MessageProjectionDto, PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto,
+    RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto, WorkspaceRootDto,
 };
 use intention_proto::{
     ErrorCategoryDto, ErrorDto, ErrorRetryDto, IdempotencyKey, ProjectId, RunId, SessionId,
@@ -819,63 +818,6 @@ fn starting_run_context_omits_unpaired_tool_rows() {
                     .is_none_or(|calls| calls.iter().all(|call| call.call_id() == answered))
         }),
         "no unpaired row survives into the model context"
-    );
-}
-
-#[test]
-fn interrupt_run_workflow_maps_durable_results() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let config = fixture_snapshot();
-    let expected = RunProjectionDto::new(
-        session_id,
-        run_id,
-        TurnId::new(),
-        RunStatusDto::Starting,
-        config.revision_id(),
-        None,
-        fixture_time(),
-        None,
-        0,
-    )
-    .expect("fixture run projection is valid");
-    let state = projection(session_id, Some(expected), Vec::new());
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable(
-        "fixture_unused",
-        "accept is not used by this fixture",
-    )));
-    *repository
-        .loaded_projection
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(state);
-    let application = ApplicationService::new(&repository);
-
-    let interrupted = application
-        .interrupt_run(InterruptRunCommandDto::new(session_id, run_id))
-        .expect("interrupt maps");
-    assert_eq!(
-        interrupted, expected,
-        "the engine returns the exact active run projection"
-    );
-}
-
-#[test]
-fn interrupt_run_rejects_a_run_that_is_not_active() {
-    let session_id = SessionId::new();
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable(
-        "fixture_unused",
-        "accept is not used by this fixture",
-    )));
-    *repository
-        .loaded_projection
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
-    assert_eq!(
-        ApplicationService::new(&repository)
-            .interrupt_run(InterruptRunCommandDto::new(session_id, RunId::new()))
-            .expect_err("an inactive session has no run to interrupt")
-            .code(),
-        "active_run_not_found"
     );
 }
 

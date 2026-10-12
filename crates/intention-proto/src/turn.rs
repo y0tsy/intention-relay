@@ -277,38 +277,10 @@ impl SendUserTurnCommandDto {
     }
 }
 
-/// A command requesting interruption of an active run's current operation.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct InterruptRunCommandDto {
-    session_id: SessionId,
-    run_id: RunId,
-}
-
-impl InterruptRunCommandDto {
-    /// Creates a typed interruption request.
-    #[must_use]
-    pub const fn new(session_id: SessionId, run_id: RunId) -> Self {
-        Self { session_id, run_id }
-    }
-
-    /// Returns the session that owns the target run.
-    #[must_use]
-    pub const fn session_id(self) -> SessionId {
-        self.session_id
-    }
-
-    /// Returns the active run requested for interruption.
-    #[must_use]
-    pub const fn run_id(self) -> RunId {
-        self.run_id
-    }
-}
-
 /// A command requesting that an active run stop for good.
 ///
-/// The stop is terminal where an interruption is not: the daemon signals the
-/// run's in-flight operation and the run ends `interrupted` instead of
-/// continuing to the next model step.
+/// The daemon signals the run's in-flight operation and the run ends
+/// `interrupted` instead of continuing to the next model step.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CancelRunCommandDto {
     session_id: SessionId,

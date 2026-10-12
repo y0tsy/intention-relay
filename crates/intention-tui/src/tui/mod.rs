@@ -12,7 +12,7 @@
 //! carries it. Committed rows lay out at the transcript pane's width,
 //! `palette` is the only source of colour, and the event loop disables
 //! revue's built-in quit key so Ctrl+C reaches the shared core's layered
-//! action: a live run is interrupted on the second consecutive press, a typed
+//! action: a live run is stopped on the second consecutive press, a typed
 //! line is abandoned into the history, and an empty line arms the exit for a
 //! second press. Ctrl+Q stays the immediate exit.
 //!

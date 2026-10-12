@@ -16,13 +16,13 @@ use std::time::{Duration, Instant};
 use intention_proto::{
     CancelRunCommandDto, ClientRequestDto, CreateSessionAcceptedDto, CreateSessionCommandDto,
     DaemonHealthDto, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto,
-    GetSessionSnapshotQueryDto, IdempotencyKey, InterruptRunAcceptedDto, InterruptRunCommandDto,
-    MessageId, MessageKindDto, MessageProjectionDto, ProtocolResultDto, RemoveTurnAcceptedDto,
-    RemoveTurnCommandDto, RunCancelledAcceptedDto, RunId, RunProjectionDto, RunStatusDto,
-    SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionId, SessionSnapshotDto,
-    SessionSummariesDto, SetTuiThemeCommandDto, SubscribeSessionCommandDto, TextDeltaChannelDto,
-    TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId, decode_response,
-    encode_request, parse_session_frame, run_status_is_terminal,
+    GetSessionSnapshotQueryDto, IdempotencyKey, MessageId, MessageKindDto, MessageProjectionDto,
+    ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunCancelledAcceptedDto, RunId,
+    RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto,
+    SessionFrameDto, SessionId, SessionSnapshotDto, SessionSummariesDto, SetTuiThemeCommandDto,
+    SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TuiSettingsDto,
+    TuiThemeAcceptedDto, TurnId, decode_response, encode_request, parse_session_frame,
+    run_status_is_terminal,
 };
 use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncMessageSender, LocalEndpoint,
@@ -305,37 +305,10 @@ impl IntentionClient {
         }
     }
 
-    /// Requests interruption of one exact active run's current operation.
-    ///
-    /// # Errors
-    ///
-    /// Returns the daemon's typed rejection, a typed transport or timeout error,
-    /// or an invalid-response error when the reply is not an accepted interrupt
-    /// of this session's run.
-    pub async fn interrupt_run(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-    ) -> DtoResult<InterruptRunAcceptedDto> {
-        match self
-            .request(ClientRequestDto::InterruptRun(InterruptRunCommandDto::new(
-                session_id, run_id,
-            )))
-            .await?
-        {
-            ProtocolResultDto::RunInterrupted(interrupted)
-                if interrupted.session_id() == session_id && interrupted.run_id() == run_id =>
-            {
-                Ok(interrupted)
-            }
-            _ => Err(invalid_response()),
-        }
-    }
-
     /// Requests that one exact active run stop for good.
     ///
-    /// The stop is terminal where an interruption is not: the daemon signals
-    /// the run's in-flight operation and the run ends `interrupted`.
+    /// The daemon signals the run's in-flight operation and the run ends
+    /// `interrupted`.
     ///
     /// # Errors
     ///

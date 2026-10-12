@@ -14,11 +14,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
-    CreateSessionCommandDto, CreateSessionFirstTurnDto, InterruptRunCommandDto, MessageKindDto,
-    MessageProjectionDto, NewMessageDto, PendingTurnProjectionDto, RemoveTurnCommandDto,
-    RunProjectionDto, SendUserTurnCommandDto, SessionProjectionDto, ToolCallRowDto,
-    ToolIdentityDto, ToolInput, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto,
-    ToolResultStatusDto, ToolRowDto,
+    CreateSessionCommandDto, CreateSessionFirstTurnDto, MessageKindDto, MessageProjectionDto,
+    NewMessageDto, PendingTurnProjectionDto, RemoveTurnCommandDto, RunProjectionDto,
+    SendUserTurnCommandDto, SessionProjectionDto, ToolCallRowDto, ToolIdentityDto, ToolInput,
+    ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
 use intention_proto::{ToolCallDto, ToolCallId};
@@ -542,8 +541,8 @@ where
 
     /// Returns the exact active run one request addresses.
     ///
-    /// Interruption and the terminal stop validate through this one rule: the
-    /// addressed run must be the session's own active run.
+    /// The terminal stop validates through this rule: the addressed run must be
+    /// the session's own active run.
     ///
     /// # Errors
     ///
@@ -560,19 +559,6 @@ where
                     "the requested run is not active in the session",
                 )
             })
-    }
-
-    /// Accepts an interruption request for one exact active run.
-    ///
-    /// Interruption is not a durable run state: the run stays active and the
-    /// daemon host signals the registered executor after this validation.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed validation error when the exact run is not active, or a
-    /// repository error when the session projection cannot be read.
-    pub fn interrupt_run(&self, command: InterruptRunCommandDto) -> DtoResult<RunProjectionDto> {
-        self.active_run(command.session_id(), command.run_id())
     }
 
     /// Reconstructs the exact durable context for one current `Starting` run.

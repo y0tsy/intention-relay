@@ -48,7 +48,6 @@ table: a request variant is the operation, and the reply variant is its typed re
 | `CreateSession` | `CreateSessionCommandDto` | `SessionCreated` |
 | `SendUserTurn` | `SendUserTurnCommandDto` | `TurnAccepted` |
 | `RemoveTurn` | `RemoveTurnCommandDto` | `TurnRemoved` |
-| `InterruptRun` | `InterruptRunCommandDto` | `RunInterrupted` |
 | `CancelRun` | `CancelRunCommandDto` | `RunCancelled` |
 | `GetSessionSnapshot` | `GetSessionSnapshotQueryDto` | `SessionSnapshot` |
 | `GetDaemonHealth` | none | `DaemonHealth` |

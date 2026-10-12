@@ -25,9 +25,9 @@ use intention_engine::{
     ToolInvocationRequestDto, ToolResultOutcomeDto, fail_starting_run,
 };
 use intention_proto::{
-    CancelRunCommandDto, ClientRequestDto, DtoResult, ErrorDto, InterruptRunCommandDto,
-    MessageKindDto, RunId, SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto,
-    SubscribeSessionCommandDto, TimestampDto, ToolCallDto,
+    CancelRunCommandDto, ClientRequestDto, DtoResult, ErrorDto, MessageKindDto, RunId,
+    SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto, SubscribeSessionCommandDto,
+    TimestampDto, ToolCallDto,
 };
 use intention_proto::{
     ProtocolDaemonMessageDto, ProtocolResultDto, SessionFrameDto, TextDeltaChannelDto,
@@ -219,8 +219,8 @@ struct HostState {
 impl HostState {
     fn schedule_if_starting(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
         let key = (session_id, run_id);
-        // Admission and interruption share this registry lock: an interrupt
-        // either reaches the registered execution signal, or arrives before
+        // Admission and the stop share this registry lock: a stop either
+        // reaches the registered execution signal, or arrives before
         // admission and finds no in-flight operation to stop.
         let mut data = match self.data.lock() {
             Ok(data) => data,
@@ -230,7 +230,7 @@ impl HostState {
             return;
         }
         // The admitted run's cancellation handle is created here and embedded
-        // in the execution input, so an interrupt and the executor share it.
+        // in the execution input, so a stop and the executor share it.
         let cancellation = RunCancellation::new();
         // The workspace root is immutable for the session, so it is resolved
         // once here and carried into every tool invocation of the run instead of
@@ -317,33 +317,6 @@ impl HostState {
             host.recorder.signal(key);
         });
         self.recorder.track(task);
-    }
-
-    /// Interrupts the current operation of one active run.
-    ///
-    /// The interrupt is accepted only for an exact active run; the run stays
-    /// `Running`. The one registered run signal reaches the in-flight provider
-    /// stream or tool call, which ends with a partial result and a context
-    /// notice, and the model continues with the next step.
-    fn interrupt_run(
-        self: &Arc<Self>,
-        session_id: SessionId,
-        run_id: RunId,
-    ) -> DtoResult<ProtocolResultDto> {
-        let accepted = self
-            .facade
-            .interrupt_run(InterruptRunCommandDto::new(session_id, run_id))?;
-        let data = self.data.lock().map_err(|_| {
-            ErrorDto::unavailable(
-                "daemon_task_registry_unavailable",
-                "the daemon task registry is unavailable",
-            )
-        })?;
-        if let Some(cancellation) = data.tasks.get(&(session_id, run_id)) {
-            cancellation.cancel();
-        }
-        drop(data);
-        Ok(accepted)
     }
 
     /// Stops one active run for good.
@@ -739,11 +712,10 @@ impl HostState {
 
     /// Stops every registered run and waits, boundedly, for each one to return.
     ///
-    /// A stop request takes the same path as a user interrupt: every admitted
-    /// run's cancellation handle is signalled, the engine commits the partial
-    /// model answer it had produced together with the durable interruption
-    /// notice, and the host then returns so the process can exit normally. The
-    /// wait is bounded because a shutdown must never hang: a run that ignores
+    /// A stop request signals every admitted run's cancellation handle: the
+    /// engine commits the partial model answer it had produced together with
+    /// the durable interruption notice, and the host then returns so the
+    /// process can exit normally. The wait is bounded because a shutdown must never hang: a run that ignores
     /// its cancellation stays unfinished and keeps only the rows it managed to
     /// commit, which recovery reads as `Interrupted` on the next start.
     async fn shutdown_executions(&self) {
@@ -1504,9 +1476,6 @@ fn dispatch_request(
             Ok(result)
         }
         ClientRequestDto::RemoveTurn(command) => host.facade.remove_turn(command),
-        ClientRequestDto::InterruptRun(command) => {
-            host.interrupt_run(command.session_id(), command.run_id())
-        }
         ClientRequestDto::CancelRun(command) => {
             host.cancel_run(command.session_id(), command.run_id())
         }
@@ -1803,22 +1772,6 @@ mod tests {
                 Ok(ModelEventDto::text_delta("fixture output").expect("fixture text is valid")),
                 Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
             ]))
-        }
-    }
-
-    struct PendingDriver;
-
-    impl ModelExecutionDriver for PendingDriver {
-        fn capabilities(&self) -> ModelCapabilitiesDto {
-            ModelCapabilitiesDto::new(true, true, true, false, false, true)
-        }
-
-        fn execute(
-            &self,
-            _request: intention_providers::ModelRequestDto,
-            _cancellation: ModelCancellationSignal,
-        ) -> ModelEventStream {
-            Box::pin(futures_util::stream::pending())
         }
     }
 
@@ -2288,110 +2241,6 @@ mod tests {
                 .len(),
             1
         );
-
-        // An interrupt that arrives before admission is accepted without a
-        // registered task, so it reaches no in-flight operation and the run
-        // stays starting and untouched.
-        let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
-        let (session_id, run_id) = create_and_start(&facade);
-        let host = new_host(facade);
-        assert!(matches!(
-            host.interrupt_run(session_id, run_id),
-            Ok(ProtocolResultDto::RunInterrupted(value))
-                if value.session_id() == session_id && value.run_id() == run_id
-        ));
-        assert!(
-            host.data
-                .lock()
-                .expect("host registry remains available")
-                .tasks
-                .is_empty()
-        );
-        assert_eq!(
-            host.facade
-                .repository()
-                .load_run_projection(session_id, run_id)
-                .expect("starting run replay reads")
-                .status(),
-            RunStatusDto::Starting
-        );
-    }
-
-    #[tokio::test]
-    async fn host_interrupt_signals_the_registered_task_and_the_run_stays_active() {
-        let (_directory, facade) = fixture_facade_with_driver(Arc::new(PendingDriver));
-        let (session_id, run_id) = create_and_start(&facade);
-        let host = new_host(facade);
-        host.schedule_if_starting(session_id, run_id);
-        for _ in 0..20 {
-            if host
-                .data
-                .lock()
-                .expect("host registry remains available")
-                .tasks
-                .contains_key(&(session_id, run_id))
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        let signal = host
-            .data
-            .lock()
-            .expect("host registry remains available")
-            .tasks
-            .get(&(session_id, run_id))
-            .cloned()
-            .expect("the admitted run registers its execution signal");
-        // Wait until the pending provider stream is the run's live operation.
-        for _ in 0..20 {
-            if host
-                .facade
-                .repository()
-                .load_run_projection(session_id, run_id)
-                .expect("run replay reads")
-                .status()
-                == RunStatusDto::Running
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-
-        host.interrupt_run(session_id, run_id)
-            .expect("host interrupt commits and signals");
-        for _ in 0..20 {
-            if signal.is_cancelled() {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        assert!(signal.is_cancelled());
-
-        // The interrupt ends the in-flight round with a notice; the run stays
-        // active and its execution task keeps the continuation alive.
-        for _ in 0..20 {
-            tokio::task::yield_now().await;
-        }
-        assert_eq!(
-            host.facade
-                .repository()
-                .load_run_projection(session_id, run_id)
-                .expect("interrupted run replay reads")
-                .status(),
-            RunStatusDto::Running
-        );
-        assert!(
-            host.data
-                .lock()
-                .expect("host registry remains available")
-                .tasks
-                .contains_key(&(session_id, run_id))
-        );
-        for task in host.recorder.take_tasks() {
-            task.abort();
-            let _ = task.await;
-        }
     }
 
     #[tokio::test]

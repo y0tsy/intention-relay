@@ -26,13 +26,12 @@ pub use projection::{
 };
 pub use protocol::{
     ClientRequestDto, CreateSessionAcceptedDto, DaemonHealthDto, DaemonReadinessDto,
-    InterruptRunAcceptedDto, ProtocolDaemonMessageDto, ProtocolRejectionDto, ProtocolReplyDto,
-    ProtocolRequestDto, ProtocolResultDto, RemoveTurnAcceptedDto, RunCancelledAcceptedDto,
-    SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionSnapshotDto,
-    SessionSummariesDto, SessionSummaryDto, SetTuiThemeCommandDto, SubscribeSessionCommandDto,
-    TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto,
-    decode_request_line, decode_response, encode_reply, encode_request, parse_daemon_message,
-    parse_session_frame,
+    ProtocolDaemonMessageDto, ProtocolRejectionDto, ProtocolReplyDto, ProtocolRequestDto,
+    ProtocolResultDto, RemoveTurnAcceptedDto, RunCancelledAcceptedDto, SendUserTurnAcceptedDto,
+    SendUserTurnOutcomeDto, SessionFrameDto, SessionSnapshotDto, SessionSummariesDto,
+    SessionSummaryDto, SetTuiThemeCommandDto, SubscribeSessionCommandDto, TextDeltaChannelDto,
+    TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, decode_request_line,
+    decode_response, encode_reply, encode_request, parse_daemon_message, parse_session_frame,
 };
 pub use run::{
     RunModeDto, RunProjectionDto, RunStatusDto, run_status_is_terminal,
@@ -47,8 +46,7 @@ pub use tool::{
 };
 pub use turn::{
     CancelRunCommandDto, CreateSessionCommandDto, CreateSessionFirstTurnDto,
-    GetSessionSnapshotQueryDto, InterruptRunCommandDto, RemoveTurnCommandDto,
-    SendUserTurnCommandDto,
+    GetSessionSnapshotQueryDto, RemoveTurnCommandDto, SendUserTurnCommandDto,
 };
 pub use workspace::WorkspaceRootDto;
 

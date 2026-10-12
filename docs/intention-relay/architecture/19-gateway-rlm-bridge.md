@@ -142,11 +142,11 @@ Before the call start boundary, cancellation or recovery records known `Cancelle
 attempt commits a bounded `Partial` result with its notice, and the next model step proceeds. Known validation, denial,
 protocol, tool, or remote failures remain known when terminal effect proof exists.
 
-Channel close and grant expiry do not interrupt a run; run interruption remains owner-controlled and
-the bridge only propagates it. The first bridge contract adds no per-`ToolCallId` interruption command: `run.interrupt`
-signals the registered execution, ends the in-flight operation with its bounded `Partial` result and notice, and keeps
-the run `Running`, and a valid durable interruption/result race is decided by the first committing mutation, with the
-loser rereading and unable to overwrite. Late fragments/results after interruption, terminalization, grant
+Channel close and grant expiry do not stop a run; the run stop remains owner-controlled and
+the bridge only propagates it. The first bridge contract adds no per-`ToolCallId` stop command: `run.cancel`
+signals the registered execution, ends the in-flight operation with its bounded `Partial` result and notice, and ends
+the run, and a valid durable stop/result race is decided by the first committing mutation, with the
+loser rereading and unable to overwrite. Late fragments/results after a stop, terminalization, grant
 expiry, or restart are non-authoritative and cannot append durable records.
 
 Bridge recovery invalidates old grants, disposes private bridge-side resources, classifies operations only from durable

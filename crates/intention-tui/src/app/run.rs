@@ -1,4 +1,4 @@
-//! The run transitions: the live subscription, frames, turns, and interrupts.
+//! The run transitions: the live subscription, frames, turns, and stops.
 
 use intention_client::{FrameUpdate, SessionStreamState};
 use intention_proto::{
@@ -309,26 +309,10 @@ impl AppState {
             .filter(|run| !run_status_is_terminal(run.status()))
     }
 
-    /// Requests the interruption of the active run, if one is live.
-    pub(super) fn request_interrupt(&mut self) -> Vec<Effect> {
-        let Some(run) = self.live_run() else {
-            self.notice = Some("no active run to interrupt".to_owned());
-            return Vec::new();
-        };
-        if let Some(session_id) = self.session_id {
-            return vec![Effect::Interrupt {
-                session_id,
-                run_id: run.run_id(),
-            }];
-        }
-        Vec::new()
-    }
-
     /// Requests that the live run stop for good.
     ///
     /// The stop is the terminal gesture: an accepted request ends the run, so
-    /// the notice names the stop instead of an interruption the model would
-    /// answer with another step.
+    /// the notice names the stop.
     pub(super) fn request_cancel(&mut self) -> Vec<Effect> {
         let Some(run) = self.live_run() else {
             self.notice = Some("no active run to stop".to_owned());
@@ -342,12 +326,6 @@ impl AppState {
             session_id,
             run_id: run.run_id(),
         }]
-    }
-
-    /// Records the accepted interrupt request.
-    pub(super) fn apply_interrupt_accepted(&mut self) -> Vec<Effect> {
-        self.note("interrupt accepted".to_owned());
-        Vec::new()
     }
 
     /// Records the accepted stop request.

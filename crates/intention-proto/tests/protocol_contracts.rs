@@ -16,14 +16,13 @@ use common::{fixture_message, fixture_projection, fixture_workspace_root};
 use intention_proto::{
     CancelRunCommandDto, ClientRequestDto, CreateSessionAcceptedDto, CreateSessionCommandDto,
     CreateSessionFirstTurnDto, DaemonHealthDto, ErrorDto, GetSessionSnapshotQueryDto,
-    InterruptRunAcceptedDto, InterruptRunCommandDto, ProtocolDaemonMessageDto, ProtocolResultDto,
-    RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunCancelledAcceptedDto, RunProjectionDto,
-    RunStatusDto, SendUserTurnAcceptedDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto,
-    SessionFrameDto, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto,
-    SetTuiThemeCommandDto, SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto,
-    ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, decode_request_line, decode_response,
-    encode_reply, encode_request, parse_daemon_message, parse_session_frame,
-    run_status_is_terminal, validate_run_status_transition,
+    ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto,
+    RunCancelledAcceptedDto, RunProjectionDto, RunStatusDto, SendUserTurnAcceptedDto,
+    SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionSnapshotDto,
+    SessionSummariesDto, SessionSummaryDto, SetTuiThemeCommandDto, SubscribeSessionCommandDto,
+    TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto,
+    decode_request_line, decode_response, encode_reply, encode_request, parse_daemon_message,
+    parse_session_frame, run_status_is_terminal, validate_run_status_transition,
 };
 use intention_proto::{ConfigRevisionId, IdempotencyKey, MessageKindDto, ProjectId, RunId};
 use intention_proto::{RunModeDto, SessionId, TimestampDto, TurnId, WorkspaceId};
@@ -86,7 +85,6 @@ const fn result_kind(request: &ClientRequestDto) -> &'static str {
         ClientRequestDto::CreateSession(_) => "session_created",
         ClientRequestDto::SendUserTurn(_) => "turn_accepted",
         ClientRequestDto::RemoveTurn(_) => "turn_removed",
-        ClientRequestDto::InterruptRun(_) => "run_interrupted",
         ClientRequestDto::CancelRun(_) => "run_cancelled",
         ClientRequestDto::GetSessionSnapshot(_) => "session_snapshot",
         ClientRequestDto::GetDaemonHealth => "daemon_health",
@@ -112,7 +110,6 @@ fn fixture_requests(session_id: SessionId, run_id: RunId) -> Vec<ClientRequestDt
                 .expect("fixture turn is valid"),
         ),
         ClientRequestDto::RemoveTurn(RemoveTurnCommandDto::new(session_id, TurnId::new())),
-        ClientRequestDto::InterruptRun(InterruptRunCommandDto::new(session_id, run_id)),
         ClientRequestDto::CancelRun(CancelRunCommandDto::new(session_id, run_id)),
         ClientRequestDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id)),
         ClientRequestDto::GetDaemonHealth,
@@ -137,7 +134,6 @@ fn fixture_results(session_id: SessionId, run_id: RunId) -> Vec<ProtocolResultDt
             SendUserTurnOutcomeDto::Pending,
         )),
         ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(session_id, TurnId::new())),
-        ProtocolResultDto::RunInterrupted(InterruptRunAcceptedDto::new(session_id, run_id)),
         ProtocolResultDto::RunCancelled(RunCancelledAcceptedDto::new(session_id, run_id)),
         ProtocolResultDto::SessionSnapshot(fixture_snapshot(session_id, run_id)),
         ProtocolResultDto::DaemonHealth(DaemonHealthDto::ready()),
@@ -190,7 +186,7 @@ fn every_request_round_trips_with_its_named_result_kind() {
     }
     assert_eq!(
         kinds.len(),
-        11,
+        10,
         "the wire implements exactly one request kind per operation"
     );
 }

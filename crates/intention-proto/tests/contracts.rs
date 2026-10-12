@@ -9,8 +9,8 @@
 
 use intention_proto::{
     ConfigRevisionId, CorrelationIdDto, CreateSessionCommandDto, ErrorCategoryDto, ErrorDto,
-    ErrorRetryDto, GetSessionSnapshotQueryDto, IdempotencyKey, InterruptRunCommandDto, ProjectId,
-    ProviderErrorDto, RemoveTurnCommandDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto,
+    ErrorRetryDto, GetSessionSnapshotQueryDto, IdempotencyKey, ProjectId, ProviderErrorDto,
+    RemoveTurnCommandDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto,
     SendUserTurnCommandDto, SessionId, SessionProjectionDto, TimestampDto, ToolCallDto, ToolCallId,
     TurnId, UsageDto, WorkspaceId, WorkspaceRelativePathDto, WorkspaceRootDto,
     run_status_is_terminal,
@@ -291,7 +291,6 @@ fn commands_round_trip_with_typed_identity_and_mode() {
     );
 
     let turn_id = TurnId::new();
-    let run_id = RunId::new();
 
     let removal = RemoveTurnCommandDto::new(session_id, turn_id);
     assert_eq!(removal.session_id(), session_id);
@@ -300,14 +299,6 @@ fn commands_round_trip_with_typed_identity_and_mode() {
         serde_json::from_str(&serde_json::to_string(&removal).expect("removal serializes"))
             .expect("removal decodes");
     assert_eq!(decoded, removal);
-
-    let interrupt = InterruptRunCommandDto::new(session_id, run_id);
-    assert_eq!(interrupt.session_id(), session_id);
-    assert_eq!(interrupt.run_id(), run_id);
-    let decoded: InterruptRunCommandDto =
-        serde_json::from_str(&serde_json::to_string(&interrupt).expect("interrupt serializes"))
-            .expect("interrupt decodes");
-    assert_eq!(decoded, interrupt);
 
     let query = GetSessionSnapshotQueryDto::new(session_id);
     assert_eq!(query.session_id(), session_id);

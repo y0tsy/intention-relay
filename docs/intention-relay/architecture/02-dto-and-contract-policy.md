@@ -16,7 +16,7 @@ A DTO is a stable contract, not merely any serializable struct.
 
 | Category | Purpose | Examples |
 | --- | --- | --- |
-| Command DTO | Requested state-changing work. | `SendUserTurnCommandDto`, `InterruptRunCommandDto`, `CancelRunCommandDto`. |
+| Command DTO | Requested state-changing work. | `SendUserTurnCommandDto`, `CancelRunCommandDto`. |
 | Query DTO | Requested read model or snapshot. | `GetSessionSnapshotQueryDto`. |
 | Persistence DTO | Storage-safe representation of a record or projection. | `RunProjectionDto`, `MessageProjectionDto`. |
 | Provider DTO | Provider-neutral model request/stream/error contract, including advertised tool definitions and the transient same-run reasoning attachment. | `ModelRequestDto`, `ModelToolDefinitionDto`, `AssistantReasoningDto`, `ModelEventDto`. |

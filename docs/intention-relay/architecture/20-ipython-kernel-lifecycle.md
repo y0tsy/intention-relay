@@ -203,12 +203,11 @@ foreground cell.
 
 Interruption terminates the attached epoch without claiming rollback. Before start it records known pre-effect
 interruption; after start, known terminal proof remains known and absent proof commits a bounded `Partial` result with
-its notice. `run.interrupt` (`InterruptRunCommandDto`) remains the only first-scope run interruption command, while the
-run-level stop is `run.cancel`, which ends the run itself: the daemon
+its notice. The run-level stop is `run.cancel`, which ends the run itself: the daemon
 signals the in-flight operation, then terminates the attached kernel epoch rather than merely leaving a potentially
-modified namespace alive. The run stays `Running`, the stopped cell commits its bounded `Partial` result with its
-notice, and the model receives the next step; the daemon does not
-wait for the cell to acknowledge an interrupt. Late cell output, host responses, fragments, and results after
+modified namespace alive. The stopped cell commits its bounded `Partial` result with its
+notice and the run ends; the daemon does not
+wait for the cell to acknowledge the stop. Late cell output, host responses, fragments, and results after
 interruption, terminalization, epoch replacement, grant expiry, or restart are non-authoritative and cannot append
 durable records.
 

@@ -162,10 +162,6 @@ pub enum Action {
     },
     /// Sending a user turn failed.
     TurnFailed(ErrorDto),
-    /// The daemon accepted one interruption request.
-    InterruptAccepted,
-    /// Interrupting the active run failed.
-    InterruptFailed(ErrorDto),
     /// The daemon accepted one stop request.
     RunCancelAccepted,
     /// Stopping the active run failed.
@@ -231,21 +227,19 @@ pub enum Action {
     /// The user pressed Ctrl+C: one key press with layered effects.
     ///
     /// The core decides what the press means from the state it finds and from
-    /// the arm the previous press left: it arms or fires the interrupt of a
+    /// the arm the previous press left: it arms or fires the stop of a
     /// live run, abandons a typed line into the history, and arms or fires the
     /// exit. See `super::ctrl_c`.
     CtrlCPressed,
     /// The user pressed Esc on the chat screen: cancel, clear, or exit.
     ///
     /// The core decides what the press means from the state it finds and from
-    /// the arm the previous press left: a live run is interrupted immediately,
+    /// the arm the previous press left: a live run is stopped immediately,
     /// a typed line needs two consecutive presses to be abandoned into the
     /// history, and an empty line leaves the front end. The sessions browser
     /// maps Esc to its own close action, so the two meanings never meet. See
     /// `super::escape`.
     EscapePressed,
-    /// The user asked to interrupt the active run.
-    InterruptRequested,
     /// The user asked to stop the active run for good.
     CancelRunRequested,
     /// The view reported the transcript display rows one selection reaches.
@@ -287,7 +281,7 @@ impl Action {
     /// of them is something the user asked for, and the layered Ctrl+C arm is
     /// consecutive over the user's own actions only: a live run's frames and a
     /// live turn's clock reports arrive between two presses of the key that
-    /// arms its interrupt, so they leave the arm standing.
+    /// arms its stop, so they leave the arm standing.
     #[must_use]
     pub(super) const fn is_client_report(&self) -> bool {
         matches!(
@@ -309,8 +303,6 @@ impl Action {
                 | Self::ElapsedReported { .. }
                 | Self::TurnAccepted(_)
                 | Self::TurnFailed(_)
-                | Self::InterruptAccepted
-                | Self::InterruptFailed(_)
                 | Self::RunCancelAccepted
                 | Self::RunCancelFailed(_)
         )
@@ -361,17 +353,10 @@ pub enum Effect {
         /// The owning session.
         session_id: SessionId,
     },
-    /// Request interruption of one run's current operation.
-    Interrupt {
-        /// The owning session.
-        session_id: SessionId,
-        /// The interrupted run.
-        run_id: RunId,
-    },
     /// Request that one run stop for good.
     ///
-    /// The stop is terminal where the interruption is not: the daemon signals
-    /// the run's in-flight operation and the run ends `interrupted`.
+    /// The daemon signals the run's in-flight operation and the run ends
+    /// `interrupted`.
     CancelRun {
         /// The owning session.
         session_id: SessionId,

@@ -13,7 +13,7 @@
 //! is the one chat binding beside the control keys: it expands the newest
 //! collapsed reasoning block, exactly as a click on that block's marker does.
 //!
-//! `Esc` is the chat's cancel/exit key: a live run is interrupted by a single
+//! `Esc` is the chat's cancel/exit key: a live run is stopped by a single
 //! press, a typed line needs two consecutive presses to be abandoned, and an
 //! empty line leaves the front end. The two docked surfaces are separate
 //! keymaps and keep `Esc` as their own close key - the sessions browser closes,

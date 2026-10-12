@@ -2593,12 +2593,12 @@ fn a_run_another_window_started_becomes_the_projected_run() {
     );
     assert_eq!(state.run_phase(), Some(RunPhase::Waiting));
     assert_eq!(
-        state.update(Action::InterruptRequested),
-        vec![Effect::Interrupt {
+        state.update(Action::CancelRunRequested),
+        vec![Effect::CancelRun {
             session_id,
             run_id: started,
         }],
-        "the second window can interrupt the run it now observes"
+        "the second window can stop the run it now observes"
     );
 }
 
@@ -2622,26 +2622,6 @@ fn a_row_another_window_committed_joins_the_transcript() {
         None,
         "a row alone never names a phase of its own"
     );
-}
-
-#[test]
-fn interrupt_requests_the_run_the_status_frame_reported() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
-    let effects = state.update(Action::InterruptRequested);
-    assert_eq!(effects, vec![Effect::Interrupt { session_id, run_id }]);
-    state.update(Action::InterruptAccepted);
-    assert_eq!(state.notice(), Some("interrupt accepted"));
-}
-
-#[test]
-fn interrupt_without_a_live_run_asks_for_nothing() {
-    let session_id = SessionId::new();
-    let mut state = opened_session(session_id, Vec::new());
-    let effects = state.update(Action::InterruptRequested);
-    assert!(effects.is_empty());
-    assert_eq!(state.notice(), Some("no active run to interrupt"));
 }
 
 #[test]
@@ -2888,8 +2868,8 @@ fn a_terminal_status_frame_reports_the_final_status() {
     )));
     assert_eq!(state.run_status(), Some(RunStatusDto::Completed));
     assert_eq!(state.notice(), Some("run completed"));
-    let effects = state.update(Action::InterruptRequested);
-    assert!(effects.is_empty(), "a completed run cannot be interrupted");
+    let effects = state.update(Action::CancelRunRequested);
+    assert!(effects.is_empty(), "a completed run cannot be stopped");
 }
 
 #[test]
