@@ -334,7 +334,14 @@ impl Script {
     }
 }
 
-/// Reads one HTTP request head and body and answers it from the script.
+/// Claims one scripted round for one accepted connection and answers it.
+///
+/// The connection is the round: the client opens exactly one connection per
+/// provider request. The round is claimed once the connection has carried a
+/// request head, and it is answered whether or not its body then arrives in
+/// full - a round the script never answers is a provider failure, which the run
+/// reports as its own failed run, and only the product may reach that verdict.
+/// The read bound below ends a stalled read; it never ends a round.
 fn handle_provider_request(
     mut stream: TcpStream,
     requests: &AtomicUsize,
@@ -342,17 +349,24 @@ fn handle_provider_request(
     script: &Script,
 ) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let Some(body) = read_request_body(&mut stream) else {
+    let Some(head) = read_request_head(&mut stream) else {
+        // A connection that carried no request is not a round.
         return;
     };
+    let request_number = requests.fetch_add(1, Ordering::AcqRel) + 1;
+    let body = read_request_body(&mut stream, &head);
     // The provider paces each scripted round so the test's subscriber can
     // attach before the committed state for that round is published.
-    let request_number = requests.fetch_add(1, Ordering::AcqRel) + 1;
     if script.pace_every_round || request_number == 1 {
         thread::sleep(ROUND_PACE);
     }
-    let body_text = String::from_utf8_lossy(&body);
-    if request_number == 1 {
+    // The assertion is the fixture's own self-check of one request it read, so
+    // it only runs for a body that arrived: the answer below is the round's
+    // answer either way.
+    if request_number == 1
+        && let Some(body) = &body
+    {
+        let body_text = String::from_utf8_lossy(body);
         assert!(
             body_text.contains(r#""tools":["#)
                 && body_text.contains(&format!(r#""name":"{}""#, script.tool_name)),
@@ -371,34 +385,44 @@ fn write_response(stream: &mut TcpStream, response: &str) {
     let _ = stream.flush();
 }
 
-/// Reads one complete HTTP request body: the head up to its blank line plus
-/// exactly the declared Content-Length bytes, preserving any body bytes that
-/// arrived in the same read as the head.
-fn read_request_body(stream: &mut TcpStream) -> Option<Vec<u8>> {
+/// Reads one HTTP request head, up to and including its blank line.
+///
+/// Returns `None` when the connection carried no complete request head within
+/// its read bound, so a connection that sent nothing is not a claimed round.
+fn read_request_head(stream: &mut TcpStream) -> Option<Vec<u8>> {
     let mut head = Vec::new();
     let mut buffer = [0_u8; 4096];
     loop {
         match stream.read(&mut buffer) {
-            Ok(0) => return None,
+            Ok(0) | Err(_) => return None,
             Ok(read) => {
                 head.extend_from_slice(&buffer[..read]);
-                if let Some(end) = head.windows(4).position(|window| window == b"\r\n\r\n") {
-                    let length = content_length(&head[..end]);
-                    let mut body = head.split_off(end + 4);
-                    if body.len() < length {
-                        let mut remaining = vec![0_u8; length - body.len()];
-                        if stream.read_exact(&mut remaining).is_err() {
-                            return None;
-                        }
-                        body.extend_from_slice(&remaining);
-                    }
-                    body.truncate(length);
-                    return Some(body);
+                if head.windows(4).any(|window| window == b"\r\n\r\n") {
+                    return Some(head);
                 }
             }
-            Err(_) => return None,
         }
     }
+}
+
+/// Reads the body one request head declares, from the bytes that read carried.
+///
+/// The bytes that arrived in the same read as the head are preserved. Returns
+/// `None` when the declared body did not arrive in full within the connection's
+/// read bound: the caller answers the round it already claimed.
+fn read_request_body(stream: &mut TcpStream, head: &[u8]) -> Option<Vec<u8>> {
+    let end = head.windows(4).position(|window| window == b"\r\n\r\n")?;
+    let length = content_length(&head[..end]);
+    let mut body = head[end + 4..].to_vec();
+    if body.len() < length {
+        let mut remaining = vec![0_u8; length - body.len()];
+        if stream.read_exact(&mut remaining).is_err() {
+            return None;
+        }
+        body.extend_from_slice(&remaining);
+    }
+    body.truncate(length);
+    Some(body)
 }
 
 /// Parses the Content-Length header from an HTTP request head.

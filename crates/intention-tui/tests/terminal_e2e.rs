@@ -235,6 +235,18 @@ struct CliOutput {
     stderr: String,
 }
 
+impl CliOutput {
+    /// Renders both output streams of the finished process for one diagnostic.
+    ///
+    /// The JSON format reports a run's own account of a failure on standard
+    /// output - the typed error record and the result that ends the output - so
+    /// a status assertion that named only standard error would hide the account
+    /// of the very failure it reports.
+    fn diagnostic(&self) -> String {
+        format!("stderr={} stdout={}", self.stderr, self.stdout)
+    }
+}
+
 /// Waits for one spawned front end and collects its two output streams.
 fn collect(child: &mut Child, deadline: Instant) -> CliOutput {
     let stdout = child
@@ -492,7 +504,14 @@ fn the_json_run_reports_transient_deltas_before_the_committed_row() {
         &["run", PROMPT, "--format", "json", "--workspace", &workspace],
         None,
     );
-    assert_eq!(output.code, Some(0), "the run completes: {}", output.stderr);
+    assert_eq!(
+        output.code,
+        Some(0),
+        "the run completes after {} provider requests and {} excess requests: {}",
+        host.scripted_provider().request_count(),
+        host.scripted_provider().excess_count(),
+        output.diagnostic()
+    );
     assert!(output.stderr.is_empty(), "stderr: {}", output.stderr);
 
     let records = json_records(&output.stdout);
@@ -656,7 +675,14 @@ fn a_run_past_the_retention_bound_reports_every_committed_row() {
         &["run", PROMPT, "--format", "json", "--workspace", &workspace],
         None,
     );
-    assert_eq!(output.code, Some(0), "the run completes: {}", output.stderr);
+    assert_eq!(
+        output.code,
+        Some(0),
+        "the run completes after {} provider requests and {} excess requests: {}",
+        host.scripted_provider().request_count(),
+        host.scripted_provider().excess_count(),
+        output.diagnostic()
+    );
     assert!(output.stderr.is_empty(), "stderr: {}", output.stderr);
 
     let records = json_records(&output.stdout);
