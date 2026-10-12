@@ -213,7 +213,9 @@ and the per-crate coverage tiers in `quality/coverage.toml` are unchanged.
 ### Slice 2 evidence
 
 Slice 2 delivers the terminal application as one `intention-tui` binary over the shared client, and its evidence follows
-the same contract-first shape. Protocol and storage contract tests cover the new `ListSessions` request and
+the same contract-first shape. The slice is closed: it merged into `main` as `0fd8ad5` (PR #67), and the evidence below
+and the corrective-pass section that follows it are what the merged slice is held to. Protocol and storage contract
+tests cover the new `ListSessions` request and
 `SessionsListed` result: recency order, the bounded session window, and the `omitted` count instead of a silent
 truncation. Protocol contract tests cover the transient `TextDelta` frame, its channel discriminator, and the rejection of
 empty text on the wire. Engine

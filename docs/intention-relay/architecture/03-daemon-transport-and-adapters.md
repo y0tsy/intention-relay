@@ -351,9 +351,10 @@ This section records the landed model; the text above is the live policy.
   committed session-frame stream, and its blocking API is removed. Daemon end-to-end tests drive the real client
   instead of the low-level transport, and the TUI proof adapter migrates mechanically without rework.
 
-## Slice 2 terminal model (activated)
+## Slice 2 terminal model (closed)
 
-Slice 2 turned the terminal adapter into the delivered terminal application. This section records the landed model; the
+Slice 2 turned the terminal adapter into the delivered terminal application, closed and merged into `main` as
+`0fd8ad5` (PR #67). This section records the landed model; the
 text above is the live policy.
 
 - One binary, three modes. `intention-tui` carries one command grammar and selects exactly one front end: the bare
