@@ -25,6 +25,23 @@ const PANEL_PADDING: u16 = 1;
 /// The rows the notice or error line occupies under the input block.
 const DETAIL_ROWS: u16 = 1;
 
+/// The share of the panel's body the input block may show buffer lines for.
+///
+/// The block grows with its buffer up to this share of the rows it competes for
+/// and then shows the window of lines that carries the cursor, so a prompt of any
+/// length leaves the transcript the rows it does not need: growth is worth its
+/// rows, but never the whole window. The share is a divisor, so the cap follows
+/// the window: a taller terminal lets the block grow further, a shorter one caps
+/// it sooner.
+const INPUT_LINE_SHARE: u16 = 3;
+
+/// The buffer lines the input block shows even in a body too short for its share.
+///
+/// A prompt is read as text before it is sent, so the block never shows fewer
+/// lines than this: the cap yields to the floor, and the transcript lives with
+/// what is left.
+const INPUT_MIN_LINES: u16 = 3;
+
 /// The rows above the transcript pane's first content row: the window's own
 /// margin, the panel's top frame row, the card's padding, and the transcript
 /// pane's own top frame row.
@@ -64,9 +81,11 @@ struct Panel {
 /// its one row under it, the hint region takes the rows it needs directly above
 /// the input block while it is open, and the transcript takes every row that
 /// leaves; the four inside the frame sum to the panel's body exactly, so no
-/// child overflows the panel. A buffer taller than the panel can hold is
-/// bounded by the rows left after the detail line and the hint region, and the
-/// block windows it.
+/// child overflows the panel. The block's growth is bounded by
+/// [`INPUT_ROW_SHARE`] of that body: a buffer taller than its share keeps those
+/// rows and shows the window of lines that carries the cursor, so the block
+/// never spends the whole panel on a long prompt and the transcript keeps the
+/// rest.
 ///
 /// The hint region takes its rows exactly or not at all: a body that cannot
 /// hold the whole band - or the picker panel - beside the rows the input block
@@ -78,10 +97,25 @@ const fn panel(window: Rect, wanted_input_rows: u16, wanted_hint_rows: u16) -> P
     let body = rows.saturating_sub(PANEL_FRAME);
     let detail_rows = if body > 0 { DETAIL_ROWS } else { 0 };
     let available = body.saturating_sub(detail_rows);
-    let input_rows = if wanted_input_rows < available {
-        wanted_input_rows
+    // The cap bounds the buffer lines the block shows, never its own chrome: the
+    // badge, the status row, and the frame survive in any window, and a block
+    // taller than its share windows the lines instead of growing further.
+    let share = available / INPUT_LINE_SHARE;
+    let lines = if share > INPUT_MIN_LINES {
+        share
+    } else {
+        INPUT_MIN_LINES
+    };
+    let wanted_cap = lines.saturating_add(input::CHROME_ROWS);
+    let cap = if wanted_cap < available {
+        wanted_cap
     } else {
         available
+    };
+    let input_rows = if wanted_input_rows < cap {
+        wanted_input_rows
+    } else {
+        cap
     };
     let hint_rows =
         if wanted_hint_rows > 0 && wanted_hint_rows.saturating_add(input_rows) <= available {
@@ -265,8 +299,14 @@ mod tests {
         );
 
         let tall = panel(window, 100, 0);
-        assert_eq!(tall.input_rows, 19, "the detail line's row is kept first");
-        assert_eq!(tall.transcript_rows, 0);
+        assert_eq!(
+            tall.input_rows, 10,
+            "the block stops at its share of the lines - a third of nineteen - plus its own chrome"
+        );
+        assert_eq!(
+            tall.transcript_rows, 9,
+            "the rows the block does not take stay with the transcript"
+        );
         assert_eq!(
             tall.transcript_rows + tall.hint_rows + tall.input_rows + tall.detail_rows,
             20
@@ -307,7 +347,8 @@ mod tests {
         );
 
         // A body too short for the band and the rows the input block needs
-        // keeps the input: the band yields rather than taking the input's rows.
+        // keeps the input: the band yields rather than taking the input's rows,
+        // and the block's floor keeps the lines every prompt is read in.
         let cramped = panel(Rect::new(0, 0, 80, 12), 6, 4);
         assert_eq!(cramped.hint_rows, 0, "the band yields to the input block");
         assert_eq!(

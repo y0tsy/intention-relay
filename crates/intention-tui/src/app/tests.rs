@@ -3777,3 +3777,298 @@ fn a_fast_drag_step_moves_five_wheel_notches() {
     state.update(Action::ScrollTranscriptFast(TranscriptScroll::Newer));
     assert_eq!(state.scroll(), 0);
 }
+
+#[test]
+fn a_paste_past_the_size_the_line_can_show_arrives_as_one_labelled_line() {
+    // Ten lines, one of them blank: the paste is taller than the eight lines the
+    // line is allowed to show, so its text waits outside the buffer.
+    let paste = format!("head\ntail\n{}", "x\n".repeat(7));
+    let mut state = AppState::new(None);
+    assert_eq!(
+        state.update(Action::InputPasted(paste.clone())),
+        Vec::new(),
+        "a paste asks for no client work"
+    );
+    assert_eq!(
+        state.input(),
+        "[pasted head tail x x x x x x x... 10 lines]",
+        "the label names the paste's own head and how many lines it carries"
+    );
+    assert_eq!(
+        state.cursor(),
+        state.input().chars().count(),
+        "the caret lands after the label it inserted"
+    );
+
+    // The turn the paste becomes is the paste, never its label.
+    let effects = state.update(Action::InputSubmitted);
+    assert_eq!(
+        effects,
+        vec![Effect::CreateSession {
+            first_turn: Some(paste.clone()),
+        }],
+        "submitting a labelled paste sends the whole text"
+    );
+
+    // The history keeps the line as the user saw it, and the label still stands
+    // for its paste when the line comes back.
+    state.update(Action::NavigateInputHistory(InputHistoryMove::Previous));
+    assert_eq!(
+        state.input(),
+        "[pasted head tail x x x x x x x... 10 lines]",
+        "the history recalls the line the user submitted"
+    );
+    assert_eq!(
+        state.update(Action::InputSubmitted),
+        vec![Effect::CreateSession {
+            first_turn: Some(paste),
+        }],
+        "the recalled label expands into its paste again"
+    );
+}
+
+#[test]
+fn a_paste_the_line_can_show_is_inserted_as_text() {
+    // Eight lines and four hundred characters are the limits: at them the paste is
+    // a line the user can read, so it enters the line exactly as it arrived.
+    let eight_lines = format!("one\n{}", "two\n".repeat(6)) + "two";
+    let mut state = AppState::new(None);
+    state.update(Action::InputPasted(eight_lines.clone()));
+    assert_eq!(state.input(), eight_lines, "eight lines stay in the line");
+
+    let mut state = AppState::new(None);
+    let four_hundred = "x".repeat(400);
+    state.update(Action::InputPasted(four_hundred.clone()));
+    assert_eq!(
+        state.input(),
+        four_hundred,
+        "four hundred characters stay in the line"
+    );
+
+    let mut state = AppState::new(None);
+    let four_hundred_and_one = "x".repeat(401);
+    state.update(Action::InputPasted(four_hundred_and_one));
+    assert_eq!(
+        state.input(),
+        format!("[pasted {}... 1 line]", "x".repeat(50)),
+        "one character past the limit is one labelled line, head and all"
+    );
+}
+
+#[test]
+fn a_label_shows_the_paste_s_head_without_the_framing_a_terminal_carried() {
+    // The head is the paste's own opening words: the framing a terminal may have
+    // carried is dropped, the line breaks and tabs inside it read as spaces, and
+    // the leading indentation is trimmed. The count is the paste's own lines,
+    // blank ones included.
+    let paste = format!("\u{1b}   indented\tfirst\nsecond\n{}", "x\n".repeat(7));
+    let mut state = AppState::new(None);
+    state.update(Action::InputPasted(paste));
+    let label = state.input().to_owned();
+    assert!(
+        label.starts_with("[pasted indented first second"),
+        "the head is the paste's words, trimmed: {label}"
+    );
+    assert!(
+        label.ends_with("... 10 lines]"),
+        "the count is the paste's own lines: {label}"
+    );
+    assert!(
+        !label.contains(['\u{1b}', '\n', '\t']),
+        "nothing of the terminal's framing survives in the label: {label}"
+    );
+}
+
+#[test]
+fn the_carriage_returns_of_a_windows_paste_are_not_content() {
+    let mut state = AppState::new(None);
+    state.update(Action::InputPasted("first\r\nsecond\r\n".to_owned()));
+    assert_eq!(
+        state.input(),
+        "first\nsecond\n",
+        "a Windows paste's line endings are the buffer's own"
+    );
+}
+
+#[test]
+fn two_pastes_with_one_label_expand_in_the_order_the_line_spells_them() {
+    // Two pastes whose first fifty characters and line counts agree, so their
+    // labels are the same text: each occurrence still stands for its own paste.
+    let first = format!("{}\nalpha\n{}", "p".repeat(60), "x\n".repeat(8));
+    let second = format!("{}\nbravo\n{}", "p".repeat(60), "x\n".repeat(8));
+    let label = format!("[pasted {}... 11 lines]", "p".repeat(50));
+    let mut state = AppState::new(None);
+    state.update(Action::InputPasted(first.clone()));
+    state.update(Action::InputPasted(second.clone()));
+    assert_eq!(state.input(), format!("{label}{label}"));
+
+    let mut state = AppState::new(None);
+    state.update(Action::InputPasted(first.clone()));
+    state.update(Action::InputPasted(second.clone()));
+    assert_eq!(
+        state.update(Action::InputSubmitted),
+        vec![Effect::CreateSession {
+            first_turn: Some(format!("{first}{second}")),
+        }],
+        "the first occurrence is the first paste and the second the second"
+    );
+}
+
+#[test]
+fn backspace_removes_a_whole_paste_label() {
+    let mut state = AppState::new(None);
+    type_text(&mut state, "before ");
+    state.update(Action::InputPasted(format!("head\n{}", "x\n".repeat(8))));
+    assert_eq!(
+        state.update(Action::InputBackspace),
+        Vec::new(),
+        "the delete asks for no client work"
+    );
+    assert_eq!(
+        state.input(),
+        "before ",
+        "the whole label goes at once, never one character of it"
+    );
+    assert_eq!(state.cursor(), 7);
+}
+
+#[test]
+fn the_horizontal_caret_moves_step_over_a_paste_label() {
+    let mut state = AppState::new(None);
+    type_text(&mut state, "ab");
+    state.update(Action::InputPasted(format!("head\n{}", "x\n".repeat(8))));
+    let label = state.input().chars().count() - 2;
+    assert_eq!(state.cursor(), 2 + label);
+
+    state.update(Action::MoveInputCursor(InputCursorMove::Left));
+    assert_eq!(
+        state.cursor(),
+        2,
+        "leaving the label lands on its start, whatever the caret did inside it"
+    );
+    state.update(Action::MoveInputCursor(InputCursorMove::Right));
+    assert_eq!(
+        state.cursor(),
+        2 + label,
+        "and returning steps over the whole label"
+    );
+    state.update(Action::MoveInputCursor(InputCursorMove::Left));
+    state.update(Action::MoveInputCursor(InputCursorMove::Left));
+    assert_eq!(
+        state.cursor(),
+        1,
+        "the step before the label is one character"
+    );
+}
+
+#[test]
+fn the_caret_moves_make_a_label_one_unbreakable_unit() {
+    // Nothing the arrows or the delete can do lands inside a label: the caret
+    // leaves it on the side it was heading for, and the delete takes it whole. So
+    // a character typed at either of its edges belongs to the line beside the
+    // label, and the label still stands for its paste.
+    let mut state = AppState::new(None);
+    let paste = format!("head\n{}", "x\n".repeat(8));
+    state.update(Action::InputPasted(paste.clone()));
+    type_text(&mut state, "!");
+    assert!(
+        state.input().ends_with("]!"),
+        "the character lands after the label: {}",
+        state.input()
+    );
+    assert_eq!(
+        state.update(Action::InputSubmitted),
+        vec![Effect::CreateSession {
+            first_turn: Some(format!("{paste}!")),
+        }],
+        "the paste and the character beside it both reach the session"
+    );
+
+    state.update(Action::NavigateInputHistory(InputHistoryMove::Previous));
+    state.update(Action::MoveInputCursor(InputCursorMove::Left));
+    state.update(Action::MoveInputCursor(InputCursorMove::Left));
+    assert_eq!(
+        state.cursor(),
+        0,
+        "stepping left off the line's end steps over the whole label"
+    );
+    type_text(&mut state, "#");
+    assert!(
+        state.input().starts_with("#[pasted "),
+        "the character lands before the label: {}",
+        state.input()
+    );
+    assert_eq!(
+        state.update(Action::InputSubmitted),
+        vec![Effect::CreateSession {
+            first_turn: Some(format!("#{paste}!")),
+        }],
+        "a label the line still spells expands, wherever the line put it"
+    );
+}
+
+#[test]
+fn the_vertical_arrows_move_the_caret_across_the_buffer_s_lines() {
+    let mut state = AppState::new(None);
+    type_text(&mut state, "abc\\");
+    assert!(
+        run_command(&mut state).is_empty(),
+        "a backslash before Enter inserts a line break"
+    );
+    type_text(&mut state, "de");
+    assert_eq!(state.input(), "abc\nde");
+    assert_eq!(state.cursor(), 6);
+
+    state.update(Action::MoveInputCursor(InputCursorMove::Up));
+    assert_eq!(
+        state.cursor(),
+        2,
+        "the caret keeps its column on the line above"
+    );
+    state.update(Action::MoveInputCursor(InputCursorMove::Down));
+    assert_eq!(state.cursor(), 6, "and comes back to the column it left");
+
+    // A line too short for the column ends it instead of walking past its text.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "abcdefgh\\");
+    assert!(run_command(&mut state).is_empty());
+    type_text(&mut state, "x");
+    assert_eq!(state.cursor(), 10);
+    state.update(Action::MoveInputCursor(InputCursorMove::Up));
+    assert_eq!(state.cursor(), 1);
+    state.update(Action::MoveInputCursor(InputCursorMove::Down));
+    assert_eq!(
+        state.cursor(),
+        10,
+        "the shorter line ends where its own text ends"
+    );
+}
+
+#[test]
+fn the_vertical_arrows_report_the_line_that_waits_in_their_direction() {
+    let mut state = AppState::new(None);
+    assert!(!state.input_line_above(), "an empty line has no line above");
+    assert!(!state.input_line_below(), "and none below");
+
+    type_text(&mut state, "abc\\");
+    assert!(run_command(&mut state).is_empty());
+    type_text(&mut state, "de");
+    assert!(
+        state.input_line_above(),
+        "the buffer carries a line above the caret"
+    );
+    assert!(
+        !state.input_line_below(),
+        "the caret ends the buffer's last line"
+    );
+
+    state.update(Action::MoveInputCursor(InputCursorMove::Up));
+    assert!(
+        !state.input_line_above(),
+        "the caret reaches the first line"
+    );
+    assert!(
+        state.input_line_below(),
+        "and the arrow's meaning is the history no longer"
+    );
+}

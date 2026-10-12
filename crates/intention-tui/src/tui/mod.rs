@@ -54,12 +54,24 @@
 //! status row renders the committed whole seconds once the run is terminal. The
 //! view therefore formats values the state carries instead of reading a clock,
 //! and it stays a pure function of state.
+//!
+//! # Pastes
+//!
+//! A paste is one edit, never a submission per line. The terminal delivers a
+//! bracketed paste as one [`Event::Paste`], so its text enters the line whole;
+//! a terminal that types a paste into the application instead is recognised by
+//! the timing of its presses (`paste`), its `Enter` presses insert the pasted
+//! text's own line breaks, and the run's end reports the characters it inserted
+//! so the core can keep a large paste outside the line as one label. The
+//! terminal owns the clipboard: this front end reads none, and it carries no
+//! copy path of its own.
 
 mod driver;
 mod keymap;
 mod layout;
 mod palette;
 mod panes;
+mod paste;
 mod screens;
 
 pub use driver::TuiOptions;
@@ -74,7 +86,7 @@ use intention_proto::{
 };
 use intention_transport::LocalEndpoint;
 use revue::core::app::App;
-use revue::event::{Event, MouseButton, MouseEvent, MouseEventKind};
+use revue::event::{Event, Key, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use revue::widget::{RenderContext, View};
 
 use crate::app::{
@@ -84,6 +96,7 @@ use crate::app::{
 use driver::Driver;
 use keymap::key_action;
 use layout::{LaidOutRow, TranscriptLayoutCache, TranscriptWindow};
+use paste::Pastes;
 
 /// Runs the terminal front end until the user quits.
 ///
@@ -158,19 +171,78 @@ pub fn run_blocking(
 /// values, and the client task reports the [`Action`] values its work produced.
 /// A tick only reports the turn's elapsed time, so a live status row repaints
 /// while the run works.
+///
+/// # Pastes
+///
+/// A character the user types into the chat's line meets the paste detector
+/// first, because a paste must reach the core as the one edit it is: presses
+/// that follow one another faster than a hand can move collect into one run and
+/// enter the line as one [`Action::InputPasted`], and a press a hand's own pause
+/// separates enters it as the press it was. Nothing of a run reaches the line
+/// while it is in flight, so a paste never paints the rows it is about to
+/// replace. A bracketed paste - the terminal delivering the text whole - is one
+/// edit too, and a large one waits for the rest of itself: a terminal hands a
+/// paste over in chunks, and a multiplexer wraps every chunk in its own markers,
+/// so the chunks of one paste join one run. Only the run's own silence, or the
+/// user's next input, ends it - a tick never does, or a paste arriving in chunks
+/// would become a paste per chunk. See the `paste` detector.
 fn handle_event(event: &Event, front_end: &mut FrontEnd, app: &mut App) -> bool {
-    let mut changed = match event {
-        Event::Key(key) => {
-            let action = key_action(key, &front_end.state);
-            let pressed = action.is_some();
-            if let Some(action) = action {
-                front_end.apply(action);
-            }
-            pressed
+    let now = Instant::now();
+    let chat = front_end.state.screen() == Screen::Chat;
+    let mut changed;
+    // The chat's line is the one surface a paste arrives on: as typing, or as the
+    // terminal's own event.
+    let in_line = match event {
+        Event::Key(key) if chat && carries_characters(key) => {
+            let settled = key_action(key, &front_end.state)
+                .and_then(|action| front_end.pastes.note_press(now, action));
+            changed = front_end.settle_paste(settled);
+            true
         }
-        Event::Mouse(mouse) => front_end.apply_mouse(mouse),
-        _ => false,
+        Event::Paste(text) if chat => {
+            // One bracketed paste is one whole paste: the terminal held it until
+            // its closing marker, so nothing waits for it and nothing merges it.
+            // The run in flight is the user's own typing and enters the line
+            // first.
+            let settled = front_end.pastes.end();
+            front_end.settle_paste(settled);
+            front_end.apply(Action::InputPasted(text.clone()));
+            changed = true;
+            true
+        }
+        // The tick is the clock a run's silence is measured against, and a
+        // resize or a focus change is the terminal's own work: none of them ends
+        // a run a terminal is still writing.
+        Event::Tick | Event::Resize(..) | Event::FocusGained | Event::FocusLost => {
+            let settled = front_end.pastes.settle(now);
+            changed = front_end.settle_paste(settled);
+            false
+        }
+        // Everything else is the user's own: the run in flight ends at once, so
+        // the press or click that interrupted a paste reaches the line after it.
+        _ => {
+            let settled = front_end.pastes.end();
+            changed = front_end.settle_paste(settled);
+            false
+        }
     };
+    if !in_line {
+        changed |= match event {
+            Event::Key(key) => {
+                let action = key_action(key, &front_end.state);
+                let pressed = action.is_some();
+                if let Some(action) = action {
+                    front_end.apply(action);
+                }
+                pressed
+            }
+            Event::Mouse(mouse) => front_end.apply_mouse(mouse),
+            // The line belongs to the chat: a paste while the browser or the
+            // picker owns the window is not a line's text.
+            Event::Paste(_) => false,
+            _ => false,
+        };
+    }
     changed |= front_end.drain_actions();
     if matches!(event, Event::Tick) {
         changed |= front_end.tick();
@@ -179,6 +251,15 @@ fn handle_event(event: &Event, front_end: &mut FrontEnd, app: &mut App) -> bool 
         app.quit();
     }
     changed
+}
+
+/// Returns whether one key press carries characters into the line before it.
+///
+/// These are the presses a paste delivered as typing is made of: its characters
+/// and its line breaks. Every other key asks for something else, so it ends the
+/// run in flight instead of continuing it.
+fn carries_characters(key: &KeyEvent) -> bool {
+    (matches!(key.key, Key::Char(_)) && !key.ctrl) || key.key == Key::Enter
 }
 
 /// Returns the action one wheel event asks for on one screen, or `None` to
@@ -354,12 +435,17 @@ const fn fast_scroll(mouse: &MouseEvent, window: TranscriptWindow) -> Option<Tra
 }
 
 /// The revue front end: the shared state, its view, its client task, its one
-/// turn clock, the chat's pointer, and the transcript layout cache every frame
-/// renders through.
+/// turn clock, the chat's pointer, the paste detector, and the transcript layout
+/// cache every frame renders through.
 struct FrontEnd {
     state: AppState,
     driver: Driver,
     timer: TurnTimer,
+    /// The run of chat keystrokes that arrived too fast to have been typed.
+    ///
+    /// The detector holds the run's text until one event tells it whether the
+    /// presses were a paste or a hand. See the `paste` detector.
+    pastes: Pastes,
     /// The chat's left-button pointer, kept between mouse events.
     pointer: Pointer,
     /// The committed transcript's laid-out rows, kept between frames.
@@ -385,6 +471,7 @@ impl FrontEnd {
             state: AppState::new(session).with_workspace_root(workspace_root),
             driver,
             timer: TurnTimer::new(),
+            pastes: Pastes::new(),
             pointer: Pointer { drag: None },
             cache: RefCell::new(TranscriptLayoutCache::new()),
         }
@@ -420,6 +507,18 @@ impl FrontEnd {
             }
             self.driver.dispatch(effect);
         }
+    }
+
+    /// Applies the action a paste run settled, and reports whether one did.
+    ///
+    /// A run settles as one paste, or as the single press a run of one press was,
+    /// and both reach the core through the same path every other action takes.
+    fn settle_paste(&mut self, settled: Option<Action>) -> bool {
+        let Some(action) = settled else {
+            return false;
+        };
+        self.apply(action);
+        true
     }
 
     /// Applies every action the client task reported and reports whether any did.

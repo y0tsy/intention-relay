@@ -24,12 +24,16 @@
 //! The input's command hint band is the newest claim on two keys, and both
 //! claims are decided here rather than in the core: while the band is open,
 //! `Up` and `Down` move its highlight and `Tab` commits it, while a closed band
-//! leaves `Up` and `Down` their older meaning, the input line history, and
-//! leaves `Tab` bound to nothing. `Enter` keeps its one meaning - submitting the
-//! line - because the submission path completes an open band before it runs
-//! anything, so no key press ever means two things at once. The theme picker
-//! claims `Up`, `Down`, and `Enter` the same way: the two arrows preview the
-//! candidate they land on and `Enter` commits it.
+//! leaves `Tab` bound to nothing and hands the arrows to the input itself - they
+//! move the cursor inside a buffer that carries a line in that direction, and at
+//! the buffer's first and last line they walk the input line history, their
+//! older meaning. `Enter` keeps its one meaning - submitting the line - because
+//! the submission path completes an open band before it runs anything, so no key
+//! press ever means two things at once; a paste that a terminal types into the
+//! application is the one exception, and the front end recognises it by timing
+//! before any key reaches this mapping. The theme picker claims `Up`, `Down`, and
+//! `Enter` the same way: the two arrows preview the candidate they land on and
+//! `Enter` commits it.
 //!
 //! The transcript's pointer path - selection, drag-scroll, and the marker click
 //! - lives in [`super`], because it needs the frame's published geometry.
@@ -45,7 +49,7 @@ use crate::app::{
 /// The state is what tells the two meanings of the vertical arrows apart: the
 /// hint band is open only while the state says so, and only then do the arrows
 /// move its highlight.
-pub(super) const fn key_action(key: &KeyEvent, state: &AppState) -> Option<Action> {
+pub(super) fn key_action(key: &KeyEvent, state: &AppState) -> Option<Action> {
     match state.screen() {
         Screen::Chat => chat_action(key, state),
         Screen::Sessions => sessions_action(key),
@@ -59,7 +63,7 @@ pub(super) const fn key_action(key: &KeyEvent, state: &AppState) -> Option<Actio
 /// deliberately not one of them, because the submission path completes an open
 /// menu before it runs anything, so the one action `Enter` carries keeps one
 /// meaning.
-const fn chat_action(key: &KeyEvent, state: &AppState) -> Option<Action> {
+fn chat_action(key: &KeyEvent, state: &AppState) -> Option<Action> {
     match key.key {
         Key::Char('q') if key.ctrl => Some(Action::Quit),
         Key::Char('c') if key.ctrl => Some(Action::CtrlCPressed),
@@ -81,12 +85,24 @@ const fn chat_action(key: &KeyEvent, state: &AppState) -> Option<Action> {
 
 /// Returns the action one vertical arrow asks for on the chat screen.
 ///
-/// The hint menu is the newer meaning of the two and claims the arrows exactly
-/// while it is open: with no menu, `Up` and `Down` walk the input line history
-/// precisely as they did before the menu existed.
-const fn vertical_action(state: &AppState, direction: MenuMove) -> Option<Action> {
+/// Three meanings meet on the two arrows, and the state decides which one a
+/// press carries. The hint menu is the newest claim and owns both while it is
+/// open. With no menu the arrows move the cursor inside the buffer whenever the
+/// buffer carries a line in that direction, so a multi-line prompt is navigable
+/// the way its own rows are; at the buffer's first and last line they keep the
+/// meaning they always had and walk the input history.
+fn vertical_action(state: &AppState, direction: MenuMove) -> Option<Action> {
     if state.command_menu().is_some() {
         return Some(Action::MenuMove(direction));
+    }
+    match direction {
+        MenuMove::Up if state.input_line_above() => {
+            return Some(Action::MoveInputCursor(InputCursorMove::Up));
+        }
+        MenuMove::Down if state.input_line_below() => {
+            return Some(Action::MoveInputCursor(InputCursorMove::Down));
+        }
+        _ => {}
     }
     Some(Action::NavigateInputHistory(match direction {
         MenuMove::Up => InputHistoryMove::Previous,

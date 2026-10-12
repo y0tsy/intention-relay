@@ -72,6 +72,12 @@ pub enum InputCursorMove {
     Home,
     /// Move the cursor to the end of the line it is on.
     End,
+    /// Move the cursor to the line above, keeping its column where that line
+    /// reaches it.
+    Up,
+    /// Move the cursor to the line below, keeping its column where that line
+    /// reaches it.
+    Down,
 }
 
 /// One step through the history of submitted and abandoned input lines.
@@ -170,6 +176,16 @@ pub enum Action {
     InputChar(char),
     /// The user deleted the character before the input cursor.
     InputBackspace,
+    /// The user pasted text into the chat's input line.
+    ///
+    /// The terminal delivers the text - this front end reads no clipboard - and
+    /// the whole paste is one edit: it enters the line at once instead of
+    /// arriving as the keystrokes its characters happen to look like, and a text
+    /// that carries a line break, or more characters than the inline limit,
+    /// leaves one labelled line behind whose paste the submission path expands
+    /// again. A run of keystrokes that arrived too fast to have been typed
+    /// reaches the core as this same action.
+    InputPasted(String),
     /// The user moved the input cursor.
     MoveInputCursor(InputCursorMove),
     /// The user walked the input line history.

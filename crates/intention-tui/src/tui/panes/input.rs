@@ -2,13 +2,13 @@
 //! status row.
 //!
 //! The block grows with the buffer: every line the buffer carries gets its own
-//! display row, so a multi-line prompt stays visible while the transcript takes
-//! the rows the block does not use. The chat panel decides those rows; a buffer
-//! taller than the block's rows shows the window of lines that keeps the
-//! cursor's line visible, exactly as a line longer than the block shows the
-//! window of columns that keeps the cursor's cell visible. The buffer itself
-//! keeps every line and every character: neither its line count nor a line's
-//! length is ever capped.
+//! display row, up to the share of the panel's body the chat screen grants it, so
+//! a multi-line prompt stays visible while the transcript takes the rows the block
+//! does not use. A buffer taller than the rows the block was given shows the
+//! window of lines that keeps the cursor's line visible, exactly as a line longer
+//! than the block shows the window of columns that keeps the cursor's cell
+//! visible. The buffer itself keeps every line and every character: neither its
+//! line count nor a line's length is ever capped.
 
 use revue::text::char_width;
 use revue::widget::{Border, Card, RichText, Span, Stack, Style, vstack};
@@ -47,9 +47,12 @@ const BADGE_ROWS: u16 = 1;
 /// The rows the run status under the buffer occupies.
 const STATUS_ROWS: u16 = 1;
 
-/// The rows the block occupies for a one-line buffer: its frame, the badge
-/// header, that line, and the run status row.
-pub(in crate::tui) const MIN_BLOCK_ROWS: u16 = BLOCK_FRAME + BADGE_ROWS + 1 + STATUS_ROWS;
+/// The rows the block's own chrome takes around its buffer lines: its frame, the
+/// badge header, and the run status row.
+pub(in crate::tui) const CHROME_ROWS: u16 = BLOCK_FRAME + BADGE_ROWS + STATUS_ROWS;
+
+/// The rows the block occupies for a one-line buffer: its chrome and that line.
+pub(in crate::tui) const MIN_BLOCK_ROWS: u16 = CHROME_ROWS + 1;
 
 /// The mode badge before a session snapshot has named the mode.
 ///
@@ -61,8 +64,9 @@ const MODE_PLACEHOLDER: &str = "mode @todo(core)";
 ///
 /// A one-line buffer takes [`MIN_BLOCK_ROWS`] and every line break adds one
 /// row, so a multi-line prompt grows the block and the transcript gives up
-/// exactly those rows. No line count is capped: the chat panel bounds what it
-/// can lay out, and the block windows a taller buffer.
+/// exactly those rows. No line count is capped here: the chat panel grants the
+/// block its share of the body and the block windows a buffer taller than the
+/// rows it was given.
 #[must_use]
 pub(in crate::tui) fn block_rows(state: &AppState) -> u16 {
     let breaks = state

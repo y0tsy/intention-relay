@@ -30,7 +30,7 @@ pub use commands::{
     ArgumentSpec, COMMANDS, CommandInvocation, CommandMenu, CommandResolution, CommandSpec,
     MenuKind, MenuMove, MenuRow, ValueSpec,
 };
-pub use input::TRANSCRIPT_DRAG_ROWS;
+pub use input::{TRANSCRIPT_DRAG_ROWS, paste_is_large};
 pub use state::AppState;
 pub use theme::Theme;
 pub use transcript::TranscriptSelection;

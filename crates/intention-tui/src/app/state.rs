@@ -13,7 +13,7 @@ use intention_proto::{
 
 use super::{
     Action, BrowserRow, BrowserTab, CommandMenu, ConnectionStatus, Effect, RunPhase, Screen,
-    StreamStatus, Theme, TranscriptSelection, browser, ctrl_c, transcript,
+    StreamStatus, Theme, TranscriptSelection, browser, ctrl_c, input, transcript,
 };
 
 /// Every value one terminal session holds, with no terminal attached.
@@ -101,6 +101,16 @@ pub struct AppState {
     pub(super) history_position: Option<usize>,
     /// The in-progress line saved when the user walked into the history.
     pub(super) history_draft: Option<String>,
+    /// The texts pasted into the input line, oldest first.
+    ///
+    /// A paste too large to read in the line leaves one labelled line behind and
+    /// keeps its text here, so the label stands for the whole paste: the
+    /// submission path expands every label it finds, and a label the user edited
+    /// out of shape is ordinary text that carries no paste of its own. Nothing
+    /// here is persisted - the paste reaches the session as the turn it is sent
+    /// with - and the front end keeps what the user pasted for as long as it
+    /// lives.
+    pub(super) pasted: Vec<input::PastedText>,
     /// The input's command hint menu, while one is open.
     ///
     /// The menu is derived from the input line and the caret: the word the
@@ -176,6 +186,7 @@ impl AppState {
             history: Vec::new(),
             history_position: None,
             history_draft: None,
+            pasted: Vec::new(),
             command_menu: None,
             ctrl_c_arm: None,
             escape_arm: false,
@@ -280,6 +291,7 @@ impl AppState {
             Action::RunCancelFailed(error) => self.apply_failure(&error),
             Action::InputChar(character) => self.apply_input_char(character),
             Action::InputBackspace => self.apply_input_backspace(),
+            Action::InputPasted(text) => self.apply_input_pasted(text),
             Action::MoveInputCursor(movement) => {
                 self.apply_input_cursor_move(movement);
                 Vec::new()
@@ -708,6 +720,32 @@ impl AppState {
     #[must_use]
     pub const fn cursor(&self) -> usize {
         self.cursor
+    }
+
+    /// Returns whether the input line carries a line above the caret.
+    ///
+    /// The keymap asks this before it gives an upward arrow its input meaning:
+    /// with a line above, the arrow moves the caret inside the buffer, and at the
+    /// line the buffer starts with, it keeps the meaning it always had and walks
+    /// the history.
+    #[must_use]
+    pub fn input_line_above(&self) -> bool {
+        self.input
+            .chars()
+            .take(self.cursor)
+            .any(|character| character == '\n')
+    }
+
+    /// Returns whether the input line carries a line below the caret.
+    ///
+    /// The downward half of the same rule: with a line below, `Down` moves the
+    /// caret, and on the buffer's last line it walks the history instead.
+    #[must_use]
+    pub fn input_line_below(&self) -> bool {
+        self.input
+            .chars()
+            .skip(self.cursor)
+            .any(|character| character == '\n')
     }
 
     /// Returns the single-line notice of the last completed transition.

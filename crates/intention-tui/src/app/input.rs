@@ -1,5 +1,15 @@
 //! The input transitions: the input line, its cursor, its history, the command
 //! hint menu, and submission.
+//!
+//! # Pastes
+//!
+//! A paste is one edit, never the keystrokes its characters look like: the
+//! terminal delivers the text, and a text that carries a line break - or more
+//! characters than the inline limit - is kept outside the buffer behind one
+//! labelled line, because a line the user cannot read at a glance is not a line
+//! they can edit. The label names the paste's ordinal and its own beginning, and
+//! the submission path expands it back into the whole text, so the session
+//! receives the paste and not its summary.
 
 use super::commands::{self, CommandMenu, MenuRow};
 use super::{
@@ -18,6 +28,37 @@ const TRANSCRIPT_WHEEL_ROWS: u16 = 3;
 /// the pointer is over.
 pub const TRANSCRIPT_DRAG_ROWS: u16 = TRANSCRIPT_WHEEL_ROWS * 5;
 
+/// The characters a paste may carry and still be inserted as ordinary text.
+///
+/// A longer paste is one labelled line whose text waits outside the buffer. The
+/// limit is about what the line can show, never about what a turn may carry: the
+/// text itself is unbounded and reaches the session whole. The same limit is what
+/// the front end measures a run of keystrokes against, so a terminal without
+/// bracketed paste is kept outside the line by the paste's own size.
+const PASTE_INLINE_CHARS: usize = 400;
+
+/// The lines a paste may carry and still be inserted as ordinary text.
+///
+/// Size decides, not timing: a paste of a few lines is a line the user can read
+/// in the input, and anything longer is one they cannot, whatever it weighs in
+/// characters.
+const PASTE_INLINE_LINES: usize = 8;
+
+/// The characters of a paste label's head: the text's own beginning.
+const PASTE_HEAD_CHARS: usize = 50;
+
+/// The prefix every paste label carries.
+const PASTE_LABEL_PREFIX: &str = "[pasted ";
+
+/// One pasted text the input line stands for with one labelled line.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct PastedText {
+    /// The labelled line that stands for the text inside the buffer.
+    label: String,
+    /// The pasted text, exactly as the terminal delivered it.
+    text: String,
+}
+
 impl AppState {
     /// Inserts one typed character at the cursor.
     pub(super) fn apply_input_char(&mut self, character: char) -> Vec<Effect> {
@@ -29,8 +70,23 @@ impl AppState {
     }
 
     /// Removes the character before the cursor.
+    ///
+    /// A paste label is one unit for the delete: removing one of its characters
+    /// would leave a label that stands for nothing, so the whole label goes at
+    /// once, exactly as it was inserted.
     pub(super) fn apply_input_backspace(&mut self) -> Vec<Effect> {
         if self.cursor == 0 {
+            return Vec::new();
+        }
+        if let Some((start, end)) = self
+            .paste_spans()
+            .into_iter()
+            .find(|(start, end)| *start < self.cursor && self.cursor <= *end)
+        {
+            let removed = self.input_byte_offset(start)..self.input_byte_offset(end);
+            self.input.replace_range(removed, "");
+            self.cursor = start;
+            self.refresh_menu();
             return Vec::new();
         }
         let removed = self.input_byte_offset(self.cursor - 1)..self.input_byte_offset(self.cursor);
@@ -40,20 +96,139 @@ impl AppState {
         Vec::new()
     }
 
-    /// Moves the cursor one character, one line boundary, or one line end.
+    /// Inserts one pasted text at the cursor as one edit.
+    ///
+    /// The terminal delivers the text and this front end reads no clipboard, so
+    /// the whole paste enters at once instead of arriving as the keystrokes its
+    /// characters look like. The text's own size decides what the line shows: a
+    /// paste of a few lines, or of a few hundred characters, is inserted exactly
+    /// as it arrived, and a larger one is kept behind one labelled line that the
+    /// submission path expands again. Line endings are the buffer's own - a
+    /// Windows paste's carriage returns are not content - and nothing else is
+    /// rewritten: the text the session receives is the text that was pasted.
+    pub(super) fn apply_input_pasted(&mut self, text: String) -> Vec<Effect> {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        if text.is_empty() {
+            return Vec::new();
+        }
+        if paste_is_large(&text) {
+            self.insert_paste(text);
+        } else {
+            self.insert_input_text(&text);
+        }
+        self.refresh_menu();
+        Vec::new()
+    }
+
+    /// Inserts `text` at the cursor as one edit.
+    fn insert_input_text(&mut self, text: &str) {
+        let offset = self.input_byte_offset(self.cursor);
+        self.input.insert_str(offset, text);
+        self.cursor += text.chars().count();
+    }
+
+    /// Keeps `text` outside the buffer and inserts the label standing for it.
+    fn insert_paste(&mut self, text: String) {
+        let label = paste_label(&text);
+        self.insert_input_text(&label);
+        self.pasted.push(PastedText { label, text });
+    }
+
+    /// Returns the character span of every paste label the buffer carries.
+    ///
+    /// The span is what makes a label one unit for the delete and the horizontal
+    /// caret moves, so a paste is never silently reduced to a label's text. A
+    /// label the user edited out of shape is not found here and stays the
+    /// ordinary characters it now is.
+    fn paste_spans(&self) -> Vec<(usize, usize)> {
+        let mut spans = Vec::new();
+        for pasted in &self.pasted {
+            let mut from = 0;
+            while let Some(offset) = self.input[from..].find(&pasted.label) {
+                let start = self.input[..from + offset].chars().count();
+                spans.push((start, start + pasted.label.chars().count()));
+                from += offset + pasted.label.len();
+            }
+        }
+        spans
+    }
+
+    /// Returns the edge a paste label moves the caret to, when the caret names
+    /// one.
+    ///
+    /// A label is one unit for the horizontal moves: the caret leaves it on the
+    /// edge it was heading for - the label's start going left, its end going
+    /// right - so no press steps into the middle of a paste's label.
+    fn paste_edge(&self, movement: InputCursorMove) -> Option<usize> {
+        let cursor = self.cursor;
+        self.paste_spans()
+            .into_iter()
+            .find_map(|(start, end)| match movement {
+                InputCursorMove::Left if start < cursor && cursor <= end => Some(start),
+                InputCursorMove::Right if start <= cursor && cursor < end => Some(end),
+                _ => None,
+            })
+    }
+
+    /// Returns `content` with every paste label replaced by the text it stands
+    /// for.
+    ///
+    /// A label carries no identity of its own - it is the paste's own beginning
+    /// and its line count, and nothing the user has to read past - so the
+    /// occurrences a line spells are matched in the order they appear: the first
+    /// occurrence of one label claims the first paste carrying it, the second the
+    /// next, and so on. Two pastes that happen to share a beginning and a length
+    /// therefore still expand into their own texts, and a label the user edited
+    /// out of shape matches nothing and stays the ordinary text it now is.
+    fn expand_pastes(&self, content: &str) -> String {
+        let mut claimed = vec![false; self.pasted.len()];
+        let mut expanded = String::with_capacity(content.len());
+        let mut rest = content;
+        loop {
+            let next = self
+                .pasted
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !claimed[*index])
+                .filter_map(|(index, pasted)| rest.find(&pasted.label).map(|at| (at, index)))
+                .min_by_key(|(at, _)| *at);
+            let Some((at, index)) = next else {
+                break;
+            };
+            expanded.push_str(&rest[..at]);
+            expanded.push_str(&self.pasted[index].text);
+            claimed[index] = true;
+            rest = &rest[at + self.pasted[index].label.len()..];
+        }
+        expanded.push_str(rest);
+        expanded
+    }
+
+    /// Moves the cursor one character, one line boundary, or one line.
     ///
     /// The cursor counts characters of the whole buffer, so `Left` and `Right`
-    /// step across a line break like any other character. `Home` and `End` stay
+    /// step across a line break like any other character, except over a paste
+    /// label, which they treat as the one unit it is. `Home` and `End` stay
     /// inside the line the cursor is on: `Home` reaches its first character and
     /// `End` its last, whether the line ends at a break or at the buffer's end.
+    /// `Up` and `Down` reach the line above or below and keep the cursor's
+    /// column where that line is long enough, ending the line where it is not;
+    /// at the buffer's first or last line they move nothing, because the keymap
+    /// gives those presses their other meaning instead.
     pub(super) fn apply_input_cursor_move(&mut self, movement: InputCursorMove) {
         let characters: Vec<char> = self.input.chars().collect();
         self.cursor = self.cursor.min(characters.len());
         self.cursor = match movement {
-            InputCursorMove::Left => self.cursor.saturating_sub(1),
-            InputCursorMove::Right => self.cursor.saturating_add(1).min(characters.len()),
+            InputCursorMove::Left => self
+                .paste_edge(InputCursorMove::Left)
+                .unwrap_or_else(|| self.cursor.saturating_sub(1)),
+            InputCursorMove::Right => self
+                .paste_edge(InputCursorMove::Right)
+                .unwrap_or_else(|| self.cursor.saturating_add(1).min(characters.len())),
             InputCursorMove::Home => line_start(&characters, self.cursor),
             InputCursorMove::End => line_end(&characters, self.cursor),
+            InputCursorMove::Up => line_step(&characters, self.cursor, true),
+            InputCursorMove::Down => line_step(&characters, self.cursor, false),
         };
         self.refresh_menu();
     }
@@ -207,10 +382,13 @@ impl AppState {
         // The line the interactive path submitted is the input line's own: it
         // is recalled through the history and cleared here, while the turn the
         // core sends is data. Whether or not a session is open, the prompt is
-        // data to the core, which creates the session it needs.
+        // data to the core, which creates the session it needs. A paste label
+        // stands for text this front end keeps outside the buffer, so the turn
+        // carries the whole paste while the history keeps the line as the user
+        // saw it.
         self.history.push(content.clone());
         self.clear_input();
-        self.submit_turn(content)
+        self.submit_turn(self.expand_pastes(&content))
     }
 
     /// Sends one prompt as one user turn, or starts the session it needs.
@@ -378,4 +556,89 @@ fn line_end(characters: &[char], cursor: usize) -> usize {
         .iter()
         .position(|character| *character == '\n')
         .map_or(characters.len(), |index| cursor + index)
+}
+
+/// Returns the position one line above or below `cursor` reaches.
+///
+/// The move keeps the cursor's column and ends the target line where that line
+/// is shorter, so the cursor always rides a character of the line it names. At
+/// the buffer's first line an upward move and at its last line a downward move
+/// return the position they were given: the keymap gives those presses their
+/// other meaning instead of moving the cursor nowhere.
+fn line_step(characters: &[char], cursor: usize, up: bool) -> usize {
+    let column = cursor - line_start(characters, cursor);
+    if up {
+        let start = line_start(characters, cursor);
+        if start == 0 {
+            return cursor;
+        }
+        let previous = line_start(characters, start - 1);
+        previous + column.min(start - 1 - previous)
+    } else {
+        let end = line_end(characters, cursor);
+        if end == characters.len() {
+            return cursor;
+        }
+        let next = end + 1;
+        next + column.min(line_end(characters, next) - next)
+    }
+}
+
+/// Returns whether a paste is too large to read in the line.
+///
+/// Size decides, never timing: a paste longer than a few hundred characters, or
+/// taller than a few lines, is one the user cannot read at a glance in the line,
+/// so its text waits outside the buffer and one label stands for it. The front
+/// end asks the same question about a run of keystrokes, because that run is a
+/// paste whenever its own text has grown past this size.
+#[must_use]
+pub fn paste_is_large(text: &str) -> bool {
+    text.chars().count() > PASTE_INLINE_CHARS || text.split('\n').count() > PASTE_INLINE_LINES
+}
+
+/// Returns the label one stored paste is shown as.
+///
+/// The label names the paste's own beginning and how many lines it carries -
+/// `[pasted <head>... <n> lines]` - so the line reads as the paste it stands for
+/// instead of as an anonymous token. The head is the text's first characters with
+/// its line breaks and tabs read as spaces, and with the control characters a
+/// terminal may have carried dropped: what is left is the paste's own words, and
+/// a paste whose first characters are all control characters shows no head at all
+/// rather than an empty label.
+fn paste_label(text: &str) -> String {
+    let head = paste_head(text);
+    let lines = text.split('\n').count().max(1);
+    let unit = if lines == 1 { "line" } else { "lines" };
+    format!("{PASTE_LABEL_PREFIX}{head}... {lines} {unit}]")
+}
+
+/// Returns the first characters of one paste, read as one line of prose.
+///
+/// The characters an input line cannot show are dropped, the line breaks and
+/// tabs inside the head read as the spaces between words, and the result is
+/// trimmed, so a paste that starts with an indented line still shows its own
+/// words in the label.
+fn paste_head(text: &str) -> String {
+    let shown = text
+        .chars()
+        .filter(|character| !is_unshowable_control(*character))
+        .take(PASTE_HEAD_CHARS);
+    let mut head = String::with_capacity(PASTE_HEAD_CHARS);
+    for character in shown {
+        match character {
+            '\n' | '\t' => head.push(' '),
+            other => head.push(other),
+        }
+    }
+    head.trim().to_owned()
+}
+
+/// Returns whether one control character is one a terminal may have carried
+/// without the user typing it.
+///
+/// The line break and the tab are text; every other C0 control, and the delete
+/// character, are the terminal's own framing.
+const fn is_unshowable_control(character: char) -> bool {
+    let code = character as u32;
+    code <= 8 || code == 127 || (code >= 14 && code <= 31)
 }
