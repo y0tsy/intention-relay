@@ -4365,7 +4365,7 @@ limitations under the License.
 - [serde_core 1.0.229](https://github.com/serde-rs/serde)
 - [serde_derive 1.0.229](https://github.com/serde-rs/serde)
 - [serde_derive_internals 0.30.0](https://github.com/serde-rs/serde)
-- [serde_json 1.0.152](https://github.com/serde-rs/json)
+- [serde_json 1.0.154](https://github.com/serde-rs/json)
 - [serde_urlencoded 0.7.1](https://github.com/nox/serde_urlencoded)
 - [shlex 2.0.1](https://github.com/comex/rust-shlex)
 - [syn 2.0.119](https://github.com/dtolnay/syn)
