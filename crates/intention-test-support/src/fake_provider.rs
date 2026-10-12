@@ -366,6 +366,15 @@ fn handle_provider_request(
     excess: &AtomicUsize,
     script: &Script,
 ) {
+    // The listener is non-blocking so its accept loop can observe `stop`, and
+    // Windows hands an accepted connection the listener's non-blocking mode
+    // while Unix hands it a blocking one. A non-blocking read here would end in
+    // `WouldBlock`, which the head read below cannot tell from a closed peer:
+    // the round would be dropped unanswered while its own request bytes were
+    // still in the socket, and dropping that socket answers with a reset. The
+    // connection is blocking for its whole life; the read bound below is its
+    // only bound.
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let Some(head) = read_request_head(&mut stream) else {
         // A connection that carried no request is not a round: it is dropped
