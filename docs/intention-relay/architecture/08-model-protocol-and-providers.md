@@ -28,8 +28,10 @@ requires exact
 persisted/current safe-selection equality before execution, owns cancellation late-event suppression, deadlines, and
 retries, and commits only current-state rows (assistant transcript rows, run status, usage, finish, and failure) through
 the DTO-only storage contract. Its `ModelTimePort` exposes fresh
-provider-neutral delay futures and safe timestamps, never Tokio. The service does not select a provider or own a Tokio
-runtime; the daemon-owned composition host supplies those private execution resources.
+provider-neutral delay futures and safe timestamps, never Tokio, and its transient `ModelTextDeltaPort` observes every
+streamed text chunk with its model-step index and text channel on a best-effort, infallible path that never affects run
+state. The service does not select a provider or own a Tokio runtime; the daemon-owned composition host supplies those
+private execution resources.
 
 Core DTO families:
 
@@ -99,7 +101,7 @@ events;
 
 ### Generic Chat Completion
 
-`intention-providers` supports compatible Chat Completion-style endpoints using `async-openai` 0.42.0
+`intention-providers` supports compatible Chat Completion-style endpoints using `async-openai` 0.42.2
 privately with its configured-base-URL streaming support. It does not implement a custom HTTP or SSE parser: the adapter
 enables the pinned SDK's `byot` feature and drives the stream through `create_stream_byot` with crate-private typed
 request and chunk structs, so the SDK still owns HTTP, SSE, TLS, and error mapping while the adapter privately owns the
@@ -150,6 +152,10 @@ immutable snapshot selected at startup.
 
 Provider/model selection changes do not mutate an already-started run. They apply to a later run, except if a future
 explicit, tested runtime transition is introduced.
+
+A terminal theme is not provider selection. The `[tui] theme` its resolved configuration carries and the daemon's
+single-row `tui_settings` override are presentation-only: a theme change records no configuration revision and never
+mutates an already-started run's immutable snapshot or its validated selection.
 
 ## Streaming and tool calls
 
@@ -236,7 +242,11 @@ The classification selects the normalized `generic_chat_provider_unavailable` (r
   because the pinned OpenRouter SDK consumes the marker inside its own stream, so the adapter cannot classify
   `openrouter_stream_incomplete` and a truncated generation is reported as an ordinary completion.
 
-The runtime uses the immutable persisted attempt timeout and at most two total attempts. A deadline is a retryable
+The runtime uses the immutable persisted attempt timeout and at most two total attempts. That timeout is an idle
+deadline, never a total wall-clock cap: a round arms one window when its provider stream opens and re-arms a fresh
+window after every normalized event the stream delivers — stream start, text delta, reasoning delta, tool call, usage,
+or finish — so a stream that keeps producing facts is never cut off, and only a stream that delivers nothing for the
+whole window expires one. An expired window is a retryable
 `provider_attempt_timed_out` failure. Before any durable text, reasoning, usage, or tool fact, only a delayed/retryable
 provider failure may produce one retry; it appends `ProviderAttemptFailed(1)`, then `RetryScheduled(1, 2)`, waits
 exactly 250 ms through `ModelTimePort`, and starts attempt two. Interruption races the stream, deadline, and wait: the
@@ -255,6 +265,7 @@ wait starts the next attempt immediately.
 | Tool loop integration | Runtime/provider/application integration test. | Provider emits a tool-call DTO; the application builds the typed invocation, the daemon-owned tool service executes it, and the runtime persists the correlated result and continues the exchange. |
 | Provider selection | Configuration contract test. | A configured provider and model ID are preserved. |
 | Retry | Controlled provider failure test. | Retry lifecycle is typed, bounded, and durable. |
+| Attempt idle deadline | Scripted slow-progress and silent-stall engine tests. | A stream that keeps delivering progress outlives the configured window and completes without a retry; a stream that delivers nothing for the window fails retryably with `provider_attempt_timed_out`, consumes the attempt budget, and commits no transcript row. |
 | Secret redaction | Provider error fixture. | API key never appears in `ProviderErrorDto`, logs, or events. |
 
 ## Quality-gate integration

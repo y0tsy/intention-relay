@@ -17,16 +17,17 @@ use intention_config::{
     ConfigPathResolver, ConfigSnapshotDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto,
     ResolvedConfigDto, StartupProviderMaterial,
 };
-use intention_engine::ApplicationService;
 #[cfg(test)]
-use intention_engine::{ModelRunCommitObserver, ToolInvocationRequestDto};
+use intention_engine::ToolInvocationRequestDto;
+use intention_engine::{ApplicationService, SessionCommitDto, SessionCommitObserver};
 use intention_proto::DaemonHealthDto;
 use intention_proto::{
-    ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto, DtoResult, ErrorDto,
-    InterruptRunAcceptedDto, InterruptRunCommandDto, ProtocolResultDto, RemoveTurnAcceptedDto,
-    RemoveTurnCommandDto, RunId, RunProjectionDto, SchemaVersionDto, SendUserTurnAcceptedDto,
+    CancelRunCommandDto, ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto,
+    DtoResult, ErrorDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto,
+    RunCancelledAcceptedDto, RunId, SchemaVersionDto, SendUserTurnAcceptedDto,
     SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId, SessionProjectionDto,
-    SessionSnapshotDto, TimestampDto,
+    SessionSnapshotDto, SessionSummariesDto, ThemeDto, TimestampDto, TuiSettingsDto,
+    TuiThemeAcceptedDto,
 };
 #[cfg(test)]
 use intention_proto::{ProjectId, RunModeDto, WorkspaceId, WorkspaceRootDto};
@@ -42,7 +43,7 @@ use intention_storage::{
     StorageRepositoryDto,
 };
 #[cfg(test)]
-use intention_tools::{ToolInput, WorkspaceRoot};
+use intention_tools::WorkspaceRoot;
 use intention_transport::MAX_TRANSCRIPT_SNAPSHOT_BYTES;
 
 /// The single live configuration snapshot schema (intention-config current schema).
@@ -53,6 +54,12 @@ const DATABASE_FILENAME: &str = "intention-relay.sqlite";
 /// The row bound is additionally held to `MAX_TRANSCRIPT_SNAPSHOT_BYTES`, the
 /// representation budget derived from the single transport envelope cap.
 pub const SESSION_SNAPSHOT_MESSAGES: u32 = 256;
+
+/// The retained bounded window of one current session list.
+///
+/// The storage read reports every session beyond this window as its explicit
+/// `omitted` count, so a bounded list is never a silent truncation.
+pub const SESSION_LIST_ROWS: u32 = 256;
 
 /// The one daemon composition root.
 ///
@@ -306,8 +313,8 @@ impl DaemonApplicationFacade {
     /// This is the single session read: recent transcript rows are bounded by
     /// the retained delivery bound and the byte budget derived from the
     /// transport envelope cap, which charges the encoded projection as well as
-    /// the transcript rows. The run-scoped read is the dedicated run
-    /// subscription, which the daemon host answers from the same repository.
+    /// the transcript rows. The same snapshot answers a session subscription,
+    /// which the daemon host reads from this same method.
     ///
     /// # Errors
     ///
@@ -315,6 +322,12 @@ impl DaemonApplicationFacade {
     /// transcript rows cannot be read.
     pub fn session_snapshot(&self, session_id: SessionId) -> DtoResult<SessionSnapshotDto> {
         let projection = self.inner.repository.load_session_projection(session_id)?;
+        // The effective provider model is this daemon's resolved configuration
+        // selection: storage cannot know it. Both the one-shot session read and
+        // the subscription-open snapshot answer through this one method, so the
+        // two can never disagree about the model.
+        let projection = projection
+            .with_provider_model(self.inner.config_snapshot.resolved().provider().model())?;
         let projection_bytes = session_projection_bytes(&projection)?;
         let messages = bounded_snapshot_messages(
             projection_bytes,
@@ -325,20 +338,49 @@ impl DaemonApplicationFacade {
         SessionSnapshotDto::with_projection(session_id, projection, messages)
     }
 
-    /// Creates one durable session and assembles its typed reply evidence.
+    /// Lists the current durable sessions newest-first in one bounded window.
+    ///
+    /// This is the one session list: it reports which sessions exist, with the
+    /// newest durable update first and the durable identity breaking ties, and
+    /// how many sessions exist beyond the window. A session a client selects is
+    /// then read through the full session snapshot.
     ///
     /// # Errors
     ///
-    /// Returns the typed durable failure when session creation is rejected.
-    pub fn create_session(&self, command: CreateSessionCommandDto) -> DtoResult<ProtocolResultDto> {
+    /// Returns a typed storage error when durable storage cannot be read.
+    pub fn list_sessions(&self, limit: u32) -> DtoResult<SessionSummariesDto> {
+        self.inner.repository.list_sessions(limit)
+    }
+
+    /// Creates one durable session and assembles its typed reply evidence.
+    ///
+    /// The creation and the first turn the command carries commit inside one
+    /// command gate, so a prompt that needs a session is one command: the
+    /// session commits first and the turn is accepted against it. The committed
+    /// turn reaches `observer` the way every other durable commit does.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed durable failure when session creation is rejected, or
+    /// the typed admission failure when a carried first turn is rejected.
+    pub fn create_session(
+        &self,
+        command: CreateSessionCommandDto,
+        observer: &dyn SessionCommitObserver,
+    ) -> DtoResult<ProtocolResultDto> {
         self.inner.command_gate.run(|| {
-            let projection =
-                ApplicationService::new(&self.inner.repository).create_session(command, now()?)?;
+            let created = ApplicationService::new(&self.inner.repository).create_session(
+                command,
+                self.inner.config_snapshot.clone(),
+                now()?,
+                observer,
+            )?;
             Ok(ProtocolResultDto::SessionCreated(
                 CreateSessionAcceptedDto::new(
-                    projection.project_id(),
-                    projection.workspace_id(),
-                    projection.session_id(),
+                    created.session().project_id(),
+                    created.session().workspace_id(),
+                    created.session().session_id(),
+                    created.first_turn().map(turn_acceptance),
                 ),
             ))
         })
@@ -352,10 +394,18 @@ impl DaemonApplicationFacade {
     /// conflict. Both identities are canonical UUIDs, so one caller identity
     /// selects exactly one run.
     ///
+    /// `observer` receives the committed acceptance the way every other durable
+    /// commit reaches the host's one sink, so a session's subscribers learn of
+    /// the turn and the run it started.
+    ///
     /// # Errors
     ///
     /// Returns the typed admission failure when the turn is rejected.
-    pub fn send_user_turn(&self, command: SendUserTurnCommandDto) -> DtoResult<ProtocolResultDto> {
+    pub fn send_user_turn(
+        &self,
+        command: SendUserTurnCommandDto,
+        observer: &dyn SessionCommitObserver,
+    ) -> DtoResult<ProtocolResultDto> {
         self.inner.command_gate.run(|| {
             let proposed_run_id = RunId::parse(&command.idempotency_key().to_string())?;
             let outcome = ApplicationService::new(&self.inner.repository).send_user_turn(
@@ -363,6 +413,7 @@ impl DaemonApplicationFacade {
                 proposed_run_id,
                 self.inner.config_snapshot.clone(),
                 now()?,
+                observer,
             )?;
             Ok(turn_accepted(&outcome))
         })
@@ -384,21 +435,56 @@ impl DaemonApplicationFacade {
         })
     }
 
-    /// Validates one interruption request and assembles its typed reply evidence.
+    /// Validates one stop request and assembles its typed reply evidence.
     ///
-    /// Interruption is not a durable run state: the validation commits nothing,
-    /// so it is a pure read and never enters the command gate. The daemon host
-    /// signals the registered execution afterwards, and the host registry lock
-    /// is what orders that signal against admission.
+    /// The stop validates the exact active run and commits nothing itself, so
+    /// it is a pure read and never enters the command gate. The daemon host
+    /// signals the registered execution with the terminal intent afterwards,
+    /// and the host registry lock is what orders that signal against admission.
     ///
     /// # Errors
     ///
     /// Returns a typed validation error when the exact run is not active.
-    pub fn interrupt_run(&self, command: InterruptRunCommandDto) -> DtoResult<ProtocolResultDto> {
-        let run = ApplicationService::new(&self.inner.repository).interrupt_run(command)?;
-        Ok(ProtocolResultDto::RunInterrupted(
-            InterruptRunAcceptedDto::new(run.session_id(), run.run_id()),
+    pub fn cancel_run(&self, command: CancelRunCommandDto) -> DtoResult<ProtocolResultDto> {
+        let run = ApplicationService::new(&self.inner.repository)
+            .active_run(command.session_id(), command.run_id())?;
+        Ok(ProtocolResultDto::RunCancelled(
+            RunCancelledAcceptedDto::new(run.session_id(), run.run_id()),
         ))
+    }
+
+    /// Returns the effective terminal settings a client renders with.
+    ///
+    /// The stored override wins; without one the answer is the resolved
+    /// configuration's `[tui]` theme, which the configuration document already
+    /// resolved to light when no section was declared. Reading the theme is
+    /// presentation-only: it touches no configuration revision and no run
+    /// selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when the stored override cannot be read.
+    pub fn tui_settings(&self) -> DtoResult<TuiSettingsDto> {
+        let theme = self
+            .inner
+            .repository
+            .load_tui_theme()?
+            .unwrap_or_else(|| self.inner.config_snapshot.resolved().tui().theme());
+        Ok(TuiSettingsDto::new(theme))
+    }
+
+    /// Commits one terminal theme override and answers the accepted theme.
+    ///
+    /// The override lives in the settings row alone: it records no
+    /// configuration revision and never enters the immutable configuration
+    /// snapshot, so a run selection captured before the set stays valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when the override cannot be committed.
+    pub fn set_tui_theme(&self, theme: ThemeDto) -> DtoResult<TuiThemeAcceptedDto> {
+        self.inner.repository.save_tui_theme(theme)?;
+        Ok(TuiThemeAcceptedDto::new(theme))
     }
 
     fn recover_before_ready(&self) -> DtoResult<()> {
@@ -407,29 +493,56 @@ impl DaemonApplicationFacade {
     }
 }
 
+/// A commit sink that records nothing.
+///
+/// A caller that drives the facade without a live host - the shared fixtures and
+/// the in-crate tests - still hands every committed value to the one
+/// publication seam, without asserting on what it observes.
+#[derive(Debug)]
+pub struct SilentCommitObserver;
+
+impl SilentCommitObserver {
+    /// Creates the silent sink.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for SilentCommitObserver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SessionCommitObserver for SilentCommitObserver {
+    fn observe_session_commit(&self, _committed: &SessionCommitDto) {}
+}
+
 /// Assembles the wire acceptance evidence of one committed user-turn outcome.
 ///
 /// The engine returns the committed durable outcome; the boundary that owns the
 /// typed wire vocabulary converts it once here.
 const fn turn_accepted(outcome: &AcceptedTurnOutcomeDto) -> ProtocolResultDto {
+    ProtocolResultDto::TurnAccepted(turn_acceptance(outcome))
+}
+
+/// Converts one committed durable turn outcome into its wire acceptance evidence.
+const fn turn_acceptance(outcome: &AcceptedTurnOutcomeDto) -> SendUserTurnAcceptedDto {
     match outcome {
-        AcceptedTurnOutcomeDto::Started { run, .. } => {
-            ProtocolResultDto::TurnAccepted(SendUserTurnAcceptedDto::new(
-                run.session_id(),
-                run.turn_id(),
-                SendUserTurnOutcomeDto::Started {
-                    run_id: run.run_id(),
-                    config_revision_id: run.config_revision_id(),
-                },
-            ))
-        }
-        AcceptedTurnOutcomeDto::Pending(turn) => {
-            ProtocolResultDto::TurnAccepted(SendUserTurnAcceptedDto::new(
-                turn.session_id(),
-                turn.turn_id(),
-                SendUserTurnOutcomeDto::Pending,
-            ))
-        }
+        AcceptedTurnOutcomeDto::Started { run, .. } => SendUserTurnAcceptedDto::new(
+            run.session_id(),
+            run.turn_id(),
+            SendUserTurnOutcomeDto::Started {
+                run_id: run.run_id(),
+                config_revision_id: run.config_revision_id(),
+            },
+        ),
+        AcceptedTurnOutcomeDto::Pending(turn) => SendUserTurnAcceptedDto::new(
+            turn.session_id(),
+            turn.turn_id(),
+            SendUserTurnOutcomeDto::Pending,
+        ),
     }
 }
 
@@ -510,25 +623,6 @@ pub fn bounded_snapshot_messages(
     }
     messages.drain(..keep_from);
     Ok(messages)
-}
-
-/// Trims one run subscription transcript to the budget its projection leaves.
-///
-/// The run snapshot carries the same whole-message contract as the session
-/// snapshot, so its committed projection is charged before the transcript rows
-/// are measured.
-///
-/// # Errors
-///
-/// Returns the typed local encode failure when the projection or a transcript
-/// row cannot be encoded.
-pub fn bounded_run_snapshot_messages(
-    run: &RunProjectionDto,
-    messages: Vec<intention_proto::MessageProjectionDto>,
-) -> DtoResult<Vec<intention_proto::MessageProjectionDto>> {
-    let mut counter = CountingWriter(0);
-    serde_json::to_writer(&mut counter, run).map_err(|_| encode_failure())?;
-    bounded_snapshot_messages(counter.0, messages)
 }
 
 /// Counts the encoded bytes one session projection adds to its snapshot.
@@ -632,9 +726,11 @@ mod tests {
 
     use super::*;
 
-    use intention_engine::{ModelRunCommitDto, RunCancellation};
-    use intention_proto::{MessageKindDto, MessageProjectionDto, SendUserTurnCommandDto};
-    use intention_storage::ToolResultStatusDto;
+    use intention_engine::{RunCancellation, SessionCommitDto};
+    use intention_proto::{
+        MessageId, MessageKindDto, MessageProjectionDto, NewMessageDto, SendUserTurnCommandDto,
+        ToolResultStatusDto,
+    };
     use tempfile::TempDir;
 
     fn test_facade() -> (TempDir, DaemonApplicationFacade) {
@@ -658,6 +754,11 @@ mod tests {
     }
 
     fn fixture_config_snapshot() -> ConfigSnapshotDto {
+        fixture_config_snapshot_with_tui("")
+    }
+
+    /// Builds the fixture configuration snapshot with one optional `[tui]` section.
+    fn fixture_config_snapshot_with_tui(tui: &str) -> ConfigSnapshotDto {
         let source = ConfigSourceDto::Explicit(
             ConfigPathDto::parse(
                 std::env::temp_dir()
@@ -668,7 +769,9 @@ mod tests {
             .expect("fixture configuration source is absolute"),
         );
         let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"",
+            format!(
+                "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"\n{tui}"
+            ),
             source,
         ))
         .expect("fixture configuration resolves");
@@ -683,13 +786,17 @@ mod tests {
 
     fn create(facade: &DaemonApplicationFacade, session_id: SessionId) {
         let accepted = facade
-            .create_session(CreateSessionCommandDto::new(
-                ProjectId::new(),
-                session_id,
-                WorkspaceId::new(),
-                fixture_workspace_root(),
-                RunModeDto::Build,
-            ))
+            .create_session(
+                CreateSessionCommandDto::new(
+                    ProjectId::new(),
+                    session_id,
+                    WorkspaceId::new(),
+                    fixture_workspace_root(),
+                    Some(RunModeDto::Build),
+                    None,
+                ),
+                &SilentCommitObserver::new(),
+            )
             .expect("fixture session creates");
         assert!(matches!(accepted, ProtocolResultDto::SessionCreated(_)));
     }
@@ -704,14 +811,6 @@ mod tests {
         )
         .expect("fixture workspace resolves");
         (directory, root)
-    }
-
-    /// Builds the read input for the shared `hello.txt` workspace fixture.
-    fn read_hello_input() -> ToolInput {
-        ToolInput::Read(intention_tools::ReadInput {
-            path: intention_proto::WorkspaceRelativePathDto::parse("hello.txt")
-                .expect("fixture path is valid"),
-        })
     }
 
     /// Starts one durable run through a direct user turn and returns its identity.
@@ -738,6 +837,7 @@ mod tests {
                 content,
             )
             .expect("fixture user turn is valid"),
+            &RecordingPublisher::new(),
         )
     }
 
@@ -784,7 +884,7 @@ mod tests {
             .expect("fixture user turn is valid");
 
         let initial = facade
-            .send_user_turn(command.clone())
+            .send_user_turn(command.clone(), &RecordingPublisher::new())
             .expect("the first user turn is accepted");
         let ProtocolResultDto::TurnAccepted(initial_turn) = initial else {
             unreachable!("the first user turn returns user-turn evidence")
@@ -802,7 +902,7 @@ mod tests {
         // key, so a repeated command proposes the identity the durable turn
         // already recorded and replays its outcome instead of conflicting.
         let replayed = facade
-            .send_user_turn(command)
+            .send_user_turn(command, &RecordingPublisher::new())
             .expect("a repeated command replays its recorded outcome");
         let ProtocolResultDto::TurnAccepted(replayed_turn) = replayed else {
             unreachable!("the replay returns user-turn evidence")
@@ -824,20 +924,163 @@ mod tests {
         let conflicting = SendUserTurnCommandDto::new(session_id, key, "different turn")
             .expect("fixture user turn is valid");
         let error = facade
-            .send_user_turn(conflicting)
+            .send_user_turn(conflicting, &RecordingPublisher::new())
             .expect_err("one key bound to different content conflicts");
         assert_eq!(error.code(), "turn_idempotency_conflict");
     }
 
     #[test]
+    fn every_created_session_joins_the_one_binding_of_its_workspace_root() {
+        let (_directory, facade) = test_facade();
+        let first = SessionId::new();
+        create(&facade, first);
+        let binding = facade
+            .list_sessions(SESSION_LIST_ROWS)
+            .expect("sessions list")
+            .sessions()
+            .first()
+            .map(|summary| (summary.project_id(), summary.workspace_id()))
+            .expect("the first session is listed");
+
+        // Every later creation proposes a fresh project and workspace identity
+        // for the same root, exactly as the terminal client does; the facade
+        // resolves them to the durable binding of the root instead of rejecting
+        // the second identity, so one root holds an unbounded number of
+        // sessions.
+        let second = SessionId::new();
+        create(&facade, second);
+        let third = SessionId::new();
+        create(&facade, third);
+
+        let listed = facade
+            .list_sessions(SESSION_LIST_ROWS)
+            .expect("sessions list");
+        let created = listed
+            .sessions()
+            .iter()
+            .map(|summary| summary.session_id())
+            .collect::<Vec<_>>();
+        assert_eq!(created.len(), 3, "every created session is listed");
+        for expected in [first, second, third] {
+            assert!(
+                created.contains(&expected),
+                "the created session {} is listed",
+                expected
+            );
+        }
+        assert!(
+            listed
+                .sessions()
+                .iter()
+                .all(|summary| (summary.project_id(), summary.workspace_id()) == binding),
+            "one root keeps one durable project and workspace identity"
+        );
+    }
+
+    #[test]
+    fn tui_settings_come_from_configuration_and_the_override_survives_a_reopen() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let path = directory.path().join("tui-settings.sqlite");
+        let facade = DaemonApplicationFacade::open_for_test_support(
+            &path,
+            fixture_config_snapshot_with_tui("[tui]\ntheme = \"dark\"\n"),
+        )
+        .expect("durable facade opens");
+
+        // Before any set the answer is the configuration document's theme.
+        assert_eq!(
+            facade.tui_settings().expect("settings read").theme(),
+            ThemeDto::Dark
+        );
+
+        let accepted = facade
+            .set_tui_theme(ThemeDto::Light)
+            .expect("the theme commits");
+        assert_eq!(accepted.theme(), ThemeDto::Light);
+        assert_eq!(
+            facade.tui_settings().expect("settings read").theme(),
+            ThemeDto::Light
+        );
+        drop(facade);
+
+        // A restarted daemon answers the stored override, not the document.
+        let reopened = DaemonApplicationFacade::open_for_test_support(
+            &path,
+            fixture_config_snapshot_with_tui("[tui]\ntheme = \"dark\"\n"),
+        )
+        .expect("durable facade reopens");
+        assert_eq!(
+            reopened
+                .tui_settings()
+                .expect("settings read after the reopen")
+                .theme(),
+            ThemeDto::Light,
+            "the stored override wins after a restart"
+        );
+    }
+
+    #[test]
+    fn setting_the_theme_creates_no_configuration_revision() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test_support(
+            directory.path().join("tui-revision.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        let snapshot = facade.inner.config_snapshot.clone();
+
+        let before_session = SessionId::new();
+        create(&facade, before_session);
+        let before_run = started_run(&facade, before_session, "before the theme change");
+
+        facade
+            .set_tui_theme(ThemeDto::Dark)
+            .expect("the theme commits");
+
+        // A run started before the theme change keeps the exact immutable
+        // selection it captured, so its validation inputs are unchanged.
+        assert_eq!(
+            facade
+                .inner
+                .repository
+                .load_run_config_snapshot(before_session, before_run)
+                .expect("the started run selection reads"),
+            snapshot,
+            "a theme change never rewrites a captured run selection"
+        );
+
+        // A later run carries the same configuration revision identity.
+        let after_session = SessionId::new();
+        create(&facade, after_session);
+        let accepted = send_user_turn(&facade, after_session, "after the theme change")
+            .expect("a later turn is accepted");
+        let ProtocolResultDto::TurnAccepted(turn) = accepted else {
+            unreachable!("a user turn answers with turn evidence")
+        };
+        let SendUserTurnOutcomeDto::Started {
+            config_revision_id, ..
+        } = turn.outcome()
+        else {
+            unreachable!("the first turn of a new session starts a run")
+        };
+        assert_eq!(
+            config_revision_id,
+            snapshot.revision_id(),
+            "a theme set records no new configuration revision"
+        );
+    }
+
+    #[test]
     fn an_over_budget_newest_row_is_kept_and_the_projection_is_charged() {
-        let row = |text: String| {
+        let mut next_id = 0;
+        let mut row = |text: String| {
+            next_id += 1;
             MessageProjectionDto::new(
+                MessageId::new(next_id).expect("fixture row identity is valid"),
                 SessionId::new(),
                 None,
                 MessageKindDto::User,
                 text,
-                None,
                 None,
                 None,
             )
@@ -949,34 +1192,13 @@ mod tests {
                     worker_run,
                     call_id,
                     "execute",
-                    ToolInput::Execute(intention_tools::ExecuteInput {
-                        program: intention_tools::BoundedText::new(if cfg!(windows) {
-                            "cmd"
-                        } else {
-                            "sh"
-                        })
-                        .expect("fixture program"),
-                        args: if cfg!(windows) {
-                            vec![
-                                intention_tools::BoundedText::new("/C").expect("arg"),
-                                intention_tools::BoundedText::new(
-                                    "echo started> sentinel.txt & ping -n 2 127.0.0.1",
-                                )
-                                .expect("arg"),
-                            ]
-                        } else {
-                            vec![
-                                intention_tools::BoundedText::new("-c").expect("arg"),
-                                intention_tools::BoundedText::new(
-                                    "printf x > sentinel.txt; sleep 2",
-                                )
-                                .expect("arg"),
-                            ]
-                        },
-                    }),
                     now().expect("fixture clock reads"),
                 )
-                .with_arguments_json("{}")
+                .with_arguments_json(if cfg!(windows) {
+                    r#"{"command":"echo started> sentinel.txt & ping -n 2 127.0.0.1"}"#
+                } else {
+                    r#"{"command":"printf x > sentinel.txt; sleep 2"}"#
+                })
                 .with_cancellation(worker_cancellation),
                 &RecordingPublisher::new(),
             )
@@ -1039,10 +1261,9 @@ mod tests {
                         run_id,
                         call_id,
                         "read",
-                        read_hello_input(),
                         now().expect("fixture clock reads"),
                     )
-                    .with_arguments_json("{}")
+                    .with_arguments_json(r#"{"path":"hello.txt"}"#)
                     .with_cancellation(cancellation.clone()),
                     &RecordingPublisher::new(),
                 )
@@ -1088,10 +1309,9 @@ mod tests {
                     run_id,
                     call_id,
                     "read",
-                    read_hello_input(),
                     now().expect("fixture clock reads"),
                 )
-                .with_arguments_json("{}"),
+                .with_arguments_json(r#"{"path":"hello.txt"}"#),
                 &publisher,
             )
             .expect("read completes");
@@ -1123,12 +1343,11 @@ mod tests {
         run_id: RunId,
         text: &str,
     ) {
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             session_id,
             Some(run_id),
             MessageKindDto::Assistant,
             text,
-            None,
             None,
             None,
         )
@@ -1211,6 +1430,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn session_snapshots_carry_the_effective_provider_model() {
+        // The snapshot read behind both the one-shot request and the
+        // subscription-open reply announces the model the session's resolved
+        // configuration executes under, so a window never renders a front-end
+        // default next to a session that runs something else.
+        let (_directory, facade) = test_facade();
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        let _ = started_run(&facade, session_id, "model announcement");
+
+        let snapshot = facade
+            .session_snapshot(session_id)
+            .expect("the fixture snapshot reads");
+        assert_eq!(snapshot.projection().provider_model(), Some("fixture"));
+        assert_eq!(
+            facade
+                .session_snapshot(session_id)
+                .expect("the fixture snapshot re-reads")
+                .projection(),
+            snapshot.projection(),
+            "every snapshot consumer reads the same filled projection"
+        );
+    }
+
     /// Records every committed transcript row handed to the commit sink.
     struct RecordingPublisher {
         publications: Mutex<Vec<MessageProjectionDto>>,
@@ -1231,9 +1475,9 @@ mod tests {
         }
     }
 
-    impl ModelRunCommitObserver for RecordingPublisher {
-        fn observe_model_run_commit(&self, committed: &ModelRunCommitDto) {
-            if let ModelRunCommitDto::Content(message) = committed {
+    impl SessionCommitObserver for RecordingPublisher {
+        fn observe_session_commit(&self, committed: &SessionCommitDto) {
+            if let SessionCommitDto::Content(message) = committed {
                 self.publications
                     .lock()
                     .expect("publication lock is available")

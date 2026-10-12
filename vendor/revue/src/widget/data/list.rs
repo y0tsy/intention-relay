@@ -1,0 +1,267 @@
+//! List widget
+
+use crate::render::Cell;
+use crate::style::Color;
+use crate::utils::Selection;
+use crate::widget::traits::{RenderContext, View, WidgetProps};
+use std::fmt::Display;
+
+/// A list widget for displaying items
+#[derive(Clone)]
+pub struct List<T> {
+    items: Vec<T>,
+    selection: Selection,
+    highlight_fg: Option<Color>,
+    highlight_bg: Option<Color>,
+    props: WidgetProps,
+}
+
+impl<T> List<T> {
+    /// Create a new list with items
+    pub fn new(items: Vec<T>) -> Self {
+        let len = items.len();
+        Self {
+            items,
+            selection: Selection::new(len),
+            highlight_fg: None,
+            highlight_bg: Some(Color::BLUE),
+            props: WidgetProps::new(),
+        }
+    }
+
+    /// Set selected index
+    pub fn selected(mut self, idx: usize) -> Self {
+        self.selection.set(idx);
+        self
+    }
+
+    /// Set highlight foreground color
+    pub fn highlight_fg(mut self, color: Color) -> Self {
+        self.highlight_fg = Some(color);
+        self
+    }
+
+    /// Set highlight background color
+    pub fn highlight_bg(mut self, color: Color) -> Self {
+        self.highlight_bg = Some(color);
+        self
+    }
+
+    /// Get items
+    pub fn items(&self) -> &[T] {
+        &self.items
+    }
+
+    /// Get selected index
+    pub fn selected_index(&self) -> usize {
+        self.selection.index
+    }
+
+    /// Get number of items
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Check if empty
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// Select next item (wraps around)
+    pub fn select_next(&mut self) {
+        self.selection.next();
+    }
+
+    /// Select previous item (wraps around)
+    pub fn select_prev(&mut self) {
+        self.selection.prev();
+    }
+
+    /// Select the first item
+    pub fn select_first(&mut self) {
+        self.selection.set(0);
+    }
+
+    /// Select the last item
+    pub fn select_last(&mut self) {
+        if !self.items.is_empty() {
+            self.selection.set(self.items.len() - 1);
+        }
+    }
+
+    /// Handle key input for navigation
+    pub fn handle_key(&mut self, key: &crate::event::Key) -> bool {
+        use crate::event::Key;
+        match key {
+            Key::Up | Key::Char('k') => {
+                self.select_prev();
+                true
+            }
+            Key::Down | Key::Char('j') => {
+                self.select_next();
+                true
+            }
+            Key::Home => {
+                self.select_first();
+                true
+            }
+            Key::End => {
+                self.select_last();
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+impl<T: Display> View for List<T> {
+    crate::impl_view_meta!("List");
+    fn render(&self, ctx: &mut RenderContext) {
+        let area = ctx.area;
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        // Scroll so the selected item is on screen: the selection keeps the
+        // offset and moves it only as far as needed to show the selection.
+        self.selection.set_visible(area.height as usize);
+        let visible = self.selection.visible_range();
+
+        // Render each visible item
+        for (row, (i, item)) in self
+            .items
+            .iter()
+            .enumerate()
+            .skip(visible.start)
+            .take(visible.len())
+            .enumerate()
+        {
+            let y = row as u16;
+            let is_selected = self.selection.is_selected(i);
+            // An unselected row had no color at all, so a rule matching the
+            // list never reached its items. Selection colors still win.
+            let base_fg = ctx.css_color_if_set();
+            let base_bg = ctx.css_background_if_set();
+
+            let text = item.to_string();
+            let mut x = 0u16;
+
+            for ch in text.chars() {
+                if x >= area.width {
+                    break;
+                }
+
+                let mut cell = Cell::new(ch);
+                if is_selected {
+                    cell.fg = self.highlight_fg.or(base_fg);
+                    cell.bg = self.highlight_bg.or(base_bg);
+                } else {
+                    cell.fg = base_fg;
+                    cell.bg = base_bg;
+                }
+
+                ctx.set(x, y, cell);
+
+                let char_width = crate::utils::unicode::char_width(ch).max(1) as u16;
+                if char_width == 2 && x + 1 < area.width {
+                    let mut cont = Cell::continuation();
+                    if is_selected {
+                        cont.bg = self.highlight_bg;
+                    }
+                    ctx.set(x + 1, y, cont);
+                }
+                x += char_width;
+            }
+
+            // Fill rest of line for selected item
+            if is_selected {
+                while x < area.width {
+                    let mut cell = Cell::new(' ');
+                    cell.bg = self.highlight_bg;
+                    ctx.set(x, y, cell);
+                    x += 1;
+                }
+            }
+        }
+    }
+}
+
+// `impl_props_builders!` cannot name a generic type, so the chainable builders
+// it would have generated are written out here. Without them `List` reports a
+// `WidgetMeta` it has no way to fill in - it takes part in the DOM and no rule
+// can select it.
+impl<T: Display> List<T> {
+    /// Set element ID for CSS selector (#id)
+    pub fn element_id(mut self, id: impl Into<String>) -> Self {
+        self.props.id = Some(id.into());
+        self
+    }
+
+    /// Set the reconciliation key - this widget's identity across frames.
+    pub fn keyed(mut self, key: impl Into<crate::dom::WidgetKey>) -> Self {
+        self.props.key = Some(key.into());
+        self
+    }
+
+    /// Add a CSS class
+    pub fn class(mut self, class: impl Into<String>) -> Self {
+        let class_str = class.into();
+        if !self.props.classes.contains(&class_str) {
+            self.props.classes.push(class_str);
+        }
+        self
+    }
+
+    /// Add multiple CSS classes
+    pub fn classes<I, S>(mut self, classes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for class in classes {
+            let class_str = class.into();
+            if !self.props.classes.contains(&class_str) {
+                self.props.classes.push(class_str);
+            }
+        }
+        self
+    }
+}
+
+// Note: Cannot use impl_styled_view! macro with generic types
+// Implement StyledView manually for List<T>
+impl<T: Display> crate::widget::StyledView for List<T> {
+    fn set_id(&mut self, id: impl Into<String>) {
+        self.props.id = Some(id.into());
+    }
+
+    fn add_class(&mut self, class: impl Into<String>) {
+        let class_str = class.into();
+        if !self.props.classes.iter().any(|c| c == &class_str) {
+            self.props.classes.push(class_str);
+        }
+    }
+
+    fn remove_class(&mut self, class: &str) {
+        self.props.classes.retain(|c| c != class);
+    }
+
+    fn toggle_class(&mut self, class: &str) {
+        if self.props.classes.iter().any(|c| c == class) {
+            self.props.classes.retain(|c| c != class);
+        } else {
+            self.props.classes.push(class.to_string());
+        }
+    }
+
+    fn has_class(&self, class: &str) -> bool {
+        self.props.classes.iter().any(|c| c == class)
+    }
+}
+
+/// Helper function to create a list widget
+pub fn list<T>(items: Vec<T>) -> List<T> {
+    List::new(items)
+}
+
+// Tests moved to tests/widget/data/list.rs

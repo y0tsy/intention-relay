@@ -1,0 +1,402 @@
+//! Rating widget for star ratings and feedback
+//!
+//! Displays customizable star ratings with hover and selection support.
+
+use crate::render::Cell;
+use crate::style::Color;
+use crate::widget::theme::{DISABLED_FG, LIGHT_GRAY};
+use crate::widget::traits::{RenderContext, View, WidgetProps};
+use crate::{impl_props_builders, impl_styled_view};
+
+/// Rating display style
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RatingStyle {
+    /// Star icons ★☆
+    #[default]
+    Star,
+    /// Heart icons ♥♡
+    Heart,
+    /// Circle icons ●○
+    Circle,
+    /// Square icons ■□
+    Square,
+    /// Numeric display (1-5)
+    Numeric,
+    /// Custom characters
+    Custom(char, char),
+}
+
+impl RatingStyle {
+    fn chars(&self) -> (char, char) {
+        match self {
+            RatingStyle::Star => ('★', '☆'),
+            RatingStyle::Heart => ('♥', '♡'),
+            RatingStyle::Circle => ('●', '○'),
+            RatingStyle::Square => ('■', '□'),
+            RatingStyle::Numeric => ('●', '○'),
+            RatingStyle::Custom(filled, empty) => (*filled, *empty),
+        }
+    }
+
+    /// Get half-filled character for this style
+    fn half_char(&self) -> char {
+        match self {
+            RatingStyle::Star => '⯪',                  // Half-filled star
+            RatingStyle::Heart => '❥',                 // Rotated heart (visual half)
+            RatingStyle::Circle => '◐',                // Left half black circle
+            RatingStyle::Square => '◧',                // Left half black square
+            RatingStyle::Numeric => '◐',               // Same as circle for numeric
+            RatingStyle::Custom(filled, _) => *filled, // Use filled for custom
+        }
+    }
+}
+
+/// Rating size
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RatingSize {
+    /// Small (1 char per star)
+    Small,
+    /// Medium (2 chars per star)
+    #[default]
+    Medium,
+    /// Large (3 chars per star)
+    Large,
+}
+
+impl RatingSize {
+    fn spacing(&self) -> usize {
+        match self {
+            RatingSize::Small => 1,
+            RatingSize::Medium => 2,
+            RatingSize::Large => 3,
+        }
+    }
+}
+
+/// Rating widget for displaying and selecting ratings
+#[derive(Clone, Debug)]
+pub struct Rating {
+    /// Current rating value (0.0 to max_value)
+    value: f32,
+    /// Maximum rating value
+    max_value: u8,
+    /// Rating style
+    style: RatingStyle,
+    /// Size
+    size: RatingSize,
+    /// Allow half stars
+    half_stars: bool,
+    /// Read-only mode
+    readonly: bool,
+    /// Filled star color
+    /// The color the builder named, if it named one - see #656.
+    filled_color: Option<Color>,
+    /// Empty star color
+    empty_color: Color,
+    /// Hover color
+    hover_color: Color,
+    /// Currently hovered value (for preview)
+    hover_value: Option<f32>,
+    /// Show numeric value
+    show_value: bool,
+    /// Label text
+    label: Option<String>,
+    /// CSS styling properties (id, classes)
+    props: WidgetProps,
+}
+
+impl Rating {
+    /// Create a new rating widget
+    pub fn new() -> Self {
+        Self {
+            value: 0.0,
+            max_value: 5,
+            style: RatingStyle::Star,
+            size: RatingSize::Medium,
+            half_stars: true,
+            readonly: false,
+            filled_color: None,
+            empty_color: DISABLED_FG,
+            hover_color: Color::rgb(255, 220, 100),
+            hover_value: None,
+            show_value: false,
+            label: None,
+            props: WidgetProps::new(),
+        }
+    }
+
+    /// Set the rating value
+    pub fn value(mut self, value: f32) -> Self {
+        self.value = value.clamp(0.0, self.max_value as f32);
+        self
+    }
+
+    /// Set maximum rating value
+    pub fn max_value(mut self, max: u8) -> Self {
+        self.max_value = max.max(1);
+        self.value = self.value.min(max as f32);
+        self
+    }
+
+    /// Set rating style
+    pub fn style(mut self, style: RatingStyle) -> Self {
+        self.style = style;
+        self
+    }
+
+    /// Set size
+    pub fn size(mut self, size: RatingSize) -> Self {
+        self.size = size;
+        self
+    }
+
+    /// Enable/disable half stars
+    pub fn half_stars(mut self, enable: bool) -> Self {
+        self.half_stars = enable;
+        self
+    }
+
+    /// Set read-only mode
+    ///
+    /// A read-only rating ignores [`increment`](Self::increment),
+    /// [`decrement`](Self::decrement), [`clear`](Self::clear) and hover
+    /// previews. [`set_value`](Self::set_value) still works, so the
+    /// application can update what it shows.
+    pub fn readonly(mut self, readonly: bool) -> Self {
+        self.readonly = readonly;
+        self
+    }
+
+    /// Set filled star color
+    pub fn filled_color(mut self, color: Color) -> Self {
+        self.filled_color = Some(color);
+        self
+    }
+
+    /// Set empty star color
+    pub fn empty_color(mut self, color: Color) -> Self {
+        self.empty_color = color;
+        self
+    }
+
+    /// Set hover color
+    pub fn hover_color(mut self, color: Color) -> Self {
+        self.hover_color = color;
+        self
+    }
+
+    /// Show numeric value
+    pub fn show_value(mut self, show: bool) -> Self {
+        self.show_value = show;
+        self
+    }
+
+    /// Set label
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// Get current value
+    pub fn get_value(&self) -> f32 {
+        self.value
+    }
+
+    /// Set value programmatically
+    pub fn set_value(&mut self, value: f32) {
+        self.value = value.clamp(0.0, self.max_value as f32);
+    }
+
+    /// Set hover preview
+    pub fn set_hover(&mut self, value: Option<f32>) {
+        if self.readonly {
+            return;
+        }
+        self.hover_value = value.map(|v| v.clamp(0.0, self.max_value as f32));
+    }
+
+    /// Increment rating
+    pub fn increment(&mut self) {
+        if self.readonly {
+            return;
+        }
+        let step = if self.half_stars { 0.5 } else { 1.0 };
+        self.value = (self.value + step).min(self.max_value as f32);
+    }
+
+    /// Decrement rating
+    pub fn decrement(&mut self) {
+        if self.readonly {
+            return;
+        }
+        let step = if self.half_stars { 0.5 } else { 1.0 };
+        self.value = (self.value - step).max(0.0);
+    }
+
+    /// Clear rating
+    pub fn clear(&mut self) {
+        if self.readonly {
+            return;
+        }
+        self.value = 0.0;
+    }
+
+    // Presets
+
+    /// Create a 5-star rating
+    pub fn five_star() -> Self {
+        Self::new().max_value(5)
+    }
+
+    /// Create a 10-star rating
+    pub fn ten_star() -> Self {
+        Self::new().max_value(10)
+    }
+
+    /// Create a heart rating
+    pub fn hearts() -> Self {
+        Self::new().style(RatingStyle::Heart)
+    }
+
+    /// Create a thumbs up/down (2-star)
+    pub fn thumbs() -> Self {
+        Self::new()
+            .max_value(2)
+            .half_stars(false)
+            .style(RatingStyle::Custom('👍', '👎'))
+    }
+}
+
+impl Default for Rating {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Rating {
+    /// Columns the label takes (0 without one).
+    fn label_width(&self) -> u16 {
+        self.label.as_deref().map_or(0, |l| {
+            crate::utils::unicode::display_width(l).min(u16::MAX as usize) as u16
+        })
+    }
+
+    /// The `3.5/5` text `show_value` adds, for the value on display.
+    fn value_text(&self) -> String {
+        let display_value = self.hover_value.unwrap_or(self.value);
+        format!("{:.1}/{}", display_value, self.max_value)
+    }
+
+    /// The columns `render` paints given room: the label and a space, the
+    /// stars at their spacing, then a space and the value if shown.
+    fn natural_width(&self) -> u16 {
+        let label = if self.label.is_some() {
+            self.label_width().saturating_add(1)
+        } else {
+            0
+        };
+        let stars = u16::from(self.max_value);
+        let spacing = self.size.spacing() as u16;
+        if self.show_value {
+            let value = self.value_text().chars().count() as u16;
+            label
+                .saturating_add(stars.saturating_mul(spacing))
+                .saturating_add(1)
+                .saturating_add(value)
+        } else if stars > 0 {
+            // The last star is one column; the spacing after it is not drawn.
+            label
+                .saturating_add((stars - 1).saturating_mul(spacing))
+                .saturating_add(1)
+        } else {
+            self.label_width()
+        }
+    }
+}
+
+impl View for Rating {
+    crate::impl_view_meta!("Rating", focusable);
+
+    /// One row: label, stars and value, as laid out by `render`.
+    fn measure(&self, max_width: u16, max_height: u16) -> Option<(u16, u16)> {
+        Some((self.natural_width().min(max_width), 1.min(max_height)))
+    }
+
+    fn render(&self, ctx: &mut RenderContext) {
+        // A single `color` cannot describe every part of this widget, so it
+        // sets the primary one and the rest keep their defaults - a filled star is the rating's primary element.
+        let filled_color = self
+            .filled_color
+            .unwrap_or_else(|| ctx.css_color(Color::rgb(255, 200, 0)));
+        let area = ctx.area;
+        if area.width < 1 || area.height < 1 {
+            return;
+        }
+
+        let mut x: u16 = 0;
+        let y: u16 = 0;
+
+        // Render label if present
+        if let Some(ref label) = self.label {
+            ctx.put_str_with(x, y, label, area.width, |ch| Cell::new(ch).fg(Color::WHITE));
+            x += self.label_width() + 1; // Space after label
+        }
+
+        // Determine which value to display (hover or actual)
+        let display_value = self.hover_value.unwrap_or(self.value);
+        let (filled_char, empty_char) = self.style.chars();
+
+        // Render stars
+        for i in 0..self.max_value {
+            if x >= area.width {
+                break;
+            }
+
+            let star_value = i as f32 + 1.0;
+            let (ch, color) = if display_value >= star_value {
+                // Fully filled
+                let color = if self.hover_value.is_some() {
+                    self.hover_color
+                } else {
+                    filled_color
+                };
+                (filled_char, color)
+            } else if self.half_stars && display_value >= star_value - 0.5 {
+                // Half filled - use half-filled character
+                let color = if self.hover_value.is_some() {
+                    self.hover_color
+                } else {
+                    filled_color
+                };
+                (self.style.half_char(), color)
+            } else {
+                // Empty
+                (empty_char, self.empty_color)
+            };
+
+            ctx.set(x, y, Cell::new(ch).fg(color));
+            x += self.size.spacing() as u16;
+        }
+
+        // Show numeric value if enabled
+        if self.show_value {
+            x += 1;
+            let value_str = self.value_text();
+            for ch in value_str.chars() {
+                if x >= area.width {
+                    break;
+                }
+                ctx.set(x, y, Cell::new(ch).fg(LIGHT_GRAY));
+                x += 1;
+            }
+        }
+    }
+}
+
+impl_styled_view!(Rating);
+impl_props_builders!(Rating);
+
+/// Helper function to create a rating widget
+pub fn rating() -> Rating {
+    Rating::new()
+}

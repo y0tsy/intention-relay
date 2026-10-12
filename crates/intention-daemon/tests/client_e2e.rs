@@ -4,7 +4,7 @@
 //! transport, drive it with the real asynchronous client, and execute a real
 //! `read` tool through the production model-tool loop against a fake
 //! OpenAI-compatible provider. They prove the committed transcript rows, the
-//! run status, and live `run.frame` publication, restart the daemon, and prove
+//! run status, and live session-frame publication, restart the daemon, and prove
 //! the same durable run is replayed as current state without re-executing the
 //! tool.
 
@@ -14,26 +14,20 @@
     reason = "Client end-to-end fixtures use assertion conveniences for precise diagnostics."
 )]
 
-mod common;
-
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
 use std::process::Child;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{spawn_daemon, unique_endpoint, write_config_document};
-use intention_client::{
-    IntentionClient, ProcessDaemonLauncher, RunStreamClient, RunStreamSubscription,
-};
+use intention_client::{SessionStreamClient, SessionStreamSubscription, StreamStep};
 use intention_proto::{
-    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunStatusDto,
-    RunStreamFrameDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto, WorkspaceRootDto,
-    run_status_is_terminal,
+    CreateSessionCommandDto, CreateSessionFirstTurnDto, MessageKindDto, MessageProjectionDto,
+    RunModeDto, RunStatusDto, SendUserTurnOutcomeDto, SessionFrameDto, SubscribeSessionCommandDto,
+    ThemeDto, ToolIdentityDto, WorkspaceRootDto, run_status_is_terminal,
 };
-use intention_proto::{IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId};
+use intention_proto::{IdempotencyKey, ProjectId, SessionId, WorkspaceId};
+use intention_test_support::daemon_process::{
+    self, spawn_daemon, unique_endpoint, wait_until_ready, write_config_document,
+};
+use intention_test_support::fake_provider::{FakeProvider, fixture_config_document};
 use intention_transport::LocalEndpoint;
 use tempfile::TempDir;
 
@@ -55,6 +49,27 @@ struct E2eHost {
 impl E2eHost {
     /// Creates a fresh isolated fixture and spawns its first daemon process.
     fn new(workspace_file: Option<(&str, &str)>, tool_arguments: &str) -> Self {
+        Self::with_tool_round("read", workspace_file, tool_arguments, &[])
+    }
+
+    /// Creates a fresh isolated fixture whose tool round streams `reasoning`
+    /// before the tool call it emits.
+    fn with_tool_round_reasoning(
+        workspace_file: Option<(&str, &str)>,
+        tool_arguments: &str,
+        reasoning: &[&str],
+    ) -> Self {
+        Self::with_tool_round("read", workspace_file, tool_arguments, reasoning)
+    }
+
+    /// Creates a fresh isolated fixture whose tool round calls `tool_name` with
+    /// `tool_arguments` and streams `reasoning` before that call.
+    fn with_tool_round(
+        tool_name: &str,
+        workspace_file: Option<(&str, &str)>,
+        tool_arguments: &str,
+        reasoning: &[&str],
+    ) -> Self {
         let config_home = TempDir::new().expect("config directory exists");
         let state_home = TempDir::new().expect("state directory exists");
         let workspace = TempDir::new().expect("workspace directory exists");
@@ -62,7 +77,7 @@ impl E2eHost {
             std::fs::write(workspace.path().join(name), content).expect("workspace fixture writes");
         }
         let credential = format!("fixture-credential-{}", std::process::id());
-        let provider = FakeProvider::start(tool_arguments);
+        let provider = FakeProvider::start_tool_round(tool_name, tool_arguments, reasoning);
         let config_document = fixture_config_document(provider.port(), &credential);
         write_config_document(config_home.path(), &config_document);
         let endpoint = unique_endpoint("e2e");
@@ -96,20 +111,7 @@ impl E2eHost {
     }
 
     fn kill_daemon(&mut self) {
-        let Some(mut child) = self.daemon.take() else {
-            return;
-        };
-        let _ = child.kill();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline {
-            if child.try_wait().ok().flatten().is_some() {
-                let _ = child.wait();
-                return;
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-        let _ = child.kill();
-        let _ = child.wait();
+        daemon_process::kill(&mut self.daemon);
     }
 }
 
@@ -118,262 +120,19 @@ impl Drop for E2eHost {
         self.kill_daemon();
         self.provider.stop();
         #[cfg(unix)]
-        if let Some(path) = common::endpoint_socket_path(&self.endpoint) {
+        if let Some(path) = daemon_process::endpoint_socket_path(&self.endpoint) {
             let _ = std::fs::remove_file(path);
         }
     }
 }
 
-/// Renders the fixture daemon configuration document for the fake provider.
-fn fixture_config_document(port: u16, credential: &str) -> String {
-    format!(
-        "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"fixture-model\"\nendpoint = \"http://127.0.0.1:{port}/v1\"\ncredential = \"{credential}\"\n"
-    )
-}
-
-/// A fake OpenAI-compatible provider serving two scripted SSE rounds.
-///
-/// The first request receives a tool-call round for the `read` tool, the second
-/// (whose body carries the tool result) receives a text round, and any further
-/// request receives an HTTP 500 and is counted as excess traffic.
-struct FakeProvider {
-    port: u16,
-    requests: Arc<AtomicUsize>,
-    excess: Arc<AtomicUsize>,
-    stop: Arc<AtomicBool>,
-    thread: Option<thread::JoinHandle<()>>,
-}
-
-impl FakeProvider {
-    fn start(tool_arguments: &str) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("provider binds");
-        let port = listener
-            .local_addr()
-            .expect("provider port is available")
-            .port();
-        let requests = Arc::new(AtomicUsize::new(0));
-        let excess = Arc::new(AtomicUsize::new(0));
-        let stop = Arc::new(AtomicBool::new(false));
-        let thread_requests = Arc::clone(&requests);
-        let thread_excess = Arc::clone(&excess);
-        let thread_stop = Arc::clone(&stop);
-        let tool_body = serde_json::to_string(&serde_json::json!({
-            "id": "chatcmpl-client-e2e-1",
-            "object": "chat.completion.chunk",
-            "created": 1,
-            "model": "fixture-model",
-            "choices": [{
-                "index": 0,
-                "delta": {
-                    "tool_calls": [{
-                        "index": 0,
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "read", "arguments": tool_arguments},
-                    }],
-                },
-                "finish_reason": "tool_calls",
-            }],
-        }))
-        .expect("tool chunk serializes");
-        let usage_body = serde_json::to_string(&serde_json::json!({
-            "id": "chatcmpl-client-e2e-1",
-            "object": "chat.completion.chunk",
-            "created": 1,
-            "model": "fixture-model",
-            "choices": [],
-            "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
-        }))
-        .expect("usage chunk serializes");
-        let text_body = serde_json::to_string(&serde_json::json!({
-            "id": "chatcmpl-client-e2e-2",
-            "object": "chat.completion.chunk",
-            "created": 1,
-            "model": "fixture-model",
-            "choices": [{
-                "index": 0,
-                "delta": {"content": "done"},
-                "finish_reason": "stop",
-            }],
-        }))
-        .expect("text chunk serializes");
-        let tool_response = sse_response(&format!(
-            "data: {tool_body}\n\ndata: {usage_body}\n\ndata: [DONE]\n\n"
-        ));
-        let text_response = sse_response(&format!(
-            "data: {text_body}\n\ndata: {usage_body}\n\ndata: [DONE]\n\n"
-        ));
-        let thread = thread::Builder::new()
-            .name("client-e2e-provider".to_owned())
-            .spawn(move || {
-                listener
-                    .set_nonblocking(true)
-                    .expect("provider listener is non-blocking");
-                while !thread_stop.load(Ordering::Acquire) {
-                    match listener.accept() {
-                        Ok((stream, _)) => handle_provider_request(
-                            stream,
-                            &thread_requests,
-                            &thread_excess,
-                            &tool_response,
-                            &text_response,
-                        ),
-                        Err(_) => thread::sleep(Duration::from_millis(10)),
-                    }
-                }
-            })
-            .expect("provider thread starts");
-        Self {
-            port,
-            requests,
-            excess,
-            stop,
-            thread: Some(thread),
-        }
-    }
-
-    const fn port(&self) -> u16 {
-        self.port
-    }
-
-    fn request_count(&self) -> usize {
-        self.requests.load(Ordering::Acquire)
-    }
-
-    fn excess_count(&self) -> usize {
-        self.excess.load(Ordering::Acquire)
-    }
-
-    fn stop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
-
-/// Reads one HTTP request head and body and answers it from the script.
-fn handle_provider_request(
-    mut stream: TcpStream,
-    requests: &AtomicUsize,
-    excess: &AtomicUsize,
-    tool_response: &str,
-    text_response: &str,
-) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let Some(body) = read_request_body(&mut stream) else {
-        return;
-    };
-    // The provider paces each scripted round so the test's subscriber can
-    // attach before the committed state for that round is published.
-    thread::sleep(Duration::from_millis(500));
-    let request_number = requests.fetch_add(1, Ordering::AcqRel) + 1;
-    let body_text = String::from_utf8_lossy(&body);
-    if request_number == 1 {
-        assert!(
-            body_text.contains(r#""tools":["#) && body_text.contains(r#""name":"read""#),
-            "the first provider request advertises tools including read: {body_text}"
-        );
-    }
-    if request_number <= 2 {
-        let response = if body_text.contains("\"role\":\"tool\"") {
-            text_response
-        } else {
-            tool_response
-        };
-        write_response(&mut stream, response);
-    } else {
-        excess.fetch_add(1, Ordering::AcqRel);
-        write_response(&mut stream, &excess_response());
-    }
-}
-
-fn write_response(stream: &mut TcpStream, response: &str) {
-    let _ = stream.write_all(response.as_bytes());
-    let _ = stream.flush();
-}
-
-/// Reads one complete HTTP request body: the head up to its blank line plus
-/// exactly the declared Content-Length bytes, preserving any body bytes that
-/// arrived in the same read as the head.
-fn read_request_body(stream: &mut TcpStream) -> Option<Vec<u8>> {
-    let mut head = Vec::new();
-    let mut buffer = [0_u8; 4096];
-    loop {
-        match stream.read(&mut buffer) {
-            Ok(0) => return None,
-            Ok(read) => {
-                head.extend_from_slice(&buffer[..read]);
-                if let Some(end) = head.windows(4).position(|window| window == b"\r\n\r\n") {
-                    let length = content_length(&head[..end]);
-                    let mut body = head.split_off(end + 4);
-                    if body.len() < length {
-                        let mut remaining = vec![0_u8; length - body.len()];
-                        if stream.read_exact(&mut remaining).is_err() {
-                            return None;
-                        }
-                        body.extend_from_slice(&remaining);
-                    }
-                    body.truncate(length);
-                    return Some(body);
-                }
-            }
-            Err(_) => return None,
-        }
-    }
-}
-
-/// Parses the Content-Length header from an HTTP request head.
-fn content_length(head: &[u8]) -> usize {
-    let head = String::from_utf8_lossy(head);
-    for line in head.lines() {
-        if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-            return value.trim().parse().unwrap_or(0);
-        }
-    }
-    0
-}
-
-fn sse_response(body: &str) -> String {
-    format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}")
-}
-
-fn excess_response() -> String {
-    let body = r#"{"error":{"message":"unexpected provider request","type":"server_error"}}"#;
-    format!(
-        "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
-        body.len()
-    )
-}
-
-/// Waits for the spawned daemon to report `Ready` through the shared client.
-///
-/// `await_ready()` only connects and queries; it never launches the daemon.
-/// Its own bounded wait is looped under the fixture deadline, so a daemon that
-/// needs longer than one client budget still becomes ready in time.
-async fn wait_until_ready(endpoint: &LocalEndpoint, deadline: Instant) -> IntentionClient {
-    let client = IntentionClient::new(
-        endpoint.clone(),
-        Box::new(
-            ProcessDaemonLauncher::new(env!("CARGO_BIN_EXE_intention-daemon"))
-                .expect("daemon program is valid"),
-        ),
-    );
-    while Instant::now() < deadline {
-        if client.await_ready().await.is_ok() {
-            return client;
-        }
-    }
-    panic!("daemon becomes ready before the deadline");
-}
-
 /// One live run observation: the subscription, the correlated current-state
 /// snapshot it carried, and every later frame the subscriber received.
 struct LiveRunObservation {
-    subscription: RunStreamSubscription,
+    subscription: SessionStreamSubscription,
     snapshot_status: Option<RunStatusDto>,
     snapshot_messages: Vec<MessageProjectionDto>,
-    frames: Vec<RunStreamFrameDto>,
+    frames: Vec<SessionFrameDto>,
 }
 
 impl LiveRunObservation {
@@ -386,27 +145,27 @@ impl LiveRunObservation {
     fn received_status_frame(&self) -> bool {
         self.frames
             .iter()
-            .any(|frame| matches!(frame, RunStreamFrameDto::Status(_)))
+            .any(|frame| matches!(frame, SessionFrameDto::Status(_)))
     }
 }
 
-/// Subscribes to one run's current state and drives the live stream until the
-/// run reports a terminal status.
+/// Subscribes to one session's current state and drives the live stream until
+/// its active run reports a terminal status.
 ///
-/// The correlated first reply is the current-state snapshot; every later
-/// committed content or status change arrives as a live `run.frame` on the
-/// same subscription. A re-subscribing client re-reads current state and
-/// continues live, so both the snapshot and the frames are authoritative.
+/// The correlated first reply is the current-state session snapshot; every
+/// later committed row, run status change, and transient delta arrives as a
+/// live session frame on the same subscription. A re-subscribing client
+/// re-reads current state and continues live, so both the snapshot and the
+/// frames are authoritative.
 async fn observe_run_until_terminal(
-    client: &RunStreamClient,
+    client: &SessionStreamClient,
     session_id: SessionId,
-    run_id: RunId,
     deadline: Instant,
 ) -> LiveRunObservation {
     let mut subscription = client
-        .subscribe(SubscribeRunCommandDto::new(session_id, run_id))
+        .subscribe(SubscribeSessionCommandDto::new(session_id))
         .await
-        .expect("run subscription arrives");
+        .expect("session subscription arrives");
     let snapshot_status = subscription.state().status();
     let snapshot_messages = subscription.state().messages().to_vec();
     let mut frames = Vec::new();
@@ -428,8 +187,8 @@ async fn observe_run_until_terminal(
             "the run reaches a terminal status before the deadline"
         );
         match tokio::time::timeout(Duration::from_secs(1), subscription.receive()).await {
-            Ok(Ok(Some(frame))) => frames.push(frame),
-            Ok(Ok(None)) => {
+            Ok(Ok(StreamStep::Frame(frame))) => frames.push(frame),
+            Ok(Ok(StreamStep::Closed(_))) => {
                 panic!("the daemon closed the run stream before the run terminalized")
             }
             Ok(Err(error)) => panic!("run stream frame error: {}", error.code()),
@@ -462,7 +221,8 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
             session_id,
             WorkspaceId::new(),
             WorkspaceRootDto::parse(workspace_root).expect("workspace root is absolute"),
-            RunModeDto::Build,
+            Some(RunModeDto::Build),
+            None,
         ))
         .await
         .expect("the daemon accepts session creation");
@@ -479,12 +239,11 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
         panic!("first turn starts a run, got: {outcome:?}")
     };
 
-    let stream_client = RunStreamClient::new(host.endpoint.clone());
+    let stream_client = SessionStreamClient::new(host.endpoint.clone());
     let live_deadline = Instant::now() + Duration::from_secs(30);
     // Subscribe immediately after acceptance: the subscription snapshot is the
-    // current run state, and every later commit arrives as a live frame.
-    let observation =
-        observe_run_until_terminal(&stream_client, session_id, run_id, live_deadline).await;
+    // session's current state, and every later commit arrives as a live frame.
+    let observation = observe_run_until_terminal(&stream_client, session_id, live_deadline).await;
     let state = observation.subscription.state();
     assert_eq!(
         state.status(),
@@ -512,7 +271,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
         assert!(
             observation.frames.iter().any(|frame| matches!(
                 frame,
-                RunStreamFrameDto::Content(message)
+                SessionFrameDto::Content(message)
                     if message.kind() == MessageKindDto::Assistant && message.text() == "done"
             )),
             "the committed assistant content is published as a live content frame"
@@ -542,7 +301,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
         assert!(
             observation.frames.iter().any(|frame| matches!(
                 frame,
-                RunStreamFrameDto::Content(message)
+                SessionFrameDto::Content(message)
                     if message.kind() == MessageKindDto::ToolResult
             )),
             "the committed tool result is published as a live content frame"
@@ -575,7 +334,10 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
         "the committed transcript records the turn, the read call, its result, and the assistant step"
     );
     assert_eq!(messages[0].text(), "Read hello.txt");
-    assert_eq!(messages[1].tool_id(), Some("read"));
+    assert_eq!(
+        messages[1].tool_id().map(ToolIdentityDto::wire_name),
+        Some("read")
+    );
     assert_eq!(
         messages[1].text(),
         r#"{"path":"hello.txt"}"#,
@@ -584,7 +346,10 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
     let call_id = messages[1]
         .tool_call_id()
         .expect("the tool call row carries its identity");
-    assert_eq!(messages[2].tool_id(), Some("read"));
+    assert_eq!(
+        messages[2].tool_id().map(ToolIdentityDto::wire_name),
+        Some("read")
+    );
     assert_eq!(messages[2].tool_call_id(), Some(call_id));
     assert_eq!(
         messages[2].text(),
@@ -622,39 +387,33 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
     );
 
     // Restart the daemon against the identical environment and state, then
-    // prove the completed run is replayed as current state without any
-    // provider re-execution.
+    // prove the completed run's committed transcript is replayed as current
+    // state without any provider re-execution. A completed run is terminal, so
+    // the session carries no active run and there is no live frame left to
+    // wait for: the rows are the state a fresh read returns.
     host.restart_daemon();
     let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
-    let replayed = observe_run_until_terminal(
-        &stream_client,
-        session_id,
-        run_id,
-        Instant::now() + Duration::from_secs(15),
-    )
-    .await;
-    assert_eq!(
-        replayed.snapshot_status,
-        Some(RunStatusDto::Completed),
-        "the restarted daemon replays the completed run as its current state"
+    let replayed = client
+        .session_snapshot(session_id)
+        .await
+        .expect("replayed session snapshot reads");
+    assert!(
+        replayed.projection().active_run().is_none(),
+        "the restarted daemon serves the completed run as terminal, so the session carries no active run"
     );
-    let replayed_messages = replayed.subscription.state().messages();
+    let replayed_messages = replayed.messages();
     assert_eq!(
         replayed_messages.len(),
         4,
-        "the replayed run snapshot carries the complete committed transcript"
+        "the replayed session snapshot carries the complete committed transcript"
     );
     assert_eq!(
         replayed_messages[2].text(),
         "hello from e2e",
         "the durable tool result replays unchanged"
     );
-    let replayed_session = client
-        .session_snapshot(session_id)
-        .await
-        .expect("replayed session snapshot reads");
     assert_eq!(
-        replayed_session
+        replayed
             .messages()
             .iter()
             .map(|message| (message.kind(), message.text()))
@@ -679,7 +438,62 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
 }
 
 #[tokio::test]
-async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
+async fn a_create_with_turn_command_commits_session_then_turn() {
+    let host = E2eHost::new(
+        Some(("hello.txt", "hello from e2e")),
+        r#"{"path":"hello.txt"}"#,
+    );
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
+
+    // One command creates the session and commits the prompt it carries as that
+    // session's first turn: the client declares the session identity and the
+    // daemon accepts the turn against the session it just created.
+    let session_id = SessionId::new();
+    let created = client
+        .create_session(CreateSessionCommandDto::new(
+            ProjectId::new(),
+            session_id,
+            WorkspaceId::new(),
+            WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
+                .expect("workspace root is absolute"),
+            Some(RunModeDto::Build),
+            Some(
+                CreateSessionFirstTurnDto::new(IdempotencyKey::new(), "Read hello.txt")
+                    .expect("fixture first turn is valid"),
+            ),
+        ))
+        .await
+        .expect("the daemon accepts the combined creation");
+    assert_eq!(
+        created.session_id(),
+        session_id,
+        "the command's declared session identity is authoritative"
+    );
+    let accepted = created
+        .first_turn()
+        .expect("the acceptance carries the committed first turn");
+    assert_eq!(accepted.session_id(), session_id);
+    assert!(
+        matches!(accepted.outcome(), SendUserTurnOutcomeDto::Started { .. }),
+        "the created session's first turn starts its run"
+    );
+
+    // The prompt is durable in the session the one command created, so a fresh
+    // read names both the session and its committed first row.
+    let snapshot = client
+        .session_snapshot(session_id)
+        .await
+        .expect("the created session reads back");
+    assert!(
+        snapshot.messages().iter().any(|message| {
+            message.kind() == MessageKindDto::User && message.text() == "Read hello.txt"
+        }),
+        "the created session holds the prompt as its committed first turn"
+    );
+}
+
+#[tokio::test]
+async fn real_daemon_tool_loop_answers_a_failed_call_without_stopping() {
     let host = E2eHost::new(None, r#"{"path":"missing.txt"}"#);
     let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
 
@@ -691,7 +505,8 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
             WorkspaceId::new(),
             WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
                 .expect("workspace root is absolute"),
-            RunModeDto::Build,
+            Some(RunModeDto::Build),
+            None,
         ))
         .await
         .expect("the daemon accepts session creation");
@@ -704,34 +519,34 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
         )
         .await
         .expect("user turn is accepted");
-    let SendUserTurnOutcomeDto::Started { run_id, .. } = outcome else {
+    let SendUserTurnOutcomeDto::Started { .. } = outcome else {
         panic!("first turn starts a run, got: {outcome:?}")
     };
 
-    let stream_client = RunStreamClient::new(host.endpoint.clone());
+    let stream_client = SessionStreamClient::new(host.endpoint.clone());
     let deadline = Instant::now() + Duration::from_secs(30);
-    let observation =
-        observe_run_until_terminal(&stream_client, session_id, run_id, deadline).await;
+    let observation = observe_run_until_terminal(&stream_client, session_id, deadline).await;
     assert_eq!(
         observation.subscription.state().status(),
-        Some(RunStatusDto::Failed),
-        "the real daemon terminalizes the missing-file tool round as Failed"
+        Some(RunStatusDto::Completed),
+        "the real daemon answers the failed tool call and continues the loop"
     );
     if !observation.snapshot_is_terminal() {
         assert!(
             observation.received_status_frame(),
-            "a live status frame carries the committed failure to the subscriber"
+            "a live status frame carries the committed completion to the subscriber"
         );
     }
     assert_eq!(
         host.provider.request_count(),
-        1,
-        "the typed tool failure never retries the provider"
+        2,
+        "the failed call is answered with a tool message and the loop continues once"
     );
     assert_eq!(host.provider.excess_count(), 0);
 
-    // The failed run's transcript carries the model's call row and the typed
-    // failure result row committed for that exact invocation.
+    // The completed run's transcript carries the model's call row, the
+    // guidance-bearing failure result committed for that exact invocation, and
+    // the answer the loop produced after reading both.
     let session_snapshot = client
         .session_snapshot(session_id)
         .await
@@ -746,24 +561,368 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
             MessageKindDto::User,
             MessageKindDto::ToolCall,
             MessageKindDto::ToolResult,
+            MessageKindDto::Assistant,
         ],
-        "the failed run records the turn, the denied call, and its typed failure result"
+        "the failed call is answered and the loop continues to a completed answer"
     );
     assert_eq!(messages[0].text(), "Read missing.txt");
-    assert_eq!(messages[1].tool_id(), Some("read"));
+    assert_eq!(
+        messages[1].tool_id().map(ToolIdentityDto::wire_name),
+        Some("read")
+    );
     assert_eq!(
         messages[1].text(),
         r#"{"path":"missing.txt"}"#,
-        "the denied tool call keeps the relative workspace path"
+        "the tool call keeps the relative workspace path"
     );
     let call_id = messages[1]
         .tool_call_id()
         .expect("the tool call row carries its identity");
-    assert_eq!(messages[2].tool_id(), Some("read"));
-    assert_eq!(messages[2].tool_call_id(), Some(call_id));
     assert_eq!(
-        messages[2].text(),
-        "tool_read_failed",
-        "the missing-file tool result is durable typed-failure evidence"
+        messages[2].tool_id().map(ToolIdentityDto::wire_name),
+        Some("read")
+    );
+    assert_eq!(messages[2].tool_call_id(), Some(call_id));
+    assert!(
+        messages[2].text().starts_with("the tool call failed\n")
+            && messages[2].text().contains("tool_read_failed"),
+        "the durable failed result carries the model-visible guidance: {}",
+        messages[2].text()
+    );
+    assert_eq!(messages[3].text(), "done");
+}
+
+#[tokio::test]
+async fn real_daemon_reports_a_declared_execute_timeout_as_a_named_partial() {
+    // The call's own deadline ends the command, and the durable result the
+    // model reads names the timeout instead of reading as lost evidence.
+    let arguments = if cfg!(windows) {
+        r#"{"command":"ping -n 5 127.0.0.1","timeout_seconds":1}"#
+    } else {
+        r#"{"command":"sleep 5","timeout_seconds":1}"#
+    };
+    let host = E2eHost::with_tool_round("execute", None, arguments, &[]);
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
+
+    let session_id = SessionId::new();
+    client
+        .create_session(CreateSessionCommandDto::new(
+            ProjectId::new(),
+            session_id,
+            WorkspaceId::new(),
+            WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
+                .expect("workspace root is absolute"),
+            Some(RunModeDto::Build),
+            None,
+        ))
+        .await
+        .expect("the daemon accepts session creation");
+
+    let outcome = client
+        .send_user_turn(
+            session_id,
+            IdempotencyKey::new(),
+            "Run a long command".to_owned(),
+        )
+        .await
+        .expect("user turn is accepted");
+    let SendUserTurnOutcomeDto::Started { .. } = outcome else {
+        panic!("first turn starts a run, got: {outcome:?}")
+    };
+
+    let stream_client = SessionStreamClient::new(host.endpoint.clone());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let observation = observe_run_until_terminal(&stream_client, session_id, deadline).await;
+    assert_eq!(
+        observation.subscription.state().status(),
+        Some(RunStatusDto::Completed),
+        "the declared deadline ends the call, not the run"
+    );
+    assert_eq!(
+        host.provider.request_count(),
+        2,
+        "the partial call is answered with its notice and the loop continues once"
+    );
+    assert_eq!(host.provider.excess_count(), 0);
+
+    let session_snapshot = client
+        .session_snapshot(session_id)
+        .await
+        .expect("session snapshot reads");
+    let messages = session_snapshot.messages();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.kind())
+            .collect::<Vec<_>>(),
+        vec![
+            MessageKindDto::User,
+            MessageKindDto::ToolCall,
+            MessageKindDto::ToolResult,
+            MessageKindDto::Assistant,
+        ],
+        "the timed-out call is answered and the loop continues to a completed answer"
+    );
+    assert_eq!(
+        messages[1].tool_id().map(ToolIdentityDto::wire_name),
+        Some("execute")
+    );
+    let result = messages[2].text();
+    assert!(
+        result.contains("hit its declared timeout of 1s and was terminated before a final result"),
+        "the durable result names the deadline the model set: {result}"
+    );
+    assert!(
+        !result.contains("did not receive a final result"),
+        "a declared deadline never reaches the model as lost evidence: {result}"
+    );
+    assert_eq!(messages[3].text(), "done");
+}
+
+#[tokio::test]
+async fn real_daemon_stops_a_running_tool_and_ends_the_run_interrupted() {
+    // The stop is terminal where an interruption is not: a command that is
+    // still running is killed, its partial result answers the call, the run
+    // records its stop notice, and the loop never asks the provider again.
+    let arguments = if cfg!(windows) {
+        r#"{"command":"ping -n 11 127.0.0.1"}"#
+    } else {
+        r#"{"command":"sleep 10"}"#
+    };
+    let host = E2eHost::with_tool_round("execute", None, arguments, &[]);
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
+
+    let session_id = SessionId::new();
+    client
+        .create_session(CreateSessionCommandDto::new(
+            ProjectId::new(),
+            session_id,
+            WorkspaceId::new(),
+            WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
+                .expect("workspace root is absolute"),
+            Some(RunModeDto::Build),
+            None,
+        ))
+        .await
+        .expect("the daemon accepts session creation");
+
+    let outcome = client
+        .send_user_turn(
+            session_id,
+            IdempotencyKey::new(),
+            "Run a long command".to_owned(),
+        )
+        .await
+        .expect("user turn is accepted");
+    let SendUserTurnOutcomeDto::Started { run_id, .. } = outcome else {
+        panic!("first turn starts a run, got: {outcome:?}")
+    };
+
+    // The tool call commits before the command is dispatched, so waiting for
+    // its row proves the stop lands while the command runs.
+    let call_deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let snapshot = client
+            .session_snapshot(session_id)
+            .await
+            .expect("session snapshot reads");
+        if snapshot
+            .messages()
+            .iter()
+            .any(|message| message.kind() == MessageKindDto::ToolCall)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < call_deadline,
+            "the tool call row never committed"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let stopped = client
+        .cancel_run(session_id, run_id)
+        .await
+        .expect("the daemon accepts the stop");
+    assert_eq!(stopped.session_id(), session_id);
+    assert_eq!(stopped.run_id(), run_id);
+
+    let stream_client = SessionStreamClient::new(host.endpoint.clone());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let observation = observe_run_until_terminal(&stream_client, session_id, deadline).await;
+    assert_eq!(
+        observation.subscription.state().status(),
+        Some(RunStatusDto::Interrupted),
+        "the stop ends the run instead of continuing it"
+    );
+    assert_eq!(
+        host.provider.request_count(),
+        1,
+        "a stopped run asks the provider no further round"
+    );
+    assert_eq!(host.provider.excess_count(), 0);
+
+    let session_snapshot = client
+        .session_snapshot(session_id)
+        .await
+        .expect("session snapshot reads");
+    let messages = session_snapshot.messages();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.kind())
+            .collect::<Vec<_>>(),
+        vec![
+            MessageKindDto::User,
+            MessageKindDto::ToolCall,
+            MessageKindDto::ToolResult,
+            MessageKindDto::Notice,
+        ],
+        "the stopped call is answered and the run records its own stop"
+    );
+    let result = messages[2].text();
+    assert!(
+        result.contains("was stopped before a final result"),
+        "the durable result carries the stopped-call notice: {result}"
+    );
+    assert_eq!(
+        messages[3].text(),
+        "[The run was stopped before a final answer.]"
+    );
+}
+
+#[tokio::test]
+async fn real_daemon_commits_step_reasoning_above_its_tool_exchange() {
+    let host = E2eHost::with_tool_round_reasoning(
+        Some(("hello.txt", "hello world")),
+        r#"{"path":"hello.txt"}"#,
+        &["weigh ", "the call"],
+    );
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
+
+    let session_id = SessionId::new();
+    client
+        .create_session(CreateSessionCommandDto::new(
+            ProjectId::new(),
+            session_id,
+            WorkspaceId::new(),
+            WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
+                .expect("workspace root is absolute"),
+            Some(RunModeDto::Build),
+            None,
+        ))
+        .await
+        .expect("the daemon accepts session creation");
+
+    let outcome = client
+        .send_user_turn(
+            session_id,
+            IdempotencyKey::new(),
+            "Read hello.txt".to_owned(),
+        )
+        .await
+        .expect("user turn is accepted");
+    let SendUserTurnOutcomeDto::Started { .. } = outcome else {
+        panic!("first turn starts a run, got: {outcome:?}")
+    };
+
+    let stream_client = SessionStreamClient::new(host.endpoint.clone());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let observation = observe_run_until_terminal(&stream_client, session_id, deadline).await;
+    assert_eq!(
+        observation.subscription.state().status(),
+        Some(RunStatusDto::Completed),
+        "the reasoned round completes after its tool exchange"
+    );
+
+    // The step's reasoning commits as its own assistant row before the tool
+    // rows of that same step; the live subscription observes the same order.
+    let expected = [
+        (MessageKindDto::User, "Read hello.txt".to_owned(), None),
+        (
+            MessageKindDto::Assistant,
+            String::new(),
+            Some("weigh the call".to_owned()),
+        ),
+        (
+            MessageKindDto::ToolCall,
+            r#"{"path":"hello.txt"}"#.to_owned(),
+            None,
+        ),
+        (MessageKindDto::ToolResult, "hello world".to_owned(), None),
+        (MessageKindDto::Assistant, "done".to_owned(), None),
+    ];
+    let observed = observation
+        .subscription
+        .state()
+        .messages()
+        .iter()
+        .map(|message| {
+            (
+                message.kind(),
+                message.text().to_owned(),
+                message.reasoning().map(str::to_owned),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        observed, expected,
+        "the live frames carry the committed order"
+    );
+    let snapshot = client
+        .session_snapshot(session_id)
+        .await
+        .expect("session snapshot reads");
+    let durable = snapshot
+        .messages()
+        .iter()
+        .map(|message| {
+            (
+                message.kind(),
+                message.text().to_owned(),
+                message.reasoning().map(str::to_owned),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        durable, expected,
+        "the durable transcript carries the same order the live frames did"
+    );
+    assert_eq!(host.provider.request_count(), 2);
+    assert_eq!(host.provider.excess_count(), 0);
+}
+
+#[tokio::test]
+async fn tui_theme_survives_a_daemon_restart() {
+    let mut host = E2eHost::new(None, "{}");
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
+
+    // The fixture configuration document declares no [tui] section, so the
+    // first answer is the resolved light default.
+    assert_eq!(
+        client.tui_settings().await.expect("settings read").theme(),
+        ThemeDto::Light
+    );
+    let accepted = client
+        .set_tui_theme(ThemeDto::Dark)
+        .await
+        .expect("the daemon accepts the theme");
+    assert_eq!(accepted.theme(), ThemeDto::Dark);
+    assert_eq!(
+        client.tui_settings().await.expect("settings read").theme(),
+        ThemeDto::Dark
+    );
+
+    // The restarted process answers the durable override, not the document.
+    host.restart_daemon();
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
+    assert_eq!(
+        client
+            .tui_settings()
+            .await
+            .expect("settings read after the restart")
+            .theme(),
+        ThemeDto::Dark,
+        "the stored theme survives a daemon restart"
     );
 }

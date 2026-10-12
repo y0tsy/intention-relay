@@ -10,7 +10,7 @@ architecture checks, and supply-chain gates live in [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md); test-first and outcome-verification rules live in [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md).
 
-The systems of documents 15 and 18-30 and of Slices 2-6 are not activated, and each activation requires an accepted
+The systems of documents 15 and 18-30 and of Slices 3-6 are not activated, and each activation requires an accepted
 activating specification ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ## Closed milestones (M0-M5)
@@ -110,28 +110,98 @@ feature crates are created at their milestones. The target
 keeps DTOs only at the three physical boundaries — the IPC wire, SQLite persistence, and provider SDKs — with internal
 crates passing domain types, and makes schema-validated JSON tool inputs and outputs the only JSON payloads in the
 system. The current-state core has already landed on this branch: the event log, snapshots, cursors, and resync are
-replaced by the eight current-state tables (`projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`,
-`tool_results`, `configuration_revisions`); `messages` and `tool_results` are the transcript; identity is the eight
-newtypes (`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`,
-`IdempotencyKey`), with model steps and tool groups addressed by plain indices and mutating operations by
-`IdempotencyKey`; every state change commits in one SQLite transaction and the daemon publishes `run.frame`
-notifications built from the committed values; the single live wire version is a byte in the endpoint name with no
-cursors, and a re-subscribing client receives current run state and bounded recent messages, then continues live;
-`intention-client` is an asynchronous client with its blocking API removed that covers connect/health, session
-snapshots, run subscriptions, and the command surface, and whose `intention-tui` proof adapter is migrated
+replaced by the nine current-state tables (`projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`,
+`tool_results`, `configuration_revisions`, `tui_settings`); `messages` and `tool_results` are the transcript; identity
+is the nine newtypes (`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`,
+`IdempotencyKey`, and the durable transcript row `MessageId`), with model steps and tool groups addressed by plain
+indices and mutating operations by `IdempotencyKey`; every state change commits in one SQLite transaction and the
+daemon publishes session frames
+built from the committed values; the single live wire version is a byte in the endpoint name with no
+cursors, and a re-subscribing client receives the current session state and its bounded recent messages, then continues
+live; `intention-client` is an asynchronous client with its blocking API removed that covers connect/health, session
+snapshots, session subscriptions, and the command surface, and whose `intention-tui` proof adapter is migrated
 mechanically; the daemon
 end-to-end suite drives that client (`client_e2e`) instead of the low-level transport; the tool cycle is one direct
 sequence of identity check, durable call row, workspace binding, dispatch, and durable terminal row; the nine-production-crate consolidation and the removal of the composition facade landed, so
 the daemon host calls the engine directly; and the single storage schema is created on open under one integer stamp,
 where a stamp bump discards and recreates the database with no migration or compatibility path.
--  **Slice 2 — Terminal UX — not activated.** The terminal application over the existing typed client and daemon
-([architecture 03](03-daemon-transport-and-adapters.md)): one `intention-tui` binary with three modes — a full-screen
-TUI (session list, create/open session, send a turn, stream the response, status, reconnect), a mandatory interactive
-REPL, and a headless command that invokes one prompt with model, prompt text, system prompt, workspace, provider
-profile, session continuation, streaming output, timeout, and a script-friendly output format. The slice also freezes
-the terminal client contract: TUI and headless modes are contract-equivalent over one `intention-client` surface,
-headless exit codes and safe errors are typed, and no presentation logic enters the daemon. Session branching and
-forks remain Slice 6 work; desktop presentation remains Milestone 6 work.
+-  **Slice 2 — Terminal UX — activated.** The terminal application over the existing typed client and daemon
+([architecture 03](03-daemon-transport-and-adapters.md)) landed as one `intention-tui` binary with three modes — a
+full-screen revue-based TUI, a mandatory interactive REPL, and a headless command that invokes one prompt with prompt
+text, workspace, session continuation, run mode, streaming output, timeout, and a script-friendly output format; the
+model, system-prompt, and provider-profile parameters are deliberately absent and arrive with Slices 3 and 4. The TUI
+delivers one window — the chat panel and the sessions panel docked to the window's bottom rows, never an overlay — over
+one light/dark palette system that is the sole colour system, with a welcome surface (the product lockup and the
+version/`AGENTS.md`/`MCPs`/`Skills` overview) while no session is open — a launch opens no session, not even the most
+recent one — a multi-line input block that grows with its buffer up to its share of the panel, user cards and assistant answers rendered as
+markdown, committed reasoning as its own block, the leading-slash command registry with the hint band it feeds above
+the input block (a ranked, filtered `/new`, `/sessions`, and `/theme` list whose registry declares each command's
+arguments, so the argument word lists the declared `light`/`dark` values in the same three columns; the input history
+and `Tab` returning to the line only once the band is closed, while `Enter` on a word that already spells its command
+or value runs the line instead of appending the row's trailing space; and the band as `Esc`'s innermost layer), the theme
+picker (which `/theme` opens with no argument: a panel in the chat panel's band region whose rows carry each theme's
+name and description, the committed row marked with the browser's `> ` cursor, live `Up`/`Down` previews of the whole
+window, `Enter` committing through the daemon, and `Esc` reverting), the daemon-owned effective theme (the optional
+`[tui] theme` configuration default and the single-row `tui_settings` override, neither of which records a
+configuration revision), a committed transcript laid out once and cached per pane width, theme, and transcript
+version, a
+wheel-driven transcript, and layered `Ctrl+C` and `Esc` (an arming press, then
+a consecutive stopping, history-pushing, or quitting press; a single `Esc` stops a live run). Session creation
+resolves the
+durable workspace binding of its root, so one root carries an unbounded number of sessions. The slice also froze the
+terminal client contract: TUI, REPL, and headless modes are contract-equivalent over one `intention-client` surface,
+the headless exit-status set is closed and typed (0 completed, 1 usage, 2 daemon or transport, 3 typed rejection or
+failed run, 4 timeout with no observed terminal status, 5 interrupted run), and no presentation logic enters the daemon.
+The step's answer and reasoning stream as channel-tagged transient `TextDelta` frames that are never persisted and
+never replayed;
+the committed assistant row replaces both channels, and the live tail lays out through the same block functions the
+committed rows use. Session branching and forks remain Slice 6 work; desktop presentation remains Milestone 6 work.
+The slice also carries the retrospective tool-execution corrections: `execute` runs one shell command through the
+private platform shell adapter (`bash -c` on Unix, `cmd /C` on Windows) with optional typed `cwd`, `env`, and
+`timeout_seconds` parameters, the fixed thirty-second ceiling is removed so a call without a declared timeout is
+bounded by cancellation alone and by one pipe-collection window after the direct child is reaped, a pathless `grep`
+searches from the workspace root, and a failed or undecodable call commits one durable `Failed` result whose bounded
+model-visible guidance answers the call before the loop continues. The slice also makes the declared deadline its own
+observable interruption: a fired `timeout_seconds` commits a `Partial` result whose notice names the timeout and whose
+durable evidence records `tool_timed_out` with the declared value, so a deadline never reads as lost evidence. One more
+correction closes the slice's reasoning
+gap: every completed step commits one assistant row whenever it produced text or reasoning, a reasoning-only row
+commits before its own step's tool rows carrying an empty `text` and the step's whole reasoning, and the context
+rebuild skips it, so a live transcript keeps a tool round's reasoning above its exchange and a reload shows that same
+order. The last correction gives the slice a terminal stop and a liveness rule: `run.cancel` ends an exact active run
+`Interrupted` at its execution's next boundary with `[The run was stopped before a final answer.]` committed first, so a
+stop is durable and never silently does nothing while committed work stays committed; every terminal front end reaches
+it — `Esc` in one press, `Ctrl+C` on the arm's second press, and SIGINT in the line front ends (the REPL stops the run
+and returns to its prompt, `run <PROMPT>` reports the interrupted outcome) — and a run counts as live only while a live
+subscription observes it, so a daemon that died cannot hold a front end's stop, clear, and exit arms. The slice's
+closing correction makes that one live channel follow the session instead of one run:
+`SubscribeSession` returns the session snapshot and then carries every committed row, the active run's projection, and
+the active run's transient text, so two windows on one session both show a turn sent in either one, a window opened while
+the session was idle stays live into the next run, and either window can stop the run they both observe; a lost stream
+asks for exactly one reconnect through the session it has open and reports a failed reconnect's typed error instead of
+retrying in a loop. The slice's tool-projection correction completes the retrospective tool work: the typed tool
+contract — the closed `ToolId`, the typed input and result families, and each committed tool row's typed projection —
+lives in `intention-proto`, the engine decodes the model's arguments document once and commits the typed row, and the
+pane renders that projection with no JSON decode and no result re-parse. That correction is adapter-facing only: it
+activates no registry, admission, bridge, or MCP contract, so Slice 5's tool-layer contracts stay unactivated. The
+slice's projection-fields correction carries the committed run facts to the terminal: the run projection gains the
+durable `started_at`/`finished_at` times, the terminal outcome's usage, and the count of committed tool calls no
+committed result answers (storage's read-time pairing); the session projection gains the effective provider model the
+daemon fills from the run's resolved configuration in the one snapshot read behind both the one-shot request and the
+subscription reply; and the status row and the badge render those facts instead of the front-end stubs they replace —
+the committed duration reads `Answered in 13s` from the projection's own times, the committed usage reads
+`ctx in 1200 out 300` (or `ctx not reported`), the badge names the session's model, and the half-second working word
+follows the projection's open-call count, so no front end pairs rows or measures a committed fact itself. The slice's
+run-mode correction moves the vocabulary and its default into the core: `RunModeDto::ALL` declares the closed two-mode
+set, `RunModeDto::DEFAULT` is `Build`, the engine resolves an absent create-command mode to that constant, and the
+command grammar renders its usage and rejection text from the declared set, so an absent `--mode` leaves the durable
+policy to the core. The slice's create-and-first-turn correction makes a first prompt one command:
+`CreateSessionCommandDto` carries the optional `first_turn`, the durable session commits before that turn, a same-key
+replay returns the recorded outcome, a same-key retry with different content is a typed conflict, and a rejected first
+turn leaves the caller's durable session plus the typed rejection instead of a parked prompt. The slice's client-surface
+correction declares the endpoint instance and the daemon program in `intention-client`: discovery prefers a declared
+instance and falls back to the platform-default endpoint, and the launcher resolves the terminal binary's sibling
+`intention-daemon` program, so the binary carries no environment read and no installation-path inference of its own.
 -  **Slice 3 — Instruction sources and system context — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
 deployment instruction profile adapted from the legacy Antibusy static prompt set, user-authored fragments at user,
@@ -153,7 +223,15 @@ the `provider_profile_tombstoned` wire code.
 -  **Slice 5 — Goal domain — not activated.** The Goal domain (architecture 28). The slice also activates the
 tool-descriptor, tool-registry, and model-tool-loop contracts as amended under [architecture
 15](15-tool-registry-and-model-tool-loop.md), the bridge-invocation and
-MCP-method-catalog selections (architectures 19/18), and work/requeue after client disconnection.
+MCP-method-catalog selections (architectures 19/18), and work/requeue after client disconnection. The 2026 corrective
+pass's adapter-facing tool projection — the typed tool contract in `intention-proto` and the typed projection on each
+committed tool row — is recorded as a Slice 2 retrospective correction, not an activation of this slice's
+tool-descriptor, tool-registry, or model-tool-loop contracts: the six-tool closed set and its typed projection are
+already live, and M11 keeps the registry, admission, and bridge work. The pass records the adapter-local rules it
+deleted instead of deferring them: the composed `session_stream_closed`, `session_not_open`, and `no_sessions_to_continue`
+fallbacks went with the client's own closed-stream classification and its typed continue failure in
+`intention-client`, so no front end composes a session condition; the pre-deletion anchors were
+`crates/intention-tui/src/headless.rs:343-347`, `:163-169`, and `:618-626` at base `99973a8`.
 -  **Slice 6 — UI foundation — last slice; not activated.** Session branching, reasoning/catalog delivery, and adapter
 boundaries (architectures 23/22 plus architecture 03's flat activity journal and notification list): `session_fork_v1`;
 normalized reasoning delivery; and the exact typed client/protocol surface M6 consumes. It also carries cross-workspace
@@ -169,6 +247,8 @@ SQLite storage is the single live schema created directly on open.
 -  Slice 1.5 preserves durable meaning: the single storage schema is created on open under one integer stamp, where a
 stamp bump discards and recreates the database with no migration or compatibility layer, and tool and lifecycle
 semantics keep their recorded law.
+-  The Slice 2 terminal keeps one `intention-tui` binary whose three modes stay contract-equivalent over one
+`intention-client` surface, exit with the closed typed status set, and carry no presentation logic into the daemon.
 -  The Slice 4 health, discovery, and pricing surfaces are non-authorizing: they create no RunId, tool
 permission, MCP capability, bridge grant, kernel epoch, context projection, or branch, and the activating
 specification must prove that non-authority.
@@ -192,6 +272,36 @@ specifications, contracts, and evidence stay owned by those milestones. M7 and M
 - Recovery never resumes, retries, reattaches, or reruns work under any slice.
 - A slice that cannot be completed atomically (contracts, tests, policy, and evidence together) is not accepted; the
   milestone remains on the prior accepted slice.
+
+### Open decisions
+
+The 2026 corrective pass closes the second business-logic rot audit; every fact it does not deliver is recorded here as
+an explicit open decision ([architecture 10](10-test-driven-delivery-and-verification.md)), consolidated from the ledger
+rows each wave recorded with its own commits. Each row names the fact, its owner — a slice this milestone still holds,
+or none — the anchor the deferring wave recorded (a live `@todo(core)` marker and the boundary-table row that documents
+it, or the site a wave deleted, marked *removed*) with the base the anchor was read at, and the re-audit verdict the W7
+five-lane re-audit recorded: `re-audited: L<n> <sha>`, the lane and the tip that read it. Every row below carries one.
+
+| Open fact | Owner | Anchor (base) | Re-audit |
+| --- | --- | --- | --- |
+| the execute-call fact on the session summary (the browser's `Exec` tab) | no owner — deferred by owner on 2026-10-11 | `03-daemon-transport-and-adapters.md:563`; live `crates/intention-tui/src/app/browser.rs:15-16` (base `5b33729`) | re-audited: L5 79082b4 |
+| a durable session title and its rename command (the title column, its filter, and the `Ctrl+R` notice) | M5+ Slice 6, via [architecture 23](23-non-destructive-session-branching-and-regeneration.md) (not activated) | `03-daemon-transport-and-adapters.md:564`; live `crates/intention-tui/src/app/browser.rs:35-37,276,402` (base `5b33729`) | re-audited: L5 79082b4 |
+| a durable favorite flag (the `Favorites` tab) | no owner — deferred by owner on 2026-10-11 | `03-daemon-transport-and-adapters.md:565`; live `crates/intention-tui/src/app/browser.rs:19-21` (base `5b33729`) | re-audited: L5 79082b4 |
+| a durable archive flag and its command (the `Archived` tab and its `Ctrl+X` notice) | M5+ Slice 6, via [architecture 23](23-non-destructive-session-branching-and-regeneration.md) (not activated) | `03-daemon-transport-and-adapters.md:566`; live `crates/intention-tui/src/app/browser.rs:24-26,40-43` (base `5b33729`) | re-audited: L5 79082b4 |
+| a session list paged past its bounded window (the row counter's `+N omitted`) | no owner — deferred by owner on 2026-10-11 | `03-daemon-transport-and-adapters.md:567`; live `crates/intention-tui/src/tui/screens/sessions.rs:566-570` (base `5b33729`) | re-audited: L5 79082b4 |
+| a notice code or severity (a notice block's text-only body) | no owner — deferred by owner on 2026-10-11 | `03-daemon-transport-and-adapters.md:572`; live `crates/intention-tui/src/tui/panes/transcript.rs:440` (re-read at `0227953`) | re-audited: L5 79082b4 |
+| durable committed-row identity for streamed text (the durable `messages.step`/`MessageProjectionDto.step` alternative to the client-derived supersession; OD-10) | no owner — deferred by owner on 2026-10-11 | *removed* `crates/intention-tui/src/headless.rs:785` and `03-daemon-transport-and-adapters.md:573` (base `99973a8`) | re-audited: L5 79082b4 |
+| the run-captured provider model, the model that served each run (the alternative to the session projection's effective model; OD-13) | no owner — deferred by owner on 2026-10-11 | *removed* `crates/intention-tui/src/tui/panes/input.rs:63,127` and `03-daemon-transport-and-adapters.md:549` (base `62ce771`) | re-audited: L5 79082b4 |
+| live per-round usage (the alternative to publishing usage with the committed terminal outcome; OD-15) | no owner — deferred by owner on 2026-10-11 | *removed* `crates/intention-tui/src/tui/panes/status.rs:77` and `03-daemon-transport-and-adapters.md:548` (base `62ce771`) | re-audited: L5 79082b4 |
+| the in-UI rendering of a launch failure, a launch-failure `--continue` shown in the running front end instead of exiting 3 (OD-23) | no owner — deferred by owner on 2026-10-11 | *removed* `crates/intention-tui/src/repl.rs:60-65` and `crates/intention-tui/src/headless.rs:372` (base `99973a8`) | re-audited: L5 79082b4 |
+| the sessionless `--continue` launch, the alternative to the typed `no_sessions_to_continue` failure and exit 3 (OD-7) | no owner — deferred by owner on 2026-10-11 | *removed* `crates/intention-tui/src/app/state.rs:222` and `crates/intention-tui/src/headless.rs:161-167` (base `99973a8`); live spelling `crates/intention-client/src/lib.rs:391-399,1178-1184` (re-read at `0227953`) | re-audited: L5 79082b4 |
+
+Not entries, because the pass decided or delivered them: the endpoint instance and the daemon program (OD-16 declares
+them), the long-run `terminal_e2e` fixture (OD-20 measured it feasible and assigned it), the execute process exit status
+(delivered as the typed `ToolProcessStatus`), the configurable run-mode default (OD-5 chose the core constant; the
+config key is a rejected design, not a deferral), the non-terminal interrupt stop (OD-9 chose the terminal stop), and
+the acknowledged interrupt (OD-24 closed it: the committed terminal status frame acknowledges the stop). The composed
+adapter session fallbacks the pass deleted are not entries either: they are recorded above in the Slice 5 bullet.
 
 ## Milestone 6: Tauri bridge and primary desktop UI
 

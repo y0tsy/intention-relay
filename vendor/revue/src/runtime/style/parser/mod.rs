@@ -1,0 +1,605 @@
+//! CSS parser for TUI styling
+
+mod animation;
+mod apply;
+mod parse;
+mod types;
+mod value_parsers;
+mod vars;
+
+pub use apply::apply_declaration;
+pub use parse::parse;
+pub use types::{Declaration, KeyframeBlock, KeyframesDefinition, Rule, StyleSheet};
+#[allow(unused_imports)]
+pub use value_parsers::{
+    parse_calc, parse_color, parse_grid_placement, parse_grid_template, parse_signed_length,
+    parse_size, parse_spacing,
+};
+
+#[cfg(test)]
+mod value_parser_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::style::{
+        AlignSelf, BorderStyle, Color, Display, FlexDirection, FlexWrap, FontWeight, Overflow,
+        Position, Size, Spacing, Style, TextAlign, VisualStyle,
+    };
+
+    #[test]
+    fn test_parse_empty() {
+        let sheet = parse("").unwrap();
+        assert!(sheet.rules.is_empty());
+        assert!(sheet.variables.is_empty());
+    }
+
+    #[test]
+    fn test_parse_simple_rule() {
+        let css = ".button { color: red; }";
+        let sheet = parse(css).unwrap();
+
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sheet.rules[0].selector, ".button");
+        assert_eq!(sheet.rules[0].declarations.len(), 1);
+        assert_eq!(sheet.rules[0].declarations[0].property, "color");
+        assert_eq!(sheet.rules[0].declarations[0].value, "red");
+    }
+
+    #[test]
+    fn test_parse_multiple_declarations() {
+        let css = ".box { width: 100; height: 50; padding: 4; }";
+        let sheet = parse(css).unwrap();
+
+        assert_eq!(sheet.rules[0].declarations.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_css_variables() {
+        let css = r#"
+        :root {
+            --primary: #ff0000;
+            --spacing: 8;
+        }
+        .button { color: var(--primary); }
+    "#;
+        let sheet = parse(css).unwrap();
+
+        assert_eq!(
+            sheet.variables.get("--primary"),
+            Some(&"#ff0000".to_string())
+        );
+        assert_eq!(sheet.variables.get("--spacing"), Some(&"8".to_string()));
+        assert_eq!(sheet.rules.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_comments() {
+        let css = r#"
+        /* This is a comment */
+        .box {
+            /* Another comment */
+            width: 100;
+        }
+    "#;
+        let sheet = parse(css).unwrap();
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sheet.rules[0].declarations.len(), 1);
+    }
+
+    #[test]
+    fn test_apply_stylesheet() {
+        let css = r#"
+        .container {
+            display: flex;
+            flex-direction: column;
+            width: 200;
+            padding: 10;
+        }
+    "#;
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".container", &Style::default());
+
+        assert_eq!(style.layout.display, Display::Flex);
+        assert_eq!(style.layout.flex_direction, FlexDirection::Column);
+        assert_eq!(style.sizing.width, Size::Fixed(200));
+        assert_eq!(style.spacing.padding, Spacing::all(10));
+    }
+
+    #[test]
+    fn test_apply_color_hex() {
+        let css = ".text { color: #ff0000; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::RED);
+    }
+
+    #[test]
+    fn test_apply_color_rgb() {
+        let css = ".text { color: rgb(255, 0, 0); }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::RED);
+    }
+
+    #[test]
+    fn test_apply_color_named() {
+        let css = ".text { color: red; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::RED);
+    }
+
+    #[test]
+    fn test_apply_size() {
+        let css = ".box { width: 100; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".box", &Style::default());
+        assert_eq!(style.sizing.width, Size::Fixed(100));
+    }
+
+    #[test]
+    fn test_apply_with_variables() {
+        let css = r#"
+        :root {
+            --primary: #ff0000;
+        }
+        .text { color: var(--primary); }
+    "#;
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+
+        assert_eq!(style.visual.color, Color::RED);
+    }
+
+    #[test]
+    fn test_apply_grid_properties() {
+        let css = r#"
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            grid-template-rows: auto 100px;
+        }
+    "#;
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".grid", &Style::default());
+
+        assert_eq!(style.layout.display, Display::Grid);
+        // Note: Current simplified implementation returns empty templates
+        // assert_eq!(style.layout.grid_template_columns.tracks.len(), 2);
+        // assert_eq!(style.layout.grid_template_rows.tracks.len(), 2);
+    }
+
+    #[test]
+    fn test_apply_position_properties() {
+        let css = r#"
+        .modal {
+            position: absolute;
+            top: 10;
+            left: 20;
+            z-index: 100;
+        }
+    "#;
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".modal", &Style::default());
+
+        assert_eq!(style.layout.position, Position::Absolute);
+        assert_eq!(style.spacing.top, Some(10));
+        assert_eq!(style.spacing.left, Some(20));
+        assert_eq!(style.visual.z_index, 100);
+    }
+
+    // Border shorthand tests
+    #[test]
+    fn test_border_shorthand_style_only() {
+        let css = ".box { border: solid; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".box", &Style::default());
+        assert_eq!(
+            style.visual.border_style,
+            Some(crate::style::BorderStyle::Solid)
+        );
+    }
+
+    #[test]
+    fn test_border_shorthand_style_and_color() {
+        let css = ".box { border: dashed red; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".box", &Style::default());
+        assert_eq!(
+            style.visual.border_style,
+            Some(crate::style::BorderStyle::Dashed)
+        );
+        assert_eq!(style.visual.border_color, Color::RED);
+    }
+
+    #[test]
+    fn test_border_shorthand_color_and_style() {
+        let css = ".box { border: #00ff00 solid; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".box", &Style::default());
+        assert_eq!(
+            style.visual.border_style,
+            Some(crate::style::BorderStyle::Solid)
+        );
+        assert_eq!(style.visual.border_color, Color::GREEN);
+    }
+
+    // Flex shorthand tests
+    #[test]
+    fn test_flex_shorthand() {
+        let css = ".item { flex: 2; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".item", &Style::default());
+        assert_eq!(style.layout.flex_grow, 2.0);
+    }
+
+    #[test]
+    fn test_flex_wrap() {
+        let css = ".container { flex-wrap: wrap; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".container", &Style::default());
+        assert_eq!(style.layout.flex_wrap, FlexWrap::Wrap);
+    }
+
+    #[test]
+    fn test_flex_wrap_reverse() {
+        let css = ".container { flex-wrap: wrap-reverse; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".container", &Style::default());
+        assert_eq!(style.layout.flex_wrap, FlexWrap::WrapReverse);
+    }
+
+    #[test]
+    fn test_align_self() {
+        let css = ".item { align-self: center; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".item", &Style::default());
+        assert_eq!(style.layout.align_self, AlignSelf::Center);
+    }
+
+    #[test]
+    fn test_align_self_stretch() {
+        let css = ".item { align-self: stretch; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".item", &Style::default());
+        assert_eq!(style.layout.align_self, AlignSelf::Stretch);
+    }
+
+    #[test]
+    fn test_order() {
+        let css = ".item { order: -1; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".item", &Style::default());
+        assert_eq!(style.layout.order, -1);
+    }
+
+    #[test]
+    fn test_gap_property() {
+        let css = ".container { gap: 8; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".container", &Style::default());
+        assert_eq!(style.layout.gap, Some(8));
+    }
+
+    #[test]
+    fn test_apply_text_align() {
+        let css = ".centered { text-align: center; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".centered", &Style::default());
+        assert_eq!(style.visual.text_align, TextAlign::Center);
+    }
+
+    #[test]
+    fn test_apply_text_align_right() {
+        let css = ".right { text-align: right; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".right", &Style::default());
+        assert_eq!(style.visual.text_align, TextAlign::Right);
+    }
+
+    #[test]
+    fn test_apply_font_weight_bold() {
+        let css = ".bold { font-weight: bold; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".bold", &Style::default());
+        assert_eq!(style.visual.font_weight, FontWeight::Bold);
+    }
+
+    #[test]
+    fn test_apply_font_weight_700() {
+        let css = ".bold { font-weight: 700; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".bold", &Style::default());
+        assert_eq!(style.visual.font_weight, FontWeight::Bold);
+    }
+
+    #[test]
+    fn test_apply_text_decoration_underline() {
+        let css = ".underlined { text-decoration: underline; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".underlined", &Style::default());
+        assert!(style.visual.text_decoration.underline);
+        assert!(!style.visual.text_decoration.line_through);
+    }
+
+    #[test]
+    fn test_apply_text_decoration_line_through() {
+        let css = ".struck { text-decoration: line-through; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".struck", &Style::default());
+        assert!(!style.visual.text_decoration.underline);
+        assert!(style.visual.text_decoration.line_through);
+    }
+
+    #[test]
+    fn test_apply_text_decoration_combined() {
+        let css = ".both { text-decoration: underline line-through; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".both", &Style::default());
+        assert!(style.visual.text_decoration.underline);
+        assert!(style.visual.text_decoration.line_through);
+    }
+
+    #[test]
+    fn test_apply_text_decoration_none() {
+        let css = ".plain { text-decoration: none; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".plain", &Style::default());
+        assert!(!style.visual.text_decoration.underline);
+        assert!(!style.visual.text_decoration.line_through);
+    }
+
+    #[test]
+    fn test_text_align_inherited() {
+        let parent = Style {
+            visual: VisualStyle {
+                text_align: TextAlign::Center,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let child = Style::inherit(&parent);
+        assert_eq!(child.visual.text_align, TextAlign::Center);
+    }
+
+    #[test]
+    fn test_font_weight_inherited() {
+        let parent = Style {
+            visual: VisualStyle {
+                font_weight: FontWeight::Bold,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let child = Style::inherit(&parent);
+        assert_eq!(child.visual.font_weight, FontWeight::Bold);
+    }
+
+    // var() fallback tests
+    #[test]
+    fn test_var_with_fallback() {
+        let css = ".text { color: var(--missing, #00ff00); }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::GREEN);
+    }
+
+    #[test]
+    fn test_var_with_fallback_uses_defined() {
+        let css = r#"
+        :root { --primary: #ff0000; }
+        .text { color: var(--primary, blue); }
+        "#;
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::RED);
+    }
+
+    // var() inside multi-token values
+
+    #[test]
+    fn test_var_inside_border_shorthand() {
+        let css = r#"
+        :root { --accent: #ff0000; }
+        .box { border: rounded var(--accent); }
+        "#;
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".box", &Style::default());
+        assert_eq!(style.visual.border_style, Some(BorderStyle::Rounded));
+        assert_eq!(style.visual.border_color, Color::RED);
+    }
+
+    #[test]
+    fn test_var_inside_margin_shorthand() {
+        let css = r#"
+        :root { --y: 1; --x: 3; }
+        .box { margin: var(--y) var(--x); }
+        "#;
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".box", &Style::default());
+        let m = style.spacing.margin;
+        assert_eq!((m.top, m.right, m.bottom, m.left), (1, 3, 1, 3));
+    }
+
+    #[test]
+    fn test_var_fallback_inside_shorthand() {
+        let css = ".box { border: solid var(--missing, #00ff00); }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".box", &Style::default());
+        assert_eq!(style.visual.border_style, Some(BorderStyle::Solid));
+        assert_eq!(style.visual.border_color, Color::GREEN);
+    }
+
+    #[test]
+    fn test_var_fallback_with_a_function_and_commas() {
+        let css = ".box { border: solid var(--missing, rgb(0,255,0)); }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".box", &Style::default());
+        assert_eq!(style.visual.border_color, Color::GREEN);
+    }
+
+    #[test]
+    fn test_var_whose_value_is_a_var() {
+        let css = r#"
+        :root { --base: #ff0000; --accent: var(--base); }
+        .text { color: var(--accent); }
+        "#;
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::RED);
+    }
+
+    #[test]
+    fn test_var_fallback_that_is_a_var() {
+        let css = r#"
+        :root { --base: #ff0000; }
+        .text { color: var(--missing, var(--base)); }
+        "#;
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::RED);
+    }
+
+    /// An undefined variable with no fallback leaves the value unparsable,
+    /// as before: the declaration does nothing.
+    #[test]
+    fn test_undefined_var_without_fallback_changes_nothing() {
+        let css = ".text { color: var(--missing); margin: 1 var(--missing); }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Style::default().visual.color);
+        assert_eq!(style.spacing.margin, Spacing::default());
+    }
+
+    #[test]
+    fn test_var_cycle_terminates() {
+        let css = r#"
+        :root { --a: var(--b); --b: var(--a); }
+        .text { color: var(--a); }
+        "#;
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Style::default().visual.color);
+    }
+
+    #[test]
+    fn test_var_fallback_named_color() {
+        let css = ".text { color: var(--undefined, orange); }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::rgb(255, 165, 0));
+    }
+
+    // HSL color tests
+    #[test]
+    fn test_parse_hsl_red() {
+        let css = ".text { color: hsl(0, 100%, 50%); }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn test_parse_hsl_green() {
+        let css = ".text { color: hsl(120, 100%, 50%); }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::rgb(0, 255, 0));
+    }
+
+    #[test]
+    fn test_parse_hsl_blue() {
+        let css = ".text { color: hsl(240, 100%, 50%); }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn test_parse_hsl_gray() {
+        let css = ".text { color: hsl(0, 0%, 50%); }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::rgb(128, 128, 128));
+    }
+
+    // Named color tests
+    #[test]
+    fn test_named_color_orange() {
+        let css = ".text { color: orange; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::rgb(255, 165, 0));
+    }
+
+    #[test]
+    fn test_named_color_rebeccapurple() {
+        let css = ".text { color: rebeccapurple; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::rgb(102, 51, 153));
+    }
+
+    #[test]
+    fn test_named_color_teal() {
+        let css = ".text { color: teal; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::rgb(0, 128, 128));
+    }
+
+    #[test]
+    fn test_named_color_transparent() {
+        let css = ".text { color: transparent; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::rgb(0, 0, 0));
+    }
+
+    #[test]
+    fn test_named_color_aqua_is_cyan() {
+        let css = ".text { color: aqua; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".text", &Style::default());
+        assert_eq!(style.visual.color, Color::CYAN);
+    }
+
+    #[test]
+    fn test_overflow_hidden() {
+        let css = ".box { overflow: hidden; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".box", &Style::default());
+        assert_eq!(style.visual.overflow, Overflow::Hidden);
+    }
+
+    #[test]
+    fn test_overflow_scroll() {
+        let css = ".box { overflow: scroll; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".box", &Style::default());
+        assert_eq!(style.visual.overflow, Overflow::Scroll);
+    }
+
+    #[test]
+    fn test_overflow_auto() {
+        let css = ".box { overflow: auto; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".box", &Style::default());
+        assert_eq!(style.visual.overflow, Overflow::Auto);
+    }
+
+    #[test]
+    fn test_overflow_visible() {
+        let css = ".box { overflow: visible; }";
+        let sheet = parse(css).unwrap();
+        let style = sheet.apply(".box", &Style::default());
+        assert_eq!(style.visual.overflow, Overflow::Visible);
+    }
+
+    #[test]
+    fn test_overflow_default() {
+        let style = Style::default();
+        assert_eq!(style.visual.overflow, Overflow::Visible);
+    }
+}

@@ -13,10 +13,11 @@ use common::{DispatchCompleted, fixture_service, relative, text};
 #[cfg(unix)]
 use common::{fixture_dir, service};
 #[cfg(unix)]
-use intention_tools::ToolDispatchOutcome;
-use intention_tools::{CancellationSignal, GrepInput, GrepScope, ToolInput, ToolResult};
+use intention_proto::{EditInput, ReadInput, WriteInput};
+use intention_proto::{GrepInput, GrepScope, ToolInput, ToolResult};
+use intention_tools::CancellationSignal;
 #[cfg(unix)]
-use intention_tools::{EditInput, ReadInput, WriteInput};
+use intention_tools::ToolDispatchOutcome;
 
 #[test]
 fn scoped_search_reports_file_directory_workspace_and_failures() {
@@ -67,19 +68,19 @@ fn scoped_search_reports_file_directory_workspace_and_failures() {
                 .is_err()
         );
     }
-    assert_eq!(
-        service
-            .dispatch_with_cancellation(
-                ToolInput::Grep(GrepInput {
-                    pattern: text("needle"),
-                    scope: None,
-                    path: None,
-                }),
-                CancellationSignal::new()
-            )
-            .unwrap_err()
-            .code(),
-        "invalid_tool_path"
+    // A pathless call addresses the whole workspace: it is the declared
+    // default scope, not a model error.
+    let pathless = service.dispatch_completed(
+        ToolInput::Grep(GrepInput {
+            pattern: text("needle"),
+            scope: None,
+            path: None,
+        }),
+        CancellationSignal::new(),
+    );
+    assert!(
+        matches!(pathless, ToolResult::Grep(value) if value.matches.len() == 2),
+        "a pathless grep searches from the workspace root"
     );
 }
 

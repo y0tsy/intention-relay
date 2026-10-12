@@ -1,6 +1,6 @@
 [policy]
-phase = "slice15"
-active_milestone = "slice15"
+phase = "slice2"
+active_milestone = "slice2"
 non_production_test_crates = ["intention-test-support"]
 active_production_crates = [
   "intention-proto",
@@ -42,7 +42,7 @@ test_targets = ["transport_integration"]
 [crate_declarations."intention-client"]
 role = "active"
 responsibility = "Shared bootstrap, dispatch, subscription, and reconnect client for adapters."
-test_targets = ["client_contract", "run_stream_contract"]
+test_targets = ["client_contract", "session_stream_contract"]
 
 [crate_declarations."intention-daemon"]
 role = "active"
@@ -61,13 +61,13 @@ test_targets = ["adapter_contracts", "m4_execution_contracts", "model_contracts"
 
 [crate_declarations."intention-tools"]
 role = "active"
-responsibility = "Tool contracts with JSON Schema descriptors, the static six-tool spec match, and the WorkspaceRoot addressing anchor."
+responsibility = "The workspace tool service: the declared tools' dispatch behind the proto's typed contract, their model-facing JSON Schema descriptors, and the WorkspaceRoot addressing anchor."
 test_targets = ["bounded_contracts", "tool_contracts", "tool_coverage", "workspace_contract"]
 
 [crate_declarations."intention-tui"]
 role = "adapter"
-responsibility = "Minimal terminal-facing proof adapter over the shared client."
-test_targets = ["tui_contract"]
+responsibility = "The revue-based terminal application over the shared client: the fullscreen UI, the interactive REPL, and the headless prompt command in one binary."
+test_targets = ["terminal_e2e", "tui_render"]
 
 [crate_declarations."intention-test-support"]
 role = "test-support"
@@ -79,6 +79,10 @@ source_patterns = [
   "std::env::current_dir",
   "std::process::exit",
   "serde_json::Value",
+  "serde_json::value::Value",
+  "serde_json::{",
+  "::<Value>",
+  "Value::as_",
   "rusqlite::",
   "tauri::",
 ]
@@ -117,21 +121,21 @@ test_only_source_patterns = [
 "intention-daemon" = ["futures-util", "serde_json", "tempfile", "tokio"]
 "intention-engine" = ["futures-util"]
 "intention-providers" = ["async-openai", "futures-core", "futures-executor", "futures-util", "http", "openrouter-rs", "serde", "serde_json"]
-"intention-tools" = ["glob", "rustix", "serde", "serde_json", "tempfile"]
+"intention-tools" = ["glob", "rustix", "serde_json", "tempfile"]
 
 # Dependency edges of the non-production test crates, compared for equality
 # like the active production edges above.
 [non_production_test_dependencies]
-"intention-test-support" = ["intention-config", "intention-daemon", "intention-proto", "intention-providers", "intention-transport"]
+"intention-test-support" = ["intention-client", "intention-config", "intention-daemon", "intention-proto", "intention-providers", "intention-transport"]
 
 [non_production_test_external_dependencies]
-"intention-test-support" = ["futures-executor", "futures-util", "tempfile", "tokio"]
+"intention-test-support" = ["futures-executor", "futures-util", "serde_json", "tempfile", "tokio"]
 
 [adapter_boundaries]
 packages = ["intention-tui"]
 allowed_workspace_dependencies = ["intention-client", "intention-transport", "intention-proto"]
 allowed_test_workspace_dependencies = ["intention-daemon", "intention-test-support"]
-allowed_external_dependencies = ["serde_json", "tokio"]
+allowed_external_dependencies = ["lexopt", "mimalloc", "revue", "serde_json", "tempfile", "tokio"]
 forbidden_source_patterns = [
   "intention_engine::",
   "intention_storage::",
@@ -139,6 +143,12 @@ forbidden_source_patterns = [
   "intention_providers::",
   "rusqlite::",
   "tauri::",
+]
+# A pattern the client declares in production may still be named by adapter test
+# code, so the adapter's list is test-only-exempt: the lexical `cfg(test)`/`#[test]`
+# exemption decides, and a production adapter source that names the pattern fails.
+test_only_forbidden_source_patterns = [
+  "RETAINED_TRANSCRIPT_MESSAGES",
 ]
 
 [protocol_boundary]

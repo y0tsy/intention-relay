@@ -6,8 +6,10 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use intention_proto::{ClientRequestDto, GetSessionSnapshotQueryDto, ProtocolResultDto, RunId};
-use intention_proto::{SessionId, SubscribeRunCommandDto, decode_response, encode_request};
+use intention_proto::{
+    ClientRequestDto, GetSessionSnapshotQueryDto, ProtocolResultDto, SessionId,
+    SubscribeSessionCommandDto, decode_response, encode_request,
+};
 use intention_test_support::FixtureHost;
 use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncMessageSender, LocalEndpoint,
@@ -67,7 +69,7 @@ async fn fixture_host_serves_current_session_state_and_typed_scoped_refusals() {
     requests
         .send_message(&encode_request(
             1,
-            ClientRequestDto::SubscribeRun(SubscribeRunCommandDto::new(session_id, RunId::new())),
+            ClientRequestDto::SubscribeSession(SubscribeSessionCommandDto::new(SessionId::new())),
         ))
         .await
         .expect("scoped request sends");
@@ -75,11 +77,11 @@ async fn fixture_host_serves_current_session_state_and_typed_scoped_refusals() {
         .receive_line()
         .await
         .expect("scoped response arrives");
-    let error = decode_response(&line, 1).expect_err("an unknown run scope is refused");
+    let error = decode_response(&line, 1).expect_err("an unknown session scope is refused");
     assert_eq!(
         error.code(),
         "storage_record_not_found",
-        "an unknown run scope is refused with a typed error instead of a resync"
+        "an unknown session scope is refused with a typed error instead of a resync"
     );
 
     host.await

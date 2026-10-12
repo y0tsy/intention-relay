@@ -1,10 +1,13 @@
 //! Typed, bounded contracts for workspace tools and the workspace addressing
 //! anchor.
 
-use intention_proto::{DtoResult, WorkspaceRelativePathDto};
-use serde::{Deserialize, Serialize};
-use std::fmt::{Display, Formatter};
-use std::process::{Child, Command, Stdio};
+use intention_proto::{
+    BoundedText, DtoResult, EditInput, ExecuteInput, ExecuteResult, GlobInput, GrepInput,
+    GrepMatch, GrepResult, GrepScope, PathsResult, ReadInput, TextResult, ToolId, ToolInput,
+    ToolProcessStatus, ToolResult, ToolTimeoutSecondsDto, WorkspaceRelativePathDto, WriteInput,
+    WriteResult,
+};
+use std::process::{Child, Stdio};
 use std::sync::{
     Arc, Condvar, Mutex, MutexGuard, PoisonError,
     atomic::{AtomicBool, Ordering},
@@ -12,8 +15,11 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod guidance;
+mod shell;
 mod workspace;
 
+pub use guidance::tool_failure_guidance;
 pub use workspace::WorkspaceRoot;
 
 #[cfg(test)]
@@ -23,10 +29,69 @@ mod timeout_tests {
     use std::process::Command;
 
     #[test]
-    fn timeout_is_classified_as_a_lost_interruption_without_waiting_thirty_seconds() {
+    fn a_declared_timeout_is_classified_as_its_own_declared_deadline() {
         let mut command = if cfg!(windows) {
             let mut command = Command::new("ping");
-            command.args(["-n", "3", "127.0.0.1"]);
+            command.args(["-n", "5", "127.0.0.1"]);
+            command
+        } else {
+            let mut command = Command::new("sleep");
+            command.arg("5");
+            command
+        };
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = command.spawn().expect("spawn timeout fixture");
+        let declared = ToolTimeoutSecondsDto::new(1).expect("one second is a valid timeout");
+        let started = Instant::now();
+        let result = bounded_output_with_timeout(child, CancellationSignal::new(), Some(declared));
+        assert!(
+            matches!(
+                result,
+                Err(ExecuteFailure::Interrupted {
+                    cause: InterruptCause::TimedOut(timeout),
+                    ..
+                }) if timeout == declared
+            ),
+            "a fired declared deadline is its own cause, never lost evidence"
+        );
+        // The declared timeout is the controlling invariant: the tool must
+        // return promptly even when the pipe readers are descheduled by a
+        // loaded machine; the assertion stays deliberately loose.
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn an_observed_cancellation_outranks_a_declared_deadline() {
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("ping");
+            command.args(["-n", "5", "127.0.0.1"]);
+            command
+        } else {
+            let mut command = Command::new("sleep");
+            command.arg("5");
+            command
+        };
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = command.spawn().expect("spawn cancelled fixture");
+        let declared = ToolTimeoutSecondsDto::new(1).expect("one second is a valid timeout");
+        // The stop is already observed when the collection starts, so the
+        // caller's stop is the cause even though a deadline was declared.
+        let result =
+            bounded_output_with_timeout(child, CancellationSignal::cancelled(), Some(declared));
+        assert!(matches!(
+            result,
+            Err(ExecuteFailure::Interrupted {
+                cause: InterruptCause::Stopped,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_command_without_a_declared_timeout_runs_to_completion() {
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("ping");
+            command.args(["-n", "2", "127.0.0.1"]);
             command
         } else {
             let mut command = Command::new("sleep");
@@ -34,30 +99,19 @@ mod timeout_tests {
             command
         };
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let child = command.spawn().expect("spawn timeout fixture");
+        let child = command.spawn().expect("spawn no-timeout fixture");
         let started = Instant::now();
-        let result = bounded_output_with_timeout(
-            child,
-            CancellationSignal::new(),
-            Duration::from_millis(25),
+        let result = bounded_output_with_timeout(child, CancellationSignal::new(), None);
+        assert!(
+            result.is_ok(),
+            "a command with no declared timeout completes instead of being cut: {result:?}"
         );
-        assert!(matches!(
-            result,
-            Err(ExecuteFailure::Interrupted {
-                cause: InterruptCause::Lost,
-                ..
-            })
-        ));
-        // The deadline bound is the controlling invariant: the tool must
-        // return promptly (far below the thirty-second execute default) even
-        // when the pipe readers are descheduled by a loaded machine; the
-        // assertion is deliberately looser than the two-second drain grace.
         assert!(started.elapsed() < Duration::from_secs(10));
     }
 
     #[cfg(unix)]
     #[test]
-    fn background_descendant_holding_pipes_cannot_exceed_the_deadline() {
+    fn background_descendant_holding_pipes_cannot_extend_the_collection() {
         use std::os::unix::process::CommandExt;
         let marker = std::env::temp_dir().join(format!(
             "intention-relay-exec-descendant-{}.pid",
@@ -76,11 +130,9 @@ mod timeout_tests {
         command.process_group(0);
         let child = command.spawn().expect("spawn descendant fixture");
         let started = Instant::now();
-        let result = bounded_output_with_timeout(
-            child,
-            CancellationSignal::new(),
-            Duration::from_millis(50),
-        );
+        // No declared timeout: the only bound is the post-exit collection
+        // window, which a descendant holding the pipes cannot extend.
+        let result = bounded_output_with_timeout(child, CancellationSignal::new(), None);
         assert!(matches!(
             result,
             Err(ExecuteFailure::Interrupted {
@@ -89,8 +141,8 @@ mod timeout_tests {
             })
         ));
         assert!(
-            started.elapsed() < Duration::from_secs(10),
-            "a descendant holding the pipes open must not extend the deadline"
+            started.elapsed() < Duration::from_secs(20),
+            "a descendant holding the pipes open must not extend the collection"
         );
         // The process-group termination must also kill the background
         // descendant, not only the direct child.
@@ -116,7 +168,10 @@ mod timeout_tests {
 }
 
 const MAX_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
-const EXECUTE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Upper bound on the model-visible guidance rendered for one failed tool
+/// call. Guidance is short code-owned text, so the bound is a representation
+/// backstop, never a message cut in practice.
+const MAX_TOOL_GUIDANCE_BYTES: usize = 8 * 1024;
 /// Upper bound on the serialized bytes of one search result, shared by glob
 /// and grep. Per-line fragments and per-entry path lists alone still allow a
 /// very large aggregate result; every retained entry is charged against this
@@ -164,43 +219,6 @@ impl CancellationSignal {
 
 pub const TOOL_SCHEMA_VERSION: u16 = 1;
 
-/// Typed terminal classification for one executed program.
-///
-/// Per the external-attempt taxonomy, a known non-zero exit or known signal
-/// termination is a normalized program result carried on the typed output, not
-/// a transport-level tool failure. Lost terminal evidence (cancellation,
-/// timeout) classifies as an interrupted dispatch whose captured output, when
-/// any, stays partial.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ToolProcessStatus {
-    Success,
-    NonZero { code: i32 },
-    Signal { signal: i32 },
-}
-
-impl ToolProcessStatus {
-    /// Classifies a finished child-process status.
-    #[must_use]
-    pub fn classify(status: std::process::ExitStatus) -> Self {
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::ExitStatusExt;
-            if let Some(signal) = status.signal() {
-                return Self::Signal { signal };
-            }
-        }
-        match status.code() {
-            Some(0) => Self::Success,
-            Some(code) => Self::NonZero { code },
-            // A reaped child always reports either a recorded signal (checked
-            // above on Unix) or a numeric exit code (Windows always reports
-            // one); a status with neither cannot occur.
-            None => unreachable!("child status has neither signal nor exit code"),
-        }
-    }
-}
-
 fn bounded_lossy(bytes: &[u8]) -> (String, bool) {
     if bytes.len() <= MAX_TOOL_OUTPUT_BYTES {
         return (String::from_utf8_lossy(bytes).into_owned(), false);
@@ -231,18 +249,20 @@ struct BoundedOutput {
 fn bounded_output(
     child: Child,
     cancellation: CancellationSignal,
+    timeout: Option<ToolTimeoutSecondsDto>,
 ) -> Result<BoundedOutput, ExecuteFailure> {
-    bounded_output_with_timeout(child, cancellation, EXECUTE_TIMEOUT)
+    bounded_output_with_timeout(child, cancellation, timeout)
 }
 
-/// How long pipe readers may keep draining without observed progress after the
-/// direct child has been reaped or terminated. Descendants holding the pipes
-/// open are killed with the child's process group on Unix; on every platform
-/// the collection is deadline-bounded so Execute can never wait forever
-/// (PR24-011). The window tolerates reader-thread descheduling on loaded,
-/// instrumented machines; a reader that keeps consuming bytes is descheduled
-/// rather than stalled, so observed progress extends the window up to the
-/// thirty-second execute deadline instead of failing the command.
+/// How long one pipe collection window lasts after the direct child has been
+/// reaped or terminated. The window is fixed: once the child is reaped only a
+/// descendant that inherited the pipes can produce further progress, and a
+/// descendant must never extend the call (PR24-011). When the window runs out,
+/// the child's process group is stopped and whatever the readers captured is
+/// kept. The window still tolerates reader-thread descheduling on loaded,
+/// instrumented machines, because a window that runs out only stops
+/// descendants and the killed group closes the pipes, so the readers still
+/// hand over their captured bytes.
 const READER_DRAIN_GRACE: Duration = Duration::from_secs(5);
 
 /// Shared progress state between the pipe readers and the drain loop.
@@ -359,6 +379,7 @@ impl<R: std::io::Read> std::io::Read for ProgressReader<R> {
 }
 
 /// Raw output captured before a program was stopped, with its truncation flag.
+#[derive(Debug)]
 struct PartialOutput {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
@@ -366,13 +387,14 @@ struct PartialOutput {
 }
 
 impl PartialOutput {
-    /// Keeps whatever the pipe drain collected; a stalled drain has no bytes.
-    fn from_drain(drain: PipeDrain) -> Option<Self> {
-        let PipeDrain::Complete { stdout, stderr } = drain else {
-            return None;
-        };
-        let (stdout, stdout_truncated) = stdout.unwrap_or_default();
-        let (stderr, stderr_truncated) = stderr.unwrap_or_default();
+    /// Keeps whatever the readers joined; a reader that never finished leaves
+    /// no captured output.
+    fn from_readers(
+        stdout: Option<Result<(Vec<u8>, bool), &'static str>>,
+        stderr: Option<Result<(Vec<u8>, bool), &'static str>>,
+    ) -> Option<Self> {
+        let (stdout, stdout_truncated) = stdout?.unwrap_or_default();
+        let (stderr, stderr_truncated) = stderr?.unwrap_or_default();
         Some(Self {
             stdout,
             stderr,
@@ -394,14 +416,20 @@ impl PartialOutput {
             "stdout:\n{stdout}\nstderr:\n{stderr}{}",
             if self.truncated { "\n[truncated]" } else { "" }
         );
-        Ok(ToolResult::Execute(TextResult {
-            text: BoundedText::new(text)?,
-            truncated: self.truncated,
+        Ok(ToolResult::Execute(ExecuteResult {
+            text: TextResult {
+                text: BoundedText::new(text)?,
+                truncated: self.truncated,
+            },
+            // An interrupted collection observed no finished program, so it
+            // carries no terminal classification rather than inventing one.
+            process: None,
         }))
     }
 }
 
 /// Why one bounded program collection stopped without a final result.
+#[derive(Debug)]
 enum ExecuteFailure {
     /// A pipe reader failed or panicked.
     ReadFailed,
@@ -412,8 +440,8 @@ enum ExecuteFailure {
     },
 }
 
-/// Classifies one observed interruption: an explicit cancellation is a stop,
-/// anything else (deadline, stalled drain, failed wait) is lost evidence.
+/// Classifies one observed interruption that carries no declared deadline: an
+/// explicit cancellation is a stop, anything else is lost evidence.
 fn interruption_cause(cancellation: &CancellationSignal) -> InterruptCause {
     if cancellation.is_cancelled() {
         InterruptCause::Stopped
@@ -422,10 +450,26 @@ fn interruption_cause(cancellation: &CancellationSignal) -> InterruptCause {
     }
 }
 
+/// Classifies the interruption of the call's own declared deadline.
+///
+/// A cancellation observed at the same moment stays the caller's stop: the
+/// stop is the more specific fact, and the declared deadline is the cause only
+/// when nothing else stopped the call.
+fn deadline_cause(
+    cancellation: &CancellationSignal,
+    timeout: ToolTimeoutSecondsDto,
+) -> InterruptCause {
+    if cancellation.is_cancelled() {
+        InterruptCause::Stopped
+    } else {
+        InterruptCause::TimedOut(timeout)
+    }
+}
+
 fn bounded_output_with_timeout(
     mut child: Child,
     cancellation: CancellationSignal,
-    timeout: Duration,
+    timeout: Option<ToolTimeoutSecondsDto>,
 ) -> Result<BoundedOutput, ExecuteFailure> {
     let child_id = child.id();
     let progress = Arc::new(ReaderProgress::default());
@@ -453,67 +497,51 @@ fn bounded_output_with_timeout(
             read_bounded(&mut reader, &mut output).map(|truncated| (output, truncated))
         })
     });
-    let deadline = Instant::now() + timeout;
+    let mut pipes = PipeReaders::new(stdout, stderr, progress);
+    // A declared timeout is the only deadline a program observation has; an
+    // absent one leaves the call bounded by cancellation alone.
+    let deadline = timeout.map(|timeout| Instant::now() + Duration::from_secs(timeout.as_secs()));
     loop {
-        if cancellation.is_cancelled() || Instant::now() >= deadline {
+        if cancellation.is_cancelled()
+            || deadline.is_some_and(|deadline| Instant::now() >= deadline)
+        {
             // The direct child is killed and, on Unix, its whole process
             // group, so a backgrounded descendant that inherited the pipes
             // cannot keep the reader threads alive after the tool returns.
-            let cause = interruption_cause(&cancellation);
+            let cause = timeout.map_or_else(
+                || interruption_cause(&cancellation),
+                |declared| deadline_cause(&cancellation, declared),
+            );
             terminate_process_tree(&mut child, child_id);
             let _ = child.wait();
-            // The interruption is already observed: the drain joins the
-            // killed readers within its existing bound instead of bailing on
-            // the signal, so their captured output survives as the partial
-            // result whenever the pipes were collected.
-            let drained = drain_pipes(
-                stdout,
-                stderr,
-                &progress,
-                READER_DRAIN_GRACE,
-                deadline,
-                None,
-            );
+            // The interruption is already observed: the collection keeps
+            // joining the killed readers instead of bailing on the signal, so
+            // their captured output survives as the partial result whenever
+            // the pipes were collected.
+            let _ = pipes.collect(READER_DRAIN_GRACE, None);
             return Err(ExecuteFailure::Interrupted {
                 cause,
-                partial: PartialOutput::from_drain(drained),
+                partial: pipes.partial(),
             });
         }
         match child.try_wait() {
             Ok(Some(status)) => {
                 // The direct child is reaped, but a descendant may still hold
-                // the output pipes open. Collect while the readers keep making
-                // progress, within the grace bound; a drain that stalls is
-                // killed and classified as a lost interruption so Execute
-                // still returns within its deadline.
-                match drain_pipes(
-                    stdout,
-                    stderr,
-                    &progress,
-                    READER_DRAIN_GRACE,
-                    deadline,
-                    Some(&cancellation),
-                ) {
-                    PipeDrain::Complete { stdout, stderr } => {
-                        let (stdout, stdout_was_truncated) =
-                            stdout.map_err(|_| ExecuteFailure::ReadFailed)?;
-                        let (stderr, stderr_was_truncated) =
-                            stderr.map_err(|_| ExecuteFailure::ReadFailed)?;
-                        return Ok(BoundedOutput {
-                            status,
-                            stdout,
-                            stderr,
-                            stdout_truncated: stdout_was_truncated,
-                            stderr_truncated: stderr_was_truncated,
-                        });
-                    }
+                // the output pipes open. The collection uses one fixed window:
+                // after the child is reaped, progress can only come from a
+                // descendant, and a descendant must never extend the call. A
+                // window that runs out stops the process group and keeps
+                // whatever the readers already captured.
+                match pipes.collect(READER_DRAIN_GRACE, Some(&cancellation)) {
+                    PipeDrain::Complete => return pipes.into_bounded_output(status),
                     PipeDrain::Stalled => {
                         let cause = interruption_cause(&cancellation);
                         terminate_process_tree(&mut child, child_id);
                         let _ = child.wait();
+                        let _ = pipes.collect(READER_DRAIN_GRACE, None);
                         return Err(ExecuteFailure::Interrupted {
                             cause,
-                            partial: None,
+                            partial: pipes.partial(),
                         });
                     }
                 }
@@ -523,17 +551,10 @@ fn bounded_output_with_timeout(
                 let cause = interruption_cause(&cancellation);
                 terminate_process_tree(&mut child, child_id);
                 let _ = child.wait();
-                let drained = drain_pipes(
-                    stdout,
-                    stderr,
-                    &progress,
-                    READER_DRAIN_GRACE,
-                    deadline,
-                    None,
-                );
+                let _ = pipes.collect(READER_DRAIN_GRACE, None);
                 return Err(ExecuteFailure::Interrupted {
                     cause,
-                    partial: PartialOutput::from_drain(drained),
+                    partial: pipes.partial(),
                 });
             }
         }
@@ -560,81 +581,126 @@ fn terminate_process_tree(child: &mut Child, _child_id: u32) {
     }
 }
 
-/// Collected reader results once both pipe readers have finished.
+/// Whether one pipe collection window joined both readers.
 enum PipeDrain {
-    /// Both readers completed; an `Err` records a reader failure.
-    Complete {
-        stdout: Result<(Vec<u8>, bool), &'static str>,
-        stderr: Result<(Vec<u8>, bool), &'static str>,
-    },
-    /// At least one reader was still pending at the deadline.
+    /// Both reader results are joined and available on the collector.
+    Complete,
+    /// At least one reader was still pending when the window ran out.
     Stalled,
 }
 
-/// Joins both pipe readers until the stall window or `deadline`.
+/// Mutable collection state for the two pipe readers of one program.
 ///
-/// A reader that keeps consuming bytes is descheduled rather than stalled, so
-/// observed progress re-arms the stall window up to `deadline`; a reader that
-/// stops making progress for the whole window is treated as a descendant
-/// holding the pipes open. The wait is woken by the readers' progress signal
-/// instead of a timer, and the remaining stall window bounds it. The success
-/// path passes the invocation's signal so a cancellation ends the drain early;
-/// an interrupted collection passes `None`, because the interruption is
-/// already observed and the readers killed with their process tree must be
-/// joined so their captured output survives as the partial result.
-fn drain_pipes(
-    mut stdout: Option<ReaderHandle>,
-    mut stderr: Option<ReaderHandle>,
-    progress: &ReaderProgress,
-    stall: Duration,
-    deadline: Instant,
-    cancellation: Option<&CancellationSignal>,
-) -> PipeDrain {
-    // An absent reader is already collected: the joined pair must complete even
-    // when a caller pipes only one of the two streams.
-    let mut stdout_result = stdout.is_none().then_some(Ok((Vec::new(), false)));
-    let mut stderr_result = stderr.is_none().then_some(Ok((Vec::new(), false)));
-    // Every spawned reader records its own stop, so the drain can collect the
-    // handles the moment the last reader stopped rather than when the OS
-    // observes the thread as finished.
-    let readers = usize::from(stdout.is_some()) + usize::from(stderr.is_some());
-    let mut observed = progress.consumed();
-    let mut until = (Instant::now() + stall).min(deadline);
-    loop {
-        let stopped = progress.stopped() >= readers;
-        if let Some(handle) = stdout.take() {
-            if stopped || handle.is_finished() {
-                stdout_result = Some(join_reader(Some(handle)));
-            } else {
-                stdout = Some(handle);
+/// The collector owns both reader handles and every result already joined, so
+/// a stalled window can be followed by another bounded collection without
+/// discarding a side that already finished.
+struct PipeReaders {
+    stdout: Option<ReaderHandle>,
+    stderr: Option<ReaderHandle>,
+    stdout_result: Option<Result<(Vec<u8>, bool), &'static str>>,
+    stderr_result: Option<Result<(Vec<u8>, bool), &'static str>>,
+    /// The reader count of the original pair; joining a side never lowers it,
+    /// so the stop check keeps waiting for the reader that is still owned.
+    readers: usize,
+    progress: Arc<ReaderProgress>,
+}
+
+impl PipeReaders {
+    fn new(
+        stdout: Option<ReaderHandle>,
+        stderr: Option<ReaderHandle>,
+        progress: Arc<ReaderProgress>,
+    ) -> Self {
+        // An absent reader is already collected: the joined pair must complete
+        // even when a caller pipes only one of the two streams.
+        let readers = usize::from(stdout.is_some()) + usize::from(stderr.is_some());
+        Self {
+            stdout_result: stdout.is_none().then_some(Ok((Vec::new(), false))),
+            stderr_result: stderr.is_none().then_some(Ok((Vec::new(), false))),
+            stdout,
+            stderr,
+            readers,
+            progress,
+        }
+    }
+
+    /// Joins both pipe readers within one fixed stall window.
+    ///
+    /// The wait is woken by the readers' progress signal or a reader stop
+    /// instead of a timer, but neither extends the window: after the direct
+    /// child has been reaped, only a descendant that inherited the pipes can
+    /// make further progress, and a descendant must never extend the call. An
+    /// interrupted collection passes `None` as the signal, because the
+    /// interruption is already observed and the readers killed with their
+    /// process tree are joined so their captured output survives.
+    fn collect(&mut self, stall: Duration, cancellation: Option<&CancellationSignal>) -> PipeDrain {
+        let until = Instant::now() + stall;
+        loop {
+            // Every spawned reader records its own stop, so the collector can
+            // collect the handles the moment the last reader stopped rather
+            // than when the OS observes the thread as finished.
+            let stopped = self.progress.stopped() >= self.readers;
+            if let Some(handle) = self.stdout.take() {
+                if stopped || handle.is_finished() {
+                    self.stdout_result = Some(join_reader(Some(handle)));
+                } else {
+                    self.stdout = Some(handle);
+                }
             }
-        }
-        if let Some(handle) = stderr.take() {
-            if stopped || handle.is_finished() {
-                stderr_result = Some(join_reader(Some(handle)));
-            } else {
-                stderr = Some(handle);
+            if let Some(handle) = self.stderr.take() {
+                if stopped || handle.is_finished() {
+                    self.stderr_result = Some(join_reader(Some(handle)));
+                } else {
+                    self.stderr = Some(handle);
+                }
             }
-        }
-        match (stdout_result.take(), stderr_result.take()) {
-            (Some(stdout), Some(stderr)) => return PipeDrain::Complete { stdout, stderr },
-            partial => {
-                // Both readers must be collected before the drain completes, so
-                // a partially collected pair keeps its gathered side.
-                (stdout_result, stderr_result) = partial;
+            if self.stdout_result.is_some() && self.stderr_result.is_some() {
+                return PipeDrain::Complete;
             }
+            if cancellation.is_some_and(CancellationSignal::is_cancelled) || Instant::now() >= until
+            {
+                return PipeDrain::Stalled;
+            }
+            // Progress or a reader stop wakes the wait at once; with neither,
+            // the collection blocks for the remaining window instead of
+            // polling.
+            let observed = self.progress.consumed();
+            let _ = self
+                .progress
+                .wait_for_activity(observed, until.saturating_duration_since(Instant::now()));
         }
-        if cancellation.is_some_and(CancellationSignal::is_cancelled) || Instant::now() >= until {
-            return PipeDrain::Stalled;
-        }
-        // Progress or a reader stop wakes the wait at once; with neither, the
-        // drain blocks for the remaining stall window instead of polling.
-        let current =
-            progress.wait_for_activity(observed, until.saturating_duration_since(Instant::now()));
-        if current > observed {
-            observed = current;
-            until = (Instant::now() + stall).min(deadline);
-        }
+    }
+
+    /// Builds the completed output, treating a failed reader as a read failure.
+    fn into_bounded_output(
+        self,
+        status: std::process::ExitStatus,
+    ) -> Result<BoundedOutput, ExecuteFailure> {
+        let Some(stdout) = self.stdout_result else {
+            return Err(ExecuteFailure::ReadFailed);
+        };
+        let Some(stderr) = self.stderr_result else {
+            return Err(ExecuteFailure::ReadFailed);
+        };
+        let Ok((stdout, stdout_truncated)) = stdout else {
+            return Err(ExecuteFailure::ReadFailed);
+        };
+        let Ok((stderr, stderr_truncated)) = stderr else {
+            return Err(ExecuteFailure::ReadFailed);
+        };
+        Ok(BoundedOutput {
+            status,
+            stdout,
+            stderr,
+            stdout_truncated,
+            stderr_truncated,
+        })
+    }
+
+    /// Keeps whatever both readers joined; a reader that never finished leaves
+    /// no captured output.
+    fn partial(self) -> Option<PartialOutput> {
+        PartialOutput::from_readers(self.stdout_result, self.stderr_result)
     }
 }
 
@@ -642,74 +708,93 @@ fn drain_pipes(
 mod drain_progress_tests {
     use super::*;
 
-    #[test]
-    fn reader_progress_extends_the_drain_beyond_the_stall_window() {
+    /// Wraps one synthetic reader thread into a one-sided collector.
+    fn collector(
+        reader: impl FnOnce(Arc<ReaderProgress>) -> Result<(Vec<u8>, bool), &'static str>
+        + Send
+        + 'static,
+    ) -> PipeReaders {
         let progress = Arc::new(ReaderProgress::default());
         let writer = Arc::clone(&progress);
-        let handle = thread::spawn(move || -> Result<(Vec<u8>, bool), &'static str> {
-            let _stop = ReaderStop(Arc::clone(&writer));
-            // Bytes keep arriving well past the stall window: the loaded-machine
-            // descheduling case that must not be classified as a stalled drain.
-            for _ in 0..8 {
-                thread::sleep(Duration::from_millis(20));
-                writer.publish(64);
-            }
-            Ok((vec![b'x'; 64], false))
-        });
-        let drain = drain_pipes(
-            Some(handle),
-            None,
-            &progress,
-            Duration::from_millis(50),
-            Instant::now() + Duration::from_secs(5),
-            None,
-        );
-        assert!(matches!(drain, PipeDrain::Complete { .. }));
+        let handle = thread::spawn(move || reader(writer));
+        PipeReaders::new(Some(handle), None, progress)
     }
 
     #[test]
-    fn reader_stop_wakes_the_drain_before_the_stall_window() {
-        let progress = Arc::new(ReaderProgress::default());
-        let reader = Arc::clone(&progress);
-        let handle = thread::spawn(move || -> Result<(Vec<u8>, bool), &'static str> {
-            let _stop = ReaderStop(reader);
-            // The reader stops long before the stall window expires: the drain
-            // must collect it on the wakeup, not by outwaiting the window.
+    fn reader_stop_wakes_the_collection_before_the_window() {
+        let mut pipes = collector(|progress| {
+            let _stop = ReaderStop(progress);
+            // The reader stops long before the stall window expires: the
+            // collector must join it on the wakeup, not by outwaiting the
+            // window.
             thread::sleep(Duration::from_millis(50));
             Ok((Vec::new(), false))
         });
         let started = Instant::now();
-        let drain = drain_pipes(
-            Some(handle),
-            None,
-            &progress,
-            Duration::from_secs(5),
-            started + Duration::from_secs(30),
-            None,
-        );
-        assert!(matches!(drain, PipeDrain::Complete { .. }));
+        assert!(matches!(
+            pipes.collect(Duration::from_secs(5), None),
+            PipeDrain::Complete
+        ));
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]
     fn reader_without_progress_stalls_at_the_window() {
-        let progress = Arc::new(ReaderProgress::default());
-        let handle = thread::spawn(move || -> Result<(Vec<u8>, bool), &'static str> {
+        let mut pipes = collector(|_progress| {
             // Alive and silent, like a descendant that inherited the pipes.
             thread::sleep(Duration::from_secs(30));
             Ok((Vec::new(), false))
         });
         let started = Instant::now();
-        let drain = drain_pipes(
-            Some(handle),
-            None,
-            &progress,
-            Duration::from_millis(50),
-            started + Duration::from_secs(30),
-            None,
-        );
-        assert!(matches!(drain, PipeDrain::Stalled));
+        assert!(matches!(
+            pipes.collect(Duration::from_millis(50), None),
+            PipeDrain::Stalled
+        ));
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn descendant_progress_does_not_extend_the_collection_window() {
+        let mut pipes = collector(|progress| {
+            // A descendant keeps writing: the bytes arrive well past the
+            // window, but the window is fixed and descendant progress must
+            // never extend the call.
+            for _ in 0..8 {
+                thread::sleep(Duration::from_millis(20));
+                progress.publish(64);
+            }
+            Ok((vec![b'x'; 64], false))
+        });
+        let started = Instant::now();
+        assert!(matches!(
+            pipes.collect(Duration::from_millis(50), None),
+            PipeDrain::Stalled
+        ));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_stalled_window_keeps_the_side_that_already_finished() {
+        let progress = Arc::new(ReaderProgress::default());
+        let writer = Arc::clone(&progress);
+        let finished = thread::spawn(move || -> Result<(Vec<u8>, bool), &'static str> {
+            let _stop = ReaderStop(writer);
+            Ok((b"kept".to_vec(), false))
+        });
+        let silent = thread::spawn(|| -> Result<(Vec<u8>, bool), &'static str> {
+            thread::sleep(Duration::from_secs(30));
+            Ok((Vec::new(), false))
+        });
+        let mut pipes = PipeReaders::new(Some(finished), Some(silent), progress);
+        assert!(matches!(
+            pipes.collect(Duration::from_millis(50), None),
+            PipeDrain::Stalled
+        ));
+        // The finished side stays available for the bounded second collection
+        // after the process group is stopped; a one-sided capture is not yet a
+        // partial result.
+        assert!(pipes.stdout_result.is_some());
+        assert!(pipes.partial().is_none());
     }
 }
 
@@ -830,38 +915,6 @@ fn read_bounded(
     }
 }
 
-/// The fixed set of tools exposed by the product boundary.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolId {
-    Read,
-    Write,
-    Edit,
-    Execute,
-    Glob,
-    Grep,
-}
-
-impl ToolId {
-    /// Returns the stable wire name.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Read => "read",
-            Self::Glob => "glob",
-            Self::Grep => "grep",
-            Self::Write => "write",
-            Self::Edit => "edit",
-            Self::Execute => "execute",
-        }
-    }
-}
-impl Display for ToolId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 /// Static specification of one tool.
 ///
 /// The specification carries the three strings the model boundary consumes:
@@ -952,19 +1005,39 @@ pub const EDIT_INPUT_SCHEMA: &str = r#"{
 pub const EXECUTE_INPUT_SCHEMA: &str = r#"{
   "type": "object",
   "properties": {
-    "program": {
+    "command": {
       "type": "string",
-      "description": "Program to run directly, without shell interpretation."
+      "description": "Shell command text with shell semantics: pipelines, redirects, and compound commands."
     },
-    "args": {
+    "cwd": {
+      "type": "string",
+      "description": "Optional workspace-relative working directory; the workspace root by default."
+    },
+    "env": {
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Environment variable name."
+          },
+          "value": {
+            "type": "string",
+            "description": "Environment variable value."
+          }
+        },
+        "required": ["name", "value"]
       },
-      "description": "Arguments passed verbatim to the program."
+      "description": "Optional environment variables overlaid on the inherited environment."
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Optional per-call deadline in whole seconds. Without it the command runs until it finishes or the run is cancelled; when it elapses the command is terminated and the call returns the captured output as a partial result whose notice names the timeout."
     }
   },
-  "required": ["program", "args"]
+  "required": ["command"]
 }"#;
 
 /// JSON Schema for the `glob` tool's typed model arguments.
@@ -1031,7 +1104,7 @@ pub const fn spec(id: ToolId) -> ToolSpec {
         },
         ToolId::Execute => ToolSpec {
             id,
-            description: "Execute an explicitly bounded command.",
+            description: "Run a shell command in the workspace.",
             input_schema: EXECUTE_INPUT_SCHEMA,
         },
         ToolId::Glob => ToolSpec {
@@ -1048,215 +1121,12 @@ pub const fn spec(id: ToolId) -> ToolSpec {
 }
 
 /// Returns the model-visible tool specifications in advertisement order.
+///
+/// The declared set is [`ToolId::ALL`], so a seventh tool is one core variant
+/// and one spec match arm, never a second hand-list here.
 #[must_use]
 pub fn model_visible_descriptors() -> Vec<ToolSpec> {
-    vec![
-        spec(ToolId::Read),
-        spec(ToolId::Write),
-        spec(ToolId::Edit),
-        spec(ToolId::Execute),
-        spec(ToolId::Glob),
-        spec(ToolId::Grep),
-    ]
-}
-
-/// Bounded text accepted by tool contracts.
-///
-/// Deserialization is validating: JSON arriving at the daemon tool boundary
-/// cannot bypass the constructor's NUL check (PR24-023).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(transparent)]
-pub struct BoundedText(String);
-impl BoundedText {
-    /// # Errors
-    ///
-    /// Returns a validation error when the text contains a NUL byte.
-    pub fn new(value: impl Into<String>) -> DtoResult<Self> {
-        let value = value.into();
-        if value.contains('\0') {
-            Err(intention_proto::ErrorDto::validation(
-                "invalid_tool_text",
-                "tool text contains NUL",
-            ))
-        } else {
-            Ok(Self(value))
-        }
-    }
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for BoundedText {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Self::new(value).map_err(|error| {
-            serde::de::Error::custom(format!("invalid tool text ({})", error.code()))
-        })
-    }
-}
-
-/// Typed tool input family.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "tool", content = "input", rename_all = "snake_case")]
-pub enum ToolInput {
-    Read(ReadInput),
-    Glob(GlobInput),
-    Grep(GrepInput),
-    Write(WriteInput),
-    Edit(EditInput),
-    Execute(ExecuteInput),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ReadInput {
-    pub path: WorkspaceRelativePathDto,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct GlobInput {
-    pub pattern: BoundedText,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct GrepInput {
-    pub pattern: BoundedText,
-    #[serde(default)]
-    pub scope: Option<GrepScope>,
-    #[serde(default)]
-    pub path: Option<WorkspaceRelativePathDto>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum GrepScope {
-    File { path: WorkspaceRelativePathDto },
-    Directory { path: WorkspaceRelativePathDto },
-    Workspace,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct WriteInput {
-    pub path: WorkspaceRelativePathDto,
-    pub content: BoundedText,
-    #[serde(default)]
-    pub expected_content: Option<BoundedText>,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct EditInput {
-    pub path: WorkspaceRelativePathDto,
-    pub old: BoundedText,
-    pub new: BoundedText,
-    #[serde(default)]
-    pub expected_content: Option<BoundedText>,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ExecuteInput {
-    pub program: BoundedText,
-    pub args: Vec<BoundedText>,
-}
-
-impl ToolInput {
-    /// Decodes raw model arguments into the typed input of one exposed tool.
-    ///
-    /// The wire name is the decoding authority: only the six exposed tools
-    /// decode, each through its own typed input DTO; every other name is
-    /// rejected as unknown, so a tool the product does not expose is never
-    /// reachable through raw model arguments.
-    ///
-    /// # Errors
-    ///
-    /// Returns `unknown_tool` when the name is not an exposed tool, and
-    /// `invalid_tool_input_json` when the arguments are malformed or do not
-    /// match the tool's typed input.
-    pub fn from_arguments_json(tool_id: &str, arguments_json: &str) -> DtoResult<Self> {
-        let input = match tool_id {
-            "read" => serde_json::from_str::<ReadInput>(arguments_json).map(Self::Read),
-            "write" => serde_json::from_str::<WriteInput>(arguments_json).map(Self::Write),
-            "edit" => serde_json::from_str::<EditInput>(arguments_json).map(Self::Edit),
-            "execute" => serde_json::from_str::<ExecuteInput>(arguments_json).map(Self::Execute),
-            "glob" => serde_json::from_str::<GlobInput>(arguments_json).map(Self::Glob),
-            "grep" => serde_json::from_str::<GrepInput>(arguments_json).map(Self::Grep),
-            _ => return Err(unknown_tool()),
-        };
-        input.map_err(|_| {
-            intention_proto::ErrorDto::validation(
-                "invalid_tool_input_json",
-                "tool arguments are not valid typed input",
-            )
-        })
-    }
-
-    /// Returns the concrete tool this input belongs to.
-    #[must_use]
-    pub const fn tool_id(&self) -> ToolId {
-        match self {
-            Self::Read(_) => ToolId::Read,
-            Self::Glob(_) => ToolId::Glob,
-            Self::Grep(_) => ToolId::Grep,
-            Self::Write(_) => ToolId::Write,
-            Self::Edit(_) => ToolId::Edit,
-            Self::Execute(_) => ToolId::Execute,
-        }
-    }
-}
-
-/// Returns the stable error for a name the product does not expose as a tool.
-fn unknown_tool() -> intention_proto::ErrorDto {
-    intention_proto::ErrorDto::validation(
-        "unknown_tool",
-        "tool is not registered for model invocation",
-    )
-}
-
-/// Typed tool result family.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "result", content = "value", rename_all = "snake_case")]
-pub enum ToolResult {
-    Read(TextResult),
-    Glob(PathsResult),
-    Grep(GrepResult),
-    Write(WriteResult),
-    Edit(WriteResult),
-    Execute(TextResult),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct TextResult {
-    pub text: BoundedText,
-    pub truncated: bool,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct GrepResult {
-    pub matches: Vec<GrepMatch>,
-    /// Whether a dropped read window, an oversized line, or the retained
-    /// serialized-match window cut content; the byte window, not a match
-    /// count, bounds the result.
-    #[serde(default)]
-    pub truncated: bool,
-}
-/// One workspace-relative match; its serialized size is charged against the
-/// shared search-result window.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct GrepMatch {
-    pub path: WorkspaceRelativePathDto,
-    pub line: u64,
-    pub column: u64,
-    pub fragment: BoundedText,
-}
-/// Workspace-relative path list produced by a glob search.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PathsResult {
-    /// Paths retained inside the shared search-result window.
-    pub paths: Vec<WorkspaceRelativePathDto>,
-    /// Whether the byte window cut further matching paths.
-    #[serde(default)]
-    pub truncated: bool,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct WriteResult {
-    pub bytes: u64,
+    ToolId::ALL.iter().copied().map(spec).collect()
 }
 
 /// Canonical model-visible content of an empty path list.
@@ -1265,6 +1135,19 @@ const NO_PATHS_PLACEHOLDER: &str = "[no paths]";
 const NO_MATCHES_PLACEHOLDER: &str = "[no matches]";
 /// Canonical model-visible content of an empty text result.
 const EMPTY_TEXT_PLACEHOLDER: &str = "[empty]";
+
+/// Renders one bounded text projection into its canonical model-visible
+/// content: an empty projection shows the empty placeholder and truncated
+/// content keeps its explicit marker.
+fn bounded_text_content(value: &TextResult) -> String {
+    let mut content = if value.text.as_str().trim().is_empty() {
+        EMPTY_TEXT_PLACEHOLDER.to_owned()
+    } else {
+        value.text.as_str().to_owned()
+    };
+    append_truncation_marker(&mut content, value.truncated);
+    content
+}
 
 /// Renders one typed tool result into its bounded model-visible content.
 ///
@@ -1284,15 +1167,8 @@ const EMPTY_TEXT_PLACEHOLDER: &str = "[empty]";
 /// readable content".
 pub fn render_tool_result_content(result: &ToolResult) -> DtoResult<String> {
     let content = match result {
-        ToolResult::Read(value) | ToolResult::Execute(value) => {
-            let mut content = if value.text.as_str().trim().is_empty() {
-                EMPTY_TEXT_PLACEHOLDER.to_owned()
-            } else {
-                value.text.as_str().to_owned()
-            };
-            append_truncation_marker(&mut content, value.truncated);
-            content
-        }
+        ToolResult::Read(value) => bounded_text_content(value),
+        ToolResult::Execute(value) => bounded_text_content(&value.text),
         ToolResult::Glob(value) => {
             let mut content = if value.paths.is_empty() {
                 NO_PATHS_PLACEHOLDER.to_owned()
@@ -1353,28 +1229,48 @@ fn append_truncation_marker(content: &mut String, truncated: bool) {
 /// Renders the durable partial result of one interrupted dispatch.
 ///
 /// The captured output precedes the exact interruption notice selected by doc
-/// 15 for the stopped/lost and captured/uncaptured cases.
+/// 15 for the cause and the captured/uncaptured cases: a caller stop names the
+/// stop, the call's own declared deadline names the timeout it hit, and an
+/// interruption without a declared deadline stays lost evidence.
 ///
 /// # Errors
 ///
 /// Returns a validation error when the captured output cannot render.
 pub fn partial_tool_result_content(
-    stopped: bool,
+    cause: InterruptCause,
     result: Option<&ToolResult>,
 ) -> DtoResult<String> {
-    let notice = match (stopped, result.is_some()) {
-        (true, true) => {
+    let (with_output, without_output) = match cause {
+        InterruptCause::Stopped => (
             "[The tool call was stopped before a final result; the output above is partial.]"
+                .to_owned(),
+            "[The tool call was stopped before a final result.]".to_owned(),
+        ),
+        InterruptCause::TimedOut(declared) => {
+            let seconds = declared.as_secs();
+            (
+                format!(
+                    "[The tool call hit its declared timeout of {seconds}s and was terminated before a final result; the output above is partial.]"
+                ),
+                format!(
+                    "[The tool call hit its declared timeout of {seconds}s and was terminated before a final result.]"
+                ),
+            )
         }
-        (false, true) => {
+        InterruptCause::Lost => (
             "[The tool call did not receive a final result; the output above is partial.]"
-        }
-        (true, false) => "[The tool call was stopped before a final result.]",
-        (false, false) => "[The tool call did not receive a final result.]",
+                .to_owned(),
+            "[The tool call did not receive a final result.]".to_owned(),
+        ),
+    };
+    let notice = if result.is_some() {
+        with_output
+    } else {
+        without_output
     };
     match result {
         Some(result) => Ok(format!("{}\n{notice}", render_tool_result_content(result)?)),
-        None => Ok(notice.to_owned()),
+        None => Ok(notice),
     }
 }
 
@@ -1405,9 +1301,12 @@ mod tool_result_renderer_tests {
             render_tool_result_content(&read).expect("read content renders"),
             "hello"
         );
-        let truncated = ToolResult::Execute(TextResult {
-            text: bounded("done"),
-            truncated: true,
+        let truncated = ToolResult::Execute(ExecuteResult {
+            text: TextResult {
+                text: bounded("done"),
+                truncated: true,
+            },
+            process: Some(ToolProcessStatus::Success),
         });
         assert_eq!(
             render_tool_result_content(&truncated).expect("execute content renders"),
@@ -1492,7 +1391,7 @@ mod tool_result_renderer_tests {
         // The interrupted path renders through the same projection, so a
         // pre-empted empty search still answers its call with content.
         assert_eq!(
-            partial_tool_result_content(true, Some(&empty_glob))
+            partial_tool_result_content(InterruptCause::Stopped, Some(&empty_glob))
                 .expect("a stopped empty search renders"),
             "[no paths]\n[The tool call was stopped before a final result; the output above is partial.]"
         );
@@ -1505,20 +1404,58 @@ mod tool_result_renderer_tests {
             truncated: false,
         });
         assert_eq!(
-            partial_tool_result_content(true, Some(&captured)).expect("partial content renders"),
+            partial_tool_result_content(InterruptCause::Stopped, Some(&captured))
+                .expect("partial content renders"),
             "half a line\n[The tool call was stopped before a final result; the output above is partial.]"
         );
         assert_eq!(
-            partial_tool_result_content(false, Some(&captured)).expect("partial content renders"),
+            partial_tool_result_content(InterruptCause::Lost, Some(&captured))
+                .expect("partial content renders"),
             "half a line\n[The tool call did not receive a final result; the output above is partial.]"
         );
         assert_eq!(
-            partial_tool_result_content(true, None).expect("partial content renders"),
+            partial_tool_result_content(InterruptCause::Stopped, None)
+                .expect("partial content renders"),
             "[The tool call was stopped before a final result.]"
         );
         assert_eq!(
-            partial_tool_result_content(false, None).expect("partial content renders"),
+            partial_tool_result_content(InterruptCause::Lost, None)
+                .expect("partial content renders"),
             "[The tool call did not receive a final result.]"
+        );
+    }
+
+    #[test]
+    fn a_declared_timeout_renders_its_own_notice_with_the_declared_value() {
+        let captured = ToolResult::Read(TextResult {
+            text: bounded("half a line"),
+            truncated: false,
+        });
+        let timed_out =
+            InterruptCause::TimedOut(ToolTimeoutSecondsDto::new(3).expect("three seconds"));
+        assert_eq!(
+            partial_tool_result_content(timed_out, Some(&captured))
+                .expect("partial content renders"),
+            "half a line\n[The tool call hit its declared timeout of 3s and was terminated before a final result; the output above is partial.]"
+        );
+        assert_eq!(
+            partial_tool_result_content(timed_out, None).expect("partial content renders"),
+            "[The tool call hit its declared timeout of 3s and was terminated before a final result.]"
+        );
+        // The deadline never reads as lost evidence or as a caller stop.
+        let timed_out_notice =
+            partial_tool_result_content(timed_out, None).expect("partial content renders");
+        assert!(!timed_out_notice.contains("did not receive a final result"));
+        assert!(!timed_out_notice.contains("was stopped"));
+    }
+
+    #[test]
+    fn every_interruption_cause_records_its_own_durable_code() {
+        assert_eq!(InterruptCause::Stopped.code(), "tool_cancelled");
+        assert_eq!(InterruptCause::Lost.code(), "tool_execution_interrupted");
+        assert_eq!(
+            InterruptCause::TimedOut(ToolTimeoutSecondsDto::new(1).expect("one second")).code(),
+            "tool_timed_out"
         );
     }
 }
@@ -1528,9 +1465,29 @@ mod tool_result_renderer_tests {
 pub enum InterruptCause {
     /// Cancellation was observed while the tool was running.
     Stopped,
-    /// The tool lost its process evidence: deadline, stalled pipes, or a
+    /// The call's own declared deadline fired: the tool terminated the program
+    /// at the timeout its caller declared and kept whatever output was
+    /// captured, so the deadline is an observed cause rather than lost
+    /// evidence.
+    TimedOut(ToolTimeoutSecondsDto),
+    /// The tool lost its process evidence: a stalled pipe collection or a
     /// failed wait probe.
     Lost,
+}
+
+impl InterruptCause {
+    /// Returns the durable interruption code one cause records.
+    ///
+    /// The code vocabulary is closed to the three causes: a caller stop, the
+    /// call's own declared deadline, and lost process evidence.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Stopped => "tool_cancelled",
+            Self::TimedOut(_) => "tool_timed_out",
+            Self::Lost => "tool_execution_interrupted",
+        }
+    }
 }
 
 /// Outcome of one admitted tool dispatch.
@@ -1628,12 +1585,19 @@ fn execute_tool(
     input: ExecuteInput,
     cancellation: CancellationSignal,
 ) -> DtoResult<ToolDispatchOutcome> {
-    let mut command = Command::new(input.program.as_str());
-    command.args(input.args.iter().map(BoundedText::as_str));
-    command.current_dir(root.execute_cwd());
-    // The child inherits the caller's environment by default. WorkspaceRoot
-    // scopes filesystem path resolution and the child CWD, not the process
-    // environment.
+    let mut command = shell::command(input.command.as_str());
+    // `cwd` addresses the workspace root by default; a declared path is
+    // addressed as given, like every other workspace-relative path.
+    command.current_dir(input.cwd.as_ref().map_or_else(
+        || root.execute_cwd().to_path_buf(),
+        |cwd| root.resolve_path(cwd),
+    ));
+    // The child inherits the caller's environment; the call's own variables
+    // overlay it by name. WorkspaceRoot scopes filesystem addressing and the
+    // child CWD, not the process environment.
+    for variable in &input.env {
+        command.env(variable.name.as_str(), variable.value.as_str());
+    }
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
     {
@@ -1643,13 +1607,11 @@ fn execute_tool(
         // (PR24-011).
         command.process_group(0);
     }
-    let child = command.spawn().map_err(|_| {
-        intention_proto::ErrorDto::validation(
-            "tool_execute_spawn_failed",
-            "unable to spawn workspace command",
-        )
-    })?;
-    let output = match bounded_output(child, cancellation) {
+    let child = command
+        .spawn()
+        .map_err(|error| shell::spawn_failure(&error))?;
+    let timeout = input.timeout_seconds;
+    let output = match bounded_output(child, cancellation, timeout) {
         Ok(output) => output,
         Err(ExecuteFailure::ReadFailed) => {
             return Err(intention_proto::ErrorDto::validation(
@@ -1678,9 +1640,12 @@ fn execute_tool(
         if truncated { "\n[truncated]" } else { "" }
     );
     Ok(ToolDispatchOutcome::Completed(ToolResult::Execute(
-        TextResult {
-            text: BoundedText::new(text)?,
-            truncated,
+        ExecuteResult {
+            text: TextResult {
+                text: BoundedText::new(text)?,
+                truncated,
+            },
+            process: Some(process_status),
         },
     )))
 }
@@ -1885,23 +1850,24 @@ fn grep_tool(
     if cancellation.is_cancelled() {
         return Ok(stopped_outcome(None));
     }
-    if input.scope.is_some() {
-        return grep_scoped(root, input, cancellation);
+    let GrepInput {
+        pattern,
+        scope,
+        path,
+    } = input;
+    if let Some(scope) = scope {
+        return grep_scoped(root, pattern, scope, cancellation);
     }
-    let path = input
-        .path
-        .as_ref()
-        .map(|path| root.resolve_path(path))
-        .ok_or_else(|| {
-            intention_proto::ErrorDto::validation(
-                "invalid_tool_path",
-                "grep requires a workspace path",
-            )
-        })?;
+    // A pathless call addresses the whole workspace, exactly like the declared
+    // default scope; it is not a model error.
+    let Some(path) = path else {
+        return grep_scoped(root, pattern, GrepScope::Workspace, cancellation);
+    };
+    let resolved = root.resolve_path(&path);
     // An explicit file path is addressed as given: `metadata` follows a
     // symbolic link like any other filesystem path, and only the type
     // decision happens here.
-    let metadata = std::fs::metadata(&path).map_err(|_| {
+    let metadata = std::fs::metadata(&resolved).map_err(|_| {
         intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
     })?;
     if !metadata.is_file() {
@@ -1910,7 +1876,7 @@ fn grep_tool(
             "workspace search failed",
         ));
     }
-    let mut file = std::fs::File::open(path).map_err(|_| {
+    let mut file = std::fs::File::open(resolved).map_err(|_| {
         intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
     })?;
     let mut bytes = Vec::new();
@@ -1919,16 +1885,7 @@ fn grep_tool(
     })?;
     let text = String::from_utf8_lossy(&bytes);
     let lossy_truncated = std::str::from_utf8(&bytes).is_err();
-    let logical = input
-        .path
-        .as_ref()
-        .ok_or_else(|| {
-            intention_proto::ErrorDto::validation(
-                "invalid_tool_path",
-                "grep requires a workspace path",
-            )
-        })?
-        .clone();
+    let logical = path;
     let mut matches = Vec::new();
     let mut retained_bytes = 0usize;
     let mut truncated = source_truncated || lossy_truncated;
@@ -1941,7 +1898,7 @@ fn grep_tool(
                 truncated: true,
             }))));
         }
-        let Some(column) = line.find(input.pattern.as_str()) else {
+        let Some(column) = line.find(pattern.as_str()) else {
             continue;
         };
         let fragment = if line.len() > MAX_TOOL_OUTPUT_BYTES {
@@ -1981,12 +1938,10 @@ fn grep_tool(
 
 fn grep_scoped(
     root: &WorkspaceRoot,
-    input: GrepInput,
+    pattern: BoundedText,
+    scope: GrepScope,
     cancellation: &CancellationSignal,
 ) -> DtoResult<ToolDispatchOutcome> {
-    let scope = input.scope.ok_or_else(|| {
-        intention_proto::ErrorDto::validation("invalid_tool_path", "grep requires a workspace path")
-    })?;
     let (base, single) = match scope {
         GrepScope::File { path } => (root.resolve_path(&path), Some(path)),
         GrepScope::Directory { path } => (root.resolve_path(&path), None),
@@ -2093,7 +2048,7 @@ fn grep_scoped(
                     truncated: true,
                 }))));
             }
-            let Some(column) = line.find(input.pattern.as_str()) else {
+            let Some(column) = line.find(pattern.as_str()) else {
                 continue;
             };
             let fragment = if line.len() > MAX_TOOL_OUTPUT_BYTES {

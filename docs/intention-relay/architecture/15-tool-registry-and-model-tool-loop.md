@@ -12,13 +12,18 @@ publication follows the committed values rather than a separate reread, and each
 code-owned input JSON Schema text. This design activates no registry table: a new tool is a new `ToolId` variant with
 its own contract. Ordinary runs and Build Autopilot admit compatible tools without
 per-action confirmation; Plan denies ordinary `write`/`edit`, while Plan `execute` is advisory-guided and
-non-sandboxed.
+non-sandboxed. The typed half of the tool layer is the proto's tool contract
+([architecture 02](02-dto-and-contract-policy.md)): the closed `ToolId`, the typed input and result families, and the
+typed projection each committed tool row carries. That move is adapter-facing only and activates none of this
+document's registry, admission, bridge, or MCP contracts.
 
 ## Ownership and one capability path
 
-`intention-tools` owns tool identity, common typed contracts, the six live tool contracts, and their model-visible spec
-match. The composition root alone assembles the model-visible set; the daemon owns active-run binding, durable
-orchestration, and post-commit publication; domain owns typed JSON record shapes, not implementation selection.
+`intention-proto` owns the typed tool contract — the closed `ToolId`, the typed input and result families, and each
+committed row's typed projection. `intention-tools` owns the six live tools' model-facing JSON Schema descriptors and
+their model-visible spec match. The composition root alone assembles the model-visible set; the daemon owns active-run
+binding, durable orchestration, and post-commit publication; the proto owns typed JSON record shapes, not
+implementation selection.
 
 Providers, models, adapters, bridge/kernel code, child work, MCP sources, Skills, and primitive owners cannot create a
 second tool collection, private model-function collection, direct primitive path, persistence authority, or publication
@@ -44,7 +49,7 @@ ToolSpec
   input_schema   (code-owned input JSON Schema text)
 ```
 
-`intention_tools::spec(id)` is the one place where a tool's identity, description, and schema are defined, and
+`intention_tools::spec(id)` is the one place where a tool's description and input schema are defined, and
 `intention_tools::model_visible_descriptors()` returns exactly the six specs in advertisement order. There is no
 registry table, no reserved slot, no descriptor revision, and no duplicate-registration outcome to reject: a name that
 is not one of the six `ToolId` values is `unknown_tool` before any effect.
@@ -91,12 +96,17 @@ version; labels, executor handles, live readiness, and opaque owner resources ar
 
 ## Base-tool initial contracts
 
--  **`execute`** takes one `ShellCommandTextDto`; a private local shell adapter interprets it, and
+-  **`execute`** takes one `ShellCommandTextDto` plus optional typed launch parameters (`cwd`, `env`,
+  `timeout_seconds`); a private local shell adapter interprets the command text, and
   the executable path, platform resource, and parser never cross a public DTO boundary. Shell syntax (pipelines,
   redirects, compound commands) is code-owned tool semantics. `stdout`, `stderr`, and exit status stay separate
   typed result fields before the bounded durable stream and safe projection and are never reconstructed from a formatted
-  text footer. `execute` runs with the user's ordinary OS authority and `WorkspaceRoot` CWD, is not a sandbox, and
-  claims no complete effect enumeration.
+  text footer. `execute` runs with the user's ordinary OS authority and the workspace root as its default CWD, is not a
+  sandbox, and claims no complete effect enumeration. A call without a declared timeout has no deadline: run
+  cancellation and the child's own exit are its only stops, and one fixed pipe-collection window after the direct child
+  is reaped keeps a descendant that inherited the pipes from extending the call. A declared timeout that fires is the
+  call's own observed interruption: the tool terminates the program's process group and returns what the pipes captured
+  as a partial result whose notice names the deadline, so a fired deadline is never recorded as lost evidence.
 -  **`fetch_url`** is network retrieval only. The closed first request form permits only `GET` and `HEAD` over `HTTP` or
   `HTTPS`: no request body, header map, cookie jar, credential source, URL userinfo, or non-HTTP(S) scheme. Every
   HTTP(S) address is permitted, including public, private, and literal loopback; it is deliberately not a local-network
@@ -171,7 +181,7 @@ The workspace rule is the same for every run:
 | Item | `WorkspaceRoot` meaning |
 | --- | --- |
 | Relative paths | Default base: `workspace_root.join(path)`. |
-| `execute` | Initial CWD; the child process starts in the root. |
+| `execute` | Initial CWD; the child process starts in the root unless the call declares a `cwd`. |
 | glob/grep | Default scope root when no path is supplied. |
 | Containment | None. The anchor does not contain: no symlink parser, containment check, or path-based denial remains, and a path inside the root may resolve outside it through a symbolic link. The typed input still rejects absolute and parent (`..`) paths — `WorkspaceRelativePathDto` for tool paths and the search-pattern validator for `glob`/`grep` patterns — as an input-shape rule, not a boundary; `WorkspaceRoot` is not a security boundary ([architecture 05](05-tools-and-workspace.md)). |
 
@@ -223,6 +233,13 @@ A `ToolCalls` finish closes a model step, not the run: one transaction records t
 and each admitted call then records its own `tool_results` row and its answering transcript row in one transaction; no
 local effect occurs inside it.
 
+Every completed step commits exactly one assistant row whenever it produced text or reasoning, and that row commits
+before the step's own tool rows do. The row carries the step's whole reasoning; a step that reasoned without answering
+commits it with an empty `text`, so the transcript keeps a tool round's reasoning above the exchange it precedes and a
+reload shows the same picture the live stream did. Reasoning never becomes model context: it rides the step's same-round
+continuation request as its attachment, and a context rebuild skips a row whose text is blank, so a reasoning-only step
+replays nothing.
+
 Calls admit independently and may execute concurrently; a group is not a workspace transaction and makes no
 serializability or merge claim. Each call commits exactly one terminal result; the next model step waits for all calls
 in the group to become terminal and receives a typed `ModelToolExchangeDto` in original model call order, never
@@ -253,12 +270,14 @@ The closed initial terminal outcome taxonomy is: `Succeeded`, `Deferred`, `Denie
 It carries only safe model-visible projection and approved typed metadata; no value silently changes category later.
 `Succeeded`, `Deferred`, known denials, known pre-effect failures, and `Partial` may enter the next typed exchange; a
 `Partial` result carries the bounded captured output with its interruption notice, never blocks another model step, and
-is never retried. `Deferred` is the asynchronous `sub_agent` acceptance outcome: it carries the child session handle,
+is never retried. Every `Failed` outcome answers its call with its bounded code-owned guidance the same way, so the
+model reads what went wrong and can correct the call instead of losing the run to it. `Deferred` is the asynchronous `sub_agent` acceptance outcome: it carries the child session handle,
 permits the next model step, and never changes category when the child's terminal markdown answer arrives later as the committed child-result message.
 
-Failure semantics are closed: invalid tool input or a refused workspace binding produces a typed failed tool result
-and the run terminalizes `Failed` without retry, and a tool infrastructure error produces a safe normalized failure
-without leaking provider or OS text.
+Failure semantics are closed: invalid tool input or a refused workspace binding produces a typed `Failed` result whose
+bounded model-visible guidance answers the call, and the model loop continues to the next step without retrying the
+call or stopping the run; a tool infrastructure error produces a safe normalized failure without leaking provider or OS
+text and remains the one tool-path outcome that terminalizes the run.
 
 #### Lifecycle vocabulary and interruption notices
 
@@ -267,9 +286,14 @@ The tool lifecycle vocabulary is closed: `ToolLifecycleStatusDto` is `Admitted`,
 mapping one to one onto the matching terminal lifecycle member. The transition set is closed: none to `Admitted`;
 `Admitted` to `Cancelled`, `Started`, or `Rejected`; `Started` to `Completed`, `Failed`, or `Partial`. A `Partial`
 result records one execution that was interrupted before a final result, requires non-blank content exactly like a
-successful result, never terminalizes the run, and is never retried. Two interruption codes are recorded:
-`tool_cancelled` when the caller stopped the call and `tool_execution_interrupted` when the call lost its process
-evidence; the durable tag of a canonical partial document or terminal error is `partial`.
+successful result, never terminalizes the run, and is never retried. A run-level stop is not a tool outcome:
+`run.cancel` cancels a call in flight with the same stopped `Partial` result and notice, keeps a result that committed
+before the stop was honored, and ends the run `Interrupted` at its execution's next boundary instead of asking the
+model again. Three interruption codes are recorded:
+`tool_cancelled` when the caller stopped the call, `tool_timed_out` when the call's own declared deadline ended it, and
+`tool_execution_interrupted` when the call lost its process evidence; a call cut by its declared deadline also records
+`declared_timeout_seconds` beside its code, and the durable tag of a canonical partial document or terminal error is
+`partial`.
 
 Every interrupted call reaches the model with a bracketed daemon notice that follows the captured output in the
 tool-message content answering the call:
@@ -277,9 +301,14 @@ tool-message content answering the call:
 | Case | Notice |
 | --- | --- |
 | stopped with captured output | `[The tool call was stopped before a final result; the output above is partial.]` |
+| timed out with captured output | `[The tool call hit its declared timeout of <n>s and was terminated before a final result; the output above is partial.]` |
 | lost with captured output | `[The tool call did not receive a final result; the output above is partial.]` |
 | stopped without captured output | `[The tool call was stopped before a final result.]` |
+| timed out without captured output | `[The tool call hit its declared timeout of <n>s and was terminated before a final result.]` |
 | lost without captured output | `[The tool call did not receive a final result.]` |
+
+The timed-out notice carries the deadline the caller declared in whole seconds, so the model reads the timeout it set
+rather than lost evidence; a caller stop observed at the same moment stays the stop.
 
 A partial tool message answers its call exactly like a completed one and the loop continues; the notices render as
 user-role notice content with the text unchanged. Recovery reports a call whose latest committed state is started
@@ -290,13 +319,15 @@ and recovery never changes the call's recorded lifecycle. Blank partial content 
 
 A stopped *answer* carries a different durable mark. The assistant message committed for a model step that the user or
 the environment stopped has `[interrupted]` appended on its own line, so the transcript records that the answer was
-cut; a step with no text commits no assistant row, a completed step never carries the marker, and the durable notice
-row that follows either way is unchanged.
+cut; the marker rides a cut answer only, never a reasoning-only row, a step that produced neither text nor reasoning
+commits no assistant row at all, a completed step never carries the marker, and the durable notice row that follows
+either way is unchanged.
 
 ### Tool result delivery
 
-Run subscriptions return current state: the correlated response carries the compact current run snapshot, and later
-committed values arrive as live `run.frame` notifications with `kind` `content` or `status` and no positions. There is
+Session subscriptions return current state: the correlated response carries the compact current session snapshot, and
+later committed values arrive as live `SessionFrameDto` notifications with `kind` `content`, `status`, or the transient
+`text_delta` and no positions. There is
 no tool-history page, cursor, snapshot frame, or resynchronization; a re-subscribing client re-reads current state and
 continues live.
 
@@ -318,7 +349,9 @@ A provider stream that stops producing content fails with `model_stream_progress
 fixed deadline value: the enforcing bound for the current scope is the provider execution's configured attempt timeout,
 an implementation safeguard owned by [architecture 08](08-model-protocol-and-providers.md) and [architecture
 09](09-configuration-security-and-observability.md), and a later activating specification selects any progress deadline
-it adds. Before the first committed content or other irreversible evidence, exactly one retry is permitted after
+it adds. That safeguard bounds silence, not content: it is armed when a provider stream opens and re-armed by every
+event the stream delivers, usage and tool-call facts included, so it holds the no-stall outcome while this policy's
+content-only refinement waits for its activating specification. Before the first committed content or other irreversible evidence, exactly one retry is permitted after
 `model_stream_progress_timeout`; after such a fact, no retry is permitted. A simultaneously committed user cancellation
 wins the race. A timeout otherwise produces a safe failed outcome, suppresses late output, and never claims success
 or resumes work after restart.
@@ -333,7 +366,8 @@ An admitted call's start is the boundary after which an external effect may be p
 restart records `CancelledBeforeStart` or `InterruptedBeforeStart` and no external action occurs; after it, known
 terminal evidence records the exact known result, and a started action interrupted or lost without proven terminal
 effect commits a bounded `Partial` result with its interruption notice. Known validation failures, denials, and known
-tool/process failures are known outcomes, not partial results. Tools are never automatically retried; provider retry may
+tool/process failures are known outcomes, not partial results, and each one is delivered to the model as the call's
+answering result with its bounded guidance. Tools are never automatically retried; provider retry may
 not repeat a tool action or occur after committed call or result evidence. Cancellation stops further admission,
 suppresses late results, and prevents a next model step.
 
@@ -344,15 +378,15 @@ and its notice, and the old call is never retried.
 
 ## Compatibility and protocol boundary
 
-`model_tool_loop_v1` is a tool/model capability delivered through typed run subscriptions
-([architecture 03](03-daemon-transport-and-adapters.md)): the correlated current run snapshot, then live `run.frame`
-notifications. A client that cannot represent loop content
+`model_tool_loop_v1` is a tool/model capability delivered through typed session subscriptions
+([architecture 03](03-daemon-transport-and-adapters.md)): the correlated current session snapshot, then live session
+frames. A client that cannot represent loop content
 receives a typed error without partial state. Snapshots stay compact and safe; exact wire tags and storage schema remain
 deferred.
 
 The model-tool-loop executor requires a tool executor, and provider tool calls execute through the one durable tool
 path. A row carries no synthetic tool collection, tool-loop, child, MCP, Skill, policy, or execution-kind state
-beyond the eight identity newtypes and the plain step and group indices.
+beyond the nine identity newtypes and the plain step and group indices.
 
 ## Dependencies and non-goals
 

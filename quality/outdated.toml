@@ -5,6 +5,8 @@
 # so the list stays empty until a new reviewed hold is required.
 # The 2026-09-30 patch refresh to async-openai 0.42.1 changed no transitive
 # dependency and requires no hold either.
+# The 2026-10-10 refresh moved async-openai to 0.42.2 and uuid to 1.28.0; both
+# keep the reviewed graph, so the list still requires no hold.
 
 [outdated_ignores]
 crates = []

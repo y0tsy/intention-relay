@@ -1,0 +1,333 @@
+//! The interactive line REPL over the shared application core.
+//!
+//! The REPL owns one line loop and no rendering: every line is either a command
+//! the loop performs or a turn the shared driver streams through the core. The
+//! same driver and the same application state serve the headless command, so
+//! session, turn, transcript, and provisional-text behavior is identical in both
+//! line front ends.
+//!
+//! Ctrl+C belongs to this loop rather than to the process: while a run streams,
+//! the signal stops that run, and at the prompt it leaves the loop like `/quit`.
+//! A signal therefore never kills a process that would leave a run working in
+//! the daemon.
+
+use std::io::{BufRead, Write};
+
+use intention_client::IntentionClient;
+use intention_proto::{RunStatusDto, SessionId, run_status_is_terminal};
+use intention_transport::LocalEndpoint;
+use intention_tui::app::short_identifier;
+
+use crate::cli::{ExitStatus, Options};
+use crate::headless::{
+    Driver, InterruptRequests, PumpFailure, RunOutcome, TextReport, interrupt_requests,
+};
+
+/// Runs the line REPL until the input ends or the user quits.
+pub fn run<W: Write, E: Write>(
+    options: &Options,
+    client: IntentionClient,
+    endpoint: LocalEndpoint,
+    out: &mut W,
+    err: &mut E,
+) -> ExitStatus {
+    let runtime = match crate::session_runtime() {
+        Ok(runtime) => runtime,
+        Err(error) => return crate::startup_failure(&error, err),
+    };
+    runtime.block_on(converse(options, client, endpoint, out, err))
+}
+
+/// Drives the line loop over one connected driver.
+async fn converse<W: Write, E: Write>(
+    options: &Options,
+    client: IntentionClient,
+    endpoint: LocalEndpoint,
+    out: &mut W,
+    err: &mut E,
+) -> ExitStatus {
+    let workspace_root = match crate::workspace_root(options.workspace()) {
+        Ok(root) => root,
+        Err(error) => return crate::startup_failure(&error, err),
+    };
+    let mut driver = Driver::new(client, endpoint, workspace_root, options.mode());
+    // The front end resolves the session it opens once, through the client: a
+    // selected session is read by its own snapshot, an explicit continuation
+    // resolves the target the daemon's list order names, and a launch that
+    // asked for neither opens nothing.
+    let opened = match options.session() {
+        Some(session) => driver.show(session).await,
+        None if options.continue_session() => match driver.continue_session().await {
+            Ok(session) => driver.show(session).await,
+            Err(error) => Err(error),
+        },
+        None => driver.bootstrap().await,
+    };
+    if let Err(error) = opened {
+        return crate::startup_failure(&error, err);
+    }
+
+    let mut lines = input_lines();
+    let mut interrupts = interrupt_requests();
+    loop {
+        // @todo(hack): every REPL write is best-effort - a failed prompt, error,
+        // or notice write is silently dropped and the loop continues as if the
+        // user saw the line; one reporter should record the suppressed failure.
+        let _ = write!(out, "> ");
+        let _ = out.flush();
+        let mut interrupted = false;
+        let line = tokio::select! {
+            biased;
+            line = lines.recv() => line,
+            _ = interrupts.recv() => {
+                interrupted = true;
+                None
+            }
+        };
+        if interrupted {
+            // Ctrl+C leaves the line loop like `/quit`: the run this front end
+            // still observes is stopped first, so the daemon never keeps
+            // working for a loop that left.
+            let _stopped = driver.request_stop().await;
+            drain_active_turn(&mut driver, out, err, &mut interrupts).await;
+            break;
+        }
+        let Some(line) = line else {
+            drain_active_turn(&mut driver, out, err, &mut interrupts).await;
+            break;
+        };
+        let input = match line {
+            Input::Line(text) => text,
+            Input::Failed => {
+                let _ = writeln!(err, "error: the input line could not be read");
+                break;
+            }
+        };
+        match Line::parse(&input) {
+            Line::Blank => {}
+            Line::Quit => {
+                drain_active_turn(&mut driver, out, err, &mut interrupts).await;
+                break;
+            }
+            Line::New => match driver.create().await {
+                Ok(()) => report_open_session(&driver, out),
+                Err(error) => {
+                    let _ = writeln!(err, "error: {error}");
+                }
+            },
+            Line::Session(argument) => match SessionId::parse(&argument) {
+                Ok(session) => match driver.show(session).await {
+                    Ok(()) => report_open_session(&driver, out),
+                    Err(error) => {
+                        let _ = writeln!(err, "error: {error}");
+                    }
+                },
+                Err(_) => {
+                    let _ = writeln!(
+                        err,
+                        "error: /session requires a canonical session identifier"
+                    );
+                }
+            },
+            Line::Unknown(name) => {
+                let _ = writeln!(err, "error: unknown command /{name}");
+            }
+            Line::Turn(turn) => {
+                // A prompt with no session open creates the session it needs
+                // and commits the prompt as that session's first turn in one
+                // command.
+                converse_turn(&mut driver, &turn, out, err, &mut interrupts).await;
+            }
+        }
+    }
+    ExitStatus::Completed
+}
+
+/// One prompt read the input thread produced.
+#[derive(Debug, Eq, PartialEq)]
+enum Input {
+    /// The thread read one line, its newline included.
+    Line(String),
+    /// The thread could not read the console, so no further line follows.
+    Failed,
+}
+
+/// Reads prompt lines on their own thread.
+///
+/// A blocking read of the console cannot notice a signal, and the line loop
+/// must wait for a line and for SIGINT at the same time: the thread owns the
+/// read and the console lock for the life of the front end - it is the only
+/// reader in the process - and sends every line it reads, so a signal reaches
+/// the loop while it waits.
+fn input_lines() -> tokio::sync::mpsc::UnboundedReceiver<Input> {
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        let mut buffer = String::new();
+        loop {
+            buffer.clear();
+            let read = std::io::stdin().lock().read_line(&mut buffer);
+            match read {
+                Ok(0) => break,
+                Ok(_) => {
+                    if sender
+                        .send(Input::Line(std::mem::take(&mut buffer)))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(_) => {
+                    let _ = sender.send(Input::Failed);
+                    break;
+                }
+            }
+        }
+    });
+    receiver
+}
+
+/// Sends one line as a user turn and streams the run to its end.
+async fn converse_turn<W: Write, E: Write>(
+    driver: &mut Driver,
+    input: &str,
+    out: &mut W,
+    err: &mut E,
+    interrupts: &mut InterruptRequests,
+) {
+    if let Some(error) = driver.send_turn(input).await {
+        let _ = writeln!(err, "error: {error}");
+        return;
+    }
+    stream_active_turn(driver, out, err, interrupts).await;
+}
+
+/// Streams the run the core currently owns to its terminal status.
+async fn stream_active_turn<W: Write, E: Write>(
+    driver: &mut Driver,
+    out: &mut W,
+    err: &mut E,
+    interrupts: &mut InterruptRequests,
+) {
+    let mut report = TextReport::new(out);
+    match driver.pump(&mut report, None, interrupts).await {
+        Ok(outcome) => {
+            let _ = report.finish(outcome);
+            if outcome == RunOutcome::Terminal(RunStatusDto::Failed)
+                && let Some(error) = driver.state().error()
+            {
+                let _ = writeln!(err, "error: {error}");
+            }
+        }
+        Err(PumpFailure::Client(error)) => {
+            let _ = writeln!(err, "error: {error}");
+        }
+        Err(PumpFailure::Output(_error)) => {
+            let _ = writeln!(err, "error: the run output could not be written");
+        }
+    }
+}
+
+/// Waits for a live run before the line loop leaves.
+///
+/// A piped script ends with `/quit` or end-of-input while the turn it sent may
+/// still be streaming. The front end owns one run at a time, so the loop waits
+/// for that run's terminal status before it returns, and a script's output
+/// stays complete instead of racing the process exit.
+// @todo(hack): the line loop must block on the live run before it returns so a
+// piped script's output is not truncated by the process exit; the run's
+// completion should own the process lifetime instead of the loop draining it.
+async fn drain_active_turn<W: Write, E: Write>(
+    driver: &mut Driver,
+    out: &mut W,
+    err: &mut E,
+    interrupts: &mut InterruptRequests,
+) {
+    let live = driver
+        .state()
+        .run_status()
+        .is_some_and(|status| !run_status_is_terminal(status));
+    if live {
+        stream_active_turn(driver, out, err, interrupts).await;
+    }
+}
+
+/// Reports the session one command left open.
+///
+/// A command that opened no session already wrote the typed failure the client
+/// reported, so this writes nothing of its own.
+fn report_open_session(driver: &Driver, out: &mut impl Write) {
+    if let Some(session) = driver.state().session_id() {
+        let _ = writeln!(out, "session {} open", short_identifier(session));
+    }
+}
+
+/// One recognized REPL input line.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Line {
+    /// The input was blank.
+    Blank,
+    /// The user asked to leave.
+    Quit,
+    /// The user asked for a new session.
+    New,
+    /// The user asked to open the named session.
+    Session(String),
+    /// The user typed one turn.
+    Turn(String),
+    /// The user typed an undeclared command.
+    Unknown(String),
+}
+
+impl Line {
+    /// Parses one raw input line.
+    fn parse(raw: &str) -> Self {
+        let input = raw.trim();
+        if input.is_empty() {
+            return Self::Blank;
+        }
+        let Some(command) = input.strip_prefix('/') else {
+            return Self::Turn(input.to_owned());
+        };
+        let (name, argument) = command
+            .split_once(' ')
+            .map_or((command, ""), |(name, argument)| (name, argument.trim()));
+        match name {
+            "quit" => Self::Quit,
+            "new" => Self::New,
+            "session" => Self::Session(argument.to_owned()),
+            _ => Self::Unknown(name.to_owned()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::panic,
+        reason = "Line tests assert the parsed step of typed input directly."
+    )]
+
+    use super::*;
+
+    #[test]
+    fn every_line_kind_parses_from_its_input() {
+        assert_eq!(Line::parse("   \n"), Line::Blank);
+        assert_eq!(Line::parse("/quit\n"), Line::Quit);
+        assert_eq!(Line::parse("/new"), Line::New);
+        assert_eq!(
+            Line::parse("/session 0b1a2c3d-0000-4000-8000-000000000000\n"),
+            Line::Session("0b1a2c3d-0000-4000-8000-000000000000".to_owned())
+        );
+        assert_eq!(
+            Line::parse("  hello world  "),
+            Line::Turn("hello world".to_owned())
+        );
+        assert_eq!(Line::parse("/watch"), Line::Unknown("watch".to_owned()));
+    }
+
+    #[test]
+    fn a_command_without_an_argument_keeps_an_empty_argument() {
+        assert_eq!(Line::parse("/session"), Line::Session(String::new()));
+        assert_eq!(Line::parse("/quit now"), Line::Quit);
+    }
+}

@@ -68,8 +68,10 @@ aliases, and the opt-in `e2e-real-api`.
   test without closing a production cycle, while a production dependency cycle still fails.
 - `make docs-check` resolves Markdown links across `docs/` and the root documents (`README.md`, `AGENTS.md`,
   `THIRD_PARTY_NOTICES.md`), checks code-fence balance and Mermaid diagram headers, verifies that every `MAX_*`/`MIN_*`
-  bound a current-policy document names exists in `crates/`, and rejects secret-shaped assignments. Prose counts,
-  tables, code-path claims, and cross-document contradictions remain review responsibilities.
+  bound a current-policy document names exists in `crates/`, rejects a removed wire name still spelled under `docs/`
+  or `crates/`, verifies that a placeholder constant a `@todo(core)` convention sentence names exists under `crates/`,
+  and rejects secret-shaped assignments. Prose counts, tables, code-path claims, and cross-document contradictions
+  remain review responsibilities.
 - `make quality-tests` runs the checkers' own focused self-tests over synthetic inputs, and it is part of `make check`.
 
 ## Coverage policy
@@ -102,6 +104,9 @@ a threshold authority.
   async test attribute is collected like any other. A collected crate is skipped only when Cargo declares no
   test-executing target for it and the crate is listed in `quality/coverage.toml` under `[policy].unexecutable_crates`;
   an undeclared skip, a stale declaration, or a collected crate absent from the snapshot fails the run.
+- The tool contract families' move into the exempt `intention-proto` is a coverage-position change, not a policy change:
+  `quality/coverage.toml` keeps its tiers, floors, and exclusions, and the moved families' cases are carried by
+  `intention-proto`'s declared `contracts`, `m3_contracts`, and `protocol_contracts` targets.
 
 ## Cargo feature policy
 
@@ -126,7 +131,10 @@ the compile and test contracts are already covered.
 
 `make deps` and blocking CI run `cargo metadata --locked` as the authoritative lockfile check; `make notices-check`,
 which regenerates `THIRD_PARTY_NOTICES.md` from `Cargo.lock`, `quality/about.toml`, and the notice template through
-pinned `cargo-about` and fails on drift; `cargo deny check` for advisories, licenses, banned crates, allowed sources,
+pinned `cargo-about` and compares it byte for byte, falling back to comparing which license every crate reference is
+rendered under when the bytes differ only because the local registry cache grouped or attributed identical license texts
+differently, so the check does not depend on which machine ran it while a changed graph, version, or license name still
+fails; `cargo deny check` for advisories, licenses, banned crates, allowed sources,
 and duplicate-version policy, using the policy expression in `deny.toml`; `cargo audit` as an independent advisory
 source; `cargo udeps` for unused dependencies; `cargo machete` for manifest hygiene; and `cargo outdated` for stale
 direct dependencies under the policy in `quality/outdated.toml`.
@@ -134,6 +142,25 @@ direct dependencies under the policy in `quality/outdated.toml`.
 `THIRD_PARTY_NOTICES.md` is a checked-in generated disclosure artifact, not a hand-maintained license inventory; private
 `publish = false` workspace packages stay project-owned code and are excluded. A failed or stale notice generation is a
 blocking supply-chain failure, not an inferred pass.
+
+`revue` 3.9.1 is vendored at `vendor/revue` and selected through the root `[patch.crates-io]` entry. The copy was
+taken for two reasons: the released crate quit the `App` event loop on Ctrl+C with no builder option, and it pulled the
+unmaintained `unic-emoji-char` probe. The first reason is settled upstream — 3.10.0 adds `App::prevent_default`, which
+the terminal's layered Ctrl+C adopts when this copy is dropped — and the second is what keeps the copy here: registry
+3.10.0 still depends on `unic-emoji-char`, whose unmaintained advisories the advisory policy resolves instead of
+acknowledging, and a `cargo deny check advisories` probe against that graph fails. Upstream plans to replace the probe's
+source (hawk90/revue#950); the upgrade, the `prevent_default` switch, and the deletion of this copy land together in one
+change. The vendored copy is 3.9.1 upstream source with `tests/`, `benches/`, `examples/`, and `docs/` dropped and their
+manifest targets stripped, plus two changes: an `AppBuilder::quit_key(Option<KeyEvent>)` option whose default, Ctrl+C,
+is the pre-patch behavior, and the removal of the `unic-emoji-char` probe, which only served the public
+`CharWidthTable` while `unicode-width` reports the same width for all but the 26 regional-indicator code points. The
+copy is excluded from the workspace, so format, lint, coverage, and architecture policy stay scoped to `crates/`, and
+`quality/check_architecture.py` skips `vendor/` in its raw-text scans; `vendor/revue/PATCH.md` records the patch, its
+files, and the conditions that drop the vendored copy.
+
+The terminal binary takes `mimalloc` as its process-wide global allocator, because a terminal frame allocates many
+short-lived small strings; it is an ordinary crates.io dependency under the MIT license, disclosed like every other
+dependency through the generated `THIRD_PARTY_NOTICES.md`.
 
 ## Required quality-gate failure tests
 
@@ -150,11 +177,14 @@ fixtures themselves live with their checkers.
 | Missing, conflicting, or incomplete crate classification metadata | `make architecture`. |
 | Undeclared or stale workspace, external, or named-test-target declaration | `make architecture`. |
 | Forbidden crate dependency or import | `make architecture`. |
+| Untyped-decode import shape hidden from the raw-text scan | `make architecture` (the `[forbidden] source_patterns` shapes and the checker's own `self_test_source_patterns` fixture). |
 | DTO/SDK implementation leak | `make architecture`. |
 | Coverage below a crate's tier floor | `make coverage`. |
 | Undeclared or stale coverage skip declaration | `make coverage`. |
 | Unapproved coverage exclusion metadata | `make coverage`. |
 | Documented bound that no crate defines | `make docs-check`. |
+| Removed wire name still spelled in a document or a crate | `make docs-check`. |
+| Documented placeholder constant that no crate defines | `make docs-check`. |
 | Dependency advisory/license/source/ban/duplicate violation | `make deps`. |
 | Unused, stale, or manifest-only dependency | `make deps`. |
 | Recognizable fake secret in output fixture | `make test` and `make verify`. |
@@ -176,12 +206,12 @@ mutating, networked, and opt-in, and it is never part of the blocking gate. The 
 
 Slice 1.5 (the current-state core) changes the evidence base without lowering it:
 
-- the storage contract suite is rebuilt for the eight-table current-state schema and the one-transaction rule, and the
+- the storage contract suite is rebuilt for the nine-table current-state schema and the one-transaction rule, and the
   event/snapshot/replay contract blocks are deleted with their surfaces;
 - the engine tests cover commit-and-publish without events or replays, and tool tests cover one transaction per call and
   the pre-effect identity rejection;
-- protocol contract fixtures cover the reduced current-state surface (current-state snapshots and `run.frame`
-  notifications, no cursors or resync);
+- protocol contract fixtures cover the reduced current-state surface (current-state session snapshots and
+  `SessionFrameDto` notifications, no cursors or resync);
 - deleted-surface tests are deleted without replacement; per-crate coverage tiers in `quality/coverage.toml` stay as
   declared, and a merged crate inherits the strictest source floor;
 - `intention-tui`'s declared `edge` floor is enforced again: the runner decides executability from Cargo metadata, so

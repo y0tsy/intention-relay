@@ -1,0 +1,141 @@
+//! TransitionGroup for animating lists with automatic reordering
+
+use super::types::Animation;
+use crate::render::Cell;
+use crate::style::Color;
+use crate::widget::traits::{RenderContext, View, WidgetProps};
+use crate::{impl_props_builders, impl_styled_view};
+
+/// TransitionGroup for animating lists with automatic reordering
+#[derive(Clone)]
+pub struct TransitionGroup {
+    /// List of items
+    items: Vec<String>,
+    /// Enter animation
+    enter_animation: Option<Animation>,
+    /// Leave animation
+    leave_animation: Option<Animation>,
+    /// Move/Reorder animation
+    move_animation: Option<Animation>,
+    /// Stagger delay in milliseconds
+    stagger_delay: u64,
+    /// Widget properties
+    props: WidgetProps,
+}
+
+impl TransitionGroup {
+    /// Create a new transition group with items
+    pub fn new(items: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        let items: Vec<String> = items.into_iter().map(|s| s.into()).collect();
+        Self {
+            items,
+            enter_animation: None,
+            leave_animation: None,
+            move_animation: None,
+            stagger_delay: 0,
+            props: WidgetProps::default(),
+        }
+    }
+
+    /// Set enter animation for items
+    #[deprecated(
+        since = "3.5.0",
+        note = "TransitionGroup draws its items without animating them; wrap each item in a `Transition` for enter/leave animations"
+    )]
+    pub fn enter(mut self, animation: Animation) -> Self {
+        self.enter_animation = Some(animation);
+        self
+    }
+
+    /// Set leave animation for items
+    #[deprecated(
+        since = "3.5.0",
+        note = "TransitionGroup draws its items without animating them; wrap each item in a `Transition` for enter/leave animations"
+    )]
+    pub fn leave(mut self, animation: Animation) -> Self {
+        self.leave_animation = Some(animation);
+        self
+    }
+
+    /// Set move/reorder animation
+    #[deprecated(
+        since = "3.5.0",
+        note = "TransitionGroup draws its items without animating them; wrap each item in a `Transition` for enter/leave animations"
+    )]
+    pub fn move_animation(mut self, animation: Animation) -> Self {
+        self.move_animation = Some(animation);
+        self
+    }
+
+    /// Set stagger delay between item animations
+    #[deprecated(
+        since = "3.5.0",
+        note = "TransitionGroup draws its items without animating them; wrap each item in a `Transition` for enter/leave animations"
+    )]
+    pub fn stagger(mut self, delay_ms: u64) -> Self {
+        self.stagger_delay = delay_ms;
+        self
+    }
+
+    /// Add an item to the group
+    pub fn push(&mut self, item: impl Into<String>) {
+        self.items.push(item.into());
+    }
+
+    /// Remove an item from the group
+    pub fn remove(&mut self, index: usize) -> Option<String> {
+        if index < self.items.len() {
+            Some(self.items.remove(index))
+        } else {
+            None
+        }
+    }
+
+    /// Get the number of items
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Check if the group is empty
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// Get items
+    pub fn items(&self) -> &[String] {
+        &self.items
+    }
+}
+
+impl Default for TransitionGroup {
+    fn default() -> Self {
+        Self::new(Vec::<String>::new())
+    }
+}
+
+impl View for TransitionGroup {
+    crate::impl_view_meta!("TransitionGroup");
+
+    fn render(&self, ctx: &mut RenderContext) {
+        let area = ctx.area;
+        // The transitioning content takes the stylesheet; the dimming applied
+        // mid-animation is progress, not a color choice.
+        let default_bg = ctx.css_background(Color::BLACK);
+        let default_fg = ctx.css_color(Color::WHITE);
+
+        // Render each item
+        for (y, item) in (0_u16..).zip(self.items.iter()) {
+            if y >= area.height {
+                break;
+            }
+
+            // Render item in terminal columns
+            ctx.put_str_with(0, y, item, area.width, |ch| {
+                Cell::new(ch).fg(default_fg).bg(default_bg)
+            });
+        }
+    }
+}
+
+impl_styled_view!(TransitionGroup);
+impl_props_builders!(TransitionGroup);

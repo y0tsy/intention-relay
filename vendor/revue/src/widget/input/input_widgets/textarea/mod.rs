@@ -1,0 +1,929 @@
+//! TextArea widget for multi-line text editing
+//!
+//! A full-featured text editor widget with:
+//! - Multi-line editing
+//! - Cursor navigation
+//! - Text selection
+//! - Undo/redo history
+//! - Line numbers
+//! - Word wrap
+//! - Scrolling
+//! - Multi-cursor support
+//! - Find/replace functionality
+
+mod content;
+mod cursor;
+mod edit;
+mod editing;
+mod find_impl;
+mod find_replace;
+mod multi_cursor;
+mod navigation;
+mod selection;
+mod undo;
+mod view;
+
+pub use cursor::{Cursor, CursorPos, CursorSet};
+pub use find_replace::{FindMatch, FindOptions, FindReplaceMode, FindReplaceState};
+pub use selection::Selection;
+
+use crate::event::{Key, KeyEvent};
+use crate::style::Color;
+use crate::widget::syntax::{Language, SyntaxHighlighter, SyntaxTheme};
+use crate::widget::traits::WidgetProps;
+use crate::{impl_props_builders, impl_styled_view};
+
+/// Maximum undo history size
+pub(super) const MAX_UNDO_HISTORY: usize = 100;
+
+/// A multi-line text editor widget
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use revue::prelude::*;
+///
+/// let mut editor = TextArea::new()
+///     .content("Hello, World!\nLine 2")
+///     .line_numbers(true)
+///     .wrap(true);
+///
+/// // Handle key events
+/// editor.handle_key(&Key::Char('a'));
+/// ```
+///
+/// # Keyboard Shortcuts
+///
+/// | Key | Action |
+/// |-----|--------|
+/// | `Char` | Insert character at cursor |
+/// | `Enter` | Insert newline |
+/// | `Tab` | Insert tab (rendered as spaces based on `tab_width`) |
+/// | `Backspace` | Delete character before cursor (or merge with previous line) |
+/// | `Delete` | Delete character at cursor (or merge with next line) |
+/// | `Left` | Move cursor left (clears selection) |
+/// | `Right` | Move cursor right (clears selection) |
+/// | `Up` | Move cursor up one line (clears selection) |
+/// | `Down` | Move cursor down one line (clears selection) |
+/// | `Home` | Move cursor to start of line (clears selection) |
+/// | `End` | Move cursor to end of line (clears selection) |
+/// | `PageUp` | Scroll the view up a page, moving the cursor with it (to the first line at the top) |
+/// | `PageDown` | Scroll the view down a page, moving the cursor with it (to the last line at the end) |
+///
+/// A page is the height of the view at the last render (10 rows before the
+/// first render). With wrapping on, pages are counted in screen rows.
+#[derive(Clone)]
+pub struct TextArea {
+    /// Lines of text
+    pub(super) lines: Vec<String>,
+    /// Multiple cursors (primary cursor is at index 0)
+    pub(super) cursors: CursorSet,
+    /// First visible line, kept between renders so the view only moves
+    /// when the cursor would leave it
+    pub(super) scroll: std::cell::Cell<usize>,
+    /// Horizontal scroll in terminal COLUMNS when not wrapping, kept between
+    /// renders so the view only moves when the cursor would leave it
+    pub(super) scroll_x: std::cell::Cell<usize>,
+    /// Undo history
+    pub(super) undo_stack: Vec<edit::EditOperation>,
+    /// Redo history
+    pub(super) redo_stack: Vec<edit::EditOperation>,
+    /// Show line numbers
+    pub(super) show_line_numbers: bool,
+    /// Enable word wrap
+    pub(super) wrap: bool,
+    /// Read-only mode
+    pub(super) read_only: bool,
+    /// Focused state
+    pub(super) focused: bool,
+    /// Tab width
+    pub(super) tab_width: usize,
+    /// Placeholder text
+    pub(super) placeholder: Option<String>,
+    /// Maximum lines (0 = unlimited)
+    pub(super) max_lines: usize,
+    /// Minimum height in rows (0 = no constraint). Defaults to 3.
+    pub(super) min_height: u16,
+    /// Text color
+    pub(super) fg: Option<Color>,
+    /// Background color
+    pub(super) bg: Option<Color>,
+    /// Cursor color
+    pub(super) cursor_fg: Option<Color>,
+    /// Selection color
+    pub(super) selection_bg: Option<Color>,
+    /// Line number color
+    pub(super) line_number_fg: Option<Color>,
+    /// Syntax highlighter for code coloring
+    pub(super) highlighter: Option<SyntaxHighlighter>,
+    /// Find/Replace state
+    pub(super) find_replace: Option<FindReplaceState>,
+    /// Match highlight color
+    pub(super) match_highlight_bg: Option<Color>,
+    /// Current match highlight color
+    pub(super) current_match_bg: Option<Color>,
+    /// CSS styling properties (id, classes)
+    pub(super) props: WidgetProps,
+    /// Last known viewport height (lines visible), updated during render
+    pub(super) last_viewport_height: std::cell::Cell<usize>,
+    /// Last known text width in columns, updated during render: where lines
+    /// wrap when paging (0 before the first render: no wrapping)
+    pub(super) last_text_width: std::cell::Cell<u16>,
+}
+
+impl TextArea {
+    /// Create a new empty text area
+    pub fn new() -> Self {
+        Self {
+            lines: vec![String::new()],
+            cursors: CursorSet::default(),
+            scroll: std::cell::Cell::new(0),
+            scroll_x: std::cell::Cell::new(0),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            show_line_numbers: false,
+            wrap: true,
+            read_only: false,
+            focused: false,
+            tab_width: 4,
+            placeholder: None,
+            max_lines: 0,
+            min_height: 3,
+            fg: None,
+            bg: None,
+            cursor_fg: None,
+            selection_bg: Some(Color::rgb(50, 50, 150)),
+            line_number_fg: None,
+            highlighter: None,
+            find_replace: None,
+            match_highlight_bg: None,
+            current_match_bg: None,
+            props: WidgetProps::new(),
+            last_viewport_height: std::cell::Cell::new(10),
+            last_text_width: std::cell::Cell::new(0),
+        }
+    }
+
+    /// Create a TextArea pre-configured as a code editor with line numbers
+    pub fn editor() -> Self {
+        Self::new().line_numbers(true).wrap(true)
+    }
+
+    /// Set initial content
+    pub fn content(mut self, text: impl Into<String>) -> Self {
+        self.set_content(&text.into());
+        self
+    }
+
+    /// Show/hide line numbers
+    pub fn line_numbers(mut self, show: bool) -> Self {
+        self.show_line_numbers = show;
+        self
+    }
+
+    /// Enable/disable word wrap
+    pub fn wrap(mut self, wrap: bool) -> Self {
+        self.wrap = wrap;
+        self
+    }
+
+    /// Set read-only mode
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    /// Set focused state
+    pub fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
+    }
+
+    /// Set tab width
+    pub fn tab_width(mut self, width: usize) -> Self {
+        self.tab_width = width;
+        self
+    }
+
+    /// Set placeholder text
+    pub fn placeholder(mut self, text: impl Into<String>) -> Self {
+        self.placeholder = Some(text.into());
+        self
+    }
+
+    /// Set maximum lines (0 = unlimited)
+    pub fn max_lines(mut self, max: usize) -> Self {
+        self.max_lines = max;
+        self
+    }
+
+    /// Set minimum height in rows (0 = no constraint)
+    ///
+    /// Defaults to 3. This prevents the TextArea from collapsing to zero height
+    /// when used as an auto-sized child in a flex/stack layout.
+    pub fn min_height(mut self, height: u16) -> Self {
+        self.min_height = height;
+        self
+    }
+
+    /// Set text color
+    pub fn fg(mut self, color: Color) -> Self {
+        self.fg = Some(color);
+        self
+    }
+
+    /// Set background color
+    pub fn bg(mut self, color: Color) -> Self {
+        self.bg = Some(color);
+        self
+    }
+
+    /// Set cursor color
+    pub fn cursor_fg(mut self, color: Color) -> Self {
+        self.cursor_fg = Some(color);
+        self
+    }
+
+    /// Set selection background color
+    pub fn selection_bg(mut self, color: Color) -> Self {
+        self.selection_bg = Some(color);
+        self
+    }
+
+    /// Set line number color
+    pub fn line_number_fg(mut self, color: Color) -> Self {
+        self.line_number_fg = Some(color);
+        self
+    }
+
+    /// Set match highlight background color
+    pub fn match_highlight_bg(mut self, color: Color) -> Self {
+        self.match_highlight_bg = Some(color);
+        self
+    }
+
+    /// Set current match highlight background color
+    pub fn current_match_bg(mut self, color: Color) -> Self {
+        self.current_match_bg = Some(color);
+        self
+    }
+
+    /// Enable syntax highlighting for a language
+    pub fn syntax(mut self, language: Language) -> Self {
+        self.highlighter = Some(SyntaxHighlighter::new(language));
+        self
+    }
+
+    /// Enable syntax highlighting with a custom theme
+    pub fn syntax_with_theme(mut self, language: Language, theme: SyntaxTheme) -> Self {
+        self.highlighter = Some(SyntaxHighlighter::with_theme(language, theme));
+        self
+    }
+
+    // =========================================================================
+    // Key Handling
+    // =========================================================================
+
+    /// Handle key event
+    pub fn handle_key(&mut self, key: &Key) -> bool {
+        if !self.focused {
+            return false;
+        }
+        match key {
+            Key::Char(ch) => {
+                self.insert_char(*ch);
+                true
+            }
+            Key::Enter => {
+                self.insert_char('\n');
+                true
+            }
+            Key::Tab => {
+                self.insert_char('\t');
+                true
+            }
+            Key::Backspace => {
+                self.delete_char_before();
+                true
+            }
+            Key::Delete => {
+                self.delete_char_at();
+                true
+            }
+            Key::Left => {
+                self.clear_selection();
+                self.move_left();
+                true
+            }
+            Key::Right => {
+                self.clear_selection();
+                self.move_right();
+                true
+            }
+            Key::Up => {
+                self.clear_selection();
+                self.move_up();
+                true
+            }
+            Key::Down => {
+                self.clear_selection();
+                self.move_down();
+                true
+            }
+            Key::Home => {
+                self.clear_selection();
+                self.move_home();
+                true
+            }
+            Key::End => {
+                self.clear_selection();
+                self.move_end();
+                true
+            }
+            Key::PageUp => {
+                let page = self.last_viewport_height.get().max(1);
+                self.page_up(page);
+                true
+            }
+            Key::PageDown => {
+                let page = self.last_viewport_height.get().max(1);
+                self.page_down(page);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Handle a key event, including modifier combinations.
+    ///
+    /// This is the modifier-aware entry point. It wires the find/replace and
+    /// multi-cursor shortcuts (whose logic already exists), then delegates
+    /// unmodified keys to [`handle_key`](Self::handle_key).
+    ///
+    /// Bindings:
+    /// - `Ctrl+F` — open the find panel
+    /// - `Ctrl+H` — open the find/replace panel
+    /// - `Ctrl+D` — select the next occurrence of the word/selection
+    /// - `F3` / `Shift+F3` — jump to the next / previous match
+    /// - `Ctrl+Alt+Up` / `Ctrl+Alt+Down` — add a cursor above / below
+    /// - `Esc` — close the find panel, or collapse to a single cursor
+    ///
+    /// Returns `true` if the event was handled (a redraw may be needed).
+    pub fn handle_key_event(&mut self, event: &KeyEvent) -> bool {
+        if !self.focused {
+            return false;
+        }
+
+        // Ctrl+Alt cursor stacking (multi-cursor).
+        if event.ctrl && event.alt {
+            match event.key {
+                Key::Up => {
+                    self.add_cursor_above();
+                    return true;
+                }
+                Key::Down => {
+                    self.add_cursor_below();
+                    return true;
+                }
+                _ => {}
+            }
+        }
+
+        // Ctrl combinations: find/replace, multi-cursor selection, undo and
+        // line commands.
+        if event.ctrl && !event.alt {
+            match event.key {
+                Key::Char('f') => {
+                    self.open_find();
+                    return true;
+                }
+                Key::Char('h') => {
+                    self.open_replace();
+                    return true;
+                }
+                Key::Char('d') => {
+                    self.select_next_occurrence();
+                    return true;
+                }
+                // Shift may come as the flag, as the capital, or both
+                Key::Char('z' | 'Z') if event.shift => {
+                    self.redo();
+                    return true;
+                }
+                Key::Char('z') => {
+                    self.undo();
+                    return true;
+                }
+                Key::Char('y') => {
+                    self.redo();
+                    return true;
+                }
+                Key::Char('a') => {
+                    self.select_all();
+                    return true;
+                }
+                Key::Char('k' | 'K') if event.shift => {
+                    self.delete_line();
+                    return true;
+                }
+                _ => {}
+            }
+        }
+
+        // Find navigation (works whether or not the panel is focused).
+        if event.key == Key::F(3) {
+            if event.shift {
+                self.find_previous();
+            } else {
+                self.find_next();
+            }
+            return true;
+        }
+
+        // Escape: close the find panel first, then collapse to a single cursor.
+        if event.key == Key::Escape {
+            if self.is_find_open() {
+                self.close_find();
+                return true;
+            }
+            if !self.cursors.is_single() {
+                self.clear_secondary_cursors();
+                return true;
+            }
+            return false;
+        }
+
+        // Ctrl or Alt with a letter is a command, and this one is not
+        // bound: leave it to the app rather than type the letter. Ctrl+Alt
+        // with a letter is text, as Windows reports AltGr.
+        if matches!(event.key, Key::Char(_)) && event.ctrl != event.alt {
+            return false;
+        }
+
+        // Fall back to unmodified key handling.
+        self.handle_key(&event.key)
+    }
+}
+
+impl Default for TextArea {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl_styled_view!(TextArea);
+impl_props_builders!(TextArea);
+
+/// Create a new text area
+pub fn textarea() -> TextArea {
+    TextArea::new()
+}
+
+// KEEP HERE - Private implementation tests (all tests access private fields: lines, scroll, show_line_numbers, etc.)
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::Key;
+
+    #[test]
+    fn test_textarea_new_creates_empty_editor() {
+        let textarea = TextArea::new();
+        assert_eq!(textarea.lines.len(), 1);
+        assert_eq!(textarea.lines[0], "");
+        assert_eq!(textarea.scroll.get(), 0);
+        assert_eq!(textarea.scroll_x.get(), 0);
+        assert!(!textarea.show_line_numbers);
+        assert!(textarea.wrap); // wrap defaults to true for intuitive multi-line editing
+        assert!(!textarea.read_only);
+        assert!(!textarea.focused);
+        assert_eq!(textarea.tab_width, 4);
+        assert!(textarea.placeholder.is_none());
+        assert_eq!(textarea.max_lines, 0);
+        assert_eq!(textarea.min_height, 3); // min_height defaults to 3 to stay visible in layouts
+    }
+
+    #[test]
+    fn test_textarea_default_trait() {
+        let textarea = TextArea::default();
+        assert_eq!(textarea.lines.len(), 1);
+        assert_eq!(textarea.tab_width, 4);
+    }
+
+    #[test]
+    fn test_textarea_content_builder() {
+        let textarea = TextArea::new().content("Hello\nWorld");
+        assert_eq!(textarea.lines.len(), 2);
+        assert_eq!(textarea.lines[0], "Hello");
+        assert_eq!(textarea.lines[1], "World");
+    }
+
+    #[test]
+    fn test_textarea_content_builder_single_line() {
+        let textarea = TextArea::new().content("Single line");
+        assert_eq!(textarea.lines.len(), 1);
+        assert_eq!(textarea.lines[0], "Single line");
+    }
+
+    #[test]
+    fn test_textarea_line_numbers_builder() {
+        let textarea = TextArea::new().line_numbers(true);
+        assert!(textarea.show_line_numbers);
+
+        let textarea = TextArea::new().line_numbers(false);
+        assert!(!textarea.show_line_numbers);
+    }
+
+    #[test]
+    fn test_textarea_wrap_builder() {
+        let textarea = TextArea::new().wrap(true);
+        assert!(textarea.wrap);
+
+        let textarea = TextArea::new().wrap(false);
+        assert!(!textarea.wrap);
+    }
+
+    #[test]
+    fn test_textarea_read_only_builder() {
+        let textarea = TextArea::new().read_only(true);
+        assert!(textarea.read_only);
+
+        let textarea = TextArea::new().read_only(false);
+        assert!(!textarea.read_only);
+    }
+
+    #[test]
+    fn test_textarea_focused_builder() {
+        let textarea = TextArea::new().focused(true);
+        assert!(textarea.focused);
+
+        let textarea = TextArea::new().focused(false);
+        assert!(!textarea.focused);
+    }
+
+    #[test]
+    fn test_textarea_tab_width_builder() {
+        let textarea = TextArea::new().tab_width(8);
+        assert_eq!(textarea.tab_width, 8);
+
+        let textarea = TextArea::new().tab_width(2);
+        assert_eq!(textarea.tab_width, 2);
+    }
+
+    #[test]
+    fn test_textarea_placeholder_builder() {
+        let textarea = TextArea::new().placeholder("Enter text here");
+        assert_eq!(textarea.placeholder, Some("Enter text here".to_string()));
+    }
+
+    #[test]
+    fn test_textarea_max_lines_builder() {
+        let textarea = TextArea::new().max_lines(100);
+        assert_eq!(textarea.max_lines, 100);
+
+        let textarea = TextArea::new().max_lines(0);
+        assert_eq!(textarea.max_lines, 0);
+    }
+
+    #[test]
+    fn test_textarea_min_height_builder() {
+        let textarea = TextArea::new().min_height(10);
+        assert_eq!(textarea.min_height, 10);
+
+        let textarea = TextArea::new().min_height(0);
+        assert_eq!(textarea.min_height, 0);
+    }
+
+    #[test]
+    fn test_textarea_min_height_default() {
+        let textarea = TextArea::new();
+        assert_eq!(textarea.min_height, 3);
+    }
+
+    #[test]
+    fn test_textarea_editor_constructor() {
+        let editor = TextArea::editor();
+        assert!(editor.show_line_numbers);
+        assert!(editor.wrap);
+        assert_eq!(editor.min_height, 3);
+    }
+
+    #[test]
+    fn test_textarea_fg_builder() {
+        let textarea = TextArea::new().fg(Color::RED);
+        assert_eq!(textarea.fg, Some(Color::RED));
+    }
+
+    #[test]
+    fn test_textarea_bg_builder() {
+        let textarea = TextArea::new().bg(Color::BLUE);
+        assert_eq!(textarea.bg, Some(Color::BLUE));
+    }
+
+    #[test]
+    fn test_textarea_cursor_fg_builder() {
+        let textarea = TextArea::new().cursor_fg(Color::GREEN);
+        assert_eq!(textarea.cursor_fg, Some(Color::GREEN));
+    }
+
+    #[test]
+    fn test_textarea_selection_bg_builder() {
+        let textarea = TextArea::new().selection_bg(Color::YELLOW);
+        assert_eq!(textarea.selection_bg, Some(Color::YELLOW));
+    }
+
+    #[test]
+    fn test_textarea_line_number_fg_builder() {
+        let textarea = TextArea::new().line_number_fg(Color::CYAN);
+        assert_eq!(textarea.line_number_fg, Some(Color::CYAN));
+    }
+
+    #[test]
+    fn test_textarea_match_highlight_bg_builder() {
+        let textarea = TextArea::new().match_highlight_bg(Color::rgb(255, 255, 0));
+        assert_eq!(textarea.match_highlight_bg, Some(Color::rgb(255, 255, 0)));
+    }
+
+    #[test]
+    fn test_textarea_current_match_bg_builder() {
+        let textarea = TextArea::new().current_match_bg(Color::rgb(0, 255, 255));
+        assert_eq!(textarea.current_match_bg, Some(Color::rgb(0, 255, 255)));
+    }
+
+    #[test]
+    fn test_textarea_syntax_builder() {
+        let textarea = TextArea::new().syntax(Language::Rust);
+        assert!(textarea.highlighter.is_some());
+    }
+
+    #[test]
+    fn test_textarea_syntax_with_theme_builder() {
+        let textarea = TextArea::new().syntax_with_theme(Language::Rust, SyntaxTheme::monokai());
+        assert!(textarea.highlighter.is_some());
+    }
+
+    #[test]
+    fn test_textarea_builder_chaining() {
+        let textarea = TextArea::new()
+            .content("Test content")
+            .line_numbers(true)
+            .wrap(true)
+            .read_only(false)
+            .focused(true)
+            .tab_width(4)
+            .placeholder("Placeholder")
+            .max_lines(100)
+            .fg(Color::WHITE)
+            .bg(Color::BLACK);
+
+        assert_eq!(textarea.lines[0], "Test content");
+        assert!(textarea.show_line_numbers);
+        assert!(textarea.wrap);
+        assert!(!textarea.read_only);
+        assert!(textarea.focused);
+        assert_eq!(textarea.tab_width, 4);
+        assert_eq!(textarea.placeholder, Some("Placeholder".to_string()));
+        assert_eq!(textarea.max_lines, 100);
+        assert_eq!(textarea.fg, Some(Color::WHITE));
+        assert_eq!(textarea.bg, Some(Color::BLACK));
+    }
+
+    #[test]
+    fn test_textarea_handle_key_char() {
+        let mut textarea = TextArea::new().focused(true);
+        let handled = textarea.handle_key(&Key::Char('a'));
+        assert!(handled);
+    }
+
+    #[test]
+    fn test_textarea_handle_key_enter() {
+        let mut textarea = TextArea::new().focused(true);
+        let handled = textarea.handle_key(&Key::Enter);
+        assert!(handled);
+    }
+
+    #[test]
+    fn test_textarea_handle_key_tab() {
+        let mut textarea = TextArea::new().focused(true);
+        let handled = textarea.handle_key(&Key::Tab);
+        assert!(handled);
+    }
+
+    #[test]
+    fn test_textarea_handle_key_backspace() {
+        let mut textarea = TextArea::new().focused(true);
+        let handled = textarea.handle_key(&Key::Backspace);
+        assert!(handled);
+    }
+
+    #[test]
+    fn test_textarea_handle_key_delete() {
+        let mut textarea = TextArea::new().focused(true);
+        let handled = textarea.handle_key(&Key::Delete);
+        assert!(handled);
+    }
+
+    #[test]
+    fn test_textarea_handle_key_left() {
+        let mut textarea = TextArea::new().focused(true);
+        let handled = textarea.handle_key(&Key::Left);
+        assert!(handled);
+    }
+
+    #[test]
+    fn test_textarea_handle_key_right() {
+        let mut textarea = TextArea::new().focused(true);
+        let handled = textarea.handle_key(&Key::Right);
+        assert!(handled);
+    }
+
+    #[test]
+    fn test_textarea_handle_key_up() {
+        let mut textarea = TextArea::new().focused(true);
+        let handled = textarea.handle_key(&Key::Up);
+        assert!(handled);
+    }
+
+    #[test]
+    fn test_textarea_handle_key_down() {
+        let mut textarea = TextArea::new().focused(true);
+        let handled = textarea.handle_key(&Key::Down);
+        assert!(handled);
+    }
+
+    #[test]
+    fn test_textarea_handle_key_home() {
+        let mut textarea = TextArea::new().focused(true);
+        let handled = textarea.handle_key(&Key::Home);
+        assert!(handled);
+    }
+
+    #[test]
+    fn test_textarea_handle_key_end() {
+        let mut textarea = TextArea::new().focused(true);
+        let handled = textarea.handle_key(&Key::End);
+        assert!(handled);
+    }
+
+    #[test]
+    fn test_textarea_handle_key_page_up() {
+        let mut textarea = TextArea::new().focused(true);
+        let handled = textarea.handle_key(&Key::PageUp);
+        assert!(handled);
+    }
+
+    #[test]
+    fn test_textarea_handle_key_page_down() {
+        let mut textarea = TextArea::new().focused(true);
+        let handled = textarea.handle_key(&Key::PageDown);
+        assert!(handled);
+    }
+
+    #[test]
+    fn test_textarea_handle_key_unknown() {
+        let mut textarea = TextArea::new().focused(true);
+        let handled = textarea.handle_key(&Key::Escape);
+        assert!(!handled);
+    }
+
+    #[test]
+    fn test_textarea_handle_key_f1() {
+        let mut textarea = TextArea::new().focused(true);
+        let handled = textarea.handle_key(&Key::F(1));
+        assert!(!handled);
+    }
+
+    #[test]
+    fn test_textarea_default_selection_bg() {
+        let textarea = TextArea::new();
+        assert_eq!(textarea.selection_bg, Some(Color::rgb(50, 50, 150)));
+    }
+
+    #[test]
+    fn test_textarea_empty_undo_stack() {
+        let textarea = TextArea::new();
+        assert_eq!(textarea.undo_stack.len(), 0);
+    }
+
+    #[test]
+    fn test_textarea_empty_redo_stack() {
+        let textarea = TextArea::new();
+        assert_eq!(textarea.redo_stack.len(), 0);
+    }
+
+    #[test]
+    fn test_textarea_no_find_replace_by_default() {
+        let textarea = TextArea::new();
+        assert!(textarea.find_replace.is_none());
+    }
+
+    #[test]
+    fn test_textarea_no_highlighter_by_default() {
+        let textarea = TextArea::new();
+        assert!(textarea.highlighter.is_none());
+    }
+
+    // --- handle_key_event: modifier-aware bindings ---
+
+    use crate::event::KeyEvent;
+
+    #[test]
+    fn test_handle_key_event_not_focused_is_ignored() {
+        let mut textarea = TextArea::new().content("hello");
+        assert!(!textarea.handle_key_event(&KeyEvent::ctrl(Key::Char('f'))));
+        assert!(!textarea.is_find_open());
+    }
+
+    #[test]
+    fn test_handle_key_event_ctrl_f_opens_find() {
+        let mut textarea = TextArea::new().content("hello").focused(true);
+        assert!(textarea.handle_key_event(&KeyEvent::ctrl(Key::Char('f'))));
+        assert!(textarea.is_find_open());
+        assert_eq!(
+            textarea.find_state().map(|s| s.mode),
+            Some(FindReplaceMode::Find)
+        );
+    }
+
+    #[test]
+    fn test_handle_key_event_ctrl_h_opens_replace() {
+        let mut textarea = TextArea::new().content("hello").focused(true);
+        assert!(textarea.handle_key_event(&KeyEvent::ctrl(Key::Char('h'))));
+        assert_eq!(
+            textarea.find_state().map(|s| s.mode),
+            Some(FindReplaceMode::Replace)
+        );
+    }
+
+    #[test]
+    fn test_handle_key_event_escape_closes_find() {
+        let mut textarea = TextArea::new().content("hello").focused(true);
+        textarea.open_find();
+        assert!(textarea.is_find_open());
+        assert!(textarea.handle_key_event(&KeyEvent::new(Key::Escape)));
+        assert!(!textarea.is_find_open());
+    }
+
+    #[test]
+    fn test_handle_key_event_escape_collapses_cursors() {
+        let mut textarea = TextArea::new().content("aa\naa").focused(true);
+        textarea.add_cursor_below();
+        assert!(!textarea.cursors.is_single());
+        // No find panel open, so Escape collapses secondary cursors.
+        assert!(textarea.handle_key_event(&KeyEvent::new(Key::Escape)));
+        assert!(textarea.cursors.is_single());
+    }
+
+    #[test]
+    fn test_handle_key_event_escape_without_state_is_ignored() {
+        let mut textarea = TextArea::new().content("hello").focused(true);
+        // No find panel, single cursor: nothing to do.
+        assert!(!textarea.handle_key_event(&KeyEvent::new(Key::Escape)));
+    }
+
+    #[test]
+    fn test_handle_key_event_ctrl_d_adds_cursor_on_next_occurrence() {
+        let mut textarea = TextArea::new().content("foo foo").focused(true);
+        // Cursor starts on the first "foo".
+        assert!(textarea.handle_key_event(&KeyEvent::ctrl(Key::Char('d'))));
+        assert_eq!(textarea.cursors.len(), 2);
+    }
+
+    #[test]
+    fn test_handle_key_event_f3_advances_current_match() {
+        let mut textarea = TextArea::new().content("ab ab ab").focused(true);
+        textarea.open_find();
+        textarea.set_find_query("ab");
+        assert_eq!(textarea.find_state().unwrap().current_match, Some(0));
+        assert!(textarea.handle_key_event(&KeyEvent::new(Key::F(3))));
+        assert_eq!(textarea.find_state().unwrap().current_match, Some(1));
+    }
+
+    #[test]
+    fn test_handle_key_event_shift_f3_goes_backwards() {
+        let mut textarea = TextArea::new().content("ab ab ab").focused(true);
+        textarea.open_find();
+        textarea.set_find_query("ab");
+        // Shift+F3 from match 0 wraps to the last match.
+        let mut event = KeyEvent::new(Key::F(3));
+        event.shift = true;
+        assert!(textarea.handle_key_event(&event));
+        assert_eq!(textarea.find_state().unwrap().current_match, Some(2));
+    }
+
+    #[test]
+    fn test_handle_key_event_ctrl_alt_down_adds_cursor_below() {
+        let mut textarea = TextArea::new().content("aa\nbb").focused(true);
+        let mut event = KeyEvent::ctrl(Key::Down);
+        event.alt = true;
+        assert!(textarea.handle_key_event(&event));
+        assert_eq!(textarea.cursors.len(), 2);
+    }
+
+    #[test]
+    fn test_handle_key_event_plain_char_delegates_to_insert() {
+        let mut textarea = TextArea::new().focused(true);
+        assert!(textarea.handle_key_event(&KeyEvent::new(Key::Char('x'))));
+        assert_eq!(textarea.lines[0], "x");
+    }
+}

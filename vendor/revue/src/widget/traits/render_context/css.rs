@@ -1,0 +1,274 @@
+//! CSS style integration methods for RenderContext
+
+use crate::style::{BorderStyle, Color, Size, Spacing};
+
+impl RenderContext<'_> {
+    /// Get foreground color from CSS style or use default
+    pub fn css_color(&self, default: Color) -> Color {
+        self.style
+            .map(|s| {
+                let c = s.visual.color;
+                if c == Color::default() {
+                    default
+                } else {
+                    c
+                }
+            })
+            .unwrap_or(default)
+    }
+
+    /// Get background color from CSS style or use default
+    pub fn css_background(&self, default: Color) -> Color {
+        self.style
+            .map(|s| {
+                let c = s.visual.background;
+                if c == Color::default() {
+                    default
+                } else {
+                    c
+                }
+            })
+            .unwrap_or(default)
+    }
+
+    /// Get border color from CSS style or use default
+    pub fn css_border_color(&self, default: Color) -> Color {
+        self.style
+            .map(|s| {
+                let c = s.visual.border_color;
+                if c == Color::default() {
+                    default
+                } else {
+                    c
+                }
+            })
+            .unwrap_or(default)
+    }
+
+    /// Get opacity from CSS style (1.0 = fully opaque)
+    pub fn css_opacity(&self) -> f32 {
+        self.style.map(|s| s.visual.opacity).unwrap_or(1.0)
+    }
+
+    /// Check if visible according to CSS
+    pub fn css_visible(&self) -> bool {
+        self.style.map(|s| s.visual.visible).unwrap_or(true)
+    }
+
+    /// Get padding from CSS style
+    pub fn css_padding(&self) -> Spacing {
+        self.style.map(|s| s.spacing.padding).unwrap_or_default()
+    }
+
+    /// Get margin from CSS style
+    pub fn css_margin(&self) -> Spacing {
+        self.style.map(|s| s.spacing.margin).unwrap_or_default()
+    }
+
+    /// Get width from CSS style
+    pub fn css_width(&self) -> Size {
+        self.style.map(|s| s.sizing.width).unwrap_or_default()
+    }
+
+    /// Get height from CSS style
+    pub fn css_height(&self) -> Size {
+        self.style.map(|s| s.sizing.height).unwrap_or_default()
+    }
+
+    /// Get border style from CSS
+    /// The `border-style` the stylesheet set, if it set one.
+    ///
+    /// `None` means the stylesheet said nothing. `Some(BorderStyle::None)`
+    /// means it asked for no border, which is a different thing and now
+    /// expressible.
+    pub fn css_border_style(&self) -> Option<BorderStyle> {
+        self.style.and_then(|s| s.visual.border_style)
+    }
+
+    /// Is the text bold per CSS?
+    pub fn css_bold(&self) -> bool {
+        self.style
+            .map(|s| s.visual.font_weight == crate::style::FontWeight::Bold)
+            .unwrap_or(false)
+    }
+
+    /// Is the text underlined per CSS?
+    pub fn css_underline(&self) -> bool {
+        self.style
+            .map(|s| s.visual.text_decoration.underline)
+            .unwrap_or(false)
+    }
+
+    /// Is the text struck through per CSS?
+    pub fn css_line_through(&self) -> bool {
+        self.style
+            .map(|s| s.visual.text_decoration.line_through)
+            .unwrap_or(false)
+    }
+
+    /// Get text alignment from CSS style.
+    pub fn css_text_align(&self) -> crate::style::TextAlign {
+        self.style.map(|s| s.visual.text_align).unwrap_or_default()
+    }
+
+    /// A boolean text flag the widget can only turn *on*.
+    ///
+    /// `false` is both "off" and "not specified", so a builder that said
+    /// nothing cannot switch a CSS rule back off - the same reading `gap: 0`
+    /// gets in [`gap_or`](Self::gap_or). To turn something off, do not select
+    /// it.
+    pub fn text_flag_or(builder_flag: bool, css_flag: bool) -> bool {
+        builder_flag || css_flag
+    }
+
+    /// The `color` the stylesheet set, if it set one.
+    ///
+    /// The primitive for an `Option<Color>` field:
+    /// `self.fg.or_else(|| ctx.css_color_if_set())` keeps the builder on top
+    /// and leaves the widget's own default underneath, with no ambiguity about
+    /// what "unset" means.
+    pub fn css_color_if_set(&self) -> Option<Color> {
+        self.style
+            .map(|s| s.visual.color)
+            .filter(|c| *c != Color::default())
+    }
+
+    /// The `background` the stylesheet set, if it set one.
+    pub fn css_background_if_set(&self) -> Option<Color> {
+        self.style
+            .map(|s| s.visual.background)
+            .filter(|c| *c != Color::default())
+    }
+
+    /// A color for a widget whose field is a plain [`Color`] with a default
+    /// rather than an `Option`.
+    ///
+    /// For those, "the builder said nothing" and "the builder set the initial
+    /// value" are the same state, so the builder can only outrank the
+    /// stylesheet by moving the color off its initial value - the reading
+    /// `gap: 0` already gets, written down as a rule in `docs/FEATURES.md`.
+    ///
+    /// Widgets whose field is an `Option` should prefer
+    /// `self.field.unwrap_or_else(|| ctx.css_color(default))`, which has no
+    /// such ambiguity.
+    pub fn color_or(&self, builder: Color, initial: Color) -> Color {
+        if builder != initial {
+            builder
+        } else {
+            self.css_color(initial)
+        }
+    }
+
+    /// [`color_or`](Self::color_or) for a background.
+    ///
+    /// A widget that fills its own area - a presentation, a zen-mode wrapper -
+    /// keeps that fill in a plain [`Color`] field, so the same rule applies:
+    /// the builder outranks the stylesheet only by moving the color off the
+    /// widget's initial value.
+    pub fn background_or(&self, builder: Color, initial: Color) -> Color {
+        if builder != initial {
+            builder
+        } else {
+            self.css_background(initial)
+        }
+    }
+
+    /// The border color a widget should draw with: `border-color` if the
+    /// stylesheet set one, else `color`, else `None`.
+    ///
+    /// Falling back to `color` mirrors CSS, where `border-color`'s initial
+    /// value is `currentColor`.
+    pub fn css_border_or_text_color(&self) -> Option<crate::style::Color> {
+        let style = self.style?;
+        [style.visual.border_color, style.visual.color]
+            .into_iter()
+            .find(|&candidate| candidate != crate::style::Color::default())
+    }
+
+    /// The `gap` the stylesheet set, if it set one.
+    ///
+    /// `None` means the stylesheet said nothing. `Some(0)` means it asked for
+    /// no gap, which is a different thing and now expressible.
+    pub fn css_gap(&self) -> Option<u16> {
+        self.style.and_then(|s| s.layout.gap)
+    }
+
+    /// The gap a container should use: CSS if it specified one, else the
+    /// builder's own value.
+    ///
+    /// Only consulted when [`css_layout`](Self::css_layout) is on, so the
+    /// flag's promise holds: with it off, nothing about the layout changes.
+    pub fn gap_or(&self, builder_gap: u16) -> u16 {
+        if !self.css_layout() {
+            return builder_gap;
+        }
+        self.css_gap().unwrap_or(builder_gap)
+    }
+
+    /// [`gap_or`](Self::gap_or) for a grid's column gap, which falls back to
+    /// `gap` before falling back to the builder.
+    pub fn column_gap_or(&self, builder_gap: u16) -> u16 {
+        if !self.css_layout() {
+            return builder_gap;
+        }
+        match self.style.and_then(|s| s.layout.column_gap) {
+            Some(css) => css,
+            None => self.gap_or(builder_gap),
+        }
+    }
+
+    /// [`gap_or`](Self::gap_or) for a grid's row gap.
+    pub fn row_gap_or(&self, builder_gap: u16) -> u16 {
+        if !self.css_layout() {
+            return builder_gap;
+        }
+        match self.style.and_then(|s| s.layout.row_gap) {
+            Some(css) => css,
+            None => self.gap_or(builder_gap),
+        }
+    }
+
+    /// Check if CSS flex-wrap is enabled
+    pub fn css_flex_wrap(&self) -> bool {
+        self.style
+            .map(|s| {
+                s.layout.flex_wrap == crate::style::FlexWrap::Wrap
+                    || s.layout.flex_wrap == crate::style::FlexWrap::WrapReverse
+            })
+            .unwrap_or(false)
+    }
+
+    /// Check if CSS overflow is hidden
+    ///
+    /// Returns true if the computed style has `overflow: hidden`.
+    /// Containers should use this to decide whether to clip children.
+    pub fn css_overflow_hidden(&self) -> bool {
+        self.style
+            .map(|s| s.visual.overflow == crate::style::Overflow::Hidden)
+            .unwrap_or(false)
+    }
+
+    /// Create a child RenderContext carrying `clip` as its clipping region.
+    ///
+    /// `clip` is the container's content box when the container has
+    /// `overflow: hidden`, and whatever clip the container itself was under
+    /// otherwise. Container widgets should reach this through
+    /// [`render_child_with_overflow`](Self::render_child_with_overflow), which
+    /// works the region out from the container's own area.
+    pub(crate) fn child_ctx_clipped<'b>(
+        buffer: &'b mut crate::render::Buffer,
+        area: crate::layout::Rect,
+        clip: Option<crate::layout::Rect>,
+    ) -> RenderContext<'b> {
+        let mut ctx = RenderContext::new(buffer, area);
+        if let Some(clip) = clip {
+            ctx = ctx.with_clip(clip);
+        }
+        ctx
+    }
+
+    // NOTE: Color resolution is handled by WidgetState::resolve_fg/resolve_bg/resolve_colors_interactive
+    // Use self.state.resolve_colors_interactive(ctx.style, default_fg, default_bg) for widget color resolution
+}
+
+use crate::widget::traits::render_context::RenderContext;

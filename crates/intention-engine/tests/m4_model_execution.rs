@@ -5,19 +5,25 @@
 
 mod common;
 
-use std::sync::PoisonError;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use common::{FakeRepository, ImmediateTime, RecordedTransition, RecordingCommitObserver};
+use common::{
+    FakeRepository, ImmediateTime, ManualTime, RecordedFinish, RecordedTransition,
+    RecordingCommitObserver,
+};
+use futures_util::stream;
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
-    ModelRunCommitDto, ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto,
-    ModelRunExecutionService, RunCancellation, ToolExecutionPort, ToolResultOutcomeDto,
+    ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto, ModelRunExecutionService,
+    ModelTextDeltaPort, RunCancellation, SessionCommitDto, ToolExecutionPort, ToolResultOutcomeDto,
 };
-use intention_proto::{DtoResult, ErrorDto, RunId, SessionId};
-use intention_proto::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
+use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TextDeltaChannelDto};
+use intention_proto::{MessageKindDto, RunStatusDto};
 use intention_providers::{
-    FinishReasonDto, ModelEventDto, ModelMessageDto, ModelRequestDto, ModelRoleDto,
+    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
+    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
     ProviderErrorDto, ToolCallDto, UsageDto,
 };
 use intention_test_support::{
@@ -56,6 +62,151 @@ impl ToolExecutionPort for NeverInvokedToolExecutor {
             ))
         })
     }
+}
+
+/// Captures every transient text-delta observation of one execution.
+struct CapturingTextDeltaPort {
+    deltas: Mutex<Vec<(u32, TextDeltaChannelDto, String)>>,
+}
+
+impl CapturingTextDeltaPort {
+    /// Creates an empty capturing port.
+    const fn new() -> Self {
+        Self {
+            deltas: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Returns every observed `(step, channel, text)` triple in publication
+    /// order.
+    #[must_use]
+    fn deltas(&self) -> Vec<(u32, TextDeltaChannelDto, String)> {
+        self.deltas
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl ModelTextDeltaPort for CapturingTextDeltaPort {
+    fn text_delta(&self, step: u32, channel: TextDeltaChannelDto, text: &str) {
+        self.deltas
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((step, channel, text.to_owned()));
+    }
+}
+
+/// One scripted provider step: the silence that precedes it and its event.
+type SilentStep = (Duration, Result<ModelEventDto, ProviderErrorDto>);
+
+/// A scripted provider round that reports its own silences.
+///
+/// A step's silence advances the manual clock while the stream is pending, so
+/// the runtime's armed delays observe the gap exactly as they observe real
+/// wall-clock time. A round whose script is exhausted keeps advancing the clock
+/// and never yields again, which models a provider that stops producing output
+/// mid-answer. Every execution replays the same script, so a retried attempt
+/// stalls identically.
+struct SilentDriver {
+    steps: Vec<SilentStep>,
+    stall: Duration,
+    clock: Arc<ManualTime>,
+    executions: AtomicUsize,
+}
+
+impl SilentDriver {
+    /// Creates a driver replaying one scripted round per provider execution.
+    #[must_use]
+    fn new(steps: Vec<SilentStep>, stall: Duration, clock: &Arc<ManualTime>) -> Self {
+        Self {
+            steps,
+            stall,
+            clock: Arc::clone(clock),
+            executions: AtomicUsize::new(0),
+        }
+    }
+
+    /// Returns how many provider executions started.
+    #[must_use]
+    fn executions(&self) -> usize {
+        self.executions.load(Ordering::Relaxed)
+    }
+}
+
+impl ModelExecutionDriver for SilentDriver {
+    fn capabilities(&self) -> ModelCapabilitiesDto {
+        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+    }
+
+    fn execute(
+        &self,
+        _request: ModelRequestDto,
+        _cancellation: ModelCancellationSignal,
+    ) -> ModelEventStream {
+        self.executions.fetch_add(1, Ordering::Relaxed);
+        let steps = self.steps.clone();
+        let stall = self.stall;
+        let clock = Arc::clone(&self.clock);
+        Box::pin(stream::unfold(
+            (steps.into_iter(), true, clock, stall),
+            |(mut steps, first, clock, stall)| async move {
+                let Some((silence, event)) = steps.next() else {
+                    loop {
+                        clock.advance(stall);
+                        silence_poll().await;
+                    }
+                };
+                if !first {
+                    clock.advance(silence);
+                    silence_poll().await;
+                }
+                Some((event, (steps, false, clock, stall)))
+            },
+        ))
+    }
+}
+
+/// Returns after one pending poll, waking itself, so the round's select
+/// observes the advanced clock before the stream delivers its next event.
+async fn silence_poll() {
+    let mut yielded = false;
+    std::future::poll_fn(|cx| {
+        if yielded {
+            std::task::Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            std::task::Poll::Pending
+        }
+    })
+    .await;
+}
+
+/// Executes one scripted round through a manual clock.
+fn execute_silent(
+    repository: &FakeRepository,
+    driver: &SilentDriver,
+    request: ModelRequestDto,
+    config: ConfigSnapshotDto,
+    clock: &ManualTime,
+) -> DtoResult<ModelRunExecutionOutcomeDto> {
+    run_ready(
+        ModelRunExecutionService::new(
+            repository,
+            driver,
+            clock,
+            &RecordingCommitObserver::new(),
+            &NeverInvokedToolExecutor,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            repository.session_id,
+            repository.run_id,
+            request,
+            config,
+            RunCancellation::new(),
+        )),
+    )
 }
 
 fn execute(
@@ -112,17 +263,15 @@ fn observer_receives_only_committed_transcript_rows_and_statuses() {
     )
     .expect("execution completes");
 
+    let committed_run = repository.projection();
+    assert_eq!(committed_run.status(), RunStatusDto::Completed);
+    assert!(
+        committed_run.finished_at().is_some(),
+        "the completed run carries its committed finish time"
+    );
     assert_eq!(
         outcome,
-        ModelRunExecutionOutcomeDto::Completed {
-            run: RunProjectionDto::new(
-                session_id,
-                run_id,
-                repository.projection().turn_id(),
-                RunStatusDto::Completed,
-                repository.config.revision_id(),
-            )
-        }
+        ModelRunExecutionOutcomeDto::Completed { run: committed_run }
     );
     let commits = observer.commits();
     assert_eq!(
@@ -132,30 +281,23 @@ fn observer_receives_only_committed_transcript_rows_and_statuses() {
     );
     assert_eq!(
         commits[0],
-        ModelRunCommitDto::Status {
+        SessionCommitDto::Status {
             session_id,
             run_id,
             status: RunStatusDto::Running,
         }
     );
-    assert_eq!(
-        commits[1],
-        ModelRunCommitDto::Content(
-            MessageProjectionDto::new(
-                session_id,
-                Some(run_id),
-                MessageKindDto::Assistant,
-                "complete",
-                None,
-                None,
-                None,
-            )
-            .expect("fixture message is valid")
-        )
-    );
+    let committed = repository.committed_messages();
+    assert_eq!(committed.len(), 1);
+    assert_eq!(commits[1], SessionCommitDto::Content(committed[0].clone()));
+    assert_eq!(committed[0].session_id(), session_id);
+    assert_eq!(committed[0].run_id(), Some(run_id));
+    assert_eq!(committed[0].kind(), MessageKindDto::Assistant);
+    assert_eq!(committed[0].text(), "complete");
+    assert!(committed[0].id().value() > 0);
     assert_eq!(
         commits[2],
-        ModelRunCommitDto::Status {
+        SessionCommitDto::Status {
             session_id,
             run_id,
             status: RunStatusDto::Completed,
@@ -215,7 +357,7 @@ fn observer_receives_no_content_when_a_message_commit_fails() {
         observer
             .commits()
             .iter()
-            .all(|commit| !matches!(commit, ModelRunCommitDto::Content(_))),
+            .all(|commit| !matches!(commit, SessionCommitDto::Content(_))),
         "an uncommitted row is never published"
     );
     assert!(
@@ -262,26 +404,18 @@ fn streams_commit_one_assistant_step_with_reasoning_and_complete() {
         unreachable!("a stop reason completes the run");
     };
     assert_eq!(run.status(), RunStatusDto::Completed);
-    let messages = repository
-        .messages
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone();
+    let messages = repository.committed_messages();
     assert_eq!(
-        messages.as_slice(),
-        &[MessageProjectionDto::new(
-            session_id,
-            Some(run_id),
-            MessageKindDto::Assistant,
-            content,
-            Some("why".to_owned()),
-            None,
-            None,
-        )
-        .expect("fixture message is valid")],
+        messages.len(),
+        1,
         "the whole step commits as one row with its reasoning"
     );
-    drop(messages);
+    assert_eq!(messages[0].session_id(), session_id);
+    assert_eq!(messages[0].run_id(), Some(run_id));
+    assert_eq!(messages[0].kind(), MessageKindDto::Assistant);
+    assert_eq!(messages[0].text(), content);
+    assert_eq!(messages[0].reasoning(), Some("why"));
+    assert!(messages[0].id().value() > 0);
     let finishes = repository
         .finishes
         .lock()
@@ -936,6 +1070,8 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let driver = ScriptedDriver::new(Vec::new());
+    // The stream yields nothing at all, so the attempt's idle window expires
+    // without a single progress event.
     driver.stay_pending();
     let clock = ImmediateTime::new();
 
@@ -989,6 +1125,169 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
             .unwrap_or_else(PoisonError::into_inner)
             .is_empty(),
         "a timed-out attempt commits no transcript row"
+    );
+}
+
+/// The silence each scripted provider chunk follows in the idle-window tests.
+const CHUNK_SILENCE: Duration = Duration::from_secs(20);
+
+#[test]
+fn continuous_provider_progress_outlives_the_attempt_timeout_and_completes() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = fixture_snapshot_with_model("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let clock = Arc::new(ManualTime::new());
+    // Every chunk follows a 20-second silence, so the stream runs for 100
+    // seconds while never falling silent for the 30-second configured window.
+    let driver = SilentDriver::new(
+        vec![
+            (Duration::ZERO, Ok(ModelEventDto::started())),
+            (
+                CHUNK_SILENCE,
+                Ok(ModelEventDto::text_delta("still ").expect("text is valid")),
+            ),
+            (
+                CHUNK_SILENCE,
+                Ok(ModelEventDto::reasoning_delta("working").expect("reasoning is valid")),
+            ),
+            (
+                CHUNK_SILENCE,
+                Ok(ModelEventDto::text_delta("making ").expect("text is valid")),
+            ),
+            (
+                CHUNK_SILENCE,
+                Ok(ModelEventDto::usage(
+                    UsageDto::reported(1, 2, 3).expect("usage is valid"),
+                )),
+            ),
+            (
+                CHUNK_SILENCE,
+                Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+            ),
+        ],
+        CHUNK_SILENCE,
+        &clock,
+    );
+
+    let outcome = execute_silent(
+        &repository,
+        &driver,
+        request(run_id, "fixture"),
+        config,
+        &clock,
+    )
+    .expect("a continuously producing stream completes");
+
+    assert!(matches!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
+    assert_eq!(
+        driver.executions(),
+        1,
+        "a stream that keeps producing progress is never retried"
+    );
+    assert_eq!(
+        clock.elapsed(),
+        Duration::from_secs(100),
+        "the round outlived the configured 30-second window more than three times over"
+    );
+    assert_eq!(
+        clock.sleeps(),
+        vec![Duration::from_secs(30); 6],
+        "every delivered event re-arms one fresh idle window"
+    );
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| (message.kind(), message.text().to_owned()))
+            .collect::<Vec<_>>(),
+        vec![(MessageKindDto::Assistant, "still making ".to_owned())],
+        "the slow stream commits its whole answer once"
+    );
+}
+
+#[test]
+fn a_silent_stall_expires_the_idle_window_armed_after_the_last_event() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = fixture_snapshot_with_model("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let clock = Arc::new(ManualTime::new());
+    // A usage fact arrives after a 10-second silence and the provider then goes
+    // silent for good: the window that expires is the fresh one armed after
+    // that last event, not one armed when the attempt started.
+    let driver = SilentDriver::new(
+        vec![
+            (Duration::ZERO, Ok(ModelEventDto::started())),
+            (
+                Duration::from_secs(10),
+                Ok(ModelEventDto::usage(
+                    UsageDto::reported(1, 2, 3).expect("usage is valid"),
+                )),
+            ),
+        ],
+        Duration::from_secs(10),
+        &clock,
+    );
+
+    let outcome = execute_silent(
+        &repository,
+        &driver,
+        request(run_id, "fixture"),
+        config,
+        &clock,
+    )
+    .expect("exhausted silent stalls become a durable failure");
+
+    let ModelRunExecutionOutcomeDto::Failed { run, error } = outcome else {
+        unreachable!("exhausted silent stalls fail the run");
+    };
+    assert_eq!(run.status(), RunStatusDto::Failed);
+    assert_eq!(error.code(), "provider_attempt_timed_out");
+    assert_eq!(
+        driver.executions(),
+        2,
+        "a silent attempt keeps the blank-text budget open and the retry stalls too"
+    );
+    assert_eq!(
+        clock.elapsed(),
+        Duration::from_secs(80) + Duration::from_millis(250),
+        "each attempt expired 30 seconds after its own last event, not 30 seconds after its start"
+    );
+    assert_eq!(
+        clock.sleeps(),
+        vec![
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            Duration::from_millis(250),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+        ],
+        "each delivered event arms one fresh window and exactly one retry delay runs"
+    );
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].error_code(), Some("provider_attempt_timed_out"));
+    assert!(
+        repository
+            .messages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty(),
+        "a stalled attempt commits no transcript row"
     );
 }
 
@@ -1146,10 +1445,13 @@ fn whitespace_only_text_keeps_the_attempt_budget_open() {
             .as_slice(),
         &[
             Duration::from_secs(30),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
             Duration::from_millis(250),
+            Duration::from_secs(30),
             Duration::from_secs(30)
         ],
-        "exactly one retry delay runs"
+        "every delivered event re-arms the idle window and exactly one retry delay runs"
     );
     assert!(
         repository
@@ -1200,5 +1502,216 @@ fn a_persisted_window_policy_disagreement_fails_the_run_before_provider_work() {
     assert_eq!(
         finishes[0].error_code(),
         Some("provider_configuration_unavailable")
+    );
+}
+
+#[test]
+fn text_delta_port_observes_both_channels_with_their_model_step_index() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = fixture_snapshot_with_model("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let signal = RunCancellation::new();
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::reasoning_delta("why").expect("reasoning is valid")),
+            Ok(ModelEventDto::text_delta("partial ").expect("text is valid")),
+            Ok(ModelEventDto::text_delta("answer").expect("text is valid")),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::text_delta("final answer").expect("text is valid")),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    // The interrupt lands after both chunks of the first round were delivered,
+    // so the run continues with a second model step of its own.
+    driver.cancel_during_stream(3, signal.model_signal());
+    let clock = ImmediateTime::new();
+    let observer = RecordingCommitObserver::new();
+    let deltas = CapturingTextDeltaPort::new();
+
+    let outcome = run_ready(
+        ModelRunExecutionService::new(
+            &repository,
+            &driver,
+            &clock,
+            &observer,
+            &NeverInvokedToolExecutor,
+        )
+        .with_text_delta_port(&deltas)
+        .execute(ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request(run_id, "fixture"),
+            config,
+            signal,
+        )),
+    )
+    .expect("the interrupted run continues and completes");
+
+    assert!(matches!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
+    assert_eq!(
+        deltas.deltas(),
+        vec![
+            (0, TextDeltaChannelDto::Reasoning, "why".to_owned()),
+            (0, TextDeltaChannelDto::Answer, "partial ".to_owned()),
+            (0, TextDeltaChannelDto::Answer, "answer".to_owned()),
+            (1, TextDeltaChannelDto::Answer, "final answer".to_owned()),
+        ],
+        "every chunk is published once with its own step and channel, and the \
+         reasoning channel never becomes answer text"
+    );
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| (message.kind(), message.text().to_owned()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                MessageKindDto::Assistant,
+                format!("partial answer\n{}", intention_engine::INTERRUPTED_MARKER),
+            ),
+            (
+                MessageKindDto::Notice,
+                intention_engine::INTERRUPT_NOTICE.to_owned(),
+            ),
+            (MessageKindDto::Assistant, "final answer".to_owned()),
+        ],
+        "each committed step row holds exactly the chunks published for its step"
+    );
+}
+
+/// Cross-run comparable durable evidence of one fixture execution.
+type RoundEvidence = (
+    Vec<(MessageKindDto, String)>,
+    Vec<SessionCommitDto>,
+    Vec<RunStatusDto>,
+);
+
+/// Runs the two-round interrupted fixture, optionally observing its text.
+fn interrupted_round_evidence(
+    session_id: SessionId,
+    run_id: RunId,
+    port: Option<&CapturingTextDeltaPort>,
+) -> RoundEvidence {
+    let config = fixture_snapshot_with_model("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let signal = RunCancellation::new();
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::text_delta("partial answer").expect("text is valid")),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::text_delta("final answer").expect("text is valid")),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    driver.cancel_during_stream(1, signal.model_signal());
+    let clock = ImmediateTime::new();
+    let observer = RecordingCommitObserver::new();
+    let service = ModelRunExecutionService::new(
+        &repository,
+        &driver,
+        &clock,
+        &observer,
+        &NeverInvokedToolExecutor,
+    );
+    let service = match port {
+        Some(port) => service.with_text_delta_port(port),
+        None => service,
+    };
+    run_ready(service.execute(ModelRunExecutionInputDto::new(
+        session_id,
+        run_id,
+        request(run_id, "fixture"),
+        config,
+        signal,
+    )))
+    .expect("the interrupted run continues and completes");
+    let messages = repository
+        .messages
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .map(|message| (message.kind(), message.text().to_owned()))
+        .collect();
+    let finishes = repository
+        .finishes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .map(RecordedFinish::status)
+        .collect();
+    (messages, observer.commits(), finishes)
+}
+
+#[test]
+fn an_unattached_text_delta_port_keeps_the_run_behavior_unchanged() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let observed = CapturingTextDeltaPort::new();
+
+    let with_port = interrupted_round_evidence(session_id, run_id, Some(&observed));
+    let without_port = interrupted_round_evidence(session_id, run_id, None);
+
+    assert_eq!(
+        with_port, without_port,
+        "the transient port changes neither the committed rows nor the published statuses"
+    );
+    assert_eq!(
+        observed.deltas(),
+        vec![
+            (0, TextDeltaChannelDto::Answer, "partial answer".to_owned()),
+            (1, TextDeltaChannelDto::Answer, "final answer".to_owned()),
+        ],
+        "the attached port observed both model steps of the unchanged run"
+    );
+}
+
+#[test]
+fn one_interrupt_request_offers_exactly_one_notice_to_the_run_boundaries() {
+    let cancellation = RunCancellation::new();
+
+    assert!(
+        !cancellation.take_interrupt_notice(),
+        "an active run owes no notice"
+    );
+
+    cancellation.cancel();
+    assert!(
+        cancellation.take_interrupt_notice(),
+        "the first boundary to reach the request takes its notice"
+    );
+    assert!(
+        !cancellation.take_interrupt_notice(),
+        "however many boundaries observe the sticky signal, one request offers one notice"
+    );
+    assert!(
+        cancellation.is_cancelled(),
+        "the sticky signal still tells every in-flight observer the run was interrupted"
+    );
+
+    cancellation.reset();
+    assert!(
+        !cancellation.is_cancelled(),
+        "the boundary that ends the interruption clears it for the continuation round"
+    );
+
+    cancellation.cancel();
+    assert!(
+        cancellation.take_interrupt_notice(),
+        "the next request records its own notice"
     );
 }

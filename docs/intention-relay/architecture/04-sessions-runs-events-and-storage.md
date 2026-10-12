@@ -28,7 +28,10 @@ erDiagram
 ## Core invariants
 
 1.  Each session has one mandatory stable `WorkspaceId` and declared `WorkspaceRootDto`; M3 persists the identity/root
-association, while M5 owns the workspace addressing policy — the root as an anchor, not a containment boundary
+association, and a root binds to exactly one project/workspace identity for the life of the database — a creation
+command that proposes another identity for an already-bound root joins the durable binding instead of replacing it, so
+one root carries an unbounded number of sessions while storage still rejects a different identity for a bound root
+(`workspace_root_conflict`). M5 owns the workspace addressing policy — the root as an anchor, not a containment boundary
 ([architecture 05](05-tools-and-workspace.md)).
 2. A session has at most one run in an active state.
 3. Every turn, run, plan, tool call, todo, permission, question, and message carries stable typed identity.
@@ -38,8 +41,8 @@ filesystem-dependent validation, provider call, or other external action runs in
 committed state.
 6. A user turn accepted while a run is active is recorded pending and joins that run's live context at the next model
 boundary; it never starts a second run.
-7. `Interrupted` is a recovery-only terminal status: an unfinished run becomes `Interrupted` on restart and never
-silently resumes, while `run.interrupt` leaves the live run `Running` and continues its work.
+7. `Interrupted` is the terminal status of a run that never finished: an unfinished run becomes `Interrupted` on restart
+and never silently resumes, and `run.cancel` ends the live run the same way.
 8. The transcript is the durable record of user, assistant, and notice content; every completed tool call has exactly
 one structured `tool_results` row.
 9. A stopped model answer is durable: the text a step produced before the stop is committed as the assistant message
@@ -57,16 +60,15 @@ stateDiagram
   Running --> Completed: terminal model result
   Running --> Failed: unrecoverable error
   Running --> Interrupted: daemon restart
+  Running --> Interrupted: run.cancel
   Completed --> [*]
   Failed --> [*]
   Interrupted --> [*]
 ```
 
-Interruption is not a run state. `run.interrupt` is accepted only for an exact active run, commits no durable status
-change, commits the stopped model answer's text with the `[interrupted]` marker before the durable notice message for
-the stopped provider stream or tool call, resets the run's cancellation signal, and the run continues with its next
-model step; `Cancelling` and `Cancelled` no longer exist, and `Interrupted`
-remains recovery-only. The closed status vocabulary is `Starting`, `Running`, `Completed`, `Failed`, and
+Interruption is not a run state. `Cancelling` and `Cancelled` no longer exist, and the only endings that write
+`Interrupted` are recovery for an unfinished run and the terminal `run.cancel` stop. The closed status vocabulary is
+`Starting`, `Running`, `Completed`, `Failed`, and
 `Interrupted`; the live path creates every run in `Starting`, and a terminal repository transition commits its state
 change in one transaction.
 
@@ -111,18 +113,30 @@ and recreated from scratch, that discard is the only version gate, and there is 
 
 - normalized current-state tables for projects, workspace roots, sessions, runs, and turns;
 - the `messages` transcript for user content, assistant content, reasoning text, tool-call and tool-result messages, and
-notices;
-- one `tool_results` row per completed tool call, holding the typed outcome, bounded redacted content, and process exit
-evidence; and
+notices, each committed tool row carrying its typed tool projection — the call's decoded arguments, or the result's
+payload and kind — in that row's `projection_json`;
+- one `tool_results` row per completed tool call, holding its lifecycle status, bounded redacted content, and approved
+metadata, and remaining the single durable home of those three;
 -  credential-free canonical configuration revisions keyed by `ConfigRevisionId`; the same revision ID with an equal
-revision is idempotent, while the same ID with a different revision fails with a typed conflict.
+revision is idempotent, while the same ID with a different revision fails with a typed conflict; and
+- one single-row `tui_settings` override holding the terminal theme the presentation layer renders with.
 
 The storage schema contains the `projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`, `tool_results`,
-and `configuration_revisions` tables, all created directly on open, plus the `messages_session_id_id` and
-`messages_session_run_id_id` indexes that serve the transcript reads. The `turns` table carries one accepted turn with
-its proposed run and configuration revision and a closed `state` in `started`, `pending`, `appended`, or `removed`.
-Ordering is SQLite row insertion order — `messages.id` for the transcript — and there is no separate event log,
-snapshot, or ordering authority.
+`configuration_revisions`, and `tui_settings` tables, all created directly on open, plus the `messages_session_id_id`
+and `messages_session_run_id_id` indexes that serve the transcript reads. The `turns` table
+carries one accepted turn with its proposed run and configuration revision and a closed `state` in `started`,
+`pending`, `appended`, or `removed`. The `tui_settings` table is the singleton settings row (`id = 1` with its `theme`
+text); adding it moved the single schema stamp from 2 to 3, so a database created under the previous stamp is
+discarded and recreated like any other schema change, with no migration. The `messages` table carries the committed
+typed tool projection in `projection_json`, and the `runs` table no longer carries the untyped `provider_kind` and
+`model` columns; that change moved the stamp from 3 to 4, so a database created under stamp 3 is discarded and
+recreated like any other schema change, with no migration. Ordering is SQLite row insertion order —
+`messages.id` for the transcript — and there is no separate event log, snapshot, or ordering authority.
+
+The terminal theme override is presentation-only: it is written in one immediate transaction, it records no
+configuration revision, it never enters a run's immutable captured configuration snapshot, and the daemon never
+rewrites the credential-bearing configuration file. Its effective value is the stored override, else the resolved
+configuration's `[tui]` theme, else light.
 
 Recovery is one immediate transaction over every unfinished run: each run that is not terminal becomes `Interrupted`
 and records its `finished_at` time inside that same transaction, so a restart cannot leave a half-applied recovery. A
@@ -154,9 +168,12 @@ because they relate to the same user operation.
 ## Transcript, tool results, and model context
 
 `messages.kind` is a closed set: `user`, `assistant`, `tool_call`, `tool_result`, and `notice`. Assistant rows carry the
-whole reasoning text of the step, not deltas or fragments. `tool_results` is the structured view of tool calls;
+whole reasoning text of the step, not deltas or fragments. A row is valid when it carries text, reasoning, or both: a
+step that reasoned without answering commits a reasoning-only assistant row whose `text` is empty, and one transaction
+commits that row before the step's own tool rows. `tool_results` is the structured view of tool calls;
 `tool_call_id` is unique, and the daemon publishes the committed values a write returned rather than re-reading durable
-state. Model context is rebuilt from `messages`; `turns` stays the acceptance and queue state machine.
+state. Model context is rebuilt from `messages`; `turns` stays the acceptance and queue state machine, and the rebuild
+skips a blank-text assistant row, so a committed reasoning-only row never replays reasoning into a later request.
 
 The daemon writes no mid-stream content: text and reasoning accumulate in memory and commit once per completed model
 step as one `messages` row, while usage, finish reason, and error commit on the `runs` row. A crash mid-step loses the
@@ -175,19 +192,26 @@ typed field through its proto parser, so an undecodable `runs.status` or `messag
 `invalid_run_status` or `invalid_message_kind` instead of a storage-local decode code. Raw TOML, configuration paths,
 credentials, and SQLite resources never cross this DTO-only read boundary.
 
-The daemon task and interruption registries are keyed by exact `(SessionId, RunId)`. Admission and interruption
+The daemon task registry is keyed by exact `(SessionId, RunId)`. Admission and the stop
 serialize through that registry: a host inserts a provider-neutral cancellation signal before spawning a newly admitted
-durable `Starting` run and deduplicates repeated admission. `run.interrupt` validates the exact active run, then signals
-that exact task; an interrupt that arrives before admission finds no in-flight operation to stop, changes no durable
-state, and the run's next boundary continues normally. A tool call interrupted before it starts is answered with the
+durable `Starting` run and deduplicates repeated admission. `run.cancel` takes the same registry:
+a registered execution's signal carries the stop, so the run ends `Interrupted` at its next boundary, and an active run
+no registered execution owns is terminalized durably `Interrupted` by the host, so a stop never silently does nothing. A tool call interrupted before it starts is answered with the
 stopped-tool-call notice as a `Partial` result, so no effect starts and the assistant tool-call message stays answered.
 The fixed notice for a stopped provider stream or another call without its own result is
 `[The call was stopped before a final result.]`; the tool-call notices are owned by [architecture
-15](15-tool-registry-and-model-tool-loop.md). `run.interrupt` is accepted only for an exact active run
-(`active_run_not_found` otherwise), reports the session position, and is never dispatched through the synchronous
-command path, which rejects it with `invalid_interrupt_dispatch`.
-An interrupt that arrives during a retry wait records the notice and starts the next attempt immediately. The executor
-owns suppression of late results from the stopped call. Recovery never admits old work to a provider.
+15](15-tool-registry-and-model-tool-loop.md). The executor owns suppression of late results from the stopped call.
+Recovery never admits old work to a provider.
+
+`run.cancel` is the terminal stop and the only command that ends a live run. It is accepted only for an exact active
+run (`active_run_not_found` otherwise) and lands at the execution's next boundary — the round select, the step finish,
+a retry wait, a tool batch, or the loop top — so committed work stays committed: a provider round in flight is
+cancelled, a tool batch whose results already committed is answered before the stop is honored, and the run commits the
+fixed `[The run was stopped before a final answer.]` notice through the same terminal-transition transaction as every
+other ending before it finishes `Interrupted`. A stopped run never continues: no successor round, no retry, and no
+second provider request. A stop whose run has no registered execution — its task returned while the run stayed active —
+is terminalized durably `Interrupted` the way recovery writes it, so the request never silently does nothing, and a run
+that is already terminal makes it a no-op.
 
 A filesystem-dependent validation must finish before the transition transaction, and any stale result becomes a
 typed known pre-effect outcome rather than an unrecorded second external check inside the transaction.
@@ -210,7 +234,6 @@ tool and run evidence is evidence of intent and observed state, not proof of ext
 | Single-transaction state changes | SQLite fault-injection outcome tests after each write stage. | Each injected failure rolls back: no partial row, run status, or transcript record persists. |
 | Canonical config revision IDs | SQLite config-revision contract test. | An equal credential-free revision for the same `ConfigRevisionId` is idempotent; a different revision for that ID fails with a typed conflict. |
 | Transcript round trip | Storage and runtime tests over user, assistant, tool, and notice messages. | Assistant rows carry whole reasoning text, tool results correlate by unique `tool_call_id`, and model context rebuilds from committed rows only. |
-| Interruption stays non-terminal | Runtime test. | An interrupt of an in-flight provider stream or tool call records the notice, resets the signal, leaves the run `Running`, and the next model step proceeds; `Cancelling` and `Cancelled` have no transition. |
 | Pending boundary join | Runtime and SQLite contract tests. | Pending turns are appended as ordered user messages and marked `appended` in one durable commit; the run continues without promotion or a second run. |
 | Recovery before ready | Composition restart fixture with an unfinished run. | Every unfinished run becomes `Interrupted` before readiness; no external work resumes. |
 | Current-schema creation and config persistence | SQLite current-schema and configuration-revision persistence fixtures. | The complete current schema is created directly on open, and only credential-free revision data persists. |

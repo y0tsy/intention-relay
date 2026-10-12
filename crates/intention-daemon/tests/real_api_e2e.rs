@@ -50,24 +50,24 @@
     reason = "Opt-in live-provider end-to-end fixtures use assertion conveniences and one stderr diagnostic on the unwind path for precise failures."
 )]
 
-mod common;
-
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{config_path, spawn_daemon, unique_endpoint, write_config_document};
-use intention_client::{IntentionClient, ProcessDaemonLauncher, RunStreamClient};
+use intention_client::{IntentionClient, ProcessDaemonLauncher, SessionStreamClient, StreamStep};
 use intention_config::{
     ConfigPathDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto,
-    RunStatusDto, WorkspaceRootDto, run_status_is_terminal,
+    RunStatusDto, ToolIdentityDto, WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_proto::{IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId};
-use intention_proto::{SendUserTurnOutcomeDto, SessionSnapshotDto, SubscribeRunCommandDto};
+use intention_proto::{SendUserTurnOutcomeDto, SessionSnapshotDto, SubscribeSessionCommandDto};
+use intention_test_support::daemon_process::{
+    config_path, spawn_daemon, unique_endpoint, write_config_document,
+};
 use intention_transport::LocalEndpoint;
 use tempfile::TempDir;
 
@@ -457,7 +457,9 @@ impl Drop for LiveE2eHost {
     fn drop(&mut self) {
         self.kill_daemon();
         #[cfg(unix)]
-        if let Some(path) = common::endpoint_socket_path(&self.endpoint) {
+        if let Some(path) =
+            intention_test_support::daemon_process::endpoint_socket_path(&self.endpoint)
+        {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -537,7 +539,8 @@ async fn create_session(host: &LiveE2eHost, session_id: SessionId, label: &str) 
             host.workspace_id,
             WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
                 .expect("workspace root is absolute"),
-            RunModeDto::Build,
+            Some(RunModeDto::Build),
+            None,
         ))
         .await
         .unwrap_or_else(|error| {
@@ -586,7 +589,8 @@ impl ObservedRun {
     /// Reports whether the run committed the named tool call row.
     fn has_tool_call(&self, tool: &str) -> bool {
         self.messages.iter().any(|message| {
-            message.kind() == MessageKindDto::ToolCall && message.tool_id() == Some(tool)
+            message.kind() == MessageKindDto::ToolCall
+                && message.tool_id().map(ToolIdentityDto::wire_name) == Some(tool)
         })
     }
 
@@ -598,7 +602,7 @@ impl ObservedRun {
             if message.kind() != MessageKindDto::ToolCall {
                 continue;
             }
-            if let Some(name) = message.tool_id()
+            if let Some(name) = message.tool_id().map(ToolIdentityDto::wire_name)
                 && !names.contains(&name)
             {
                 names.push(name);
@@ -616,7 +620,8 @@ impl ObservedRun {
         self.messages
             .iter()
             .filter(|message| {
-                message.kind() == MessageKindDto::ToolCall && message.tool_id() == Some(tool)
+                message.kind() == MessageKindDto::ToolCall
+                    && message.tool_id().map(ToolIdentityDto::wire_name) == Some(tool)
             })
             .map(MessageProjectionDto::text)
             .collect()
@@ -633,10 +638,10 @@ impl ObservedRun {
             .iter()
             .filter(|result| {
                 result.kind() == MessageKindDto::ToolResult
-                    && result.tool_id() == Some(tool)
+                    && result.tool_id().map(ToolIdentityDto::wire_name) == Some(tool)
                     && self.messages.iter().any(|call| {
                         call.kind() == MessageKindDto::ToolCall
-                            && call.tool_id() == Some(tool)
+                            && call.tool_id().map(ToolIdentityDto::wire_name) == Some(tool)
                             && call.tool_call_id() == result.tool_call_id()
                     })
             })
@@ -670,26 +675,22 @@ enum RunObservation {
 async fn collect_terminal_run(
     endpoint: &LocalEndpoint,
     session_id: SessionId,
-    run_id: RunId,
     deadline: Instant,
 ) -> RunObservation {
     tokio::time::timeout_at(
         tokio::time::Instant::from_std(deadline),
-        collect_run_frames(endpoint, session_id, run_id),
+        collect_session_frames(endpoint, session_id),
     )
     .await
     .unwrap_or_else(|_| panic!("the run reaches a terminal status before the deadline"))
 }
 
-/// Reads one run stream until its terminal status or a closed connection.
-async fn collect_run_frames(
-    endpoint: &LocalEndpoint,
-    session_id: SessionId,
-    run_id: RunId,
-) -> RunObservation {
-    let client = RunStreamClient::new(endpoint.clone());
+/// Reads the session stream until its active run reaches a terminal status or
+/// the connection closes.
+async fn collect_session_frames(endpoint: &LocalEndpoint, session_id: SessionId) -> RunObservation {
+    let client = SessionStreamClient::new(endpoint.clone());
     let Ok(mut subscription) = client
-        .subscribe(SubscribeRunCommandDto::new(session_id, run_id))
+        .subscribe(SubscribeSessionCommandDto::new(session_id))
         .await
     else {
         return RunObservation::Lost("the run subscription failed".to_owned());
@@ -710,8 +711,8 @@ async fn collect_run_frames(
             }));
         }
         match subscription.receive().await {
-            Ok(Some(_)) => {}
-            Ok(None) => {
+            Ok(StreamStep::Frame(_)) => {}
+            Ok(StreamStep::Closed(_)) => {
                 return RunObservation::Lost(format!(
                     "the daemon closed the run stream after {} committed rows",
                     subscription.state().messages().len()
@@ -765,21 +766,17 @@ async fn drive_tool_turn_with(
         prepare();
         let session_id = SessionId::new();
         create_session(host, session_id, &format!("{tool} turn {attempt}")).await;
-        let run_id = send_user_turn(&host.endpoint, session_id, prompt).await;
-        let observed = match collect_terminal_run(
-            &host.endpoint,
-            session_id,
-            run_id,
-            Instant::now() + TURN_DEADLINE,
-        )
-        .await
-        {
-            RunObservation::Terminal(observed) => *observed,
-            RunObservation::Lost(reason) => {
-                last_gap = Some(reason);
-                continue;
-            }
-        };
+        send_user_turn(&host.endpoint, session_id, prompt).await;
+        let observed =
+            match collect_terminal_run(&host.endpoint, session_id, Instant::now() + TURN_DEADLINE)
+                .await
+            {
+                RunObservation::Terminal(observed) => *observed,
+                RunObservation::Lost(reason) => {
+                    last_gap = Some(reason);
+                    continue;
+                }
+            };
         if observed.status() != RunStatusDto::Completed {
             // A failed live turn is model noise: the live model can answer
             // without a usable tool call, and an unparsable call terminalizes
@@ -1037,18 +1034,14 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_survives_resta
     )
     .await;
 
-    // `execute`: the real registry runs a child process in the workspace.
-    let (program, args) = if cfg!(windows) {
-        ("cmd", vec!["/C".to_owned(), format!("echo {token}")])
-    } else {
-        ("sh", vec!["-c".to_owned(), format!("echo {token}")])
-    };
+    // `execute`: the real registry runs a shell command in the workspace.
+    let command = format!("echo {token}");
     let (execute_session, execute_run) = drive_tool_turn(
         &host,
         "execute",
         &format!(
             "Use the execute tool with the arguments {} to print the token with a real child process.",
-            serde_json::json!({"program": program, "args": args})
+            serde_json::json!({"command": command})
         ),
         &|run| {
             let content = run.tool_result_contents("execute").join("\n");
@@ -1065,22 +1058,20 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_survives_resta
         &edit_run,
         &execute_run,
     ];
-    let run_id = read_run.run.run_id();
 
     host.restart_daemon();
     let _client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE).await;
-    let stream_client = RunStreamClient::new(host.endpoint.clone());
+    let stream_client = SessionStreamClient::new(host.endpoint.clone());
     let subscription = tokio::time::timeout_at(
         tokio::time::Instant::from_std(Instant::now() + RESUBSCRIBE_DEADLINE),
-        stream_client.subscribe(SubscribeRunCommandDto::new(read_session, run_id)),
+        stream_client.subscribe(SubscribeSessionCommandDto::new(read_session)),
     )
     .await
     .unwrap_or_else(|_| panic!("the post-restart subscription reply arrives before the deadline"))
     .expect("the post-restart subscription reply is valid");
-    assert_eq!(
-        subscription.state().status(),
-        Some(RunStatusDto::Completed),
-        "the restarted daemon serves the completed run"
+    assert!(
+        subscription.state().status().is_none(),
+        "the restarted daemon serves the completed run as terminal, so the session carries no active run"
     );
     assert_eq!(
         subscription.state().messages(),
@@ -1097,7 +1088,6 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_survives_resta
         if let RunObservation::Terminal(observed) = collect_terminal_run(
             &host.endpoint,
             read_session,
-            run_id,
             Instant::now() + RESUBSCRIBE_DEADLINE,
         )
         .await
@@ -1178,16 +1168,11 @@ async fn real_provider_rejects_invalid_credential_without_leak() {
 
     let session_id = SessionId::new();
     create_session(&host, session_id, "the invalid-credential run").await;
-    let run_id = send_user_turn(&host.endpoint, session_id, "Reply with a short greeting.").await;
+    send_user_turn(&host.endpoint, session_id, "Reply with a short greeting.").await;
     let mut observed = None;
     for _ in 1..=TOOL_TURN_ATTEMPTS {
-        if let RunObservation::Terminal(terminal) = collect_terminal_run(
-            &host.endpoint,
-            session_id,
-            run_id,
-            Instant::now() + TURN_DEADLINE,
-        )
-        .await
+        if let RunObservation::Terminal(terminal) =
+            collect_terminal_run(&host.endpoint, session_id, Instant::now() + TURN_DEADLINE).await
         {
             observed = Some(*terminal);
             break;

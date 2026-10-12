@@ -1,17 +1,20 @@
 //! Typed local-protocol DTOs for Intention Relay.
 //!
 //! One typed message travels per NDJSON line: a correlated client request, a
-//! correlated daemon reply or rejection, or an uncorrelated committed run
-//! frame. The typed request and result enums are the complete wire contract:
+//! correlated daemon reply or rejection, or an uncorrelated run-stream frame.
+//! The typed request and result enums are the complete wire contract:
 //! there is no method table, no second error channel, and no version
 //! negotiation. This module defines typed wire contracts only. It contains no
 //! socket framing, client bootstrap, daemon lifecycle, runtime actors, or
 //! presentation logic.
 
+use std::collections::BTreeSet;
+
 use crate::{
-    ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorDto, GetSessionSnapshotQueryDto,
-    InterruptRunCommandDto, MessageProjectionDto, ProjectId, RemoveTurnCommandDto, RunId,
-    RunProjectionDto, SendUserTurnCommandDto, SessionId, SessionProjectionDto, TurnId, WorkspaceId,
+    CancelRunCommandDto, ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorCategoryDto,
+    ErrorDto, ErrorRetryDto, GetSessionSnapshotQueryDto, MessageProjectionDto, ProjectId,
+    RemoveTurnCommandDto, RunId, RunModeDto, RunProjectionDto, SendUserTurnCommandDto, SessionId,
+    SessionProjectionDto, TimestampDto, TurnId, WorkspaceId, WorkspaceRootDto,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -49,18 +52,123 @@ impl DaemonHealthDto {
     }
 }
 
-/// A subscription request scoped to one durable session and run.
+/// One presentation theme a client can read and select.
+///
+/// The theme is presentation-only: the daemon answers and stores it, and it
+/// never enters a run's immutable configuration selection.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct SubscribeRunCommandDto {
-    session_id: SessionId,
-    run_id: RunId,
+#[serde(rename_all = "snake_case")]
+pub enum ThemeDto {
+    /// The light terminal palette.
+    Light,
+    /// The dark terminal palette.
+    Dark,
 }
 
-impl SubscribeRunCommandDto {
-    /// Creates a run-scoped subscription request.
+impl ThemeDto {
+    /// Returns the canonical durable string representation of this theme.
+    ///
+    /// The representation is persisted verbatim, so it must stay byte-identical
+    /// across releases.
     #[must_use]
-    pub const fn new(session_id: SessionId, run_id: RunId) -> Self {
-        Self { session_id, run_id }
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    /// Parses the canonical durable string representation of a theme.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe internal error when `value` is not a declared durable theme.
+    pub fn parse(value: &str) -> DtoResult<Self> {
+        match value {
+            "light" => Ok(Self::Light),
+            "dark" => Ok(Self::Dark),
+            _ => Err(ErrorDto::new(
+                "invalid_theme",
+                ErrorCategoryDto::Internal,
+                "the durable theme is not declared",
+                ErrorRetryDto::Never,
+                None,
+            )?),
+        }
+    }
+}
+
+/// The effective terminal settings a client renders with.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TuiSettingsDto {
+    theme: ThemeDto,
+}
+
+impl TuiSettingsDto {
+    /// Creates one effective terminal settings value.
+    #[must_use]
+    pub const fn new(theme: ThemeDto) -> Self {
+        Self { theme }
+    }
+
+    /// Returns the effective terminal theme.
+    #[must_use]
+    pub const fn theme(self) -> ThemeDto {
+        self.theme
+    }
+}
+
+/// One command selecting the terminal theme.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SetTuiThemeCommandDto {
+    theme: ThemeDto,
+}
+
+impl SetTuiThemeCommandDto {
+    /// Creates one theme-selection command.
+    #[must_use]
+    pub const fn new(theme: ThemeDto) -> Self {
+        Self { theme }
+    }
+
+    /// Returns the requested theme.
+    #[must_use]
+    pub const fn theme(self) -> ThemeDto {
+        self.theme
+    }
+}
+
+/// Typed acceptance evidence for one stored theme.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TuiThemeAcceptedDto {
+    theme: ThemeDto,
+}
+
+impl TuiThemeAcceptedDto {
+    /// Creates the acceptance evidence for one stored theme.
+    #[must_use]
+    pub const fn new(theme: ThemeDto) -> Self {
+        Self { theme }
+    }
+
+    /// Returns the accepted theme.
+    #[must_use]
+    pub const fn theme(self) -> ThemeDto {
+        self.theme
+    }
+}
+
+/// A subscription request scoped to one durable session.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SubscribeSessionCommandDto {
+    session_id: SessionId,
+}
+
+impl SubscribeSessionCommandDto {
+    /// Creates a session-scoped subscription request.
+    #[must_use]
+    pub const fn new(session_id: SessionId) -> Self {
+        Self { session_id }
     }
 
     /// Returns the scoped session identity.
@@ -68,84 +176,149 @@ impl SubscribeRunCommandDto {
     pub const fn session_id(self) -> SessionId {
         self.session_id
     }
+}
 
-    /// Returns the scoped run identity.
+/// The channel one transient delta chunk belongs to.
+///
+/// One model step streams two independent text channels before it commits: the
+/// reasoning it thinks the answer through, and the answer that becomes its
+/// assistant row. The channel is the only thing that tells them apart, so a
+/// client can buffer the reasoning without ever merging it into the answer.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextDeltaChannelDto {
+    /// The answer text the step commits as the text of its assistant row.
+    Answer,
+    /// The reasoning the step precedes its answer with.
+    Reasoning,
+}
+
+impl TextDeltaChannelDto {
+    /// Returns the stable wire name of the channel.
     #[must_use]
-    pub const fn run_id(self) -> RunId {
-        self.run_id
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Answer => "answer",
+            Self::Reasoning => "reasoning",
+        }
     }
 }
 
-/// A server-originated, uncorrelated committed run-stream frame.
+/// One transient provisional text delta from a running model step.
 ///
-/// The wire tag is `kind` with `content` for one committed transcript row and
-/// `status` for one committed run projection; the payload travels in `data` and
-/// carries no event position. A status frame carries the committed projection
-/// itself, never a status delta a client would have to merge.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
-pub enum RunStreamFrameDto {
-    /// One committed transcript row.
-    Content(MessageProjectionDto),
-    /// The committed run projection after one status change.
-    Status(RunProjectionDto),
-}
-
-/// The current run state returned by a dedicated run subscription.
+/// A text delta is best-effort advance notice: it is never persisted and never
+/// replayed after a reconnect, so a client renders it only until the committed
+/// assistant row of the same step arrives. It names the step it belongs to and
+/// which of that step's two text channels it carries, so the answer and the
+/// reasoning it precedes stay separate from the first chunk on.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct RunSubscriptionSnapshotDto {
-    run: RunProjectionDto,
-    messages: Vec<MessageProjectionDto>,
+pub struct TextDeltaFrameDto {
+    session_id: SessionId,
+    run_id: RunId,
+    step: u32,
+    channel: TextDeltaChannelDto,
+    text: String,
 }
 
-impl<'de> Deserialize<'de> for RunSubscriptionSnapshotDto {
+impl<'de> Deserialize<'de> for TextDeltaFrameDto {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        struct RawRunSubscriptionSnapshotDto {
-            run: RunProjectionDto,
-            messages: Vec<MessageProjectionDto>,
+        struct RawTextDeltaFrameDto {
+            session_id: SessionId,
+            run_id: RunId,
+            step: u32,
+            channel: TextDeltaChannelDto,
+            text: String,
         }
-        let raw = RawRunSubscriptionSnapshotDto::deserialize(deserializer)?;
-        Self::new(raw.run, raw.messages).map_err(serde::de::Error::custom)
+
+        let raw = RawTextDeltaFrameDto::deserialize(deserializer)?;
+        Self::new(raw.session_id, raw.run_id, raw.step, raw.channel, raw.text)
+            .map_err(serde::de::Error::custom)
     }
 }
 
-impl RunSubscriptionSnapshotDto {
-    /// Creates a coherent run snapshot scoped to one session and run.
+impl TextDeltaFrameDto {
+    /// Creates one transient provisional text delta.
     ///
     /// # Errors
     ///
-    /// Returns a validation error when a carried transcript row belongs to a
-    /// different session or to a different run.
-    pub fn new(run: RunProjectionDto, messages: Vec<MessageProjectionDto>) -> DtoResult<Self> {
-        if messages.iter().any(|message| {
-            message.session_id() != run.session_id()
-                || message
-                    .run_id()
-                    .is_some_and(|run_id| run_id != run.run_id())
-        }) {
-            return Err(ErrorDto::validation(
-                "invalid_run_subscription_snapshot",
-                "run snapshot messages must belong to the snapshot session and run",
-            ));
+    /// Returns a validation error when the delta text is empty.
+    pub fn new(
+        session_id: SessionId,
+        run_id: RunId,
+        step: u32,
+        channel: TextDeltaChannelDto,
+        text: impl Into<String>,
+    ) -> DtoResult<Self> {
+        let text = text.into();
+        if text.is_empty() {
+            Err(ErrorDto::validation(
+                "invalid_text_delta",
+                "model text delta must not be empty",
+            ))
+        } else {
+            Ok(Self {
+                session_id,
+                run_id,
+                step,
+                channel,
+                text,
+            })
         }
-        Ok(Self { run, messages })
     }
 
-    /// Returns the current run projection.
+    /// Returns the owning session identity.
     #[must_use]
-    pub const fn run(&self) -> &RunProjectionDto {
-        &self.run
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
     }
 
-    /// Returns the bounded committed transcript rows of the run.
+    /// Returns the run whose model step produced the delta.
     #[must_use]
-    pub fn messages(&self) -> &[MessageProjectionDto] {
-        &self.messages
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
     }
+
+    /// Returns the zero-based model step index within the run.
+    #[must_use]
+    pub const fn step(&self) -> u32 {
+        self.step
+    }
+
+    /// Returns the step's text channel this chunk belongs to.
+    #[must_use]
+    pub const fn channel(&self) -> TextDeltaChannelDto {
+        self.channel
+    }
+
+    /// Returns the provisional text chunk.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+/// A server-originated, uncorrelated session-stream frame.
+///
+/// The wire tag is `kind` with `content` for one committed transcript row,
+/// `status` for one committed run projection of the session's active run, and
+/// `text_delta` for one transient provisional model chunk; the payload travels
+/// in `data`. No frame carries an event position: a text delta names the run
+/// and model step it belongs to and the channel of that step the chunk carries.
+/// A status frame carries the committed projection itself, never a status
+/// delta a client would have to merge.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum SessionFrameDto {
+    /// One committed transcript row of the session.
+    Content(MessageProjectionDto),
+    /// The committed projection of the session's active run after one change.
+    Status(RunProjectionDto),
+    /// One transient provisional text delta from the active run's model step.
+    TextDelta(TextDeltaFrameDto),
 }
 
 /// A current session projection with its committed transcript rows.
@@ -225,6 +398,182 @@ impl SessionSnapshotDto {
     }
 }
 
+/// One bounded current summary of a durable session.
+///
+/// A summary carries no transcript rows: the list reports which sessions
+/// exist, and a client reads the session it selects through a full session
+/// read. It carries the durable facts a list renders — the session's creation
+/// and last update times, its bound workspace root, and how many committed
+/// transcript rows it holds — beside the sole active run, if one exists.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SessionSummaryDto {
+    session_id: SessionId,
+    project_id: ProjectId,
+    workspace_id: WorkspaceId,
+    mode: RunModeDto,
+    created_at: TimestampDto,
+    updated_at: TimestampDto,
+    workspace_root: WorkspaceRootDto,
+    message_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_run: Option<RunProjectionDto>,
+}
+
+impl SessionSummaryDto {
+    /// Creates the bounded public summary of one durable session.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "This public wire constructor preserves the established nine-field session summary contract."
+    )]
+    #[must_use]
+    pub const fn new(
+        session_id: SessionId,
+        project_id: ProjectId,
+        workspace_id: WorkspaceId,
+        mode: RunModeDto,
+        created_at: TimestampDto,
+        updated_at: TimestampDto,
+        workspace_root: WorkspaceRootDto,
+        message_count: u64,
+        active_run: Option<RunProjectionDto>,
+    ) -> Self {
+        Self {
+            session_id,
+            project_id,
+            workspace_id,
+            mode,
+            created_at,
+            updated_at,
+            workspace_root,
+            message_count,
+            active_run,
+        }
+    }
+
+    /// Returns the durable session identity.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the owning project identity.
+    #[must_use]
+    pub const fn project_id(&self) -> ProjectId {
+        self.project_id
+    }
+
+    /// Returns the daemon-owned workspace identity.
+    #[must_use]
+    pub const fn workspace_id(&self) -> WorkspaceId {
+        self.workspace_id
+    }
+
+    /// Returns the session run policy mode.
+    #[must_use]
+    pub const fn mode(&self) -> RunModeDto {
+        self.mode
+    }
+
+    /// Returns when the durable session was created in whole Unix seconds.
+    #[must_use]
+    pub const fn created_at(&self) -> TimestampDto {
+        self.created_at
+    }
+
+    /// Returns the last durable session update in whole Unix seconds.
+    #[must_use]
+    pub const fn updated_at(&self) -> TimestampDto {
+        self.updated_at
+    }
+
+    /// Returns the workspace root the session is durably bound to.
+    #[must_use]
+    pub const fn workspace_root(&self) -> &WorkspaceRootDto {
+        &self.workspace_root
+    }
+
+    /// Returns how many committed transcript rows the session holds.
+    #[must_use]
+    pub const fn message_count(&self) -> u64 {
+        self.message_count
+    }
+
+    /// Returns the sole active run, if one exists.
+    #[must_use]
+    pub const fn active_run(&self) -> Option<RunProjectionDto> {
+        self.active_run
+    }
+}
+
+/// One bounded list of current session summaries.
+///
+/// The omitted count is always explicit: a bounded read reports how many
+/// sessions exist beyond the returned window instead of silently truncating
+/// the list.
+///
+/// The order is a contract, not a suggestion: the newest durable update comes
+/// first, with the durable session identity ascending as the tie-break. This
+/// is the order a continuation reads — the first summary of the list is its
+/// continue target — and it is exactly the daemon's list order.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SessionSummariesDto {
+    sessions: Vec<SessionSummaryDto>,
+    omitted: u32,
+}
+
+impl<'de> Deserialize<'de> for SessionSummariesDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawSessionSummariesDto {
+            sessions: Vec<SessionSummaryDto>,
+            omitted: u32,
+        }
+
+        let raw = RawSessionSummariesDto::deserialize(deserializer)?;
+        Self::new(raw.sessions, raw.omitted).map_err(serde::de::Error::custom)
+    }
+}
+
+impl SessionSummariesDto {
+    /// Creates a coherent bounded session list with its explicit omitted count.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when one summary's active run belongs to a
+    /// different session or session identities are not unique.
+    pub fn new(sessions: Vec<SessionSummaryDto>, omitted: u32) -> DtoResult<Self> {
+        let mut unique_session_ids = BTreeSet::new();
+        if sessions.iter().any(|summary| {
+            summary
+                .active_run()
+                .is_some_and(|run| run.session_id() != summary.session_id())
+                || !unique_session_ids.insert(summary.session_id())
+        }) {
+            return Err(ErrorDto::validation(
+                "invalid_session_summaries",
+                "session summaries must carry unique sessions with their own active runs",
+            ));
+        }
+        Ok(Self { sessions, omitted })
+    }
+
+    /// Returns the bounded session summaries in the list's contract order:
+    /// newest durable update first, then session identity ascending.
+    #[must_use]
+    pub fn sessions(&self) -> &[SessionSummaryDto] {
+        &self.sessions
+    }
+
+    /// Returns how many sessions exist beyond the returned window.
+    #[must_use]
+    pub const fn omitted(&self) -> u32 {
+        self.omitted
+    }
+}
+
 /// One typed request from a local adapter to the daemon.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
@@ -235,14 +584,20 @@ pub enum ClientRequestDto {
     SendUserTurn(SendUserTurnCommandDto),
     /// Requests removal of a not-yet-seen pending user turn.
     RemoveTurn(RemoveTurnCommandDto),
-    /// Requests interruption of an active daemon-owned run's current operation.
-    InterruptRun(InterruptRunCommandDto),
+    /// Requests that an active daemon-owned run stop for good.
+    CancelRun(CancelRunCommandDto),
     /// Obtains the latest durable session projection.
     GetSessionSnapshot(GetSessionSnapshotQueryDto),
     /// Obtains the daemon's latest health projection.
     GetDaemonHealth,
-    /// Begins a dedicated run-stream subscription.
-    SubscribeRun(SubscribeRunCommandDto),
+    /// Obtains the bounded current session list.
+    ListSessions,
+    /// Obtains the effective terminal settings.
+    GetTuiSettings,
+    /// Selects and stores the terminal theme.
+    SetTuiTheme(SetTuiThemeCommandDto),
+    /// Begins a dedicated session-stream subscription.
+    SubscribeSession(SubscribeSessionCommandDto),
 }
 
 /// One correlated client request line.
@@ -288,14 +643,20 @@ pub enum ProtocolResultDto {
     TurnAccepted(SendUserTurnAcceptedDto),
     /// A pending user turn was removed.
     TurnRemoved(RemoveTurnAcceptedDto),
-    /// An interruption request was accepted for a run.
-    RunInterrupted(InterruptRunAcceptedDto),
+    /// A stop request was accepted for a run.
+    RunCancelled(RunCancelledAcceptedDto),
     /// A current durable session projection.
     SessionSnapshot(SessionSnapshotDto),
     /// The daemon health projection.
     DaemonHealth(DaemonHealthDto),
-    /// The current run state of a new subscription.
-    RunSubscribed(RunSubscriptionSnapshotDto),
+    /// A bounded current list of session summaries.
+    SessionsListed(SessionSummariesDto),
+    /// The effective terminal settings.
+    TuiSettings(TuiSettingsDto),
+    /// A theme selection was stored.
+    TuiThemeSet(TuiThemeAcceptedDto),
+    /// The current session state of a new subscription.
+    SessionSubscribed(SessionSnapshotDto),
 }
 
 /// Typed acceptance evidence for a created session.
@@ -304,20 +665,27 @@ pub struct CreateSessionAcceptedDto {
     project_id: ProjectId,
     workspace_id: WorkspaceId,
     session_id: SessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    first_turn: Option<SendUserTurnAcceptedDto>,
 }
 
 impl CreateSessionAcceptedDto {
     /// Creates durable session acceptance evidence.
+    ///
+    /// `first_turn` echoes the accepted outcome of the command's first turn,
+    /// or `None` when the command carried none.
     #[must_use]
     pub const fn new(
         project_id: ProjectId,
         workspace_id: WorkspaceId,
         session_id: SessionId,
+        first_turn: Option<SendUserTurnAcceptedDto>,
     ) -> Self {
         Self {
             project_id,
             workspace_id,
             session_id,
+            first_turn,
         }
     }
 
@@ -337,6 +705,12 @@ impl CreateSessionAcceptedDto {
     #[must_use]
     pub const fn session_id(self) -> SessionId {
         self.session_id
+    }
+
+    /// Returns the accepted outcome of the command's first turn, if it carried one.
+    #[must_use]
+    pub const fn first_turn(self) -> Option<SendUserTurnAcceptedDto> {
+        self.first_turn
     }
 }
 
@@ -425,15 +799,15 @@ impl RemoveTurnAcceptedDto {
     }
 }
 
-/// Typed acceptance evidence for a run interruption request.
+/// Typed acceptance evidence for a run stop request.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct InterruptRunAcceptedDto {
+pub struct RunCancelledAcceptedDto {
     session_id: SessionId,
     run_id: RunId,
 }
 
-impl InterruptRunAcceptedDto {
-    /// Creates complete interruption acceptance evidence.
+impl RunCancelledAcceptedDto {
+    /// Creates complete stop acceptance evidence.
     #[must_use]
     pub const fn new(session_id: SessionId, run_id: RunId) -> Self {
         Self { session_id, run_id }
@@ -445,7 +819,7 @@ impl InterruptRunAcceptedDto {
         self.session_id
     }
 
-    /// Returns the interrupted run identity.
+    /// Returns the stopped run identity.
     #[must_use]
     pub const fn run_id(self) -> RunId {
         self.run_id
@@ -531,7 +905,7 @@ pub enum ProtocolDaemonMessageDto {
     /// A correlated rejection carrying one request's typed error.
     Rejection(ProtocolRejectionDto),
     /// A committed run frame published by an established subscription.
-    Frame(RunStreamFrameDto),
+    Frame(SessionFrameDto),
 }
 
 impl ProtocolDaemonMessageDto {
@@ -549,7 +923,7 @@ impl ProtocolDaemonMessageDto {
 
     /// Creates the frame carrying one committed run-stream value.
     #[must_use]
-    pub const fn frame(frame: RunStreamFrameDto) -> Self {
+    pub const fn frame(frame: SessionFrameDto) -> Self {
         Self::Frame(frame)
     }
 }
@@ -649,7 +1023,7 @@ pub fn decode_response(line: &str, id: u64) -> DtoResult<ProtocolResultDto> {
 ///
 /// Returns an `invalid_local_protocol_response` error when the line is not a
 /// committed run frame, so a reply is never accepted as a frame.
-pub fn parse_run_frame(line: &str) -> DtoResult<RunStreamFrameDto> {
+pub fn parse_session_frame(line: &str) -> DtoResult<SessionFrameDto> {
     match parse_daemon_message(line)? {
         ProtocolDaemonMessageDto::Frame(frame) => Ok(frame),
         _ => Err(invalid_wire_response()),
@@ -699,11 +1073,11 @@ mod tests {
 
     fn fixture_message(session_id: SessionId, run_id: RunId) -> MessageProjectionDto {
         MessageProjectionDto::new(
+            crate::MessageId::new(1).expect("fixture row identity is valid"),
             session_id,
             Some(run_id),
             MessageKindDto::Notice,
             "fixture notice",
-            None,
             None,
             None,
         )
@@ -717,7 +1091,13 @@ mod tests {
             TurnId::new(),
             crate::RunStatusDto::Running,
             ConfigRevisionId::new(),
+            None,
+            crate::TimestampDto::from_unix_seconds(1_726_000_000)
+                .expect("fixture timestamp is valid"),
+            None,
+            0,
         )
+        .expect("fixture run projection is valid")
     }
 
     #[test]
@@ -739,17 +1119,14 @@ mod tests {
             snapshot
         );
 
-        let run_snapshot = RunSubscriptionSnapshotDto::new(
-            fixture_run(session_id, run_id),
-            vec![fixture_message(session_id, run_id)],
-        )
-        .expect("fixture run snapshot is valid");
-        let result = ProtocolResultDto::RunSubscribed(run_snapshot);
+        // The subscription answer carries the same session snapshot the
+        // one-shot session read does: one snapshot shape serves both.
+        let result = ProtocolResultDto::SessionSubscribed(snapshot);
         assert_eq!(
             serde_json::from_str::<ProtocolResultDto>(
-                &serde_json::to_string(&result).expect("run result serializes")
+                &serde_json::to_string(&result).expect("subscription result serializes")
             )
-            .expect("run result deserializes"),
+            .expect("subscription result deserializes"),
             result
         );
 
@@ -775,10 +1152,10 @@ mod tests {
     fn wire_helpers_round_trip_replies_rejections_and_frames() {
         let session_id = SessionId::new();
         let run_id = RunId::new();
-        let frame = RunStreamFrameDto::Status(fixture_run(session_id, run_id));
+        let frame = SessionFrameDto::Status(fixture_run(session_id, run_id));
         let message = ProtocolDaemonMessageDto::frame(frame.clone());
         let line = serde_json::to_string(&message).expect("frame message serializes");
-        assert_eq!(parse_run_frame(&line).expect("frame parses"), frame);
+        assert_eq!(parse_session_frame(&line).expect("frame parses"), frame);
         assert!(
             decode_response(&line, 7).is_err(),
             "a frame is never accepted as a correlated reply"
@@ -786,18 +1163,19 @@ mod tests {
 
         let reply = encode_reply(
             7,
-            ProtocolResultDto::RunSubscribed(
-                RunSubscriptionSnapshotDto::new(
-                    fixture_run(session_id, run_id),
+            ProtocolResultDto::SessionSubscribed(
+                SessionSnapshotDto::with_projection(
+                    session_id,
+                    fixture_projection(session_id),
                     vec![fixture_message(session_id, run_id)],
                 )
-                .expect("fixture run snapshot is valid"),
+                .expect("fixture session snapshot is valid"),
             ),
         );
         let line = serde_json::to_string(&reply).expect("reply serializes");
         assert!(matches!(
             decode_response(&line, 7).expect("the correlated reply decodes"),
-            ProtocolResultDto::RunSubscribed(_)
+            ProtocolResultDto::SessionSubscribed(_)
         ));
         assert!(
             decode_response(&line, 8).is_err(),
@@ -830,7 +1208,7 @@ mod tests {
 
         let request = encode_request(
             3,
-            ClientRequestDto::InterruptRun(InterruptRunCommandDto::new(session_id, run_id)),
+            ClientRequestDto::CancelRun(CancelRunCommandDto::new(session_id, run_id)),
         );
         let line = serde_json::to_string(&request).expect("request serializes");
         let decoded = decode_request_line(&line).expect("request decodes");
@@ -840,7 +1218,7 @@ mod tests {
         let foreign = encode_request(4, ClientRequestDto::GetDaemonHealth);
         let line = serde_json::to_string(&foreign).expect("request serializes");
         assert!(
-            parse_run_frame(&line).is_err(),
+            parse_session_frame(&line).is_err(),
             "a request line is never accepted as a run frame"
         );
         assert_eq!(
@@ -856,25 +1234,27 @@ mod tests {
         let session = SessionId::new();
         let run = RunId::new();
         assert_eq!(
-            RunSubscriptionSnapshotDto::new(
-                fixture_run(session, run),
+            SessionSnapshotDto::with_projection(
+                session,
+                fixture_projection(SessionId::new()),
+                Vec::new()
+            )
+            .expect_err("a projection from another session is rejected")
+            .code(),
+            "invalid_session_snapshot_projection"
+        );
+        assert_eq!(
+            SessionSnapshotDto::with_projection(
+                session,
+                fixture_projection(session),
                 vec![fixture_message(SessionId::new(), run)]
             )
             .expect_err("a message from another session is rejected")
             .code(),
-            "invalid_run_subscription_snapshot"
-        );
-        assert_eq!(
-            RunSubscriptionSnapshotDto::new(
-                fixture_run(session, run),
-                vec![fixture_message(session, RunId::new())]
-            )
-            .expect_err("a message bound to another run is rejected")
-            .code(),
-            "invalid_run_subscription_snapshot"
+            "invalid_session_snapshot_projection"
         );
         assert!(
-            serde_json::from_str::<RunStreamFrameDto>(r#"{"kind":"unknown","data":{}}"#).is_err()
+            serde_json::from_str::<SessionFrameDto>(r#"{"kind":"unknown","data":{}}"#).is_err()
         );
         assert!(
             serde_json::from_str::<ProtocolResultDto>(r#"{"kind":"unknown","data":{}}"#).is_err()

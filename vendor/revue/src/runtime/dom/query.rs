@@ -1,0 +1,1070 @@
+//! DOM query support
+//!
+//! Enables jQuery/CSS-like queries on the DOM tree:
+//!
+//! ```ignore
+//! // Single element
+//! let btn = dom.query_one("#submit");
+//! let input = dom.query_one("Input.email");
+//!
+//! // Multiple elements
+//! let buttons = dom.query_all("Button");
+//! let cards = dom.query_all(".card");
+//! ```
+
+use super::selector::{parse_selectors, Selector};
+use super::{DomId, DomNode};
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+
+/// Query result - found nodes
+pub struct QueryResult<'a> {
+    nodes: Vec<&'a DomNode>,
+}
+
+impl<'a> QueryResult<'a> {
+    /// Create empty result
+    pub fn empty() -> Self {
+        Self { nodes: Vec::new() }
+    }
+
+    /// Create from nodes
+    pub fn from_nodes(nodes: Vec<&'a DomNode>) -> Self {
+        Self { nodes }
+    }
+
+    /// Get first result
+    pub fn first(&self) -> Option<&'a DomNode> {
+        self.nodes.first().copied()
+    }
+
+    /// Get all results
+    pub fn all(&self) -> &[&'a DomNode] {
+        &self.nodes
+    }
+
+    /// Get result count
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Check if empty
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    /// Iterate over results
+    pub fn iter(&self) -> impl Iterator<Item = &'a DomNode> + '_ {
+        self.nodes.iter().copied()
+    }
+}
+
+impl<'a> IntoIterator for QueryResult<'a> {
+    type Item = &'a DomNode;
+    type IntoIter = std::vec::IntoIter<&'a DomNode>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.nodes.into_iter()
+    }
+}
+
+/// DOM query interface
+pub trait Query {
+    /// Query for the first matching element, in document order
+    fn query_one(&self, selector: &str) -> Option<&DomNode>;
+
+    /// Query for all matching elements, in document order
+    fn query_all(&self, selector: &str) -> QueryResult<'_>;
+
+    /// Get element by ID
+    fn get_by_id(&self, id: &str) -> Option<&DomNode>;
+
+    /// Get elements by class
+    fn get_by_class(&self, class: &str) -> QueryResult<'_>;
+
+    /// Get elements by type
+    fn get_by_type(&self, widget_type: &str) -> QueryResult<'_>;
+}
+
+/// DOM Tree - manages the widget hierarchy
+#[derive(Debug, Default)]
+pub struct DomTree {
+    /// All nodes by ID
+    nodes: HashMap<DomId, DomNode>,
+    /// Root node ID
+    root: Option<DomId>,
+    /// ID to DomId mapping (for #id queries)
+    id_map: HashMap<Arc<str>, DomId>,
+    /// Type index: maps widget type to list of node IDs (for type queries)
+    type_index: HashMap<Arc<str>, Vec<DomId>>,
+    /// Class index: maps class name to list of node IDs (for .class queries)
+    class_index: HashMap<Arc<str>, Vec<DomId>>,
+    /// Selector cache: maps selector string to parsed Selector (for repeated queries)
+    /// Uses RwLock for interior mutability since Query trait takes &self
+    selector_cache: RwLock<HashMap<String, Vec<Selector>>>,
+}
+
+impl DomTree {
+    /// Create a new empty DOM tree
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a root node
+    pub fn create_root(&mut self, meta: super::node::WidgetMeta) -> DomId {
+        let id = DomId::new(super::generate_node_id());
+        let mut node = DomNode::new(id, meta);
+
+        // Mark new nodes as dirty so they get rendered
+        node.state.dirty = true;
+
+        // Update ID index (zero-copy with Arc<str>)
+        if let Some(ref element_id) = node.meta.id {
+            self.id_map.insert(Arc::from(element_id.as_str()), id);
+        }
+
+        // Update type index (zero-copy with Arc<str>)
+        self.type_index
+            .entry(Arc::from(node.widget_type()))
+            .or_default()
+            .push(id);
+
+        // Update class index (zero-copy with Arc<str>)
+        for class in &node.meta.classes {
+            self.class_index
+                .entry(Arc::from(class.as_str()))
+                .or_default()
+                .push(id);
+        }
+
+        self.nodes.insert(id, node);
+        self.root = Some(id);
+        id
+    }
+
+    /// Add a child node
+    pub fn add_child(&mut self, parent_id: DomId, meta: super::node::WidgetMeta) -> DomId {
+        let id = DomId::new(super::generate_node_id());
+        let mut node = DomNode::new(id, meta);
+        node.parent = Some(parent_id);
+
+        // Mark new nodes as dirty so they get rendered
+        node.state.dirty = true;
+
+        // Update ID index (zero-copy with Arc<str>)
+        if let Some(ref element_id) = node.meta.id {
+            self.id_map.insert(Arc::from(element_id.as_str()), id);
+        }
+
+        // Update type index (zero-copy with Arc<str>)
+        self.type_index
+            .entry(Arc::from(node.widget_type()))
+            .or_default()
+            .push(id);
+
+        // Update class index (zero-copy with Arc<str>)
+        for class in &node.meta.classes {
+            self.class_index
+                .entry(Arc::from(class.as_str()))
+                .or_default()
+                .push(id);
+        }
+
+        // Add to parent's children and collect IDs for position update
+        let children_to_update: Vec<(DomId, usize, usize)> =
+            if let Some(parent) = self.nodes.get_mut(&parent_id) {
+                parent.children.push(id);
+                let child_count = parent.children.len();
+                parent
+                    .children
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, &child_id)| (child_id, idx, child_count))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+        self.nodes.insert(id, node);
+
+        // Update sibling positions
+        for (child_id, idx, child_count) in children_to_update {
+            if let Some(child) = self.nodes.get_mut(&child_id) {
+                child.state.update_position(idx, child_count);
+            }
+        }
+
+        // A brand new node has no computed style, so the walk has to reach it.
+        self.mark_subtree_dirty(id);
+
+        id
+    }
+
+    /// Apply a new element id and class set to an existing node, keeping the
+    /// id and class indices consistent.
+    ///
+    /// Reconciliation reuses nodes across frames, so a node's classes and even
+    /// its element id can change while its [`DomId`] stays the same. Writing
+    /// `node.meta` directly leaves `id_map` and `class_index` pointing at the
+    /// old values, and every `query(".foo")` after that is wrong.
+    ///
+    /// Returns `true` if anything changed.
+    pub(crate) fn apply_meta(&mut self, id: DomId, new_meta: &super::node::WidgetMeta) -> bool {
+        let Some(node) = self.nodes.get(&id) else {
+            return false;
+        };
+
+        let id_changed = node.meta.id != new_meta.id;
+        let classes_changed = node.meta.classes != new_meta.classes;
+        let key_changed = node.meta.key != new_meta.key;
+        // Static per widget type, so in practice it only differs when the node
+        // is being replaced rather than updated - but leaving it out of both
+        // the test and the copy below would make that the one case it is wrong.
+        let focusable_changed = node.meta.focusable != new_meta.focusable;
+        // Unlike the rest of the meta, this one really does change frame to
+        // frame - a form disables its submit button while it validates. It also
+        // has to reach `NodeState`, since that is what `:disabled` matches.
+        let disabled_changed = node.meta.disabled != new_meta.disabled;
+        if !id_changed
+            && !classes_changed
+            && !key_changed
+            && !focusable_changed
+            && !disabled_changed
+        {
+            return false;
+        }
+
+        let old_element_id = node.meta.id.clone();
+        let old_classes: Vec<Arc<str>> = node
+            .meta
+            .classes
+            .iter()
+            .map(|c| Arc::from(c.as_str()))
+            .collect();
+
+        if id_changed {
+            if let Some(old) = old_element_id {
+                self.id_map.remove(&Arc::from(old.as_str()));
+            }
+            if let Some(ref new) = new_meta.id {
+                self.id_map.insert(Arc::from(new.as_str()), id);
+            }
+        }
+
+        if classes_changed {
+            for class in &old_classes {
+                if let Some(ids) = self.class_index.get_mut(class) {
+                    ids.retain(|&x| x != id);
+                    if ids.is_empty() {
+                        self.class_index.remove(class);
+                    }
+                }
+            }
+            for class in &new_meta.classes {
+                self.class_index
+                    .entry(Arc::from(class.as_str()))
+                    .or_default()
+                    .push(id);
+            }
+        }
+
+        if let Some(node) = self.nodes.get_mut(&id) {
+            node.meta.id = new_meta.id.clone();
+            node.meta.classes = new_meta.classes.clone();
+            node.meta.key = new_meta.key.clone();
+            node.meta.focusable = new_meta.focusable;
+            node.meta.disabled = new_meta.disabled;
+            if disabled_changed {
+                node.state.disabled = new_meta.disabled;
+                // `:disabled` may now match or stop matching.
+                node.state.dirty = true;
+            }
+        }
+
+        true
+    }
+
+    /// Replace a parent's child list and refresh every child's structural
+    /// state (`first_child`, `last_child`, `only_child`, `child_index`,
+    /// `sibling_count`).
+    ///
+    /// Reconciliation reorders and removes children, and `:first-child` /
+    /// `:nth-child` selectors read that state. Assigning `parent.children`
+    /// without this leaves the CSS matching one frame behind - or permanently
+    /// wrong, since nothing else recomputes it.
+    pub(crate) fn set_children(&mut self, parent_id: DomId, children: Vec<DomId>) {
+        if !self.nodes.contains_key(&parent_id) {
+            return;
+        }
+
+        let total = children.len();
+        let mut moved = Vec::new();
+        for (idx, &child_id) in children.iter().enumerate() {
+            if let Some(child) = self.nodes.get_mut(&child_id) {
+                // `first_child`, `last_child` and `only_child` are all derived
+                // from these two, so they are the whole comparison.
+                if (child.state.child_index, child.state.sibling_count) != (idx, total) {
+                    child.state.update_position(idx, total);
+                    // The node moved, so it may now match a different
+                    // structural pseudo-class and its computed style is stale.
+                    child.state.dirty = true;
+                    moved.push(child_id);
+                }
+            }
+        }
+
+        for child_id in moved {
+            self.mark_subtree_dirty(child_id);
+        }
+
+        if let Some(parent) = self.nodes.get_mut(&parent_id) {
+            parent.children = children;
+        }
+    }
+
+    /// Remove a node and its children
+    pub fn remove(&mut self, id: DomId) {
+        // Collect info we need before modifying (convert to Arc<str> for lookup)
+        let (parent_id, element_id, widget_type, classes, children) =
+            if let Some(node) = self.nodes.get(&id) {
+                (
+                    node.parent,
+                    node.meta.id.as_ref().map(|s| Arc::from(s.as_str())),
+                    Arc::from(node.widget_type()),
+                    node.meta
+                        .classes
+                        .iter()
+                        .map(|s| Arc::from(s.as_str()))
+                        .collect::<Vec<_>>(),
+                    node.children.clone(),
+                )
+            } else {
+                return;
+            };
+
+        // Remove from parent, and renumber the siblings left behind so their
+        // `:first-child` / `:last-child` / `:nth-child` state stays right
+        if let Some(parent_id) = parent_id {
+            let remaining = self.nodes.get(&parent_id).map(|parent| {
+                parent
+                    .children
+                    .iter()
+                    .copied()
+                    .filter(|&child| child != id)
+                    .collect::<Vec<_>>()
+            });
+            if let Some(remaining) = remaining {
+                self.set_children(parent_id, remaining);
+            }
+        }
+
+        // Remove from ID map
+        if let Some(element_id) = element_id {
+            self.id_map.remove(&element_id);
+        }
+
+        // Remove from type index
+        if let Some(type_ids) = self.type_index.get_mut(&widget_type) {
+            type_ids.retain(|&x| x != id);
+            if type_ids.is_empty() {
+                self.type_index.remove(&widget_type);
+            }
+        }
+
+        // Remove from class index
+        for class in &classes {
+            if let Some(class_ids) = self.class_index.get_mut(class) {
+                class_ids.retain(|&x| x != id);
+                if class_ids.is_empty() {
+                    self.class_index.remove(class);
+                }
+            }
+        }
+
+        // Remove children recursively. Detach them first so each removal does
+        // not renumber the siblings of a node that is going away anyway.
+        if let Some(node) = self.nodes.get_mut(&id) {
+            node.children.clear();
+        }
+        for child_id in children {
+            self.remove(child_id);
+        }
+
+        self.nodes.remove(&id);
+
+        if self.root == Some(id) {
+            self.root = None;
+        }
+    }
+
+    /// Get a node by DomId
+    pub fn get(&self, id: DomId) -> Option<&DomNode> {
+        self.nodes.get(&id)
+    }
+
+    /// Get a mutable node by DomId
+    pub fn get_mut(&mut self, id: DomId) -> Option<&mut DomNode> {
+        self.nodes.get_mut(&id)
+    }
+
+    /// Get root node
+    pub fn root(&self) -> Option<&DomNode> {
+        self.root.and_then(|id| self.nodes.get(&id))
+    }
+
+    /// Get root node ID
+    pub fn root_id(&self) -> Option<DomId> {
+        self.root
+    }
+
+    /// Get all nodes
+    pub fn nodes(&self) -> impl Iterator<Item = &DomNode> {
+        self.nodes.values()
+    }
+
+    /// Get node count
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Collect all dirty node IDs
+    pub fn get_dirty_nodes(&self) -> Vec<DomId> {
+        self.nodes
+            .values()
+            .filter(|node| node.state.dirty)
+            .map(|node| node.id)
+            .collect()
+    }
+
+    /// Clear dirty flags for all nodes after rendering
+    pub fn clear_dirty_flags(&mut self) {
+        for node in self.nodes.values_mut() {
+            node.state.dirty = false;
+        }
+    }
+
+    /// Check if empty
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    /// Update node state
+    pub fn set_state(&mut self, id: DomId, state: super::node::NodeState) {
+        if let Some(node) = self.nodes.get_mut(&id) {
+            node.state = state;
+        }
+    }
+
+    /// Set focused node
+    pub fn set_focused(&mut self, id: Option<DomId>) {
+        // Clear previous focus
+        for node in self.nodes.values_mut() {
+            node.state.focused = false;
+        }
+
+        // Set new focus
+        if let Some(focus_id) = id {
+            if let Some(node) = self.nodes.get_mut(&focus_id) {
+                node.state.focused = true;
+            }
+        }
+    }
+
+    /// Set the hovered node and its ancestors.
+    ///
+    /// `:hover` matches the element under the pointer *and every element that
+    /// contains it* - that is what makes `.button:hover` work when the pointer
+    /// is really over the button's inner label. Marking only the deepest node
+    /// would leave every container rule dead.
+    ///
+    /// `:focus` is not like this: exactly one element has focus, and the
+    /// ancestor form is a separate selector (`:focus-within`). See
+    /// [`set_focused`](Self::set_focused).
+    pub fn set_hovered(&mut self, id: Option<DomId>) {
+        // Clear previous hover
+        for node in self.nodes.values_mut() {
+            node.state.hovered = false;
+        }
+
+        let mut current = id;
+        while let Some(node_id) = current {
+            let Some(node) = self.nodes.get_mut(&node_id) else {
+                break;
+            };
+            node.state.hovered = true;
+            current = node.parent;
+        }
+    }
+
+    /// The nearest node at or above `id` that can take focus right now.
+    ///
+    /// A click lands on the deepest node under the pointer, which for a button
+    /// is its inner label - a node that holds no focus and reacts to no key.
+    /// Focus belongs to the nearest enclosing thing that does, exactly as a
+    /// click on a `<button>`'s text focuses the button.
+    ///
+    /// `disabled` nodes are skipped rather than blocking: a disabled control
+    /// does not swallow focus, it just is not the one that gets it.
+    pub fn focus_target(&self, id: DomId) -> Option<DomId> {
+        let mut current = Some(id);
+        while let Some(node_id) = current {
+            let node = self.nodes.get(&node_id)?;
+            if node.meta.focusable && !node.state.disabled {
+                return Some(node_id);
+            }
+            current = node.parent;
+        }
+        None
+    }
+
+    /// Every node that can take focus, in document order.
+    ///
+    /// Document order is what Tab follows - the order the reader meets things,
+    /// not the order they were registered - so this is a pre-order walk, the
+    /// same walk the paint pass makes. A widget that moves in the view moves in
+    /// the tab ring with it, for free.
+    ///
+    /// `disabled` nodes are left out, matching
+    /// [`focus_target`](Self::focus_target) and every browser: a disabled
+    /// control is not in the ring at all, rather than being a stop that does
+    /// nothing.
+    pub fn focusable_in_order(&self) -> Vec<DomId> {
+        let mut out = Vec::new();
+        if let Some(root) = self.root_id() {
+            self.collect_focusable(root, &mut out);
+        }
+        out
+    }
+
+    fn collect_focusable(&self, id: DomId, out: &mut Vec<DomId>) {
+        let Some(node) = self.nodes.get(&id) else {
+            return;
+        };
+        if node.meta.focusable && !node.state.disabled {
+            out.push(id);
+        }
+        for &child in &node.children {
+            self.collect_focusable(child, out);
+        }
+    }
+
+    /// Tell every ancestor of `id` that something below it needs recomputing.
+    ///
+    /// Call this whenever a node's computed style is invalidated. The style walk
+    /// descends from the root and turns back at settled nodes, so an invalidated
+    /// node that no ancestor points at is simply never visited.
+    ///
+    /// Stops early if an ancestor is already marked - the rest of the chain to
+    /// the root was marked by whoever set it.
+    pub fn mark_subtree_dirty(&mut self, id: DomId) {
+        let mut current = self.nodes.get(&id).and_then(|node| node.parent);
+        while let Some(node_id) = current {
+            let Some(node) = self.nodes.get_mut(&node_id) else {
+                break;
+            };
+            if node.state.subtree_dirty {
+                break;
+            }
+            node.state.subtree_dirty = true;
+            current = node.parent;
+        }
+    }
+
+    /// The siblings that come after `id`, in order.
+    ///
+    /// `+` and `~` only ever look backwards, so a change on a node can affect
+    /// the ones after it and never the ones before.
+    pub fn following_siblings_of(&self, id: DomId) -> Vec<DomId> {
+        let Some(parent_id) = self.nodes.get(&id).and_then(|node| node.parent) else {
+            return Vec::new();
+        };
+        let Some(parent) = self.nodes.get(&parent_id) else {
+            return Vec::new();
+        };
+        match parent.children.iter().position(|&child| child == id) {
+            Some(pos) => parent.children[pos + 1..].to_vec(),
+            None => Vec::new(),
+        }
+    }
+
+    /// The node and its ancestors, deepest first.
+    pub fn ancestors_of(&self, id: DomId) -> Vec<DomId> {
+        let mut chain = Vec::new();
+        let mut current = Some(id);
+        while let Some(node_id) = current {
+            let Some(node) = self.nodes.get(&node_id) else {
+                break;
+            };
+            chain.push(node_id);
+            current = node.parent;
+        }
+        chain
+    }
+
+    /// Every node in document order: a pre-order walk from the root, then any
+    /// subtrees outside it (detached, or an earlier root) in creation order.
+    fn document_order(&self) -> Vec<&DomNode> {
+        let mut out = Vec::with_capacity(self.nodes.len());
+        let mut visited = std::collections::HashSet::with_capacity(self.nodes.len());
+
+        if let Some(root) = self.root {
+            self.walk_preorder(root, &mut visited, &mut out);
+        }
+
+        if out.len() < self.nodes.len() {
+            let mut rest: Vec<DomId> = self
+                .nodes
+                .keys()
+                .copied()
+                .filter(|id| !visited.contains(id))
+                .collect();
+            rest.sort_by_key(|id| id.0);
+            for id in rest {
+                if visited.contains(&id) {
+                    continue;
+                }
+                // Start from the topmost ancestor not yet walked
+                let mut top = id;
+                let mut seen = std::collections::HashSet::new();
+                while let Some(parent) = self.nodes.get(&top).and_then(|n| n.parent) {
+                    if !self.nodes.contains_key(&parent)
+                        || visited.contains(&parent)
+                        || !seen.insert(parent)
+                    {
+                        break;
+                    }
+                    top = parent;
+                }
+                self.walk_preorder(top, &mut visited, &mut out);
+            }
+        }
+        out
+    }
+
+    fn walk_preorder<'a>(
+        &'a self,
+        start: DomId,
+        visited: &mut std::collections::HashSet<DomId>,
+        out: &mut Vec<&'a DomNode>,
+    ) {
+        let mut stack = vec![start];
+        while let Some(id) = stack.pop() {
+            let Some(node) = self.nodes.get(&id) else {
+                continue;
+            };
+            if !visited.insert(id) {
+                continue;
+            }
+            out.push(node);
+            stack.extend(node.children.iter().rev().copied());
+        }
+    }
+
+    /// Internal matcher for selectors with full combinator support.
+    ///
+    /// Delegates to the shared matcher - see
+    /// [`selector::matching`](crate::dom::selector::matching) for why this and
+    /// the cascade must not have one each.
+    fn matches_selector(&self, node: &DomNode, selector: &Selector) -> bool {
+        crate::dom::selector::matching::matches(node, selector, &|id| self.nodes.get(&id))
+    }
+
+    /// Get a parsed selector list from cache, or parse and cache it
+    ///
+    /// This avoids re-parsing the same selector string multiple times,
+    /// which is especially beneficial for repeated queries in loops.
+    fn get_or_parse_selectors(&self, selector_str: &str) -> Option<Vec<Selector>> {
+        // Try read lock first to check cache
+        {
+            let cache = self.selector_cache.read().ok()?;
+            if let Some(selectors) = cache.get(selector_str) {
+                return Some(selectors.clone());
+            }
+        }
+
+        // Not in cache, need to parse
+        let parsed = parse_selectors(selector_str).ok()?;
+
+        // Upgrade to write lock to insert into cache
+        if let Ok(mut cache) = self.selector_cache.write() {
+            cache.insert(selector_str.to_string(), parsed.clone());
+        }
+
+        Some(parsed)
+    }
+
+    /// Whether `node` matches any selector of a list
+    fn matches_any(&self, node: &DomNode, selectors: &[Selector]) -> bool {
+        selectors.iter().any(|s| self.matches_selector(node, s))
+    }
+
+    /// Clear the selector cache (useful for memory management)
+    ///
+    /// Call this periodically if the app uses many unique selectors
+    /// to prevent unbounded cache growth.
+    pub fn clear_selector_cache(&self) {
+        if let Ok(mut cache) = self.selector_cache.write() {
+            cache.clear();
+        }
+    }
+}
+
+impl Query for DomTree {
+    fn query_one(&self, selector_str: &str) -> Option<&DomNode> {
+        let selectors = self.get_or_parse_selectors(selector_str)?;
+        self.document_order()
+            .into_iter()
+            .find(|node| self.matches_any(node, &selectors))
+    }
+
+    fn query_all(&self, selector_str: &str) -> QueryResult<'_> {
+        let selectors = match self.get_or_parse_selectors(selector_str) {
+            Some(s) => s,
+            None => return QueryResult::empty(),
+        };
+
+        let nodes: Vec<_> = self
+            .document_order()
+            .into_iter()
+            .filter(|node| self.matches_any(node, &selectors))
+            .collect();
+
+        QueryResult::from_nodes(nodes)
+    }
+
+    fn get_by_id(&self, id: &str) -> Option<&DomNode> {
+        self.id_map
+            .get(id)
+            .and_then(|dom_id| self.nodes.get(dom_id))
+    }
+
+    fn get_by_class(&self, class: &str) -> QueryResult<'_> {
+        // Use class index for O(k) lookup where k = nodes with that class
+        // Instead of O(n) where n = total nodes
+        let node_ids = self.class_index.get(class);
+        if let Some(ids) = node_ids {
+            let nodes: Vec<_> = ids.iter().filter_map(|id| self.nodes.get(id)).collect();
+            QueryResult::from_nodes(nodes)
+        } else {
+            QueryResult::empty()
+        }
+    }
+
+    fn get_by_type(&self, widget_type: &str) -> QueryResult<'_> {
+        // Use type index for O(k) lookup where k = nodes with that type
+        // Instead of O(n) where n = total nodes
+        let node_ids = self.type_index.get(widget_type);
+        if let Some(ids) = node_ids {
+            let nodes: Vec<_> = ids.iter().filter_map(|id| self.nodes.get(id)).collect();
+            QueryResult::from_nodes(nodes)
+        } else {
+            QueryResult::empty()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::node::WidgetMeta;
+    use super::*;
+
+    fn create_test_tree() -> DomTree {
+        let mut tree = DomTree::new();
+
+        // Create root
+        let root = tree.create_root(WidgetMeta::new("App").id("app"));
+
+        // Add sidebar
+        let sidebar = tree.add_child(root, WidgetMeta::new("Container").class("sidebar"));
+
+        // Add buttons to sidebar
+        tree.add_child(
+            sidebar,
+            WidgetMeta::new("Button").class("primary").id("nav-home"),
+        );
+        tree.add_child(sidebar, WidgetMeta::new("Button").id("nav-settings"));
+
+        // Add content area
+        let content = tree.add_child(root, WidgetMeta::new("Container").class("content"));
+
+        // Add cards
+        tree.add_child(content, WidgetMeta::new("Container").class("card"));
+        tree.add_child(
+            content,
+            WidgetMeta::new("Container").class("card").class("featured"),
+        );
+
+        tree
+    }
+
+    #[test]
+    fn test_query_by_id() {
+        let tree = create_test_tree();
+
+        let node = tree.get_by_id("app");
+        assert!(node.is_some());
+        assert_eq!(node.unwrap().widget_type(), "App");
+
+        let node = tree.get_by_id("nav-home");
+        assert!(node.is_some());
+        assert_eq!(node.unwrap().widget_type(), "Button");
+    }
+
+    #[test]
+    fn test_query_by_type() {
+        let tree = create_test_tree();
+
+        let buttons = tree.get_by_type("Button");
+        assert_eq!(buttons.len(), 2);
+    }
+
+    #[test]
+    fn test_query_by_class() {
+        let tree = create_test_tree();
+
+        let cards = tree.get_by_class("card");
+        assert_eq!(cards.len(), 2);
+
+        let featured = tree.get_by_class("featured");
+        assert_eq!(featured.len(), 1);
+    }
+
+    #[test]
+    fn test_query_one() {
+        let tree = create_test_tree();
+
+        let node = tree.query_one("Button");
+        assert!(node.is_some());
+
+        let node = tree.query_one("#nav-home");
+        assert!(node.is_some());
+
+        let node = tree.query_one(".primary");
+        assert!(node.is_some());
+
+        let node = tree.query_one("#nonexistent");
+        assert!(node.is_none());
+    }
+
+    #[test]
+    fn test_query_all() {
+        let tree = create_test_tree();
+
+        let results = tree.query_all("Button");
+        assert_eq!(results.len(), 2);
+
+        let results = tree.query_all(".card");
+        assert_eq!(results.len(), 2);
+
+        let results = tree.query_all("Container");
+        assert_eq!(results.len(), 4); // sidebar, content, 2 cards
+    }
+
+    #[test]
+    fn test_query_combined() {
+        let tree = create_test_tree();
+
+        let results = tree.query_all("Button.primary");
+        assert_eq!(results.len(), 1);
+
+        let results = tree.query_all("Container.card.featured");
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_sibling_positions() {
+        let tree = create_test_tree();
+
+        // Get sidebar buttons
+        let home = tree.get_by_id("nav-home").unwrap();
+        let settings = tree.get_by_id("nav-settings").unwrap();
+
+        assert!(home.state.first_child);
+        assert!(!home.state.last_child);
+        assert!(!settings.state.first_child);
+        assert!(settings.state.last_child);
+    }
+
+    #[test]
+    fn test_query_result_methods() {
+        let tree = create_test_tree();
+
+        let results = tree.query_all("Button");
+        assert_eq!(results.len(), 2);
+        assert!(!results.is_empty());
+
+        // Test first()
+        let first = results.first();
+        assert!(first.is_some());
+
+        // Test all()
+        let all = results.all();
+        assert_eq!(all.len(), 2);
+
+        // Test iter()
+        let count = results.iter().count();
+        assert_eq!(count, 2);
+
+        // Test empty result
+        let empty = tree.query_all("NonExistent");
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+        assert!(empty.first().is_none());
+    }
+
+    #[test]
+    fn test_dom_tree_basic_methods() {
+        let mut tree = create_test_tree();
+
+        // Test get() and get_mut()
+        let root_id = tree.root_id().unwrap();
+        assert!(tree.get(root_id).is_some());
+        assert!(tree.get_mut(root_id).is_some());
+
+        // Test root()
+        let root = tree.root();
+        assert!(root.is_some());
+        assert_eq!(root.unwrap().widget_type(), "App");
+
+        // Test len() and is_empty()
+        assert!(!tree.is_empty());
+        assert!(!tree.is_empty());
+
+        // Test nodes() iterator
+        let count = tree.nodes().count();
+        assert_eq!(count, 7); // 1 root + 1 sidebar + 2 buttons + 1 content + 2 cards
+    }
+
+    #[test]
+    fn test_dom_tree_state_methods() {
+        let mut tree = create_test_tree();
+        let root_id = tree.root_id().unwrap();
+
+        // Test set_state()
+        let mut new_state = tree.get(root_id).unwrap().state.clone();
+        new_state.focused = true;
+        tree.set_state(root_id, new_state);
+        assert!(tree.get(root_id).unwrap().state.focused);
+
+        // Test set_focused()
+        let button_id = tree.get_by_id("nav-home").unwrap().id;
+        tree.set_focused(Some(button_id));
+        assert!(tree.get(button_id).unwrap().state.focused);
+        assert!(!tree.get(root_id).unwrap().state.focused);
+
+        // Test set_hovered()
+        tree.set_hovered(Some(button_id));
+        assert!(tree.get(button_id).unwrap().state.hovered);
+
+        // Clear focus
+        tree.set_focused(None);
+        assert!(!tree.get(button_id).unwrap().state.focused);
+    }
+
+    #[test]
+    fn test_dom_tree_dirty_nodes() {
+        let mut tree = create_test_tree();
+
+        // Initially all nodes are dirty (just created)
+        let dirty = tree.get_dirty_nodes();
+        assert!(!dirty.is_empty());
+
+        // Clear dirty flags
+        tree.clear_dirty_flags();
+        let dirty = tree.get_dirty_nodes();
+        assert!(dirty.is_empty());
+    }
+
+    #[test]
+    fn test_query_combinators() {
+        let mut tree = DomTree::new();
+
+        // Create structure: App > Container > Button
+        let root = tree.create_root(WidgetMeta::new("App").id("app"));
+        let container = tree.add_child(root, WidgetMeta::new("Container").id("container"));
+        let _button = tree.add_child(container, WidgetMeta::new("Button").id("btn"));
+
+        // Descendant selector (space)
+        let result = tree.query_one("Container Button");
+        assert!(result.is_some());
+
+        // Child selector (>)
+        let result = tree.query_one("Container > Button");
+        assert!(result.is_some());
+
+        // Should not match non-direct child
+        let result = tree.query_one("App > Button");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_remove_node() {
+        let mut tree = create_test_tree();
+
+        // Remove a child by ID
+        let content_id = tree.get_by_type("Container").first().unwrap().id;
+        tree.remove(content_id);
+
+        // Verify removed
+        assert!(tree.get(content_id).is_none());
+    }
+
+    #[test]
+    fn test_query_one_returns_first_match_in_document_order() {
+        let mut tree = DomTree::new();
+        let root = tree.create_root(WidgetMeta::new("App"));
+        // A nested match comes before its parent's later siblings
+        let group = tree.add_child(root, WidgetMeta::new("Container"));
+        let mut expected = Vec::new();
+        expected.push(tree.add_child(group, WidgetMeta::new("Button")));
+        for _ in 0..15 {
+            expected.push(tree.add_child(root, WidgetMeta::new("Button")));
+        }
+
+        assert_eq!(tree.query_one("Button").map(|n| n.id), Some(expected[0]));
+
+        let all: Vec<DomId> = tree.query_all("Button").iter().map(|n| n.id).collect();
+        assert_eq!(all, expected);
+        assert_eq!(
+            tree.query_all("Button").first().map(|n| n.id),
+            Some(expected[0])
+        );
+    }
+
+    #[test]
+    fn test_remove_root_clears_root() {
+        let mut tree = create_test_tree();
+        let root = tree.root_id().unwrap();
+
+        tree.remove(root);
+
+        assert!(tree.is_empty());
+        assert_eq!(tree.root_id(), None);
+        assert!(tree.root().is_none());
+        assert!(tree.focusable_in_order().is_empty());
+    }
+
+    #[test]
+    fn test_remove_updates_sibling_positions() {
+        let mut tree = DomTree::new();
+        let root = tree.create_root(WidgetMeta::new("App"));
+        let a = tree.add_child(root, WidgetMeta::new("Item").id("a"));
+        let b = tree.add_child(root, WidgetMeta::new("Item").id("b"));
+        let c = tree.add_child(root, WidgetMeta::new("Item").id("c"));
+        tree.clear_dirty_flags();
+
+        tree.remove(c);
+        let state = &tree.get(b).unwrap().state;
+        assert_eq!((state.child_index, state.sibling_count), (1, 2));
+        assert!(state.last_child);
+        // Its structural pseudo-classes changed, so its style is stale
+        assert!(state.dirty);
+        assert_eq!(tree.query_one("Item:last-child").map(|n| n.id), Some(b));
+
+        tree.remove(a);
+        let state = &tree.get(b).unwrap().state;
+        assert_eq!((state.child_index, state.sibling_count), (0, 1));
+        assert!(state.first_child && state.last_child && state.only_child);
+        assert_eq!(tree.query_one("Item:first-child").map(|n| n.id), Some(b));
+    }
+}

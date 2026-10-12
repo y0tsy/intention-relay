@@ -14,31 +14,39 @@
 
 use std::collections::VecDeque;
 use std::future;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
+use std::task::Poll;
 use std::time::Duration;
 
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
-    ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort, RunCancellation,
+    ModelSleepFuture, ModelTimePort, RunCancellation, SessionCommitDto, SessionCommitObserver,
     ToolExecutionPort, ToolResultOutcomeDto,
 };
 use intention_proto::{
-    CreateSessionCommandDto, DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey,
-    MessageProjectionDto, PendingTurnProjectionDto, ProjectId, RemoveTurnCommandDto, RunId,
-    RunModeDto, RunProjectionDto, RunStatusDto, SessionId, SessionProjectionDto, TimestampDto,
-    ToolCallId, TurnId, UsageDto, WorkspaceId, WorkspaceRootDto,
+    CreateSessionCommandDto, DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, MessageId,
+    MessageProjectionDto, NewMessageDto, PendingTurnProjectionDto, ProjectId, RemoveTurnCommandDto,
+    RunId, RunModeDto, RunProjectionDto, RunStatusDto, SessionId, SessionProjectionDto,
+    SessionSummariesDto, ThemeDto, TimestampDto, ToolCallId, ToolResultStatusDto, TurnId, UsageDto,
+    WorkspaceBindingDto, WorkspaceId, WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_providers::ToolCallDto;
 use intention_storage::{
     AcceptedTurnOutcomeDto, RunOutcomeDto, StartingRunModelContextDto, StorageRepositoryDto,
-    ToolResultEvidenceDto, ToolResultStatusDto,
+    ToolResultEvidenceDto,
 };
 use intention_test_support::fixture_snapshot;
 
 /// Returns the exact fixture timestamp for one Unix second value.
 pub fn time(value: i64) -> TimestampDto {
     TimestampDto::from_unix_seconds(value).expect("fixture timestamp is valid")
+}
+
+/// Returns one fresh durable row identity for a committed fixture row.
+pub fn row_id() -> MessageId {
+    static NEXT: AtomicI64 = AtomicI64::new(0);
+    MessageId::new(NEXT.fetch_add(1, Ordering::Relaxed) + 1).expect("fixture row identity is valid")
 }
 
 /// Returns native absolute workspace root for the engine fixtures.
@@ -161,7 +169,13 @@ pub struct FakeRepository {
     /// Counts committed tool-result rows for `Send + Sync` observers that must
     /// not borrow this fixture; mirrors `tool_results`.
     pub committed_result_rows: AtomicUsize,
-    pub created: Mutex<Option<SessionProjectionDto>>,
+    pub created: Mutex<DtoResult<SessionProjectionDto>>,
+    /// The durable identity binding this fixture reports for every root.
+    pub workspace_binding: Mutex<Option<WorkspaceBindingDto>>,
+    /// Every creation command the facade forwarded, in order.
+    pub create_commands: Mutex<Vec<CreateSessionCommandDto>>,
+    /// The repository calls this fixture observed, in order.
+    pub calls: Mutex<Vec<&'static str>>,
     pub accepted: Mutex<DtoResult<AcceptedTurnOutcomeDto>>,
     pub accepted_inputs: Mutex<Vec<RecordedTurn>>,
     pub removed: Mutex<Option<PendingTurnProjectionDto>>,
@@ -175,6 +189,8 @@ pub struct FakeRepository {
     pub append_failure_at: Mutex<Option<(usize, ErrorDto)>>,
     pub cancel_after_append: Mutex<Option<(usize, RunCancellation)>>,
     pub append_count: Mutex<usize>,
+    /// The newest durable row identity this fixture assigned.
+    pub next_message_id: Mutex<i64>,
     pub config_error: Mutex<Option<ErrorDto>>,
     /// Pending user messages committed by the next context boundary.
     pub pending: Mutex<VecDeque<MessageProjectionDto>>,
@@ -196,7 +212,10 @@ impl FakeRepository {
             transitions: Mutex::new(Vec::new()),
             tool_results: Mutex::new(Vec::new()),
             committed_result_rows: AtomicUsize::new(0),
-            created: Mutex::new(None),
+            created: Mutex::new(Err(ErrorDto::unavailable("fixture_unused", "unused"))),
+            workspace_binding: Mutex::new(None),
+            create_commands: Mutex::new(Vec::new()),
+            calls: Mutex::new(Vec::new()),
             accepted: Mutex::new(Err(ErrorDto::unavailable("fixture_unused", "unused"))),
             accepted_inputs: Mutex::new(Vec::new()),
             removed: Mutex::new(None),
@@ -210,6 +229,7 @@ impl FakeRepository {
             append_failure_at: Mutex::new(None),
             cancel_after_append: Mutex::new(None),
             append_count: Mutex::new(0),
+            next_message_id: Mutex::new(0),
             config_error: Mutex::new(None),
             pending: Mutex::new(VecDeque::new()),
             pending_consumes: Mutex::new(0),
@@ -251,13 +271,34 @@ impl FakeRepository {
         if let Some(run) = stored {
             return run;
         }
+        let started_at = self.config.captured_at();
+        let status = *self.status.lock().unwrap_or_else(PoisonError::into_inner);
+        self.fixture_run(
+            status,
+            run_status_is_terminal(status).then_some(started_at),
+            0,
+        )
+    }
+
+    /// Returns one coherent fixture run projection in `status`.
+    fn fixture_run(
+        &self,
+        status: RunStatusDto,
+        finished_at: Option<TimestampDto>,
+        open_tool_calls: u32,
+    ) -> RunProjectionDto {
         RunProjectionDto::new(
             self.session_id,
             self.run_id,
             self.turn_id,
-            *self.status.lock().unwrap_or_else(PoisonError::into_inner),
+            status,
             self.config.revision_id(),
+            None,
+            self.config.captured_at(),
+            finished_at,
+            open_tool_calls,
         )
+        .expect("fixture run projection is coherent")
     }
 
     /// Returns every committed transcript row.
@@ -297,6 +338,33 @@ impl FakeRepository {
         *count
     }
 
+    /// Returns the next durable row identity this fixture assigns.
+    fn assign_message_id(&self) -> MessageId {
+        let mut next = self
+            .next_message_id
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *next += 1;
+        MessageId::new(*next).expect("fixture row identity is positive")
+    }
+
+    /// Returns one row to commit as the committed row carrying `message_id`.
+    fn committed_row(
+        &self,
+        message_id: MessageId,
+        message: &NewMessageDto,
+    ) -> DtoResult<MessageProjectionDto> {
+        MessageProjectionDto::new(
+            message_id,
+            message.session_id(),
+            message.run_id(),
+            message.kind(),
+            message.text(),
+            message.reasoning().map(str::to_owned),
+            message.tool().cloned(),
+        )
+    }
+
     /// Returns the next one-based commit ordinal, or the selected injected failure.
     fn next_commit(&self) -> DtoResult<usize> {
         let injected = self
@@ -330,7 +398,7 @@ impl FakeRepository {
     }
 
     /// Stores one durable status transition and keeps an explicit run current.
-    fn store_status(&self, status: RunStatusDto) {
+    fn store_status(&self, status: RunStatusDto, occurred_at: TimestampDto) {
         *self.status.lock().unwrap_or_else(PoisonError::into_inner) = status;
         let refreshed = self
             .run
@@ -344,7 +412,12 @@ impl FakeRepository {
                     run.turn_id(),
                     status,
                     run.config_revision_id(),
+                    run.usage(),
+                    run.started_at(),
+                    run_status_is_terminal(status).then_some(occurred_at),
+                    run.open_tool_calls(),
                 )
+                .expect("fixture run projection is coherent")
             });
         if let Some(refreshed) = refreshed {
             *self.run.lock().unwrap_or_else(PoisonError::into_inner) = Some(refreshed);
@@ -355,16 +428,31 @@ impl FakeRepository {
 impl StorageRepositoryDto for FakeRepository {
     fn create_session(
         &self,
-        _command: CreateSessionCommandDto,
+        command: CreateSessionCommandDto,
         _occurred_at: TimestampDto,
     ) -> DtoResult<SessionProjectionDto> {
+        self.calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push("create_session");
+        self.create_commands
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(command);
         self.created
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
-            .ok_or_else(|| {
-                ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
-            })
+    }
+
+    fn workspace_binding(
+        &self,
+        _root: &WorkspaceRootDto,
+    ) -> DtoResult<Option<WorkspaceBindingDto>> {
+        Ok(*self
+            .workspace_binding
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner))
     }
 
     fn accept_user_turn(
@@ -376,6 +464,10 @@ impl StorageRepositoryDto for FakeRepository {
         config_snapshot: ConfigSnapshotDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<AcceptedTurnOutcomeDto> {
+        self.calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push("accept_user_turn");
         self.accepted_inputs
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -429,11 +521,11 @@ impl StorageRepositoryDto for FakeRepository {
         session_id: SessionId,
         run_id: RunId,
         status: RunStatusDto,
-        _occurred_at: TimestampDto,
+        occurred_at: TimestampDto,
     ) -> DtoResult<RunProjectionDto> {
         assert_eq!(session_id, self.session_id);
         assert_eq!(run_id, self.run_id);
-        self.store_status(status);
+        self.store_status(status, occurred_at);
         self.transitions
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -458,13 +550,13 @@ impl StorageRepositoryDto for FakeRepository {
                 outcome,
                 occurred_at,
             });
-        self.store_status(status);
+        self.store_status(status, occurred_at);
         Ok(self.projection())
     }
 
     fn append_message(
         &self,
-        message: MessageProjectionDto,
+        message: NewMessageDto,
         _occurred_at: TimestampDto,
     ) -> DtoResult<MessageProjectionDto> {
         self.next_commit()?;
@@ -502,29 +594,31 @@ impl StorageRepositoryDto for FakeRepository {
         {
             signal.cancel();
         }
+        let committed = self.committed_row(self.assign_message_id(), &message)?;
         self.messages
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(message.clone());
-        Ok(message)
+            .push(committed.clone());
+        Ok(committed)
     }
 
     fn write_tool_result(
         &self,
         evidence: ToolResultEvidenceDto,
-        message: MessageProjectionDto,
-    ) -> DtoResult<ToolResultEvidenceDto> {
+        message: NewMessageDto,
+    ) -> DtoResult<MessageProjectionDto> {
         self.next_commit()?;
+        let committed = self.committed_row(self.assign_message_id(), &message)?;
         self.messages
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(message);
+            .push(committed.clone());
         self.tool_results
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(evidence.clone());
+            .push(evidence);
         self.committed_result_rows.fetch_add(1, Ordering::SeqCst);
-        Ok(evidence)
+        Ok(committed)
     }
 
     fn load_tool_result(
@@ -625,6 +719,13 @@ impl StorageRepositoryDto for FakeRepository {
         Ok(Vec::new())
     }
 
+    fn list_sessions(&self, _limit: u32) -> DtoResult<SessionSummariesDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "session listing is not used by this fixture",
+        ))
+    }
+
     fn load_run_messages(
         &self,
         _session_id: SessionId,
@@ -644,6 +745,20 @@ impl StorageRepositoryDto for FakeRepository {
         Err(ErrorDto::unavailable(
             "fixture_unused",
             "recovery is not used by this fixture",
+        ))
+    }
+
+    fn load_tui_theme(&self) -> DtoResult<Option<ThemeDto>> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "terminal settings are not used by this fixture",
+        ))
+    }
+
+    fn save_tui_theme(&self, _theme: ThemeDto) -> DtoResult<()> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "terminal settings are not used by this fixture",
         ))
     }
 
@@ -684,9 +799,79 @@ impl ModelTimePort for ImmediateTime {
     }
 }
 
+/// A manual clock whose elapsed time advances only when a scripted provider
+/// stream reports a silence.
+///
+/// The seconds-scale attempt window resolves only against the silences the
+/// fixture drives, so a test can model a slow provider without waiting. A
+/// sub-second delay is the runtime's own retry delay, which no provider
+/// silence drives: it completes immediately and advances the clock by its own
+/// duration, exactly like the m5 fixtures that classify delays by their scale.
+pub struct ManualTime {
+    elapsed: Mutex<Duration>,
+    sleeps: Mutex<Vec<Duration>>,
+}
+
+impl ManualTime {
+    /// Creates a manual clock at zero elapsed time.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            elapsed: Mutex::new(Duration::ZERO),
+            sleeps: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Advances the clock by one provider silence.
+    pub fn advance(&self, silence: Duration) {
+        let mut elapsed = self.elapsed.lock().unwrap_or_else(PoisonError::into_inner);
+        *elapsed += silence;
+    }
+
+    /// Returns the elapsed virtual time.
+    #[must_use]
+    pub fn elapsed(&self) -> Duration {
+        *self.elapsed.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Returns every armed delay in arming order.
+    #[must_use]
+    pub fn sleeps(&self) -> Vec<Duration> {
+        self.sleeps
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl ModelTimePort for ManualTime {
+    fn now(&self) -> TimestampDto {
+        time(2)
+    }
+
+    fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
+        self.sleeps
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(duration);
+        if duration < Duration::from_secs(1) {
+            self.advance(duration);
+            return Box::pin(future::ready(()));
+        }
+        let deadline = self.elapsed() + duration;
+        Box::pin(future::poll_fn(move |_| {
+            if self.elapsed() >= deadline {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        }))
+    }
+}
+
 /// Records every committed transcript row and run status.
 pub struct RecordingCommitObserver {
-    commits: Mutex<Vec<ModelRunCommitDto>>,
+    commits: Mutex<Vec<SessionCommitDto>>,
 }
 
 impl RecordingCommitObserver {
@@ -700,7 +885,7 @@ impl RecordingCommitObserver {
 
     /// Returns every observed commit in publication order.
     #[must_use]
-    pub fn commits(&self) -> Vec<ModelRunCommitDto> {
+    pub fn commits(&self) -> Vec<SessionCommitDto> {
         self.commits
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -708,8 +893,8 @@ impl RecordingCommitObserver {
     }
 }
 
-impl ModelRunCommitObserver for RecordingCommitObserver {
-    fn observe_model_run_commit(&self, committed: &ModelRunCommitDto) {
+impl SessionCommitObserver for RecordingCommitObserver {
+    fn observe_session_commit(&self, committed: &SessionCommitDto) {
         self.commits
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

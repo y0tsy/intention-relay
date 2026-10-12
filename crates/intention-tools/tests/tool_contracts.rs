@@ -7,35 +7,34 @@
 mod common;
 
 use common::{DispatchCompleted, fixture_dir, service};
-use intention_proto::WorkspaceRelativePathDto;
-use intention_tools::{
-    BoundedText, CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepScope,
-    InterruptCause, ReadInput, TextResult, ToolDispatchOutcome, ToolId, ToolInput, ToolResult,
-    WriteInput, model_visible_descriptors,
+use intention_proto::{
+    BoundedText, EditInput, EnvVarDto, EnvVarNameDto, ExecuteInput, ExecuteResult, GlobInput,
+    GrepInput, GrepScope, ReadInput, ShellCommandTextDto, TextResult, ToolId, ToolInput,
+    ToolResult, ToolTimeoutSecondsDto, WorkspaceRelativePathDto, WriteInput,
 };
+use intention_tools::{
+    CancellationSignal, InterruptCause, ToolDispatchOutcome, model_visible_descriptors,
+    partial_tool_result_content,
+};
+
+/// Builds one `execute` input running `command` through the platform shell.
+fn execute_command(command: &str) -> ToolInput {
+    ToolInput::Execute(ExecuteInput {
+        command: ShellCommandTextDto::new(command).expect("command"),
+        cwd: None,
+        env: Vec::new(),
+        timeout_seconds: None,
+    })
+}
 
 #[test]
 fn execute_uses_workspace_cwd_and_returns_typed_result() {
     let root_dir = fixture_dir("execute");
     let root = root_dir.path().to_owned();
     let service = service(&root_dir);
-    let program = if cfg!(windows) { "cmd" } else { "pwd" };
-    let args = if cfg!(windows) {
-        vec!["/C", "cd"]
-    } else {
-        vec![]
-    };
-    let result = service.dispatch_completed(
-        ToolInput::Execute(ExecuteInput {
-            program: BoundedText::new(program).expect("program"),
-            args: args
-                .into_iter()
-                .map(|value| BoundedText::new(value).expect("argument"))
-                .collect(),
-        }),
-        CancellationSignal::new(),
-    );
-    let ToolResult::Execute(result) = result else {
+    let command = if cfg!(windows) { "cd" } else { "pwd" };
+    let result = service.dispatch_completed(execute_command(command), CancellationSignal::new());
+    let ToolResult::Execute(ExecuteResult { text: result, .. }) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
     let expected_root = std::fs::canonicalize(&root)
@@ -127,26 +126,10 @@ fn tool_service_covers_nonzero_execute_as_normalized_result() {
     let root = root_dir.path();
     std::fs::write(root.join("file.txt"), "content").expect("seed");
     let service = service(&root_dir);
-    let nonzero_input = || {
-        ToolInput::Execute(ExecuteInput {
-            program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).expect("program"),
-            args: if cfg!(windows) {
-                vec![
-                    BoundedText::new("/C").expect("arg"),
-                    BoundedText::new("exit 2").expect("arg"),
-                ]
-            } else {
-                vec![
-                    BoundedText::new("-c").expect("arg"),
-                    BoundedText::new("exit 2").expect("arg"),
-                ]
-            },
-        })
-    };
     // A known non-zero exit is a normalized program result on the typed
     // output path, not a transport-level error.
-    let result = service.dispatch_completed(nonzero_input(), CancellationSignal::new());
-    let ToolResult::Execute(result) = result else {
+    let result = service.dispatch_completed(execute_command("exit 2"), CancellationSignal::new());
+    let ToolResult::Execute(ExecuteResult { text: result, .. }) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
     assert!(result.text.as_str().contains("exit_code:2"));
@@ -175,26 +158,13 @@ fn execute_cancellation_is_classified_as_a_stopped_interruption() {
         }
         canceller.cancel();
     });
+    let command = if cfg!(windows) {
+        "echo started> sentinel.txt & ping -n 2 127.0.0.1"
+    } else {
+        "trap '' TERM; printf x > sentinel.txt; sleep 2"
+    };
     let outcome = service
-        .dispatch_with_cancellation(
-            ToolInput::Execute(ExecuteInput {
-                program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" })
-                    .expect("program"),
-                args: if cfg!(windows) {
-                    vec![
-                        BoundedText::new("/C").unwrap(),
-                        BoundedText::new("echo started> sentinel.txt & ping -n 2 127.0.0.1")
-                            .unwrap(),
-                    ]
-                } else {
-                    vec![
-                        BoundedText::new("-c").unwrap(),
-                        BoundedText::new("trap '' TERM; printf x > sentinel.txt; sleep 2").unwrap(),
-                    ]
-                },
-            }),
-            cancellation,
-        )
+        .dispatch_with_cancellation(execute_command(command), cancellation)
         .expect("an interrupted dispatch is an outcome, not an error");
     cancellation_helper
         .join()
@@ -203,7 +173,7 @@ fn execute_cancellation_is_classified_as_a_stopped_interruption() {
         unreachable!("cancellation must interrupt the dispatch");
     };
     assert_eq!(cause, InterruptCause::Stopped);
-    let Some(ToolResult::Execute(value)) = partial else {
+    let Some(ToolResult::Execute(ExecuteResult { text: value, .. })) = partial else {
         unreachable!("the stopped execute captures the output of its collected pipes")
     };
     // Captured output keeps the completed rendering without the exit status
@@ -619,24 +589,13 @@ fn cancellation_signal_transitions_and_tool_id_formats_are_stable() {
 fn execute_success_reports_stderr_and_typed_success_status() {
     let dir = fixture_dir("execute-stderr");
     let service = service(&dir);
-    let input = || {
-        ToolInput::Execute(ExecuteInput {
-            program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).unwrap(),
-            args: if cfg!(windows) {
-                vec![
-                    BoundedText::new("/C").unwrap(),
-                    BoundedText::new("echo err 1>&2").unwrap(),
-                ]
-            } else {
-                vec![
-                    BoundedText::new("-c").unwrap(),
-                    BoundedText::new("printf err >&2").unwrap(),
-                ]
-            },
-        })
+    let command = if cfg!(windows) {
+        "echo err 1>&2"
+    } else {
+        "printf err >&2"
     };
-    let result = service.dispatch_completed(input(), CancellationSignal::new());
-    let ToolResult::Execute(result) = result else {
+    let result = service.dispatch_completed(execute_command(command), CancellationSignal::new());
+    let ToolResult::Execute(ExecuteResult { text: result, .. }) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
     assert!(result.text.as_str().contains("stderr:\nerr"));
@@ -654,26 +613,15 @@ fn execute_inherits_the_invoking_environment() {
     // invoking process on every supported platform. A child that does not
     // inherit the caller environment exits non-zero, and the rendered result
     // records that exit code.
-    let (program, args): (&str, Vec<String>) = if cfg!(windows) {
-        // `cmd` rejects the parenthesized `if defined … (…) else (…)` form on
-        // the Windows runners (`" was unexpected at this time.`), so the probe
-        // uses the single-line negated guard: it exits non-zero only when
-        // `PATH` is absent from the inherited environment.
-        ("cmd", vec!["/C if not defined PATH exit 1".to_owned()])
+    let command: &str = if cfg!(windows) {
+        // `if not defined` is the single-line negated guard: it exits non-zero
+        // only when `PATH` is absent from the inherited environment.
+        "if not defined PATH exit 1"
     } else {
-        ("sh", vec!["-c".to_owned(), "test -n \"$PATH\"".to_owned()])
+        "test -n \"$PATH\""
     };
-    let result = service.dispatch_completed(
-        ToolInput::Execute(ExecuteInput {
-            program: BoundedText::new(program).unwrap(),
-            args: args
-                .into_iter()
-                .map(|arg| BoundedText::new(arg).unwrap())
-                .collect(),
-        }),
-        CancellationSignal::new(),
-    );
-    let ToolResult::Execute(result) = result else {
+    let result = service.dispatch_completed(execute_command(command), CancellationSignal::new());
+    let ToolResult::Execute(ExecuteResult { text: result, .. }) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
     assert!(
@@ -735,17 +683,9 @@ fn execute_reports_signal_termination_as_known_terminal_result() {
     }
     let root_dir = fixture_dir("signal-exit");
     let service = service(&root_dir);
-    let signal_input = || {
-        ToolInput::Execute(ExecuteInput {
-            program: BoundedText::new("sh").unwrap(),
-            args: vec![
-                BoundedText::new("-c").unwrap(),
-                BoundedText::new("kill -TERM $$").unwrap(),
-            ],
-        })
-    };
-    let result = service.dispatch_completed(signal_input(), CancellationSignal::new());
-    let ToolResult::Execute(result) = result else {
+    let result =
+        service.dispatch_completed(execute_command("kill -TERM $$"), CancellationSignal::new());
+    let ToolResult::Execute(ExecuteResult { text: result, .. }) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
     // Signal termination renders from the typed status; there is no invented
@@ -785,62 +725,40 @@ fn execute_formats_success_and_truncates_both_streams() {
     let service = service(&root_dir);
     // A small success carries no truncation flag.
     let small = service.dispatch_completed(
-        ToolInput::Execute(ExecuteInput {
-            program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).unwrap(),
-            args: if cfg!(windows) {
-                vec![
-                    BoundedText::new("/C").unwrap(),
-                    BoundedText::new("echo out & echo err 1>&2").unwrap(),
-                ]
-            } else {
-                vec![
-                    BoundedText::new("-c").unwrap(),
-                    BoundedText::new("printf out; printf err >&2").unwrap(),
-                ]
-            },
+        execute_command(if cfg!(windows) {
+            "echo out & echo err 1>&2"
+        } else {
+            "printf out; printf err >&2"
         }),
         CancellationSignal::new(),
     );
-    let ToolResult::Execute(small) = small else {
+    let ToolResult::Execute(ExecuteResult { text: small, .. }) = small else {
         unreachable!("dispatch returned a non-execute result")
     };
     assert!(!small.truncated);
-    let result = service
-        .dispatch_completed(
-            ToolInput::Execute(ExecuteInput {
-                program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).unwrap(),
-                args: if cfg!(windows) {
-                    vec![
-                        // `for /L` and `echo` are built into cmd.exe, so this
-                        // fixture does not depend on Python or another tool.
-                        // Each iteration writes one 100-byte line, so 2000
-                        // iterations deterministically exceed the 64 KiB
-                        // output bound without `& exit /b` parsing.
-                        BoundedText::new("/C").unwrap(),
-                        BoundedText::new(
-                            "for /L %i in (1,1,2000) do @echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789",
-                        )
-                        .unwrap(),
-                    ]
-                } else {
-                    let script = "python3 -c 'import sys; sys.stdout.write(\"x\" * 200000); sys.stderr.write(\"y\" * 200000)'";
-                    vec![
-                        BoundedText::new("-c").unwrap(),
-                        BoundedText::new(script).unwrap(),
-                    ]
-                },
-            }),
-            CancellationSignal::new(),
-        );
-    let ToolResult::Execute(value) = result else {
+    let result = service.dispatch_completed(
+        execute_command(if cfg!(windows) {
+            // `for /L` and `echo` are built into cmd.exe, so this fixture does
+            // not depend on Python or another tool. Each iteration writes one
+            // 100-byte line, so 2000 iterations deterministically exceed the
+            // 64 KiB output bound without `& exit /b` parsing.
+            "for /L %i in (1,1,2000) do @echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"
+        } else {
+            // A shell loop writes the same deterministic volume without any
+            // interpreter beyond the shell itself.
+            "for _ in $(seq 1 2000); do printf '%s\\n' \"0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789\"; done"
+        }),
+        CancellationSignal::new(),
+    );
+    let ToolResult::Execute(ExecuteResult { text: value, .. }) = result else {
         unreachable!()
     };
     assert!(value.text.as_str().contains("stdout:"));
     assert!(value.text.as_str().contains("stderr:"));
     assert!(value.text.as_str().contains("exit_code:0"));
-    // The fixture writes more than the output bound (to both streams on Unix,
-    // to stdout on Windows), so the truncation flag is set and the rendered
-    // result carries the marker on every platform.
+    // The fixture writes more than the output bound on stdout, so the
+    // truncation flag is set and the rendered result carries the marker on
+    // every platform.
     assert!(value.truncated);
     assert!(value.text.as_str().contains("[truncated]"));
 }
@@ -876,23 +794,24 @@ fn exact_typed_errors_cover_search_edit_and_spawn_failures() {
         )
         .unwrap_err();
     assert_eq!(error.code(), "tool_search_failed");
-    let error = service
-        .dispatch_with_cancellation(
-            ToolInput::Execute(ExecuteInput {
-                program: BoundedText::new("not-a-real-program").unwrap(),
-                args: vec![],
-            }),
-            CancellationSignal::new(),
-        )
-        .unwrap_err();
-    assert_eq!(error.code(), "tool_execute_spawn_failed");
+    // A missing program inside the shell is a normalized nonzero result, not
+    // an error: the shell itself started and reported its own exit code.
+    let result = service.dispatch_completed(
+        execute_command("not-a-real-program"),
+        CancellationSignal::new(),
+    );
+    let ToolResult::Execute(ExecuteResult { text: result, .. }) = result else {
+        unreachable!("dispatch returned a non-execute result")
+    };
+    assert!(result.text.as_str().contains("exit_code:"));
+    assert!(!result.text.as_str().contains("exit_code:0"));
 }
 
-/// The advertised list is the six exposed tools in order, each carrying a
-/// description and a model-facing input schema, and every advertised wire
-/// name decodes through the typed input authority.
+/// The advertised list is exactly the declared tool set in its advertisement
+/// order, each carrying a description and a model-facing input schema, and
+/// every advertised wire name decodes through the typed input authority.
 #[test]
-fn model_visible_descriptors_are_the_six_exposed_tools_in_order() {
+fn the_advertised_specs_are_the_declared_tool_set_in_order() {
     let expected = [
         ToolId::Read,
         ToolId::Write,
@@ -901,6 +820,11 @@ fn model_visible_descriptors_are_the_six_exposed_tools_in_order() {
         ToolId::Glob,
         ToolId::Grep,
     ];
+    assert_eq!(
+        expected,
+        ToolId::ALL,
+        "the fixture spells the whole declared tool set in advertisement order"
+    );
     let visible = model_visible_descriptors();
     assert_eq!(visible.len(), expected.len());
     for (spec, id) in visible.into_iter().zip(expected) {
@@ -1027,11 +951,13 @@ fn model_parameter_schemas_agree_with_serialized_inputs() {
         ),
         (
             ToolId::Execute,
-            &["program", "args"][..],
-            &["program", "args"][..],
+            &["command", "cwd", "env", "timeout_seconds"][..],
+            &["command"][..],
             serde_json::to_value(ExecuteInput {
-                program: text("cargo"),
-                args: vec![text("test")],
+                command: ShellCommandTextDto::new("cargo test").expect("command"),
+                cwd: None,
+                env: Vec::new(),
+                timeout_seconds: None,
             })
             .expect("execute fixture"),
         ),
@@ -1116,23 +1042,7 @@ fn dispatched_results_are_typed_and_redacted_for_every_concrete_tool() {
             }),
             ToolId::Grep,
         ),
-        (
-            ToolInput::Execute(ExecuteInput {
-                program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).unwrap(),
-                args: if cfg!(windows) {
-                    vec![
-                        BoundedText::new("/C").unwrap(),
-                        BoundedText::new("echo ok").unwrap(),
-                    ]
-                } else {
-                    vec![
-                        BoundedText::new("-c").unwrap(),
-                        BoundedText::new("echo ok").unwrap(),
-                    ]
-                },
-            }),
-            ToolId::Execute,
-        ),
+        (execute_command("echo ok"), ToolId::Execute),
     ];
     let absolute_root = root_path.to_string_lossy().to_string();
     for (input, tool) in calls {
@@ -1170,11 +1080,157 @@ fn dispatched_results_are_typed_and_redacted_for_every_concrete_tool() {
                 assert_eq!(value.matches[0].line, 1);
                 assert!(!value.truncated);
             }
-            (ToolResult::Execute(value), ToolId::Execute) => {
+            (ToolResult::Execute(ExecuteResult { text: value, .. }), ToolId::Execute) => {
                 assert!(value.text.as_str().contains("ok"));
                 assert!(!value.truncated);
             }
             (result, id) => unreachable!("unexpected result for {id}: {result:?}"),
         }
     }
+}
+
+/// A shell runs pipelines, redirects, and compound commands, which a direct
+/// program invocation cannot express.
+#[cfg(unix)]
+#[test]
+fn execute_runs_pipelines_redirects_and_compound_commands() {
+    let root_dir = fixture_dir("execute-pipeline");
+    let service = service(&root_dir);
+    let result = service.dispatch_completed(
+        execute_command("printf 'b\\na\\n' | sort > sorted.txt && printf done"),
+        CancellationSignal::new(),
+    );
+    let ToolResult::Execute(ExecuteResult { text: result, .. }) = result else {
+        unreachable!("dispatch returned a non-execute result")
+    };
+    assert!(
+        result.text.as_str().contains("stdout:\ndone"),
+        "{}",
+        result.text.as_str()
+    );
+    assert!(result.text.as_str().contains("exit_code:0"));
+    assert_eq!(
+        std::fs::read_to_string(root_dir.path().join("sorted.txt"))
+            .expect("redirect target exists"),
+        "a\nb\n"
+    );
+}
+
+/// A declared working directory and declared environment variables reach the
+/// child, which otherwise inherits the caller environment.
+#[test]
+fn execute_reports_a_declared_working_directory_and_environment() {
+    let root_dir = fixture_dir("execute-cwd-env");
+    std::fs::create_dir_all(root_dir.path().join("sub")).expect("subdirectory");
+    let service = service(&root_dir);
+    let command = if cfg!(windows) {
+        "cd & echo %IR_PROBE%"
+    } else {
+        "pwd; printf \"%s\" \"$IR_PROBE\""
+    };
+    let input = ToolInput::Execute(ExecuteInput {
+        command: ShellCommandTextDto::new(command).expect("command"),
+        cwd: Some(WorkspaceRelativePathDto::parse("sub").expect("cwd")),
+        env: vec![EnvVarDto {
+            name: EnvVarNameDto::new("IR_PROBE").expect("name"),
+            value: BoundedText::new("probe-value").expect("value"),
+        }],
+        timeout_seconds: None,
+    });
+    let result = service.dispatch_completed(input, CancellationSignal::new());
+    let ToolResult::Execute(ExecuteResult { text: result, .. }) = result else {
+        unreachable!("dispatch returned a non-execute result")
+    };
+    assert!(
+        result.text.as_str().contains("probe-value"),
+        "the declared environment variable must reach the child: {}",
+        result.text.as_str()
+    );
+    if !cfg!(windows) {
+        let expected = std::fs::canonicalize(root_dir.path().join("sub"))
+            .expect("fixture subdirectory canonicalizes")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            result.text.as_str().contains(&expected),
+            "the child must start in the declared directory: {}",
+            result.text.as_str()
+        );
+    }
+}
+
+/// A declared timeout is the call's own working deadline: it ends the call as a
+/// partial result whose notice names the timeout instead of reading as lost
+/// evidence.
+#[test]
+fn execute_honors_a_declared_timeout() {
+    let root_dir = fixture_dir("execute-timeout");
+    let service = service(&root_dir);
+    let command = if cfg!(windows) {
+        "ping -n 5 127.0.0.1"
+    } else {
+        "sleep 5"
+    };
+    let declared = ToolTimeoutSecondsDto::new(1).expect("timeout");
+    let input = ToolInput::Execute(ExecuteInput {
+        command: ShellCommandTextDto::new(command).expect("command"),
+        cwd: None,
+        env: Vec::new(),
+        timeout_seconds: Some(declared),
+    });
+    let started = std::time::Instant::now();
+    let outcome = service
+        .dispatch_with_cancellation(input, CancellationSignal::new())
+        .expect("a declared timeout is an outcome, not an error");
+    let ToolDispatchOutcome::Interrupted { cause, partial } = outcome else {
+        unreachable!("a declared timeout must interrupt the dispatch")
+    };
+    assert_eq!(cause, InterruptCause::TimedOut(declared));
+    assert_eq!(cause.code(), "tool_timed_out");
+    let content = partial_tool_result_content(cause, partial.as_ref())
+        .expect("the partial content of a timed-out call renders");
+    assert!(
+        content.contains("hit its declared timeout of 1s and was terminated before a final result"),
+        "the model reads the declared deadline it hit: {content}"
+    );
+    assert!(
+        !content.contains("did not receive a final result"),
+        "a declared deadline never reads as lost evidence: {content}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "a declared timeout returns promptly"
+    );
+}
+
+/// Blank commands, invalid environment names, and zero timeouts never decode
+/// into the typed execute payload.
+#[test]
+fn execute_rejects_blank_commands_and_zero_timeouts_at_decode() {
+    assert_eq!(
+        ShellCommandTextDto::new("  ")
+            .expect_err("blank command")
+            .code(),
+        "invalid_tool_text"
+    );
+    assert_eq!(
+        ShellCommandTextDto::new("nul\0text")
+            .expect_err("NUL command")
+            .code(),
+        "invalid_tool_text"
+    );
+    assert_eq!(
+        EnvVarNameDto::new("A=B").expect_err("invalid name").code(),
+        "invalid_tool_env"
+    );
+    assert_eq!(
+        ToolTimeoutSecondsDto::new(0)
+            .expect_err("zero timeout")
+            .code(),
+        "invalid_tool_timeout"
+    );
+    let error =
+        ToolInput::from_arguments_json("execute", r#"{"command":"true","timeout_seconds":0}"#)
+            .expect_err("a zero timeout fails decoding");
+    assert_eq!(error.code(), "invalid_tool_input_json");
 }

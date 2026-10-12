@@ -1,0 +1,554 @@
+//! DataGrid core structure and builders
+
+use super::editing::EditState;
+use super::types::{
+    AggregationType, FooterRow, GridColors, GridColumn, GridOptions, GridRow, SortDirection,
+};
+use crate::style::Color;
+use crate::{impl_props_builders, impl_styled_view};
+
+/// Tree node info for flattened display
+#[derive(Clone, Debug)]
+pub struct TreeNodeInfo {
+    /// Original row index in tree (path from root)
+    pub path: Vec<usize>,
+    /// Nesting depth (0 = root level)
+    pub depth: usize,
+    /// Has child rows
+    pub has_children: bool,
+    /// Currently expanded
+    pub is_expanded: bool,
+    /// Is last child at this level (for tree line rendering)
+    pub is_last_child: bool,
+}
+
+/// Cell position for rendering
+pub(super) struct CellPos {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+}
+
+/// Cell state for rendering
+pub(super) struct CellState {
+    pub row_bg: Color,
+    pub is_selected: bool,
+    pub is_editing: bool,
+}
+
+/// A column positioned in the rendered viewport, after applying column freeze
+/// and horizontal scroll.
+///
+/// `x` is absolute and already accounts for the row-number gutter. Columns are
+/// laid out as: left-frozen (pinned left) · scrollable middle (offset by
+/// `scroll_col`) · right-frozen (pinned right).
+pub(super) struct ColumnSlot<'a> {
+    /// Index into `self.columns`.
+    pub orig_idx: usize,
+    /// The column.
+    pub col: &'a GridColumn,
+    /// Position in display order (index into the full `visible_cols` list).
+    pub display_idx: usize,
+    /// Absolute x of the column's first cell.
+    pub x: u16,
+    /// Column width (excluding the trailing separator).
+    pub width: u16,
+}
+
+/// Row rendering parameters
+pub(super) struct RowRenderParams<'a, 'b> {
+    pub slots: &'b [ColumnSlot<'a>],
+    pub area_x: u16,
+    pub content_end: u16,
+    pub start_y: u16,
+    pub row_num_width: u16,
+    pub visible_height: usize,
+}
+
+/// DataGrid widget
+pub struct DataGrid {
+    // ─────────────────────────────────────────────────────────────────────────
+    // Data
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Columns
+    pub columns: Vec<GridColumn>,
+    /// Rows
+    pub rows: Vec<GridRow>,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Sorting & Filtering
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Current sort column
+    pub sort_column: Option<usize>,
+    /// Sort direction
+    pub sort_direction: SortDirection,
+    /// Multi-column sort stack: (column_index, direction) in priority order
+    pub sort_columns: Vec<(usize, SortDirection)>,
+    /// Filter text
+    pub filter: String,
+    /// Filter column (None = all columns)
+    pub filter_column: Option<usize>,
+    /// Cached filtered row indices (eagerly computed on mutation)
+    pub filtered_cache: Vec<usize>,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Selection & Navigation
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Selected row
+    pub selected_row: usize,
+    /// Selected column
+    pub selected_col: usize,
+    /// Scroll offset
+    pub scroll_row: usize,
+    /// Unused horizontal scroll offset (reserved for future use)
+    pub _scroll_col: usize,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Display Options & Colors (extracted structs)
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Display options
+    pub options: GridOptions,
+    /// Color scheme
+    pub colors: GridColors,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Editing
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Cell editing state
+    pub edit_state: EditState,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Column Resize State
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Column being resized (index)
+    pub resizing_col: Option<usize>,
+    /// X position when resize started
+    pub resize_start_x: u16,
+    /// Column width when resize started
+    pub resize_start_width: u16,
+    /// Column resize handle being hovered
+    pub hovered_resize: Option<usize>,
+    /// User-set column widths (overrides auto calculation), indexed like
+    /// `columns`
+    pub column_widths: Vec<u16>,
+    /// Callback when column is resized
+    pub on_column_resize: Option<Box<dyn FnMut(usize, u16)>>,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Column Reorder State
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Column being dragged (index into `columns`)
+    pub dragging_col: Option<usize>,
+    /// Drop target: the display position (among visible columns) the dragged
+    /// column will be inserted before; the visible column count means "at
+    /// the end"
+    pub drop_target_col: Option<usize>,
+    /// Column display order (maps display index to actual column index).
+    /// Empty means the order of `columns`; drag reorder permutes this and
+    /// leaves `columns` in place.
+    pub column_order: Vec<usize>,
+    /// Whether columns can be reordered
+    pub reorderable: bool,
+    /// Callback when column is reordered
+    pub on_column_reorder: Option<Box<dyn FnMut(usize, usize)>>,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Column Freeze State
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Number of columns frozen on the left
+    pub frozen_left: usize,
+    /// Number of columns frozen on the right
+    pub frozen_right: usize,
+    /// Horizontal scroll offset (column index)
+    pub scroll_col: usize,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Tree Grid State
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Enable tree grid mode (hierarchical display)
+    pub tree_mode: bool,
+    /// Flattened tree cache for display
+    pub tree_cache: Vec<TreeNodeInfo>,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Export & Aggregation State
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Footer rows for aggregation display
+    pub footer_rows: Vec<FooterRow>,
+    /// Show aggregation footer
+    pub show_footer: bool,
+
+    /// Last known viewport height (rows visible), updated during render
+    pub(crate) last_viewport_height: std::cell::Cell<usize>,
+
+    /// Widget props for CSS integration
+    pub props: crate::widget::traits::WidgetProps,
+}
+
+// Test helpers
+impl DataGrid {
+    /// Get column width for testing
+    #[doc(hidden)]
+    pub fn get_column_widths(&self) -> &Vec<u16> {
+        &self.column_widths
+    }
+
+    /// Set column width for testing
+    #[doc(hidden)]
+    pub fn set_column_widths(&mut self, widths: Vec<u16>) {
+        self.column_widths = widths;
+    }
+
+    /// Get options for testing
+    #[doc(hidden)]
+    pub fn get_options(&self) -> &GridOptions {
+        &self.options
+    }
+
+    /// Set show_row_numbers for testing
+    #[doc(hidden)]
+    pub fn set_row_numbers(&mut self, show: bool) {
+        self.options.show_row_numbers = show;
+    }
+}
+
+impl DataGrid {
+    /// Create a new data grid
+    pub fn new() -> Self {
+        Self {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            sort_column: None,
+            sort_direction: SortDirection::Ascending,
+            sort_columns: Vec::new(),
+            filter: String::new(),
+            filter_column: None,
+            filtered_cache: Vec::new(),
+            selected_row: 0,
+            selected_col: 0,
+            scroll_row: 0,
+            _scroll_col: 0,
+            options: GridOptions::default(),
+            colors: GridColors::default(),
+            edit_state: EditState::default(),
+            // Resize state
+            resizing_col: None,
+            resize_start_x: 0,
+            resize_start_width: 0,
+            hovered_resize: None,
+            column_widths: Vec::new(),
+            on_column_resize: None,
+            // Reorder state
+            dragging_col: None,
+            drop_target_col: None,
+            column_order: Vec::new(),
+            reorderable: false,
+            on_column_reorder: None,
+            // Freeze state
+            frozen_left: 0,
+            frozen_right: 0,
+            scroll_col: 0,
+            // Tree grid state
+            tree_mode: false,
+            tree_cache: Vec::new(),
+            // Footer state
+            footer_rows: Vec::new(),
+            show_footer: false,
+            last_viewport_height: std::cell::Cell::new(10),
+            props: crate::widget::traits::WidgetProps::new(),
+        }
+    }
+
+    /// Set color scheme
+    pub fn colors(mut self, colors: GridColors) -> Self {
+        self.colors = colors;
+        self
+    }
+
+    /// Set display options
+    pub fn options(mut self, options: GridOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Get color scheme (for customization)
+    pub fn colors_mut(&mut self) -> &mut GridColors {
+        &mut self.colors
+    }
+
+    /// Get display options (for customization)
+    pub fn options_mut(&mut self) -> &mut GridOptions {
+        &mut self.options
+    }
+
+    /// Recompute the filtered rows cache (called on mutation)
+    pub fn recompute_cache(&mut self) {
+        self.filtered_cache = self.compute_filtered_indices();
+        // Fewer rows than before (rows removed, an edit that no longer
+        // matches the filter): keep the selection and scroll on a row
+        let last = self.filtered_cache.len().saturating_sub(1);
+        self.selected_row = self.selected_row.min(last);
+        self.scroll_row = self.scroll_row.min(last);
+    }
+
+    /// Add a column
+    pub fn column(mut self, col: GridColumn) -> Self {
+        self.columns.push(col);
+        self
+    }
+
+    /// Add columns
+    pub fn columns(mut self, cols: Vec<GridColumn>) -> Self {
+        self.columns.extend(cols);
+        self
+    }
+
+    /// Add a row
+    pub fn row(mut self, row: GridRow) -> Self {
+        self.rows.push(row);
+        self.recompute_cache();
+        self
+    }
+
+    /// Add rows
+    pub fn rows(mut self, rows: Vec<GridRow>) -> Self {
+        self.rows.extend(rows);
+        self.recompute_cache();
+        self
+    }
+
+    /// Set data from 2D vector
+    pub fn data(mut self, data: Vec<Vec<String>>) -> Self {
+        for row_data in data {
+            let mut row = GridRow::new();
+            for (i, value) in row_data.into_iter().enumerate() {
+                if let Some(col) = self.columns.get(i) {
+                    row.data.push((col.key.clone(), value));
+                }
+            }
+            self.rows.push(row);
+        }
+        self.recompute_cache();
+        self
+    }
+
+    /// Show/hide header
+    pub fn header(mut self, show: bool) -> Self {
+        self.options.show_header = show;
+        self
+    }
+
+    /// Show/hide row numbers
+    pub fn row_numbers(mut self, show: bool) -> Self {
+        self.options.show_row_numbers = show;
+        self
+    }
+
+    /// Enable/disable zebra striping
+    pub fn zebra(mut self, enable: bool) -> Self {
+        self.options.zebra = enable;
+        self
+    }
+
+    /// Enable multi-select
+    pub fn multi_select(mut self, enable: bool) -> Self {
+        self.options.multi_select = enable;
+        self
+    }
+
+    /// Enable natural sorting for text columns (file2 before file10)
+    pub fn natural_sort(mut self, enable: bool) -> Self {
+        self.options.use_natural_sort = enable;
+        self
+    }
+
+    /// Enable virtual scrolling for large datasets (default: true)
+    ///
+    /// When enabled, only visible rows plus overscan are rendered,
+    /// allowing smooth performance with 100,000+ rows.
+    pub fn virtual_scroll(mut self, enable: bool) -> Self {
+        self.options.virtual_scroll = enable;
+        self
+    }
+
+    /// Set row height in lines (default: 1)
+    pub fn row_height(mut self, height: u16) -> Self {
+        self.options.row_height = height.max(1);
+        self
+    }
+
+    /// Set overscan rows (extra rows rendered above/below viewport)
+    ///
+    /// Higher values provide smoother scrolling but use more memory.
+    /// Default is 5 rows.
+    pub fn overscan(mut self, rows: usize) -> Self {
+        self.options.overscan = rows;
+        self
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Column Resize API
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Set callback for when a column is resized
+    pub fn on_column_resize<F>(mut self, callback: F) -> Self
+    where
+        F: FnMut(usize, u16) + 'static,
+    {
+        self.on_column_resize = Some(Box::new(callback));
+        self
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Column Reorder API
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Enable or disable column reordering via drag and drop
+    pub fn reorderable(mut self, enable: bool) -> Self {
+        self.reorderable = enable;
+        self
+    }
+
+    /// Set callback for when columns are reordered
+    pub fn on_column_reorder<F>(mut self, callback: F) -> Self
+    where
+        F: FnMut(usize, usize) + 'static,
+    {
+        self.on_column_reorder = Some(Box::new(callback));
+        self
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Column Freeze API
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Freeze N columns on the left (they stay visible during horizontal scroll)
+    pub fn freeze_columns_left(mut self, count: usize) -> Self {
+        self.frozen_left = count;
+        self
+    }
+
+    /// Freeze N columns on the right (they stay visible during horizontal scroll)
+    pub fn freeze_columns_right(mut self, count: usize) -> Self {
+        self.frozen_right = count;
+        self
+    }
+
+    /// Compute aggregation value for a column
+    pub(super) fn compute_aggregation(
+        &self,
+        column_key: &str,
+        agg_type: AggregationType,
+    ) -> Option<f64> {
+        let values: Vec<f64> = self
+            .filtered_indices()
+            .iter()
+            .filter_map(|&idx| {
+                self.rows
+                    .get(idx)
+                    .and_then(|r| r.get(column_key))
+                    .and_then(|v| v.parse::<f64>().ok())
+            })
+            .collect();
+
+        if values.is_empty() {
+            return None;
+        }
+
+        Some(match agg_type {
+            AggregationType::Sum => values.iter().sum(),
+            AggregationType::Average => values.iter().sum::<f64>() / values.len() as f64,
+            AggregationType::Count => values.len() as f64,
+            AggregationType::Min => values.iter().cloned().fold(f64::INFINITY, f64::min),
+            AggregationType::Max => values.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+        })
+    }
+
+    /// Get computed footer values for rendering
+    pub(super) fn get_footer_values(&self, footer: &FooterRow) -> Vec<(String, String)> {
+        let mut values = Vec::new();
+
+        for agg in &footer.aggregations {
+            let label = agg
+                .label
+                .clone()
+                .unwrap_or_else(|| agg.agg_type.label().to_string());
+
+            let value = self
+                .compute_aggregation(&agg.column_key, agg.agg_type)
+                .map(|v| {
+                    if v.fract() == 0.0 {
+                        format!("{:.0}", v)
+                    } else {
+                        format!("{:.2}", v)
+                    }
+                })
+                .unwrap_or_else(|| "—".to_string());
+
+            values.push((agg.column_key.clone(), format!("{}: {}", label, value)));
+        }
+
+        values
+    }
+
+    /// Compute filtered row indices (internal)
+    pub(super) fn compute_filtered_indices(&self) -> Vec<usize> {
+        if self.filter.is_empty() {
+            (0..self.rows.len()).collect()
+        } else {
+            self.rows
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| match self.filter_column {
+                    Some(col_idx) => {
+                        if let Some(col) = self.columns.get(col_idx).filter(|c| c.filterable) {
+                            row.get(&col.key)
+                                .map(|v| v.to_lowercase().contains(&self.filter))
+                                .unwrap_or(false)
+                        } else {
+                            false
+                        }
+                    }
+                    None => row.data.iter().any(|(k, v)| {
+                        let filterable = self
+                            .columns
+                            .iter()
+                            .find(|c| &c.key == k)
+                            .is_none_or(|c| c.filterable);
+                        filterable && v.to_lowercase().contains(&self.filter)
+                    }),
+                })
+                .map(|(i, _)| i)
+                .collect()
+        }
+    }
+
+    /// Get cached filtered row indices (zero-cost, no allocation)
+    #[inline]
+    pub fn filtered_indices(&self) -> &[usize] {
+        &self.filtered_cache
+    }
+
+    /// Get filtered rows count (uses cache)
+    pub fn filtered_count(&self) -> usize {
+        self.filtered_indices().len()
+    }
+
+    /// Get filtered rows (uses cached indices)
+    /// Note: For large datasets, prefer using filtered_indices() with index-based access
+    pub fn filtered_rows(&self) -> Vec<&GridRow> {
+        self.filtered_indices()
+            .iter()
+            .filter_map(|&i| self.rows.get(i))
+            .collect()
+    }
+}
+
+impl Default for DataGrid {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl_styled_view!(DataGrid);
+impl_props_builders!(DataGrid);

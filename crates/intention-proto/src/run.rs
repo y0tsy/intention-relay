@@ -1,10 +1,10 @@
 //! Run policy, durable lifecycle status, and run projection values.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
     ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, RunId, SessionId,
-    TurnId,
+    TimestampDto, TurnId, UsageDto,
 };
 
 /// The agent policy active for a run.
@@ -48,6 +48,19 @@ impl RunModeDto {
             )?),
         }
     }
+
+    /// The declared durable run modes, in `as_str` order.
+    ///
+    /// This is the single source the command grammar renders in its usage and
+    /// rejection text, and the proto tests pin it to the wire spelling of every
+    /// member.
+    pub const ALL: [Self; 2] = [Self::Plan, Self::Build];
+
+    /// The durable run mode a session starts with when its creation command declares none.
+    ///
+    /// The application service resolves an absent caller mode to this value, so
+    /// no front end decides the durable policy of a created session.
+    pub const DEFAULT: Self = Self::Build;
 }
 
 /// The durable lifecycle status for a run.
@@ -150,32 +163,109 @@ pub fn validate_run_status_transition(from: RunStatusDto, to: RunStatusDto) -> D
 }
 
 /// A safe current projection of one durable run.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+///
+/// The projection carries whole committed facts: the immutable admission
+/// reference, the durable lifecycle status, the run's committed token usage
+/// (absent until a terminal outcome records it), the committed start and
+/// finish times in whole Unix seconds, and how many committed tool calls the
+/// run has not answered yet. `finished_at` is present exactly when the status
+/// is terminal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct RunProjectionDto {
     session_id: SessionId,
     run_id: RunId,
     turn_id: TurnId,
     status: RunStatusDto,
     config_revision_id: ConfigRevisionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    usage: Option<UsageDto>,
+    started_at: TimestampDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    finished_at: Option<TimestampDto>,
+    open_tool_calls: u32,
+}
+
+impl<'de> Deserialize<'de> for RunProjectionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawRunProjectionDto {
+            session_id: SessionId,
+            run_id: RunId,
+            turn_id: TurnId,
+            status: RunStatusDto,
+            config_revision_id: ConfigRevisionId,
+            #[serde(default)]
+            usage: Option<UsageDto>,
+            started_at: TimestampDto,
+            #[serde(default)]
+            finished_at: Option<TimestampDto>,
+            open_tool_calls: u32,
+        }
+
+        let raw = RawRunProjectionDto::deserialize(deserializer)?;
+        Self::new(
+            raw.session_id,
+            raw.run_id,
+            raw.turn_id,
+            raw.status,
+            raw.config_revision_id,
+            raw.usage,
+            raw.started_at,
+            raw.finished_at,
+            raw.open_tool_calls,
+        )
+        .map_err(de::Error::custom)
+    }
 }
 
 impl RunProjectionDto {
     /// Creates the safe public projection of one M3 run lifecycle.
-    #[must_use]
-    pub const fn new(
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when a terminal status and a finish time
+    /// disagree, or when the finish time precedes the start time.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "This public wire constructor preserves the established nine-field run projection contract."
+    )]
+    pub fn new(
         session_id: SessionId,
         run_id: RunId,
         turn_id: TurnId,
         status: RunStatusDto,
         config_revision_id: ConfigRevisionId,
-    ) -> Self {
-        Self {
+        usage: Option<UsageDto>,
+        started_at: TimestampDto,
+        finished_at: Option<TimestampDto>,
+        open_tool_calls: u32,
+    ) -> DtoResult<Self> {
+        if run_status_is_terminal(status) != finished_at.is_some() {
+            return Err(ErrorDto::validation(
+                "invalid_run_projection",
+                "a terminal run projection requires its finish time and a live one must not carry one",
+            ));
+        }
+        if finished_at.is_some_and(|finished| finished < started_at) {
+            return Err(ErrorDto::validation(
+                "invalid_run_projection",
+                "a run finish time never precedes its start time",
+            ));
+        }
+        Ok(Self {
             session_id,
             run_id,
             turn_id,
             status,
             config_revision_id,
-        }
+            usage,
+            started_at,
+            finished_at,
+            open_tool_calls,
+        })
     }
 
     /// Returns the owning session identity.
@@ -207,6 +297,31 @@ impl RunProjectionDto {
     pub const fn config_revision_id(self) -> ConfigRevisionId {
         self.config_revision_id
     }
+
+    /// Returns the committed token usage, absent until a terminal outcome
+    /// records it.
+    #[must_use]
+    pub const fn usage(self) -> Option<UsageDto> {
+        self.usage
+    }
+
+    /// Returns when the run was admitted, in whole Unix seconds.
+    #[must_use]
+    pub const fn started_at(self) -> TimestampDto {
+        self.started_at
+    }
+
+    /// Returns when the run reached a terminal status, absent while it is live.
+    #[must_use]
+    pub const fn finished_at(self) -> Option<TimestampDto> {
+        self.finished_at
+    }
+
+    /// Returns how many committed tool calls the run has not answered yet.
+    #[must_use]
+    pub const fn open_tool_calls(self) -> u32 {
+        self.open_tool_calls
+    }
 }
 
 #[cfg(test)]
@@ -232,6 +347,22 @@ mod tests {
         assert_eq!(
             rejected.as_ref().err().map(ErrorDto::retry),
             Some(ErrorRetryDto::Never)
+        );
+    }
+
+    #[test]
+    fn every_declared_run_mode_round_trips() {
+        assert_eq!(
+            RunModeDto::ALL.map(RunModeDto::as_str),
+            ["plan", "build"],
+            "the declared set is every durable run mode in as_str order"
+        );
+        for mode in RunModeDto::ALL {
+            assert_eq!(RunModeDto::parse(mode.as_str()).ok(), Some(mode));
+        }
+        assert!(
+            RunModeDto::ALL.contains(&RunModeDto::DEFAULT),
+            "the durable default is a declared run mode"
         );
     }
 

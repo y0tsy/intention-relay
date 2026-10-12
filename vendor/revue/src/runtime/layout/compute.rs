@@ -1,0 +1,474 @@
+//! Layout computation orchestration
+//!
+//! Main entry point for computing layout across the tree.
+//!
+//! # Performance
+//!
+//! The layout engine uses efficient recursive traversal and only computes
+//! nodes that are visible (not Display::None). For large trees, consider
+//! splitting your UI into separate components to minimize recalculation scope.
+
+use super::node::ComputedLayout;
+use super::tree::LayoutTree;
+use super::{block, flex, grid, position};
+use crate::style::Display;
+
+/// Maximum layout depth to prevent stack overflow
+/// Prevents stack overflow from malicious or malformed deeply nested layouts
+const MAX_LAYOUT_DEPTH: usize = 100;
+
+/// Compute layout for the entire tree starting from root
+///
+/// # Arguments
+/// * `tree` - The layout tree to compute
+/// * `root_id` - Root node ID
+/// * `width` - Available width
+/// * `height` - Available height
+///
+/// # Performance
+///
+/// This function currently computes the entire tree. For incremental updates,
+/// nodes marked as \`dirty\` will be recomputed, while clean nodes may skip computation.
+pub fn compute_layout(tree: &mut LayoutTree, root_id: u64, width: u16, height: u16) {
+    // Set root node size and position
+    if let Some(root) = tree.get_mut(root_id) {
+        root.computed = ComputedLayout::new(0, 0, width, height);
+        root.dirty = true; // Root is always dirty on full layout
+    }
+
+    // Recursively compute layout with depth tracking
+    compute_node(tree, root_id, width, height, (width, height), 0);
+}
+
+/// Compute layout for a single node and its descendants
+fn compute_node(
+    tree: &mut LayoutTree,
+    node_id: u64,
+    available_width: u16,
+    available_height: u16,
+    viewport: (u16, u16),
+    depth: usize,
+) {
+    // Prevent stack overflow from deeply nested layouts
+    if depth > MAX_LAYOUT_DEPTH {
+        // Mark node as clean to prevent infinite retry
+        if let Some(node_mut) = tree.get_mut(node_id) {
+            node_mut.computed = ComputedLayout::default();
+            node_mut.dirty = false;
+        }
+        return;
+    }
+    let node = match tree.get(node_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    // Skip Display::None nodes entirely
+    if node.display == Display::None {
+        // Set zero size for hidden nodes
+        if let Some(node_mut) = tree.get_mut(node_id) {
+            node_mut.computed = ComputedLayout::default();
+            node_mut.dirty = false; // Mark as clean
+        }
+        return;
+    }
+
+    // Check dirty flag - skip computation if already clean and viewport unchanged
+    let node = match tree.get(node_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    if !node.dirty {
+        // Node is clean and viewport hasn't changed, skip computation
+        // but still need to process children that might be dirty
+        // Collect children IDs first to release the borrow on node
+        let children: Vec<u64> = node.children.to_vec();
+        for child_id in children {
+            compute_node(
+                tree,
+                child_id,
+                available_width,
+                available_height,
+                viewport,
+                depth + 1,
+            );
+        }
+        return;
+    }
+
+    let display = node.display;
+    // Collect children IDs - use to_vec() instead of clone() for better performance
+    let children: Vec<u64> = node.children.to_vec();
+
+    // Compute this node's children layout based on display mode
+    match display {
+        Display::Flex => {
+            flex::compute_flex(tree, node_id, available_width, available_height);
+        }
+        Display::Block => {
+            block::compute_block(tree, node_id, available_width, available_height);
+        }
+        Display::Grid => {
+            grid::compute_grid(tree, node_id, available_width, available_height);
+        }
+        Display::None => {
+            // Already handled above, but included for completeness
+            return;
+        }
+    }
+
+    // Get parent layout for position calculations
+    let parent_layout = tree.get(node_id).map(|n| n.computed).unwrap_or_default();
+
+    // Recursively compute children, then apply position offsets
+    for &child_id in &children {
+        let child_layout = tree.get(child_id).map(|c| c.computed).unwrap_or_default();
+
+        // Recursively compute grandchildren
+        compute_node(
+            tree,
+            child_id,
+            child_layout.width,
+            child_layout.height,
+            viewport,
+            depth + 1,
+        );
+
+        // Apply position offsets after children are laid out
+        if let Some(child_mut) = tree.get_mut(child_id) {
+            position::apply_position_offsets(child_mut, parent_layout, viewport);
+        }
+    }
+
+    // Mark this node as clean after computing
+    if let Some(node_mut) = tree.get_mut(node_id) {
+        node_mut.dirty = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::node::LayoutNode;
+    use crate::style::{FlexDirection, Size};
+
+    fn setup_simple_tree() -> (LayoutTree, u64) {
+        let mut tree = LayoutTree::new();
+
+        let mut root = LayoutNode {
+            id: 1,
+            display: Display::Flex,
+            ..Default::default()
+        };
+
+        let mut child1 = LayoutNode {
+            id: 2,
+            ..Default::default()
+        };
+        child1.sizing.width = Size::Fixed(50);
+        child1.sizing.height = Size::Fixed(30);
+
+        let mut child2 = LayoutNode {
+            id: 3,
+            ..Default::default()
+        };
+        child2.sizing.width = Size::Fixed(50);
+        child2.sizing.height = Size::Fixed(30);
+
+        root.children = vec![2, 3];
+
+        tree.insert(root);
+        tree.insert(child1);
+        tree.insert(child2);
+        tree.set_root(1);
+
+        (tree, 1)
+    }
+
+    #[test]
+    fn test_compute_layout_basic() {
+        let (mut tree, root_id) = setup_simple_tree();
+
+        compute_layout(&mut tree, root_id, 200, 100);
+
+        let root = tree.get(root_id).unwrap();
+        assert_eq!(root.computed.width, 200);
+        assert_eq!(root.computed.height, 100);
+
+        let child1 = tree.get(2).unwrap();
+        assert_eq!(child1.computed.x, 0);
+        assert_eq!(child1.computed.width, 50);
+
+        let child2 = tree.get(3).unwrap();
+        assert_eq!(child2.computed.x, 50);
+        assert_eq!(child2.computed.width, 50);
+    }
+
+    #[test]
+    fn test_compute_layout_nested() {
+        let mut tree = LayoutTree::new();
+
+        // Root (flex row)
+        let mut root = LayoutNode {
+            id: 1,
+            display: Display::Flex,
+            ..Default::default()
+        };
+        root.flex.direction = FlexDirection::Row;
+        root.children = vec![2, 3];
+
+        // Child 1 (flex column container)
+        let mut child1 = LayoutNode {
+            id: 2,
+            display: Display::Flex,
+            ..Default::default()
+        };
+        child1.flex.direction = FlexDirection::Column;
+        child1.sizing.width = Size::Fixed(50);
+        child1.sizing.height = Size::Auto;
+        child1.children = vec![4, 5];
+
+        // Child 2 (leaf)
+        let mut child2 = LayoutNode {
+            id: 3,
+            ..Default::default()
+        };
+        child2.sizing.width = Size::Auto;
+        child2.sizing.height = Size::Auto;
+
+        // Grandchildren
+        let mut grandchild1 = LayoutNode {
+            id: 4,
+            ..Default::default()
+        };
+        grandchild1.sizing.height = Size::Fixed(20);
+
+        let mut grandchild2 = LayoutNode {
+            id: 5,
+            ..Default::default()
+        };
+        grandchild2.sizing.height = Size::Fixed(20);
+
+        tree.insert(root);
+        tree.insert(child1);
+        tree.insert(child2);
+        tree.insert(grandchild1);
+        tree.insert(grandchild2);
+        tree.set_root(1);
+
+        compute_layout(&mut tree, 1, 100, 100);
+
+        // Check grandchildren are laid out
+        let gc1 = tree.get(4).unwrap();
+        assert_eq!(gc1.computed.height, 20);
+        assert_eq!(gc1.computed.y, 0);
+
+        let gc2 = tree.get(5).unwrap();
+        assert_eq!(gc2.computed.height, 20);
+        assert_eq!(gc2.computed.y, 20);
+    }
+
+    #[test]
+    fn test_display_none_hidden() {
+        let mut tree = LayoutTree::new();
+
+        let root = LayoutNode {
+            id: 1,
+            display: Display::Flex,
+            children: vec![2],
+            ..Default::default()
+        };
+
+        let mut child = LayoutNode {
+            id: 2,
+            display: Display::None,
+            ..Default::default()
+        };
+        child.sizing.width = Size::Fixed(100);
+        child.sizing.height = Size::Fixed(100);
+
+        tree.insert(root);
+        tree.insert(child);
+        tree.set_root(1);
+
+        compute_layout(&mut tree, 1, 200, 200);
+
+        let child = tree.get(2).unwrap();
+        assert_eq!(child.computed.width, 0);
+        assert_eq!(child.computed.height, 0);
+    }
+
+    #[test]
+    fn test_mixed_display_modes() {
+        let mut tree = LayoutTree::new();
+
+        // Root (flex)
+        let root = LayoutNode {
+            id: 1,
+            display: Display::Flex,
+            children: vec![2],
+            ..Default::default()
+        };
+
+        // Child (block container)
+        let mut block_container = LayoutNode {
+            id: 2,
+            display: Display::Block,
+            ..Default::default()
+        };
+        block_container.sizing.width = Size::Auto;
+        block_container.sizing.height = Size::Auto;
+        block_container.children = vec![3, 4];
+
+        // Block children
+        let mut block_child1 = LayoutNode {
+            id: 3,
+            ..Default::default()
+        };
+        block_child1.sizing.height = Size::Fixed(20);
+
+        let mut block_child2 = LayoutNode {
+            id: 4,
+            ..Default::default()
+        };
+        block_child2.sizing.height = Size::Fixed(30);
+
+        tree.insert(root);
+        tree.insert(block_container);
+        tree.insert(block_child1);
+        tree.insert(block_child2);
+        tree.set_root(1);
+
+        compute_layout(&mut tree, 1, 100, 100);
+
+        // Block children should stack vertically
+        let bc1 = tree.get(3).unwrap();
+        assert_eq!(bc1.computed.y, 0);
+
+        let bc2 = tree.get(4).unwrap();
+        assert_eq!(bc2.computed.y, 20);
+    }
+
+    #[test]
+    fn test_deep_nesting_stress() {
+        let mut tree = LayoutTree::new();
+
+        // Create 10 levels of nested flex containers
+        let depth = 10;
+        for i in 1..=depth {
+            let mut node = LayoutNode {
+                id: i as u64,
+                display: Display::Flex,
+                ..Default::default()
+            };
+            node.flex.direction = if i % 2 == 0 {
+                FlexDirection::Row
+            } else {
+                FlexDirection::Column
+            };
+            if i < depth {
+                node.children = vec![(i + 1) as u64];
+            }
+            node.sizing.width = Size::Auto;
+            node.sizing.height = Size::Auto;
+            tree.insert(node);
+        }
+        tree.set_root(1);
+
+        // Should not panic or stack overflow
+        compute_layout(&mut tree, 1, 100, 100);
+
+        // Deepest node should have valid layout
+        let deepest = tree.get(depth as u64).unwrap();
+        assert!(deepest.computed.width > 0 || deepest.computed.height > 0);
+    }
+
+    #[test]
+    fn test_grid_in_flex() {
+        let mut tree = LayoutTree::new();
+
+        // Root (flex)
+        let root = LayoutNode {
+            id: 1,
+            display: Display::Flex,
+            children: vec![2],
+            ..Default::default()
+        };
+
+        // Grid container
+        let mut grid = LayoutNode {
+            id: 2,
+            display: Display::Grid,
+            ..Default::default()
+        };
+        grid.sizing.width = Size::Fixed(80);
+        grid.sizing.height = Size::Fixed(40);
+        grid.children = vec![3, 4];
+
+        // Grid items
+        let item1 = LayoutNode {
+            id: 3,
+            ..Default::default()
+        };
+
+        let item2 = LayoutNode {
+            id: 4,
+            ..Default::default()
+        };
+
+        tree.insert(root);
+        tree.insert(grid);
+        tree.insert(item1);
+        tree.insert(item2);
+        tree.set_root(1);
+
+        compute_layout(&mut tree, 1, 100, 100);
+
+        // Grid container should be positioned
+        let grid_node = tree.get(2).unwrap();
+        assert_eq!(grid_node.computed.width, 80);
+
+        // Grid items should be laid out
+        let i1 = tree.get(3).unwrap();
+        let i2 = tree.get(4).unwrap();
+        assert!(i1.computed.width > 0);
+        assert!(i2.computed.width > 0);
+    }
+
+    #[test]
+    fn test_missing_node_graceful() {
+        let mut tree = LayoutTree::new();
+
+        let mut root = LayoutNode {
+            id: 1,
+            display: Display::Flex,
+            ..Default::default()
+        };
+        root.children = vec![2, 999]; // 999 doesn't exist
+        tree.insert(root);
+
+        let mut child = LayoutNode {
+            id: 2,
+            ..Default::default()
+        };
+        child.sizing.width = Size::Fixed(50);
+        tree.insert(child);
+
+        tree.set_root(1);
+
+        // Should not panic with missing child
+        compute_layout(&mut tree, 1, 100, 100);
+
+        let c = tree.get(2).unwrap();
+        assert_eq!(c.computed.width, 50);
+    }
+
+    #[test]
+    fn test_zero_available_space() {
+        let (mut tree, _) = setup_simple_tree();
+
+        // Should not panic with zero space
+        compute_layout(&mut tree, 1, 0, 0);
+    }
+}

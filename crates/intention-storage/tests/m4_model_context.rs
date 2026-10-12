@@ -15,10 +15,12 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_proto::{
-    ConfigRevisionId, FinishReasonDto, IdempotencyKey, RunId, SchemaVersionDto, SessionId,
-    ToolCallId, UsageDto,
+    BoundedText, ConfigRevisionId, FinishReasonDto, IdempotencyKey, RunId, SchemaVersionDto,
+    SessionId, TextResult, ToolCallId, ToolIdentityDto, ToolResult, ToolResultRowDto,
+    ToolResultStatusDto, ToolRowDto, UsageDto,
 };
-use intention_proto::{MessageKindDto, MessageProjectionDto, RunStatusDto};
+use intention_proto::{MessageKindDto, MessageProjectionDto, NewMessageDto, RunStatusDto};
+use intention_storage::ToolResultEvidenceDto;
 use intention_storage::{
     AcceptedTurnOutcomeDto, RunOutcomeDto, SqliteStorageRepository, StorageRepositoryDto,
 };
@@ -30,24 +32,38 @@ fn starting_run_model_context_rebuilds_the_committed_transcript_in_insertion_ord
 
     let first_run = start_run(&repository, session_id, "first user", "first-model", 2);
     let call_id = ToolCallId::new();
-    append(
-        &repository,
-        session_id,
-        Some(first_run),
-        MessageKindDto::ToolResult,
-        "file contents",
-        None,
-        Some(call_id),
-        Some("read"),
-        3,
-    );
+    // A result row commits atomically with its lifecycle evidence, so the
+    // fixture commits through the one writer the transcript reads expect.
+    repository
+        .write_tool_result(
+            ToolResultEvidenceDto::new(
+                session_id,
+                first_run,
+                call_id,
+                "read",
+                ToolResultStatusDto::Completed,
+                "file contents",
+                Vec::new(),
+                time(3),
+            )
+            .expect("fixture evidence is valid"),
+            NewMessageDto::new(
+                session_id,
+                Some(first_run),
+                MessageKindDto::ToolResult,
+                "file contents",
+                None,
+                Some(read_result_row(call_id)),
+            )
+            .expect("fixture answering row is valid"),
+        )
+        .expect("fixture tool result commits");
     append(
         &repository,
         session_id,
         Some(first_run),
         MessageKindDto::Notice,
         "[The call was stopped before a final result.]",
-        None,
         None,
         None,
         3,
@@ -59,7 +75,6 @@ fn starting_run_model_context_rebuilds_the_committed_transcript_in_insertion_ord
         MessageKindDto::Assistant,
         "first assistant",
         Some("first reasoning"),
-        None,
         None,
         3,
     );
@@ -140,7 +155,6 @@ fn starting_run_context_ends_at_the_target_run_user_turn() {
         "joined user",
         None,
         None,
-        None,
         3,
     );
 
@@ -155,6 +169,57 @@ fn starting_run_context_ends_at_the_target_run_user_turn() {
             .collect::<Vec<_>>(),
         vec!["first user"]
     );
+}
+
+#[test]
+fn a_reasoning_only_assistant_row_round_trips_through_the_transcript_read() {
+    let (_directory, repository) = repository();
+    let session_id = create_session(&repository, "reasoning-only");
+    let previous_run = start_run(&repository, session_id, "first user", "first-model", 2);
+    // A completed step that reasoned without answering commits its reasoning
+    // as its own assistant row; the storage gate accepts the empty text
+    // because the reasoning carries the row's content.
+    append(
+        &repository,
+        session_id,
+        Some(previous_run),
+        MessageKindDto::Assistant,
+        "",
+        Some("step reasoning"),
+        None,
+        2,
+    );
+    repository
+        .transition_run(session_id, previous_run, RunStatusDto::Running, time(3))
+        .expect("first run starts");
+    repository
+        .finish_run(
+            session_id,
+            previous_run,
+            RunOutcomeDto::new(
+                RunStatusDto::Completed,
+                None,
+                Some(FinishReasonDto::Stop),
+                None,
+                None,
+            )
+            .expect("fixture outcome is valid"),
+            time(4),
+        )
+        .expect("first run completes");
+
+    let current_run = start_run(&repository, session_id, "current user", "current-model", 5);
+    let context = repository
+        .load_starting_run_model_context(session_id, current_run)
+        .expect("the reasoning-only row never blocks the starting context");
+    let row = context
+        .messages()
+        .iter()
+        .find(|message| message.kind() == MessageKindDto::Assistant)
+        .expect("the reasoning-only row is durable transcript evidence");
+    assert_eq!(row.text(), "");
+    assert_eq!(row.reasoning(), Some("step reasoning"));
+    assert_eq!(row.run_id(), Some(previous_run));
 }
 
 #[test]
@@ -229,18 +294,16 @@ fn append(
     kind: MessageKindDto,
     text: &str,
     reasoning: Option<&str>,
-    tool_call_id: Option<ToolCallId>,
-    tool_id: Option<&str>,
+    tool: Option<ToolRowDto>,
     event_time: i64,
 ) {
-    let message = MessageProjectionDto::new(
+    let message = NewMessageDto::new(
         session_id,
         run_id,
         kind,
         text,
         reasoning.map(str::to_owned),
-        tool_call_id,
-        tool_id.map(str::to_owned),
+        tool,
     )
     .expect("fixture transcript row is valid");
     repository
@@ -269,6 +332,23 @@ fn starting_run_context_reads_without_taking_a_write_lock() {
     connection
         .execute_batch("ROLLBACK")
         .expect("the write lock releases");
+}
+
+/// Builds one typed completed `read` result row answering `call_id`.
+fn read_result_row(call_id: ToolCallId) -> ToolRowDto {
+    ToolRowDto::Result(
+        ToolResultRowDto::new(
+            call_id,
+            ToolIdentityDto::parse("read").expect("the fixture tool is declared"),
+            ToolResultStatusDto::Completed,
+            Some(ToolResult::Read(TextResult {
+                text: BoundedText::new("file contents").expect("fixture text is bounded"),
+                truncated: false,
+            })),
+            Vec::new(),
+        )
+        .expect("fixture result row is valid"),
+    )
 }
 
 fn snapshot(model: &str) -> ConfigSnapshotDto {

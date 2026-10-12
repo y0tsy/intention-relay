@@ -7,12 +7,18 @@
 //! become one `assistant` row per completed model step; a crash mid-step loses
 //! the in-flight step text.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, ProviderErrorDto, RunId,
     SessionId, TimestampDto, ToolCallDto, UsageDto,
 };
-use intention_proto::{MessageKindDto, MessageProjectionDto, RunProjectionDto, RunStatusDto};
+use intention_proto::{
+    MessageKindDto, MessageProjectionDto, NewMessageDto, RunProjectionDto, RunStatusDto,
+    TextDeltaChannelDto,
+};
 pub use intention_providers::{
     AssistantReasoningDto, ModelCancellationSignal, ModelCancelledFuture, ModelEventDto,
     ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
@@ -33,6 +39,12 @@ pub const INTERRUPT_NOTICE: &str = "[The call was stopped before a final result.
 /// produced up to that moment with this marker on its own line, so a reader can
 /// tell the answer was cut; a step with no text commits nothing.
 pub const INTERRUPTED_MARKER: &str = "[interrupted]";
+
+/// The durable notice recorded when a client stopped the whole run.
+///
+/// A stop is terminal where an interruption is not: the run records this notice
+/// and ends `interrupted` instead of continuing to the next model step.
+pub const RUN_STOP_NOTICE: &str = "[The run was stopped before a final answer.]";
 
 /// The bounded delay between two provider attempts.
 const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
@@ -98,12 +110,27 @@ pub trait ModelTimePort {
 pub type ModelSleepFuture<'a> =
     std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
 
+/// Best-effort observation of one uncommitted provider text chunk.
+///
+/// The model-run executor reports every provider text chunk here together with
+/// the 0-based index of the model step that produced it and the step's text
+/// channel the chunk belongs to: the reasoning the step thinks through, or the
+/// answer it commits. The observation is transient: it never becomes durable
+/// state, never fails a run, and never changes the assistant row the step
+/// commits when it closes. A run without an attached port behaves exactly like
+/// one whose port ignores every call.
+pub trait ModelTextDeltaPort: Send + Sync {
+    /// Observes one streamed text chunk of `channel` at the model step `step`.
+    fn text_delta(&self, step: u32, channel: TextDeltaChannelDto, text: &str);
+}
+
 /// Safe terminal outcome of one tool call returned by the execution port.
 ///
 /// The port selects the bounded, credential-free content the runtime commits as
 /// the call's durable result and delivers to the model. A `Failed` outcome
-/// carries the safe error that terminalizes the run; `Completed`, `Partial`,
-/// and `Cancelled` keep the run going with the returned content.
+/// carries its safe error classification plus the bounded guidance the run
+/// delivers as the call's tool message; `Completed`, `Partial`, `Cancelled`,
+/// and `Failed` all keep the run going with the returned content.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolResultOutcomeDto {
     /// The call completed with bounded model-visible content.
@@ -122,10 +149,12 @@ pub enum ToolResultOutcomeDto {
         /// The bounded, credential-free content answering the call.
         content: String,
     },
-    /// The call failed safely; the error terminalizes the run.
+    /// The call failed safely; content explains the failure to the model.
     Failed {
-        /// The safe failure that terminalizes the run.
+        /// The safe failure classification the result row records.
         error: ErrorDto,
+        /// The bounded, credential-free content answering the call.
+        content: String,
     },
 }
 
@@ -163,10 +192,16 @@ impl ToolResultOutcomeDto {
         })
     }
 
-    /// Creates a safe failed tool outcome.
-    #[must_use]
-    pub const fn failed(error: ErrorDto) -> Self {
-        Self::Failed { error }
+    /// Creates a safe failed tool outcome with its model-visible content.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the content is blank.
+    pub fn failed(error: ErrorDto, content: impl Into<String>) -> DtoResult<Self> {
+        Ok(Self::Failed {
+            error,
+            content: tool_result_content(content.into())?,
+        })
     }
 }
 
@@ -198,10 +233,21 @@ pub trait ToolExecutionPort: Send + Sync {
 /// the synchronous signal. The engine's interruption boundaries reset the
 /// handle, so the same run observes the next interrupt with fresh state and no
 /// per-invocation registration exists.
+///
+/// The handle also carries the run's **interruption notice budget**: one
+/// interruption signal offers exactly one notice, which the first interruption
+/// boundary to reach it takes with
+/// [`RunCancellation::take_interrupt_notice`]. However many boundaries observe
+/// the sticky signal - a round that ends while a tool batch is in flight, a
+/// retry wait that re-enters a boundary, or two boundaries racing on a loaded
+/// host - the run records one durable notice per interruption, and
+/// [`RunCancellation::reset`] re-arms the budget for the next one.
 #[derive(Clone, Default)]
 pub struct RunCancellation {
     model: ModelCancellationSignal,
     tool: ToolCancellationSignal,
+    notice_taken: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
 }
 
 /// The cancellation handle carries interior shared state with no safe debug
@@ -223,15 +269,53 @@ impl RunCancellation {
     }
 
     /// Requests cancellation of the run's in-flight operation.
+    ///
+    /// One signal offers exactly one interruption notice.
     pub fn cancel(&self) {
         self.model.cancel();
         self.tool.cancel();
     }
 
+    /// Requests that the run stop for good.
+    ///
+    /// The stop reaches the same in-flight operation as an interruption, but it
+    /// is terminal: every later boundary returns the run's `interrupted`
+    /// outcome with one stop notice instead of continuing, and the intent is
+    /// never cleared - [`Self::reset`] clears an interruption, because a stop
+    /// is not one operation's state but the run's own.
+    pub fn request_stop(&self) {
+        self.stop.store(true, Ordering::Release);
+        self.cancel();
+    }
+
+    /// Returns whether the run was asked to stop for good.
+    #[must_use]
+    pub fn stop_requested(&self) -> bool {
+        self.stop.load(Ordering::Acquire)
+    }
+
     /// Clears the request so the continuing run observes the next interrupt.
+    ///
+    /// Re-arms the notice budget with the signal: the next interruption offers
+    /// its own notice.
     pub fn reset(&self) {
         self.model.reset();
         self.tool.reset();
+        self.notice_taken.store(false, Ordering::Release);
+    }
+
+    /// Takes the interruption notice this run's current signal still owes.
+    ///
+    /// Returns `true` exactly once per interruption, so the boundary that takes
+    /// it records the run's durable notice while a later boundary continues the
+    /// run with the context it already carries. A clear signal owes nothing, so
+    /// a path that resets without taking cannot leave a stale notice behind.
+    #[must_use]
+    pub fn take_interrupt_notice(&self) -> bool {
+        if !self.is_cancelled() {
+            return false;
+        }
+        !self.notice_taken.swap(true, Ordering::AcqRel)
     }
 
     /// Returns whether cancellation has been requested for this run.
@@ -352,7 +436,7 @@ pub enum ModelRunExecutionOutcomeDto {
 /// observer receives neither a repository transaction nor provider/runtime
 /// resources, so it cannot publish an uncommitted mutation.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ModelRunCommitDto {
+pub enum SessionCommitDto {
     /// One committed transcript row.
     Content(MessageProjectionDto),
     /// One committed run status.
@@ -372,13 +456,13 @@ pub enum ModelRunCommitDto {
 /// from the committed values the repository returned. The model-run executor
 /// and the tool-invocation path both hand their committed rows to this one
 /// sink, so publication observes only durable values and never fails a commit.
-pub trait ModelRunCommitObserver: Send + Sync {
+pub trait SessionCommitObserver: Send + Sync {
     /// Observes one committed transcript row or run status.
-    fn observe_model_run_commit(&self, commit: &ModelRunCommitDto);
+    fn observe_session_commit(&self, commit: &SessionCommitDto);
 }
 
 /// DTO-only executor over injected storage, selected driver, time port,
-/// commit observer, and tool executor.
+/// commit observer, tool executor, and an optional text-delta port.
 ///
 /// Every collaborator is shared behind a `Sync` reference: the execution
 /// lifecycle hands its futures to a scheduling runtime, so each returned
@@ -387,8 +471,10 @@ pub struct ModelRunExecutionService<'a, Repository, Driver: ?Sized, Time> {
     repository: &'a Repository,
     driver: &'a Driver,
     time: &'a Time,
-    observer: &'a dyn ModelRunCommitObserver,
+    observer: &'a dyn SessionCommitObserver,
     tool_executor: &'a dyn ToolExecutionPort,
+    /// Unattached by default, so a run observes nothing that is not wired.
+    text_delta: Option<&'a dyn ModelTextDeltaPort>,
 }
 
 impl<'a, Repository, Driver, Time> ModelRunExecutionService<'a, Repository, Driver, Time>
@@ -401,14 +487,15 @@ where
     ///
     /// Provider-emitted tool calls always execute through the supplied
     /// `ToolExecutionPort`, and every committed value is handed to the
-    /// supplied [`ModelRunCommitObserver`]; neither collaborator has a
-    /// fallback.
+    /// supplied [`SessionCommitObserver`]; neither collaborator has a
+    /// fallback. The transient text-delta observation starts unattached and is
+    /// added with [`Self::with_text_delta_port`].
     #[must_use]
     pub const fn new(
         repository: &'a Repository,
         driver: &'a Driver,
         time: &'a Time,
-        observer: &'a dyn ModelRunCommitObserver,
+        observer: &'a dyn SessionCommitObserver,
         tool_executor: &'a dyn ToolExecutionPort,
     ) -> Self {
         Self {
@@ -417,7 +504,20 @@ where
             time,
             observer,
             tool_executor,
+            text_delta: None,
         }
+    }
+
+    /// Attaches the transient text-delta observation port.
+    ///
+    /// The port receives every provider text chunk of the run, tagged with the
+    /// model step and the text channel that produced it; it cannot return a
+    /// value or an error, so its presence never changes the run's state or its
+    /// commits.
+    #[must_use]
+    pub const fn with_text_delta_port(mut self, port: &'a dyn ModelTextDeltaPort) -> Self {
+        self.text_delta = Some(port);
+        self
     }
 
     /// Performs one bounded model execution lifecycle.
@@ -465,6 +565,10 @@ where
         let mut pending_text = String::new();
         let mut usage: Option<UsageDto> = None;
         let mut durable_output = false;
+        // The run's 0-based model-step sequence. One provider round is one
+        // model step, and the sequence continues across retried attempts and
+        // tool rounds, so every round of the run carries its own step index.
+        let mut next_step = 0u32;
         // Context additions that must survive a retryable attempt boundary:
         // joined pending user messages and interruption notices. The live
         // context of the run stays continuous across provider attempts.
@@ -484,6 +588,7 @@ where
                     &input,
                     policy.attempt_timeout_seconds(),
                     RoundState::new(
+                        &mut next_step,
                         &mut pending_text,
                         &mut usage,
                         &mut durable_output,
@@ -549,20 +654,38 @@ where
         let mut request = input.request.with_messages(messages.clone())?;
         let mut tool_round = 0u8;
         loop {
+            // A stop requested while the run waited here is terminal before any
+            // further provider work: the run ends instead of asking again.
+            if input.cancellation.stop_requested() {
+                return self.end_stopped_run(input, state.reported_usage());
+            }
             let outcome = self
                 .drive_provider_round(request.clone(), input, timeout_seconds, &mut state)
                 .await?;
             match outcome {
                 RoundOutcome::Finished { reason, assistant } => {
                     state.record_step_commit(assistant.as_ref());
+                    // A stop that raced the finish is terminal too: the step's
+                    // own row stands as evidence and the run ends here.
+                    if input.cancellation.stop_requested() {
+                        return self.end_stopped_run(input, state.reported_usage());
+                    }
                     // A pending message is the nearest-boundary continuation:
                     // it joins the live context in FIFO order and the run
                     // continues instead of completing. An interruption that
                     // raced the finish is answered with its notice first.
                     if input.cancellation.is_cancelled() {
-                        self.record_interrupt_notice(input)?;
-                        messages.push(interrupt_notice_message()?);
-                        extra_messages.push(interrupt_notice_message()?);
+                        // The request's one notice goes to the boundary that
+                        // takes the budget: a round that finished while the
+                        // signal was already being observed continues without a
+                        // second row.
+                        if input.cancellation.take_interrupt_notice() {
+                            self.record_interrupt_notice(input)?;
+                            messages.push(interrupt_notice_message()?);
+                            extra_messages.push(interrupt_notice_message()?);
+                        } else {
+                            input.cancellation.reset();
+                        }
                         state.apply_window(&mut messages, &reasoning_attachments)?;
                         request = continuation_request(input, &messages, &reasoning_attachments)?;
                         continue;
@@ -583,6 +706,20 @@ where
                 }
                 RoundOutcome::Interrupted { assistant } => {
                     state.record_step_commit(assistant.as_ref());
+                    // A stopped run ends terminal: the interrupted step is
+                    // already committed with its own cut marker, so the stop
+                    // records its notice and the run stops instead of asking
+                    // the model what to do next.
+                    if input.cancellation.stop_requested() {
+                        return self.end_stopped_run(input, state.reported_usage());
+                    }
+                    // A round that ended stopped is its own interruption event,
+                    // so it records the notice even when no host request caused
+                    // it - a stream the provider ended stopped. It spends the
+                    // request's budget first, so a boundary that observes the
+                    // same sticky signal later cannot record a second row for
+                    // one interruption.
+                    let _ = input.cancellation.take_interrupt_notice();
                     self.record_interrupt_notice(input)?;
                     messages.push(interrupt_notice_message()?);
                     extra_messages.push(interrupt_notice_message()?);
@@ -590,6 +727,12 @@ where
                     request = continuation_request(input, &messages, &reasoning_attachments)?;
                 }
                 RoundOutcome::Failed { error, retryable } => {
+                    // A stop never retries: whatever the failed attempt left
+                    // uncommitted commits as its step and the run ends.
+                    if input.cancellation.stop_requested() {
+                        self.commit_step(input, state.pending_text_mut(), None)?;
+                        return self.end_stopped_run(input, state.reported_usage());
+                    }
                     if tool_round == 0 {
                         return Ok(AttemptResult::Failed { error, retryable });
                     }
@@ -648,15 +791,14 @@ where
                             }
                         };
                         match outcome {
-                            ToolResultOutcomeDto::Failed { error } => {
-                                let run = self.finish_run(
-                                    input,
-                                    RunStatusDto::Failed,
-                                    None,
-                                    Some(&error),
-                                    state.reported_usage(),
-                                )?;
-                                return Ok(AttemptResult::FailedTerminal { run, error });
+                            ToolResultOutcomeDto::Failed { content, .. } => {
+                                // A failed call is answered like a completed
+                                // one: its content is the model-visible
+                                // failure guidance, and the loop continues so
+                                // the model can recover instead of losing the
+                                // run to its own call.
+                                messages
+                                    .push(ModelMessageDto::tool_result(call.call_id(), content)?);
                             }
                             ToolResultOutcomeDto::Completed { content, .. } => {
                                 messages
@@ -677,18 +819,31 @@ where
                         // and recomputed breakpoints.
                         state.apply_window(&mut messages, &reasoning_attachments)?;
                     }
+                    // A stop ends the run at this boundary: the batch's results
+                    // are committed, so the run records the stop notice and its
+                    // terminal status instead of asking the model again.
+                    if input.cancellation.stop_requested() {
+                        return self.end_stopped_run(input, state.reported_usage());
+                    }
                     // A tool batch is the second bounded interruption
                     // boundary. A partial tool result already carries the
                     // stopped-call notice, so the run continues to the next
                     // model step; every other in-flight batch position gets
                     // the explicit context notice.
                     if input.cancellation.is_cancelled() {
+                        // A partial tool result already carries the
+                        // stopped-call notice of this request, so the batch
+                        // spends the request's notice here instead of letting a
+                        // later boundary record a second row for it.
                         if state.interrupted_tool() {
+                            let _ = input.cancellation.take_interrupt_notice();
                             input.cancellation.reset();
-                        } else {
+                        } else if input.cancellation.take_interrupt_notice() {
                             self.record_interrupt_notice(input)?;
                             messages.push(interrupt_notice_message()?);
                             extra_messages.push(interrupt_notice_message()?);
+                        } else {
+                            input.cancellation.reset();
                         }
                     }
                     self.consume_pending_user_turns(input, &mut messages, extra_messages)?;
@@ -699,7 +854,39 @@ where
         }
     }
 
-    /// Commits one durable interruption notice and clears the run's signal.
+    /// Ends one stopped run: one durable notice, then the terminal outcome.
+    ///
+    /// The boundary that observed the stop already committed the step's own
+    /// evidence - a cut answer keeps [`INTERRUPTED_MARKER`] - so this commits
+    /// the notice a reader needs and the run's terminal `interrupted` status,
+    /// and the loop never continues past it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or storage error when the notice or the
+    /// terminal outcome cannot commit.
+    fn end_stopped_run(
+        &self,
+        input: &ModelRunExecutionInputDto,
+        usage: Option<&UsageDto>,
+    ) -> DtoResult<AttemptResult> {
+        input.cancellation.reset();
+        let message = NewMessageDto::new(
+            input.session_id,
+            Some(input.run_id),
+            MessageKindDto::Notice,
+            RUN_STOP_NOTICE,
+            None,
+            None,
+        )?;
+        let committed = self.repository.append_message(message, self.time.now())?;
+        self.publish_content(&committed);
+        let run = self.finish_run(input, RunStatusDto::Interrupted, None, None, usage)?;
+        Ok(AttemptResult::Completed { run })
+    }
+
+    /// Commits the interruption notice one request owes and clears the run's
+    /// signal.
     ///
     /// The notice tells the model that its current call was stopped before a
     /// final result; the run stays `Running` and continues with the next step.
@@ -713,12 +900,11 @@ where
         input: &ModelRunExecutionInputDto,
     ) -> DtoResult<MessageProjectionDto> {
         input.cancellation.reset();
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             input.session_id,
             Some(input.run_id),
             MessageKindDto::Notice,
             INTERRUPT_NOTICE,
-            None,
             None,
             None,
         )?;
@@ -777,14 +963,12 @@ where
         let mut lifecycle = ModelStreamLifecycleDto::new();
         let request_characters = ContextWindowState::request_characters(&request);
         state.begin_round();
+        // The round claims its step index before its stream starts, so every
+        // chunk of the round publishes the same step.
+        let step = state.begin_step();
         let mut stream = self
             .driver
             .execute(request, input.cancellation.model_signal());
-        let timeout = self
-            .time
-            .sleep(std::time::Duration::from_secs(u64::from(timeout_seconds)))
-            .fuse();
-        futures_util::pin_mut!(timeout);
         let mut calls: Vec<ToolCallDto> = Vec::new();
         let mut reasoning_text = String::new();
         loop {
@@ -800,7 +984,18 @@ where
             }
             let next = stream.next().fuse();
             let cancelled = input.cancellation.cancelled().fuse();
-            futures_util::pin_mut!(next, cancelled);
+            // The attempt deadline is an idle deadline: it bounds the silence
+            // between two provider facts, never the round's total duration.
+            // Every turn of this loop follows exactly one delivered event (or
+            // the round's start), so arming the window here re-arms it after
+            // each of them: a stream that keeps producing progress is never cut
+            // off, while a stream that produces nothing for the whole window
+            // fails the attempt exactly as a total deadline did.
+            let timeout = self
+                .time
+                .sleep(std::time::Duration::from_secs(u64::from(timeout_seconds)))
+                .fuse();
+            futures_util::pin_mut!(next, cancelled, timeout);
             let event_or_timeout = match futures_util::future::select(
                 cancelled,
                 futures_util::future::select(next, &mut timeout),
@@ -873,9 +1068,17 @@ where
             match event {
                 ModelEventDto::Started => {}
                 ModelEventDto::TextDelta { content } => {
+                    self.publish_text_delta(step, TextDeltaChannelDto::Answer, &content);
                     state.push_text(&content);
                 }
                 ModelEventDto::ReasoningDelta { content } => {
+                    // The reasoning channel is published like the answer, so a
+                    // live observer can render the step's thinking as it
+                    // streams. A textless presence marker carries no text and
+                    // is not published: the port observes text.
+                    if !content.is_empty() {
+                        self.publish_text_delta(step, TextDeltaChannelDto::Reasoning, &content);
+                    }
                     // The accumulated echo is bounded per round at the
                     // attachment's representable bound: a round that crosses it
                     // is marked unrepresentable and never truncated, and empty
@@ -934,9 +1137,13 @@ where
         use futures_util::{FutureExt, future::Either};
 
         if input.cancellation.is_cancelled() {
-            let message = interrupt_notice_message()?;
-            self.record_interrupt_notice(input)?;
-            extra_messages.push(message);
+            if input.cancellation.take_interrupt_notice() {
+                let message = interrupt_notice_message()?;
+                self.record_interrupt_notice(input)?;
+                extra_messages.push(message);
+            } else {
+                input.cancellation.reset();
+            }
             return Ok(());
         }
         let delay = self.time.sleep(RETRY_DELAY).fuse();
@@ -944,9 +1151,13 @@ where
         futures_util::pin_mut!(delay, cancelled);
         match futures_util::future::select(cancelled, delay).await {
             Either::Left(((), _)) => {
-                let message = interrupt_notice_message()?;
-                self.record_interrupt_notice(input)?;
-                extra_messages.push(message);
+                if input.cancellation.take_interrupt_notice() {
+                    let message = interrupt_notice_message()?;
+                    self.record_interrupt_notice(input)?;
+                    extra_messages.push(message);
+                } else {
+                    input.cancellation.reset();
+                }
                 Ok(())
             }
             Either::Right(((), _)) => Ok(()),
@@ -956,8 +1167,11 @@ where
     /// Commits the accumulated assistant step as one transcript row.
     ///
     /// The step's text and reasoning accumulate in memory and become one
-    /// committed `assistant` message; a step without non-blank text commits
-    /// nothing, because the transcript shape requires assistant content.
+    /// committed `assistant` message. A step that produced non-blank text,
+    /// non-blank reasoning, or both commits its row; a reasoning-only step
+    /// commits its reasoning as the row of that step, so the step's durable
+    /// evidence exists before its tool rows. A step with neither carries
+    /// nothing and commits nothing.
     ///
     /// # Errors
     ///
@@ -968,17 +1182,19 @@ where
         pending_text: &mut String,
         reasoning: Option<&str>,
     ) -> DtoResult<Option<MessageProjectionDto>> {
+        let carries_reasoning = reasoning.is_some_and(|reasoning| !reasoning.trim().is_empty());
         if pending_text.trim().is_empty() {
             pending_text.clear();
-            return Ok(None);
+            if !carries_reasoning {
+                return Ok(None);
+            }
         }
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             input.session_id,
             Some(input.run_id),
             MessageKindDto::Assistant,
             std::mem::take(pending_text),
             reasoning.map(str::to_owned),
-            None,
             None,
         )?;
         let committed = self.repository.append_message(message, self.time.now())?;
@@ -989,9 +1205,11 @@ where
     /// Commits one stopped model step with its durable interruption marker.
     ///
     /// The text the model produced before the stop becomes durable exactly like
-    /// a completed step's text, with [`INTERRUPTED_MARKER`] on its own line; a
-    /// blank or whitespace-only step commits nothing, so an interruption that
-    /// produced no text leaves only the notice row.
+    /// a completed step's text, with [`INTERRUPTED_MARKER`] on its own line,
+    /// which marks a cut answer; a stopped step that produced reasoning but no
+    /// text commits its reasoning row without the marker. A step with neither
+    /// text nor reasoning commits nothing, so an interruption that produced no
+    /// content leaves only the notice row.
     ///
     /// # Errors
     ///
@@ -1050,16 +1268,26 @@ where
         Ok(ModelRunExecutionOutcomeDto::Failed { run, error })
     }
 
+    /// Publishes one streamed provider text chunk as a transient observation.
+    ///
+    /// The chunk is uncommitted step text, so the publication is best-effort:
+    /// it never fails the run and never touches run state.
+    fn publish_text_delta(&self, step: u32, channel: TextDeltaChannelDto, text: &str) {
+        if let Some(port) = self.text_delta {
+            port.text_delta(step, channel, text);
+        }
+    }
+
     /// Publishes one committed transcript row.
     fn publish_content(&self, message: &MessageProjectionDto) {
         self.observer
-            .observe_model_run_commit(&ModelRunCommitDto::Content(message.clone()));
+            .observe_session_commit(&SessionCommitDto::Content(message.clone()));
     }
 
     /// Publishes one committed run status.
     fn publish_status(&self, session_id: SessionId, run_id: RunId, status: RunStatusDto) {
         self.observer
-            .observe_model_run_commit(&ModelRunCommitDto::Status {
+            .observe_session_commit(&SessionCommitDto::Status {
                 session_id,
                 run_id,
                 status,
@@ -1074,6 +1302,8 @@ where
 /// the loop flags belong to the attempt's current round, and every round
 /// observes them through the transitions below instead of raw fields.
 struct RoundState<'a> {
+    /// The run's next 0-based model-step index.
+    next_step: &'a mut u32,
     /// Accumulated uncommitted assistant text of the current model step.
     pending_text: &'a mut String,
     /// The last reported provider usage of the run.
@@ -1093,12 +1323,14 @@ struct RoundState<'a> {
 impl<'a> RoundState<'a> {
     /// Creates one attempt's state over the run's live step state.
     const fn new(
+        next_step: &'a mut u32,
         pending_text: &'a mut String,
         usage: &'a mut Option<UsageDto>,
         durable_output: &'a mut bool,
         context_window: ContextWindowState,
     ) -> Self {
         Self {
+            next_step,
             pending_text,
             usage,
             durable_output,
@@ -1114,6 +1346,18 @@ impl<'a> RoundState<'a> {
         self.reasoning_channel_seen = false;
         self.reasoning_echo_exceeds_round_bound = false;
         self.interrupted_tool = false;
+    }
+
+    /// Takes the run's next model-step index and advances the sequence.
+    ///
+    /// One provider round is one model step: it issues exactly one provider
+    /// request and commits at most one assistant transcript row. The counter
+    /// belongs to the run rather than the attempt, so a retried attempt and a
+    /// tool round continue the sequence instead of repeating an index.
+    const fn begin_step(&mut self) -> u32 {
+        let step = *self.next_step;
+        *self.next_step = step + 1;
+        step
     }
 
     /// Appends one provider text delta to the uncommitted step text.

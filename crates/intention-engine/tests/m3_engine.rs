@@ -9,39 +9,41 @@ use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-use common::{FakeRepository, RecordingCommitObserver, workspace_root};
+use common::{FakeRepository, RecordingCommitObserver, row_id, workspace_root};
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
-    ApplicationService, ModelRunCommitDto, ModelRunCommitObserver, RunCancellation,
-    ToolInvocationRequestDto, ToolResultOutcomeDto,
+    ApplicationService, ModelMessageDto, ModelRoleDto, RunCancellation, SessionCommitDto,
+    SessionCommitObserver, ToolInvocationRequestDto, ToolResultOutcomeDto,
 };
 use intention_proto::{
-    CreateSessionCommandDto, InterruptRunCommandDto, MessageKindDto, MessageProjectionDto,
-    PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
-    SendUserTurnCommandDto, SessionProjectionDto, WorkspaceRootDto,
+    BoundedText, TextResult, ToolCallRowDto, ToolIdentityDto, ToolInput, ToolResult,
+    ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
 };
 use intention_proto::{
-    ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, TimestampDto, ToolCallId, TurnId,
-    WorkspaceId,
+    ConfigRevisionId, CreateSessionCommandDto, CreateSessionFirstTurnDto, MessageKindDto,
+    MessageProjectionDto, PendingTurnProjectionDto, RemoveTurnCommandDto, RunModeDto,
+    RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto, WorkspaceRootDto,
 };
-use intention_storage::{StartingRunModelContextDto, ToolResultStatusDto};
+use intention_proto::{
+    ErrorCategoryDto, ErrorDto, ErrorRetryDto, IdempotencyKey, ProjectId, RunId, SessionId,
+    TimestampDto, ToolCallId, TurnId, WorkspaceBindingDto, WorkspaceId,
+};
+use intention_storage::{AcceptedTurnOutcomeDto, StartingRunModelContextDto};
 use intention_test_support::fixture_snapshot;
-use intention_tools::{BoundedText, ExecuteInput, GlobInput, ReadInput, ToolInput, WorkspaceRoot};
+use intention_tools::WorkspaceRoot;
+
+/// Builds the canonical model arguments document of one `read` call.
+fn read_arguments(path: &str) -> String {
+    format!("{{\"path\":\"{path}\"}}")
+}
 
 fn invoke_read_input(path: &str) -> ToolInvocationRequestDto {
-    ToolInvocationRequestDto::new(
-        WorkspaceRoot::resolve(
+    invoke_read_input_in_workspace(
+        &WorkspaceRoot::resolve(
             &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy()).expect("workspace"),
         )
         .expect("workspace is valid"),
-        SessionId::new(),
-        RunId::new(),
-        ToolCallId::new(),
-        "read",
-        ToolInput::Read(ReadInput {
-            path: intention_proto::WorkspaceRelativePathDto::parse(path).expect("path"),
-        }),
-        fixture_time(),
+        path,
     )
 }
 
@@ -52,11 +54,9 @@ fn invoke_read_input_in_workspace(root: &WorkspaceRoot, path: &str) -> ToolInvoc
         RunId::new(),
         ToolCallId::new(),
         "read",
-        ToolInput::Read(ReadInput {
-            path: intention_proto::WorkspaceRelativePathDto::parse(path).expect("path"),
-        }),
         fixture_time(),
     )
+    .with_arguments_json(read_arguments(path))
 }
 fn fixture_time() -> TimestampDto {
     TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid")
@@ -101,42 +101,31 @@ fn hello_workspace(root: &std::path::Path) -> WorkspaceRoot {
         .expect("workspace")
 }
 
-fn managed_read_input(path: &str) -> ToolInput {
-    ToolInput::Read(ReadInput {
-        path: intention_proto::WorkspaceRelativePathDto::parse(path).expect("path"),
-    })
+fn cancelled_execute_arguments() -> String {
+    r#"{"command":"sleep 1"}"#.to_owned()
 }
 
-fn cancelled_execute_input() -> ToolInput {
-    ToolInput::Execute(ExecuteInput {
-        program: BoundedText::new("sh").expect("program"),
-        args: vec![
-            BoundedText::new("-c").expect("arg"),
-            BoundedText::new("sleep 1").expect("arg"),
-        ],
-    })
-}
-
-/// An execute invocation that reports its own start and keeps running.
+/// The arguments of an execute call that reports its own start and keeps
+/// running.
 ///
-/// The child writes `sentinel.txt` into the invocation's working directory and
-/// then waits, so a fixture can synchronize on the observed effect before it
-/// cancels the call.
-fn started_execute_input() -> ToolInput {
-    ToolInput::Execute(ExecuteInput {
-        program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).expect("program"),
-        args: if cfg!(windows) {
-            vec![
-                BoundedText::new("/C").expect("arg"),
-                BoundedText::new("echo started> sentinel.txt & ping -n 2 127.0.0.1").expect("arg"),
-            ]
-        } else {
-            vec![
-                BoundedText::new("-c").expect("arg"),
-                BoundedText::new("printf x > sentinel.txt; sleep 2").expect("arg"),
-            ]
-        },
-    })
+/// The command writes `sentinel.txt` into the invocation's working directory
+/// and then waits, so a fixture can synchronize on the observed effect before
+/// it cancels the call.
+fn started_execute_arguments() -> String {
+    if cfg!(windows) {
+        r#"{"command":"echo started> sentinel.txt & ping -n 2 127.0.0.1"}"#.to_owned()
+    } else {
+        r#"{"command":"printf x > sentinel.txt; sleep 2"}"#.to_owned()
+    }
+}
+
+/// The arguments of an execute call whose own declared deadline ends the call.
+fn timed_out_execute_arguments() -> String {
+    if cfg!(windows) {
+        r#"{"command":"ping -n 5 127.0.0.1","timeout_seconds":1}"#.to_owned()
+    } else {
+        r#"{"command":"sleep 5","timeout_seconds":1}"#.to_owned()
+    }
 }
 
 #[test]
@@ -154,9 +143,9 @@ fn local_tool_success_records_admission_and_completion() {
                 run,
                 call,
                 "read",
-                managed_read_input("hello.txt"),
                 fixture_time(),
-            ),
+            )
+            .with_arguments_json(read_arguments("hello.txt")),
             &RecordingCommitObserver::new(),
         )
         .expect("tool succeeds");
@@ -168,7 +157,10 @@ fn local_tool_success_records_admission_and_completion() {
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].kind(), MessageKindDto::ToolCall);
     assert_eq!(messages[0].tool_call_id(), Some(call));
-    assert_eq!(messages[0].tool_id(), Some("read"));
+    assert_eq!(
+        messages[0].tool_id().map(ToolIdentityDto::wire_name),
+        Some("read")
+    );
     assert_eq!(messages[1].kind(), MessageKindDto::ToolResult);
     assert_eq!(messages[1].text(), "hello");
     let results = repository.committed_results();
@@ -196,11 +188,9 @@ fn an_empty_search_result_still_commits_one_terminal_answer() {
                 run,
                 call,
                 "glob",
-                ToolInput::Glob(GlobInput {
-                    pattern: BoundedText::new("*.none").expect("pattern"),
-                }),
                 fixture_time(),
-            ),
+            )
+            .with_arguments_json(r#"{"pattern":"*.none"}"#.to_owned()),
             &RecordingCommitObserver::new(),
         )
         .expect("an empty search result answers its call instead of failing");
@@ -263,7 +253,7 @@ fn committed_rows_redact_absolute_workspace_root_and_os_error_text() {
             &RecordingCommitObserver::new(),
         )
         .expect("a missing file is a durable safe failure");
-    let ToolResultOutcomeDto::Failed { error } = outcome else {
+    let ToolResultOutcomeDto::Failed { error, .. } = outcome else {
         unreachable!("a missing file fails the call");
     };
     let rendered = format!(
@@ -277,9 +267,9 @@ fn committed_rows_redact_absolute_workspace_root_and_os_error_text() {
 }
 
 #[test]
-fn local_tool_rejects_unknown_or_mismatched_id_before_effects() {
+fn unknown_tool_calls_commit_a_guided_failure_instead_of_stopping() {
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
-    let error = ApplicationService::new(&repository)
+    let outcome = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
             ToolInvocationRequestDto::new(
                 WorkspaceRoot::resolve(
@@ -290,16 +280,119 @@ fn local_tool_rejects_unknown_or_mismatched_id_before_effects() {
                 SessionId::new(),
                 RunId::new(),
                 ToolCallId::new(),
-                "unknown",
-                managed_read_input("missing"),
+                "frobnicate",
                 fixture_time(),
-            ),
+            )
+            .with_arguments_json(r#"{"path":"missing"}"#),
             &RecordingCommitObserver::new(),
         )
-        .expect_err("mismatched tool id is rejected");
-    assert_eq!(error.code(), "tool_id_mismatch");
-    assert!(repository.committed_messages().is_empty());
-    assert!(repository.committed_results().is_empty());
+        .expect("an unknown tool is a durable, model-visible failure");
+    let ToolResultOutcomeDto::Failed { error, content } = outcome else {
+        unreachable!("an unknown tool fails the call");
+    };
+    assert_eq!(error.code(), "unknown_tool");
+    assert!(content.contains("read, write, edit, execute, glob, grep"));
+    // The call row and exactly one terminal Failed result commit; the model's
+    // mistake never stops the run.
+    let messages = repository.committed_messages();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].kind(), MessageKindDto::ToolCall);
+    assert_eq!(
+        messages[0].tool_id().map(ToolIdentityDto::wire_name),
+        Some("frobnicate")
+    );
+    assert_eq!(messages[1].kind(), MessageKindDto::ToolResult);
+    assert_eq!(messages[1].text(), content);
+    let results = repository.committed_results();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status(), ToolResultStatusDto::Failed);
+}
+
+#[test]
+fn an_accepted_turn_publishes_its_committed_row_and_run_once() {
+    // The turn path hands its committed values to the same sink the model-run
+    // and tool paths use: a session's subscribers see the prompt row first and
+    // then the run it started, exactly once each.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let message = MessageProjectionDto::new(
+        row_id(),
+        session_id,
+        Some(run_id),
+        MessageKindDto::User,
+        "hello",
+        None,
+        None,
+    )
+    .expect("fixture user row is valid");
+    let run = RunProjectionDto::new(
+        session_id,
+        run_id,
+        TurnId::new(),
+        RunStatusDto::Starting,
+        ConfigRevisionId::new(),
+        None,
+        fixture_time(),
+        None,
+        0,
+    )
+    .expect("fixture run projection is valid");
+    let repository = FakeRepository::with_accepted(Ok(AcceptedTurnOutcomeDto::Started {
+        run,
+        message: message.clone(),
+    }));
+    let observer = RecordingCommitObserver::new();
+    let accepted = ApplicationService::new(&repository)
+        .send_user_turn(
+            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "hello")
+                .expect("command is valid"),
+            run_id,
+            fixture_snapshot(),
+            fixture_time(),
+            &observer,
+        )
+        .expect("the accepted turn is returned");
+    assert!(matches!(accepted, AcceptedTurnOutcomeDto::Started { .. }));
+    assert_eq!(
+        observer.commits(),
+        vec![
+            SessionCommitDto::Content(message),
+            SessionCommitDto::Status {
+                session_id,
+                run_id,
+                status: RunStatusDto::Starting,
+            },
+        ],
+        "the committed prompt row precedes the run it started"
+    );
+}
+
+#[test]
+fn a_queued_turn_publishes_its_acceptance_alone() {
+    // A queued turn has no transcript row yet: it becomes visible to a
+    // session's subscribers when its row commits as it joins the run, so this
+    // path publishes nothing at acceptance.
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Ok(AcceptedTurnOutcomeDto::Pending(
+        PendingTurnProjectionDto::new(session_id, TurnId::new(), "queued")
+            .expect("fixture pending turn is valid"),
+    )));
+    let observer = RecordingCommitObserver::new();
+    let accepted = ApplicationService::new(&repository)
+        .send_user_turn(
+            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "queued")
+                .expect("command is valid"),
+            RunId::new(),
+            fixture_snapshot(),
+            fixture_time(),
+            &observer,
+        )
+        .expect("the queued turn is returned");
+    assert!(matches!(accepted, AcceptedTurnOutcomeDto::Pending(_)));
+    assert!(
+        observer.commits().is_empty(),
+        "a queued turn commits no row and publishes nothing"
+    );
 }
 
 #[test]
@@ -313,7 +406,13 @@ fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection
         "the durable session refused the turn",
     )));
     let error = ApplicationService::new(&repository)
-        .send_user_turn(command, proposed_run_id, config.clone(), fixture_time())
+        .send_user_turn(
+            command,
+            proposed_run_id,
+            config.clone(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
         .expect_err("admission failure is propagated");
     assert_eq!(error.code(), "turn_admission_unavailable");
     let inputs = repository
@@ -361,55 +460,364 @@ fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection
     assert!(!request.tools().is_empty());
 }
 
+/// Builds one committed tool row of a previous run in the fixture session.
+fn tool_row_fixture(
+    session_id: SessionId,
+    run_id: RunId,
+    kind: MessageKindDto,
+    text: &str,
+    call_id: ToolCallId,
+) -> MessageProjectionDto {
+    let identity = ToolIdentityDto::parse("read").expect("the fixture tool is declared");
+    let tool = match kind {
+        MessageKindDto::ToolCall => ToolRowDto::Call(
+            ToolCallRowDto::new(
+                call_id,
+                identity,
+                ToolInput::from_arguments_json("read", text).ok(),
+            )
+            .expect("fixture call row is valid"),
+        ),
+        MessageKindDto::ToolResult => ToolRowDto::Result(
+            ToolResultRowDto::new(
+                call_id,
+                identity,
+                ToolResultStatusDto::Completed,
+                Some(ToolResult::Read(TextResult {
+                    text: BoundedText::new(text).expect("fixture text is bounded"),
+                    truncated: false,
+                })),
+                Vec::new(),
+            )
+            .expect("fixture result row is valid"),
+        ),
+        _ => unreachable!("the tool-row fixture serves tool and result rows"),
+    };
+    MessageProjectionDto::new(
+        row_id(),
+        session_id,
+        Some(run_id),
+        kind,
+        text,
+        None,
+        Some(tool),
+    )
+    .expect("fixture tool row is valid")
+}
+
+/// Asserts that every replayed assistant tool-call message stays answered by
+/// the tool-role messages that immediately follow it.
+fn assert_tool_calls_stay_answered(messages: &[ModelMessageDto]) {
+    for (index, message) in messages.iter().enumerate() {
+        let Some(calls) = message.tool_calls() else {
+            continue;
+        };
+        let replies = messages[index + 1..]
+            .iter()
+            .take_while(|reply| reply.role() == ModelRoleDto::Tool)
+            .collect::<Vec<_>>();
+        assert_eq!(replies.len(), calls.len(), "every tool call stays answered");
+        assert!(
+            calls
+                .iter()
+                .zip(&replies)
+                .all(|(call, reply)| reply.tool_call_id() == Some(call.call_id())),
+            "each tool reply answers its own call"
+        );
+    }
+}
+
 #[test]
-fn interrupt_run_workflow_maps_durable_results() {
+fn starting_run_context_rebuilds_the_committed_tool_exchange() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let previous_run = RunId::new();
+    let config = fixture_snapshot();
+    let call_id = ToolCallId::new();
+    let context = StartingRunModelContextDto::new(
+        session_id,
+        run_id,
+        config,
+        vec![
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                None,
+                MessageKindDto::User,
+                "Read hello.txt",
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolCall,
+                r#"{"path":"hello.txt"}"#,
+                call_id,
+            ),
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolResult,
+                "hello world",
+                call_id,
+            ),
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                None,
+                MessageKindDto::Assistant,
+                "done",
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                Some(run_id),
+                MessageKindDto::User,
+                "latest",
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+        ],
+    )
+    .expect("fixture context is valid");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .starting_context
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(context);
+
+    let scheduled = ApplicationService::new(&repository)
+        .schedule_starting_run(session_id, run_id, RunCancellation::new())
+        .expect("a committed tool exchange schedules the next run");
+    let messages = scheduled.request().messages();
+    assert_eq!(
+        messages.len(),
+        5,
+        "every committed row becomes its model message"
+    );
+    assert_eq!(messages[0].role(), ModelRoleDto::User);
+    assert_eq!(messages[0].content(), "Read hello.txt");
+    assert_eq!(messages[1].role(), ModelRoleDto::Assistant);
+    let calls = messages[1]
+        .tool_calls()
+        .expect("the call row carries its tool call");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].call_id(), call_id);
+    assert_eq!(calls[0].name(), "read");
+    assert_eq!(calls[0].arguments_json(), r#"{"path":"hello.txt"}"#);
+    assert_eq!(messages[2].role(), ModelRoleDto::Tool);
+    assert_eq!(messages[2].tool_call_id(), Some(call_id));
+    assert_eq!(messages[2].content(), "hello world");
+    assert_eq!(messages[3].role(), ModelRoleDto::Assistant);
+    assert_eq!(messages[3].content(), "done");
+    assert_eq!(messages[4].role(), ModelRoleDto::User);
+    assert_eq!(messages[4].content(), "latest");
+    assert_tool_calls_stay_answered(messages);
+}
+
+#[test]
+fn starting_run_context_skips_reasoning_only_assistant_rows() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = fixture_snapshot();
-    let expected = RunProjectionDto::new(
+    let context = StartingRunModelContextDto::new(
         session_id,
         run_id,
-        TurnId::new(),
-        RunStatusDto::Starting,
-        config.revision_id(),
-    );
-    let state = projection(session_id, Some(expected), Vec::new());
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable(
-        "fixture_unused",
-        "accept is not used by this fixture",
-    )));
+        config,
+        vec![
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                None,
+                MessageKindDto::User,
+                "first user",
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            // A completed step that reasoned without answering: durable
+            // transcript evidence that never enters the model context.
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                None,
+                MessageKindDto::Assistant,
+                "",
+                Some("step reasoning".to_owned()),
+                None,
+            )
+            .expect("a reasoning-only assistant row is coherent"),
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                None,
+                MessageKindDto::Assistant,
+                "the answer",
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                Some(run_id),
+                MessageKindDto::User,
+                "current user",
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+        ],
+    )
+    .expect("fixture context is valid");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     *repository
-        .loaded_projection
+        .starting_context
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(state);
-    let application = ApplicationService::new(&repository);
+        .unwrap_or_else(PoisonError::into_inner) = Some(context);
 
-    let interrupted = application
-        .interrupt_run(InterruptRunCommandDto::new(session_id, run_id))
-        .expect("interrupt maps");
+    let scheduled = ApplicationService::new(&repository)
+        .schedule_starting_run(session_id, run_id, RunCancellation::new())
+        .expect("the reasoning-only row never blocks scheduling");
+    let messages = scheduled.request().messages();
     assert_eq!(
-        interrupted, expected,
-        "the engine returns the exact active run projection"
+        messages
+            .iter()
+            .map(|message| (message.role(), message.content()))
+            .collect::<Vec<_>>(),
+        vec![
+            (ModelRoleDto::User, "first user"),
+            (ModelRoleDto::Assistant, "the answer"),
+            (ModelRoleDto::User, "current user"),
+        ],
+        "reasoning is never replayed into the model context"
     );
 }
 
 #[test]
-fn interrupt_run_rejects_a_run_that_is_not_active() {
+fn starting_run_context_omits_unpaired_tool_rows() {
     let session_id = SessionId::new();
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable(
-        "fixture_unused",
-        "accept is not used by this fixture",
-    )));
+    let run_id = RunId::new();
+    let previous_run = RunId::new();
+    let config = fixture_snapshot();
+    let unanswered = ToolCallId::new();
+    let orphaned = ToolCallId::new();
+    let answered = ToolCallId::new();
+    let context = StartingRunModelContextDto::new(
+        session_id,
+        run_id,
+        config,
+        vec![
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                None,
+                MessageKindDto::User,
+                "first",
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            // A committed call whose result never committed: the crash window.
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolCall,
+                r#"{"path":"unanswered.txt"}"#,
+                unanswered,
+            ),
+            // A committed result whose call row does not exist.
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolResult,
+                "orphan result",
+                orphaned,
+            ),
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolCall,
+                r#"{"path":"hello.txt"}"#,
+                answered,
+            ),
+            tool_row_fixture(
+                session_id,
+                previous_run,
+                MessageKindDto::ToolResult,
+                "hello world",
+                answered,
+            ),
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                None,
+                MessageKindDto::Assistant,
+                "done",
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                Some(run_id),
+                MessageKindDto::User,
+                "latest",
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+        ],
+    )
+    .expect("fixture context is valid");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     *repository
-        .loaded_projection
+        .starting_context
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+        .unwrap_or_else(PoisonError::into_inner) = Some(context);
+
+    let scheduled = ApplicationService::new(&repository)
+        .schedule_starting_run(session_id, run_id, RunCancellation::new())
+        .expect("unpaired tool rows never fail the schedule");
+    let messages = scheduled.request().messages();
     assert_eq!(
-        ApplicationService::new(&repository)
-            .interrupt_run(InterruptRunCommandDto::new(session_id, RunId::new()))
-            .expect_err("an inactive session has no run to interrupt")
-            .code(),
-        "active_run_not_found"
+        messages
+            .iter()
+            .map(ModelMessageDto::role)
+            .collect::<Vec<_>>(),
+        vec![
+            ModelRoleDto::User,
+            ModelRoleDto::Assistant,
+            ModelRoleDto::Tool,
+            ModelRoleDto::Assistant,
+            ModelRoleDto::User,
+        ],
+        "only the paired exchange replays, in durable order"
+    );
+    let calls = messages[1]
+        .tool_calls()
+        .expect("the paired call replays as an assistant tool call");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].call_id(), answered);
+    assert_eq!(messages[2].tool_call_id(), Some(answered));
+    assert_eq!(messages[2].content(), "hello world");
+    assert_tool_calls_stay_answered(messages);
+    assert!(
+        messages.iter().all(|message| {
+            message.tool_call_id() != Some(unanswered)
+                && message.tool_call_id() != Some(orphaned)
+                && message
+                    .tool_calls()
+                    .is_none_or(|calls| calls.iter().all(|call| call.call_id() == answered))
+        }),
+        "no unpaired row survives into the model context"
     );
 }
 
@@ -421,7 +829,7 @@ fn create_and_remove_workflows_map_committed_results() {
     *repository
         .created
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
     *repository
         .removed
         .lock()
@@ -435,13 +843,15 @@ fn create_and_remove_workflows_map_committed_results() {
         session_id,
         WorkspaceId::new(),
         workspace_root(),
-        RunModeDto::Build,
+        Some(RunModeDto::Build),
+        None,
     );
 
+    let observer = RecordingCommitObserver::new();
     let created = application
-        .create_session(create, fixture_time())
+        .create_session(create, fixture_snapshot(), fixture_time(), &observer)
         .expect("create maps");
-    assert_eq!(created.session_id(), session_id);
+    assert_eq!(created.session().session_id(), session_id);
     let removed = application
         .remove_turn(
             RemoveTurnCommandDto::new(session_id, pending_turn),
@@ -450,6 +860,369 @@ fn create_and_remove_workflows_map_committed_results() {
         .expect("removal maps");
     assert_eq!(removed.session_id(), session_id);
     assert_eq!(removed.turn_id(), pending_turn);
+}
+
+#[test]
+fn session_creation_joins_the_durable_binding_of_its_workspace_root() {
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
+    let bound_project = ProjectId::new();
+    let bound_workspace = WorkspaceId::new();
+    *repository
+        .workspace_binding
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) =
+        Some(WorkspaceBindingDto::new(bound_project, bound_workspace));
+    let create = CreateSessionCommandDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        workspace_root(),
+        Some(RunModeDto::Build),
+        None,
+    );
+
+    ApplicationService::new(&repository)
+        .create_session(
+            create,
+            fixture_snapshot(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
+        .expect("create maps");
+
+    let forwarded = repository
+        .create_commands
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(forwarded.len(), 1, "one creation reaches the repository");
+    assert_eq!(
+        forwarded[0].project_id(),
+        bound_project,
+        "the durable project binding replaces the proposed identity"
+    );
+    assert_eq!(
+        forwarded[0].workspace_id(),
+        bound_workspace,
+        "the durable workspace binding replaces the proposed identity"
+    );
+    assert_eq!(
+        forwarded[0].session_id(),
+        session_id,
+        "the requested session identity is kept: every creation is a fresh session"
+    );
+    assert_eq!(forwarded[0].workspace_root(), &workspace_root());
+    assert_eq!(forwarded[0].mode(), Some(RunModeDto::Build));
+}
+
+#[test]
+fn session_creation_keeps_its_identities_for_an_unbound_workspace_root() {
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
+    let project_id = ProjectId::new();
+    let workspace_id = WorkspaceId::new();
+    let create = CreateSessionCommandDto::new(
+        project_id,
+        session_id,
+        workspace_id,
+        workspace_root(),
+        Some(RunModeDto::Plan),
+        None,
+    );
+
+    ApplicationService::new(&repository)
+        .create_session(
+            create,
+            fixture_snapshot(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
+        .expect("create maps");
+
+    let forwarded = repository
+        .create_commands
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(forwarded.len(), 1);
+    assert_eq!(
+        forwarded[0].project_id(),
+        project_id,
+        "an unbound root establishes the proposed binding"
+    );
+    assert_eq!(forwarded[0].workspace_id(), workspace_id);
+    assert_eq!(forwarded[0].mode(), Some(RunModeDto::Plan));
+}
+
+#[test]
+fn the_core_default_resolves_absent_to_build() {
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
+    let create = CreateSessionCommandDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        workspace_root(),
+        None,
+        None,
+    );
+
+    ApplicationService::new(&repository)
+        .create_session(
+            create,
+            fixture_snapshot(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
+        .expect("create maps");
+
+    let forwarded = repository
+        .create_commands
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(forwarded.len(), 1, "one creation reaches the repository");
+    assert_eq!(
+        forwarded[0].mode(),
+        Some(RunModeDto::DEFAULT),
+        "the core resolves a command that declares no mode to the durable default before the write"
+    );
+    assert_eq!(RunModeDto::DEFAULT, RunModeDto::Build);
+}
+
+/// Builds one combined creation command carrying a first turn.
+fn create_with_first_turn(
+    session_id: SessionId,
+    key: IdempotencyKey,
+    content: &str,
+) -> CreateSessionCommandDto {
+    CreateSessionCommandDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        workspace_root(),
+        Some(RunModeDto::Build),
+        Some(
+            CreateSessionFirstTurnDto::new(key, content)
+                .expect("fixture first-turn content is non-blank"),
+        ),
+    )
+}
+
+/// Builds the durable conflict the repository reports for a repeated session id.
+fn session_already_exists() -> ErrorDto {
+    ErrorDto::new(
+        "session_already_exists",
+        ErrorCategoryDto::Conflict,
+        "the durable session already exists",
+        ErrorRetryDto::Never,
+        None,
+    )
+    .expect("fixture conflict is valid")
+}
+
+/// Returns one pending first-turn outcome for its session.
+fn pending_first_turn(session_id: SessionId, content: &str) -> AcceptedTurnOutcomeDto {
+    AcceptedTurnOutcomeDto::Pending(
+        PendingTurnProjectionDto::new(session_id, TurnId::new(), content)
+            .expect("fixture pending turn is valid"),
+    )
+}
+
+#[test]
+fn create_session_with_turn_commits_the_session_before_the_turn() {
+    let session_id = SessionId::new();
+    let key = IdempotencyKey::new();
+    let repository = FakeRepository::with_accepted(Ok(pending_first_turn(session_id, "first")));
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
+    let observer = RecordingCommitObserver::new();
+    let created = ApplicationService::new(&repository)
+        .create_session(
+            create_with_first_turn(session_id, key, "first"),
+            fixture_snapshot(),
+            fixture_time(),
+            &observer,
+        )
+        .expect("the combined creation commits");
+    assert_eq!(created.session().session_id(), session_id);
+    assert!(matches!(
+        created.first_turn(),
+        Some(AcceptedTurnOutcomeDto::Pending(_))
+    ));
+    assert_eq!(
+        repository
+            .calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone(),
+        vec!["create_session", "accept_user_turn"],
+        "the durable session commits before its first turn"
+    );
+    let inputs = repository
+        .accepted_inputs
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(inputs.len(), 1, "one turn reaches the repository");
+    assert_eq!(
+        inputs[0].proposed_run_id(),
+        RunId::parse(&key.to_string()).expect("the key names a run identity"),
+        "the first turn's run identity derives from its idempotency key"
+    );
+}
+
+#[test]
+fn a_replayed_create_session_with_turn_returns_the_recorded_outcome() {
+    let session_id = SessionId::new();
+    let key = IdempotencyKey::new();
+    let pending = PendingTurnProjectionDto::new(session_id, TurnId::new(), "first")
+        .expect("fixture pending turn is valid");
+    let repository =
+        FakeRepository::with_accepted(Ok(AcceptedTurnOutcomeDto::Pending(pending.clone())));
+    // The first attempt already committed this session: the creation reports
+    // its durable conflict and the turn path replays the recorded outcome.
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Err(session_already_exists());
+    *repository
+        .loaded_projection
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+    let created = ApplicationService::new(&repository)
+        .create_session(
+            create_with_first_turn(session_id, key, "first"),
+            fixture_snapshot(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
+        .expect("a replay reads the durable session back");
+    assert_eq!(created.session().session_id(), session_id);
+    let Some(AcceptedTurnOutcomeDto::Pending(replayed)) = created.first_turn() else {
+        unreachable!("the replayed turn outcome is the recorded pending turn")
+    };
+    assert_eq!(replayed.turn_id(), pending.turn_id());
+    assert_eq!(
+        repository
+            .calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone(),
+        vec!["create_session", "accept_user_turn"],
+        "a replay still accepts the carried turn against the durable session"
+    );
+}
+
+#[test]
+fn a_same_key_with_different_content_is_a_typed_conflict() {
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::new(
+        "turn_idempotency_conflict",
+        ErrorCategoryDto::Conflict,
+        "the idempotency key is already bound to different content",
+        ErrorRetryDto::Never,
+        None,
+    )
+    .expect("fixture conflict is valid")));
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
+    let error = ApplicationService::new(&repository)
+        .create_session(
+            create_with_first_turn(session_id, IdempotencyKey::new(), "different"),
+            fixture_snapshot(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
+        .expect_err("a key bound to other content is a typed conflict");
+    assert_eq!(error.code(), "turn_idempotency_conflict");
+    assert_eq!(
+        repository
+            .create_commands
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len(),
+        1,
+        "the session committed before the turn was rejected"
+    );
+}
+
+#[test]
+fn a_failed_turn_leaves_the_session_replayable() {
+    let session_id = SessionId::new();
+    let key = IdempotencyKey::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable(
+        "turn_admission_unavailable",
+        "the turn could not be admitted",
+    )));
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
+    let application = ApplicationService::new(&repository);
+    let error = application
+        .create_session(
+            create_with_first_turn(session_id, key, "first"),
+            fixture_snapshot(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
+        .expect_err("the rejected first turn surfaces");
+    assert_eq!(error.code(), "turn_admission_unavailable");
+    assert_eq!(
+        repository
+            .create_commands
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len(),
+        1,
+        "the session stays durable although the carried turn was rejected"
+    );
+
+    // The next command targets the same durable session: the creation replays
+    // and the turn commits.
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Err(session_already_exists());
+    *repository
+        .loaded_projection
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+    *repository
+        .accepted
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Ok(pending_first_turn(session_id, "first"));
+    let replayed = application
+        .create_session(
+            create_with_first_turn(session_id, key, "first"),
+            fixture_snapshot(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
+        .expect("the durable session accepts the replayed turn");
+    assert_eq!(replayed.session().session_id(), session_id);
+    assert!(matches!(
+        replayed.first_turn(),
+        Some(AcceptedTurnOutcomeDto::Pending(_))
+    ));
 }
 
 #[test]
@@ -550,9 +1323,9 @@ impl<'a> TerminalOrderingProbe<'a> {
     }
 }
 
-impl ModelRunCommitObserver for TerminalOrderingProbe<'_> {
-    fn observe_model_run_commit(&self, commit: &ModelRunCommitDto) {
-        let ModelRunCommitDto::Content(message) = commit else {
+impl SessionCommitObserver for TerminalOrderingProbe<'_> {
+    fn observe_session_commit(&self, commit: &SessionCommitDto) {
+        let SessionCommitDto::Content(message) = commit else {
             return;
         };
         self.results_at_publish
@@ -599,7 +1372,10 @@ fn assert_single_terminal_result(
         .last()
         .expect("the terminal result commits with its answering row");
     assert_eq!(answering.kind(), MessageKindDto::ToolResult);
-    assert_eq!(answering.tool_id(), Some(tool_id));
+    assert_eq!(
+        answering.tool_id().map(ToolIdentityDto::wire_name),
+        Some(tool_id)
+    );
     assert_eq!(answering.text(), terminal.content());
 }
 
@@ -621,9 +1397,9 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
                 run_id,
                 call_id,
                 "read",
-                managed_read_input("hello.txt"),
                 fixture_time(),
-            ),
+            )
+            .with_arguments_json(read_arguments("hello.txt")),
             &publisher,
         )
         .expect("read succeeds");
@@ -673,16 +1449,21 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
                 run_id,
                 call_id,
                 "read",
-                managed_read_input("missing.txt"),
                 fixture_time(),
-            ),
+            )
+            .with_arguments_json(read_arguments("missing.txt")),
             &publisher,
         )
         .expect("a missing file is a durable safe failure");
-    let ToolResultOutcomeDto::Failed { error } = outcome else {
+    let ToolResultOutcomeDto::Failed { error, content } = outcome else {
         unreachable!("a missing file fails the call");
     };
     assert_eq!(error.code(), "tool_read_failed");
+    assert!(content.contains("tool_read_failed"));
+    assert!(
+        !content.contains(&root.to_string_lossy().to_string()),
+        "guidance never carries the absolute workspace root"
+    );
     assert_single_terminal_result(
         &repository,
         session_id,
@@ -691,9 +1472,10 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
         "read",
         ToolResultStatusDto::Failed,
     );
-    // The terminal Failed commit classifies the safe error code.
+    // The terminal Failed commit carries the model-visible failure guidance.
     let failed = &repository.committed_results()[0];
-    assert_eq!(failed.content(), "tool_read_failed");
+    assert!(failed.content().starts_with("the tool call failed\n"));
+    assert!(failed.content().contains("tool_read_failed"));
     assert!(failed.metadata().is_empty());
     publisher.assert_call_row_then_one_terminal();
     drop(publisher);
@@ -713,9 +1495,9 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
                 run_id,
                 call_id,
                 "execute",
-                cancelled_execute_input(),
                 fixture_time(),
             )
+            .with_arguments_json(cancelled_execute_arguments())
             .with_cancellation(cancelled),
             &publisher,
         )
@@ -734,10 +1516,21 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
         ToolResultStatusDto::Partial,
     );
     // The terminal Partial commit classifies the interrupted call with the
-    // exact stopped notice and never records a completed row.
+    // exact stopped notice, records the caller's stop, and never records a
+    // completed row.
     assert_eq!(
         repository.committed_results()[0].content(),
         "[The tool call was stopped before a final result.]"
+    );
+    let stopped = &repository.committed_results()[0];
+    assert_eq!(
+        stopped
+            .metadata()
+            .iter()
+            .map(|entry| (entry.key(), entry.value()))
+            .collect::<Vec<_>>(),
+        vec![("interruption", "tool_cancelled")],
+        "a stopped call records the caller's stop as its durable cause"
     );
     assert_eq!(repository.completed_result_count(), 0);
     publisher.assert_call_row_then_one_terminal();
@@ -773,9 +1566,9 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
                 run_id,
                 call_id,
                 "execute",
-                started_execute_input(),
                 fixture_time(),
             )
+            .with_arguments_json(started_execute_arguments())
             .with_cancellation(signal),
             &publisher,
         )
@@ -795,13 +1588,85 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
         "execute",
         ToolResultStatusDto::Partial,
     );
-    // The terminal Partial commit keeps the captured output and never records
-    // a completed row.
+    // The terminal Partial commit keeps the captured output, records the
+    // caller's stop, and never records a completed row.
     let partial = &repository.committed_results()[0];
     assert!(partial.content().contains("stdout:"));
     assert!(partial.content().contains(
         "[The tool call was stopped before a final result; the output above is partial.]"
     ));
+    assert_eq!(
+        partial
+            .metadata()
+            .iter()
+            .map(|entry| (entry.key(), entry.value()))
+            .collect::<Vec<_>>(),
+        vec![("interruption", "tool_cancelled")],
+        "an interrupted process keeps the caller's stop as its durable cause"
+    );
+    assert_eq!(repository.completed_result_count(), 0);
+    publisher.assert_call_row_then_one_terminal();
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A call cut by its own declared deadline is a Partial outcome whose notice
+/// names the timeout and whose durable evidence records the deadline it hit.
+#[test]
+fn a_declared_execute_timeout_records_its_deadline_as_partial_evidence() {
+    let root = hello_tool_root("declared-timeout");
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let call_id = ToolCallId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let publisher = TerminalOrderingProbe::new(&repository);
+    let outcome = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            ToolInvocationRequestDto::new(
+                hello_workspace(&root),
+                session_id,
+                run_id,
+                call_id,
+                "execute",
+                fixture_time(),
+            )
+            .with_arguments_json(timed_out_execute_arguments()),
+            &publisher,
+        )
+        .expect("a declared timeout is a partial outcome");
+    let ToolResultOutcomeDto::Partial { content } = outcome else {
+        unreachable!("a declared timeout must interrupt the invocation");
+    };
+    assert!(
+        content.contains("hit its declared timeout of 1s and was terminated before a final result"),
+        "the model reads the declared deadline it hit: {content}"
+    );
+    assert!(
+        !content.contains("did not receive a final result"),
+        "a declared deadline never reads as lost evidence: {content}"
+    );
+    assert_single_terminal_result(
+        &repository,
+        session_id,
+        run_id,
+        call_id,
+        "execute",
+        ToolResultStatusDto::Partial,
+    );
+    let partial = &repository.committed_results()[0];
+    assert!(partial.content().contains("hit its declared timeout of 1s"));
+    assert_eq!(
+        partial
+            .metadata()
+            .iter()
+            .map(|entry| (entry.key(), entry.value()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("interruption", "tool_timed_out"),
+            ("declared_timeout_seconds", "1"),
+        ],
+        "the durable row names the cause and the deadline it hit"
+    );
     assert_eq!(repository.completed_result_count(), 0);
     publisher.assert_call_row_then_one_terminal();
 
@@ -815,17 +1680,21 @@ fn tool_call_row_commits_the_canonical_arguments_document() {
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
-            invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt")
-                .with_arguments_json(r#"{"path":"hello.txt"}"#),
+            invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt"),
             &RecordingCommitObserver::new(),
         )
         .expect("read succeeds");
     let messages = repository.committed_messages();
     assert_eq!(messages[0].kind(), MessageKindDto::ToolCall);
     assert_eq!(messages[0].text(), r#"{"path":"hello.txt"}"#);
-    assert_eq!(messages[0].tool_id(), Some("read"));
+    assert_eq!(
+        messages[0].tool_id().map(ToolIdentityDto::wire_name),
+        Some("read")
+    );
 
-    // A caller without the model's arguments still commits a well-formed row.
+    // A caller without the model's arguments still commits the call row; the
+    // undecodable call is answered by one terminal Failed result instead of
+    // stopping the run.
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
@@ -835,13 +1704,17 @@ fn tool_call_row_commits_the_canonical_arguments_document() {
                 RunId::new(),
                 call,
                 "read",
-                managed_read_input("hello.txt"),
                 fixture_time(),
             ),
             &RecordingCommitObserver::new(),
         )
-        .expect("read succeeds");
+        .expect("a call without model arguments still commits its row");
     assert_eq!(repository.committed_messages()[0].text(), "{}");
+    assert_eq!(repository.committed_messages().len(), 2);
+    assert_eq!(
+        repository.committed_results()[0].status(),
+        ToolResultStatusDto::Failed
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -856,31 +1729,31 @@ fn starting_context(
         config.clone(),
         vec![
             MessageProjectionDto::new(
+                row_id(),
                 session_id,
                 None,
                 MessageKindDto::User,
                 "first",
                 None,
                 None,
-                None,
             )
             .expect("context message is valid"),
             MessageProjectionDto::new(
+                row_id(),
                 session_id,
                 None,
                 MessageKindDto::Assistant,
                 "answer",
                 None,
                 None,
-                None,
             )
             .expect("context message is valid"),
             MessageProjectionDto::new(
+                row_id(),
                 session_id,
                 Some(run_id),
                 MessageKindDto::User,
                 "latest",
-                None,
                 None,
                 None,
             )
@@ -926,5 +1799,314 @@ fn committed_tool_result_content_preserves_control_characters_as_text() {
     assert_eq!(results[0].status(), ToolResultStatusDto::Completed);
     assert_eq!(results[0].content(), "\u{8}\t\u{c}\r");
     assert_eq!(repository.committed_messages()[1].text(), "\u{8}\t\u{c}\r");
+    let _ = fs::remove_dir_all(root);
+}
+
+/// One committed call row carries the typed arguments the dispatch decoded, so
+/// no consumer re-decodes the arguments document the row also carries as text.
+#[test]
+fn a_committed_tool_call_row_carries_its_typed_arguments_projection() {
+    let root = hello_tool_root("typed-call");
+    let session = SessionId::new();
+    let run = RunId::new();
+    let call = ToolCallId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let result = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            ToolInvocationRequestDto::new(
+                hello_workspace(&root),
+                session,
+                run,
+                call,
+                "read",
+                fixture_time(),
+            )
+            .with_arguments_json(read_arguments("hello.txt")),
+            &RecordingCommitObserver::new(),
+        )
+        .expect("tool succeeds");
+    assert_eq!(completed_outcome(result), "hello");
+
+    let messages = repository.committed_messages();
+    let Some(ToolRowDto::Call(evidence)) = messages[0].tool() else {
+        unreachable!("the committed call row carries its typed call evidence")
+    };
+    assert_eq!(evidence.call_id(), call);
+    assert_eq!(evidence.tool_id().wire_name(), "read");
+    let expected = ToolInput::from_arguments_json("read", &read_arguments("hello.txt"))
+        .expect("fixture arguments decode");
+    assert_eq!(
+        evidence.arguments(),
+        Some(&expected),
+        "the committed projection is the decode the dispatch ran"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A call whose arguments document never decoded still commits its own durable
+/// identity without inventing typed arguments for it, and its failure is a
+/// model-visible result row with no payload.
+#[test]
+fn an_undecodable_call_row_commits_without_a_typed_projection() {
+    let root = hello_tool_root("undecodable-call");
+    let session = SessionId::new();
+    let run = RunId::new();
+    let call = ToolCallId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let outcome = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            ToolInvocationRequestDto::new(
+                hello_workspace(&root),
+                session,
+                run,
+                call,
+                "read",
+                fixture_time(),
+            )
+            .with_arguments_json(r#"{"path":42}"#),
+            &RecordingCommitObserver::new(),
+        )
+        .expect("an undecodable call is a durable, model-visible failure");
+    let ToolResultOutcomeDto::Failed { error, .. } = outcome else {
+        unreachable!("an undecodable call fails the invocation");
+    };
+    assert_eq!(error.code(), "invalid_tool_input_json");
+
+    let messages = repository.committed_messages();
+    let Some(ToolRowDto::Call(evidence)) = messages[0].tool() else {
+        unreachable!("the committed call row carries its typed call evidence")
+    };
+    assert_eq!(evidence.tool_id().wire_name(), "read");
+    assert!(
+        evidence.arguments().is_none(),
+        "no typed arguments are invented for a document that never decoded"
+    );
+    let Some(ToolRowDto::Result(result)) = messages[1].tool() else {
+        unreachable!("the answering row carries its typed result evidence")
+    };
+    assert_eq!(result.status(), ToolResultStatusDto::Failed);
+    assert!(
+        result.result().is_none(),
+        "a failed result carries no payload"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The terminal result row carries the typed payload together with the
+/// lifecycle status and the approved metadata the engine recorded.
+#[test]
+fn a_committed_tool_result_row_carries_status_and_metadata() {
+    let root = hello_tool_root("typed-result");
+    // A read past the tool's output bound is truncated, which the engine
+    // records as approved metadata; the typed payload carries the same flag.
+    std::fs::write(root.join("large.txt"), "x".repeat(64 * 1024 + 1)).expect("large fixture");
+    let session = SessionId::new();
+    let run = RunId::new();
+    let call = ToolCallId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let result = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            ToolInvocationRequestDto::new(
+                hello_workspace(&root),
+                session,
+                run,
+                call,
+                "read",
+                fixture_time(),
+            )
+            .with_arguments_json(read_arguments("large.txt")),
+            &RecordingCommitObserver::new(),
+        )
+        .expect("tool succeeds");
+    assert!(completed_outcome(result).contains("[truncated]"));
+
+    let messages = repository.committed_messages();
+    let Some(ToolRowDto::Result(evidence)) = messages[1].tool() else {
+        unreachable!("the answering row carries its typed result evidence")
+    };
+    assert_eq!(evidence.status(), ToolResultStatusDto::Completed);
+    assert_eq!(
+        evidence
+            .metadata()
+            .iter()
+            .map(|entry| (entry.key(), entry.value()))
+            .collect::<Vec<_>>(),
+        vec![("truncated", "true")],
+        "the approved metadata rides the committed projection"
+    );
+    let Some(ToolResult::Read(payload)) = evidence.result() else {
+        unreachable!("a completed read result carries its typed read payload")
+    };
+    assert!(payload.truncated, "the typed payload carries the same flag");
+    assert_eq!(payload.text.as_str(), "x".repeat(64 * 1024));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn active_run_returns_the_exact_active_run_and_rejects_every_other_lookup() {
+    // The terminal stop resolves through this lookup: only the session's own
+    // exact active run may be addressed, so another run identity and a session
+    // with no active run answer the same typed rejection.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let active = RunProjectionDto::new(
+        session_id,
+        run_id,
+        TurnId::new(),
+        RunStatusDto::Running,
+        fixture_snapshot().revision_id(),
+        None,
+        fixture_time(),
+        None,
+        0,
+    )
+    .expect("fixture run projection is coherent");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .loaded_projection
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) =
+        Some(projection(session_id, Some(active), Vec::new()));
+
+    let service = ApplicationService::new(&repository);
+    assert_eq!(
+        service
+            .active_run(session_id, run_id)
+            .expect("the session's exact active run is returned")
+            .run_id(),
+        run_id
+    );
+    assert_eq!(
+        service
+            .active_run(session_id, RunId::new())
+            .expect_err("a run the session does not own is never its active run")
+            .code(),
+        "active_run_not_found"
+    );
+
+    *repository
+        .loaded_projection
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+    assert_eq!(
+        service
+            .active_run(session_id, run_id)
+            .expect_err("a session without an active run has none to address")
+            .code(),
+        "active_run_not_found"
+    );
+}
+
+#[test]
+fn a_failed_creation_propagates_without_accepting_its_first_turn() {
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .created
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Err(ErrorDto::unavailable(
+        "storage_busy",
+        "the durable store is locked",
+    ));
+
+    let error = ApplicationService::new(&repository)
+        .create_session(
+            create_with_first_turn(session_id, IdempotencyKey::new(), "first"),
+            fixture_snapshot(),
+            fixture_time(),
+            &RecordingCommitObserver::new(),
+        )
+        .expect_err("a creation failure other than the replay conflict is propagated");
+    assert_eq!(error.code(), "storage_busy");
+    assert_eq!(
+        repository
+            .calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone(),
+        vec!["create_session"],
+        "a failed creation never reaches the first turn it carried"
+    );
+}
+
+#[test]
+fn starting_run_context_replays_committed_notices_to_the_model() {
+    // A notice is durable transcript evidence the model must see: the rebuilt
+    // context carries it as a notice-role message in committed order.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let context = StartingRunModelContextDto::new(
+        session_id,
+        run_id,
+        fixture_snapshot(),
+        vec![
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                None,
+                MessageKindDto::User,
+                "read the file",
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                Some(run_id),
+                MessageKindDto::Notice,
+                intention_engine::INTERRUPT_NOTICE,
+                None,
+                None,
+            )
+            .expect("a committed notice row is coherent"),
+            MessageProjectionDto::new(
+                row_id(),
+                session_id,
+                Some(run_id),
+                MessageKindDto::User,
+                "continue",
+                None,
+                None,
+            )
+            .expect("context message is valid"),
+        ],
+    )
+    .expect("fixture context is valid");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository
+        .starting_context
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(context);
+
+    let scheduled = ApplicationService::new(&repository)
+        .schedule_starting_run(session_id, run_id, RunCancellation::new())
+        .expect("a committed notice schedules the next run");
+    let messages = scheduled.request().messages();
+    assert_eq!(messages.len(), 3, "every committed row replays in order");
+    assert_eq!(messages[0].role(), ModelRoleDto::User);
+    assert_eq!(messages[1].role(), ModelRoleDto::Notice);
+    assert_eq!(messages[1].content(), intention_engine::INTERRUPT_NOTICE);
+    assert_eq!(messages[2].role(), ModelRoleDto::User);
+    assert_eq!(messages[2].content(), "continue");
+}
+
+#[test]
+fn a_tool_call_carrying_a_nul_never_commits_evidence() {
+    // Durable transcript rows are NUL-free, so a model call whose arguments
+    // carry one cannot leave a call row: the invocation fails closed and
+    // commits neither the call nor a result.
+    let root = hello_tool_root("nul-arguments");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let error = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt")
+                .with_arguments_json("{\"path\":\"hel\0lo.txt\"}"),
+            &RecordingCommitObserver::new(),
+        )
+        .expect_err("a call whose evidence cannot commit fails closed");
+    assert_eq!(error.code(), "invalid_message");
+    assert!(repository.committed_messages().is_empty());
+    assert!(repository.committed_results().is_empty());
     let _ = fs::remove_dir_all(root);
 }

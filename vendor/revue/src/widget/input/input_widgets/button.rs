@@ -1,0 +1,366 @@
+//! Button widget for clickable actions
+
+use crate::event::{Key, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use crate::layout::Rect;
+use crate::render::Cell;
+use crate::style::Color;
+use crate::widget::theme::{EDITOR_BG, SECONDARY_TEXT, SEPARATOR_COLOR};
+use crate::widget::traits::{
+    EventResult, Interactive, RenderContext, View, WidgetProps, WidgetState,
+};
+use crate::{impl_styled_view, impl_widget_builders};
+
+/// Button style presets
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ButtonVariant {
+    /// Default button style
+    #[default]
+    Default,
+    /// Primary action button (highlighted)
+    Primary,
+    /// Danger/destructive action button
+    Danger,
+    /// Ghost button (minimal styling)
+    Ghost,
+    /// Success button
+    Success,
+}
+
+/// A clickable button widget
+#[derive(Clone, Debug)]
+pub struct Button {
+    label: String,
+    /// Optional icon before the label
+    icon: Option<char>,
+    variant: ButtonVariant,
+    /// Common widget state (focused, disabled, pressed, hovered, colors)
+    state: WidgetState,
+    /// CSS styling properties (id, classes)
+    props: WidgetProps,
+    width: Option<u16>,
+}
+
+impl Button {
+    /// Create a new button with a label
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            icon: None,
+            variant: ButtonVariant::Default,
+            state: WidgetState::new(),
+            props: WidgetProps::new(),
+            width: None,
+        }
+    }
+
+    /// Set an icon to display before the label
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use revue::prelude::*;
+    ///
+    /// let btn = Button::new("Save")
+    ///     .icon('💾')
+    ///     .variant(ButtonVariant::Primary);
+    ///
+    /// // Using Nerd Font icons
+    /// let btn = Button::new("Settings")
+    ///     .icon('\u{f013}');  // Gear icon
+    /// ```
+    pub fn icon(mut self, icon: char) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    /// Create a primary button
+    pub fn primary(label: impl Into<String>) -> Self {
+        Self::new(label).variant(ButtonVariant::Primary)
+    }
+
+    /// Create a danger button
+    pub fn danger(label: impl Into<String>) -> Self {
+        Self::new(label).variant(ButtonVariant::Danger)
+    }
+
+    /// Create a ghost button
+    pub fn ghost(label: impl Into<String>) -> Self {
+        Self::new(label).variant(ButtonVariant::Ghost)
+    }
+
+    /// Create a success button
+    pub fn success(label: impl Into<String>) -> Self {
+        Self::new(label).variant(ButtonVariant::Success)
+    }
+
+    /// Set button variant
+    pub fn variant(mut self, variant: ButtonVariant) -> Self {
+        self.variant = variant;
+        self
+    }
+
+    /// Set minimum width
+    pub fn width(mut self, width: u16) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    /// Handle key input, returns true if button was "clicked"
+    pub fn handle_key(&mut self, key: &Key) -> bool {
+        if self.state.disabled {
+            return false;
+        }
+
+        matches!(key, Key::Enter | Key::Char(' '))
+    }
+
+    /// Handle mouse input, returns (needs_render, was_clicked)
+    ///
+    /// The `area` parameter should be the button's rendered area.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let (needs_render, clicked) = button.handle_mouse(&mouse, button_area);
+    /// if clicked {
+    ///     // Button was clicked
+    /// }
+    /// ```
+    pub fn handle_mouse(&mut self, event: &MouseEvent, area: Rect) -> (bool, bool) {
+        if self.state.disabled {
+            return (false, false);
+        }
+
+        let inside = area.contains(event.x, event.y);
+        let mut needs_render = false;
+        let mut was_clicked = false;
+
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) if inside && !self.state.pressed => {
+                self.state.pressed = true;
+                needs_render = true;
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.state.pressed => {
+                self.state.pressed = false;
+                needs_render = true;
+                if inside {
+                    was_clicked = true;
+                }
+            }
+            MouseEventKind::Move => {
+                let was_hovered = self.state.hovered;
+                self.state.hovered = inside;
+                if was_hovered != self.state.hovered {
+                    needs_render = true;
+                }
+            }
+            _ => {}
+        }
+
+        (needs_render, was_clicked)
+    }
+
+    /// Check if button is pressed
+    pub fn is_pressed(&self) -> bool {
+        self.state.is_pressed()
+    }
+
+    /// Check if button is hovered
+    pub fn is_hovered(&self) -> bool {
+        self.state.is_hovered()
+    }
+
+    /// Columns the icon (plus the space after it) and the label take.
+    fn content_width(&self) -> u16 {
+        let icon = self
+            .icon
+            .map_or(0, |c| crate::utils::unicode::char_width(c) + 1);
+        let label = crate::utils::unicode::display_width(&self.label);
+        (icon + label).min(u16::MAX as usize) as u16
+    }
+
+    /// The content plus two columns of padding each side, at least
+    /// [`width`](Self::width) - what `render` paints given room.
+    fn natural_width(&self) -> u16 {
+        self.content_width()
+            .saturating_add(4)
+            .max(self.width.unwrap_or(0))
+    }
+
+    /// Get base colors for the variant (without state effects)
+    fn get_variant_base_colors(&self) -> (Color, Color) {
+        match self.variant {
+            ButtonVariant::Default => (Color::WHITE, SEPARATOR_COLOR),
+            ButtonVariant::Primary => (Color::WHITE, Color::rgb(37, 99, 235)),
+            ButtonVariant::Danger => (Color::WHITE, Color::rgb(220, 38, 38)),
+            ButtonVariant::Ghost => (SECONDARY_TEXT, EDITOR_BG),
+            ButtonVariant::Success => (Color::WHITE, Color::rgb(22, 163, 74)),
+        }
+    }
+
+    /// Get colors with CSS cascade support
+    ///
+    /// Uses WidgetState::resolve_colors_interactive for standard cascade:
+    /// 1. Disabled state (grayed out)
+    /// 2. Widget inline override (via .fg()/.bg())
+    /// 3. CSS computed style from context
+    /// 4. Variant-based default colors
+    /// 5. Apply pressed/hover/focus interaction effects
+    fn get_colors_from_ctx(&self, ctx: &RenderContext) -> (Color, Color) {
+        let (variant_fg, variant_bg) = self.get_variant_base_colors();
+        self.state
+            .resolve_colors_interactive(ctx.style, variant_fg, variant_bg)
+    }
+}
+
+impl Default for Button {
+    fn default() -> Self {
+        Self::new("")
+    }
+}
+
+impl View for Button {
+    /// One row, as wide as the label and icon plus their padding (or the
+    /// [`width`](Button::width) set, if larger).
+    fn measure(&self, max_width: u16, max_height: u16) -> Option<(u16, u16)> {
+        Some((self.natural_width().min(max_width), 1.min(max_height)))
+    }
+
+    fn render(&self, ctx: &mut RenderContext) {
+        let area = ctx.area;
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        // Get colors: prefer CSS if available, otherwise use variant colors
+        let (fg, bg) = self.get_colors_from_ctx(ctx);
+
+        let content_width = self.content_width();
+        let button_width = self.natural_width().min(area.width);
+
+        // Render button background
+        for x in 0..button_width {
+            let mut cell = Cell::new(' ');
+            cell.bg = Some(bg);
+            ctx.set(x, 0, cell);
+        }
+
+        // Calculate content start position for centering
+        let content_start = (button_width.saturating_sub(content_width)) / 2;
+        let mut x = content_start;
+
+        // Render icon if present
+        if let Some(icon) = self.icon {
+            if x < button_width {
+                let bold = self.state.focused && !self.state.disabled;
+                let mut utf8 = [0u8; 4];
+                // A wide icon (emoji) takes two columns.
+                x += ctx.put_str_with(x, 0, icon.encode_utf8(&mut utf8), button_width, |ch| {
+                    let mut cell = Cell::new(ch);
+                    cell.fg = Some(fg);
+                    cell.bg = Some(bg);
+                    if bold {
+                        cell.modifier = crate::render::Modifier::BOLD;
+                    }
+                    cell
+                });
+
+                // Space after icon
+                if x < button_width {
+                    let mut space = Cell::new(' ');
+                    space.bg = Some(bg);
+                    ctx.set(x, 0, space);
+                    x += 1;
+                }
+            }
+        }
+
+        // Render label
+        if self.state.focused && !self.state.disabled {
+            ctx.draw_text_bg_bold(x, 0, &self.label, fg, bg);
+        } else {
+            ctx.draw_text_bg(x, 0, &self.label, fg, bg);
+        }
+
+        // Render focus indicator (inside area bounds)
+        if self.state.focused && !self.state.disabled {
+            ctx.draw_focus_brackets(0, button_width, Color::CYAN);
+        }
+    }
+
+    crate::impl_view_meta!("Button", focusable, disabled: state);
+}
+
+impl Interactive for Button {
+    fn handle_key(&mut self, event: &KeyEvent) -> EventResult {
+        if self.state.disabled {
+            return EventResult::Ignored;
+        }
+
+        match event.key {
+            Key::Enter | Key::Char(' ') => EventResult::ConsumedAndRender,
+            _ => EventResult::Ignored,
+        }
+    }
+
+    fn handle_mouse(&mut self, event: &MouseEvent, area: Rect) -> EventResult {
+        if self.state.disabled {
+            return EventResult::Ignored;
+        }
+
+        let inside = area.contains(event.x, event.y);
+
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) if inside => {
+                if !self.state.pressed {
+                    self.state.pressed = true;
+                    return EventResult::ConsumedAndRender;
+                }
+                EventResult::Consumed
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if self.state.pressed {
+                    self.state.pressed = false;
+                    // Click event is signaled by ConsumedAndRender when inside
+                    return if inside {
+                        EventResult::ConsumedAndRender
+                    } else {
+                        EventResult::Consumed
+                    };
+                }
+                EventResult::Ignored
+            }
+            MouseEventKind::Move => {
+                let was_hovered = self.state.hovered;
+                self.state.hovered = inside;
+                if was_hovered != self.state.hovered {
+                    EventResult::ConsumedAndRender
+                } else {
+                    EventResult::Ignored
+                }
+            }
+            _ => EventResult::Ignored,
+        }
+    }
+
+    fn focusable(&self) -> bool {
+        !self.state.disabled
+    }
+
+    fn on_focus(&mut self) {
+        self.state.focused = true;
+    }
+
+    fn on_blur(&mut self) {
+        self.state.focused = false;
+        // Button has extra cleanup on blur
+        self.state.reset_transient();
+    }
+}
+
+/// Create a button
+pub fn button(label: impl Into<String>) -> Button {
+    Button::new(label)
+}
+
+impl_styled_view!(Button);
+impl_widget_builders!(Button);

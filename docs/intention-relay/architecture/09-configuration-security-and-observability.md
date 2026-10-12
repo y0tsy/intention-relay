@@ -68,6 +68,11 @@ be in `1..=60`; `max_attempts` defaults to `2` and must be in `1..=2`. Missing p
 to those defaults; `provider_execution` is a required field on the resolved and snapshot wire shapes, so persisted
 snapshots always carry the effective policy explicitly. Runtime owns the fixed 250 ms retry delay, not TOML.
 
+`attempt_timeout_seconds` is the idle window of one provider attempt, not the attempt's total duration: the attempt
+arms one window when its stream opens and re-arms a fresh one after every event the stream delivers, so it bounds the
+silence between two provider facts. A window that expires fails the attempt retryably with
+`provider_attempt_timed_out` ([architecture 08](08-model-protocol-and-providers.md)).
+
 `parse_startup_material` additionally creates opaque `StartupProviderMaterial` for composition. It has no `Debug`,
 `Display`, serde implementation, or credential accessor and may only be consumed by a selected provider constructor.
 Safe resolved/snapshot DTOs, committed records, frames, protocol, diagnostics, logs, and adapter projections remain
@@ -121,8 +126,9 @@ The current bounds are:
 | Tool read and output windows (`MAX_TOOL_OUTPUT_BYTES`, `MAX_EDIT_TARGET_BYTES`, `MAX_GREP_AGGREGATE_BYTES`) | Representation: bounds one tool read or rendered result; a cut is marked, never hidden. |
 | Tool-result content (`MAX_TOOL_RESULT_CONTENT_BYTES`, 512 KiB) | Representation: bounds one persisted tool-result content; an over-bound value fails `invalid_tool_result` instead of truncating. |
 | Transient reasoning attachment (`MAX_MODEL_ASSISTANT_REASONING_BYTES`, 512 KiB) | Representation: bounds the reasoning one provider response attaches to its tool calls for the same-run continuation; an over-bound value fails `invalid_model_assistant_reasoning_text`. |
-| Process timeout and drain windows (`EXECUTE_TIMEOUT` 30 s, `READER_DRAIN_GRACE` 5 s) | Liveness: a child process that stops producing progress or never exits cannot hang the loop. |
-| Provider progress and retry timeouts | Liveness: a live provider request that stops producing progress fails typed. |
+| Tool failure guidance (`MAX_TOOL_GUIDANCE_BYTES`, 8 KiB) | Representation: bounds one failed call's model-visible guidance; a cut is marked and never hides the failure. |
+| Pipe-collection window (`READER_DRAIN_GRACE`, 5 s) | Liveness: after the direct child is reaped, a descendant holding the pipes open cannot extend the call; a window that runs out stops the process group and keeps the captured output. |
+| Provider idle attempt window and retry delay | Liveness: a live provider request that delivers no event for the configured window fails typed; the window re-arms after every delivered event, so a request that keeps producing facts is never cut off. |
 | Subscriber queue and write deadline (`SUBSCRIBER_QUEUE_CAPACITY` 64, `SUBSCRIBER_WRITE_DEADLINE` 10 s) | Liveness: isolates a slow local peer from execution, persistence, and healthy delivery. |
 
 ## Data classification

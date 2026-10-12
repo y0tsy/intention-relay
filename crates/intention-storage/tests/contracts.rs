@@ -12,11 +12,11 @@ mod common;
 use common::time;
 
 use intention_config::ConfigSnapshotDto;
-use intention_proto::{MessageKindDto, MessageProjectionDto, RunId, SessionId, ToolCallId};
-use intention_storage::{
-    StartingRunModelContextDto, ToolResultEvidenceDto, ToolResultMetadataEntryDto,
-    ToolResultStatusDto,
+use intention_proto::{
+    MessageId, MessageKindDto, MessageProjectionDto, RunId, SessionId, ToolCallId,
+    ToolResultMetadataEntryDto, ToolResultStatusDto,
 };
+use intention_storage::{StartingRunModelContextDto, ToolResultEvidenceDto};
 
 fn snapshot() -> ConfigSnapshotDto {
     serde_json::from_str(include_str!(
@@ -27,11 +27,11 @@ fn snapshot() -> ConfigSnapshotDto {
 
 fn user_message(session_id: SessionId, run_id: RunId, text: &str) -> MessageProjectionDto {
     MessageProjectionDto::new(
+        MessageId::new(1).expect("fixture row identity is valid"),
         session_id,
         Some(run_id),
         MessageKindDto::User,
         text,
-        None,
         None,
         None,
     )
@@ -160,11 +160,11 @@ fn starting_run_model_context_validates_its_committed_values() {
             snapshot(),
             vec![
                 MessageProjectionDto::new(
+                    MessageId::new(2).expect("fixture row identity is valid"),
                     session_id,
                     Some(run_id),
                     MessageKindDto::Notice,
                     "notice",
-                    None,
                     None,
                     None,
                 )
@@ -182,11 +182,11 @@ fn starting_run_model_context_validates_its_committed_values() {
             snapshot(),
             vec![
                 MessageProjectionDto::new(
+                    MessageId::new(3).expect("fixture row identity is valid"),
                     session_id,
                     None,
                     MessageKindDto::User,
                     "session-level",
-                    None,
                     None,
                     None,
                 )

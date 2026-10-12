@@ -15,16 +15,19 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_proto::{
-    ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId,
-    RunId, SchemaVersionDto, SessionId, ToolCallId, UsageDto, WorkspaceId,
+    BoundedText, CreateSessionCommandDto, ExecuteResult, MessageKindDto, MessageProjectionDto,
+    NewMessageDto, PathsResult, PendingTurnProjectionDto, ReadInput, RemoveTurnCommandDto,
+    RunModeDto, RunProjectionDto, RunStatusDto, TextResult, ToolCallRowDto, ToolIdentityDto,
+    ToolInput, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto,
+    ToolRowDto, WorkspaceRelativePathDto,
 };
 use intention_proto::{
-    CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto,
-    RemoveTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto,
+    ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId,
+    RunId, SchemaVersionDto, SessionId, ThemeDto, ToolCallId, UsageDto, WorkspaceId,
 };
 use intention_storage::{
     AcceptedTurnOutcomeDto, RunOutcomeDto, SqliteStorageRepository, StorageRepositoryDto,
-    ToolResultEvidenceDto, ToolResultMetadataEntryDto, ToolResultStatusDto,
+    ToolResultEvidenceDto,
 };
 use tempfile::TempDir;
 
@@ -63,6 +66,36 @@ fn create(store: &SqliteStorageRepository) -> SessionId {
     create_session(store, &SessionId::new().to_string())
 }
 
+/// Creates one durable session whose last durable update is `updated_at`.
+fn create_at(store: &SqliteStorageRepository, updated_at: i64) -> SessionId {
+    let session_id = SessionId::new();
+    store
+        .create_session(
+            CreateSessionCommandDto::new(
+                ProjectId::new(),
+                session_id,
+                WorkspaceId::new(),
+                workspace_root(&session_id.to_string()),
+                Some(RunModeDto::Build),
+                None,
+            ),
+            time(updated_at),
+        )
+        .expect("session creates");
+    session_id
+}
+
+/// Returns the session identities of one session-list window in durable order.
+fn listed(store: &SqliteStorageRepository, limit: u32) -> Vec<SessionId> {
+    store
+        .list_sessions(limit)
+        .expect("sessions list")
+        .sessions()
+        .iter()
+        .map(|summary| summary.session_id())
+        .collect()
+}
+
 fn accept(
     store: &SqliteStorageRepository,
     session: SessionId,
@@ -82,6 +115,14 @@ fn started(outcome: AcceptedTurnOutcomeDto) -> (RunProjectionDto, MessageProject
     }
 }
 
+/// Returns the open committed tool calls one run's projection reports.
+fn open_calls(store: &SqliteStorageRepository, session: SessionId, run: RunId) -> u32 {
+    store
+        .load_run_projection(session, run)
+        .expect("run projection loads")
+        .open_tool_calls()
+}
+
 fn pending(outcome: AcceptedTurnOutcomeDto) -> PendingTurnProjectionDto {
     match outcome {
         AcceptedTurnOutcomeDto::Pending(turn) => turn,
@@ -91,7 +132,7 @@ fn pending(outcome: AcceptedTurnOutcomeDto) -> PendingTurnProjectionDto {
 
 fn append(
     store: &SqliteStorageRepository,
-    message: MessageProjectionDto,
+    message: NewMessageDto,
     event_time: i64,
 ) -> MessageProjectionDto {
     store
@@ -116,6 +157,76 @@ fn outcome(
     .expect("fixture run outcome is valid")
 }
 
+/// Returns the parsed identity of a declared fixture tool.
+fn identity(wire_name: &str) -> ToolIdentityDto {
+    ToolIdentityDto::parse(wire_name).expect("the fixture tool name is a declared tool")
+}
+
+/// Returns the typed arguments of one declared `read` fixture call.
+fn read_arguments(path: &str) -> ToolInput {
+    ToolInput::Read(ReadInput {
+        path: WorkspaceRelativePathDto::parse(path)
+            .expect("the fixture path is workspace-relative"),
+    })
+}
+
+/// Builds one typed call-row fixture for a declared tool.
+fn call_row(
+    call_id: ToolCallId,
+    tool: ToolIdentityDto,
+    arguments: Option<ToolInput>,
+) -> ToolRowDto {
+    ToolRowDto::Call(
+        ToolCallRowDto::new(call_id, tool, arguments).expect("fixture call row is valid"),
+    )
+}
+
+/// Returns one typed `read` payload carrying `text`.
+fn read_result(text: &str) -> ToolResult {
+    ToolResult::Read(TextResult {
+        text: BoundedText::new(text).expect("fixture read text is bounded"),
+        truncated: false,
+    })
+}
+
+/// Returns one typed `execute` payload carrying the output a stopped call
+/// captured, with no terminal process status.
+fn partial_execute_result(text: &str) -> ToolResult {
+    ToolResult::Execute(ExecuteResult {
+        text: TextResult {
+            text: BoundedText::new(text).expect("fixture execute text is bounded"),
+            truncated: false,
+        },
+        process: None,
+    })
+}
+
+/// Builds one typed result-row fixture for a declared tool.
+fn result_row(
+    call_id: ToolCallId,
+    tool: ToolIdentityDto,
+    status: ToolResultStatusDto,
+    result: Option<ToolResult>,
+    metadata: Vec<ToolResultMetadataEntryDto>,
+) -> ToolRowDto {
+    ToolRowDto::Result(
+        ToolResultRowDto::new(call_id, tool, status, result, metadata)
+            .expect("fixture result row is valid"),
+    )
+}
+
+/// Builds one committed tool-row message for the fixture call sites.
+fn tool_message(
+    session: SessionId,
+    run: RunId,
+    kind: MessageKindDto,
+    text: &str,
+    tool: ToolRowDto,
+) -> NewMessageDto {
+    NewMessageDto::new(session, Some(run), kind, text, None, Some(tool))
+        .expect("fixture tool row is valid")
+}
+
 #[test]
 fn current_database_reopen_preserves_committed_rows() {
     let directory = TempDir::new().expect("temporary directory exists");
@@ -124,17 +235,28 @@ fn current_database_reopen_preserves_committed_rows() {
     let run = RunId::new();
     let (_, message) = started(accept(&store, session, IdempotencyKey::new(), run, "kept"));
     assert_eq!(message.text(), "kept");
+    assert!(
+        message.id().value() > 0,
+        "the committed row carries the durable row id the commit assigned"
+    );
     drop(store);
 
     let reopened = reopen(&directory);
+    let rows = reopened
+        .load_run_messages(session, run, 10)
+        .expect("transcript loads after reopen");
     assert_eq!(
-        reopened
-            .load_run_messages(session, run, 10)
-            .expect("transcript loads after reopen")
-            .iter()
+        rows.iter()
             .map(MessageProjectionDto::text)
             .collect::<Vec<_>>(),
         vec!["kept"]
+    );
+    assert_eq!(
+        rows.iter()
+            .map(MessageProjectionDto::id)
+            .collect::<Vec<_>>(),
+        vec![message.id()],
+        "a reread projects the same durable row identity"
     );
     assert_eq!(
         reopened
@@ -201,6 +323,50 @@ fn a_stale_schema_stamp_discards_the_database_once_and_recreates_it() {
             .session_id(),
         session
     );
+}
+
+/// A database from the immediately previous stamped schema (stamp 3) is
+/// discarded exactly like any other stale stamp and recreated at stamp 4.
+#[test]
+fn a_database_from_the_previous_stamp_is_discarded() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    let store = open(&directory);
+    let session = create(&store);
+    drop(store);
+
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for stamp mutation");
+    connection
+        .execute_batch(
+            "CREATE TABLE previous_stamp_marker (id INTEGER PRIMARY KEY);
+             PRAGMA user_version = 3;",
+        )
+        .expect("the previous stamp applies");
+    drop(connection);
+
+    let recreated = open(&directory);
+    assert_eq!(
+        recreated
+            .load_session_projection(session)
+            .expect_err("the discarded database no longer holds its rows")
+            .code(),
+        "storage_record_not_found"
+    );
+    drop(recreated);
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("recreated database reopens for inspection");
+    let stamp: i32 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("the recreated stamp reads");
+    assert_eq!(stamp, 4, "the recreated database carries the current stamp");
+    let marker: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'previous_stamp_marker'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("previous-stamp object lookup runs");
+    assert_eq!(marker, 0, "the previous stamp's objects are gone");
 }
 
 #[test]
@@ -652,13 +818,12 @@ fn append_message_and_transcript_reads_obey_bounds_and_order() {
     let call_id = ToolCallId::new();
     let _ = append(
         &store,
-        MessageProjectionDto::new(
+        NewMessageDto::new(
             session,
             Some(run),
             MessageKindDto::Assistant,
             "answer",
             Some("why".to_owned()),
-            None,
             None,
         )
         .expect("assistant row is valid"),
@@ -666,16 +831,17 @@ fn append_message_and_transcript_reads_obey_bounds_and_order() {
     );
     let _ = append(
         &store,
-        MessageProjectionDto::new(
+        tool_message(
             session,
-            Some(run),
+            run,
             MessageKindDto::ToolCall,
             r#"{"path":"src/lib.rs"}"#,
-            None,
-            Some(call_id),
-            Some("read".to_owned()),
-        )
-        .expect("tool call row is valid"),
+            call_row(
+                call_id,
+                identity("read"),
+                Some(read_arguments("src/lib.rs")),
+            ),
+        ),
         3,
     );
 
@@ -696,6 +862,14 @@ fn append_message_and_transcript_reads_obey_bounds_and_order() {
     assert_eq!(all.len(), 3);
     assert_eq!(all[0].text(), "start");
     assert_eq!(all[1].reasoning(), Some("why"));
+    assert!(
+        all.iter()
+            .map(MessageProjectionDto::id)
+            .collect::<Vec<_>>()
+            .windows(2)
+            .all(|pair| pair[0] < pair[1]),
+        "insertion order is durable row identity order"
+    );
     assert_eq!(
         store
             .load_run_messages(session, run, 10)
@@ -742,14 +916,13 @@ fn append_message_and_transcript_reads_obey_bounds_and_order() {
     assert_eq!(
         store
             .append_message(
-                MessageProjectionDto::new(
+                NewMessageDto::new(
                     other,
                     Some(run),
                     MessageKindDto::User,
                     "foreign",
                     None,
-                    None,
-                    None,
+                    None
                 )
                 .expect("foreign row is valid"),
                 time(5),
@@ -767,6 +940,9 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
     let run = RunId::new();
     let _ = accept(&store, session, IdempotencyKey::new(), run, "run");
     let call_id = ToolCallId::new();
+    let metadata = vec![
+        ToolResultMetadataEntryDto::new("truncated", "false").expect("fixture metadata is valid"),
+    ];
     let evidence = ToolResultEvidenceDto::new(
         session,
         run,
@@ -774,74 +950,77 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
         "read",
         ToolResultStatusDto::Completed,
         r#"{"result":"read","value":{"text":"hello","truncated":false}}"#,
-        vec![
-            ToolResultMetadataEntryDto::new("truncated", "false")
-                .expect("fixture metadata is valid"),
-        ],
+        metadata.clone(),
         time(4),
     )
     .expect("tool result evidence is valid");
-    let message = MessageProjectionDto::new(
+    let answering = result_row(
+        call_id,
+        identity("read"),
+        ToolResultStatusDto::Completed,
+        Some(read_result("hello")),
+        metadata.clone(),
+    );
+    let message = tool_message(
         session,
-        Some(run),
+        run,
         MessageKindDto::ToolResult,
         evidence.content(),
-        None,
-        Some(call_id),
-        Some("read".to_owned()),
-    )
-    .expect("answering row is valid");
+        answering.clone(),
+    );
     for mismatched in [
-        MessageProjectionDto::new(
+        NewMessageDto::new(
             session,
             Some(run),
             MessageKindDto::Assistant,
             "not a result",
             None,
             None,
-            None,
         )
         .expect("assistant row is valid"),
-        MessageProjectionDto::new(
+        tool_message(
             SessionId::new(),
-            Some(run),
+            run,
             MessageKindDto::ToolResult,
             evidence.content(),
-            None,
-            Some(call_id),
-            Some("read".to_owned()),
-        )
-        .expect("cross-session row is structurally valid"),
-        MessageProjectionDto::new(
+            answering.clone(),
+        ),
+        tool_message(
             session,
-            Some(RunId::new()),
+            RunId::new(),
             MessageKindDto::ToolResult,
             evidence.content(),
-            None,
-            Some(call_id),
-            Some("read".to_owned()),
-        )
-        .expect("cross-run row is structurally valid"),
-        MessageProjectionDto::new(
+            answering,
+        ),
+        tool_message(
             session,
-            Some(run),
+            run,
             MessageKindDto::ToolResult,
             evidence.content(),
-            None,
-            Some(ToolCallId::new()),
-            Some("read".to_owned()),
-        )
-        .expect("cross-call row is structurally valid"),
-        MessageProjectionDto::new(
+            result_row(
+                ToolCallId::new(),
+                identity("read"),
+                ToolResultStatusDto::Completed,
+                Some(read_result("hello")),
+                metadata.clone(),
+            ),
+        ),
+        tool_message(
             session,
-            Some(run),
+            run,
             MessageKindDto::ToolResult,
             evidence.content(),
-            None,
-            Some(call_id),
-            Some("glob".to_owned()),
-        )
-        .expect("cross-tool row is structurally valid"),
+            result_row(
+                call_id,
+                identity("glob"),
+                ToolResultStatusDto::Completed,
+                Some(ToolResult::Glob(PathsResult {
+                    paths: Vec::new(),
+                    truncated: false,
+                })),
+                metadata,
+            ),
+        ),
     ] {
         assert_eq!(
             store
@@ -854,21 +1033,24 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
     let committed = store
         .write_tool_result(evidence.clone(), message.clone())
         .expect("evidence and its transcript row commit atomically");
-    assert_eq!(committed, evidence);
+    assert_eq!(committed.kind(), MessageKindDto::ToolResult);
+    assert_eq!(committed.tool_call_id(), Some(call_id));
+    assert_eq!(committed.text(), evidence.content());
     assert_eq!(
         store
             .load_tool_result(session, run, call_id)
             .expect("typed evidence rereads"),
         evidence
     );
-    assert!(
+    assert_eq!(
         store
             .load_run_messages(session, run, 10)
             .expect("transcript loads")
             .iter()
-            .any(|row| row.kind() == MessageKindDto::ToolResult
-                && row.tool_call_id() == Some(call_id)
-                && row.text() == evidence.content())
+            .find(|row| row.kind() == MessageKindDto::ToolResult)
+            .map(MessageProjectionDto::id),
+        Some(committed.id()),
+        "the committed row carries the durable row identity the commit assigned"
     );
     assert_eq!(
         store
@@ -900,6 +1082,277 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
             .expect("durable evidence rereads after reopen"),
         evidence
     );
+}
+
+/// A partial result's interruption cause and declared deadline survive the
+/// write and a reopen in order.
+#[test]
+fn partial_tool_result_evidence_rereads_with_its_interruption_metadata() {
+    let (directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "run");
+    let call_id = ToolCallId::new();
+    let evidence = ToolResultEvidenceDto::new(
+        session,
+        run,
+        call_id,
+        "execute",
+        ToolResultStatusDto::Partial,
+        "stdout:\n\nstderr:\n\n[The tool call hit its declared timeout of 1s and was terminated before a final result; the output above is partial.]",
+        vec![
+            ToolResultMetadataEntryDto::new("interruption", "tool_timed_out")
+                .expect("fixture metadata is valid"),
+            ToolResultMetadataEntryDto::new("declared_timeout_seconds", "1")
+                .expect("fixture metadata is valid"),
+        ],
+        time(4),
+    )
+    .expect("partial tool result evidence is valid");
+    let message = tool_message(
+        session,
+        run,
+        MessageKindDto::ToolResult,
+        evidence.content(),
+        result_row(
+            call_id,
+            identity("execute"),
+            ToolResultStatusDto::Partial,
+            Some(partial_execute_result("stdout:\n\nstderr:\n")),
+            evidence.metadata().to_vec(),
+        ),
+    );
+    store
+        .write_tool_result(evidence.clone(), message)
+        .expect("partial evidence and its transcript row commit atomically");
+    drop(store);
+
+    let reread = reopen(&directory)
+        .load_tool_result(session, run, call_id)
+        .expect("partial evidence rereads after reopen");
+    assert_eq!(reread, evidence);
+    assert_eq!(
+        reread
+            .metadata()
+            .iter()
+            .map(|entry| (entry.key(), entry.value()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("interruption", "tool_timed_out"),
+            ("declared_timeout_seconds", "1"),
+        ],
+        "the cause and the declared deadline it hit survive the reopen in order"
+    );
+}
+
+#[test]
+fn a_message_row_round_trips_its_typed_projection() {
+    let (directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "run");
+    let call_id = ToolCallId::new();
+    let tool = call_row(
+        call_id,
+        identity("read"),
+        Some(read_arguments("src/lib.rs")),
+    );
+    let committed = append(
+        &store,
+        tool_message(
+            session,
+            run,
+            MessageKindDto::ToolCall,
+            r#"{"path":"src/lib.rs"}"#,
+            tool.clone(),
+        ),
+        3,
+    );
+    assert_eq!(committed.tool(), Some(&tool));
+    assert_eq!(committed.tool_call_id(), Some(call_id));
+    assert_eq!(
+        committed.tool_id().map(ToolIdentityDto::wire_name),
+        Some("read")
+    );
+    drop(store);
+
+    let reread = reopen(&directory)
+        .load_recent_messages(session, 10)
+        .expect("the transcript rereads");
+    let row = reread.last().expect("the committed row rereads");
+    assert_eq!(
+        row.tool(),
+        Some(&tool),
+        "the typed projection survives the reopen byte for byte"
+    );
+}
+
+#[test]
+fn an_undecodable_arguments_document_projects_no_typed_arguments() {
+    let (directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "run");
+    let call_id = ToolCallId::new();
+    // The engine commits the call before dispatch, so a document that never
+    // decoded to typed arguments commits with its own identity and no
+    // arguments; the storage boundary stores that projection instead of
+    // decoding the document a second time.
+    let tool = call_row(call_id, identity("read"), None);
+    let _ = append(
+        &store,
+        tool_message(
+            session,
+            run,
+            MessageKindDto::ToolCall,
+            r#"{"path":42}"#,
+            tool,
+        ),
+        3,
+    );
+    drop(store);
+
+    let reread = reopen(&directory)
+        .load_recent_messages(session, 10)
+        .expect("the transcript rereads");
+    let Some(ToolRowDto::Call(call)) = reread.last().and_then(MessageProjectionDto::tool) else {
+        unreachable!("the committed tool-call row carries its call evidence")
+    };
+    assert!(
+        call.arguments().is_none(),
+        "the undecodable document projects no typed arguments"
+    );
+    assert_eq!(call.tool_id(), &identity("read"));
+}
+
+#[test]
+fn a_tool_result_row_round_trips_its_typed_outcome() {
+    let (directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "run");
+    let cases = [
+        result_row(
+            ToolCallId::new(),
+            identity("read"),
+            ToolResultStatusDto::Completed,
+            Some(read_result("hello")),
+            vec![ToolResultMetadataEntryDto::new("bytes", "5").expect("fixture metadata is valid")],
+        ),
+        result_row(
+            ToolCallId::new(),
+            identity("glob"),
+            ToolResultStatusDto::Failed,
+            None,
+            Vec::new(),
+        ),
+        result_row(
+            ToolCallId::new(),
+            identity("execute"),
+            ToolResultStatusDto::Partial,
+            Some(partial_execute_result("captured")),
+            Vec::new(),
+        ),
+    ];
+    for tool in &cases {
+        let ToolRowDto::Result(row) = tool else {
+            unreachable!("the fixtures are result rows")
+        };
+        let evidence = ToolResultEvidenceDto::new(
+            session,
+            run,
+            tool.call_id(),
+            tool.tool_id().wire_name(),
+            row.status(),
+            "rendered content",
+            row.metadata().to_vec(),
+            time(4),
+        )
+        .expect("fixture evidence is valid");
+        store
+            .write_tool_result(
+                evidence,
+                tool_message(
+                    session,
+                    run,
+                    MessageKindDto::ToolResult,
+                    "rendered content",
+                    tool.clone(),
+                ),
+            )
+            .expect("evidence and its transcript row commit atomically");
+    }
+    drop(store);
+
+    let reread = reopen(&directory)
+        .load_run_messages(session, run, 10)
+        .expect("the transcript rereads");
+    let tool_rows = reread
+        .iter()
+        .filter_map(MessageProjectionDto::tool)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tool_rows,
+        cases.iter().collect::<Vec<_>>(),
+        "every committed status, payload, and metadata rereads unchanged"
+    );
+}
+
+#[test]
+fn a_projection_whose_identity_disagrees_with_its_row_is_refused() {
+    assert_eq!(
+        disagreeing_projection_error(|_row_call| {
+            call_row(
+                ToolCallId::new(),
+                identity("read"),
+                Some(read_arguments("src/lib.rs")),
+            )
+        }),
+        "storage_decode_failed",
+        "the projection's call identity must be the row's tool_call_id"
+    );
+    assert_eq!(
+        disagreeing_projection_error(|row_call| call_row(row_call, identity("write"), None)),
+        "storage_decode_failed",
+        "the projection's tool identity must be the row's tool_id"
+    );
+}
+
+/// Commits one handwritten tool-call row whose typed projection disagrees with
+/// the row's own identity columns and returns the transcript read's error code.
+fn disagreeing_projection_error(mutate: impl FnOnce(ToolCallId) -> ToolRowDto) -> String {
+    let (directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let _ = accept(&store, session, IdempotencyKey::new(), run, "run");
+    let row_call = ToolCallId::new();
+    let projection =
+        serde_json::to_string(&mutate(row_call)).expect("the fixture projection serializes");
+    drop(store);
+
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for the handwritten row");
+    connection
+        .execute(
+            "INSERT INTO messages(session_id, run_id, kind, text, reasoning, tool_call_id, tool_id, projection_json, created_at)              VALUES (?1, ?2, 'tool_call', ?3, NULL, ?4, ?5, ?6, ?7)",
+            sqlite::params![
+                session.to_string(),
+                run.to_string(),
+                r#"{"path":"src/lib.rs"}"#,
+                row_call.to_string(),
+                "read",
+                projection,
+                5
+            ],
+        )
+        .expect("the disagreeing row inserts");
+    drop(connection);
+
+    reopen(&directory)
+        .load_recent_messages(session, 10)
+        .expect_err("a projection that disagrees with its row is refused")
+        .code()
+        .to_owned()
 }
 
 #[test]
@@ -1197,6 +1650,47 @@ fn canonical_config_revision_binds_one_snapshot_across_both_entry_points() {
 }
 
 #[test]
+fn the_workspace_binding_reads_the_association_a_creation_established() {
+    let (_directory, store) = repository();
+    let root = workspace_root("binding-read");
+    assert_eq!(
+        store
+            .workspace_binding(&root)
+            .expect("an unbound root reads as absent"),
+        None,
+        "a root with no session carries no binding yet"
+    );
+    let project_id = ProjectId::new();
+    let workspace_id = WorkspaceId::new();
+    store
+        .create_session(
+            CreateSessionCommandDto::new(
+                project_id,
+                SessionId::new(),
+                workspace_id,
+                root.clone(),
+                Some(RunModeDto::Build),
+                None,
+            ),
+            time(1),
+        )
+        .expect("the first session establishes the binding");
+    let binding = store
+        .workspace_binding(&root)
+        .expect("the bound root reads")
+        .expect("the root is bound");
+    assert_eq!(binding.project_id(), project_id);
+    assert_eq!(binding.workspace_id(), workspace_id);
+    assert_eq!(
+        store
+            .workspace_binding(&workspace_root("binding-read-other"))
+            .expect("an unrelated root reads as absent"),
+        None,
+        "the binding belongs to its exact root"
+    );
+}
+
+#[test]
 fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
     let (_directory, store) = repository();
     let workspace_id = WorkspaceId::new();
@@ -1210,7 +1704,8 @@ fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
                     session,
                     workspace_id,
                     root.clone(),
-                    RunModeDto::Build,
+                    Some(RunModeDto::Build),
+                    None,
                 ),
                 time(1),
             )
@@ -1224,7 +1719,8 @@ fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
                     first_session,
                     workspace_id,
                     root.clone(),
-                    RunModeDto::Build,
+                    Some(RunModeDto::Build),
+                    None,
                 ),
                 time(1),
             )
@@ -1240,7 +1736,8 @@ fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
                     SessionId::new(),
                     workspace_id,
                     workspace_root("conflict"),
-                    RunModeDto::Build,
+                    Some(RunModeDto::Build),
+                    None,
                 ),
                 time(2),
             )
@@ -1255,7 +1752,8 @@ fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
                 SessionId::new(),
                 WorkspaceId::new(),
                 root,
-                RunModeDto::Build,
+                Some(RunModeDto::Build),
+                None,
             ),
             time(3),
         )
@@ -1277,6 +1775,284 @@ fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
             .code(),
         "storage_record_not_found"
     );
+}
+
+#[test]
+fn a_run_projection_carries_usage_times_and_open_calls() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let (_, _) = started(accept(&store, session, IdempotencyKey::new(), run, "run"));
+    let call_id = ToolCallId::new();
+    let _ = append(
+        &store,
+        tool_message(
+            session,
+            run,
+            MessageKindDto::ToolCall,
+            r#"{"call":"read"}"#,
+            call_row(
+                call_id,
+                identity("read"),
+                Some(read_arguments("src/lib.rs")),
+            ),
+        ),
+        3,
+    );
+
+    let open = store
+        .load_run_projection(session, run)
+        .expect("run projection loads");
+    assert_eq!(open.status(), RunStatusDto::Starting);
+    assert_eq!(
+        open.started_at().unix_seconds(),
+        2,
+        "a run starts at its durable acceptance time"
+    );
+    assert_eq!(
+        open.finished_at(),
+        None,
+        "a live run carries no finish time"
+    );
+    assert_eq!(open.usage(), None, "a live run reports no usage");
+    assert_eq!(
+        open.open_tool_calls(),
+        1,
+        "a committed call without its committed result stays open"
+    );
+
+    let running = store
+        .transition_run(session, run, RunStatusDto::Running, time(3))
+        .expect("run starts");
+    assert_eq!(running.status(), RunStatusDto::Running);
+    assert_eq!(running.open_tool_calls(), 1);
+    let usage = UsageDto::reported(1_200, 300, 1_500).expect("fixture usage is consistent");
+    let finished = store
+        .finish_run(
+            session,
+            run,
+            outcome(
+                RunStatusDto::Completed,
+                Some(usage),
+                Some(FinishReasonDto::Stop),
+                None,
+            ),
+            time(4),
+        )
+        .expect("run completes");
+    assert_eq!(finished.status(), RunStatusDto::Completed);
+    assert_eq!(finished.started_at().unix_seconds(), 2);
+    assert_eq!(
+        finished
+            .finished_at()
+            .expect("a terminal projection carries its finish time")
+            .unix_seconds(),
+        4
+    );
+    assert_eq!(finished.usage(), Some(usage));
+    assert_eq!(
+        finished.open_tool_calls(),
+        1,
+        "the terminal write leaves the committed pairing exactly as it was"
+    );
+    assert_eq!(
+        store
+            .load_run_projection(session, run)
+            .expect("run projection re-reads"),
+        finished,
+        "every write path projects the same committed row"
+    );
+}
+
+#[test]
+fn open_calls_track_committed_calls_without_a_committed_result() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let (_, _) = started(accept(&store, session, IdempotencyKey::new(), run, "run"));
+    let answered = ToolCallId::new();
+    let pending = ToolCallId::new();
+    for (call_id, path) in [(answered, "a.rs"), (pending, "b.rs")] {
+        let _ = append(
+            &store,
+            tool_message(
+                session,
+                run,
+                MessageKindDto::ToolCall,
+                r#"{"call":"read"}"#,
+                call_row(call_id, identity("read"), Some(read_arguments(path))),
+            ),
+            3,
+        );
+    }
+    assert_eq!(open_calls(&store, session, run), 2);
+
+    // Another session's committed call never counts against this run.
+    let other_session = create(&store);
+    let other_run = RunId::new();
+    let (_, _) = started(accept(
+        &store,
+        other_session,
+        IdempotencyKey::new(),
+        other_run,
+        "other",
+    ));
+    let _ = append(
+        &store,
+        tool_message(
+            other_session,
+            other_run,
+            MessageKindDto::ToolCall,
+            r#"{"call":"read"}"#,
+            call_row(
+                ToolCallId::new(),
+                identity("read"),
+                Some(read_arguments("c.rs")),
+            ),
+        ),
+        3,
+    );
+    assert_eq!(
+        open_calls(&store, session, run),
+        2,
+        "a call of another run never counts against this run"
+    );
+
+    // A committed result closes only the call it answers.
+    write_result(&store, session, run, answered, "answered");
+    assert_eq!(
+        open_calls(&store, session, run),
+        1,
+        "the answered call closes and the unanswered call stays open"
+    );
+
+    // An orphan result - a result whose call was never committed - closes
+    // nothing.
+    write_result(&store, session, run, ToolCallId::new(), "orphan");
+    assert_eq!(
+        open_calls(&store, session, run),
+        1,
+        "an orphan result never cancels a live call"
+    );
+
+    write_result(&store, session, run, pending, "pending");
+    assert_eq!(open_calls(&store, session, run), 0);
+}
+
+#[test]
+fn a_terminal_run_projection_carries_its_finish_time() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    let (starting, _) = started(accept(&store, session, IdempotencyKey::new(), run, "run"));
+    assert_eq!(starting.status(), RunStatusDto::Starting);
+    assert_eq!(starting.finished_at(), None);
+
+    let running = store
+        .transition_run(session, run, RunStatusDto::Running, time(3))
+        .expect("run starts");
+    assert_eq!(running.status(), RunStatusDto::Running);
+    assert_eq!(
+        running.finished_at(),
+        None,
+        "a run is finished only by its terminal write"
+    );
+
+    let completed = store
+        .finish_run(
+            session,
+            run,
+            outcome(
+                RunStatusDto::Completed,
+                Some(UsageDto::NotReported),
+                Some(FinishReasonDto::Stop),
+                None,
+            ),
+            time(4),
+        )
+        .expect("run completes");
+    assert_eq!(
+        completed
+            .finished_at()
+            .expect("a completed run carries its finish time")
+            .unix_seconds(),
+        4
+    );
+    assert_eq!(completed.usage(), Some(UsageDto::NotReported));
+
+    // Recovery stamps its own finish time on an unfinished run.
+    let recovered_session = create(&store);
+    let recovered_run = RunId::new();
+    let (_, _) = started(accept(
+        &store,
+        recovered_session,
+        IdempotencyKey::new(),
+        recovered_run,
+        "recovered",
+    ));
+    let recovered = store
+        .recover_unfinished_runs(time(9))
+        .expect("recovery commits");
+    let interrupted = recovered
+        .iter()
+        .find(|projection| projection.run_id() == recovered_run)
+        .expect("the unfinished run is recovered");
+    assert_eq!(interrupted.status(), RunStatusDto::Interrupted);
+    assert_eq!(
+        interrupted
+            .finished_at()
+            .expect("a recovered run carries its finish time")
+            .unix_seconds(),
+        9
+    );
+    assert_eq!(
+        store
+            .load_run_projection(recovered_session, recovered_run)
+            .expect("recovered run re-reads")
+            .finished_at()
+            .expect("the recovered row keeps its finish time")
+            .unix_seconds(),
+        9
+    );
+}
+
+/// Commits one completed result row for `call_id` and rereads nothing.
+fn write_result(
+    store: &SqliteStorageRepository,
+    session: SessionId,
+    run: RunId,
+    call_id: ToolCallId,
+    text: &str,
+) {
+    let evidence = ToolResultEvidenceDto::new(
+        session,
+        run,
+        call_id,
+        "read",
+        ToolResultStatusDto::Completed,
+        r#"{"result":"read"}"#,
+        Vec::new(),
+        time(3),
+    )
+    .expect("fixture tool result evidence is valid");
+    let _ = store
+        .write_tool_result(
+            evidence,
+            tool_message(
+                session,
+                run,
+                MessageKindDto::ToolResult,
+                r#"{"result":"read"}"#,
+                result_row(
+                    call_id,
+                    identity("read"),
+                    ToolResultStatusDto::Completed,
+                    Some(read_result(text)),
+                    Vec::new(),
+                ),
+            ),
+        )
+        .expect("tool result commits");
 }
 
 #[test]
@@ -1394,7 +2170,32 @@ fn messages_transcript_indexes_and_stamp_are_current() {
     let stamp: i32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("the schema stamp reads");
-    assert_eq!(stamp, 2, "the created database carries the current stamp");
+    assert_eq!(stamp, 4, "the created database carries the current stamp");
+    let columns = |table: &str| {
+        let mut statement = connection
+            .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+            .expect("table info prepares");
+        let names = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("table info reads")
+            .map(|row| row.expect("column name reads"))
+            .collect::<Vec<_>>();
+        drop(statement);
+        names
+    };
+    assert!(
+        columns("messages")
+            .iter()
+            .any(|name| name == "projection_json"),
+        "the current schema carries the typed tool projection column"
+    );
+    let run_columns = columns("runs");
+    assert!(
+        !run_columns
+            .iter()
+            .any(|name| name == "provider_kind" || name == "model"),
+        "the removed run provider columns stay removed: {run_columns:?}"
+    );
     let mut statement = connection
         .prepare("SELECT name FROM sqlite_master WHERE type='index' ORDER BY name")
         .expect("index catalogue prepares");
@@ -1449,7 +2250,7 @@ fn messages_transcript_indexes_and_stamp_are_current() {
     let stamp: i32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("the recreated stamp reads");
-    assert_eq!(stamp, 2, "the recreated database carries the current stamp");
+    assert_eq!(stamp, 4, "the recreated database carries the current stamp");
 }
 
 #[test]
@@ -1681,12 +2482,11 @@ fn terminal_runs_reject_pending_turns_messages_and_tool_results() {
     assert_eq!(
         store
             .append_message(
-                MessageProjectionDto::new(
+                NewMessageDto::new(
                     session,
                     Some(run),
                     MessageKindDto::Assistant,
                     "late answer",
-                    None,
                     None,
                     None,
                 )
@@ -1713,16 +2513,19 @@ fn terminal_runs_reject_pending_turns_messages_and_tool_results() {
         store
             .write_tool_result(
                 evidence,
-                MessageProjectionDto::new(
+                tool_message(
                     session,
-                    Some(run),
+                    run,
                     MessageKindDto::ToolResult,
                     r#"{"result":"read"}"#,
-                    None,
-                    Some(call_id),
-                    Some("read".to_owned()),
-                )
-                .expect("answering row is valid"),
+                    result_row(
+                        call_id,
+                        identity("read"),
+                        ToolResultStatusDto::Completed,
+                        Some(read_result("read")),
+                        Vec::new(),
+                    ),
+                ),
             )
             .expect_err("a terminal run accepts no tool result")
             .code(),
@@ -1759,12 +2562,11 @@ fn session_snapshot_reads_projection_and_transcript_in_one_call() {
     let _ = accept(&store, session, IdempotencyKey::new(), run, "start");
     let _ = append(
         &store,
-        MessageProjectionDto::new(
+        NewMessageDto::new(
             session,
             Some(run),
             MessageKindDto::Assistant,
             "answer",
-            None,
             None,
             None,
         )
@@ -1852,4 +2654,309 @@ fn accept_user_turn_rejects_content_over_the_durable_turn_bound() {
     );
     assert_eq!(message.run_id(), Some(run.run_id()));
     assert_eq!(message.text().len(), bound);
+}
+
+#[test]
+fn session_list_orders_by_its_last_update_and_breaks_ties_by_identity() {
+    let (directory, store) = repository();
+    let oldest = create_at(&store, 10);
+    let middle = create_at(&store, 20);
+    let newest = create_at(&store, 30);
+    let tie_left = create_at(&store, 40);
+    let tie_right = create_at(&store, 40);
+    let mut tied = [tie_left, tie_right];
+    tied.sort_unstable();
+
+    assert_eq!(
+        listed(&store, 10),
+        vec![tied[0], tied[1], newest, middle, oldest],
+        "newest-first order with the durable identity breaking an update-time tie"
+    );
+
+    // A later durable update is what moves a session to the front: the list
+    // reflects `updated_at`, not the order the sessions were created in.
+    drop(store);
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for the update");
+    connection
+        .execute(
+            "UPDATE sessions SET updated_at=?1 WHERE id=?2",
+            sqlite::params![50, oldest.to_string()],
+        )
+        .expect("the session update applies");
+    drop(connection);
+
+    assert_eq!(
+        listed(&reopen(&directory), 10),
+        vec![oldest, tied[0], tied[1], newest, middle],
+        "the updated session leads the list"
+    );
+
+    // The order follows the update time, not the creation time: the leading
+    // session keeps the creation time it was created with.
+    let summaries = reopen(&directory).list_sessions(10).expect("sessions list");
+    let leading = &summaries.sessions()[0];
+    assert_eq!(leading.session_id(), oldest);
+    assert_eq!(
+        leading.created_at().unix_seconds(),
+        10,
+        "the durable creation time does not move with a later update"
+    );
+    assert_eq!(
+        leading.updated_at().unix_seconds(),
+        50,
+        "the later durable update is the fact that leads the list"
+    );
+}
+
+#[test]
+fn session_list_reports_its_window_and_the_omitted_count() {
+    let (_directory, store) = repository();
+    let empty = store.list_sessions(1).expect("an empty store lists");
+    assert!(empty.sessions().is_empty());
+    assert_eq!(empty.omitted(), 0, "an empty store omits nothing");
+
+    let oldest = create_at(&store, 10);
+    let middle = create_at(&store, 20);
+    let newest = create_at(&store, 30);
+
+    // A zero limit reports the whole list as omitted instead of silently
+    // returning nothing.
+    let none = store.list_sessions(0).expect("a zero limit lists");
+    assert!(none.sessions().is_empty());
+    assert_eq!(none.omitted(), 3);
+
+    let single = store.list_sessions(1).expect("a one-row window lists");
+    assert_eq!(
+        single
+            .sessions()
+            .iter()
+            .map(|summary| summary.session_id())
+            .collect::<Vec<_>>(),
+        vec![newest]
+    );
+    assert_eq!(single.omitted(), 2);
+
+    let exact = store.list_sessions(3).expect("an exact window lists");
+    assert_eq!(exact.sessions().len(), 3);
+    assert_eq!(exact.omitted(), 0);
+
+    let wider = store.list_sessions(10).expect("an over-wide window lists");
+    assert_eq!(wider.sessions().len(), 3);
+    assert_eq!(wider.omitted(), 0);
+    assert_eq!(listed(&store, 10), vec![newest, middle, oldest]);
+}
+
+#[test]
+fn session_list_maps_every_durable_session_column() {
+    let (_directory, store) = repository();
+    let project = ProjectId::new();
+    let workspace = WorkspaceId::new();
+    let session = SessionId::new();
+    let root = workspace_root(&session.to_string());
+    store
+        .create_session(
+            CreateSessionCommandDto::new(
+                project,
+                session,
+                workspace,
+                root.clone(),
+                Some(RunModeDto::Plan),
+                None,
+            ),
+            time(7),
+        )
+        .expect("session creates");
+    for (text, event_time) in [("first row", 8), ("second row", 9)] {
+        let _ = append(
+            &store,
+            NewMessageDto::new(session, None, MessageKindDto::Notice, text, None, None)
+                .expect("notice row is valid"),
+            event_time,
+        );
+    }
+
+    let summaries = store.list_sessions(10).expect("sessions list");
+    assert_eq!(summaries.sessions().len(), 1);
+    let summary = &summaries.sessions()[0];
+    assert_eq!(summary.session_id(), session);
+    assert_eq!(summary.project_id(), project);
+    assert_eq!(summary.workspace_id(), workspace);
+    assert_eq!(summary.mode(), RunModeDto::Plan);
+    assert_eq!(summary.created_at().unix_seconds(), 7);
+    assert_eq!(summary.updated_at().unix_seconds(), 7);
+    assert_eq!(summary.workspace_root(), &root);
+    assert_eq!(
+        summary.message_count(),
+        2,
+        "the summary counts the session's committed transcript rows"
+    );
+    assert!(summary.active_run().is_none());
+}
+
+#[test]
+fn session_list_maps_the_active_run_of_each_session() {
+    let (_directory, store) = repository();
+    let idle = create_at(&store, 10);
+    let starting = create_at(&store, 20);
+    let starting_run = RunId::new();
+    let _ = accept(
+        &store,
+        starting,
+        IdempotencyKey::new(),
+        starting_run,
+        "starting",
+    );
+    let running = create_at(&store, 30);
+    let running_run = RunId::new();
+    let _ = accept(
+        &store,
+        running,
+        IdempotencyKey::new(),
+        running_run,
+        "running",
+    );
+    store
+        .transition_run(running, running_run, RunStatusDto::Running, time(50))
+        .expect("run starts");
+    let finished = create_at(&store, 40);
+    let finished_run = RunId::new();
+    let _ = accept(
+        &store,
+        finished,
+        IdempotencyKey::new(),
+        finished_run,
+        "finished",
+    );
+    store
+        .transition_run(finished, finished_run, RunStatusDto::Running, time(60))
+        .expect("run starts");
+    store
+        .finish_run(
+            finished,
+            finished_run,
+            outcome(
+                RunStatusDto::Completed,
+                Some(UsageDto::NotReported),
+                Some(FinishReasonDto::Stop),
+                None,
+            ),
+            time(70),
+        )
+        .expect("run completes");
+
+    let summaries = store.list_sessions(10).expect("sessions list");
+    assert_eq!(
+        summaries
+            .sessions()
+            .iter()
+            .map(|summary| summary.session_id())
+            .collect::<Vec<_>>(),
+        vec![finished, running, starting, idle]
+    );
+    let summary_of = |session: SessionId| {
+        summaries
+            .sessions()
+            .iter()
+            .find(|summary| summary.session_id() == session)
+            .expect("every created session is listed")
+    };
+    assert!(
+        summary_of(idle).active_run().is_none(),
+        "an idle session carries no active run"
+    );
+    assert!(
+        summary_of(finished).active_run().is_none(),
+        "a terminal run is not active"
+    );
+    let starting_run_dto = summary_of(starting)
+        .active_run()
+        .expect("a starting run is active");
+    assert_eq!(starting_run_dto.session_id(), starting);
+    assert_eq!(starting_run_dto.run_id(), starting_run);
+    assert_eq!(starting_run_dto.status(), RunStatusDto::Starting);
+    let running_run_dto = summary_of(running)
+        .active_run()
+        .expect("a running run is active");
+    assert_eq!(running_run_dto.session_id(), running);
+    assert_eq!(running_run_dto.run_id(), running_run);
+    assert_eq!(running_run_dto.status(), RunStatusDto::Running);
+}
+
+#[test]
+fn tui_theme_round_trips_absent_is_none_and_survives_a_reopen() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    let store = open(&directory);
+    assert_eq!(
+        store.load_tui_theme().expect("absent theme reads"),
+        None,
+        "no stored override answers None"
+    );
+    store
+        .save_tui_theme(ThemeDto::Dark)
+        .expect("the theme commits");
+    assert_eq!(
+        store.load_tui_theme().expect("stored theme reads"),
+        Some(ThemeDto::Dark)
+    );
+    drop(store);
+
+    let reopened = reopen(&directory);
+    assert_eq!(
+        reopened
+            .load_tui_theme()
+            .expect("stored theme reads after reopen"),
+        Some(ThemeDto::Dark),
+        "the committed override survives a reopen"
+    );
+
+    // The settings row is a singleton: a later set replaces its value.
+    reopened
+        .save_tui_theme(ThemeDto::Light)
+        .expect("the theme updates");
+    assert_eq!(
+        reopened.load_tui_theme().expect("updated theme reads"),
+        Some(ThemeDto::Light)
+    );
+    drop(reopened);
+
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for inspection");
+    let table: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tui_settings'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("table lookup runs");
+    assert_eq!(table, 1, "the current schema declares the settings table");
+    let rows: i64 = connection
+        .query_row("SELECT COUNT(*) FROM tui_settings", [], |row| row.get(0))
+        .expect("settings row count reads");
+    assert_eq!(rows, 1, "the settings table holds exactly one row");
+}
+
+#[test]
+fn saving_a_tui_theme_creates_no_configuration_revision() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    let store = open(&directory);
+    store
+        .accept_configuration_revision(snapshot())
+        .expect("configuration revision accepts");
+    store
+        .save_tui_theme(ThemeDto::Dark)
+        .expect("the theme commits");
+    drop(store);
+
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for inspection");
+    let revisions: i64 = connection
+        .query_row("SELECT COUNT(*) FROM configuration_revisions", [], |row| {
+            row.get(0)
+        })
+        .expect("revision count reads");
+    assert_eq!(
+        revisions, 1,
+        "a theme set records no configuration revision"
+    );
 }

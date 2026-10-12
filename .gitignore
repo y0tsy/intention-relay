@@ -1,4 +1,6 @@
 /target/
+/vendor/revue/target/
+/vendor/revue/Cargo.lock
 /quality/reports/
 /.cargo-home/
 /.rustup-home/

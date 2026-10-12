@@ -19,28 +19,81 @@ use std::sync::Mutex;
 use crate::{
     AcceptedTurnOutcomeDto, MAX_PENDING_TURN_PROJECTION_BYTES, MAX_TURN_CONTENT_BYTES,
     RunOutcomeDto, StartingRunModelContextDto, StorageRepositoryDto, ToolResultEvidenceDto,
-    ToolResultMetadataEntryDto, ToolResultStatusDto,
 };
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorCategoryDto, ErrorDto,
-    ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId, RemoveTurnCommandDto, RunId,
-    SessionId, SessionSnapshotDto, TimestampDto, ToolCallId, TurnId, UsageDto, WorkspaceId,
+    ErrorRetryDto, FinishReasonDto, IdempotencyKey, MessageId, ProjectId, RemoveTurnCommandDto,
+    RunId, SessionId, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, ThemeDto,
+    TimestampDto, ToolCallId, TurnId, UsageDto, WorkspaceBindingDto, WorkspaceId,
 };
 use intention_proto::{
-    MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, RunModeDto, RunProjectionDto,
-    RunStatusDto, SessionProjectionDto, WorkspaceRootDto, run_status_is_terminal,
-    validate_run_status_transition,
+    MessageKindDto, MessageProjectionDto, NewMessageDto, PendingTurnProjectionDto, RunModeDto,
+    RunProjectionDto, RunStatusDto, SessionProjectionDto, ToolCallRowDto, ToolIdentityDto,
+    ToolInput, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto,
+    ToolRowDto, WorkspaceRootDto, run_status_is_terminal, validate_run_status_transition,
 };
+use serde::{Deserialize, Serialize};
 use sqlite::OptionalExtension;
 
 /// The durable run statuses that accept no further transitions.
 const TERMINAL_STATUSES: &str = "'completed','failed','interrupted'";
 
 /// The transcript projection columns in their canonical decode order.
-const MESSAGE_COLUMNS: &str = "session_id, run_id, kind, text, reasoning, tool_call_id, tool_id";
+///
+/// The typed tool projection is decoded from the row's own `projection_json`
+/// column; a result row's lifecycle status and metadata are the committed
+/// `tool_results` row the join names, so no fact is stored twice.
+const MESSAGE_COLUMNS: &str = "messages.id, messages.session_id, messages.run_id, messages.kind, \
+     messages.text, messages.reasoning, messages.tool_call_id, messages.tool_id, \
+     messages.projection_json, tool_results.status, tool_results.metadata_json";
 
-/// The complete current storage schema (logical version 1): the eight
+/// The transcript source every row read shares: the committed rows joined with
+/// the lifecycle evidence of a result row, when one exists.
+const MESSAGE_SOURCE: &str = "messages LEFT JOIN tool_results \
+     ON tool_results.tool_call_id = messages.tool_call_id";
+
+/// The persisted typed payload of one row's tool projection.
+///
+/// The column carries payload and kind only: the call's typed arguments or the
+/// result's typed payload, the call identity, and the tool identity. A result
+/// row's lifecycle status, content, and metadata stay in `tool_results`, their
+/// single durable home.
+#[derive(Debug, Deserialize, Serialize)]
+struct StoredToolProjection {
+    /// The tool call identity of the row's typed evidence.
+    call_id: ToolCallId,
+    /// The tool identity of the row's typed evidence.
+    tool_id: ToolIdentityDto,
+    /// The decoded typed call arguments, when the row is a call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    arguments: Option<ToolInput>,
+    /// The typed result payload, when the row is a result with one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    result: Option<ToolResult>,
+}
+
+impl StoredToolProjection {
+    /// Encodes one committed row's typed production into its stored payload.
+    fn of(tool: &ToolRowDto) -> Self {
+        match tool {
+            ToolRowDto::Call(row) => Self {
+                call_id: row.call_id(),
+                tool_id: row.tool_id().clone(),
+                arguments: row.arguments().cloned(),
+                result: None,
+            },
+            ToolRowDto::Result(row) => Self {
+                call_id: row.call_id(),
+                tool_id: row.tool_id().clone(),
+                arguments: None,
+                result: row.result().cloned(),
+            },
+        }
+    }
+}
+
+/// The complete current storage schema (logical version 1): the nine
 /// current-state tables created directly on open. There is no migration chain,
 /// and no event log, snapshot, cursor, or journal table exists under the single
 /// live schema. `SCHEMA_STAMP` records the version this text implements.
@@ -70,8 +123,6 @@ CREATE TABLE IF NOT EXISTS runs (
   turn_id TEXT NOT NULL,
   config_revision_id TEXT NOT NULL,
   status TEXT NOT NULL,
-  provider_kind TEXT,
-  model TEXT,
   usage_json TEXT,
   finish_reason TEXT,
   error_code TEXT,
@@ -101,6 +152,7 @@ CREATE TABLE IF NOT EXISTS messages (
   reasoning TEXT,
   tool_call_id TEXT,
   tool_id TEXT,
+  projection_json TEXT,
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS tool_results (
@@ -119,6 +171,10 @@ CREATE TABLE IF NOT EXISTS configuration_revisions (
   snapshot_json TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tui_settings (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  theme TEXT NOT NULL
+);
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_session ON runs(session_id)
   WHERE status NOT IN ('completed','failed','interrupted');
 CREATE INDEX IF NOT EXISTS messages_session_id_id ON messages(session_id, id);
@@ -132,7 +188,7 @@ CREATE INDEX IF NOT EXISTS messages_session_run_id_id ON messages(session_id, ru
 /// column changes: the next open discards the whole database file and its
 /// rollback journal and recreates the current schema from scratch. That discard
 /// is the only version gate; there is no migration path.
-const SCHEMA_STAMP: i32 = 2;
+const SCHEMA_STAMP: i32 = 4;
 
 /// Returns whether the open database already carries the current schema stamp.
 /// A database written under any other stamp is discarded by its opener.
@@ -410,8 +466,8 @@ impl SqliteStorageRepository {
         let active = connection
             .query_row(
                 &format!(
-                    "SELECT id, turn_id, status, config_revision_id FROM runs \
-                     WHERE session_id=?1 AND status NOT IN ({TERMINAL_STATUSES})"
+                    "SELECT id, turn_id, status, config_revision_id, usage_json, started_at, finished_at \
+                     FROM runs WHERE session_id=?1 AND status NOT IN ({TERMINAL_STATUSES})"
                 ),
                 [session_id.to_string()],
                 |row| {
@@ -420,14 +476,29 @@ impl SqliteStorageRepository {
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
                     ))
                 },
             )
             .optional()
             .map_err(storage_error)?
-            .map(|(run, turn, status, revision)| {
-                run_projection(session_id, &run, &turn, &status, &revision)
-            })
+            .map(
+                |(run, turn_id, status, config_revision_id, usage_json, started_at, finished_at)| {
+                    let run_id = RunId::parse(&run).map_err(codec_error)?;
+                    let row = RawRunRow {
+                        turn_id,
+                        status,
+                        config_revision_id,
+                        usage: decode_usage(usage_json)?,
+                        started_at,
+                        finished_at,
+                        open_tool_calls: open_tool_call_count(connection, session_id, run_id)?,
+                    };
+                    committed_run_projection(session_id, run_id, &row)
+                },
+            )
             .transpose()?;
         let (pending_turns, pending_turns_omitted) = bounded_pending_turns(connection, session_id)?;
         SessionProjectionDto::new(
@@ -443,16 +514,25 @@ impl SqliteStorageRepository {
         .map(|projection| projection.with_pending_turns_omitted(pending_turns_omitted))
     }
 
-    /// Inserts one committed transcript row with its external commit time.
+    /// Inserts one transcript row with its external commit time and returns it
+    /// as committed.
+    ///
+    /// The durable identity is the `messages.id` this insert assigned, so the
+    /// returned projection is the only committed value that carries it.
     fn insert_message(
         connection: &sqlite::Connection,
-        message: &MessageProjectionDto,
+        message: &NewMessageDto,
         created_at: i64,
-    ) -> DtoResult<()> {
+    ) -> DtoResult<MessageProjectionDto> {
+        let projection_json = message
+            .tool()
+            .map(|tool| serde_json::to_string(&StoredToolProjection::of(tool)))
+            .transpose()
+            .map_err(codec_error)?;
         connection
             .execute(
-                "INSERT INTO messages(session_id, run_id, kind, text, reasoning, tool_call_id, tool_id, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO messages(session_id, run_id, kind, text, reasoning, tool_call_id, tool_id, projection_json, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 sqlite::params![
                     message.session_id().to_string(),
                     message.run_id().map(|run| run.to_string()),
@@ -460,12 +540,22 @@ impl SqliteStorageRepository {
                     message.text(),
                     message.reasoning(),
                     message.tool_call_id().map(|call| call.to_string()),
-                    message.tool_id(),
+                    message.tool_id().map(ToolIdentityDto::wire_name),
+                    projection_json,
                     created_at,
                 ],
             )
             .map_err(storage_error)?;
-        Ok(())
+        let message_id = MessageId::new(connection.last_insert_rowid()).map_err(codec_error)?;
+        MessageProjectionDto::new(
+            message_id,
+            message.session_id(),
+            message.run_id(),
+            message.kind(),
+            message.text(),
+            message.reasoning().map(str::to_owned),
+            message.tool().cloned(),
+        )
     }
 
     /// Inserts one accepted turn row in its recorded durable state.
@@ -683,23 +773,18 @@ impl SqliteStorageRepository {
                 ],
             )
             .map_err(storage_error)?;
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             session_id,
             Some(run_id),
             MessageKindDto::User,
             message_text,
             None,
             None,
-            None,
         )?;
-        Self::insert_message(connection, &message, created_at)?;
-        let run = RunProjectionDto::new(
-            session_id,
-            run_id,
-            turn_id,
-            RunStatusDto::Starting,
-            revision_id,
-        );
+        let message = Self::insert_message(connection, &message, created_at)?;
+        // The committed run is re-read from the row this transaction just
+        // wrote, so the accepted turn and every later read share one decoder.
+        let run = load_scoped_run(connection, session_id, run_id)?;
         Ok(AcceptedTurnOutcomeDto::Started { run, message })
     }
 }
@@ -790,7 +875,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                         session_id.to_string(),
                         command.project_id().to_string(),
                         command.workspace_id().to_string(),
-                        command.mode().as_str(),
+                        command.resolved_mode().as_str(),
                         occurred_at
                     ],
                 )
@@ -915,16 +1000,15 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             let occurred_at = occurred_at.unix_seconds();
             let mut messages = Vec::with_capacity(pending.len());
             for turn in pending {
-                let message = MessageProjectionDto::new(
+                let message = NewMessageDto::new(
                     session_id,
                     Some(run_id),
                     MessageKindDto::User,
                     turn.content(),
                     None,
                     None,
-                    None,
                 )?;
-                Self::insert_message(transaction, &message, occurred_at)?;
+                let message = Self::insert_message(transaction, &message, occurred_at)?;
                 transaction
                     .execute(
                         "UPDATE turns SET state='appended' WHERE session_id=?1 AND id=?2",
@@ -962,13 +1046,9 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     ],
                 )
                 .map_err(storage_error)?;
-            Ok(RunProjectionDto::new(
-                session_id,
-                run_id,
-                current.turn_id(),
-                status,
-                current.config_revision_id(),
-            ))
+            // The transition re-reads the row it just wrote, so the returned
+            // projection carries the committed times and usage.
+            load_scoped_run(transaction, session_id, run_id)
         })
     }
 
@@ -982,19 +1062,12 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         let status = outcome.status();
         self.with_immediate_transaction(|transaction| {
             let current = load_scoped_run(transaction, session_id, run_id)?;
-            let run = RunProjectionDto::new(
-                session_id,
-                run_id,
-                current.turn_id(),
-                status,
-                current.config_revision_id(),
-            );
             if current.status() == status {
                 // The run already holds a terminal outcome. Repeating the exact
                 // recorded outcome is idempotent; a different outcome would
                 // silently discard its evidence, so it is a typed conflict.
                 if load_run_outcome(transaction, session_id, run_id)? == outcome {
-                    return Ok(run);
+                    return Ok(current);
                 }
                 return Err(run_outcome_conflict());
             }
@@ -1021,13 +1094,15 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 )
                 .map_err(storage_error)?;
             self.fault(FaultPoint::RunOutcome)?;
-            Ok(run)
+            // The committed terminal projection is re-read from the row this
+            // transaction just wrote, usage and finish time included.
+            load_scoped_run(transaction, session_id, run_id)
         })
     }
 
     fn append_message(
         &self,
-        message: MessageProjectionDto,
+        message: NewMessageDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<MessageProjectionDto> {
         let session_id = message.session_id();
@@ -1036,22 +1111,31 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             if let Some(run_id) = message.run_id() {
                 require_active_run(transaction, session_id, run_id)?;
             }
-            Self::insert_message(transaction, &message, occurred_at.unix_seconds())?;
+            let committed =
+                Self::insert_message(transaction, &message, occurred_at.unix_seconds())?;
             self.fault(FaultPoint::Message)?;
-            Ok(message)
+            Ok(committed)
         })
     }
 
     fn write_tool_result(
         &self,
         evidence: ToolResultEvidenceDto,
-        message: MessageProjectionDto,
-    ) -> DtoResult<ToolResultEvidenceDto> {
+        message: NewMessageDto,
+    ) -> DtoResult<MessageProjectionDto> {
+        let Some(ToolRowDto::Result(projection)) = message.tool() else {
+            return Err(ErrorDto::validation(
+                "invalid_tool_result",
+                "a tool result commits with its own answering transcript row",
+            ));
+        };
         if message.kind() != MessageKindDto::ToolResult
             || message.session_id() != evidence.session_id()
             || message.run_id() != Some(evidence.run_id())
             || message.tool_call_id() != Some(evidence.call_id())
-            || message.tool_id() != Some(evidence.tool_id())
+            || message.tool_id().map(ToolIdentityDto::wire_name) != Some(evidence.tool_id())
+            || projection.status() != evidence.status()
+            || projection.metadata() != evidence.metadata()
         {
             return Err(ErrorDto::validation(
                 "invalid_tool_result",
@@ -1093,9 +1177,10 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     ],
                 )
                 .map_err(storage_error)?;
-            Self::insert_message(transaction, &message, evidence.occurred_at().unix_seconds())?;
+            let committed =
+                Self::insert_message(transaction, &message, evidence.occurred_at().unix_seconds())?;
             self.fault(FaultPoint::ToolResult)?;
-            Ok(evidence)
+            Ok(committed)
         })
     }
 
@@ -1203,14 +1288,8 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         // its classified storage error.
         let target = scoped_run_row(&connection, session_id, run_id)?
             .ok_or_else(run_model_context_unavailable)?;
-        let target = run_projection(
-            session_id,
-            &run_id.to_string(),
-            &target.0,
-            &target.1,
-            &target.2,
-        )
-        .map_err(|_| run_model_context_unavailable())?;
+        let target = committed_run_projection(session_id, run_id, &target)
+            .map_err(|_| run_model_context_unavailable())?;
         if target.status() != RunStatusDto::Starting {
             return Err(run_model_context_unavailable());
         }
@@ -1238,6 +1317,39 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         let projection = Self::projection_of(&connection, session_id)?;
         drop(connection);
         Ok(projection)
+    }
+
+    fn list_sessions(&self, limit: u32) -> DtoResult<SessionSummariesDto> {
+        let connection = self.connection()?;
+        let total: u32 = connection
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .map_err(storage_error)?;
+        let sessions = session_summaries(&connection, limit)?;
+        drop(connection);
+        // The window returns at most `limit` rows, so every session above that
+        // many is reported as omitted.
+        SessionSummariesDto::new(sessions, total.saturating_sub(limit))
+    }
+
+    fn workspace_binding(&self, root: &WorkspaceRootDto) -> DtoResult<Option<WorkspaceBindingDto>> {
+        let connection = self.connection()?;
+        let binding = connection
+            .query_row(
+                "SELECT project_id, id FROM workspace_roots WHERE root=?1",
+                [root.as_str()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        drop(connection);
+        binding
+            .map(|(project, workspace)| {
+                Ok(WorkspaceBindingDto::new(
+                    ProjectId::parse(&project).map_err(codec_error)?,
+                    WorkspaceId::parse(&workspace).map_err(codec_error)?,
+                ))
+            })
+            .transpose()
     }
 
     fn load_recent_messages(
@@ -1276,8 +1388,8 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         load_scoped_run(&connection, session_id, run_id)?;
         let mut statement = connection
             .prepare(&format!(
-                "SELECT {MESSAGE_COLUMNS} FROM messages WHERE session_id=?1 AND run_id=?2 \
-                 ORDER BY id DESC LIMIT ?3"
+                "SELECT {MESSAGE_COLUMNS} FROM {MESSAGE_SOURCE} WHERE messages.session_id=?1 AND messages.run_id=?2 \
+                 ORDER BY messages.id DESC LIMIT ?3"
             ))
             .map_err(storage_error)?;
         let rows = statement
@@ -1306,7 +1418,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         self.with_immediate_transaction(|transaction| {
             let mut statement = transaction
                 .prepare(&format!(
-                    "SELECT session_id, id, turn_id, config_revision_id, status FROM runs \
+                    "SELECT session_id, id, status FROM runs \
                      WHERE status NOT IN ({TERMINAL_STATUSES}) ORDER BY session_id, id"
                 ))
                 .map_err(storage_error)?;
@@ -1316,8 +1428,6 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
                     ))
                 })
                 .map_err(storage_error)?;
@@ -1326,15 +1436,12 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 .collect::<DtoResult<Vec<_>>>()?;
             drop(statement);
             let mut recovered = Vec::with_capacity(unfinished.len());
-            for (session, run, turn, revision, status) in unfinished {
+            for (session, run, status) in unfinished {
                 let current = RunStatusDto::parse(&status)?;
                 validate_run_status_transition(current, RunStatusDto::Interrupted)?;
-                recovered.push(RunProjectionDto::new(
+                recovered.push((
                     SessionId::parse(&session).map_err(codec_error)?,
                     RunId::parse(&run).map_err(codec_error)?,
-                    TurnId::parse(&turn).map_err(codec_error)?,
-                    RunStatusDto::Interrupted,
-                    ConfigRevisionId::parse(&revision).map_err(codec_error)?,
                 ));
             }
             // One transaction marks every unfinished run, so a crash mid-recovery
@@ -1348,7 +1455,38 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     [recovered_at],
                 )
                 .map_err(storage_error)?;
-            Ok(recovered)
+            // Each recovered run is re-read from the row this transaction just
+            // marked, so its finish time and its open calls are durable facts.
+            recovered
+                .into_iter()
+                .map(|(session_id, run_id)| load_scoped_run(transaction, session_id, run_id))
+                .collect()
+        })
+    }
+
+    fn load_tui_theme(&self) -> DtoResult<Option<ThemeDto>> {
+        let stored = {
+            let connection = self.connection()?;
+            connection
+                .query_row("SELECT theme FROM tui_settings WHERE id=1", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .optional()
+                .map_err(storage_error)?
+        };
+        stored.map(|theme| ThemeDto::parse(&theme)).transpose()
+    }
+
+    fn save_tui_theme(&self, theme: ThemeDto) -> DtoResult<()> {
+        self.with_immediate_transaction(|transaction| {
+            transaction
+                .execute(
+                    "INSERT INTO tui_settings(id, theme) VALUES (1, ?1) \
+                     ON CONFLICT(id) DO UPDATE SET theme=excluded.theme",
+                    [theme.as_str()],
+                )
+                .map_err(storage_error)?;
+            Ok(())
         })
     }
 
@@ -1361,12 +1499,17 @@ impl StorageRepositoryDto for SqliteStorageRepository {
     }
 }
 
-/// The committed rows of one transcript query.
+/// The committed columns of one transcript row read: the row's own columns,
+/// its persisted typed projection, and the lifecycle evidence of a result row.
 type RawMessageRow = (
+    i64,
     String,
     Option<String>,
     String,
     String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
     Option<String>,
     Option<String>,
     Option<String>,
@@ -1382,27 +1525,240 @@ fn raw_message_row(row: &sqlite::Row<'_>) -> sqlite::Result<RawMessageRow> {
         row.get(4)?,
         row.get(5)?,
         row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
+        row.get(10)?,
     ))
 }
 
 fn decode_message(row: RawMessageRow) -> DtoResult<MessageProjectionDto> {
+    let kind = MessageKindDto::parse(&row.3)?;
+    let tool = decode_tool_row(
+        kind,
+        row.6.as_deref(),
+        row.7.as_deref(),
+        row.8.as_deref(),
+        row.9.as_deref(),
+        row.10.as_deref(),
+    )?;
     MessageProjectionDto::new(
-        SessionId::parse(&row.0).map_err(codec_error)?,
-        row.1
+        MessageId::new(row.0).map_err(codec_error)?,
+        SessionId::parse(&row.1).map_err(codec_error)?,
+        row.2
             .as_deref()
             .map(RunId::parse)
             .transpose()
             .map_err(codec_error)?,
-        MessageKindDto::parse(&row.2)?,
-        row.3,
+        kind,
         row.4,
-        row.5
-            .as_deref()
-            .map(ToolCallId::parse)
-            .transpose()
-            .map_err(codec_error)?,
-        row.6,
+        row.5,
+        tool,
     )
+}
+
+/// Decodes one committed tool row's typed evidence from its own column and the
+/// persisted payload projection.
+///
+/// The row's `tool_call_id` and `tool_id` columns are the row identity; the
+/// one typed projection the row was committed with carries the same call and
+/// identity, so a payload whose identity disagrees with its row is refused
+/// rather than rendered as the wrong tool's evidence. A result row's lifecycle
+/// status and metadata come from the one durable `tool_results` row the read
+/// joins; a result row without that evidence cannot decode.
+fn decode_tool_row(
+    kind: MessageKindDto,
+    tool_call_id: Option<&str>,
+    tool_id: Option<&str>,
+    projection: Option<&str>,
+    result_status: Option<&str>,
+    result_metadata: Option<&str>,
+) -> DtoResult<Option<ToolRowDto>> {
+    if !matches!(kind, MessageKindDto::ToolCall | MessageKindDto::ToolResult) {
+        return Ok(None);
+    }
+    let call_id = tool_call_id
+        .map(ToolCallId::parse)
+        .transpose()
+        .map_err(codec_error)?
+        .ok_or_else(|| codec_error("a tool row carries its tool call identity"))?;
+    let identity = ToolIdentityDto::parse(tool_id.unwrap_or_default())?;
+    // Every tool row commits with its typed projection in the same transaction
+    // as the row itself, so an absent or disagreeing projection is corrupt
+    // durable state and is refused instead of decoded as another row's facts.
+    let encoded =
+        projection.ok_or_else(|| codec_error("a tool row carries its typed projection"))?;
+    let stored: StoredToolProjection = serde_json::from_str(encoded).map_err(codec_error)?;
+    if stored.call_id != call_id || stored.tool_id != identity {
+        return Err(codec_error(
+            "the committed typed projection disagrees with its own row identity",
+        ));
+    }
+    match kind {
+        MessageKindDto::ToolCall => Ok(Some(ToolRowDto::Call(ToolCallRowDto::new(
+            call_id,
+            identity,
+            stored.arguments,
+        )?))),
+        MessageKindDto::ToolResult => {
+            let status = result_status
+                .map(ToolResultStatusDto::parse)
+                .transpose()?
+                .ok_or_else(tool_result_unavailable)?;
+            let metadata: Vec<ToolResultMetadataEntryDto> = match result_metadata {
+                Some(encoded) => {
+                    serde_json::from_str(encoded).map_err(|_| tool_result_unavailable())?
+                }
+                None => Vec::new(),
+            };
+            Ok(Some(ToolRowDto::Result(ToolResultRowDto::new(
+                call_id,
+                identity,
+                status,
+                stored.result,
+                metadata,
+            )?)))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Returns one bounded newest-first window of current session summaries.
+///
+/// Sessions are ordered by their last durable update with their identity
+/// breaking ties, and one row carries at most one active run: the current
+/// schema admits a single non-terminal run per session. Each row also carries
+/// the session's durable creation time, its bound workspace root, and its
+/// committed message count.
+fn session_summaries(
+    connection: &sqlite::Connection,
+    limit: u32,
+) -> DtoResult<Vec<SessionSummaryDto>> {
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT sessions.id, sessions.project_id, sessions.workspace_id, sessions.mode, \
+             sessions.created_at, sessions.updated_at, workspace_roots.root, \
+             (SELECT COUNT(*) FROM messages WHERE messages.session_id=sessions.id), \
+             runs.id, runs.turn_id, runs.status, runs.config_revision_id, runs.usage_json, \
+             runs.started_at, runs.finished_at, \
+             (SELECT COUNT(*) FROM messages AS call \
+              WHERE call.session_id=sessions.id AND call.run_id=runs.id AND call.kind='tool_call' \
+              AND NOT EXISTS (SELECT 1 FROM tool_results AS answer \
+                  WHERE answer.tool_call_id=call.tool_call_id)) \
+             FROM sessions JOIN workspace_roots ON workspace_roots.id=sessions.workspace_id \
+             LEFT JOIN runs ON runs.session_id=sessions.id \
+             AND runs.status NOT IN ({TERMINAL_STATUSES}) \
+             ORDER BY sessions.updated_at DESC, sessions.id ASC LIMIT ?1"
+        ))
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([i64::from(limit)], raw_session_summary_row)
+        .map_err(storage_error)?;
+    rows.map(|row| decode_session_summary(row.map_err(storage_error)?))
+        .collect()
+}
+
+/// The committed columns of one session-list row: the session's own columns
+/// followed by its sole non-terminal run's columns, absent together when the
+/// session has no active run.
+type RawSessionSummaryRow = (
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    String,
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+);
+
+fn raw_session_summary_row(row: &sqlite::Row<'_>) -> sqlite::Result<RawSessionSummaryRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
+        row.get(10)?,
+        row.get(11)?,
+        row.get(12)?,
+        row.get(13)?,
+        row.get(14)?,
+        row.get(15)?,
+    ))
+}
+
+fn decode_session_summary(row: RawSessionSummaryRow) -> DtoResult<SessionSummaryDto> {
+    let session_id = SessionId::parse(&row.0).map_err(codec_error)?;
+    let active_run = match (row.8, row.9, row.10, row.11) {
+        (None, None, None, None) => None,
+        (Some(run), Some(turn), Some(status), Some(revision)) => {
+            let run_id = RunId::parse(&run).map_err(codec_error)?;
+            let raw =
+                RawRunRow {
+                    turn_id: turn,
+                    status,
+                    config_revision_id: revision,
+                    usage: decode_usage(row.12)?,
+                    started_at: row.13.ok_or_else(|| {
+                        codec_error("the durable active run columns are incomplete")
+                    })?,
+                    finished_at: row.14,
+                    open_tool_calls: u32::try_from(row.15.ok_or_else(|| {
+                        codec_error("the durable active run columns are incomplete")
+                    })?)
+                    .map_err(codec_error)?,
+                };
+            Some(committed_run_projection(session_id, run_id, &raw)?)
+        }
+        _ => return Err(codec_error("the durable active run columns are incomplete")),
+    };
+    Ok(SessionSummaryDto::new(
+        session_id,
+        ProjectId::parse(&row.1).map_err(codec_error)?,
+        WorkspaceId::parse(&row.2).map_err(codec_error)?,
+        RunModeDto::parse(&row.3)?,
+        TimestampDto::from_unix_seconds(row.4).map_err(codec_error)?,
+        TimestampDto::from_unix_seconds(row.5).map_err(codec_error)?,
+        WorkspaceRootDto::parse(row.6).map_err(codec_error)?,
+        u64::try_from(row.7).map_err(codec_error)?,
+        active_run,
+    ))
+}
+
+/// The committed columns every run-projection read decodes.
+///
+/// One private row carries the durable fields together for the scoped read, the
+/// session list's joined row, and the write paths that re-read the row they just
+/// committed, so one decoder owns every run-projection field.
+struct RawRunRow {
+    /// The causal user turn identity.
+    turn_id: String,
+    /// The durable lifecycle status.
+    status: String,
+    /// The immutable configuration revision selected by the run.
+    config_revision_id: String,
+    /// The terminal outcome's typed usage, absent until it records one.
+    usage: Option<UsageDto>,
+    /// The admission time in whole Unix seconds.
+    started_at: i64,
+    /// The terminal time in whole Unix seconds, absent while the run is live.
+    finished_at: Option<i64>,
+    /// How many committed call rows of this run no committed result answers.
+    open_tool_calls: u32,
 }
 
 /// Loads the raw durable columns of one scoped run, or `None` when the run row
@@ -1412,21 +1768,75 @@ fn scoped_run_row(
     connection: &sqlite::Connection,
     session_id: SessionId,
     run_id: RunId,
-) -> DtoResult<Option<(String, String, String)>> {
-    connection
+) -> DtoResult<Option<RawRunRow>> {
+    let row = connection
         .query_row(
-            "SELECT turn_id, status, config_revision_id FROM runs WHERE session_id=?1 AND id=?2",
+            "SELECT turn_id, status, config_revision_id, usage_json, started_at, finished_at \
+             FROM runs WHERE session_id=?1 AND id=?2",
             sqlite::params![session_id.to_string(), run_id.to_string()],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
                 ))
             },
         )
         .optional()
-        .map_err(storage_error)
+        .map_err(storage_error)?;
+    row.map(
+        |(turn_id, status, config_revision_id, usage_json, started_at, finished_at)| {
+            Ok(RawRunRow {
+                turn_id,
+                status,
+                config_revision_id,
+                usage: decode_usage(usage_json)?,
+                started_at,
+                finished_at,
+                open_tool_calls: open_tool_call_count(connection, session_id, run_id)?,
+            })
+        },
+    )
+    .transpose()
+}
+
+/// Decodes one durable usage column into its typed value.
+///
+/// The column carries the serialized outcome usage; decoding it at the read
+/// boundary keeps the row carrier itself free of JSON-shaped fields.
+fn decode_usage(usage_json: Option<String>) -> DtoResult<Option<UsageDto>> {
+    usage_json
+        .as_deref()
+        .map(serde_json::from_str::<UsageDto>)
+        .transpose()
+        .map_err(codec_error)
+}
+
+/// Counts one run's committed tool calls that no committed result answers.
+///
+/// The call identity is the pairing key: a call stays open exactly while the
+/// run carries no committed `tool_results` row for its `tool_call_id`, so an
+/// orphan result never answers a live call and a call of another run never
+/// counts. A run recovered after a crash keeps its unanswered calls.
+fn open_tool_call_count(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+    run_id: RunId,
+) -> DtoResult<u32> {
+    let count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM messages AS call \
+             WHERE call.session_id=?1 AND call.run_id=?2 AND call.kind='tool_call' \
+             AND NOT EXISTS (SELECT 1 FROM tool_results AS answer \
+                 WHERE answer.tool_call_id=call.tool_call_id)",
+            sqlite::params![session_id.to_string(), run_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(storage_error)?;
+    u32::try_from(count).map_err(codec_error)
 }
 
 /// Loads one scoped durable run or a typed not-found error.
@@ -1436,7 +1846,7 @@ fn load_scoped_run(
     run_id: RunId,
 ) -> DtoResult<RunProjectionDto> {
     let row = scoped_run_row(connection, session_id, run_id)?.ok_or_else(record_not_found)?;
-    run_projection(session_id, &run_id.to_string(), &row.0, &row.1, &row.2)
+    committed_run_projection(session_id, run_id, &row)
 }
 
 /// Loads one scoped durable run that still accepts further writes.
@@ -1514,7 +1924,7 @@ fn first_user_message(
     let id = id.ok_or_else(|| codec_error("started turn has no committed user message"))?;
     let row = connection
         .query_row(
-            &format!("SELECT {MESSAGE_COLUMNS} FROM messages WHERE id=?1"),
+            &format!("SELECT {MESSAGE_COLUMNS} FROM {MESSAGE_SOURCE} WHERE messages.id=?1"),
             [id],
             raw_message_row,
         )
@@ -1546,7 +1956,7 @@ fn starting_context_messages(
     };
     let mut statement = connection
         .prepare(&format!(
-            "SELECT {MESSAGE_COLUMNS} FROM messages WHERE session_id=?1 AND id<=?2 ORDER BY id"
+            "SELECT {MESSAGE_COLUMNS} FROM {MESSAGE_SOURCE} WHERE messages.session_id=?1 AND messages.id<=?2 ORDER BY messages.id"
         ))
         .map_err(storage_error)?;
     let rows = statement
@@ -1577,7 +1987,7 @@ fn recent_messages(
     SqliteStorageRepository::require_session(connection, session_id)?;
     let mut statement = connection
         .prepare(&format!(
-            "SELECT {MESSAGE_COLUMNS} FROM messages WHERE session_id=?1 ORDER BY id DESC LIMIT ?2"
+            "SELECT {MESSAGE_COLUMNS} FROM {MESSAGE_SOURCE} WHERE messages.session_id=?1 ORDER BY messages.id DESC LIMIT ?2"
         ))
         .map_err(storage_error)?;
     let rows = statement
@@ -1738,20 +2148,27 @@ fn validate_message_limit(limit: u32) -> DtoResult<()> {
     Ok(())
 }
 
-fn run_projection(
-    session: SessionId,
-    run: &str,
-    turn: &str,
-    status: &str,
-    revision: &str,
+/// Decodes one committed run row into its safe public projection.
+fn committed_run_projection(
+    session_id: SessionId,
+    run_id: RunId,
+    row: &RawRunRow,
 ) -> DtoResult<RunProjectionDto> {
-    Ok(RunProjectionDto::new(
-        session,
-        RunId::parse(run).map_err(codec_error)?,
-        TurnId::parse(turn).map_err(codec_error)?,
-        RunStatusDto::parse(status)?,
-        ConfigRevisionId::parse(revision).map_err(codec_error)?,
-    ))
+    RunProjectionDto::new(
+        session_id,
+        run_id,
+        TurnId::parse(&row.turn_id).map_err(codec_error)?,
+        RunStatusDto::parse(&row.status)?,
+        ConfigRevisionId::parse(&row.config_revision_id).map_err(codec_error)?,
+        row.usage,
+        TimestampDto::from_unix_seconds(row.started_at).map_err(codec_error)?,
+        row.finished_at
+            .map(TimestampDto::from_unix_seconds)
+            .transpose()
+            .map_err(codec_error)?,
+        row.open_tool_calls,
+    )
+    .map_err(|_| codec_error("the committed run row is not a coherent run projection"))
 }
 
 const fn finish_reason_name(value: FinishReasonDto) -> &'static str {
@@ -2078,11 +2495,32 @@ mod tests {
     use super::*;
     use crate::StorageRepositoryDto;
     use intention_config::{ConfigPathDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto};
+    use intention_proto::{BoundedText, TextResult};
     use intention_proto::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
     use intention_proto::{IdempotencyKey, ProjectId, SchemaVersionDto, UsageDto, WorkspaceId};
 
     fn fixture_time(value: i64) -> TimestampDto {
         TimestampDto::from_unix_seconds(value).expect("fixture timestamp is valid")
+    }
+
+    /// Builds one typed completed `read` result row fixture carrying `metadata`.
+    fn read_result_row(
+        call_id: ToolCallId,
+        metadata: Vec<ToolResultMetadataEntryDto>,
+    ) -> ToolRowDto {
+        ToolRowDto::Result(
+            ToolResultRowDto::new(
+                call_id,
+                ToolIdentityDto::parse("read").expect("the fixture tool is declared"),
+                ToolResultStatusDto::Completed,
+                Some(ToolResult::Read(TextResult {
+                    text: BoundedText::new("read").expect("fixture text is bounded"),
+                    truncated: false,
+                })),
+                metadata,
+            )
+            .expect("fixture result row is valid"),
+        )
     }
 
     fn fixture_snapshot() -> ConfigSnapshotDto {
@@ -2137,7 +2575,8 @@ mod tests {
                     session_id,
                     WorkspaceId::new(),
                     fixture_workspace_root(),
-                    RunModeDto::Build,
+                    Some(RunModeDto::Build),
+                    None,
                 ),
                 fixture_time(1),
             )
@@ -2191,6 +2630,7 @@ mod tests {
             "SELECT COALESCE(usage_json, '') FROM runs",
             "SELECT text FROM messages",
             "SELECT COALESCE(reasoning, '') FROM messages",
+            "SELECT COALESCE(projection_json, '') FROM messages",
         ]
         .into_iter()
         .flat_map(|query| {
@@ -2536,13 +2976,12 @@ mod tests {
         let repository = SqliteStorageRepository::open(location.clone()).expect("database opens");
         let session_id = create_fixture_session(&repository);
         let run = accept_fixture_turn(&repository, session_id, "active");
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             session_id,
             Some(run.run_id()),
             MessageKindDto::Assistant,
             "atomic answer",
             Some("reasoning".to_owned()),
-            None,
             None,
         )
         .expect("assistant row is valid");
@@ -2636,14 +3075,19 @@ mod tests {
             fixture_time(3),
         )
         .expect("fixture evidence is valid");
-        let message = MessageProjectionDto::new(
+        let message = NewMessageDto::new(
             session_id,
             Some(run.run_id()),
             MessageKindDto::ToolResult,
             r#"{"result":"read"}"#,
             None,
-            Some(call_id),
-            Some("read".to_owned()),
+            Some(read_result_row(
+                call_id,
+                vec![
+                    ToolResultMetadataEntryDto::new("truncated", "false")
+                        .expect("fixture metadata is valid"),
+                ],
+            )),
         )
         .expect("answering row is valid");
         repository.arm_fault(FaultPoint::ToolResult);
@@ -2707,13 +3151,12 @@ mod tests {
         let run = accept_fixture_turn(&repository, session_id, "active");
         repository
             .append_message(
-                MessageProjectionDto::new(
+                NewMessageDto::new(
                     session_id,
                     Some(run.run_id()),
                     MessageKindDto::Assistant,
                     "safe answer",
                     Some("safe reasoning".to_owned()),
-                    None,
                     None,
                 )
                 .expect("assistant row is valid"),
@@ -2735,14 +3178,13 @@ mod tests {
         repository
             .write_tool_result(
                 evidence,
-                MessageProjectionDto::new(
+                NewMessageDto::new(
                     session_id,
                     Some(run.run_id()),
                     MessageKindDto::ToolResult,
                     r#"{"result":"read"}"#,
                     None,
-                    Some(call_id),
-                    Some("read".to_owned()),
+                    Some(read_result_row(call_id, Vec::new())),
                 )
                 .expect("answering row is valid"),
             )

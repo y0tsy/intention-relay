@@ -15,28 +15,38 @@ mod model;
 mod projection;
 pub mod protocol;
 mod run;
+mod tool;
 mod turn;
 mod workspace;
 
 pub use model::{FinishReasonDto, ProviderErrorDto, ToolCallDto, UsageDto};
 pub use projection::{
-    MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, SessionProjectionDto,
+    MessageKindDto, MessageProjectionDto, NewMessageDto, PendingTurnProjectionDto,
+    SessionProjectionDto, WorkspaceBindingDto,
 };
 pub use protocol::{
     ClientRequestDto, CreateSessionAcceptedDto, DaemonHealthDto, DaemonReadinessDto,
-    InterruptRunAcceptedDto, ProtocolDaemonMessageDto, ProtocolRejectionDto, ProtocolReplyDto,
-    ProtocolRequestDto, ProtocolResultDto, RemoveTurnAcceptedDto, RunStreamFrameDto,
-    RunSubscriptionSnapshotDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
-    SessionSnapshotDto, SubscribeRunCommandDto, decode_request_line, decode_response, encode_reply,
-    encode_request, parse_daemon_message, parse_run_frame,
+    ProtocolDaemonMessageDto, ProtocolRejectionDto, ProtocolReplyDto, ProtocolRequestDto,
+    ProtocolResultDto, RemoveTurnAcceptedDto, RunCancelledAcceptedDto, SendUserTurnAcceptedDto,
+    SendUserTurnOutcomeDto, SessionFrameDto, SessionSnapshotDto, SessionSummariesDto,
+    SessionSummaryDto, SetTuiThemeCommandDto, SubscribeSessionCommandDto, TextDeltaChannelDto,
+    TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, decode_request_line,
+    decode_response, encode_reply, encode_request, parse_daemon_message, parse_session_frame,
 };
 pub use run::{
     RunModeDto, RunProjectionDto, RunStatusDto, run_status_is_terminal,
     validate_run_status_transition,
 };
+pub use tool::{
+    BoundedText, EditInput, EnvVarDto, EnvVarNameDto, ExecuteInput, ExecuteResult, GlobInput,
+    GrepInput, GrepMatch, GrepResult, GrepScope, PathsResult, ReadInput, ShellCommandTextDto,
+    TextResult, ToolCallRowDto, ToolId, ToolIdentityDto, ToolInput, ToolProcessStatus, ToolResult,
+    ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
+    ToolTimeoutSecondsDto, WriteInput, WriteResult,
+};
 pub use turn::{
-    CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto,
-    RemoveTurnCommandDto, SendUserTurnCommandDto,
+    CancelRunCommandDto, CreateSessionCommandDto, CreateSessionFirstTurnDto,
+    GetSessionSnapshotQueryDto, RemoveTurnCommandDto, SendUserTurnCommandDto,
 };
 pub use workspace::WorkspaceRootDto;
 
@@ -122,6 +132,55 @@ define_id!(
     IdempotencyKey,
     "A caller-supplied identity that makes one mutating operation repeatable."
 );
+
+/// A stable identity for one durable transcript row.
+///
+/// The durable value is the row's SQLite `messages.id`: the positive row id
+/// the single durable writer assigned, which an adapter matches committed rows
+/// by when two reads of the same transcript meet.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct MessageId(i64);
+
+impl<'de> Deserialize<'de> for MessageId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = i64::deserialize(deserializer)?;
+        Self::new(value).map_err(de::Error::custom)
+    }
+}
+
+impl MessageId {
+    /// Creates a durable transcript row identity from its positive row id.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe validation error when `value` is not a positive row id.
+    pub fn new(value: i64) -> DtoResult<Self> {
+        if value > 0 {
+            Ok(Self(value))
+        } else {
+            Err(ErrorDto::validation(
+                "invalid_message_id",
+                "a durable transcript row identity must be a positive row id",
+            ))
+        }
+    }
+
+    /// Returns the durable row id.
+    #[must_use]
+    pub const fn value(self) -> i64 {
+        self.0
+    }
+}
+
+impl Display for MessageId {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.0, formatter)
+    }
+}
 
 /// The schema version carried by configuration and persisted DTOs.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -504,6 +563,38 @@ mod tests {
                 .expect_err("negative timestamp must fail")
                 .code(),
             "invalid_timestamp"
+        );
+    }
+
+    #[test]
+    fn durable_message_ids_validate_and_round_trip_as_row_numbers() {
+        let identity = MessageId::new(7).expect("a positive row id is a valid identity");
+        assert_eq!(identity.value(), 7);
+        assert_eq!(
+            serde_json::to_string(&identity).expect("identity serializes"),
+            "7"
+        );
+        assert_eq!(
+            serde_json::from_str::<MessageId>("7").expect("identity decodes"),
+            identity
+        );
+        for rejected in ["0", "-1", "\"7\""] {
+            assert!(
+                serde_json::from_str::<MessageId>(rejected).is_err(),
+                "{rejected} is not a durable row id"
+            );
+        }
+        assert_eq!(
+            MessageId::new(0)
+                .expect_err("zero is not a durable row id")
+                .code(),
+            "invalid_message_id"
+        );
+        assert_eq!(
+            MessageId::new(-1)
+                .expect_err("a negative value is not a durable row id")
+                .code(),
+            "invalid_message_id"
         );
     }
 
