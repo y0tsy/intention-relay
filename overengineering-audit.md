@@ -52,6 +52,7 @@ Branch `cleanup/overengineering-removal`, base `a359729`, four commits:
 | `54117be` | `build(deps)`: de-vendor `revue` and adopt upstream 3.10.0 |
 | `0231be8` | `build(deps)`: upgrade `openrouter-rs` to 0.19.0 |
 | `12ebbf8` + the Part 1 removal commit | `build`/`refactor(quality)`: Clippy carries the two source rules; the architecture and docs checkers and their self-tests are deleted |
+| `8e1b3c4` + the matrix-cut commit | `build`/`ci(quality)`: the Windows target is linted from Linux through MinGW, and the blocking matrix drops to four jobs |
 
 Findings this closes:
 
@@ -70,7 +71,7 @@ Findings this closes:
   requires that set instead of an empty list.
 - **L1-10, top burden 3, Wave R1 bullet 3 — partly resolved** (`3aa5b8b`). `cargo-udeps` is gone with the pinned nightly
   toolchain it required; coverage now runs on stable 1.97.1. `cargo deny`, `cargo audit`, `cargo machete`,
-  `cargo outdated`, byte-exact notices, and the six-job CI matrix stay.
+  `cargo outdated`, byte-exact notices, and the four-job CI matrix stay.
 - **L1-4, L1-5, L1-6, L1-7, L1-8, L1-9, L1-13, L1-14, L1-15, L1-16, L7-8, L7-13, top burdens 4 and 5, Wave R1
   bullet 4, C8 — resolved** (Part 1, commit `12ebbf8` plus the removal commit). `quality/` shrinks by 2,001 lines:
   `check_architecture.py` (1,126), `architecture.toml` (210), `check_docs.py` (288), `test_check_coverage.py` (229),
@@ -183,7 +184,9 @@ of Python/Makefile for a local single-user tool, and `make check` blocks on the 
 
 12. **CI matrix, six required checks, cache-cleanup workflow** — `12:22-26`, `Makefile:112-126`,
     `.github/workflows/cache-cleanup.yml`. Four matrix jobs, branch protection, and a scheduled cache-pruner for a repo
-    with no external contributors. Simpler: one job running `make verify`; delete cache-cleanup. **MEDIUM.**
+    with no external contributors. Simpler: one job running `make verify`; delete cache-cleanup. **MEDIUM.** **Partly
+    resolved**: the blocking matrix is four jobs, the Windows target is linted from Linux, and the Linux test job folded
+    into coverage; branch protection and cache-cleanup remain.
 
 13. **Docs mirror code constants** — `check_docs.py:87-109`, `12:69-74`. Every `MAX_*`/`MIN_*` named in a
     `**Current policy.**` doc must exist verbatim under `crates/`. Renaming a constant forces a doc edit. Simpler: check
@@ -828,7 +831,8 @@ Note: `docs/intention-relay/closeout/` **does not exist**; roadmap `11:19-23` re
 - Remove `make quality-tests` from the blocking gate (`Makefile:60-62`). — **done** (Part 1): the target, the checkers,
   and their self-tests are deleted.
 - `revue` to registry 3.10.0 + scoped advisory ignore (`Cargo.toml:74-76`, `12:146-160`). — **done** (`54117be`).
-- One CI job running `make verify`; delete cache-cleanup (`12:22-26`).
+- One CI job running `make verify`; delete cache-cleanup (`12:22-26`). — **partly done**: the blocking matrix is four
+  jobs with the Windows target linted from Linux; one job and the cache-pruner remain.
 
 **Wave R2 — contracts and versioning (remove ceremony with no consumer)**
 - Seven contract-test families → round-trip + malformed-decode + redaction (`02:195-207`).

@@ -307,10 +307,14 @@ The blocking workflow is
 [.github/workflows/quality.yml](.github/workflows/quality.yml), run on pushes
 and pull requests to `main`:
 
-- `lint-arch` and `test` jobs on `ubuntu-24.04` and `windows-2025`;
-- `coverage-default` and `deps` jobs on `ubuntu-24.04`;
+- `lint-arch` (formatting, native lint, Windows-target lint, doctests,
+  rustdoc), `coverage-default`, and `deps` on `ubuntu-24.04`;
+- `test` on `windows-2025`, where the Windows-only fixtures run; Linux test
+  execution happens inside `coverage-default`, which runs the same suite
+  instrumented;
 - pinned toolchains and per-job tool scopes, rust-cache, `mold` on Linux,
-  sccache for coverage builds, and uploaded quality reports.
+  MinGW for the Windows-target lint, sccache for coverage builds, and uploaded
+  quality reports.
 
 One supporting workflow is not part of the blocking gate: the manual
 live-provider end-to-end run
