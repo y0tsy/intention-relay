@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.** Architecture 25 owns the
 configuration and provider control-plane cluster: controlled configuration live reload, credential rotation, provider
-health checks, provider/model discovery, pricing and budget policy, and the configuration control-plane surface. The
+health checks, provider/model discovery, pricing and budget policy, and raw-TOML/configuration editing. The
 slice is not activated; activation requires an activating specification (activation sequence: [architecture
 11](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment), [architecture
 30](30-instruction-sources-and-system-context.md)).
@@ -18,7 +18,7 @@ run-execution meaning layer (its canonical codec was removed under [architecture
 flat activity journal, the notification list, and adapter behavior.
 
 This document owns only the accepted future directions below: no second runtime, registry, persistence authority, or
-sandbox, and no `RunId`, lifecycle transition, tool permission, child, MCP capability, bridge grant, kernel epoch,
+sandbox, and no `RunId`, lifecycle transition, tool permission, child, kernel epoch,
 context projection, branch, or reconciliation result from a reload, rotation, health observation, discovery result,
 price, or control-plane action. All directions apply to future fresh runs only.
 
@@ -35,8 +35,8 @@ path, unversioned or legacy documents fail closed under [architecture
 auto-restart, or automatic re-application;
 - a candidate that cannot be applied atomically fails closed and leaves the
 daemon on its recorded configuration revision; a candidate that changes catalog-affecting configuration is rejected with
-`catalog_change_requires_restart`, and the next daemon restart re-derives the active catalog from the startup document
-through the catalog prepare and accept path;
+`catalog_change_requires_restart`, and the next daemon restart re-parses the startup document and rebuilds the catalog
+at startup;
 - existing persisted runs, admitted runs, and recorded configuration revisions are never
 mutated, re-selected, or rewritten by a reload;
 - the reload command is the only activation path for a running daemon; with no
@@ -100,16 +100,10 @@ Pricing and budget policy is product/budget policy, never an admission ceiling, 
 - numeric values are classified Intrinsic/Capacity/Product; pricing is never an
 admission ceiling.
 
-## Profile UI and configuration control plane
+## Presentation and protocol surface
 
-A provider profile UI and configuration control plane is the accepted future presentation direction:
-
-- it consumes only the shared typed client and existing safe projections; it is
-not a second authority, transport, registry, or adapter path;
-- it renders safe projections and never raw TOML, credentials, private endpoint
-material, SDK objects, or live resources;
-- profile edits surface through the reload and catalog contracts above and
-affect fresh runs only.
+The provider profile UI and the configuration control plane's presentation and protocol surface are owned by
+[architecture 29](29-provider-session-and-profiles-protocol.md) (public protocol and presentation).
 
 ## Raw-TOML editing and configuration editing
 
