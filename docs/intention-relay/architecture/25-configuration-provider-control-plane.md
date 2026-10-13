@@ -19,13 +19,13 @@ sandbox, and no `RunId`, lifecycle transition, tool permission, child, kernel ep
 context projection, branch, or reconciliation result from a discovery result or a configuration edit. All directions
 apply to future fresh runs only, and configuration activation remains daemon-startup-only.
 
-## Directions removed by the owner decision (2026-10-13)
+## Removed directions
 
 Controlled configuration live reload, in-process credential rotation, provider health checks, pricing and budget policy,
 and raw-TOML configuration editing are removed from the accepted directions:
 
 - no command, contract, transaction, DTO, facade, or test obligation survives for any of them, and none of them may be
-reintroduced by an activating specification without a new owner decision;
+reintroduced by an activating specification;
 - configuration activation stays daemon-startup-only: the typed editing direction below produces a document that the
 next daemon start applies, and a running daemon has no second activation path;
 - credential material reaches the daemon only through the startup loading boundary of [architecture

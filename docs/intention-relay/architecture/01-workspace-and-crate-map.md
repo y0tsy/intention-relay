@@ -17,8 +17,8 @@ implementation, tools, or provider implementations.
 -  M1 establishes the `ConfigRevisionId` and credential-free configuration-snapshot contract foundation. M3 makes
 `ConfigSnapshotDto` the canonical credential-free persisted configuration selection: the composition root supplies one
 startup snapshot, storage records it by `ConfigRevisionId`, and each accepted run retains its immutable revision. TOML
-is applied only at daemon startup, and live reload was removed from the accepted directions (owner decision
-2026-10-13), so startup stays the only activation path.
+is applied only at daemon startup, and live reload is not an accepted direction, so startup stays the only activation
+path.
 -  M3 activates the engine and storage layers, merged since Slice 1.5 into `intention-engine` and `intention-storage`. The
 active graph adds the intentional `storage -> config`, `storage-sqlite -> config`, `application -> config`, and `runtime
 -> config` edges required to persist and attach canonical configuration revisions without exposing credentials or

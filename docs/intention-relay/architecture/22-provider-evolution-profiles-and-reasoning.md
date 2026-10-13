@@ -12,8 +12,7 @@ reasoning. It applies only to future run execution; `openrouter` and `generic-ch
 kinds. Retained provider/profile/reasoning material is research provenance where it conflicts with architectures
 15--21. Provider/model discovery, typed configuration editing, and the profile UI are owned by [architecture
 25](25-configuration-provider-control-plane.md). Controlled live reload, in-process credential rotation, provider health
-checks, pricing and budget policy, and raw-TOML editing were removed from the accepted directions by the owner decision
-2026-10-13.
+checks, pricing and budget policy, and raw-TOML editing were removed from the accepted directions.
 
 ## Ownership and non-authorities
 
@@ -483,7 +482,7 @@ Responses SDK/driver, user-kind parser, profile picker/editor presentation, cred
 telemetry, multimodal or structured output, plugin drivers, or remote continuation. The catalog database, the single
 current storage schema (logical version 1), discovery, typed configuration editing, and typed header policy belong to
 the not-activated Slice 4; controlled live reload, credential rotation, health checks, pricing, and raw-TOML editing
-were removed from it by the owner decision 2026-10-13; the typed preservation-control and
+were removed from it; the typed preservation-control and
 server-side-parser contracts were removed as unconsumed by the unconsumed-surface audit (2026-09), and no
 parser-configuration surface is activated.
 Semantic content inspection of reasoning or provider content is an accepted post-M5 future direction,

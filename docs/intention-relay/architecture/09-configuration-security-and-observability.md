@@ -40,7 +40,7 @@ its own immutable selected snapshot/revision.
 M3 applies TOML **only at daemon startup**. It neither watches TOML nor applies an edit to an already-running daemon. A
 changed TOML file therefore takes effect only after a restart; the new startup snapshot applies to new runs, while
 existing persisted runs retain their recorded revision. Configuration application stays daemon-startup-only: controlled
-live reload was removed from the accepted directions by the owner decision 2026-10-13 ([architecture
+live reload is not an accepted direction ([architecture
 25](25-configuration-provider-control-plane.md)), so no reload contract, transaction, or outcome test is owed, and a
 running daemon has no second activation path.
 

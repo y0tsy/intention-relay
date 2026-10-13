@@ -79,9 +79,8 @@ capability plane: the negotiated `provider_profiles_v1` capability mechanism is 
 03](03-daemon-transport-and-adapters.md), so the surface uses plain typed requests with no
 capability or family gate. It does not imply configuration editing, profile testing, credential entry, or
 model discovery; typed configuration editing belongs to the [architecture 25](25-configuration-provider-control-plane.md)
-direction and is not part of this surface, and no live-reload or atomic-reload contract exists (removed by the owner
-decision 2026-10-13). The daemon advertises and serves no `provider_profiles_v1`
-capability today.
+direction and is not part of this surface, and no live-reload or atomic-reload contract exists. The daemon advertises
+and serves no `provider_profiles_v1` capability today.
 
 A catalog list is bounded, paginated by an opaque token, sorted by stable `ProfileId`, carries the active
 `CatalogRevisionId`, and returns `has_more`; a catalog change invalidates the token with a typed conflict. An
@@ -128,7 +127,7 @@ presentation, credential entry/keychain, discovery, telemetry, multimodal or
 structured output, plugin drivers, remote continuation, and production behavior. The catalog database, the single
 current storage schema (logical version 1), discovery, typed configuration editing, and typed header policy belong to
 the not-activated Slice 4; controlled live reload, credential rotation, health checks, pricing, and raw-TOML editing
-were removed from it by the owner decision 2026-10-13; the typed server-side-parser and
+were removed from it; the typed server-side-parser and
 preservation-control contracts were removed as unconsumed by the unconsumed-surface audit (2026-09), so no
 parser-configuration surface is activated.
 

@@ -1,7 +1,7 @@
 # Over-engineering audit — Intention Relay architecture, roadmap, and process
 
-> **Working artifact, not an approved decision.** Committed at the repository root by owner decision on 2026-10-13.
-> Every finding is a recommendation the owner accepts or rejects; nothing here overrides `docs/intention-relay/` or
+> **Working artifact, not an approved decision.** Committed at the repository root on 2026-10-13.
+> Every finding is a recommendation to accept or reject; nothing here overrides `docs/intention-relay/` or
 > `AGENTS.md`. No gate reads it: `quality/check_docs.py`, the only documentation checker the repository had, was deleted
 > in Part 1, and `make doc` (`cargo doc --workspace --no-deps` with `RUSTDOCFLAGS=-D warnings`) is now the only
 > documentation gate.
@@ -128,7 +128,7 @@ Findings this closes:
   sections are deleted (L7-6, L7-7). M8's speculative decisions are explicit v1 non-goals (L7-11), and the roadmap's
   restated UI detail shrinks (L7-18). The duplicate `SkillSelectionV1` (C5), the two owners of the profile UI /
   configuration control plane (C7), and the deleted `closeout/` citation (C9) are resolved.
-- **L4-16 and top burden 10 (kernel checkpoints) — not cut** (owner decision, 2026-10-13). The checkpoint subsystem
+- **L4-16 and top burden 10 (kernel checkpoints) — not cut.** The checkpoint subsystem
   stays in full and is a direction to develop, so the R4 kernel bullet is only partly applied: `ad43352` resolves C4 and
   removes the bridge grant, while the checkpoint policy, metadata, restoration, and recovery sections remain.
 
@@ -154,7 +154,7 @@ and docs 28-30 were rewritten by the branch, so their line numbers have shifted.
 | 7 | Atomic-slice rule blocks sequential merges inside one slice — **resolved** (`bdbe700`) | `11:85-89`, `11:299-303` | HIGH |
 | 8 | Rot-audit apparatus cites an unrecoverable `/tmp` input — **resolved** (`bdbe700`) | `10:403-418` | HIGH |
 | 9 | MCP: five versioned record families + two-phase acquire/invoke CAS — **resolved** (`ad43352`) | `18:42-141` | HIGH (future) |
-| 10 | Kernel checkpoint subsystem for "convenience state" — **kept in full** by owner decision (2026-10-13) | `20:155-192` | HIGH (future) |
+| 10 | Kernel checkpoint subsystem for "convenience state" — **kept in full** | `20:155-192` | HIGH (future) |
 
 ---
 
@@ -537,8 +537,7 @@ All four docs are "Approved future design. Not implemented" (`15:3`, `18:3`, `19
     atomic generation promotion, Required/Optional restore, three failure codes — for state `20:155-157` calls "private
     convenience state, not durable application progress". Simpler: ship `checkpoint_policy = Disabled`; the
     `.ir/scripts` library already gives cross-run reuse. **HIGH.**
-    **Kept by owner decision, 2026-10-13**: the checkpoint subsystem stays in full and is a direction to develop; treat
-    this finding as rejected.
+    **Kept**: the checkpoint subsystem stays in full and is a direction to develop; treat this finding as rejected.
 
 17. **Session-scoped vs run-scoped kernel contradiction** — `20:27-29` ("One live `KernelEpochId` belongs to exactly one
     admitted `RunId`… a new run receives a fresh epoch") vs `20:253-258` ("A kernel is session-scoped"). Implementers
@@ -788,7 +787,7 @@ Note: `docs/intention-relay/closeout/` **does not exist**; roadmap `11:19-23` re
    owning milestone); git history holds anchors. **HIGH.**
    **Resolved** in `bdbe700`: Known deferrals carry a fact and its owner.
 
-5. **Process locks dead UI in place** — `11:316-326` keeps owner-deferred stub facts as permanent ledger rows, and
+5. **Process locks dead UI in place** — `11:316-326` keeps deferred stub facts as permanent ledger rows, and
    `12:72-73` has `docs-check` verify that a placeholder constant named by a `@todo(core)` sentence exists under
    `crates/`; the stub tabs still ship (`10:261`). Simpler: delete the stubs and their rows; drop the placeholder check.
    **MED-HIGH.**
@@ -841,7 +840,7 @@ Note: `docs/intention-relay/closeout/` **does not exist**; roadmap `11:19-23` re
 
 15. **Planning pipeline per milestone** — `SKILL.md:87-99` (mandatory option/trade-off briefs), `:108-138` pre-draft,
     `:140-156` consolidated draft, `:158-172` spec, plus `checklists.md:41-54` decision-record template and five
-    checklist groups (`checklists.md:56-101`). The owner is the only decision-maker. Simpler: one decision table plus one
+    checklist groups (`checklists.md:56-101`). One decision-maker consumes all of it. Simpler: one decision table plus one
     spec. **MEDIUM.**
 
 16. **Dual-OS CI on every slice** — `11:283-285`, `12:22-24` require Linux/Windows per activated slice and six blocking
@@ -953,8 +952,7 @@ Note: `docs/intention-relay/closeout/` **does not exist**; roadmap `11:19-23` re
 - MCP: one connection record + direct invoke; pass through JSON Schema (`18:42-141,134-135`). — **done** (`ad43352`).
 - Bridge: delete grant + `BridgeOperationId`; kernel is a daemon child (`19:45-108`). — **done** (`ad43352`).
 - Kernel: `checkpoint_policy = Disabled`; resolve the scope contradiction (C4) (`20:155-192,27-29`). — **partly done**
-  (`ad43352`): C4 resolved and the bridge grant removed; the checkpoint cut was rejected by owner decision (kept in
-  full).
+  (`ad43352`): C4 resolved and the bridge grant removed; the checkpoint cut was rejected (kept in full).
 - Goal domain: flat goals + one status; drop DAG readiness, exception sets, gate templates, memory domain
   (`28:25-256`). — **done** (`ad43352`).
 - Provider catalog: startup-only; drop pending-removal/expiry/degraded states (`22:170-204`, `29:100-124`). — **done**
@@ -973,9 +971,9 @@ Note: `docs/intention-relay/closeout/` **does not exist**; roadmap `11:19-23` re
 
 ## 11. Method note
 
-Findings are anchored to document line numbers at `a359729`; they are the auditors' reading, not owner decisions.
+Findings are anchored to document line numbers at `a359729`; they are the auditors' reading, not settled decisions.
 Severity is a burden estimate, not a correctness verdict. Anything marked load-bearing in §9 should be preserved
-unless the owner explicitly changes the underlying decision. Contradictions in §8 should be resolved before the
+unless the underlying decision changes. Contradictions in §8 should be resolved before the
 affected milestone activates, because they are cheapest to fix while the code does not yet exist. The status tags and
 the status section above record what branch `cleanup/overengineering-removal` already removed through Waves R2-R5,
-including the owner decision of 2026-10-13 to keep the kernel checkpoint subsystem in full.
+including the retained kernel checkpoint subsystem.

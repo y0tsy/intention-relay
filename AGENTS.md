@@ -71,6 +71,7 @@
 
 - Use the root Makefile as the quality orchestration interface. Run `make quick` while iterating and `make verify` before handing off implementation work.
 - Changes to Makefile, linting, coverage, feature profiles, or supply-chain policy must update the relevant machine-readable policy and architecture documentation in the same change.
+- Documentation, code comments, commit messages, and pull-request descriptions state changes, removals, and statuses as facts: what the repository does, not who decided it. Never cite a decision, directive, approval, or rejection by a person as the reason for a change.
 
 ## Security and language
 

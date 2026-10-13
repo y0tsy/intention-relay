@@ -67,10 +67,10 @@ The coverage policy is the per-crate tiers declared in `quality/coverage.toml`
 
 ## Milestone 5+: Post-M5 retrospective alignment
 
-**Activation home for the complete post-M5 stack; hard prerequisite for M6-M8 and M10-M11.** Owner directive
-2026-10-12: Slice 3 absorbs the former M7 milestone — except the optional implementation handoff, delivered by Slice 6 —
-and the `sub_agent` tool path of the former M11; the remaining milestones renumber in sequence, so the former M8 is M7,
-the former M9 is M8, the former M11 is M10, and the former M12 is M11. This milestone is the declared prerequisite of
+**Activation home for the complete post-M5 stack; hard prerequisite for M6-M8 and M10-M11.** Slice 3 absorbs the
+former M7 milestone — except the optional implementation handoff, delivered by Slice 6 — and the `sub_agent` tool
+path of the former M11; the remaining milestones renumber in sequence, so the former M8 is M7, the former M9 is M8, the
+former M11 is M10, and the former M12 is M11. This milestone is the declared prerequisite of
 the remaining milestones in the dependency graph and activates only foundation work, including the terminal presentation
 foundation and the Slice 3 agent-operation scope, never their direct boundary implementation. The remaining post-M4
 package implementations are not part of its slices: they are delivered by Milestones 10 and 11, which consume this
@@ -166,7 +166,7 @@ configuration editing (architecture 25) and provider session selection (architec
 configuration-editing surface, provider profile UI, arbitrary authentication headers, session defaults and per-turn/fork
 overrides, the provider profiles protocol, and the provider reasoning/catalog surface, with the catalog built at startup.
 Controlled live reload, in-process credential rotation, provider health checks, pricing and budget policy, and raw-TOML
-editing were removed from the slice by the owner decision 2026-10-13 (architecture 25). The
+editing were removed from the slice (architecture 25). The
 unconsumed-surface audit (2026-09) removed the unconsumed
 typed preservation-control, server-side-parser, Responses reasoning-mode, reasoning-usage, and model-capability-envelope
 contracts, the protocol-only reasoning/header/parser duplicates, the eight producer-less control-plane event DTOs, and
