@@ -2,8 +2,9 @@
 
 > **Working artifact, not an approved decision.** Committed at the repository root by owner decision on 2026-10-13.
 > Every finding is a recommendation the owner accepts or rejects; nothing here overrides `docs/intention-relay/` or
-> `AGENTS.md`. The gates do not read it: `quality/check_docs.py` checks `docs/**` plus `README.md`, `AGENTS.md`, and
-> `THIRD_PARTY_NOTICES.md` only.
+> `AGENTS.md`. No gate reads it: `quality/check_docs.py`, the only documentation checker the repository had, was deleted
+> in Part 1, and `make doc` (`cargo doc --workspace --no-deps` with `RUSTDOCFLAGS=-D warnings`) is now the only
+> documentation gate.
 
 ## How this was produced
 
@@ -43,7 +44,7 @@ listed separately in §9 and must not be cut.
 
 ## Status — what the removal branch already resolved
 
-Branch `cleanup/overengineering-removal`, base `a359729`, eight commits:
+Branch `cleanup/overengineering-removal`, base `a359729`, fourteen commits:
 
 | Commit | Change |
 | --- | --- |
@@ -53,6 +54,10 @@ Branch `cleanup/overengineering-removal`, base `a359729`, eight commits:
 | `0231be8` | `build(deps)`: upgrade `openrouter-rs` to 0.19.0 |
 | `12ebbf8` + the Part 1 removal commit | `build`/`refactor(quality)`: Clippy carries the two source rules; the architecture and docs checkers and their self-tests are deleted |
 | `8e1b3c4` + the matrix-cut commit | `build`/`ci(quality)`: the Windows target is linted from Linux through MinGW, and the blocking matrix drops to four jobs |
+| `abdaf72` | `refactor(runtime)`: give the tool projection one durable home |
+| `cd62ac1` | `refactor(tools)`: return the path and OS error in tool failures |
+| `ad43352` | `docs(architecture)`: execute Wave R4 for the future packages and domains |
+| `bdbe700` | `docs(architecture)`: execute Wave R5 for the roadmap and delivery process |
 
 Findings this closes:
 
@@ -90,6 +95,42 @@ Findings this closes:
   jobs: `lint-arch` on Linux also lints the Windows target and runs the doctests, `coverage-default` and `deps` stay on
   Linux, and `test` runs on Windows only, because Linux test execution already happens inside the coverage run. Branch
   protection requires exactly those four checks. The scheduled cache-pruner stays, so the finding is not closed.
+- **L1-19, L2-2, L2-4, L3-3/C1, L3-14, L3-15/C2, L3-16, L6-19, L6-20, Wave R2 and R3 — resolved** (`abdaf72`,
+  `cd62ac1`). The seven mandatory contract-test families per boundary shrink to round-trip, malformed-decode, and
+  redaction, so a boundary is proven by what crosses it instead of by a pre-implementation fixture set (L1-19). The tool
+  projection has one durable home in `messages.projection_json`, with the schema stamp at 5 (L2-2). Tool failures return
+  the path and the OS error again (L2-4). The orphan plan `digest` is gone (L3-3, C1), the immutable profile-revision
+  history is dropped while freeze-at-admission stays (L3-14), and `declared_audience` and `total_instruction_size` no
+  longer exist (L3-15, C2). The instruction secret regression is one "never logged" assertion (L3-16). The 5×3
+  classification matrix collapses to one rule plus one absence test (L6-19), and the file-permission policy is dropped
+  (L6-20).
+- **L4-6, L4-7, L4-8, L4-11, L4-12, L4-13, L4-14, L4-17/C4, L4-18, Wave R4 — resolved** (`ad43352`). MCP keeps one
+  user-editable connection record with its method list (L4-6), a call invokes directly instead of a two-phase
+  acquire-then-invoke with revision CAS (L4-7), and a server's input schema is parsed, bounded, and passed through as
+  JSON Schema text with no closed typed schema family and no validator beyond the parse (L4-8). The bridge drops the
+  ephemeral grant (L4-11), `BridgeOperationId` and its durable binding record (L4-12), the separate `BridgeSelectionV1`
+  wire surface and DTO family (L4-13), and the fourth copy of the shared cancellation/recovery/partial rules (L4-14);
+  the kernel is a daemon-spawned child holding a typed client bound to its run, so the kernel→bridge→tool-loop three-hop
+  indirection is gone (L4-18). The kernel lifetime contradiction is resolved as a session-scoped kernel process with
+  run-scoped namespaces and epochs (L4-17, C4).
+- **L5-1/C6, L5-4, L5-8/C3, L5-9, L6-8, L6-9, L6-10, L6-11, L6-12, L6-18 (partly), Wave R4 and R5 — resolved**
+  (`ad43352`, `bdbe700`). Goals are flat with one status: the DAG with obligatory children and readiness inheritance
+  (L6-8), the three orthogonal state machines with exception-set propagation (L6-9), the `GoalRunSelectionV1` frozen
+  mega-record (L6-10), the user-authored typed gate-template domain (L6-11), and the first-class durable working-memory
+  domain with replacement links and rollback (L6-12, C6) are gone. The provider catalog is startup-only: catalog
+  acceptance machinery (L5-4) and the pending-removal candidates, 30-minute expiry, and degraded recovery states
+  (L6-18) are dropped, while opaque pagination stays, so that finding is only partly closed. Fork lineage no longer
+  mandates an additive migration (L5-8, C3), and regeneration is an ordinary same-session rerun rather than a fork
+  (L5-9).
+- **L7-1, L7-2, L7-3, L7-4, L7-6, L7-7, L7-11, L7-18, C5, C7, C9, Wave R5 — resolved** (`bdbe700`). The unfalsifiable
+  exit rule and the mandatory atomic-slice rule are replaced by one activating specification per milestone (L7-1,
+  L7-2, L7-3). The open-decision ledger is a "Known deferrals" table of fact plus owner (L7-4), and doc 10's evidence
+  sections are deleted (L7-6, L7-7). M8's speculative decisions are explicit v1 non-goals (L7-11), and the roadmap's
+  restated UI detail shrinks (L7-18). The duplicate `SkillSelectionV1` (C5), the two owners of the profile UI /
+  configuration control plane (C7), and the deleted `closeout/` citation (C9) are resolved.
+- **L4-16 and top burden 10 (kernel checkpoints) — not cut** (owner decision, 2026-10-13). The checkpoint subsystem
+  stays in full and is a direction to develop, so the R4 kernel bullet is only partly applied: `ad43352` resolves C4 and
+  removes the bridge grant, while the checkpoint policy, metadata, restoration, and recovery sections remain.
 
 Landed outside the audit's scope: `0231be8` upgrades `openrouter-rs` to 0.19.0, published 2026-10-13, because the
 stale-pin gate (`cargo outdated --exit-code 1`) in `make deps` trips on an external release rather than on a defect.
@@ -97,8 +138,8 @@ stale-pin gate (`cargo outdated --exit-code 1`) in `make deps` trips on an exter
 Still open in Wave R1: coverage floors (L1-3, L7-12), the label taxonomy and the agent quotas (L1-17, L1-18), and the
 six-job CI matrix (L1-12).
 
-Anchors elsewhere in this file remain as read at `a359729`; doc 12 and doc 03 were rewritten by the branch, so their
-line numbers have shifted.
+Anchors elsewhere in this file remain as read at `a359729`; doc 03, doc 10, doc 11, doc 12, doc 15, docs 18-23, doc 25,
+and docs 28-30 were rewritten by the branch, so their line numbers have shifted.
 
 ## Top burdens (feature-velocity blockers)
 
@@ -110,10 +151,10 @@ line numbers have shifted.
 | 4 | The quality system has its own ~1000-line test suite, blocking in `make check` — **resolved** (Part 1): the meta-suite is deleted | `Makefile:60-62`, `check_architecture.py:817-978` | HIGH |
 | 5 | Every new crate/dep is a policy edit with declared↔Cargo equality and named test targets — **partly resolved** (Part 1): only the coverage tier is left, and an untiered crate now fails `make coverage` | `architecture.toml:20-130` | MED-HIGH |
 | 6 | Vendored, patched `revue` maintained for one advisory — **resolved** (`54117be`) | `Cargo.toml:22,74-76`, `12:146-160` | HIGH |
-| 7 | Atomic-slice rule blocks sequential merges inside one slice | `11:85-89`, `11:299-303` | HIGH |
-| 8 | Rot-audit apparatus cites an unrecoverable `/tmp` input | `10:403-418` | HIGH |
-| 9 | MCP: five versioned record families + two-phase acquire/invoke CAS | `18:42-141` | HIGH (future) |
-| 10 | Kernel checkpoint subsystem for "convenience state" | `20:155-192` | HIGH (future) |
+| 7 | Atomic-slice rule blocks sequential merges inside one slice — **resolved** (`bdbe700`) | `11:85-89`, `11:299-303` | HIGH |
+| 8 | Rot-audit apparatus cites an unrecoverable `/tmp` input — **resolved** (`bdbe700`) | `10:403-418` | HIGH |
+| 9 | MCP: five versioned record families + two-phase acquire/invoke CAS — **resolved** (`ad43352`) | `18:42-141` | HIGH (future) |
+| 10 | Kernel checkpoint subsystem for "convenience state" — **kept in full** by owner decision (2026-10-13) | `20:155-192` | HIGH (future) |
 
 ---
 
@@ -219,6 +260,7 @@ of Python/Makefile for a local single-user tool, and `make check` blocks on the 
     forbidden-type proofs, consumer-driven contract tests, redaction. The only consumer of the wire is the repo's own
     `intention-client`, and the single-live-version rule (`02:180-194`) makes compatibility fixtures structurally
     pointless. Simpler: round-trip + malformed-decode + redaction; drop consumer-driven and compatibility. **MED-HIGH.**
+    **Resolved** in `abdaf72`: the seven contract-test families reduce to round-trip, malformed-decode, and redaction.
 
 20. **Every principle must map to an executable test or documented exception** — `00:150-152`, mirrored by
     `AGENTS.md:64` (new crate needs policy declaration + test target before any production code). Simpler: require
@@ -241,6 +283,8 @@ and `SESSION_LIST_ROWS` are **already implemented**, so the burdens below are ma
 2. **Two durable homes for the same tool projection** — `04:116-119,130-131`. `messages.projection_json` carries the
    typed projection *and* one `tool_results` row per call is "the single durable home". Every write does two inserts
    whose shapes must stay in sync; every read path can pick a different source. Simpler: one table. **HIGH.**
+   **Resolved** in `abdaf72`: the `tool_results` table is gone; one committed message row per tool fact carries status,
+   metadata, and content.
 
 3. **Pending-turn subsystem** — `04:82-105,126-129`. A `turns` table with a four-state machine, per-turn proposed
    `RunId`/`ConfigRevisionId`, idempotency keys with content comparison (`turn_idempotency_conflict`), `turn.remove`,
@@ -253,6 +297,8 @@ and `SESSION_LIST_ROWS` are **already implemented**, so the burdens below are ma
    The only reader is the user whose own file it is; hiding *which* path failed and *why* is a UX regression and forces
    a separate rendering path plus a byte bound. Simpler: return path + OS error verbatim (bounded); `05:91-93` already
    says there is no security boundary. **HIGH** (security-shaped machinery with negative product value).
+   **Resolved** in `cd62ac1`: a failed workspace operation returns the workspace-relative path and the OS error
+   verbatim, bounded.
 
 5. **Byte-bounded snapshot that truncates silently** — `03:75,135-137`, `04:142-144`.
    `MAX_TRANSCRIPT_SNAPSHOT_BYTES` (= 1 MiB − ¼ MiB) caps the snapshot; pending turns trimmed with an `omitted` count;
@@ -322,6 +368,7 @@ and `SESSION_LIST_ROWS` are **already implemented**, so the burdens below are ma
 3. **Orphan `digest` contract** — `07:161` has approval record "its revision, and the digest", but `02:137-143` removed
    canonical digests and `07:88-95` has no digest field. Nothing can produce or read it. Simpler: approve on
    `(SessionId, plan_number, revision)`. **MEDIUM** (contradiction, not just weight).
+   **Resolved** in `abdaf72`: plan approval pins the exact revision; the orphan digest is gone (C1).
 
 4. **Eight-state plan lifecycle** — `07:177-192` plus a state-machine test (`07:217`), while `07:194-196` admits the
    vocabulary "is not defined today" and no validator is kept. Simpler: `drafting | submitted | approved` plus a
@@ -371,17 +418,21 @@ and `SESSION_LIST_ROWS` are **already implemented**, so the burdens below are ma
     revision identity with no mutation. Nothing consumes old revisions (`30:133` records only the current projection
     identity). Simpler: profile is current config; keep one typed revision identity for the frozen projection only.
     **HIGH** (freeze-at-admission `30:127-133` is load-bearing; revision history is not).
+    **Resolved** in `abdaf72`: the profile is current configuration; only the frozen projection keeps a typed revision
+    identity.
 
 15. **Unconsumed projection fields and a self-contradiction** — `30:105-113` declares `declared_audience` and
     `total_instruction_size` with no reader, while `30:14-18` assigns audience semantics to architecture 21;
     `30:186-188` specifies a "future projection identity" covering audience, contradicting `30:64-67` ("no canonical
     digest or identity layer exists… introduced only with its first real consumer"). Simpler: projection = assembled
     text + ordered source revision references. **MEDIUM.**
+    **Resolved** in `abdaf72`: `declared_audience` and `total_instruction_size` are deleted (C2).
 
 16. **Fake-secret regression over non-secret text** — `30:208-217` requires secret-style regression across every
     public/durable/log/activity surface for instruction text, while `30:213-216` says no surface displays fragment text
     at all — there is no leak path. Simpler: one assertion that instruction text is never written to logs/activity.
     **MEDIUM.**
+    **Resolved** in `abdaf72`: one never-logged assertion replaces the fake-secret regression.
 
 17. **Two new crates and a six-stage pipeline ahead of need** — `06:95-102,113-116,141-145`, while `06:153-159` still
     leaves the language set, thresholds, CCR backend, capacity, retention, compaction, and fallback undecided. Simpler:
@@ -427,41 +478,54 @@ All four docs are "Approved future design. Not implemented" (`15:3`, `18:3`, `19
    incl. `private_endpoint_generation_reference`, `private_credential_generation_reference`,
    `acquisition_operation_id`, `attempt_evidence_reference`, `gateway_contract_revision`). Simpler: one user-editable
    connection record plus capability rows keyed by connection+method; keep only the invocation row durable. **HIGH.**
+   **Resolved** in `ad43352`: one user-editable connection record, direct invocation, bounded JSON-Schema pass-through.
 
 7. **Two-phase acquire-then-invoke with revision CAS** — `18:96-97,107-108,136-141`: the model first `AcquireCapability`
    (with an `accumulated_selection_revision` per step), then `InvokeCapability`; concurrent commits compare predecessor
    revisions and "a loser rereads." A single-writer local daemon has no concurrent writers, and the extra turn is pure
    latency. Simpler: discover at connect/run start, expose methods directly. **HIGH.**
+   **Resolved** in `ad43352`: one user-editable connection record, direct invocation, bounded JSON-Schema pass-through.
 
 8. **Closed schema families reject real MCP servers** — `18:134-135`: discovery normalizes only into "closed typed
    input/result schema families"; raw-map-only or unsupported schemas "fail before capability registration." Most MCP
    servers publish plain JSON Schema. Simpler: pass validated JSON through under a size bound. **HIGH** (actively
    counterproductive).
+   **Resolved** in `ad43352`: one user-editable connection record, direct invocation, bounded JSON-Schema pass-through.
 
 9. **Run-owned MCP processes, never shared** — `18:192-193,210-211`: local stdio services start on first call and
    terminate at run end, never shared or reattached, while `18:210-211` accepts they run with ordinary OS authority.
    Cost: respawn + re-handshake every run. Simpler: a daemon-owned per-user process per connection. **MEDIUM.**
+   **Resolved** in `ad43352`: the MCP process is connection-scoped, not run-owned.
 
 10. **Exact-revision gating on every invocation** — `18:145-150`: each call re-validates endpoint, credential
     generation, descriptor, gateway, protocol, and schema revisions. Simpler: validate against the current connection
     record. **MEDIUM.**
+    **Resolved** in `ad43352`: an invocation validates against the current connection record.
 
 11. **Ephemeral grant handshake between components of one local process tree** — `19:45-66`: issuance requires a durable
     reread and yields `BridgeAttachmentGrantV1` (opaque id, daemon epoch, protocol revision, run, model-step position)
     with six expiry conditions and a never-logged rule, while `19:15-16` states the document is "not a privilege
     boundary". Simpler: the kernel is a daemon-spawned child holding a typed client bound to its run; no grant. **HIGH.**
+   **Resolved** in `ad43352`: no grant, no `BridgeOperationId`, no bridge wire DTOs; the kernel is a daemon child and
+   the restated rules collapse into references to 15.
 
 12. **A third identity plus a durable binding record** — `19:75-108`: `BridgeOperationId` distinct from `CorrelationIdDto`
     and `ToolCallId`, with `BridgeOperationV1` (10 fields) and pre-effect `bridge_operation_conflict` on unequal reuse.
     Simpler: one `ToolCallId` at ingress; reuse the turn idempotency key for dedupe. **HIGH.**
+    **Resolved** in `ad43352`: no grant, no `BridgeOperationId`, no bridge wire DTOs; the kernel is a daemon child and
+    the restated rules collapse into references to 15.
 
 13. **New wire surface and DTO family** — `19:34-41,69-73,174-186`: `BridgeSelectionV1` joins the run record, four
     `Bridge*Dto` families added, attachment rides the shared socket with its own handshake. Simpler: call the tool
     service in-process or over a minimal framed pipe. **HIGH** if the kernel is a daemon child; **MEDIUM** otherwise.
+    **Resolved** in `ad43352`: no grant, no `BridgeOperationId`, no bridge wire DTOs; the kernel is a daemon child and
+    the restated rules collapse into references to 15.
 
 14. **Fourth copy of shared cancellation/recovery/partial rules** — `19:152-159,196-206` restate 15's rules; `18:26-31`,
     `19:13-22`, `20:15-23` each re-declare "not a second X". Every future change must be mirrored four ways. Simpler:
     state bridge/kernel specifics once and reference 15. **MEDIUM.**
+    **Resolved** in `ad43352`: no grant, no `BridgeOperationId`, no bridge wire DTOs; the kernel is a daemon child and
+    the restated rules collapse into references to 15.
 
 15. **Nine-field `KernelSelectionV1` plus separate epoch identity** — `20:27-52`: kernel/interpreter/namespace/checkpoint/
     host-request contract revisions, checkpoint policy, projection revision, a script-library reference, and a
@@ -473,15 +537,20 @@ All four docs are "Approved future design. Not implemented" (`15:3`, `18:3`, `19
     atomic generation promotion, Required/Optional restore, three failure codes — for state `20:155-157` calls "private
     convenience state, not durable application progress". Simpler: ship `checkpoint_policy = Disabled`; the
     `.ir/scripts` library already gives cross-run reuse. **HIGH.**
+    **Kept by owner decision, 2026-10-13**: the checkpoint subsystem stays in full and is a direction to develop; treat
+    this finding as rejected.
 
 17. **Session-scoped vs run-scoped kernel contradiction** — `20:27-29` ("One live `KernelEpochId` belongs to exactly one
     admitted `RunId`… a new run receives a fresh epoch") vs `20:253-258` ("A kernel is session-scoped"). Implementers
     cannot tell which lifetime governs disposal/grants/checkpoints. Simpler: pick one (session-scoped kernel, run-scoped
     namespace) and state it once. **MEDIUM** (ambiguity; load-bearing to resolve).
+    **Resolved** in `ad43352`: a session-scoped kernel process with run-scoped namespaces (C4).
 
 18. **Three-hop kernel→bridge→tool-loop indirection** — `20:118-122,196-202`: kernel host requests require a current
     grant, a new `BridgeOperationId`, then 15's `ToolCallId`; background code may call tools only while the foreground
     grant lives. Simpler: kernel Python calls the daemon client directly with its run context. **HIGH.**
+    **Resolved** in `ad43352`: no grant, no `BridgeOperationId`, no bridge wire DTOs; the kernel is a daemon child and
+    the restated rules collapse into references to 15.
 
 19. **Per-cell script-import evidence** — `20:144-151`: each foreground cell records per-module path/count/size evidence,
     and unrepresentable evidence fails publication with `kernel_script_library_unavailable`. Audit value near zero; the
@@ -494,6 +563,7 @@ All four docs are "Approved future design. Not implemented" (`15:3`, `18:3`, `19
 1. **Memory records have two owners** — `21:7-8,301-305` define immutable typed records with provenance/scope/audience/
    supersession/rollback; `28:3-5,160-178` defines the same family (`MemoryKindDto`, scopes, replacement/rollback,
    cards). Simpler: 28 owns the records; 21 only selects references. **HIGH.**
+   **Resolved** in `ad43352`: the typed memory domain is dropped, so no record family has two owners (C6).
 
 2. **Three compaction/summary mechanisms** — `21:307-313` (immutable compaction), `28:200-214`
    (`ConversationSummaryDto` cumulative working form), `08:193-217` (live window pass compressing tool results). Simpler:
@@ -508,6 +578,8 @@ All four docs are "Approved future design. Not implemented" (`15:3`, `18:3`, `19
    requiring explicit accept/reject, degraded read mode, `activation_recovery_required`, exact registry swap) and
    `22:439-460` (nine ordered audit events, tombstones). For a TOML file read at startup on one machine. Simpler: parse
    at startup, fail loudly on invalid/removed entries, restart to apply. **HIGH.**
+   **Resolved** in `ad43352`: the catalog is parsed, validated, and built once at startup; pending-removal, expiry,
+   degraded mode, and activation recovery are gone.
 
 5. **Provider descriptor/user-kind framework is speculative breadth** — `22:118-132,388-418` (closed protocol-part
    registry, compatibility matrix, per-descriptor private decoders; `responses` + user-kind parser + `SafeHeader`
@@ -526,10 +598,12 @@ All four docs are "Approved future design. Not implemented" (`15:3`, `18:3`, `19
 8. **Fork lineage requires a migration, which policy forbids** — `23:266-268` mandates an "additive migration" creating
    root lineage for M3/M4 sessions; `00:132-133` and `11:126,275` state there are no migrations and a stamp bump
    recreates the DB. Simpler: delete the migration clause; lineage starts empty. **HIGH** (contradiction).
+   **Resolved** in `ad43352`: no lineage migration exists; a stale stamp discards and recreates (C3).
 
 9. **Regeneration is implemented as a fork** — `23:31-32,48`: "Regenerate response" = user-turn fork +
    `StartForkRunCommandDto`, pulling in preview, snapshot, lineage, idempotency. Simpler: append-only same-session rerun
    bound to a parent `RunId`; keep fork for explicit branching. **HIGH.**
+   **Resolved** in `ad43352`: regeneration is an ordinary same-session rerun bound to the parent `RunId`.
 
 10. **Presentation commands carry operation-id idempotency** — `23:89-102,157-162`: rename/archive/restore get
     `SessionPresentationOperationId`, stale-sequence conflicts, `changed = false`. Distributed-systems machinery for a
@@ -615,25 +689,35 @@ All four docs are "Approved future design. Not implemented" (`15:3`, `18:3`, `19
    parent is not ready until every obligatory child reaches a terminal user-decision state; child links carry
    `child_revision_at_link` and link identity. A workflow/graph engine for a single user. Simpler: flat goals per
    project with an optional parent pointer for display; no readiness inheritance. **HIGH.**
+   **Resolved** in `ad43352`: flat goals with one status and an `accepted` flag; DAG readiness, exception sets, gate
+   templates, and the typed memory domain are dropped.
 
 9. **Three orthogonal state machines plus exception-set propagation** — `28:76-108`: lifecycle + readiness +
    user-decision states, where `AcceptedWithException` carries evidence upward and a parent may be accepted only with an
    exception set explicitly including each inherited child exception. Simpler: one status (active/done/stopped) plus an
    `accepted` boolean. **HIGH.**
+   **Resolved** in `ad43352`: flat goals with one status and an `accepted` flag; DAG readiness, exception sets, gate
+   templates, and the typed memory domain are dropped.
 
 10. **`GoalRunSelectionV1` frozen mega-record** — `28:122-127`: leading goal, ordered parent revision chain, obligatory
     component refs, selected gate/template revisions, memory/Skill/role cards and revisions, revealed-record refs,
     target snapshot, bounds. Simpler: store goal_id + revision on the run. **HIGH.**
+    **Resolved** in `ad43352`: flat goals with one status and an `accepted` flag; DAG readiness, exception sets, gate
+    templates, and the typed memory domain are dropped.
 
 11. **Verification gates as a user-authored typed template domain** — `28:140-156`: `ReferenceGate`/`ExecutableGate`,
     user-created typed templates with Project/Goal/Session scope, immutable revisions, safe cards, explicit
     create/edit/archive/restore, provenance, plus gate-invalidation rules (`28:103-104`). Simpler: the user marks a goal
     verified, optionally attaching one command they run. **HIGH.**
+    **Resolved** in `ad43352`: flat goals with one status and an `accepted` flag; DAG readiness, exception sets, gate
+    templates, and the typed memory domain are dropped.
 
 12. **Working memory as first-class durable records with replacement links and rollback** — `28:158-185`: typed records
     with scopes, revisions, safe cards, explicit replacement/rollback links; the daemon never decides two texts conflict;
     full content only via `retrieve`. Simpler: memory = a markdown file per project/goal the model reads directly.
     **HIGH.**
+    **Resolved** in `ad43352`: flat goals with one status and an `accepted` flag; DAG readiness, exception sets, gate
+    templates, and the typed memory domain are dropped.
 
 13. **Skills and Roles as typed narrowing-only domains** — `28:180-186`: Skill = typed procedure with typed refs; Role =
     reusable `sub_agent` template that may only narrow. Simpler: skills as markdown files; roles as a prompt fragment.
@@ -660,15 +744,19 @@ All four docs are "Approved future design. Not implemented" (`15:3`, `18:3`, `19
     opaque pagination tokens with catalog-revision invalidation; candidate handles, accept/reject, 30-minute expiry,
     four degraded reasons, activation-recovery state. Simpler: startup removes missing profiles; referencing sessions
     show "provider unavailable". **HIGH.**
+    **Partly resolved** in `ad43352`: startup-only catalog, no pending-removal, expiry, or degraded states; catalog
+    pagination remains.
 
 19. **Data-classification matrix and redaction-crossing law** — `09:134-158`: 5 classes × persist/emit/log duties and a
     7-crossing redaction boundary whose failure is a security defect needing regression coverage, while credentials
     already never enter DTOs (`intention-config/src/lib.rs:541`). Simpler: keep one rule (credentials never cross) and
     one absence test. **MEDIUM** (load-bearing only as the single structural rule).
+    **Resolved** in `cd62ac1`: one credential-isolation rule plus one absence test.
 
 20. **File-permission warning/enforcement policy** — `09:100-102,197,215-216`: creation/update code warns or refuses
     unsafe permissions per a documented platform policy, with a Unix permission test. Simpler: document the risk; do not
     warn or refuse. **LOW-MED.**
+    **Resolved** in `cd62ac1`: the file-permission policy and its check are gone.
 
 ---
 
@@ -682,32 +770,40 @@ Note: `docs/intention-relay/closeout/` **does not exist**; roadmap `11:19-23` re
    pre-merge evidence can prove this, and the history already violates it (Slice 2 retrospective corrections,
    `10:299-399`). Simpler: require each remaining milestone to have an accepted activating spec; delete the promise.
    **HIGH.**
+   **Resolved** in `bdbe700`: the accepted-activating-spec requirement replaces the unfalsifiable retroactive-change
+   promise.
 
 2. **Mandatory atomic slices** — `11:85-89,299-303`: slices are approved as one package, "no slice ships half-ready", a
    slice that cannot be completed atomically is not accepted. Slice 3 alone spans three architectures plus a new crate
    (`11:212-238`). Simpler: permit sequential merges inside one slice under one spec; drop atomic acceptance. **HIGH.**
+   **Resolved** in `bdbe700`: the atomic-slice rules are deleted.
 
 3. **Per-slice activating specification** — `11:13-14,88-89`: every slice needs its own accepted activating spec at
    milestone start. Simpler: one activating spec per milestone (M5+), with slices as sections. **MED-HIGH.**
+   **Resolved** in `bdbe700`: one activating specification per milestone.
 
 4. **Open-decision ledger with anchor + base SHA + re-audit verdict** — `11:305-326`: 11 rows each pinning a live code
    anchor, the base commit it was read at, and a five-lane re-audit stamp (`re-audited: L5 79082b4`), plus a non-entry
    paragraph (`11:328-333`). Every doc move re-invalidates anchors. Simpler: a plain "Known deferrals" list (fact +
    owning milestone); git history holds anchors. **HIGH.**
+   **Resolved** in `bdbe700`: Known deferrals carry a fact and its owner.
 
 5. **Process locks dead UI in place** — `11:316-326` keeps owner-deferred stub facts as permanent ledger rows, and
    `12:72-73` has `docs-check` verify that a placeholder constant named by a `@todo(core)` sentence exists under
    `crates/`; the stub tabs still ship (`10:261`). Simpler: delete the stubs and their rows; drop the placeholder check.
    **MED-HIGH.**
+   **Partly resolved** in `bdbe700`: the ledger no longer locks placeholder rows; the stub tabs still ship.
 
 6. **Rot-audit apparatus cites ephemeral input** — `10:403-418`: the whole corrective pass is defined by
    `/tmp/rot-audit_2.md` (MR-1…MR-31), and ~100 lines then cite MR ids, wave names, and lane verdicts
    (`10:423-542`). The authoritative input is unrecoverable. Simpler: record each correction where it lands (owner doc)
    with no MR ids, wave labels, or `/tmp` references. **HIGH.**
+   **Resolved** in `bdbe700`: the rot-audit apparatus is deleted.
 
 7. **360 of 586 lines of doc 10 are closed-slice evidence** — `10:203-562` (including the 81-case render enumeration
    `10:239-262` and per-commit test-name lists `10:423-512`), contradicting the rationale that deleted `closeout/` as
    "dead historical artifacts" (`11:19-23`). Simpler: keep current policy (`10:1-201`) only. **HIGH.**
+   **Resolved** in `bdbe700`: doc 10 keeps current policy only.
 
 8. **New-crate / new-dependency tax** — `10:76-77` requires every production crate's test targets before
    implementation; `12:61-68` compares declared edges/external deps/named test targets for equality. Simpler: keep
@@ -726,6 +822,7 @@ Note: `docs/intention-relay/closeout/` **does not exist**; roadmap `11:19-23` re
     stale-listener recovery, idle shutdown (`11:404-405`), TOML include/import policy, non-Unix config permissions,
     diagnostic-export policy (`11:406-407`), and decode-time DTO validation enforcement (`11:402-403`). Simpler: declare
     them explicit v1 non-goals. **HIGH.**
+    **Resolved** in `bdbe700`: M8's speculative decisions are explicit v1 non-goals.
 
 12. **Blocking coverage floors with no grace baseline** — `12:79-97`: floors bite from the first production line and any
     decrease fails `make coverage`. Simpler: enforce at milestone acceptance, or on changed lines only. **MEDIUM.**
@@ -757,6 +854,7 @@ Note: `docs/intention-relay/closeout/` **does not exist**; roadmap `11:19-23` re
 18. **Roadmap doubles as changelog** — `11:69-333` is 265 lines for one milestone; the single Slice 2 bullet runs
     `11:127-211` and restates UI detail already owned by docs 03/10, while `11:7-8` claims the roadmap owns "order,
     dependencies, activation, and status only". Simpler: enforce that claim; link owner docs. **MEDIUM.**
+    **Resolved** in `bdbe700`: the roadmap links owner documents instead of restating their detail.
 
 ---
 
@@ -764,15 +862,15 @@ Note: `docs/intention-relay/closeout/` **does not exist**; roadmap `11:19-23` re
 
 | # | Contradiction | Anchors |
 | --- | --- | --- |
-| C1 | Approval records a plan `digest`, but canonical digests were removed and no digest field exists | `07:161` vs `02:137-143`, `07:88-95` |
-| C2 | Instruction projection identity covers audience, but "no canonical digest or identity layer exists" | `30:186-188` vs `30:64-67` |
-| C3 | Fork lineage mandates an additive migration, but there are no migrations and a stamp bump recreates the DB | `23:266-268` vs `00:132-133`, `11:126,275` |
-| C4 | Kernel is run-scoped (fresh epoch per run) in one place and session-scoped in another | `20:27-29` vs `20:253-258` |
-| C5 | `SkillSelectionV1` is defined twice with different field sets | `21:65-71` vs `21:219-229` |
-| C6 | Memory records have two owners with overlapping semantics | `21:7-8,301-305` vs `28:3-5,160-178` |
-| C7 | Profile UI / configuration control plane has two owners | `25:103-112` vs `29:76-84` |
+| C1 | Approval records a plan `digest`, but canonical digests were removed and no digest field exists — **resolved** (`abdaf72`): the digest is deleted | `07:161` vs `02:137-143`, `07:88-95` |
+| C2 | Instruction projection identity covers audience, but "no canonical digest or identity layer exists" — **resolved** (`abdaf72`): `declared_audience` is deleted | `30:186-188` vs `30:64-67` |
+| C3 | Fork lineage mandates an additive migration, but there are no migrations and a stamp bump recreates the DB — **resolved** (`bdbe700`): no migration exists | `23:266-268` vs `00:132-133`, `11:126,275` |
+| C4 | Kernel is run-scoped (fresh epoch per run) in one place and session-scoped in another — **resolved** (`ad43352`): session-scoped process, run-scoped namespace and epoch | `20:27-29` vs `20:253-258` |
+| C5 | `SkillSelectionV1` is defined twice with different field sets — **resolved** (`bdbe700`): one definition | `21:65-71` vs `21:219-229` |
+| C6 | Memory records have two owners with overlapping semantics — **resolved** (`ad43352`): the memory domain is dropped | `21:7-8,301-305` vs `28:3-5,160-178` |
+| C7 | Profile UI / configuration control plane has two owners — **resolved** (`bdbe700`): doc 29 owns the protocol, doc 25 references it | `25:103-112` vs `29:76-84` |
 | C8 | Secret-shaped source scan contradicts the repo's ban on content scanning — **resolved** in Part 1: the scan is deleted | `check_docs.py:13-15,254-259` vs `AGENTS.md:79` |
-| C9 | Roadmap cites `docs/intention-relay/closeout/`, which was deleted | `11:19-23` vs absent directory |
+| C9 | Roadmap cites `docs/intention-relay/closeout/`, which was deleted — **resolved** (`bdbe700`): deletion note only, no live citation remains | `11:19-23` vs absent directory |
 
 ---
 
@@ -839,31 +937,37 @@ Note: `docs/intention-relay/closeout/` **does not exist**; roadmap `11:19-23` re
   jobs with the Windows target linted from Linux; one job and the cache-pruner remain.
 
 **Wave R2 — contracts and versioning (remove ceremony with no consumer)**
-- Seven contract-test families → round-trip + malformed-decode + redaction (`02:195-207`).
-- Remove the orphan plan `digest`, `declared_audience`, `total_instruction_size` (C1, C2).
-- Drop immutable profile-revision history; keep freeze-at-admission (`30:69-85`).
-- One durable home for the tool projection (`04:116-119`).
+- Seven contract-test families → round-trip + malformed-decode + redaction (`02:195-207`). — **done** (`abdaf72`).
+- Remove the orphan plan `digest`, `declared_audience`, `total_instruction_size` (C1, C2). — **done** (`abdaf72`).
+- Drop immutable profile-revision history; keep freeze-at-admission (`30:69-85`). — **done** (`abdaf72`).
+- One durable home for the tool projection (`04:116-119`). — **done** (`abdaf72`).
 
 **Wave R3 — security-shaped machinery (restore UX)**
-- Return path + OS error in tool failures (`05:95-106`).
-- Drop fake-secret regression for instructions; keep one "never logged" assertion (`30:208-217`).
-- Collapse the 5×3 classification matrix to one rule + one absence test (`09:134-158`).
-- Drop file-permission policy (`09:100-102,197,215-216`).
+- Return path + OS error in tool failures (`05:95-106`). — **done** (`cd62ac1`).
+- Drop fake-secret regression for instructions; keep one "never logged" assertion (`30:208-217`). — **done**
+  (`cd62ac1`).
+- Collapse the 5×3 classification matrix to one rule + one absence test (`09:134-158`). — **done** (`cd62ac1`).
+- Drop file-permission policy (`09:100-102,197,215-216`). — **done** (`cd62ac1`).
 
 **Wave R4 — future packages (rewrite while unbuilt; cheapest now)**
-- MCP: one connection record + direct invoke; pass through JSON Schema (`18:42-141,134-135`).
-- Bridge: delete grant + `BridgeOperationId`; kernel is a daemon child (`19:45-108`).
-- Kernel: `checkpoint_policy = Disabled`; resolve the scope contradiction (C4) (`20:155-192,27-29`).
+- MCP: one connection record + direct invoke; pass through JSON Schema (`18:42-141,134-135`). — **done** (`ad43352`).
+- Bridge: delete grant + `BridgeOperationId`; kernel is a daemon child (`19:45-108`). — **done** (`ad43352`).
+- Kernel: `checkpoint_policy = Disabled`; resolve the scope contradiction (C4) (`20:155-192,27-29`). — **partly done**
+  (`ad43352`): C4 resolved and the bridge grant removed; the checkpoint cut was rejected by owner decision (kept in
+  full).
 - Goal domain: flat goals + one status; drop DAG readiness, exception sets, gate templates, memory domain
-  (`28:25-256`).
-- Provider catalog: startup-only; drop pending-removal/expiry/degraded states (`22:170-204`, `29:100-124`).
-- Regeneration as an append-only same-session rerun (`23:31-32,48`).
+  (`28:25-256`). — **done** (`ad43352`).
+- Provider catalog: startup-only; drop pending-removal/expiry/degraded states (`22:170-204`, `29:100-124`). — **done**
+  (`ad43352`), except that opaque pagination stays.
+- Regeneration as an append-only same-session rerun (`23:31-32,48`). — **done** (`ad43352`).
 
 **Wave R5 — roadmap and docs**
-- Ledger → "Known deferrals" (fact + owner); delete evidence sections of doc 10 (`11:305-326`, `10:203-562`).
-- Delete atomic-slice and unfalsifiable-exit rules; one activating spec per milestone (`11:85-89,270-271`).
-- Declare M8's speculative decisions explicit v1 non-goals (`11:391-410`).
-- Fix C3, C5–C9; move the roadmap's restated UI detail into owner docs (`11:69-333`).
+- Ledger → "Known deferrals" (fact + owner); delete evidence sections of doc 10 (`11:305-326`, `10:203-562`). — **done**
+  (`bdbe700`).
+- Delete atomic-slice and unfalsifiable-exit rules; one activating spec per milestone (`11:85-89,270-271`). — **done**
+  (`bdbe700`).
+- Declare M8's speculative decisions explicit v1 non-goals (`11:391-410`). — **done** (`bdbe700`).
+- Fix C3, C5–C9; move the roadmap's restated UI detail into owner docs (`11:69-333`). — **done** (`bdbe700`).
 
 ---
 
@@ -873,4 +977,5 @@ Findings are anchored to document line numbers at `a359729`; they are the audito
 Severity is a burden estimate, not a correctness verdict. Anything marked load-bearing in §9 should be preserved
 unless the owner explicitly changes the underlying decision. Contradictions in §8 should be resolved before the
 affected milestone activates, because they are cheapest to fix while the code does not yet exist. The status tags and
-the status section above record what branch `cleanup/overengineering-removal` already removed.
+the status section above record what branch `cleanup/overengineering-removal` already removed through Waves R2-R5,
+including the owner decision of 2026-10-13 to keep the kernel checkpoint subsystem in full.
