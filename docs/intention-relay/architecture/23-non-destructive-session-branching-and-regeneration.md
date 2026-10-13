@@ -12,7 +12,7 @@ audit, and branch presentation. It applies to future ordinary Session branching 
 Architecture 04 owns current Session/Run persistence and recovery. Run-execution meaning and historical compatibility
 left no live path: their canonical framing was removed under [architecture
 02](02-dto-and-contract-policy.md). Architectures 15, 18, 19, and 20 own tool, MCP, bridge, and
-kernel semantics. Architecture 21 owns Goal/Skill/context source, audience, and disclosure semantics. Architecture 22
+kernel semantics. Architecture 21 owns Goal, Skill, and context-source semantics. Architecture 22
 owns provider/profile/capability/reasoning semantics.
 
 This document owns only ordinary Session lineage and frozen fork transfer semantics. A conversation branch is not an RLM

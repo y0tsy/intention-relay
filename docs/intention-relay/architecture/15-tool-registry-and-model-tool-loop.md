@@ -113,10 +113,13 @@ version; labels, executor handles, live readiness, and opaque owner resources ar
   boundary and does not relax the separate provider-endpoint policy. Redirects remain retrievals under the same
   restrictions with a code-owned bounded limit. The typed result distinguishes final URL, status, safe content
   metadata, and bounded body; arbitrary response headers are not model-visible by default.
--  **`ask_user`** is a normal long-running `user_interaction` tool. After
-  `ToolCallStarted` the post-M4 run stays `Running`; other independently admitted calls may complete concurrently, and
-  the next model step waits for this question's terminal safe result with every other group result. It never moves the
-  post-M4 run out of `Running` and never rewrites committed `messages` rows or recovery state.
+-  **`ask_user`** is an asynchronous `user_interaction` tool. The call records the durable question and completes
+  immediately with a typed no-answer-yet result, so no model step, group, or run waits for the user: the question reaches
+  the user through the ordinary durable activity/notification projection, and an answer arrives as an ordinary user turn
+  under the pending-turn rule (principle 5 of [architecture 00](00-principles-and-scope.md)). Its code-owned description
+  and result guidance state that an answer may never arrive and that the model continues the work the question does not
+  directly block. There is no correlation queue, answer-resume path, or second model step, and an unanswered question
+  never moves the run out of `Running` or rewrites committed `messages` rows or recovery state.
 -  **`sub_agent`** admits one child run and returns its markdown answer. The typed input carries the bounded markdown
   task and the selected `mode`. `Sync` holds the call open until the child run reaches a terminal state and returns the
   child's terminal markdown answer as the call's result. `Async` terminates the call immediately with a `Deferred`
@@ -192,8 +195,8 @@ own typed plan authorization.
 
 Build admits otherwise compatible selected tools; Plan keeps ordinary project `write`/`edit` incompatible while
 physical-plan mutation stays a plan-owner operation. `execute` is admissible when otherwise compatible but is not a
-sandbox; `ask_user` is normal `user_interaction` tooling, and the run remains `Running`
-after it starts.
+sandbox; `ask_user` is asynchronous `user_interaction` tooling, and the run remains `Running` without waiting for its
+answer.
 
 The project script library (`.ir/scripts`, [architecture 20](20-ipython-kernel-lifecycle.md))
 follows these same tool-admission semantics: its logical relative path is a default base for existing frozen tools
@@ -342,8 +345,8 @@ the tool/model `model_tool_loop_v1` support needed to reconstruct local exchange
 `model_stream_progress_timeout_v1` is the selected model-step policy for all post-M4 model-tool-loop steps, including
 roots and children. Progress is content, not schedule: only non-empty text and reasoning content counts; usage and other
 non-content values do not, and a continuously producing stream has no fixed step duration. The policy is active only
-while a provider stream for a model step is open; it is paused while a tool or foreground kernel cell runs, `ask_user`
-awaits, a retry delay runs, or the run is completing or cancelling.
+while a provider stream for a model step is open; it is paused while a tool or foreground kernel cell runs, a retry delay
+runs, or the run is completing or cancelling.
 
 A provider stream that stops producing content fails with `model_stream_progress_timeout`. This document selects no
 fixed deadline value: the enforcing bound for the current scope is the provider execution's configured attempt timeout,

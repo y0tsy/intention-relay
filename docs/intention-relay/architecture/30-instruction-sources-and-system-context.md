@@ -10,8 +10,8 @@ Owner: architecture 30.
 
 This document owns the source model, the instruction profile, the canonical assembly order and separators, the
 effective instruction projection, its closed failures, and its observability rules. Architecture
-21 owns Goal, Skill, context-manifest, projection, and compaction semantics; instruction sources are not a
-context source and never enter a context manifest, a Skill disclosure, or a model-step projection. Architecture 23 owns
+21 owns Goal, Skill, context-source selection, and compaction semantics; instruction sources are not a
+context source and never enter a context selection, a Skill selection, or a model-step context. Architecture 23 owns
 fork lineage and the frozen records that carry the materialized projection. Architecture 07 owns the `Mode` contribution
 text; architecture 06 owns the `Vfr` contribution content and its configuration dependency; architecture 08 owns the
 request contract and driver translation; architecture 09 owns classification and redaction. Architecture 25 owns no
@@ -153,7 +153,7 @@ following request window is mutable under [architecture 08](08-model-protocol-an
 The instruction channel is the only trusted instruction surface of a request, and it accepts content from declared
 sources only. Repository content, tool output, fetched material, Skill bodies, provider output, and
 model output remain untrusted or evidence-only material and can never be promoted into it; they enter a request only
-through the context-manifest, Skill-disclosure, and evidence rules of architecture 21.
+through the context-selection, Skill-selection, and evidence rules of architecture 21.
 
 Because the channel is the target of prompt injection rather than its source, three rules are normative:
 
@@ -212,7 +212,7 @@ instruction contract.
 ## Dependencies and non-goals
 
 This document depends on architectures 04, 06, 07, 08, 09, 21, 23, and 25.
-Non-goals: Goal, Skill, context-manifest, or compaction semantics; fork lineage or lineage projection rules;
+Non-goals: Goal, Skill, context-source selection, or compaction semantics; fork lineage or lineage projection rules;
 the model request contract or driver translation; configuration storage, reload, or credential handling; activity,
 notification, or adapter behavior; few-shot example selection, memory-derived prompt material, MCP-provided prompts,
 date/time/Git/session-derived context injection, provider-native prompt framing, model-specific templates, prompt

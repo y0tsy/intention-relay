@@ -1,6 +1,6 @@
 # Principles and Scope
 
-**Current policy.** Principles 1–11 govern v1, delivered through M5. The post-M4+ extension packages state no
+**Current policy.** Principles 1–12 govern v1, delivered through M5. The post-M4+ extension packages state no
 principles here; each is governed by its owner document and implemented only where its owning milestone has landed
 ([implementation roadmap](11-implementation-roadmap.md)).
 
@@ -75,6 +75,23 @@ Makefile orchestrates these non-mutating gates. GitHub Actions runs the per-job 
 `ci-coverage-default`, `ci-deps`) as parallel matrix jobs in `.github/workflows/quality.yml`, and
 `make ci` is the local single-pass alias for the same full gate. See [Quality gates and
 Makefile](12-quality-gates-and-makefile.md).
+
+### 12. Unattended execution, no interactive gates
+
+The user hands over a task and leaves; a run may last hours. No execution path waits for user input: admission, tools,
+MCP, providers, children, bridge, and kernel work proceed without confirmation, approval, or a blocking question.
+`ask_user` is asynchronous: the question is recorded durably and delivered to the user, the call returns immediately,
+and the model continues the work the question does not directly block, instructed that an answer may never arrive
+([architecture 15](15-tool-registry-and-model-tool-loop.md)).
+
+Security is structural, never a prompt: `WorkspaceRoot` addressing (principle 6), credential isolation at the daemon's
+private loading boundary ([architecture 09](09-configuration-security-and-observability.md)), typed DTO boundaries, safe
+projections that keep credentials, raw frames, and implementation resources out of DTOs, logs, cards, and model
+context, post-commit publication, and one local user who owns the machine. No phase may add a per-action confirmation
+barrier.
+
+User-facing workflow steps outside a run, such as Plan approval and Goal proposal acceptance, are not gates on a run:
+they apply when the user returns and never pause execution.
 
 ## Scope boundaries
 

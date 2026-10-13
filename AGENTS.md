@@ -27,6 +27,7 @@
 - Remove imports, variables, functions, or tests only when the current change makes them unused or obsolete.
 - Fix issues introduced by the current change, but do not use a task as an excuse for unrelated cleanup.
 - Never add speculative limits, quotas, caps, or bureaucratic bounds without a real, demonstrated precedent. Liveness safeguards are the only exception.
+- Never add an interactive confirmation, approval, or blocking question gate to an execution path. The product runs unattended for hours: admission, tools, MCP, providers, children, bridge, and kernel all proceed without waiting for user input, and `ask_user` is asynchronous. Security is structural (workspace addressing, credential isolation, typed boundaries, safe projections), never a prompt.
 
 ### No backward compatibility
 

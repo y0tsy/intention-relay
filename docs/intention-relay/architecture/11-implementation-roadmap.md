@@ -220,7 +220,7 @@ stays an ordinary run, with no untrusted material entering the instruction chann
 -  Milestones 10 and 11 are this milestone's successors for the remaining post-M4 packages; their activating
 specifications, contracts, and evidence stay owned by those milestones. M7 consumes only the declared `Vfr`
 contribution, the third slice consumes the declared `Mode` contribution, and M11 keeps the Skill and
-context-disclosure boundary.
+context-selection boundary.
 
 ### Failure semantics
 
@@ -422,8 +422,8 @@ frozen tool descriptors, an exact import surface, bounded script-import evidence
 executable payload in checkpoint payload or metadata ([architecture 20](20-ipython-kernel-lifecycle.md));
 -  rich MIME/raw kernel output projection, bounded and credential-free, never substituting for the closed text-only safe
 projection;
--  scoped Goal acceptance and evidence, immutable untrusted Skill selection and progressive disclosure, admission-source
-context manifests, model-step safe projections, and immutable compaction over exact completed history
+-  scoped Goal acceptance and evidence, immutable untrusted Skill selection, the admission-frozen context-source
+selection, model-step context, and immutable compaction over exact completed history
 (architecture 21), with the Goal domain itself owned by architecture 28;
 -  the canonical `responses` provider driver, `SafeHeader` live wire injection, and the user-kind parser (architecture
 22);
@@ -437,7 +437,7 @@ Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations fo
 -  `.ir/scripts` import-surface fixtures (missing library, unaddressable library path, and kernel-side scope cases),
 reuse by reading the file in a fresh epoch, and bounded script-import evidence without source text or absolute paths;
 - kernel output projection fixtures without raw frames, MIME payloads, binary objects, or credentials;
-- Skill selection, context manifest, projection, and compaction fixtures plus no-current-state reconstruction;
+- Skill selection, context-source selection, and compaction fixtures plus no-current-state reconstruction;
 - provider driver, header-injection, and parser wire fixtures;
 - M3/M4 and retained IPython/RLM/provider/context preservation fixtures.
 

@@ -39,24 +39,25 @@ McpConnectionV1
   connection_id
   scope = Project | Session
   transport = Http | Stdio
-  safe_endpoint_identity
-  private_endpoint_reference
+  endpoint
   private_credential_reference
 ```
 
 The record is typed serde JSON ([architecture 02](02-dto-and-contract-policy.md)) and is not immutable history: the
 user alone creates, edits, archives, and restores a connection, and a model may only prepare a draft under the selected
-proposal rules. `safe_endpoint_identity` is credential-free execution and presentation metadata. The private endpoint
-and one opaque credential live only in the daemon's private loading boundary
-([architecture 09](09-configuration-security-and-observability.md)); a reference is resolved there for a call and is never a
-raw URL, command, header, token, key, keychain locator, SDK value, socket, process handle, raw frame, raw result, or
-server error body, and none of those enters a DTO, log, diagnostic, card, model context, or safe result. A connection
-edit takes effect for later calls and never retargets an already-committed call or an already-sent model step.
+proposal rules. `endpoint` is the user's own visible, credential-free execution and presentation metadata, validated
+exactly as a provider endpoint is ([architecture
+22](22-provider-evolution-profiles-and-reasoning.md)): an absolute `HTTPS` URL with a non-root API base, and a raw or
+secret-bearing URL is never durable identity. The one opaque credential lives only in the daemon's private loading
+boundary ([architecture 09](09-configuration-security-and-observability.md)); the reference is resolved there for a call
+and is never a token, key, keychain locator, header, SDK value, socket, process handle, raw frame, raw result, or server
+error body, and none of those enters a DTO, log, diagnostic, card, model context, or safe result. A connection edit takes
+effect for later calls and never retargets an already-committed call or an already-sent model step.
 
 ## Discovery and the frozen method set
 
 The daemon discovers a connection's methods at connect or run start into one bounded per-connection method list: each
-entry names one remote method, its input JSON Schema text, and its known effect classification. The server's schema is
+entry names one remote method and its input JSON Schema text. The server's schema is
 parsed as JSON, bounded in size, and passed through as text; there is no closed typed schema family, no normalization
 into typed families, and no JSON Schema validator beyond the parse. A malformed or over-bound schema makes that method
 unavailable and fails with `mcp_schema_mismatch`; every other schema is carried unchanged.
@@ -86,29 +87,25 @@ McpMethodSummaryV1
   connection_reference
   bounded_method_name
   schema_text
-  effect_classification
 
 McpResultProjectionV1
   connection_and_method_reference
   known_terminal_class
   bounded_validated_typed_result
-  safe_progress_summaries
-  redacted_observation_references
 ```
 
-Raw JSON/maps, headers, protocol frames, server errors, endpoint/command, credentials, SDK values, sockets, process
-resources, provider-native IDs, and unsafe resource details never leave the MCP boundary. Progress uses the existing
-tool-call fragment stream, is observational only, and is never model context until a terminal safe result commits. A
-validated result, known protocol failure, known remote failure, known connection refusal, or unrepresentable bounded
-projection with durably proven remote terminal effect is known; an unrepresentable result after dispatch without that
-proof is not pre-effect incompatibility but a started effect without terminal proof.
+Raw JSON/maps, headers, protocol frames, server errors, credentials, SDK values, sockets, process resources,
+provider-native IDs, and unsafe resource details never leave the MCP boundary; the endpoint is the user's own visible
+configuration and carries no credential. A validated result, known protocol failure, known remote failure, known
+connection refusal, or unrepresentable bounded projection with durably proven remote terminal effect is known; an
+unrepresentable result after dispatch without that proof is not pre-effect incompatibility but a started effect without
+terminal proof.
 
-## Readiness, cancellation, and recovery
+## Cancellation and recovery
 
-MCP readiness is typed operational evidence for resources named by the current connection record, such as descriptor
-implementation, transport/process capacity, or protocol support. It must not perform discovery and cannot select
-connections or methods, start a local service, mutate a run selection, repair meaning, or retry invocation;
-invocation is tool-loop work after admission.
+Availability is checked at call time against the current connection record and the run's frozen selection; an
+unavailable connection or method is the typed failure below, and no separate readiness evidence type, probe, or
+pre-flight state exists. Invocation is tool-loop work after admission.
 
 Before `Started`, cancellation or restart records a known before-start outcome and no MCP effect occurs; after
 `Started`, only durable terminal proof makes the result known, and otherwise the interrupted invocation commits a
@@ -118,11 +115,11 @@ private resources without asserting rollback.
 
 A local stdio service is a private daemon-owned process per connection, started lazily on that connection's first call
 and terminated on connection archival, idle disposal, failure, or daemon shutdown. It is never shared across
-connections, never adopted or reattached after restart, and never treated as durable execution authority. HTTP
-connections and local process epochs are private operational evidence, not durable execution authority.
+connections, never adopted or reattached after restart, and never treated as durable execution authority. HTTP connections and local
+process epochs are private daemon resources, never durable execution authority.
 
 MCP recovery validates historical MCP records, classifies unfinished calls, disposes private resources, establishes
-fresh readiness without dispatch, and never reconnects, polls, reattaches, respawns, retries, resumes, rediscovers, or
+fresh availability without dispatch, and never reconnects, polls, reattaches, respawns, retries, resumes, rediscovers, or
 repeats old discovery/invocation work. A fresh run imports no live process, connection handle, credential, or method
 list; it discovers again against the current connection record, and earlier discovery remains audit evidence only.
 
@@ -145,15 +142,16 @@ Goal, Skill, UI, logs, or remote continuation state may reconstruct missing MCP 
 
 The bounded MCP gateway is the canonical `mcp` gateway `ToolId`, owned by a future MCP boundary and assembled only
 through the composition root's tool path and gateway; it is not a second registry. Its descriptor exposes only the run's
-frozen method selection: explicit user-approved connection methods, each naming exactly one connection and remote
-method, with its bounded schema text and effect classification. It is never an arbitrary method
-name outside that selection, raw JSON transport, arbitrary header map, or automatic exposure of a discovered remote
-method, and a method whose schema is malformed or over-bound is unavailable.
+frozen method selection: the methods the current connection record named at admission, each naming exactly one connection
+and remote method, with its bounded schema text. It is never an arbitrary method
+name outside that selection, raw JSON transport, arbitrary header map, or automatic exposure of a method discovered
+after admission, and a method whose schema is malformed or over-bound is unavailable.
 
 A connection has `Project` or `Session` scope; the user alone creates, edits, archives, restores, and selects a
-connection and its methods, and a model may only prepare a draft under the selected proposal rules. Credentials, OAuth
-material, SDK objects, sockets, child-process handles, and endpoint resources remain private daemon material and never
-enter a DTO, log, diagnostic, card, model context, or safe result. The selected transports are
+connection, and a model may only prepare a draft under the selected proposal rules. There is no per-method approval
+step: a method the connection record exposes is available to the run's frozen selection without a separate user
+decision. Credentials, OAuth material, SDK objects, sockets, and child-process handles remain private daemon material and
+never enter a DTO, log, diagnostic, card, model context, or safe result. The selected transports are
 user-created outgoing `HTTP`/`HTTPS` connections and user-created local standard-input/output services. A local
 service is started lazily per connection and is terminated on connection archival, idle disposal, failure, or daemon
 shutdown; it is never attached by a later daemon, shared across connections, treated as a durable worker, or managed as
@@ -163,8 +161,7 @@ Every MCP call passes the same frozen tool selection, daemon-bound authority, ty
 cancellation, redaction, and post-commit publication rules as another model-visible tool. The run's selection records
 the method set the model saw, and the call resolves the current connection record; an archived or unlisted connection
 or method fails before effect. An already started ambiguous call is never repeated and commits a bounded `Partial`
-result with its notice when appropriate. A service may emit bounded safe
-progress through the ordinary durable output stream but cannot invoke `ask_user`, and it cannot create a Goal,
+result with its notice when appropriate. A service cannot invoke `ask_user`, and it cannot create a Goal,
 proposal, session, run, connection, tool registration, child agent, or another authority context. There is no
 MCP listener, remote attachment to the daemon's ingress, plug-in system, Skill/MCP
 installation, dynamic tool registration, server-driven child control, autonomous continuation, or claim that a local
@@ -177,8 +174,6 @@ mcp_connection_unavailable
 mcp_method_unavailable
 mcp_schema_mismatch
 mcp_local_process_unavailable
-mcp_progress_limit_exceeded
-mcp_user_interaction_unavailable
 ```
 
 They disclose no credential, path, raw external response, private process resource, or implementation detail. The

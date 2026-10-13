@@ -141,7 +141,7 @@ before effect with `kernel_script_library_unavailable`. Python-level import erro
 `Error` output under the closed text-only projection. A fresh run reuses a module by reading the file inside its own
 epoch; namespace, cell, task, and checkpoint state are never carried over to provide reuse, and the trusted-local
 model is unchanged: library code is project material, not a sandbox, and direct Python OS APIs remain outside the
-facade. A library path, an import, or a persisted module grants no lifecycle, tool, MCP, bridge, or confirmation
+facade. A library path, an import, or a persisted module grants no lifecycle, tool, MCP, or bridge
 authority, and it never substitutes for a frozen registry selection. No secret material enters the library: credentials,
 tokens, endpoints, and provider values are never written into it, and the redaction rules of [architecture
 09](09-configuration-security-and-observability.md) apply to every path and error this capability produces.

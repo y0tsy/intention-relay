@@ -114,7 +114,7 @@ executable, install, plug-in, dynamic registration, arbitrary MCP schema, or hid
 reusable `sub_agent` template (task, permitted class, tool subset, contextual limits, typed references); a concrete use
 may only narrow task, class, context/result limits, and tool subset and cannot add a tool, increase a class, widen
 scope, change a provider, or weaken policy. Skill and role cards are discovered first; full records require explicit
-disclosure.
+selection.
 
 ## Model proposals and user confirmation
 
@@ -124,12 +124,12 @@ scope and record kind: user acceptance or stop of a goal, or recording of a veri
 run/Goal and milestone, exact base revisions, bounded typed edit set, evidence references, safe rationale, and a typed
 record identity. It is not a current record, does not appear in cards or model context, cannot be used by a
 child/Skill/role/MCP method, and grants no execution authority. A later equal proposal adds evidence to the
-one pending draft rather than producing an unbounded queue. The daemon records the proposal durably before asking the
-user; via the normal `ask_user` path the user may accept, edit-and-accept, or reject, and the draft remains pending
-until an explicit decision. Acceptance validates the exact base revision and creates a new immutable record revision; a
+one pending draft rather than producing an unbounded queue. The daemon records the proposal durably and surfaces the question
+through the asynchronous `ask_user` path; the run continues while the draft stays pending, and the user may accept,
+edit-and-accept, or reject it whenever they return. Acceptance validates the exact base revision and creates a new immutable record revision; a
 stale base is a typed conflict, and rejection changes no active record.
 
-## Conversation compaction and progressive context disclosure
+## Conversation compaction and progressive context selection
 
 Compaction is a versioned model-context projection, not a replacement for the source transcript, model facts, tool
 facts, reasoning, kernel checkpoint, child dossier, or Goal evidence. `ConversationSummaryDto`

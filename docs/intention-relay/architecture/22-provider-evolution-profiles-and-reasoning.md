@@ -19,7 +19,7 @@ checks, pricing and budget policy, and raw-TOML editing were removed from the ac
 Run-execution meaning and historical compatibility left no live path: the binary codec with canonical records,
 digests, and decode classes was removed under [architecture 02](02-dto-and-contract-policy.md); 15 owns the
 registry, tool loop, model-step identities, and local tool exchange; 18 owns MCP; 19 owns bridge ingress; 20 owns kernel
-lifecycle; 21 owns source selection, audience, disclosure, and immutable model-context projection.
+lifecycle; 21 owns source selection and immutable model-step context.
 
 This document owns only provider selection, compatibility, catalog, private adapter translation, and provider-local
 availability. A provider/profile/kind, model ID, endpoint, capability, reasoning value, catalog entry, driver, output,
@@ -217,12 +217,13 @@ proof is unknown, not retryable. M4 retry and timeout semantics remain historica
 ## Reasoning and Responses
 
 Provider descriptors own closed request dialect and native stream normalization, not context sourcing. Architecture 21
-alone selects safe source references, audience, disclosure, omissions, and model-step context. A provider cannot scan
-sessions/ancestors/siblings, construct history from current state, inject prior reasoning, compact content, or broaden
-an audience. The ordinary same-run continuation is not prior-reasoning injection: the runtime may attach the current
+alone selects safe source references and the model-step context window. A provider cannot scan
+sessions/ancestors/siblings, construct history from current state, inject prior reasoning, or compact content. The
+ordinary same-run continuation is not prior-reasoning injection: the runtime may attach the current
 round's own accepted reasoning to the assistant tool-call message of that in-flight exchange as transient request state
 ([architecture 08](08-model-protocol-and-providers.md)); prior-run, cross-turn, and fork reasoning injection remains
-forbidden as a source of context, because reasoning never becomes ordinary model text and never widens an audience. A
+forbidden as a source of context, because reasoning never becomes ordinary model text and never enters a context
+selection. A
 provider contract that requires the session's own earlier steps back verbatim (DeepSeek: with `tools` in the request,
 every previous turn's `reasoning_content`, or HTTP 400) is not that: it sources nothing and widens nothing, it hands the
 provider material the provider itself produced, and it is the open `@todo(provider)` of [architecture
