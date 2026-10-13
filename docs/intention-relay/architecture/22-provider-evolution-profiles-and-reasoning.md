@@ -126,7 +126,11 @@ typed kind. For the ordinary production path, the current `generic-chat-completi
 SDK's typed `reasoning_content` field as normalized `Primary` reasoning output and echoes the current round's accepted
 reasoning on the same-run assistant tool-call continuation ([architecture
 08](08-model-protocol-and-providers.md)); that typed field does not widen the descriptor
-envelope, and any other or vendor-specific dialect still requires a separate descriptor or typed kind. A user kind is an
+envelope, and any other or vendor-specific dialect still requires a separate descriptor or typed kind. A gateway whose
+wire also requires the session's earlier steps to be handed back once the request carries `tools` — the DeepSeek
+contract, where a missing `reasoning_content` is an HTTP 400 — is not served by that same-run echo; that replay is the
+open `@todo(provider)` of [architecture 08](08-model-protocol-and-providers.md) and not this document's transfer policy.
+A user kind is an
 immutable composition of closed binary-owned protocol parts accepted by a code-owned compatibility matrix. It cannot be
 a plugin, executable configuration, arbitrary driver/parser, raw HTTP/JSON template, arbitrary header map, or secret
 interpolation. Reserved first-party IDs cannot be replaced.
@@ -217,7 +221,11 @@ sessions/ancestors/siblings, construct history from current state, inject prior 
 an audience. The ordinary same-run continuation is not prior-reasoning injection: the runtime may attach the current
 round's own accepted reasoning to the assistant tool-call message of that in-flight exchange as transient request state
 ([architecture 08](08-model-protocol-and-providers.md)); prior-run, cross-turn, and fork reasoning injection remains
-forbidden.
+forbidden as a source of context, because reasoning never becomes ordinary model text and never widens an audience. A
+provider contract that requires the session's own earlier steps back verbatim (DeepSeek: with `tools` in the request,
+every previous turn's `reasoning_content`, or HTTP 400) is not that: it sources nothing and widens nothing, it hands the
+provider material the provider itself produced, and it is the open `@todo(provider)` of [architecture
+08](08-model-protocol-and-providers.md).
 
 The future normalized stream carries text, reasoning, summaries, tool calls, usage, and terminal events. The Slice 4
 provider-neutral reasoning DTO surface is owned by `intention-providers`; the
@@ -320,7 +328,10 @@ ReasoningHistoryTransferDto
   TextualHistoryV1 { compatibility_id }
 ```
 
-`compatibility_id` is code-owned descriptor and compatibility-matrix metadata, never inferred from a model name,
+This closed policy is the future typed transfer of reasoning *context*, and it is not what a provider contract requires:
+no provider asks for a manifest, a compatibility identity, an audit record, or an aggregate bound before it accepts back
+the session's own earlier reasoning, so none of those parts belongs to the open `@todo(provider)` of [architecture
+08](08-model-protocol-and-providers.md). `compatibility_id` is code-owned descriptor and compatibility-matrix metadata, never inferred from a model name,
 endpoint, or equal text. Under `TextualHistoryV1`, a run receives all causally preceding completed compatible assistant
 responses in causal `RunStarted` order, then each response's own reasoning records; it receives both
 `Primary` and `Detail` fragments and all summaries, placed in a separate typed reasoning history associated with the
@@ -367,8 +378,9 @@ there is no event tail, cursor, or resynchronization. Legacy M4 runs retain exis
 present, ordered reasoning-record category/size references, and the source
 descriptor's `compatibility_id`. `fork-model-context-v1` remains a text-only projection and does not add reasoning or
 summaries to ordinary model messages. The ordinary same-run continuation echo is out of scope here: it attaches only the
-current round's own reasoning to that round's assistant tool-call message and never adds fork or prior reasoning to
-ordinary messages ([architecture 08](08-model-protocol-and-providers.md)). A child run combines frozen references
+current round's own reasoning to that round's assistant tool-call message, and the previous-turn replay of the open
+`@todo(provider)` in [architecture 08](08-model-protocol-and-providers.md) stays inside one session and never crosses a
+fork, so neither adds fork reasoning to ordinary messages. A child run combines frozen references
 with its own completed compatible responses to construct its own `ReasoningHistoryManifestDto`; it never rescans the
 source or a sibling. An unavailable required
 reference blocks only the dependent action.
@@ -399,7 +411,8 @@ unconsumed-surface audit (2026-09): no preservation-control or parser-configurat
 header injection (`SafeHeader`) and provider-native live extraction beyond the declared paths remain not activated. The
 current `async-openai` core Chat Completions adapter is not assumed sufficient for every descriptor; a future
 implementation must choose a pinned private SDK or an explicitly specified private typed decoder per closed descriptor.
-The same-run reasoning round trip ([architecture 08](08-model-protocol-and-providers.md)) follows this clause for the
+The reasoning round trip of [architecture 08](08-model-protocol-and-providers.md) — same-run today, with the
+previous-turn replay as its open `@todo(provider)` — follows this clause for the
 current ordinary adapter: it keeps the pinned `async-openai` SDK and uses its private `byot` typed-stream seam with
 crate-private request and chunk structs, rather than assuming the core adapter's fixed types are sufficient.
 The descriptor registry never authorizes arbitrary network protocol handling, unbounded

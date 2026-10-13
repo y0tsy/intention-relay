@@ -37,7 +37,7 @@ Core DTO families:
 
 | DTO | Responsibility |
 | --- | --- |
-| `ModelRequestDto` | System context, text messages, advertised typed `ModelToolDefinitionDto` tool definitions, the transient same-run assistant reasoning attachment, and run identity. |
+| `ModelRequestDto` | System context, text messages, advertised typed `ModelToolDefinitionDto` tool definitions, the transient assistant reasoning attachment (same-run today; the previous-turn replay is the open `@todo(provider)`), and run identity. |
 | `ModelCapabilitiesDto` | Supported input, output, reasoning, tool, multimodal, vendor-extension, and streaming capability declarations. |
 | `ModelEventDto` | Text, reasoning, tool, usage, lifecycle, and provider-normalized stream events. |
 | `ToolCallDto` | Typed tool identity and typed tool input. |
@@ -109,7 +109,8 @@ typed wire. It owns:
 
 - generic endpoint/auth/config translation;
 -  private SDK request construction and normalization for text, advertised tool definitions, usage, finish,
-`tool_calls` tool-call, `reasoning_content` reasoning, same-run assistant tool-call reasoning echo, and error events;
+`tool_calls` tool-call, `reasoning_content` reasoning, assistant reasoning echo (same-run today; `@todo(provider)` names
+the previous-turn replay), and error events;
 - documented capability limitations; and
 - normalized failures.
 
@@ -136,8 +137,18 @@ prepared. Reasoning output is normalized as
 `ModelEventDto::ReasoningDelta`, and when a configured thinking-mode gateway requires it the adapter
 serializes the same round's accepted reasoning as `reasoning_content` on the assistant tool-call message of the same-run
 continuation, as transient request state with no durable representation; an empty channel is only a presence marker.
-The OpenRouter adapter ignores the transient attachment because its pinned SDK request type has no reasoning
-field and its wire does not require the echo. OpenRouter declares text, reasoning, tool-call, and streaming capability
+That same-run echo is the minimum a thinking-mode gateway needs, and it is not the whole provider contract: DeepSeek
+requires every previous turn's `reasoning_content`, including turns that issued no tool call, to be returned in any
+request that carries `tools`, and it answers a missing one with HTTP 400; Anthropic requires its signed thinking blocks
+back within the current tool-use turn; Gemini validates a thought signature on each current-turn function call.
+Intention Relay implements the same-run echo only, so a multi-turn session against a gateway with the DeepSeek contract
+fails at the provider boundary. The durable transcript already holds each step's whole reasoning
+(`messages.reasoning`), so closing that gap needs message-scoped attachments and no new storage; `@todo(provider)` marks
+every place the replay would change, and it means work the provider layer must still do, unlike the terminal's
+`@todo(core)` stub.
+The OpenRouter adapter ignores the transient attachment because its pinned SDK request type carries no reasoning
+field at all: through that kind reasoning is output-only, and a model whose wire validates the echo for tool calls
+(Claude, Gemini 3, DeepSeek) is not supported there. OpenRouter declares text, reasoning, tool-call, and streaming capability
 while its M4 foundation declares no multimodal or vendor-extension support. Capability negotiation happens once at
 provider selection: the selected driver's declaration must serve streamed text with tool calls, and the per-request
 execution path carries no capability check. A truncation limitation of that pinned SDK is recorded under
@@ -177,10 +188,14 @@ at most 64 characters (`invalid_tool_definition_name`), the description is non-b
 failure mode exists. Advertisement is transient request state: it creates no durable record, digest, or
 storage row, and it never reconstructs a stored selection from the current spec match.
 
-The same-run continuation is the one place provider reasoning returns to a request: the runtime attaches the current
-round's accepted reasoning to the assistant tool-call message (`assistant_reasoning`), and no prior-turn reasoning is
-transferred. The attachment is transient request state with no durable representation and never becomes message text or
-durable history; cross-turn transfer remains future work. The request validates at least one unique tool-call identity
+The same-run continuation is the only place provider reasoning returns to a request today: the runtime attaches the
+current round's accepted reasoning to the assistant tool-call message (`assistant_reasoning`), and no prior-turn
+reasoning is transferred. The attachment is transient request state with no durable representation and never becomes
+message text or durable history. A gateway with the DeepSeek contract needs more than that round, so the previous-turn
+replay is the open `@todo(provider)` of this section and not the future typed transfer surface of [architecture
+22](22-provider-evolution-profiles-and-reasoning.md); two shapes stay outside the replay even then, because neither has
+a message in the model context: a step that reasoned without answering and without issuing a call, and a call whose
+committed result never followed. The request validates at least one unique tool-call identity
 and control-character-safe text bounded at 512 KiB per attachment, and the runtime bounds each round's accumulated echo
 at that same 512 KiB per-round bound. A round that exceeds the bound or carries a control character other than `\n`,
 `\r`, or `\t` terminalizes as a typed failed run with the dedicated `reasoning_attachment_unrepresentable` code instead
@@ -261,7 +276,7 @@ wait starts the next attempt immediately.
 | Event normalization | Provider fixture stream tests. | Equivalent native sequences map to valid ordered `ModelEventDto` values. |
 | Capability check | Model contract test. | A declaration without streamed text or tool calls fails closed with `unsupported_model_capability` at provider selection. |
 | Tool advertisement | Model/adapter/runtime/daemon-host tests. | The outgoing request contains the six active tool definitions in advertisement order, both adapters translate them without `tool_choice`, a driver without tool-call support is rejected at provider selection, and the advertisement survives the tool-result continuation request. |
-| Reasoning round trip | Model/adapter/runtime tests. | The generic adapter normalizes typed `reasoning_content` deltas as `ReasoningDelta` events and serializes the same round's accepted reasoning on the assistant tool-call continuation without adding a durable representation; empty text is presence-only; multimodal and vendor extensions stay outside the declared capabilities. |
+| Reasoning round trip | Model/adapter/runtime tests. | The generic adapter normalizes typed `reasoning_content` deltas as `ReasoningDelta` events and serializes the same round's accepted reasoning on the assistant tool-call continuation without adding a durable representation; empty text is presence-only; multimodal and vendor extensions stay outside the declared capabilities. The echo's scope is the same run today; replaying the session's earlier steps is the open `@todo(provider)` of [Streaming and tool calls](#streaming-and-tool-calls) and needs its own test evidence. |
 | Tool loop integration | Runtime/provider/application integration test. | Provider emits a tool-call DTO; the application builds the typed invocation, the daemon-owned tool service executes it, and the runtime persists the correlated result and continues the exchange. |
 | Provider selection | Configuration contract test. | A configured provider and model ID are preserved. |
 | Retry | Controlled provider failure test. | Retry lifecycle is typed, bounded, and durable. |

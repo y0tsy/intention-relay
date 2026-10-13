@@ -189,11 +189,19 @@ impl ModelMessageDto {
 ///
 /// The bound caps the reasoning text one provider response may attach to its
 /// tool calls for the same-run tool-loop continuation.
+///
+/// @todo(provider): a gateway with the DeepSeek contract also requires the
+/// session's earlier steps back once the request carries `tools`, which needs a
+/// message-scoped attachment instead of a tool-call set.
 const MAX_MODEL_ASSISTANT_REASONING_BYTES: usize = 512 * 1024;
 
 /// Transient assistant reasoning attached to the tool calls of one provider
 /// response; preserved only for the same-run tool-loop continuation, never
 /// durable, never message content.
+///
+/// @todo(provider): the DeepSeek contract also requires the session's earlier
+/// steps once the request carries `tools`, where the attachment belongs to the
+/// assistant message rather than to a set of tool-call identities.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AssistantReasoningDto {
     tool_call_ids: Vec<ToolCallId>,
@@ -530,6 +538,9 @@ impl ModelRequestDto {
 
     /// Returns the transient reasoning attachments carried into the same-run
     /// tool-loop continuation.
+    ///
+    /// @todo(provider): the DeepSeek contract extends the same field to every
+    /// earlier step of the session once the request carries `tools`.
     #[must_use]
     pub fn assistant_reasoning(&self) -> &[AssistantReasoningDto] {
         &self.assistant_reasoning

@@ -223,7 +223,12 @@ fn map_openrouter_error(error: &OpenRouterError) -> ProviderErrorDto {
 /// assistant-message reasoning echo field, and OpenRouter expresses reasoning
 /// through request-scoped options (`reasoning`, `include_reasoning`) plus
 /// response-side reasoning content. The attachment stays runtime-owned
-/// transient same-run state and never changes this native request shape.
+/// transient state and never changes this native request shape.
+///
+/// @todo(provider): the missing SDK field, not the wire, is why this adapter
+/// cannot echo. A model routed through OpenRouter whose own wire validates the
+/// reasoning echo for tool calls (Claude, Gemini 3) fails there, so this kind
+/// supports reasoning output only until the pinned SDK carries the field.
 fn translate_request(request: &ModelRequestDto) -> DtoResult<ChatCompletionRequest> {
     let mut messages = Vec::new();
     if let Some(context) = request.system_context() {

@@ -453,6 +453,10 @@ fn translate_request(request: &ModelRequestDto) -> DtoResult<WireRequest> {
 ///
 /// Attachments are transient same-run material: they are matched by identity,
 /// never merged into message content, and never consulted for other roles.
+///
+/// @todo(provider): a replayed earlier step (the DeepSeek contract once the
+/// request carries `tools`) reuses the same `reasoning_content` wire field on
+/// any assistant message, including one that carries no tool call.
 fn reasoning_attachments(request: &ModelRequestDto) -> BTreeMap<ToolCallId, &str> {
     let mut attachments = BTreeMap::new();
     for attachment in request.assistant_reasoning() {

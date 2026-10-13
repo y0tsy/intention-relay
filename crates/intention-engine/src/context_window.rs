@@ -18,6 +18,10 @@
 //! The measured input is the whole request: message content, the tool-call
 //! arguments of every assistant message, and the transient reasoning
 //! attachments carried into the same-run tool-loop continuation.
+//!
+//! @todo(provider): a replayed earlier step (the DeepSeek contract once the
+//! request carries `tools`) is measured here too and is never compressed, so
+//! this pass decides how much of a session's reasoning can be sent at all.
 
 use intention_proto::DtoResult;
 use intention_providers::{

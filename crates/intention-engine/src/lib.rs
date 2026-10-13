@@ -664,6 +664,11 @@ fn schedule_from_context(
 /// that issued calls without answering; reasoning is never replayed, so the row
 /// contributes no model message.
 ///
+/// @todo(provider): a gateway with the DeepSeek contract requires every previous
+/// turn's reasoning back once the request carries `tools`, and this rebuild is
+/// where that replay would read the durable `messages.reasoning` column into a
+/// request-scoped attachment.
+///
 /// A call whose result never committed cannot replay: an assistant tool-call
 /// message whose answer is missing is not a valid model context, so the call is
 /// omitted. A result whose call was omitted for that reason, or that never had
@@ -697,6 +702,8 @@ fn model_context_messages(rows: &[MessageProjectionDto]) -> DtoResult<Vec<ModelM
                 // A reasoning-only step row is durable transcript evidence,
                 // not model context: reasoning is never replayed, so a row
                 // without answer text contributes no message.
+                // @todo(provider): a gateway with the DeepSeek contract replays
+                // it once the request carries `tools`.
                 if !row.text().trim().is_empty() {
                     messages.push(ModelMessageDto::new(ModelRoleDto::Assistant, row.text())?);
                 }

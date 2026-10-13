@@ -118,7 +118,9 @@ request may additionally carry the current round's
 accepted provider reasoning as transient same-run attachment state with no durable representation: the runtime may
 attach it to the assistant tool-call message of the same-run continuation ([architecture
 08](08-model-protocol-and-providers.md)), and it is never durable history,
-message text, or cross-turn transfer. `intention-proto` owns the shared safe usage, finish-reason, tool-call, and
+message text, or cross-turn transfer. The same-run scope is that DTO's shape today; replaying a session's earlier steps
+is the open `@todo(provider)` of [architecture 08](08-model-protocol-and-providers.md), and it would pair each
+attachment with the message it belongs to instead of a tool-call set. `intention-proto` owns the shared safe usage, finish-reason, tool-call, and
 provider-error values; `intention-providers` re-exports them for its consumers. Native SDK decoding and JSON values
 may exist only inside the owning provider implementation before being normalized to those DTOs.
 

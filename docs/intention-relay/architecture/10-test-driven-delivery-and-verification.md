@@ -178,7 +178,8 @@ advertises the six active tools and requests the `tool_calls` capability (scenar
 the call through the real typed tool service under `WorkspaceRoot`, the committed tool call and its result commit before
 publication, and the run completes. When the configured model runs in thinking mode, the
 continuation request also carries the same round's accepted reasoning as `reasoning_content` on the assistant tool-call
-message; no prior-turn reasoning is transferred.
+message; no prior-turn reasoning is transferred (the previous-turn replay a gateway with the DeepSeek contract needs is
+the open `@todo(provider)` of [architecture 08](08-model-protocol-and-providers.md)).
 4. Restart the daemon and re-read the run; verify the recorded tool call and
 result re-read from current state and are never re-executed.
 5. Verify the credential is absent from the committed transcript rows, session snapshots, daemon logs,
