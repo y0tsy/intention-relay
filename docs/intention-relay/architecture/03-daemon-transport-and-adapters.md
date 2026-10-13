@@ -425,8 +425,9 @@ text above is the live policy.
   wrapped, because wrapping it would shred the alignment the table exists to show.
 - One colour system, two themes. `src/tui/palette.rs` is the single source of colours: `palette::of(theme)` resolves
   one `Palette` value once per frame from the state's effective theme, and every pane reads the roles of the reference
-  it was handed, so no pane constructs a colour of its own. The light theme is the warm off-white surface the terminal
-  has always drawn; the dark theme is a neutral graphite ramp whose only hue is the accent pair, so a state there
+  it was handed, so no pane constructs a colour of its own. The light palette is the product's warm off-white surface;
+  the dark palette is a neutral graphite ramp whose only hue is the accent pair, and it is what a terminal that reports
+  no background is painted with, so a state there
   reaches the reader through its word and glyph rather than through a colour of its own. The module's own role table
   pairs each role's light and dark value. Within one
   theme no two roles share a value — the one documented alias is `error`, which spells `scarlet` exactly — every role
@@ -473,40 +474,50 @@ text above is the live policy.
   line break while the `Enter` the user presses afterwards submits the line — so the keystrokes reach the line as the one
   paste they are, never as a row per line.
 - Terminal theme resolution. The theme is the terminal client's own presentation state: it is no wire value, the
-  daemon never learns it, and no remote round trip gates a repaint. The launch resolves it in one fixed precedence —
-  the fullscreen UI's `--theme` flag; else the `COLORFGBG` environment variable a terminal exports; else the local
-  `tui.toml` beside `config.toml` under the same platform configuration directory (a `[tui] theme` declaration of
-  `light` or `dark`; an absent file, section, or key declares nothing, and an unknown spelling is the typed
-  `invalid_tui_theme` validation error, so nothing silently falls back); else a foreground-free `OSC 11` query of the
-  terminal's background colour, read with a bounded deadline before the frame starts and answered from the report the
-  terminal sends, with a malformed or missing report standing for no evidence; else light. The terminal route is the
-  zero-configuration source rather than a platform theme lookup, because the background the terminal paints is the
-  surface this front end draws on and the route needs no platform dependency. Every level is evidence the front end
-  gathered itself, so a level that answers
-  nothing falls through to the next and only the last one names the default. A theme is presentation-only: a change
+  daemon never learns it, and no remote round trip gates a repaint. A launch resolves a *preference* — `auto`, `light`,
+  or `dark` — and paints the palette it names. The preference comes from the fullscreen UI's `--theme` flag when it was
+  spelled; else from the local `tui.toml` beside `config.toml` under the same platform configuration directory, whose
+  `[tui] theme` declaration is `auto`, `light`, or `dark` (an absent file, section, or key, like a declared `auto`,
+  asks for detection, and an unknown spelling is the typed `invalid_tui_theme` validation error, so nothing silently
+  falls back); else `auto`. A spelled `light` or `dark` — by flag or by file — beats every form of environment
+  detection, and `auto` paints what detection answers: the `COLORFGBG` variable a terminal exports when it exists
+  (cheap, no query), else a foreground-free `OSC 11` query of the terminal's background colour, read with a 15 ms
+  deadline before the frame starts and answered from the report the terminal sends, with a malformed or missing report
+  standing for no evidence; else the dark palette, because a terminal that reports neither is far more often a dark
+  one (the emulators that ship a default profile ship a dark one) and terminal applications default to their dark
+  themes likewise. Detection runs once per launch even when a spelled palette wins, so the picker's `Auto` row can
+  preview what returning to detection would paint, and it is skipped when standard input or output is not a terminal.
+  The terminal route is the zero-configuration source rather than a platform theme lookup, because the background the
+  terminal paints is the surface this front end draws on and the route needs no platform dependency. A theme is
+  presentation-only: a change
   records no configuration revision, never enters a run's immutable captured selection, and never rewrites the
   credential-bearing `config.toml`.
-- Theme selection. `Enter` on the picker commits the highlighted theme in memory at once and asks for one rewrite of
-  the local `tui.toml`, so the next launch reads it without anyone asking again; a selection that matches the committed
-  theme writes nothing, and a failed rewrite reports its typed error while the committed selection stands. The write
+- Theme selection. `Enter` on the picker commits the highlighted preference in memory at once and asks for one rewrite
+  of the local `tui.toml`, so the next launch reads it without anyone asking again; a selection that matches the
+  committed preference writes nothing, a commit of `Auto` stores the request to follow detection and clears any
+  spelled-out palette the file held, and a failed rewrite reports its typed error while the committed selection stands.
+  The write
   happens after the frame the selection produced, so no local file access sits in the input path, and the terminal
-  re-lays the transcript out exactly as a resize does because the layout cache is keyed by the theme.
+  re-lays the transcript out exactly as a resize does because the layout cache is keyed by the palette in force.
 - Theme picker. `/theme` with no argument opens the picker as `Screen::Theme`, a small panel in the chat panel's own
   band region — the region above the input block the command band uses — so the input block and the detail line keep
   their rows rather than the panel docking at the window's bottom. Its rounded frame carries the `Theme` title, one row
-  per theme with the theme's name and one-line description, the effective theme's row marked with the sessions
+  per preference — `Auto`, `Light`, `Dark`, the first being the way back to detection without editing the file by hand
+  — with the preference's name and one-line description, the highlighted row marked with the sessions
   browser's `> ` cursor and selected wash, and its own last inner row carries the `enter apply | esc revert` legend.
-  `Up` and `Down` preview the row they land on: the whole window, transcript included, repaints through the candidate
-  and nothing is persisted. `Enter` commits the highlighted theme, asks for its local rewrite, and closes the picker;
+  `Up` and `Down` preview the row they land on: the whole window, transcript included, repaints through the palette
+  that preference names — `Auto` through the palette detection answered at this launch — and nothing is persisted.
+  `Enter` commits the highlighted preference, asks for its local rewrite, and closes the picker;
   `Esc`
-  drops the preview, restores the committed theme, and closes. The picker's `Esc` is its own keymap layer, so the
+  drops the preview, restores the committed preference, and closes. The picker's `Esc` is its own keymap layer, so the
   chat's cancel, clear, and exit arms are unreachable while it is open; the Esc layering is the open band, then the
   picker, then a live run's cancel, then the input-clear arm, then the exit.
 - Interaction. A command is a submitted line beginning with `/` as its first character, never a bare letter: `/new`
   creates a session, `/sessions` opens the browser panel, and `/theme` selects the theme its optional `theme` argument
-  names (`light` or `dark`; a declared value matches however it is spelled) or opens the picker when the argument is
+  names (`auto`, `light`, or `dark`; a declared value matches however it is spelled) or opens the picker when the
+  argument is
   omitted. An unknown
-  command answers with the known set, an unknown value answers `unknown theme "purple" - expected light or dark`, and a
+  command answers with the known set, an unknown value answers `unknown theme "purple" - expected auto or light or dark`, and a
   word past the last declared argument answers `unexpected argument "now"`. One registry is the single source for every
   command's name, description, category, action, and declared arguments — their values, value descriptions, order, and
   whether they are required — so the submission path, the band, and every notice are built from the one declaration and

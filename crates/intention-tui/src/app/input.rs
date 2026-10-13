@@ -13,7 +13,8 @@
 
 use super::commands::{self, CommandMenu, MenuRow};
 use super::{
-    AppState, Effect, InputCursorMove, InputHistoryMove, MenuMove, Theme, TranscriptScroll,
+    AppState, Effect, InputCursorMove, InputHistoryMove, MenuMove, ThemePreference,
+    TranscriptScroll,
 };
 
 /// How many transcript display rows one mouse-wheel notch moves.
@@ -467,11 +468,13 @@ impl AppState {
             commands::CommandAction::SessionsBrowser => self.request_sessions_browser(),
             commands::CommandAction::Theme => {
                 // `/theme`'s one argument is the first the command declares: a
-                // declared value selects its theme, and only the argument's
-                // absence opens the picker. The declaration is derived from
-                // `Theme::ALL`, so the value's position in it is its theme's.
+                // declared value selects its preference - `auto` included, which
+                // stores the request to follow detection - and only the
+                // argument's absence opens the picker. The declaration is
+                // derived from `ThemePreference::ALL`, so the value's position
+                // in it is its preference's.
                 match invocation.value_index(0) {
-                    Some(position) => self.apply_theme_selected(Theme::ALL[position]),
+                    Some(position) => self.apply_theme_selected(ThemePreference::ALL[position]),
                     None => self.request_theme_picker(),
                 }
             }

@@ -130,7 +130,8 @@ below is the live crate map; each crate's permitted dependency direction is the 
 
 Retained outside the nine production crates: the `intention-tui` adapter crate — since Slice 2 the terminal
 application, one binary with a fullscreen revue UI, an interactive REPL, and a headless prompt mode over the shared
-client, and the owner of its own terminal theme, which it resolves and stores locally so no theme state crosses the
+client, and the owner of its own terminal theme, which it stores locally — a `--theme auto|light|dark` flag, else the
+`tui.toml` preference, else environment detection, else the dark palette — so no theme state crosses the
 wire — and the non-production `intention-test-support` fixture crate. The future crates are created at their
 milestones: `intention-tauri` (M6), `intention-plans` (M5+ Slice 3), and `intention-vfr` and `intention-headroom` (M7).
 

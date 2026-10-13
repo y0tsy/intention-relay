@@ -166,7 +166,8 @@ reads no environment and infers no path.
 
 The terminal client shares one command grammar across its three modes
 (`tui`, `repl`, `run <PROMPT>`, with `--workspace`, `--session`, `--continue`,
-`--mode`, `--timeout`, `--format`, and the fullscreen UI's `--theme`), talks to the daemon only through
+`--mode`, `--timeout`, `--format`, and the fullscreen UI's `--theme
+auto|light|dark`), talks to the daemon only through
 `intention-client`, renders the step's answer and reasoning as separate
 transient delta channels until the committed row replaces them, and ends with a
 closed typed status set: 0 completed, 1 usage, 2 daemon or transport, 3 typed
@@ -194,20 +195,23 @@ filters, ranks, and completes them, with `Tab` committing the highlighted row,
 already spells its command or value, and `Esc` closing the band before it means
 anything else. The
 registry also declares each command's arguments: `/theme` takes an optional
-`light` or `dark` value, and while the caret is in that argument word the band
-lists those values in the same three columns, completing one with a trailing
-space. A theme is the terminal's warm off-white light palette or its neutral
-graphite dark palette whose only hue is the accent pair, resolved once per frame
-so a theme change replays the
+`auto`, `light`, or `dark` value, and while the caret is in that argument word
+the band lists those values in the same three columns, completing one with a
+trailing space. A theme is the terminal's warm off-white light palette or its
+neutral graphite dark palette whose only hue is the accent pair, resolved once
+per frame so a theme change replays the
 transcript exactly as a resize does. The terminal owns its own theme and the
-daemon never learns it: the launch resolves it from the `--theme` flag, else
-`COLORFGBG`, else the local `tui.toml`, else a terminal background probe, else
-light. `/theme`
-with a value selects that theme and rewrites `tui.toml`; with no value it opens a
-picker panel in the chat panel's band region — so the input block keeps its
-rows — where `Up`/`Down` preview the whole window live without persisting
-anything, `Enter` commits the selection and writes the file, and `Esc` reverts
-the preview.
+daemon never learns it: the launch resolves the preference from the `--theme`
+flag, else from the local `tui.toml`, else to `auto`, and `auto` paints what the
+environment detection answers — `COLORFGBG` when the terminal exports it, else
+the terminal's own answer to a background query, else the dark palette, which is
+the default of a terminal that reports nothing. `/theme` with a value selects
+that preference and rewrites `tui.toml` — a stored `auto` clears a spelled-out
+palette — while `/theme` with no value opens a picker panel in the chat panel's
+band region — so the input block keeps its rows — with one row per preference
+(`Auto`, `Light`, `Dark`), where `Up`/`Down` preview the whole window live
+without persisting anything, `Enter` commits the selection and writes the file,
+and `Esc` reverts the preview.
 
 ## Configuration
 
@@ -238,8 +242,9 @@ Notes:
   OpenRouter API default).
 - The terminal theme is not configuration this file carries: `intention-tui`
   resolves it locally and writes it to its own `tui.toml` beside `config.toml`,
-  so a selection records no configuration revision and never rewrites this
-  credential-bearing file.
+  where `theme = "auto"` (the default), `"light"`, or `"dark"` stores the
+  preference, so a selection records no configuration revision and never
+  rewrites this credential-bearing file.
 - By explicit product decision the credential is open text in this private
   file. Keep the file readable only by your user (e.g. mode `0600` on Unix);
   never commit it. The configuration crate keeps raw text opaque: after
@@ -363,8 +368,9 @@ What `main` does not yet provide (all of it is documented roadmap work):
   no session at launch, draws one window — the chat panel with markdown answers,
   a multi-line input block, and the registry-driven command hint band above it,
   and the sessions panel docked to the window's bottom rows — over one light/dark
-  palette system, with `/theme` (`light` or `dark`, or no argument for the
-  previewing picker panel) and the locally resolved and locally stored theme,
+  palette system, with `/theme` (`auto`, `light`, or `dark`, or no argument for
+  the previewing picker panel) and the locally resolved, locally stored
+  preference,
   caches the committed transcript layout,
   streams the live tail through the same block functions as the committed rows,
   and layers `Ctrl+C` and `Esc` into stop, history-pushing, and quitting arms (a

@@ -12,7 +12,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use intention_proto::{ErrorCategoryDto, ErrorDto, RunModeDto, RunStatusDto, SessionId};
-use intention_tui::app::Theme;
+use intention_tui::app::ThemePreference;
 
 /// The one-line usage every command-line rejection prints.
 pub const USAGE: &str = "usage: intention-tui [tui | repl | run <PROMPT>] [OPTIONS]";
@@ -29,7 +29,8 @@ pub const TUI_REQUIRES_TERMINAL: &str =
 pub fn help() -> String {
     let modes = RunModeDto::ALL.map(RunModeDto::as_str).join("|");
     let default = RunModeDto::DEFAULT.as_str();
-    let themes = Theme::ALL.map(Theme::as_str).join("|");
+    let themes = ThemePreference::ALL.map(ThemePreference::as_str).join("|");
+    let default_theme = ThemePreference::default().as_str();
     format!(
         "Intention Relay terminal client
 
@@ -43,7 +44,7 @@ options:
   --session ID        open an existing session by its durable identifier
   --continue          continue the most recently updated session
   --mode {modes}   run policy of a created session (default: {default})
-  --theme {themes}    colour theme of the fullscreen UI (default: detected)
+  --theme {themes}    colour theme of the fullscreen UI (default: {default_theme})
   --timeout SECS      stop the run when it does not finish within SECS
   --format text|json  run output format: progressive text or NDJSON records
   -h, --help          print this help
@@ -67,7 +68,7 @@ pub struct Options {
     session: Option<SessionId>,
     continue_session: bool,
     mode: Option<RunModeDto>,
-    theme: Option<Theme>,
+    theme: Option<ThemePreference>,
     timeout: Option<Duration>,
     format: Format,
 }
@@ -101,13 +102,14 @@ impl Options {
         self.mode
     }
 
-    /// Returns the colour theme the caller spelled, if any.
+    /// Returns the colour theme preference the caller spelled, if any.
     ///
     /// The grammar carries no default: an absent `--theme` leaves the theme to
-    /// the launch's own resolution, so a scripted run never overrides the
-    /// environment it starts in.
+    /// the launch's own resolution - the local settings file, then environment
+    /// detection - so a scripted run never overrides what the terminal already
+    /// carries.
     #[must_use]
-    pub const fn theme(&self) -> Option<Theme> {
+    pub const fn theme(&self) -> Option<ThemePreference> {
         self.theme
     }
 
@@ -226,8 +228,9 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, String> {
     // The flag carries only a mode the caller spelled: the durable default of a
     // created session is the core's, so the grammar substitutes none.
     let mut mode = None;
-    // The flag carries only a theme the caller spelled: an absent value leaves
-    // the theme to the launch's own resolution.
+    // The flag carries only a preference the caller spelled: an absent value
+    // leaves the theme to the launch's own resolution, and `auto` asks that
+    // resolution to run detection for this launch.
     let mut theme = None;
     let mut timeout = None;
     let mut format = None;
@@ -361,10 +364,12 @@ fn mode_value(value: &str) -> Result<RunModeDto, String> {
 ///
 /// # Errors
 ///
-/// Returns the usage message for a theme the grammar does not declare.
-fn theme_value(value: &str) -> Result<Theme, String> {
-    Theme::parse(value).map_err(|_| {
-        let themes = Theme::ALL.map(Theme::as_str).join(" or ");
+/// Returns the usage message for a preference the grammar does not declare.
+fn theme_value(value: &str) -> Result<ThemePreference, String> {
+    ThemePreference::parse(value).map_err(|_| {
+        let themes = ThemePreference::ALL
+            .map(ThemePreference::as_str)
+            .join(" or ");
         format!("--theme must be {themes}, got '{value}'")
     })
 }
@@ -432,18 +437,30 @@ mod tests {
     }
 
     #[test]
-    fn the_theme_flag_selects_one_declared_theme_for_the_fullscreen_front_end() {
+    fn the_theme_flag_selects_one_declared_preference_for_the_fullscreen_front_end() {
         let spelled = options_of(parsed(&["--theme", "dark"]).expect("the flag parses"));
-        assert_eq!(spelled.theme(), Some(Theme::Dark));
+        assert_eq!(spelled.theme(), Some(ThemePreference::Dark));
         let light = options_of(parsed(&["tui", "--theme=light"]).expect("the flag parses"));
-        assert_eq!(light.theme(), Some(Theme::Light));
+        assert_eq!(light.theme(), Some(ThemePreference::Light));
+        let automatic = options_of(parsed(&["--theme=auto"]).expect("the flag parses"));
+        assert_eq!(
+            automatic.theme(),
+            Some(ThemePreference::Auto),
+            "auto is a value the flag declares like any other"
+        );
         let help = help();
-        let themes = Theme::ALL.map(Theme::as_str).join("|");
+        let themes = ThemePreference::ALL.map(ThemePreference::as_str).join("|");
         assert!(
             help.contains(&format!("--theme {themes}")),
             "the help renders the declared theme set"
         );
-        let declared = Theme::ALL.map(Theme::as_str).join(" or ");
+        assert!(
+            help.contains("(default: auto)"),
+            "the help names the default preference"
+        );
+        let declared = ThemePreference::ALL
+            .map(ThemePreference::as_str)
+            .join(" or ");
         assert_eq!(
             theme_value("midnight"),
             Err(format!("--theme must be {declared}, got 'midnight'")),

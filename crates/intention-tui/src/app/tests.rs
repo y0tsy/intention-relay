@@ -14,7 +14,7 @@ use intention_proto::{
 use super::{
     Action, AppState, BrowserCursorMove, BrowserTab, COMMANDS, ConnectionStatus, Effect,
     InputCursorMove, InputHistoryMove, MenuMove, RunPhase, Screen, StreamStatus,
-    TRANSCRIPT_DRAG_ROWS, Theme, TranscriptScroll,
+    TRANSCRIPT_DRAG_ROWS, Theme, ThemePreference, TranscriptScroll,
 };
 
 /// The canonical id of the first fixture session.
@@ -547,7 +547,7 @@ fn bootstrap_failure_is_reported_without_client_work() {
 
 #[test]
 fn the_launch_theme_holds_across_a_ready_connection() {
-    let mut state = AppState::new(None).with_theme(Theme::Dark);
+    let mut state = AppState::new(None).with_theme(ThemePreference::Dark, Theme::Light);
     let effects = state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
     assert_eq!(
         effects,
@@ -557,7 +557,12 @@ fn the_launch_theme_holds_across_a_ready_connection() {
     assert_eq!(
         state.theme(),
         Theme::Dark,
-        "the theme the launch resolved stays the committed one"
+        "the palette the launch resolved stays the committed one"
+    );
+    assert_eq!(
+        state.theme_preference(),
+        ThemePreference::Dark,
+        "the stored preference is what the launch resolved"
     );
     assert_eq!(state.effective_theme(), Theme::Dark);
 }
@@ -565,23 +570,29 @@ fn the_launch_theme_holds_across_a_ready_connection() {
 #[test]
 fn a_selection_commits_at_once_and_asks_for_its_local_rewrite() {
     let mut state = AppState::new(None);
-    let effects = state.update(Action::ThemeSelected(Theme::Dark));
+    assert_eq!(
+        state.theme_preference(),
+        ThemePreference::Auto,
+        "a launch that stores nothing follows detection"
+    );
+    let effects = state.update(Action::ThemeSelected(ThemePreference::Dark));
     assert_eq!(
         effects,
-        vec![Effect::PersistTheme(Theme::Dark)],
+        vec![Effect::PersistTheme(ThemePreference::Dark)],
         "a selection asks for its local rewrite"
     );
     assert_eq!(
         state.theme(),
         Theme::Dark,
-        "the selection moves the committed theme at once"
+        "the selection moves the committed palette at once"
     );
+    assert_eq!(state.theme_preference(), ThemePreference::Dark);
     assert_eq!(state.effective_theme(), Theme::Dark);
 
-    let effects = state.update(Action::ThemeSelected(Theme::Dark));
+    let effects = state.update(Action::ThemeSelected(ThemePreference::Dark));
     assert!(
         effects.is_empty(),
-        "selecting the committed theme writes nothing"
+        "selecting the committed preference writes nothing"
     );
 
     let effects = state.update(Action::ThemePersistFailed(failure()));
@@ -597,6 +608,30 @@ fn a_selection_commits_at_once_and_asks_for_its_local_rewrite() {
             .is_some_and(|error| error.starts_with("fixture_failure:")),
         "the failure reaches the error line"
     );
+}
+
+#[test]
+fn returning_to_auto_stores_detection_and_paints_what_it_answered() {
+    let mut state = AppState::new(None).with_theme(ThemePreference::Light, Theme::Dark);
+    assert_eq!(
+        state.theme(),
+        Theme::Light,
+        "the launched preference paints its own palette"
+    );
+
+    let effects = state.update(Action::ThemeSelected(ThemePreference::Auto));
+    assert_eq!(
+        effects,
+        vec![Effect::PersistTheme(ThemePreference::Auto)],
+        "auto asks for the one-line rewrite that clears the spelled palette"
+    );
+    assert_eq!(state.theme_preference(), ThemePreference::Auto);
+    assert_eq!(
+        state.theme(),
+        Theme::Dark,
+        "auto paints the palette detection answered"
+    );
+    assert_eq!(state.effective_theme(), Theme::Dark);
 }
 
 #[test]
@@ -1195,7 +1230,7 @@ fn a_word_that_already_spells_its_command_or_value_runs_on_one_enter() {
     assert!(state.command_menu().is_some(), "the value is still offered");
     assert_eq!(
         state.update(Action::InputSubmitted),
-        vec![Effect::PersistTheme(Theme::Dark)],
+        vec![Effect::PersistTheme(ThemePreference::Dark)],
         "one Enter applies the value the word already spells"
     );
     assert_eq!(state.input(), "");
@@ -1317,7 +1352,7 @@ fn the_band_lists_a_declared_arguments_values_and_completes_one() {
         .expect("a declared argument opens the band");
     assert_eq!(
         menu.rows().map(|row| row.label()).collect::<Vec<_>>(),
-        vec!["light".to_owned(), "dark".to_owned()],
+        vec!["auto".to_owned(), "light".to_owned(), "dark".to_owned()],
         "an empty filter lists every value in declaration order"
     );
     assert_eq!(menu.highlight(), 0, "the best match starts highlighted");
@@ -1327,15 +1362,15 @@ fn the_band_lists_a_declared_arguments_values_and_completes_one() {
     // band has nothing to complete for Enter either - but Enter runs the
     // command instead, which is what opens the picker.
     state.update(Action::MenuAccept);
-    assert_eq!(state.input(), "/theme light ");
-    assert_eq!(state.cursor(), "/theme light ".chars().count());
+    assert_eq!(state.input(), "/theme auto ");
+    assert_eq!(state.cursor(), "/theme auto ".chars().count());
     assert!(
         state.command_menu().is_none(),
         "a complete value closes the band"
     );
     assert!(
         state.update(Action::InputSubmitted).is_empty(),
-        "the completed value names the committed theme, so it writes nothing"
+        "the completed value names the committed preference, so it writes nothing"
     );
 
     // A typed prefix narrows the band, and Enter completes it the same way.
@@ -1365,7 +1400,10 @@ fn the_band_lists_a_declared_arguments_values_and_completes_one() {
     );
 
     let submitting = state.update(Action::InputSubmitted);
-    assert_eq!(submitting, vec![Effect::PersistTheme(Theme::Dark)]);
+    assert_eq!(
+        submitting,
+        vec![Effect::PersistTheme(ThemePreference::Dark)]
+    );
 }
 
 #[test]
@@ -1514,18 +1552,25 @@ fn the_theme_command_opens_the_picker_without_an_argument() {
     assert_eq!(state.screen(), Screen::Theme);
     assert_eq!(state.input(), "", "a command never stays in the input line");
     assert_eq!(
+        state.theme_preference(),
+        ThemePreference::Auto,
+        "the picker opens on the committed preference"
+    );
+    assert_eq!(
         state.effective_theme(),
-        Theme::Light,
-        "the picker opens on the committed theme"
+        Theme::Dark,
+        "the committed palette is the one detection answered"
     );
 }
 
 #[test]
-fn the_theme_command_applies_a_theme_name_however_it_is_spelled() {
-    for (typed, theme) in [
-        ("dark", Theme::Dark),
-        ("DARK", Theme::Dark),
-        ("Light", Theme::Light),
+fn the_theme_command_applies_a_preference_however_it_is_spelled() {
+    for (typed, preference, palette) in [
+        ("auto", ThemePreference::Auto, Theme::Dark),
+        ("AUTO", ThemePreference::Auto, Theme::Dark),
+        ("dark", ThemePreference::Dark, Theme::Dark),
+        ("DARK", ThemePreference::Dark, Theme::Dark),
+        ("Light", ThemePreference::Light, Theme::Light),
     ] {
         let mut state = AppState::new(None);
         type_text(&mut state, &format!("/theme {typed}"));
@@ -1533,54 +1578,55 @@ fn the_theme_command_applies_a_theme_name_however_it_is_spelled() {
         assert_eq!(
             state.screen(),
             Screen::Chat,
-            "a spelled-out theme never opens the picker"
+            "a spelled-out preference never opens the picker"
+        );
+        assert_eq!(
+            state.theme_preference(),
+            preference,
+            "/theme {typed} commits {preference:?} however it is spelled"
         );
         assert_eq!(
             state.theme(),
-            theme,
-            "/theme {typed} commits {theme:?} however it is spelled"
+            palette,
+            "the committed palette is what the window paints"
         );
-        assert_eq!(
-            state.effective_theme(),
-            theme,
-            "the committed theme is what the window paints"
-        );
-        let expected = if theme == Theme::Light {
+        assert_eq!(state.effective_theme(), palette);
+        let expected = if preference == ThemePreference::Auto {
             Vec::new()
         } else {
-            vec![Effect::PersistTheme(theme)]
+            vec![Effect::PersistTheme(preference)]
         };
         assert_eq!(
             effects, expected,
-            "a moved theme asks for its local rewrite; the committed one writes nothing"
+            "a moved preference asks for its local rewrite; the committed one writes nothing"
         );
     }
 }
 
 #[test]
-fn every_declared_theme_value_names_a_theme() {
-    for theme in Theme::ALL {
-        let name = theme.as_str();
+fn every_declared_theme_value_names_a_preference() {
+    for preference in ThemePreference::ALL {
+        let name = preference.as_str();
         let uppercase = name.to_uppercase();
         for typed in [name, uppercase.as_str()] {
             let mut state = AppState::new(None);
             type_text(&mut state, &format!("/theme {typed}"));
             let effects = run_command(&mut state);
             assert_eq!(
-                state.theme(),
-                theme,
-                "/theme {typed} applies {theme:?} however the name is spelled"
+                state.theme_preference(),
+                preference,
+                "/theme {typed} applies {preference:?} however the name is spelled"
             );
-            let expected = if theme == Theme::Light {
+            let expected = if preference == ThemePreference::Auto {
                 Vec::new()
             } else {
-                vec![Effect::PersistTheme(theme)]
+                vec![Effect::PersistTheme(preference)]
             };
             assert_eq!(effects, expected);
             assert_eq!(
                 state.screen(),
                 Screen::Chat,
-                "a declared value applies its theme instead of opening the picker"
+                "a declared value applies its preference instead of opening the picker"
             );
         }
     }
@@ -1588,9 +1634,10 @@ fn every_declared_theme_value_names_a_theme() {
 
 #[test]
 fn a_declared_theme_value_never_opens_the_picker() {
-    // The registry's declared values are the theme vocabulary by construction:
-    // each one selects the theme at its own position in `Theme::ALL` instead of
-    // falling back to the picker the way an unknown name once did.
+    // The registry's declared values are the preference vocabulary by
+    // construction: each one selects the preference at its own position in
+    // `ThemePreference::ALL` instead of falling back to the picker the way an
+    // unknown name once did.
     let theme = COMMANDS
         .iter()
         .find(|command| command.name == "theme")
@@ -1598,29 +1645,29 @@ fn a_declared_theme_value_never_opens_the_picker() {
     let values = theme.arguments[0].values;
     assert_eq!(
         values.len(),
-        Theme::ALL.len(),
-        "the declaration derives one value per theme"
+        ThemePreference::ALL.len(),
+        "the declaration derives one value per preference"
     );
     for (position, value) in values.iter().enumerate() {
         let mut state = AppState::new(None);
         type_text(&mut state, &format!("/theme {}", value.value));
         let effects = run_command(&mut state);
         assert_eq!(
-            state.theme(),
-            Theme::ALL[position],
-            "/theme {} selects the theme its declaration derives from",
+            state.theme_preference(),
+            ThemePreference::ALL[position],
+            "/theme {} selects the preference its declaration derives from",
             value.value
         );
-        let expected = if Theme::ALL[position] == Theme::Light {
+        let expected = if ThemePreference::ALL[position] == ThemePreference::Auto {
             Vec::new()
         } else {
-            vec![Effect::PersistTheme(Theme::ALL[position])]
+            vec![Effect::PersistTheme(ThemePreference::ALL[position])]
         };
         assert_eq!(effects, expected);
         assert_ne!(
             state.screen(),
             Screen::Theme,
-            "/theme {} selects a theme instead of opening the picker",
+            "/theme {} selects a preference instead of opening the picker",
             value.value
         );
     }
@@ -1640,7 +1687,7 @@ fn the_theme_command_notices_an_unknown_value_and_an_extra_word() {
     assert!(effects.is_empty(), "a bad value asks for no client work");
     assert_eq!(
         state.notice(),
-        Some("unknown theme \"purple\" - expected light or dark")
+        Some("unknown theme \"purple\" - expected auto or light or dark")
     );
     assert_eq!(state.screen(), Screen::Chat, "a bad value opens no picker");
 
@@ -1650,18 +1697,18 @@ fn the_theme_command_notices_an_unknown_value_and_an_extra_word() {
     assert!(effects.is_empty());
     assert_eq!(state.notice(), Some("unexpected argument \"now\""));
     assert_eq!(
-        state.theme(),
-        Theme::Light,
+        state.theme_preference(),
+        ThemePreference::Auto,
         "a malformed line selects nothing"
     );
 }
 
 #[test]
 fn the_picker_moves_the_highlight_and_previews_the_candidate_without_persisting() {
-    let mut state = AppState::new(None);
+    let mut state = AppState::new(None).with_theme(ThemePreference::Auto, Theme::Light);
     open_picker(&mut state);
 
-    let effects = state.update(Action::ThemePreviewed(Theme::Dark));
+    let effects = state.update(Action::ThemePreviewed(ThemePreference::Dark));
     assert!(
         effects.is_empty(),
         "a preview asks for nothing: it is never persisted"
@@ -1674,21 +1721,40 @@ fn the_picker_moves_the_highlight_and_previews_the_candidate_without_persisting(
     assert_eq!(
         state.theme(),
         Theme::Light,
-        "the committed theme stays what the launch resolved"
+        "the committed palette stays what the launch resolved"
     );
+    assert_eq!(state.theme_preference(), ThemePreference::Auto);
 
-    // The picker walks its two rows from the effective theme, so the last row
-    // is where Down stops and the first is where Up stops.
-    assert_eq!(
-        state.effective_theme().next(),
-        Theme::Dark,
-        "Down from light reaches dark"
-    );
-    state.update(Action::ThemePreviewed(Theme::Light));
+    // The auto row previews the palette detection answered at this launch.
+    state.update(Action::ThemePreviewed(ThemePreference::Auto));
     assert_eq!(
         state.effective_theme(),
         Theme::Light,
-        "Up walks back to the committed row"
+        "auto previews what detection answered"
+    );
+
+    // The picker walks its three rows from the highlighted one, so the last row
+    // is where Down stops and the first is where Up stops.
+    assert_eq!(
+        ThemePreference::Auto.next(),
+        ThemePreference::Light,
+        "Down from auto reaches light"
+    );
+    state.update(Action::ThemePreviewed(ThemePreference::Light));
+    assert_eq!(
+        state.effective_theme(),
+        Theme::Light,
+        "the light row previews the light palette"
+    );
+    assert_eq!(
+        state.theme_preference(),
+        ThemePreference::Auto,
+        "no preview touches the committed preference"
+    );
+    assert_eq!(
+        state.highlighted_preference(),
+        ThemePreference::Light,
+        "the picker's cursor is the previewed row"
     );
 }
 
@@ -1696,13 +1762,13 @@ fn the_picker_moves_the_highlight_and_previews_the_candidate_without_persisting(
 fn the_picker_commits_the_highlighted_theme_and_asks_for_its_local_rewrite() {
     let mut state = AppState::new(None);
     open_picker(&mut state);
-    state.update(Action::ThemePreviewed(Theme::Dark));
+    state.update(Action::ThemePreviewed(ThemePreference::Dark));
 
-    let effects = state.update(Action::ThemeSelected(Theme::Dark));
+    let effects = state.update(Action::ThemeSelected(ThemePreference::Dark));
     assert_eq!(
         effects,
-        vec![Effect::PersistTheme(Theme::Dark)],
-        "Enter asks for the highlighted theme's local rewrite"
+        vec![Effect::PersistTheme(ThemePreference::Dark)],
+        "Enter asks for the highlighted preference's local rewrite"
     );
     assert_eq!(
         state.screen(),
@@ -1714,14 +1780,41 @@ fn the_picker_commits_the_highlighted_theme_and_asks_for_its_local_rewrite() {
         Theme::Dark,
         "the commit moves the theme at once"
     );
+    assert_eq!(state.theme_preference(), ThemePreference::Dark);
     assert_eq!(state.effective_theme(), Theme::Dark);
 }
 
 #[test]
-fn escaping_the_picker_restores_the_committed_theme() {
-    let mut state = AppState::new(None);
+fn committing_the_auto_row_stores_the_request_to_follow_detection() {
+    let mut state = AppState::new(None).with_theme(ThemePreference::Dark, Theme::Light);
     open_picker(&mut state);
-    state.update(Action::ThemePreviewed(Theme::Dark));
+    state.update(Action::ThemePreviewed(ThemePreference::Auto));
+    assert_eq!(
+        state.effective_theme(),
+        Theme::Light,
+        "the auto row previews what detection answered"
+    );
+
+    let effects = state.update(Action::ThemeSelected(ThemePreference::Auto));
+    assert_eq!(
+        effects,
+        vec![Effect::PersistTheme(ThemePreference::Auto)],
+        "committing auto writes the preference that clears the spelled palette"
+    );
+    assert_eq!(state.theme_preference(), ThemePreference::Auto);
+    assert_eq!(
+        state.theme(),
+        Theme::Light,
+        "the committed palette is what detection answered"
+    );
+    assert_eq!(state.screen(), Screen::Chat);
+}
+
+#[test]
+fn escaping_the_picker_restores_the_committed_theme() {
+    let mut state = AppState::new(None).with_theme(ThemePreference::Auto, Theme::Light);
+    open_picker(&mut state);
+    state.update(Action::ThemePreviewed(ThemePreference::Dark));
     assert_eq!(state.effective_theme(), Theme::Dark);
 
     let effects = state.update(Action::ThemePreviewCleared);
@@ -1732,17 +1825,19 @@ fn escaping_the_picker_restores_the_committed_theme() {
         "Esc restores the committed theme"
     );
     assert_eq!(state.theme(), Theme::Light);
+    assert_eq!(state.theme_preference(), ThemePreference::Auto);
     assert_eq!(state.screen(), Screen::Chat, "Esc closes the picker");
 
     // The picker's Esc is its own layer: it never cancels a run, arms a clear,
     // or exits, because the screen owns the key while it is open. A reopened
-    // picker starts from the committed theme again.
-    let mut state = AppState::new(None);
+    // picker starts from the committed preference again.
+    let mut state = AppState::new(None).with_theme(ThemePreference::Auto, Theme::Light);
     open_picker(&mut state);
-    state.update(Action::ThemePreviewed(Theme::Dark));
+    state.update(Action::ThemePreviewed(ThemePreference::Dark));
     state.update(Action::ThemePreviewCleared);
     open_picker(&mut state);
     assert_eq!(state.effective_theme(), Theme::Light);
+    assert_eq!(state.highlighted_preference(), ThemePreference::Auto);
     assert!(!state.should_quit());
     assert_eq!(state.notice(), None);
 }

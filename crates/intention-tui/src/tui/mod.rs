@@ -91,8 +91,7 @@ use revue::event::{Event, Key, KeyEvent, MouseButton, MouseEvent, MouseEventKind
 use revue::widget::{RenderContext, View};
 
 use crate::app::{
-    Action, AppState, BrowserCursorMove, Effect, Screen, TRANSCRIPT_DRAG_ROWS, Theme,
-    TranscriptScroll,
+    Action, AppState, BrowserCursorMove, Effect, Screen, TRANSCRIPT_DRAG_ROWS, TranscriptScroll,
 };
 
 use driver::Driver;
@@ -117,8 +116,8 @@ pub fn run_blocking(
     endpoint: LocalEndpoint,
 ) -> DtoResult<()> {
     // The theme is this front end's own value and is resolved once, before the
-    // first frame: the spelled flag, the environment, the local settings file,
-    // and the terminal probe, in that order. See `theme`.
+    // first frame: the spelled flag, else the local settings file, else the
+    // environment detection the file asks for. See `theme`.
     let theme = theme::resolve(options.theme())?;
     // The front end resolves the session it opens once, through the client: an
     // explicit continuation asks the client for the target, a selected session
@@ -470,17 +469,18 @@ impl FrontEnd {
     /// `session` is the session this launch opens: the one the caller selected,
     /// or the one the client resolved for an explicit continuation. A launch
     /// that named neither opens none, and the user can still ask for a session
-    /// later with `/new` or a row of the sessions browser. `theme` is the theme
-    /// the launch resolved, so the first frame already paints it.
+    /// later with `/new` or a row of the sessions browser. `theme` is the
+    /// preference and detection answer the launch resolved, so the first frame
+    /// already paints the palette they name.
     fn new(
         session: Option<SessionId>,
         workspace_root: WorkspaceRootDto,
         driver: Driver,
-        theme: Theme,
+        theme: theme::ResolvedTheme,
     ) -> Self {
         Self {
             state: AppState::new(session)
-                .with_theme(theme)
+                .with_theme(theme.preference(), theme.detected())
                 .with_workspace_root(workspace_root),
             driver,
             timer: TurnTimer::new(),

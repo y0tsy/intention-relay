@@ -577,7 +577,7 @@ mod tests {
     };
     use revue::render::Modifier;
 
-    use crate::app::{Action, AppState, Theme};
+    use crate::app::{Action, AppState, Theme, ThemePreference};
     use crate::tui::layout::{
         LaidOutRow, MARKER_GAP, RowStyleId, TranscriptLayoutCache, append_blocks, append_messages,
     };
@@ -976,7 +976,8 @@ mod tests {
     fn a_theme_change_lays_the_whole_transcript_out_again() {
         let session_id = SessionId::new();
         let run_id = RunId::new();
-        let mut state = fixture_state(session_id, run_id);
+        let mut state =
+            fixture_state(session_id, run_id).with_theme(ThemePreference::Light, Theme::Light);
         let mut cache = TranscriptLayoutCache::new();
         let light: Vec<_> = cache
             .rows(&state, WIDTH, LIGHT, |range, width| {
@@ -990,7 +991,7 @@ mod tests {
             "the fixture opens on a user card"
         );
 
-        state = state.with_theme(Theme::Dark);
+        state = state.with_theme(ThemePreference::Dark, Theme::Dark);
         let dark: Vec<_> = cache
             .rows(&state, WIDTH, DARK, |range, width| {
                 committed_blocks(&state, range, width, DARK)
@@ -1017,7 +1018,8 @@ mod tests {
     fn a_preview_change_lays_the_whole_transcript_out_again_without_committing_it() {
         let session_id = SessionId::new();
         let run_id = RunId::new();
-        let mut state = fixture_state(session_id, run_id);
+        let mut state =
+            fixture_state(session_id, run_id).with_theme(ThemePreference::Light, Theme::Light);
         let mut cache = TranscriptLayoutCache::new();
         let light: Vec<_> = cache
             .rows(&state, WIDTH, LIGHT, |range, width| {
@@ -1031,7 +1033,7 @@ mod tests {
             "the fixture opens on a user card"
         );
 
-        state.update(Action::ThemePreviewed(Theme::Dark));
+        state.update(Action::ThemePreviewed(ThemePreference::Dark));
         assert_eq!(
             state.theme(),
             Theme::Light,

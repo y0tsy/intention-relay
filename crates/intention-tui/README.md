@@ -9,7 +9,8 @@ the revue fullscreen UI (`tui`), the interactive `repl`, and the headless
 - `src/app/` — `action.rs` (`Action`/`Effect` vocabulary), `state.rs` (state,
   accessors, `update`), `commands.rs` (the one command registry with its
   declared arguments, the command and argument word, and the menu's filter and
-  ranking), `theme.rs` (the theme vocabulary and the picker transitions),
+  ranking), `theme.rs` (the palette and preference vocabularies and the picker
+  transitions),
   `sessions.rs`/`browser.rs`/`run.rs`/
   `input.rs` and the layered `ctrl_c.rs`/`escape.rs` (transitions), `tests.rs`.
 - `src/client_task.rs` — the one async `Effect` to client-call mapper.
@@ -125,10 +126,11 @@ feeds: `/new` (Session), `/sessions` (Navigation), and `/theme` (Appearance) are
 the registered commands, each carrying its name, one-line description, category,
 action, and declared arguments, and the registry is the single source for the
 submission path, the band, and every notice. `/theme` declares one optional
-argument, `theme`, whose values are the theme vocabulary itself (`light` and
-`dark`), and the parser reads only the registry: a submitted line resolves every
+argument, `theme`, whose values are the preference vocabulary itself (`auto`,
+`light`, and `dark`), and the parser reads only the registry: a submitted line
+resolves every
 word against the declarations, so an unknown value answers
-`unknown theme "purple" - expected light or dark`, a word past the last declared
+`unknown theme "purple" - expected auto or light or dark`, a word past the last declared
 argument answers `unexpected argument "now"`, and a declared value matches
 however it is spelled (`DARK` names `dark`). A slash
 is a command only as a line's *first* character: a slash anywhere else is
@@ -166,41 +168,61 @@ space after a complete value closes it. The band closes when the slash is
 removed, on `Esc`, or when nothing matches.
 
 The colour theme belongs to this front end: it is local presentation state, no
-wire operation carries it, and the daemon never learns it. The light palette
-is the warm off-white surface every session starts in; the dark palette is a
+wire operation carries it, and the daemon never learns it. The light palette is
+the warm off-white surface; the dark palette is a
 neutral graphite surface whose only hue is its accent pair. Both are
 the same role table resolved by `palette::of(theme)`, which the frame calls once
 per state's effective theme and hands to every pane, so a theme switch repaints
 the whole window - the transcript layout cache included, because the cache is
-keyed by the theme like the pane width. The launch resolves the theme in one
-fixed precedence, each level consulted only while the ones above it answered
-nothing: the fullscreen UI's `--theme light|dark` flag, else the `COLORFGBG`
-variable a terminal exports, else the local `tui.toml`, else a foreground-free
-`OSC 11` query of the terminal background - the zero-configuration source,
-which needs no platform theme lookup - else light. The local file is `tui.toml` beside the
+keyed by the theme like the pane width.
+
+A launch resolves a *preference* - `auto`, `light`, or `dark` - and paints the
+palette it names. The preference is the fullscreen UI's `--theme auto|light|dark`
+flag when it was spelled; else the local `tui.toml`'s `[tui] theme` declaration,
+the choice the user already made; else `auto`. A spelled `light` or `dark`, by
+flag or by file, beats every form of environment detection; `auto` - and an
+absent file, section, or key - paints what detection answers: the `COLORFGBG`
+variable a terminal exports when it exists, else a foreground-free `OSC 11`
+query of the terminal background with a 15 ms deadline, and the zero-configuration
+route that needs no platform theme lookup, else the dark palette. The dark
+fallback is deliberate: a terminal that reports neither its background nor
+`COLORFGBG` is usually a dark one, which is the profile terminal emulators and
+terminal applications ship by default. Detection runs once per launch even when a
+spelled palette wins, because the picker's `Auto` row previews what returning to
+detection would paint, and the probe is skipped when standard input or output is
+not a terminal.
+
+The local file is `tui.toml` beside the
 configuration directory's `config.toml` (Linux `$XDG_CONFIG_HOME` or
 `~/.config`, macOS `~/Library/Application Support`, Windows `%APPDATA%`), it
 carries one `[tui] theme` declaration, and an unknown spelling is a typed
-validation error rather than a silent fallback. `/theme light` and `/theme dark`
-select a theme; the selection commits in memory at once and asks for one rewrite
+validation error rather than a silent fallback. `/theme auto`, `/theme light`,
+and `/theme dark` select a preference; the selection commits in memory at once
+and asks for one rewrite
 of the local file after the frame it produced, so the next launch reads the same
-theme and no daemon round trip gates the repaint. A failed rewrite reports its
+preference and no daemon round trip gates the repaint. A stored `auto` is what
+clears a spelled-out palette. A failed rewrite reports its
 typed error while the committed selection stands, and a selection that matches
-the committed theme writes nothing. A theme change records no configuration
+the committed preference writes nothing. A theme change records no configuration
 revision and never rewrites the credential-bearing configuration file.
 
 `/theme` with no argument opens the theme picker as `Screen::Theme`: a small
 panel in the same one-window layout, drawn in the chat panel's band region above
 the input block (the region the command band uses), so the input block and the
 detail line keep their rows instead of the panel docking at the window's bottom.
-Its rounded frame carries the `Theme` title, one row per theme with the theme's
-name and one-line description, the committed row marked with the sessions
+Its rounded frame carries the `Theme` title, one row per preference - `Auto`,
+`Light`, `Dark`, the first being the way back to detection without editing the
+file by hand - with the preference's name and one-line description, the
+highlighted row marked with the sessions
 browser's `> ` cursor and selected wash, and its own last inner row carries the
 `enter apply | esc revert` legend. `Up`/`Down` preview the candidate they land
-on: the whole window, transcript included, repaints through it and nothing is
-persisted. `Enter` commits the highlighted theme, writes the local file the next
+on: the whole window, transcript included, repaints through the palette that
+preference names (`Auto` through the palette detection answered at this launch)
+and nothing is
+persisted. `Enter` commits the highlighted preference, writes the local file the
+next
 launch reads, and closes;
-`Esc` drops the preview, restores the committed theme, and closes. The picker's
+`Esc` drops the preview, restores the committed preference, and closes. The picker's
 `Esc` is its own layer, so the Esc layering is the open band, then the picker,
 then a live run's cancel, then the input-clear arm, then the exit.
 
@@ -272,9 +294,10 @@ Rules the panes keep:
 
 `src/tui/palette.rs` is the single source of colours: `palette::of(theme)`
 resolves one `Palette` value once per frame from the state's effective theme,
-and every pane reads the roles of the reference it was handed. The light theme
-is the warm off-white surface every session starts in; the dark theme is a
-neutral graphite ramp whose only hue is the accent pair. No pane constructs a
+and every pane reads the roles of the reference it was handed. The light palette
+is the warm off-white surface; the dark palette is a
+neutral graphite ramp whose only hue is the accent pair, and it is what a
+terminal that reports no background is painted with. No pane constructs a
 colour of its own.
 
 | Role | Light | Dark | Used by |

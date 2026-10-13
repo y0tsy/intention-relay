@@ -13,7 +13,7 @@ use intention_proto::{
 
 use super::{
     Action, BrowserRow, BrowserTab, CommandMenu, ConnectionStatus, Effect, RunPhase, Screen,
-    StreamStatus, Theme, TranscriptSelection, browser, ctrl_c, input, transcript,
+    StreamStatus, Theme, ThemePreference, TranscriptSelection, browser, ctrl_c, input, transcript,
 };
 
 /// Every value one terminal session holds, with no terminal attached.
@@ -33,16 +33,29 @@ pub struct AppState {
     /// end resolves its palette from this one field and never tracks a theme
     /// of its own, so the whole view stays a pure function of the state.
     ///
-    /// This is the committed theme - the value this front end resolved at
-    /// launch and the value a selection moves. A picker row is not committed
-    /// here: it lives in [`AppState::theme_preview`] until the picker's Enter.
+    /// This is the committed palette: the one the launch resolved from the
+    /// committed preference and the detection answer, and the one a selection
+    /// moves. A picker row is not committed here: it lives in
+    /// [`AppState::theme_preview`] until the picker's Enter.
     pub(super) theme: Theme,
-    /// The theme the picker is previewing, while one is.
+    /// The theme preference the launch resolved and a selection moves.
+    ///
+    /// The preference is what the local settings file stores: a palette the
+    /// user spelled out, or [`ThemePreference::Auto`], which asks every launch
+    /// to follow environment detection.
+    pub(super) theme_preference: ThemePreference,
+    /// The palette the launch's environment detection answered.
+    ///
+    /// The answer is read once per launch, so the picker's `Auto` row can
+    /// preview the palette detection would paint without asking the terminal
+    /// again.
+    pub(super) detected_theme: Theme,
+    /// The theme preference the picker is previewing, while one is.
     ///
     /// The preview is local and never persisted: it is what makes the whole
     /// window repaint through a candidate before the picker's Enter, and
     /// dropping it is what restores the committed theme.
-    pub(super) theme_preview: Option<Theme>,
+    pub(super) theme_preview: Option<ThemePreference>,
     pub(super) sessions: Vec<SessionSummaryDto>,
     pub(super) sessions_omitted: u32,
     pub(super) sessions_loaded: bool,
@@ -164,7 +177,9 @@ impl AppState {
             initial_session,
             connection: ConnectionStatus::Connecting,
             screen: Screen::Chat,
-            theme: Theme::Light,
+            theme: Theme::Dark,
+            theme_preference: ThemePreference::Auto,
+            detected_theme: Theme::Dark,
             theme_preview: None,
             sessions: Vec::new(),
             sessions_omitted: 0,
@@ -200,14 +215,17 @@ impl AppState {
         }
     }
 
-    /// Returns the same state rendering through `theme`.
+    /// Returns the same state rendering the palette one launch resolved.
     ///
     /// The theme is the terminal's own value, so a caller selects it directly
-    /// rather than through a wire action: the state carries it and a front end
-    /// resolves its palette from it once per frame.
+    /// rather than through a wire action: the state carries the committed
+    /// preference and the palette detection answered, resolves the palette in
+    /// force from the two, and a front end paints that once per frame.
     #[must_use]
-    pub const fn with_theme(mut self, theme: Theme) -> Self {
-        self.theme = theme;
+    pub const fn with_theme(mut self, preference: ThemePreference, detected: Theme) -> Self {
+        self.theme_preference = preference;
+        self.detected_theme = detected;
+        self.theme = preference.theme(detected);
         self
     }
 
@@ -275,8 +293,8 @@ impl AppState {
                 carried_first_turn,
                 error,
             } => self.apply_session_create_failed(carried_first_turn, &error),
-            Action::ThemeSelected(theme) => self.apply_theme_selected(theme),
-            Action::ThemePreviewed(theme) => self.apply_theme_previewed(theme),
+            Action::ThemeSelected(preference) => self.apply_theme_selected(preference),
+            Action::ThemePreviewed(preference) => self.apply_theme_previewed(preference),
             Action::ThemePreviewCleared => self.apply_theme_preview_cleared(),
             Action::ThemePersistFailed(error) => self.apply_theme_persist_failed(&error),
             Action::SessionStreamOpened(state) => self.apply_session_stream_opened(state),
@@ -368,13 +386,36 @@ impl AppState {
 
     /// Returns the colour theme a front end renders the session through.
     ///
-    /// This is the committed theme: the value the launch resolved and a
-    /// selection moves. A front end paints [`AppState::effective_theme`]
-    /// instead, which is the preview while one is active and this value at
-    /// every other moment.
+    /// This is the committed palette, which a selection moves and the
+    /// picker's preview leaves alone. A front end paints
+    /// [`AppState::effective_theme`] instead.
     #[must_use]
     pub const fn theme(&self) -> Theme {
         self.theme
+    }
+
+    /// Returns the colour theme preference a front end carries.
+    ///
+    /// This is the committed preference: the one the launch resolved and a
+    /// selection moves. A front end paints [`AppState::effective_theme`]
+    /// instead, which is the preview while one is active and the palette of
+    /// this preference at every other moment.
+    #[must_use]
+    pub const fn theme_preference(&self) -> ThemePreference {
+        self.theme_preference
+    }
+
+    /// Returns the preference the picker's cursor sits on.
+    ///
+    /// The highlight is the preview while one is active and the committed
+    /// preference at every other moment, so a picker that opens always marks
+    /// the row the front end is following.
+    #[must_use]
+    pub const fn highlighted_preference(&self) -> ThemePreference {
+        match self.theme_preview {
+            Some(preference) => preference,
+            None => self.theme_preference,
+        }
     }
 
     /// Returns the theme a front end paints: the preview, else the committed
@@ -387,7 +428,7 @@ impl AppState {
     #[must_use]
     pub const fn effective_theme(&self) -> Theme {
         match self.theme_preview {
-            Some(theme) => theme,
+            Some(preference) => preference.theme(self.detected_theme),
             None => self.theme,
         }
     }

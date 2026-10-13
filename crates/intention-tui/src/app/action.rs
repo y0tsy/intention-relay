@@ -6,7 +6,7 @@ use intention_proto::{
     SessionId, SessionSnapshotDto, SessionSummariesDto,
 };
 
-use super::{MenuMove, Theme};
+use super::{MenuMove, ThemePreference};
 
 /// The readiness the client last reported for the local daemon.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -131,18 +131,18 @@ pub enum Action {
         /// The typed rejection.
         error: ErrorDto,
     },
-    /// The user selected a theme: it applies in memory at once and its local
-    /// file is rewritten.
-    ThemeSelected(Theme),
-    /// The user highlighted a theme in the picker: it previews until the
+    /// The user selected a theme preference: it applies in memory at once and
+    /// its local file is rewritten.
+    ThemeSelected(ThemePreference),
+    /// The user highlighted a preference in the picker: it previews until the
     /// selection settles.
-    ThemePreviewed(Theme),
+    ThemePreviewed(ThemePreference),
     /// The user left the theme picker: the local preview is dropped.
     ThemePreviewCleared,
     /// Rewriting the local theme file failed.
     ///
-    /// The selection already moved the committed theme; the failure names why
-    /// the choice will not survive the next start.
+    /// The selection already moved the committed preference; the failure names
+    /// why the choice will not survive the next start.
     ThemePersistFailed(ErrorDto),
     /// A run subscription opened with the daemon's current run state.
     SessionStreamOpened(SessionStreamState),
@@ -329,12 +329,13 @@ impl Action {
 pub enum Effect {
     /// Bootstrap or re-bootstrap the shared local client.
     Connect,
-    /// Rewrite the local settings file with one selected theme.
+    /// Rewrite the local settings file with one selected theme preference.
     ///
-    /// The theme is this front end's own value, so the rewrite is local work:
-    /// no client call carries it and the daemon never learns it. The file is
-    /// what makes the choice survive the next start.
-    PersistTheme(Theme),
+    /// The preference is this front end's own value, so the rewrite is local
+    /// work: no client call carries it and the daemon never learns it. The file
+    /// is what makes the choice survive the next start, and a written `auto`
+    /// leaves the next launch to its own environment detection.
+    PersistTheme(ThemePreference),
     /// Read the bounded current session list.
     ListSessions,
     /// Read the current snapshot of one session.

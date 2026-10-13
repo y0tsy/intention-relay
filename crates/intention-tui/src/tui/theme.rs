@@ -1,15 +1,21 @@
-//! The terminal front end's own theme: the local settings file, the
-//! environment, and the terminal background probe.
+//! The terminal front end's own theme: the local settings file and the
+//! environment detection a launch falls back on.
 //!
 //! The theme is a presentation choice of this front end and nothing else: no
 //! wire value carries it, the daemon never learns it, and no durable store
-//! holds it. One launch resolves the theme once, highest precedence first:
+//! holds it. One launch resolves the preference in force once, highest
+//! precedence first:
 //!
-//! 1. the explicit `--theme` flag;
-//! 2. `COLORFGBG`, the terminal background index many emulators export;
-//! 3. the local file's `[tui] theme` key;
-//! 4. the terminal's answer to the standard `OSC 11` background query;
-//! 5. the light theme, when nothing answers.
+//! 1. the explicit `--theme` flag, which is `auto`, `light`, or `dark`;
+//! 2. the local file's `[tui] theme` key - the choice the user already saved in
+//!    this front end, which beats every form of environment detection;
+//! 3. `auto` when the local file declares no theme, or declares `auto`.
+//!
+//! The preference decides the palette: `light` and `dark` paint themselves
+//! whatever the environment says, while `auto` paints what environment
+//! detection answers - `COLORFGBG` when the terminal exports it, else the
+//! terminal's own answer to the standard `OSC 11` background query, else
+//! [`DEFAULT_THEME`].
 //!
 //! The operating system's own theme is not a source: the terminal probe answers
 //! with the background the terminal paints, which is the environment this front
@@ -20,7 +26,8 @@
 //! directory (`$XDG_CONFIG_HOME/intention-relay` or `$HOME/.config` on Linux,
 //! `$HOME/Library/Application Support` on macOS, `%APPDATA%` on Windows). A
 //! live selection is applied in memory and then rewritten there in one line, so
-//! the next start reads the choice back.
+//! the next start reads the choice back; a rewrite of `auto` clears the
+//! spelled-out palette and leaves the next launch to detection.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -29,7 +36,7 @@ use std::time::{Duration, Instant};
 use intention_proto::{DtoResult, ErrorDto};
 use revue::style::Color;
 
-use crate::app::Theme;
+use crate::app::{Theme, ThemePreference};
 
 /// The local settings file's name under the platform configuration directory.
 const THEME_FILE_NAME: &str = "tui.toml";
@@ -43,10 +50,23 @@ const OSC11_QUERY: &[u8] = b"\x1b]11;?\x1b\\";
 
 /// The bounded window one terminal has to answer the background query.
 ///
-/// A terminal answers a query within a few milliseconds; the bound is a
-/// liveness safeguard against one that never answers, never a budget a
-/// compliant terminal can lose.
-const PROBE_DEADLINE: Duration = Duration::from_millis(100);
+/// A terminal answers a query within a few milliseconds, and the probe runs
+/// before the first frame, so the window is short enough that a terminal which
+/// never answers costs one launch almost nothing: 15 ms is a liveness
+/// safeguard, never a budget a compliant terminal can lose.
+const PROBE_DEADLINE: Duration = Duration::from_millis(15);
+
+/// The palette the resolution paints when the environment answers nothing.
+///
+/// The fallback is the dark palette because a terminal that reports neither
+/// `COLORFGBG` nor a background colour is far more often a dark one: the
+/// emulators that ship a default profile ship a dark one (macOS Terminal's
+/// `Basic` is white on black, Windows Terminal's default `Campbell` paints a
+/// black background, and GNOME Terminal and Konsole default to dark schemes),
+/// and terminal applications default to their dark themes for the same reason.
+/// A user whose terminal is light either exports `COLORFGBG`, answers the
+/// background query, or spells the theme out in `tui.toml` or `--theme`.
+const DEFAULT_THEME: Theme = Theme::Dark;
 
 /// The largest reply the probe reads before giving up.
 ///
@@ -84,55 +104,109 @@ static ANSI_16: [Color; 16] = [
     Color::rgb(0xFF, 0xFF, 0xFF),
 ];
 
+/// The theme one launch resolved: the preference in force and the palette the
+/// environment detection answered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::tui) struct ResolvedTheme {
+    preference: ThemePreference,
+    detected: Theme,
+}
+
+impl ResolvedTheme {
+    /// Returns the preference this launch resolved.
+    ///
+    /// The preference is what the front end stores: the one the flag spelled,
+    /// or the one the local file declared, or `auto` when neither said
+    /// anything.
+    #[must_use]
+    pub(in crate::tui) const fn preference(&self) -> ThemePreference {
+        self.preference
+    }
+
+    /// Returns the palette the environment detection answered.
+    ///
+    /// The answer decides the palette for `auto` and is carried alongside every
+    /// other preference, so the picker's `Auto` row previews what returning to
+    /// detection would paint.
+    #[must_use]
+    pub(in crate::tui) const fn detected(&self) -> Theme {
+        self.detected
+    }
+}
+
 /// Resolves the theme of one launch.
 ///
 /// `explicit` is the `--theme` value the caller spelled, if any: the flag wins
-/// over every other source, and the sources below it are gathered in order, so
-/// a higher source is never asked to share its answer with a lower one.
+/// over every other source - including the local file, so `--theme auto` runs
+/// detection for one launch without touching what the file stores - and the
+/// sources below it are gathered in order, so a higher source is never asked to
+/// share its answer with a lower one. Detection is read once per launch even
+/// when the preference names a palette itself, because the picker's `Auto` row
+/// previews what detection would paint.
 ///
 /// # Errors
 ///
 /// Returns the typed validation error of a local file whose declared theme is
-/// not a declared spelling, and the typed unavailable error of a local file
+/// not a declared preference, and the typed unavailable error of a local file
 /// that cannot be read. Nothing silently falls back.
-pub(in crate::tui) fn resolve(explicit: Option<Theme>) -> DtoResult<Theme> {
+pub(in crate::tui) fn resolve(explicit: Option<ThemePreference>) -> DtoResult<ResolvedTheme> {
     resolve_with(
         explicit,
+        || local_theme_path().map_or(Ok(None), |path| read_local_theme(&path)),
+        detect,
+    )
+}
+
+/// Resolves one launch's theme from already-gathered evidence.
+///
+/// The evidence is gathered lazily by the closure the caller supplies for each
+/// source, and this function is the one place the precedence order lives: the
+/// flag, else the local file, else `auto`.
+///
+/// # Errors
+///
+/// Returns the local file's typed error unchanged.
+fn resolve_with(
+    explicit: Option<ThemePreference>,
+    local_file: impl FnOnce() -> DtoResult<Option<ThemePreference>>,
+    detection: impl FnOnce() -> Theme,
+) -> DtoResult<ResolvedTheme> {
+    let declared = match explicit {
+        Some(preference) => Some(preference),
+        None => local_file()?,
+    };
+    Ok(ResolvedTheme {
+        // A file that declares no theme asks for detection, exactly as a file
+        // that spells `auto` does.
+        preference: declared.unwrap_or_default(),
+        detected: detection(),
+    })
+}
+
+/// Returns the palette the environment answers.
+///
+/// The cheap read comes first: `COLORFGBG` is a variable the terminal already
+/// exported, so a terminal that carries one costs no query at all. Only a
+/// terminal that carries none is asked for its background colour through the
+/// bounded probe, and a terminal that answers neither leaves [`DEFAULT_THEME`].
+fn detect() -> Theme {
+    detect_with(
         || {
             std::env::var("COLORFGBG")
                 .ok()
                 .as_deref()
                 .and_then(colorfgbg_theme)
         },
-        || local_theme_path().map_or(Ok(None), |path| read_local_theme(&path)),
         terminal_probe,
     )
 }
 
-/// Resolves one theme from already-gathered evidence, in precedence order.
-///
-/// The evidence is gathered lazily by the closure the caller supplies for each
-/// level, so this function is the one place the precedence order lives.
-///
-/// # Errors
-///
-/// Returns the local file's typed error unchanged.
-fn resolve_with(
-    explicit: Option<Theme>,
-    terminal_variable: impl FnOnce() -> Option<Theme>,
-    local_file: impl FnOnce() -> DtoResult<Option<Theme>>,
-    terminal_probe: impl FnOnce() -> Option<Theme>,
-) -> DtoResult<Theme> {
-    if let Some(theme) = explicit {
-        return Ok(theme);
-    }
-    if let Some(theme) = terminal_variable() {
-        return Ok(theme);
-    }
-    if let Some(theme) = local_file()? {
-        return Ok(theme);
-    }
-    Ok(terminal_probe().unwrap_or(Theme::Light))
+/// Returns the palette one detection answers, variable first and probe second.
+fn detect_with(
+    variable: impl FnOnce() -> Option<Theme>,
+    probe: impl FnOnce() -> Option<Theme>,
+) -> Theme {
+    variable().or_else(probe).unwrap_or(DEFAULT_THEME)
 }
 
 /// Returns the local theme file of this platform, when it has one.
@@ -172,14 +246,14 @@ fn platform_config_directory() -> Option<PathBuf> {
     }
 }
 
-/// Reads the theme one local file declares.
+/// Reads the theme preference one local file declares.
 ///
 /// # Errors
 ///
 /// Returns an unavailable error when the file exists but cannot be read, and
 /// the parse error of [`parse_local_theme`] when its content does not declare a
-/// coherent theme.
-fn read_local_theme(path: &Path) -> DtoResult<Option<Theme>> {
+/// coherent preference.
+fn read_local_theme(path: &Path) -> DtoResult<Option<ThemePreference>> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -193,19 +267,19 @@ fn read_local_theme(path: &Path) -> DtoResult<Option<Theme>> {
     parse_local_theme(&text)
 }
 
-/// Parses the local settings document into the theme it declares.
+/// Parses the local settings document into the preference it declares.
 ///
-/// `None` means the document declares no theme: an empty file, an absent
-/// `[tui]` table, or an absent `theme` key leave the resolution to the sources
-/// below the file. Any other shape is rejected rather than ignored, so a typo
-/// never silently selects another theme.
+/// `None` means the document declares no preference: an empty file, an absent
+/// `[tui]` table, or an absent `theme` key all ask for environment detection,
+/// exactly as a declared `auto` does. Any other shape is rejected rather than
+/// ignored, so a typo never silently selects another theme.
 ///
 /// # Errors
 ///
 /// Returns a validation error when the document is not one `[tui]` table with
-/// one string `theme` key, and the theme vocabulary's own validation error when
-/// the declared spelling is not a declared theme.
-fn parse_local_theme(text: &str) -> DtoResult<Option<Theme>> {
+/// one string `theme` key, and the preference vocabulary's own validation error
+/// when the declared spelling is not a declared preference.
+fn parse_local_theme(text: &str) -> DtoResult<Option<ThemePreference>> {
     let document: toml::Value = toml::from_str(text).map_err(|_| {
         ErrorDto::validation(
             "invalid_tui_config",
@@ -248,25 +322,29 @@ fn parse_local_theme(text: &str) -> DtoResult<Option<Theme>> {
             "the tui theme must be a string",
         ));
     };
-    Theme::parse(theme).map(Some)
+    ThemePreference::parse(theme).map(Some)
 }
 
-/// Writes one theme into the local settings file.
+/// Writes one theme preference into the local settings file.
 ///
 /// The whole file is one `[tui]` table with one line, so a rewrite replaces the
-/// previous choice exactly. The parent directory is created when it does not
-/// exist yet.
+/// previous choice exactly; a written `auto` is what clears the spelled-out
+/// palette and asks the next launch for detection. The parent directory is
+/// created when it does not exist yet.
 ///
 /// # Errors
 ///
 /// Returns an unavailable error when the directory or the file cannot be
 /// written.
-fn write_local_theme(path: &Path, theme: Theme) -> DtoResult<()> {
+fn write_local_theme(path: &Path, preference: ThemePreference) -> DtoResult<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|_| write_failure())?;
     }
-    std::fs::write(path, format!("[tui]\ntheme = \"{}\"\n", theme.as_str()))
-        .map_err(|_| write_failure())
+    std::fs::write(
+        path,
+        format!("[tui]\ntheme = \"{}\"\n", preference.as_str()),
+    )
+    .map_err(|_| write_failure())
 }
 
 /// Returns the typed failure of one local settings write.
@@ -283,14 +361,14 @@ fn write_failure() -> ErrorDto {
 ///
 /// Returns an unavailable error when the platform reports no configuration
 /// directory or the file cannot be written.
-pub(in crate::tui) fn rewrite(theme: Theme) -> DtoResult<()> {
+pub(in crate::tui) fn rewrite(preference: ThemePreference) -> DtoResult<()> {
     let path = local_theme_path().ok_or_else(|| {
         ErrorDto::unavailable(
             "tui_config_directory_unavailable",
             "a platform configuration directory could not be determined",
         )
     })?;
-    write_local_theme(&path, theme)
+    write_local_theme(&path, preference)
 }
 
 /// Returns the theme one `COLORFGBG` value names.
@@ -484,16 +562,17 @@ fn component(text: &str) -> Option<u8> {
 mod tests {
     use std::io::Cursor;
     use std::path::Path;
+    use std::time::Duration;
 
     use revue::style::Color;
     use tempfile::TempDir;
 
-    use crate::app::Theme;
+    use crate::app::{Theme, ThemePreference};
 
     use super::{
-        MAX_REPLY_BYTES, THEME_FILE_NAME, colorfgbg_theme, local_theme_path, parse_local_theme,
-        parse_osc11_background, read_local_theme, read_osc11_reply, resolve_with,
-        theme_of_background, write_local_theme,
+        DEFAULT_THEME, MAX_REPLY_BYTES, PROBE_DEADLINE, THEME_FILE_NAME, colorfgbg_theme,
+        detect_with, local_theme_path, parse_local_theme, parse_osc11_background, read_local_theme,
+        read_osc11_reply, resolve_with, theme_of_background, write_local_theme,
     };
 
     #[test]
@@ -519,21 +598,24 @@ mod tests {
             assert_eq!(
                 parse_local_theme(text).expect("a document with no theme parses"),
                 None,
-                "{text:?} declares no theme"
+                "{text:?} declares no preference"
             );
         }
     }
 
     #[test]
-    fn one_tui_table_declares_its_theme() {
-        assert_eq!(
-            parse_local_theme("[tui]\ntheme = \"dark\"\n").expect("the document parses"),
-            Some(Theme::Dark)
-        );
-        assert_eq!(
-            parse_local_theme("[tui]\ntheme = \"light\"\n").expect("the document parses"),
-            Some(Theme::Light)
-        );
+    fn one_tui_table_declares_its_preference() {
+        for (document, expected) in [
+            ("[tui]\ntheme = \"auto\"\n", ThemePreference::Auto),
+            ("[tui]\ntheme = \"light\"\n", ThemePreference::Light),
+            ("[tui]\ntheme = \"dark\"\n", ThemePreference::Dark),
+        ] {
+            assert_eq!(
+                parse_local_theme(document).expect("the document parses"),
+                Some(expected),
+                "the file stores every declared preference"
+            );
+        }
     }
 
     #[test]
@@ -565,18 +647,19 @@ mod tests {
             None,
             "a file that does not exist declares nothing"
         );
-        for theme in Theme::ALL {
-            write_local_theme(&path, theme).expect("the selection writes");
+        for preference in ThemePreference::ALL {
+            write_local_theme(&path, preference).expect("the selection writes");
             assert_eq!(
                 read_local_theme(&path).expect("the written file reads"),
-                Some(theme),
+                Some(preference),
                 "the written selection reads back"
             );
         }
+        write_local_theme(&path, ThemePreference::Auto).expect("the selection writes");
         let rewritten = std::fs::read_to_string(&path).expect("the file is readable");
         assert_eq!(
-            rewritten, "[tui]\ntheme = \"dark\"\n",
-            "the file holds one table and one line, so a rewrite replaces the choice"
+            rewritten, "[tui]\ntheme = \"auto\"\n",
+            "the file holds one table and one line, and a stored auto clears the spelled palette"
         );
     }
 
@@ -695,67 +778,115 @@ mod tests {
     }
 
     #[test]
-    fn the_precedence_runs_from_the_flag_to_the_default() {
-        let theme = |value: Theme| {
-            move || {
-                let _ = value;
-                Some(value)
+    fn the_probe_waits_fifteen_milliseconds() {
+        assert_eq!(
+            PROBE_DEADLINE,
+            Duration::from_millis(15),
+            "the probe's window is short enough to sit in the launch path"
+        );
+    }
+
+    #[test]
+    fn detection_reads_the_variable_first_then_the_probe_then_the_dark_fallback() {
+        assert_eq!(
+            detect_with(|| Some(Theme::Light), || panic!("the probe is not asked")),
+            Theme::Light,
+            "COLORFGBG costs no query"
+        );
+        assert_eq!(
+            detect_with(|| None, || Some(Theme::Light)),
+            Theme::Light,
+            "the terminal's own answer decides when no variable exists"
+        );
+        assert_eq!(
+            detect_with(|| None, || None),
+            Theme::Dark,
+            "a terminal that answers nothing leaves the dark default"
+        );
+        assert_eq!(DEFAULT_THEME, Theme::Dark);
+    }
+
+    #[test]
+    fn the_flag_outranks_the_file_and_the_file_outranks_detection() {
+        let file = |declared: Option<ThemePreference>| move || Ok(declared);
+        let detection = |theme: Theme| move || theme;
+
+        // The flag wins, and the local file is never read for it.
+        let resolved = resolve_with(
+            Some(ThemePreference::Light),
+            || panic!("the flag does not read the file"),
+            detection(Theme::Dark),
+        )
+        .expect("the flag decides");
+        assert_eq!(resolved.preference(), ThemePreference::Light);
+        assert_eq!(resolved.detected(), Theme::Dark);
+        assert_eq!(
+            resolved.preference().theme(resolved.detected()),
+            Theme::Light,
+            "the spelled flag paints its own palette whatever the environment answered"
+        );
+
+        // `--theme auto` runs detection for one launch and ignores the file.
+        let resolved = resolve_with(
+            Some(ThemePreference::Auto),
+            || panic!("the flag does not read the file"),
+            detection(Theme::Light),
+        )
+        .expect("the flag decides");
+        assert_eq!(resolved.preference(), ThemePreference::Auto);
+        assert_eq!(
+            resolved.preference().theme(resolved.detected()),
+            Theme::Light,
+            "the flag asks detection for this launch"
+        );
+
+        // The file's explicit choice beats the environment answer.
+        let resolved = resolve_with(
+            None,
+            file(Some(ThemePreference::Dark)),
+            detection(Theme::Light),
+        )
+        .expect("the file decides");
+        assert_eq!(resolved.preference(), ThemePreference::Dark);
+        assert_eq!(
+            resolved.detected(),
+            Theme::Light,
+            "the detection answer is still gathered for the picker's auto row"
+        );
+        assert_eq!(
+            resolved.preference().theme(resolved.detected()),
+            Theme::Dark,
+            "the file's dark palette beats the light the environment answered"
+        );
+    }
+
+    #[test]
+    fn an_auto_or_absent_file_paints_what_detection_answered() {
+        let file = |declared: Option<ThemePreference>| move || Ok(declared);
+        for declared in [None, Some(ThemePreference::Auto)] {
+            for detected in Theme::ALL {
+                let resolved = resolve_with(None, file(declared), move || detected)
+                    .expect("a file that declares no palette asks for detection");
+                assert_eq!(
+                    resolved.preference(),
+                    ThemePreference::Auto,
+                    "{declared:?} asks for detection"
+                );
+                assert_eq!(
+                    resolved.preference().theme(resolved.detected()),
+                    detected,
+                    "detection paints {detected:?} for {declared:?}"
+                );
             }
-        };
-        let file = |value: Option<Theme>| move || Ok(value);
-        let terminal = || Some(Theme::Dark);
-        assert_eq!(
-            resolve_with(
-                Some(Theme::Dark),
-                || panic!("no variable"),
-                || panic!("no file"),
-                || panic!("no probe")
-            )
-            .expect("the flag decides"),
-            Theme::Dark,
-            "the flag is never asked to share its answer"
-        );
-        assert_eq!(
-            resolve_with(
-                None,
-                theme(Theme::Light),
-                || panic!("no file"),
-                || panic!("no probe")
-            )
-            .expect("the variable decides"),
-            Theme::Light,
-            "COLORFGBG beats the file and the probe"
-        );
-        assert_eq!(
-            resolve_with(
-                None,
-                || None,
-                file(Some(Theme::Dark)),
-                || panic!("no probe")
-            )
-            .expect("the file decides"),
-            Theme::Dark,
-            "the file beats the probe"
-        );
-        assert_eq!(
-            resolve_with(None, || None, file(None), terminal).expect("the probe decides"),
-            Theme::Dark,
-            "the probe decides when the terminal answers"
-        );
-        assert_eq!(
-            resolve_with(None, || None, file(None), || None).expect("the default decides"),
-            Theme::Light,
-            "the light theme is the default"
-        );
+        }
     }
 
     #[test]
     fn a_local_file_of_an_unknown_spelling_fails_the_resolution() {
         let error = resolve_with(
             None,
-            || None,
             || parse_local_theme("[tui]\ntheme = \"midnight\"\n"),
-            || panic!("no probe"),
+            || panic!("the file fails before detection is read"),
         )
         .expect_err("the local file's failure reaches the caller");
         assert_eq!(error.code(), "invalid_tui_theme");

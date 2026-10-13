@@ -166,7 +166,8 @@ Provider/model selection changes do not mutate an already-started run. They appl
 explicit, tested runtime transition is introduced.
 
 A terminal theme is not provider selection. The theme is the terminal client's own presentation state, resolved from
-the front end's flag, environment, local file, and terminal background probe: it records no
+the front end's flag, else the local file's saved preference, else environment detection (the `COLORFGBG` variable,
+then a bounded terminal background query, then the dark default): it records no
 configuration revision, carries no wire operation, and never mutates an already-started run's immutable snapshot or its
 validated selection.
 

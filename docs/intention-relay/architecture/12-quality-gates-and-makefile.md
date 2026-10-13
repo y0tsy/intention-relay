@@ -176,8 +176,10 @@ short-lived small strings; it is an ordinary crates.io dependency under the MIT 
 dependency through the generated `THIRD_PARTY_NOTICES.md`.
 
 The terminal's local theme resolution adds three direct dependencies, and none of them adds a package to the locked
-graph: `toml` parses and writes the local `tui.toml`, and the `cfg(unix)` pair `crossterm` (raw mode) and `mio`
-(readiness on the terminal's own input) serve the bounded `OSC 11` background probe. `crossterm` and `mio` were already
+graph: `toml` parses and writes the local `tui.toml` (whose `theme` key stores `auto`, `light`, or `dark`), and the
+`cfg(unix)` pair `crossterm` (raw mode) and `mio`
+(readiness on the terminal's own input) serve the `OSC 11` background probe, bounded at 15 ms, skipped when standard
+input or output is not a terminal, and never run at all when the terminal exports `COLORFGBG`. `crossterm` and `mio` were already
 locked as the backend and event source of `revue 3.10.0`, and `toml` was already locked through the same graph, so the
 declared set changed without a new package, license, or advisory entering it.
 

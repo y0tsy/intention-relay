@@ -12,7 +12,7 @@ use intention_proto::{DtoResult, ErrorDto, RunModeDto, SessionId, WorkspaceRootD
 use intention_transport::LocalEndpoint;
 use tokio::sync::mpsc;
 
-use crate::app::{Action, Effect, Theme};
+use crate::app::{Action, Effect, ThemePreference};
 use crate::client_task;
 
 /// The startup choices the command line hands to the fullscreen front end.
@@ -22,7 +22,7 @@ pub struct TuiOptions {
     mode: Option<RunModeDto>,
     session: Option<SessionId>,
     continue_session: bool,
-    theme: Option<Theme>,
+    theme: Option<ThemePreference>,
 }
 
 impl TuiOptions {
@@ -33,9 +33,9 @@ impl TuiOptions {
     /// the session the caller selected; `None` opens nothing, so the launch
     /// shows the welcome state until the user asks for a session. A caller that
     /// wants the newest session opened asks for it explicitly with
-    /// [`TuiOptions::continuing`]. No theme is selected: the launch resolves
-    /// one from its environment unless the caller spells one with
-    /// [`TuiOptions::with_theme`].
+    /// [`TuiOptions::continuing`]. No theme preference is spelled: the launch
+    /// resolves one from the local settings file and the environment unless the
+    /// caller spells one with [`TuiOptions::with_theme`].
     #[must_use]
     pub const fn new(
         workspace_root: WorkspaceRootDto,
@@ -51,20 +51,21 @@ impl TuiOptions {
         }
     }
 
-    /// Returns these options asking for a theme the caller spelled.
+    /// Returns these options asking for a theme preference the caller spelled.
     ///
-    /// The spelled theme wins over every source the launch would otherwise
-    /// resolve, so one run or one script can pick a palette without touching
-    /// the local settings file.
+    /// The spelled preference wins over every source the launch would otherwise
+    /// resolve - `auto` included, which asks detection for this launch and
+    /// ignores the local settings file for it - so one run or one script can
+    /// pick a palette without touching what the file stores.
     #[must_use]
-    pub const fn with_theme(mut self, theme: Option<Theme>) -> Self {
+    pub const fn with_theme(mut self, theme: Option<ThemePreference>) -> Self {
         self.theme = theme;
         self
     }
 
-    /// Returns the theme the caller spelled, if any.
+    /// Returns the theme preference the caller spelled, if any.
     #[must_use]
-    pub const fn theme(&self) -> Option<Theme> {
+    pub const fn theme(&self) -> Option<ThemePreference> {
         self.theme
     }
 
@@ -238,10 +239,11 @@ async fn drive(
                     Err(error) => Some(Action::SessionStreamFailed(error)),
                 }
             }
-            Step::Effect(Some(Effect::PersistTheme(theme))) => {
+            Step::Effect(Some(Effect::PersistTheme(preference))) => {
                 // The theme never reaches the daemon: the selection is written
                 // to the front end's own settings file here, off the draw path.
-                crate::tui::theme::rewrite(theme)
+                // A written `auto` is what clears a spelled-out palette.
+                crate::tui::theme::rewrite(preference)
                     .err()
                     .map(Action::ThemePersistFailed)
             }
