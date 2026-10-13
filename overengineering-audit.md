@@ -43,7 +43,7 @@ listed separately in §9 and must not be cut.
 
 ## Status — what the removal branch already resolved
 
-Branch `cleanup/overengineering-removal`, base `a359729`, four commits:
+Branch `cleanup/overengineering-removal`, base `a359729`, eight commits:
 
 | Commit | Change |
 | --- | --- |
@@ -86,6 +86,10 @@ Findings this closes:
   `RUSTDOCFLAGS=-D warnings`) is all that remains of the documentation gate. The coverage tiers, floors, and
   exclusions stay exactly as they were, with one completeness rule added: a workspace crate with a test-executing
   target and no tier fails `make coverage`, and `intention-test-support` is declared `exempt`.
+- **L1-12, Wave R1 bullet 6 — partly resolved** (`8e1b3c4` plus the matrix-cut commit). The blocking matrix is four
+  jobs: `lint-arch` on Linux also lints the Windows target and runs the doctests, `coverage-default` and `deps` stay on
+  Linux, and `test` runs on Windows only, because Linux test execution already happens inside the coverage run. Branch
+  protection requires exactly those four checks. The scheduled cache-pruner stays, so the finding is not closed.
 
 Landed outside the audit's scope: `0231be8` upgrades `openrouter-rs` to 0.19.0, published 2026-10-13, because the
 stale-pin gate (`cargo outdated --exit-code 1`) in `make deps` trips on an external release rather than on a defect.
