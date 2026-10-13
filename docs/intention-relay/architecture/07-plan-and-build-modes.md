@@ -158,7 +158,7 @@ contribution cannot widen or narrow tool policy, and a Build run's projection ne
 3. Plan prompt guidance cannot create authority, change mode, or prevent side effects.
 4. Build Autopilot has no per-action confirmation barrier for configured active capabilities.
 5. Build Autopilot authority originates only from an explicit user Plan approval or Build start transition.
-6. Plan approval records the exact session-scoped plan number, its revision, and the digest.
+6. Plan approval records the exact session-scoped plan number and its revision.
 7. Same-Session continuation preserves `SessionId` but creates a new `RunId`.
 8. The old Plan run, provider request, tool call, process, kernel, MCP, and bridge state are never resumed or reattached.
 9. The Build run binds an immutable mode, Autopilot policy, plan reference, and safe context projection.

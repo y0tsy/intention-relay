@@ -36,8 +36,6 @@ use intention_providers::ModelExecutionDriver;
 use intention_providers::OpenRouterDriver;
 #[cfg(any(test, feature = "test-support"))]
 use intention_providers::{ModelCancellationSignal, ModelCapabilitiesDto, ModelEventStream};
-#[cfg(test)]
-use intention_storage::ToolResultEvidenceDto;
 use intention_storage::{
     AcceptedTurnOutcomeDto, SqliteDatabaseLocationDto, SqliteStorageRepository,
     StorageRepositoryDto,
@@ -553,8 +551,6 @@ fn load_platform_provider_configuration() -> DtoResult<(ConfigSnapshotDto, Selec
 fn load_provider_configuration(
     source: ConfigSourceDto,
 ) -> DtoResult<(ConfigSnapshotDto, SelectedProvider)> {
-    #[cfg(unix)]
-    intention_config::ensure_user_only_permissions(source.path())?;
     let raw_toml = fs::read_to_string(source.path().as_str()).map_err(|_| {
         ErrorDto::unavailable(
             "daemon_configuration_read_unavailable",
@@ -851,18 +847,20 @@ mod tests {
             .expect("committed run transcript reads")
     }
 
-    /// Reads the durable tool-result evidence of one exact invocation.
+    /// Reads the committed tool-result row of one exact invocation.
     fn tool_evidence(
         facade: &DaemonApplicationFacade,
         session_id: SessionId,
         run_id: RunId,
         call_id: intention_proto::ToolCallId,
-    ) -> ToolResultEvidenceDto {
-        facade
-            .inner
-            .repository
-            .load_tool_result(session_id, run_id, call_id)
-            .expect("committed tool evidence reads")
+    ) -> intention_proto::MessageProjectionDto {
+        run_messages(facade, session_id, run_id)
+            .into_iter()
+            .find(|message| {
+                message.kind() == MessageKindDto::ToolResult
+                    && message.tool_call_id() == Some(call_id)
+            })
+            .expect("the committed tool-result row exists")
     }
 
     #[test]
@@ -1218,8 +1216,11 @@ mod tests {
             .expect("worker completes")
             .expect("in-flight execution observes the interrupt as a partial outcome");
         let evidence = tool_evidence(&facade, session_id, run_id, call_id);
+        let Some(intention_proto::ToolRowDto::Result(row)) = evidence.tool() else {
+            unreachable!("the committed result row carries its result evidence")
+        };
         assert_eq!(
-            evidence.status(),
+            row.status(),
             ToolResultStatusDto::Partial,
             "the stopped execute commits its partial result"
         );
@@ -1281,9 +1282,17 @@ mod tests {
         );
         for call_id in call_ids {
             let evidence = tool_evidence(&facade, session_id, run_id, call_id);
-            assert_eq!(evidence.status(), ToolResultStatusDto::Completed);
-            assert_eq!(evidence.tool_id(), "read");
-            assert_eq!(evidence.content(), "hello");
+            let Some(intention_proto::ToolRowDto::Result(row)) = evidence.tool() else {
+                unreachable!("the committed result row carries its result evidence")
+            };
+            assert_eq!(row.status(), ToolResultStatusDto::Completed);
+            assert_eq!(
+                evidence
+                    .tool_id()
+                    .map(intention_proto::ToolIdentityDto::wire_name),
+                Some("read")
+            );
+            assert_eq!(evidence.text(), "hello");
         }
     }
 

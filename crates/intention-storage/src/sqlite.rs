@@ -18,7 +18,7 @@ use std::sync::Mutex;
 
 use crate::{
     AcceptedTurnOutcomeDto, MAX_PENDING_TURN_PROJECTION_BYTES, MAX_TURN_CONTENT_BYTES,
-    RunOutcomeDto, StartingRunModelContextDto, StorageRepositoryDto, ToolResultEvidenceDto,
+    RunOutcomeDto, StartingRunModelContextDto, StorageRepositoryDto,
 };
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
@@ -41,24 +41,21 @@ const TERMINAL_STATUSES: &str = "'completed','failed','interrupted'";
 
 /// The transcript projection columns in their canonical decode order.
 ///
-/// The typed tool projection is decoded from the row's own `projection_json`
-/// column; a result row's lifecycle status and metadata are the committed
-/// `tool_results` row the join names, so no fact is stored twice.
+/// A result row's typed status and metadata are part of the row's own
+/// `projection_json`, so no fact is stored twice.
 const MESSAGE_COLUMNS: &str = "messages.id, messages.session_id, messages.run_id, messages.kind, \
      messages.text, messages.reasoning, messages.tool_call_id, messages.tool_id, \
-     messages.projection_json, tool_results.status, tool_results.metadata_json";
+     messages.projection_json";
 
-/// The transcript source every row read shares: the committed rows joined with
-/// the lifecycle evidence of a result row, when one exists.
-const MESSAGE_SOURCE: &str = "messages LEFT JOIN tool_results \
-     ON tool_results.tool_call_id = messages.tool_call_id";
+/// The transcript source every row read shares: the committed rows.
+const MESSAGE_SOURCE: &str = "messages";
 
 /// The persisted typed payload of one row's tool projection.
 ///
-/// The column carries payload and kind only: the call's typed arguments or the
-/// result's typed payload, the call identity, and the tool identity. A result
-/// row's lifecycle status, content, and metadata stay in `tool_results`, their
-/// single durable home.
+/// The column carries the call's typed arguments or the result's typed
+/// payload, the call identity, the tool identity, and - for a result row - its
+/// lifecycle status and approved metadata. The result row's bounded content is
+/// the row's own `text`.
 #[derive(Debug, Deserialize, Serialize)]
 struct StoredToolProjection {
     /// The tool call identity of the row's typed evidence.
@@ -71,6 +68,12 @@ struct StoredToolProjection {
     /// The typed result payload, when the row is a result with one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     result: Option<ToolResult>,
+    /// The lifecycle status, when the row is a result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    status: Option<ToolResultStatusDto>,
+    /// The approved structured metadata entries, when the row is a result.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    metadata: Vec<ToolResultMetadataEntryDto>,
 }
 
 impl StoredToolProjection {
@@ -82,18 +85,22 @@ impl StoredToolProjection {
                 tool_id: row.tool_id().clone(),
                 arguments: row.arguments().cloned(),
                 result: None,
+                status: None,
+                metadata: Vec::new(),
             },
             ToolRowDto::Result(row) => Self {
                 call_id: row.call_id(),
                 tool_id: row.tool_id().clone(),
                 arguments: None,
                 result: row.result().cloned(),
+                status: Some(row.status()),
+                metadata: row.metadata().to_vec(),
             },
         }
     }
 }
 
-/// The complete current storage schema (logical version 1): the nine
+/// The complete current storage schema (logical version 1): the eight
 /// current-state tables created directly on open. There is no migration chain,
 /// and no event log, snapshot, cursor, or journal table exists under the single
 /// live schema. `SCHEMA_STAMP` records the version this text implements.
@@ -155,17 +162,6 @@ CREATE TABLE IF NOT EXISTS messages (
   projection_json TEXT,
   created_at INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS tool_results (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  tool_call_id TEXT NOT NULL UNIQUE,
-  session_id TEXT NOT NULL,
-  run_id TEXT NOT NULL,
-  tool_id TEXT NOT NULL,
-  status TEXT NOT NULL,
-  content TEXT NOT NULL,
-  metadata_json TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
 CREATE TABLE IF NOT EXISTS configuration_revisions (
   id TEXT PRIMARY KEY,
   snapshot_json TEXT NOT NULL,
@@ -188,7 +184,7 @@ CREATE INDEX IF NOT EXISTS messages_session_run_id_id ON messages(session_id, ru
 /// column changes: the next open discards the whole database file and its
 /// rollback journal and recreates the current schema from scratch. That discard
 /// is the only version gate; there is no migration path.
-const SCHEMA_STAMP: i32 = 4;
+const SCHEMA_STAMP: i32 = 5;
 
 /// Returns whether the open database already carries the current schema stamp.
 /// A database written under any other stamp is discarded by its opener.
@@ -1114,123 +1110,6 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         })
     }
 
-    fn write_tool_result(
-        &self,
-        evidence: ToolResultEvidenceDto,
-        message: NewMessageDto,
-    ) -> DtoResult<MessageProjectionDto> {
-        let Some(ToolRowDto::Result(projection)) = message.tool() else {
-            return Err(ErrorDto::validation(
-                "invalid_tool_result",
-                "a tool result commits with its own answering transcript row",
-            ));
-        };
-        if message.kind() != MessageKindDto::ToolResult
-            || message.session_id() != evidence.session_id()
-            || message.run_id() != Some(evidence.run_id())
-            || message.tool_call_id() != Some(evidence.call_id())
-            || message.tool_id().map(ToolIdentityDto::wire_name) != Some(evidence.tool_id())
-            || projection.status() != evidence.status()
-            || projection.metadata() != evidence.metadata()
-        {
-            return Err(ErrorDto::validation(
-                "invalid_tool_result",
-                "a tool result commits with its own answering transcript row",
-            ));
-        }
-        let session_id = evidence.session_id();
-        let run_id = evidence.run_id();
-        let call_id = evidence.call_id();
-        self.with_immediate_transaction(|transaction| {
-            Self::require_session(transaction, session_id)?;
-            require_active_run(transaction, session_id, run_id)?;
-            let duplicate = transaction
-                .query_row(
-                    "SELECT 1 FROM tool_results WHERE tool_call_id=?1",
-                    [call_id.to_string()],
-                    |_| Ok(()),
-                )
-                .optional()
-                .map_err(storage_error)?
-                .is_some();
-            if duplicate {
-                return Err(tool_result_conflict());
-            }
-            let metadata_json = serde_json::to_string(evidence.metadata()).map_err(codec_error)?;
-            transaction
-                .execute(
-                    "INSERT INTO tool_results(tool_call_id, session_id, run_id, tool_id, status, content, metadata_json, created_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                    sqlite::params![
-                        call_id.to_string(),
-                        session_id.to_string(),
-                        run_id.to_string(),
-                        evidence.tool_id(),
-                        evidence.status().as_str(),
-                        evidence.content(),
-                        metadata_json,
-                        evidence.occurred_at().unix_seconds()
-                    ],
-                )
-                .map_err(storage_error)?;
-            let committed =
-                Self::insert_message(transaction, &message, evidence.occurred_at().unix_seconds())?;
-            self.fault(FaultPoint::ToolResult)?;
-            Ok(committed)
-        })
-    }
-
-    fn load_tool_result(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        call_id: ToolCallId,
-    ) -> DtoResult<ToolResultEvidenceDto> {
-        let row = {
-            let connection = self.connection()?;
-            connection
-                .query_row(
-                    "SELECT tool_id, status, content, metadata_json, created_at FROM tool_results \
-                     WHERE tool_call_id=?1 AND session_id=?2 AND run_id=?3",
-                    sqlite::params![
-                        call_id.to_string(),
-                        session_id.to_string(),
-                        run_id.to_string()
-                    ],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, String>(2)?,
-                            row.get::<_, String>(3)?,
-                            row.get::<_, i64>(4)?,
-                        ))
-                    },
-                )
-                .optional()
-                .map_err(storage_error)?
-        };
-        let Some((tool_id, status, content, metadata_json, created_at)) = row else {
-            return Err(not_found(
-                "tool_result_not_found",
-                "the requested durable tool result does not exist",
-            ));
-        };
-        let metadata: Vec<ToolResultMetadataEntryDto> =
-            serde_json::from_str(&metadata_json).map_err(|_| tool_result_unavailable())?;
-        ToolResultEvidenceDto::new(
-            session_id,
-            run_id,
-            call_id,
-            tool_id,
-            ToolResultStatusDto::parse(&status).map_err(|_| tool_result_unavailable())?,
-            content,
-            metadata,
-            TimestampDto::from_unix_seconds(created_at).map_err(|_| tool_result_unavailable())?,
-        )
-        .map_err(|_| tool_result_unavailable())
-    }
-
     fn load_run_config_snapshot(
         &self,
         session_id: SessionId,
@@ -1495,16 +1374,14 @@ impl StorageRepositoryDto for SqliteStorageRepository {
     }
 }
 
-/// The committed columns of one transcript row read: the row's own columns,
-/// its persisted typed projection, and the lifecycle evidence of a result row.
+/// The committed columns of one transcript row read: the row's own columns
+/// and its persisted typed projection.
 type RawMessageRow = (
     i64,
     String,
     Option<String>,
     String,
     String,
-    Option<String>,
-    Option<String>,
     Option<String>,
     Option<String>,
     Option<String>,
@@ -1523,21 +1400,12 @@ fn raw_message_row(row: &sqlite::Row<'_>) -> sqlite::Result<RawMessageRow> {
         row.get(6)?,
         row.get(7)?,
         row.get(8)?,
-        row.get(9)?,
-        row.get(10)?,
     ))
 }
 
 fn decode_message(row: RawMessageRow) -> DtoResult<MessageProjectionDto> {
     let kind = MessageKindDto::parse(&row.3)?;
-    let tool = decode_tool_row(
-        kind,
-        row.6.as_deref(),
-        row.7.as_deref(),
-        row.8.as_deref(),
-        row.9.as_deref(),
-        row.10.as_deref(),
-    )?;
+    let tool = decode_tool_row(kind, row.6.as_deref(), row.7.as_deref(), row.8.as_deref())?;
     MessageProjectionDto::new(
         MessageId::new(row.0).map_err(codec_error)?,
         SessionId::parse(&row.1).map_err(codec_error)?,
@@ -1559,16 +1427,14 @@ fn decode_message(row: RawMessageRow) -> DtoResult<MessageProjectionDto> {
 /// The row's `tool_call_id` and `tool_id` columns are the row identity; the
 /// one typed projection the row was committed with carries the same call and
 /// identity, so a payload whose identity disagrees with its row is refused
-/// rather than rendered as the wrong tool's evidence. A result row's lifecycle
-/// status and metadata come from the one durable `tool_results` row the read
-/// joins; a result row without that evidence cannot decode.
+/// rather than rendered as the wrong tool's evidence. The projection is the
+/// single durable home of a result row's status and metadata; a result row
+/// whose projection carries no status cannot decode.
 fn decode_tool_row(
     kind: MessageKindDto,
     tool_call_id: Option<&str>,
     tool_id: Option<&str>,
     projection: Option<&str>,
-    result_status: Option<&str>,
-    result_metadata: Option<&str>,
 ) -> DtoResult<Option<ToolRowDto>> {
     if !matches!(kind, MessageKindDto::ToolCall | MessageKindDto::ToolResult) {
         return Ok(None);
@@ -1597,22 +1463,15 @@ fn decode_tool_row(
             stored.arguments,
         )?))),
         MessageKindDto::ToolResult => {
-            let status = result_status
-                .map(ToolResultStatusDto::parse)
-                .transpose()?
-                .ok_or_else(tool_result_unavailable)?;
-            let metadata: Vec<ToolResultMetadataEntryDto> = match result_metadata {
-                Some(encoded) => {
-                    serde_json::from_str(encoded).map_err(|_| tool_result_unavailable())?
-                }
-                None => Vec::new(),
-            };
+            let status = stored
+                .status
+                .ok_or_else(|| codec_error("a tool result row carries its lifecycle status"))?;
             Ok(Some(ToolRowDto::Result(ToolResultRowDto::new(
                 call_id,
                 identity,
                 status,
                 stored.result,
-                metadata,
+                stored.metadata,
             )?)))
         }
         _ => Ok(None),
@@ -1639,8 +1498,9 @@ fn session_summaries(
              runs.started_at, runs.finished_at, \
              (SELECT COUNT(*) FROM messages AS call \
               WHERE call.session_id=sessions.id AND call.run_id=runs.id AND call.kind='tool_call' \
-              AND NOT EXISTS (SELECT 1 FROM tool_results AS answer \
-                  WHERE answer.tool_call_id=call.tool_call_id)) \
+              AND NOT EXISTS (SELECT 1 FROM messages AS answer \
+                  WHERE answer.session_id=call.session_id AND answer.run_id=call.run_id \
+                  AND answer.kind='tool_result' AND answer.tool_call_id=call.tool_call_id)) \
              FROM sessions JOIN workspace_roots ON workspace_roots.id=sessions.workspace_id \
              LEFT JOIN runs ON runs.session_id=sessions.id \
              AND runs.status NOT IN ({TERMINAL_STATUSES}) \
@@ -1813,8 +1673,9 @@ fn decode_usage(usage_json: Option<String>) -> DtoResult<Option<UsageDto>> {
 
 /// Counts one run's committed tool calls that no committed result answers.
 ///
-/// The call identity is the pairing key: a call stays open exactly while the
-/// run carries no committed `tool_results` row for its `tool_call_id`, so an
+/// The committed `tool_call_id` column carries the same call identity the
+/// row's typed projection does, so a call stays open exactly while the run
+/// carries no committed `tool_result` message row for that identity: an
 /// orphan result never answers a live call and a call of another run never
 /// counts. A run recovered after a crash keeps its unanswered calls.
 fn open_tool_call_count(
@@ -1826,8 +1687,9 @@ fn open_tool_call_count(
         .query_row(
             "SELECT COUNT(*) FROM messages AS call \
              WHERE call.session_id=?1 AND call.run_id=?2 AND call.kind='tool_call' \
-             AND NOT EXISTS (SELECT 1 FROM tool_results AS answer \
-                 WHERE answer.tool_call_id=call.tool_call_id)",
+             AND NOT EXISTS (SELECT 1 FROM messages AS answer \
+                 WHERE answer.session_id=call.session_id AND answer.run_id=call.run_id \
+                 AND answer.kind='tool_result' AND answer.tool_call_id=call.tool_call_id)",
             sqlite::params![session_id.to_string(), run_id.to_string()],
             |row| row.get(0),
         )
@@ -2278,24 +2140,6 @@ fn record_not_found() -> ErrorDto {
     )
 }
 
-fn tool_result_conflict() -> ErrorDto {
-    conflict(
-        "tool_result_conflict",
-        "a durable tool result already exists for the call identity",
-    )
-}
-
-fn tool_result_unavailable() -> ErrorDto {
-    ErrorDto::new(
-        "tool_result_unavailable",
-        ErrorCategoryDto::Unavailable,
-        "the durable tool result is unavailable",
-        ErrorRetryDto::Manual,
-        None,
-    )
-    .unwrap_or_else(|_| unavailable())
-}
-
 fn unavailable() -> ErrorDto {
     ErrorDto::unavailable(
         "storage_unavailable",
@@ -2476,8 +2320,6 @@ enum FaultPoint {
     Message,
     /// The stage that commits one terminal run outcome.
     RunOutcome,
-    /// The stage that commits one tool result with its transcript row.
-    ToolResult,
     /// The stage that commits one configuration revision.
     ConfigRevision,
 }
@@ -2618,7 +2460,6 @@ mod tests {
             sqlite::Connection::open(&location.0).expect("database reopens for inspection");
         [
             "SELECT snapshot_json FROM configuration_revisions",
-            "SELECT metadata_json FROM tool_results",
             "SELECT COALESCE(usage_json, '') FROM runs",
             "SELECT text FROM messages",
             "SELECT COALESCE(reasoning, '') FROM messages",
@@ -2660,7 +2501,6 @@ mod tests {
                 .code(),
             "invalid_tool_result_status"
         );
-        assert_eq!(tool_result_unavailable().code(), "tool_result_unavailable");
     }
 
     #[test]
@@ -3047,60 +2887,6 @@ mod tests {
     }
 
     #[test]
-    fn tool_result_fault_rolls_back_evidence_and_its_transcript_row() {
-        let location = fixture_location();
-        let repository = SqliteStorageRepository::open(location.clone()).expect("database opens");
-        let session_id = create_fixture_session(&repository);
-        let run = accept_fixture_turn(&repository, session_id, "active");
-        let call_id = ToolCallId::new();
-        let evidence = ToolResultEvidenceDto::new(
-            session_id,
-            run.run_id(),
-            call_id,
-            "read",
-            ToolResultStatusDto::Completed,
-            r#"{"result":"read"}"#,
-            vec![
-                ToolResultMetadataEntryDto::new("truncated", "false")
-                    .expect("fixture metadata is valid"),
-            ],
-            fixture_time(3),
-        )
-        .expect("fixture evidence is valid");
-        let message = NewMessageDto::new(
-            session_id,
-            Some(run.run_id()),
-            MessageKindDto::ToolResult,
-            r#"{"result":"read"}"#,
-            None,
-            Some(read_result_row(
-                call_id,
-                vec![
-                    ToolResultMetadataEntryDto::new("truncated", "false")
-                        .expect("fixture metadata is valid"),
-                ],
-            )),
-        )
-        .expect("answering row is valid");
-        repository.arm_fault(FaultPoint::ToolResult);
-        let error = repository
-            .write_tool_result(evidence, message)
-            .expect_err("injected tool result fault aborts the transaction");
-        assert_eq!(error.code(), "injected_storage_fault");
-        drop(repository);
-        let reopened = SqliteStorageRepository::open(location.clone()).expect("database reopens");
-        assert_eq!(raw_count(&location, "tool_results"), 0);
-        assert_eq!(raw_count(&location, "messages"), 1);
-        assert_eq!(
-            reopened
-                .load_tool_result(session_id, run.run_id(), call_id)
-                .expect_err("evidence rolled back with its transaction")
-                .code(),
-            "tool_result_not_found"
-        );
-    }
-
-    #[test]
     fn configuration_revision_fault_rolls_back_the_revision() {
         let location = fixture_location();
         let repository = SqliteStorageRepository::open(location.clone()).expect("database opens");
@@ -3156,20 +2942,8 @@ mod tests {
             )
             .expect("assistant row commits");
         let call_id = ToolCallId::new();
-        let evidence = ToolResultEvidenceDto::new(
-            session_id,
-            run.run_id(),
-            call_id,
-            "read",
-            ToolResultStatusDto::Completed,
-            r#"{"result":"read"}"#,
-            Vec::new(),
-            fixture_time(3),
-        )
-        .expect("fixture evidence is valid");
         repository
-            .write_tool_result(
-                evidence,
+            .append_message(
                 NewMessageDto::new(
                     session_id,
                     Some(run.run_id()),
@@ -3179,6 +2953,7 @@ mod tests {
                     Some(read_result_row(call_id, Vec::new())),
                 )
                 .expect("answering row is valid"),
+                fixture_time(3),
             )
             .expect("tool result commits");
         repository

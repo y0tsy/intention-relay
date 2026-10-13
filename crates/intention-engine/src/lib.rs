@@ -21,7 +21,7 @@ use intention_proto::{
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
 use intention_proto::{ToolCallDto, ToolCallId};
-use intention_storage::{AcceptedTurnOutcomeDto, StorageRepositoryDto, ToolResultEvidenceDto};
+use intention_storage::{AcceptedTurnOutcomeDto, StorageRepositoryDto};
 use intention_tools::{
     InterruptCause, ToolDispatchOutcome, ToolService, WorkspaceRoot, partial_tool_result_content,
     render_tool_result_content, tool_failure_guidance,
@@ -289,12 +289,12 @@ where
         Ok(committed)
     }
 
-    /// Commits one terminal tool result with its answering transcript row, then
+    /// Commits one terminal tool result as its answering transcript row, then
     /// hands that committed row to the commit sink.
     ///
-    /// Exactly one transaction writes the `tool_results` row and the
-    /// `tool_result` message the model reads; the message carries the same
-    /// typed status, payload, and metadata the evidence row stores.
+    /// Exactly one transaction appends the `tool_result` message the model
+    /// reads; the row's own typed projection carries its status, payload, and
+    /// metadata, so the message is the result's single durable home.
     ///
     /// # Errors
     ///
@@ -315,23 +315,13 @@ where
         metadata: Vec<ToolResultMetadataEntryDto>,
         occurred_at: TimestampDto,
         publisher: &P,
-    ) -> DtoResult<ToolResultEvidenceDto> {
+    ) -> DtoResult<MessageProjectionDto> {
         let projection = ToolResultRowDto::new(
             call_id,
             ToolIdentityDto::parse(tool_id)?,
             status,
             result,
-            metadata.clone(),
-        )?;
-        let evidence = ToolResultEvidenceDto::new(
-            session_id,
-            run_id,
-            call_id,
-            tool_id.to_owned(),
-            status,
-            content.clone(),
             metadata,
-            occurred_at,
         )?;
         let message = NewMessageDto::new(
             session_id,
@@ -341,11 +331,9 @@ where
             None,
             Some(ToolRowDto::Result(projection)),
         )?;
-        let committed = self
-            .repository
-            .write_tool_result(evidence.clone(), message)?;
-        publisher.observe_session_commit(&SessionCommitDto::Content(committed));
-        Ok(evidence)
+        let committed = self.repository.append_message(message, occurred_at)?;
+        publisher.observe_session_commit(&SessionCommitDto::Content(committed.clone()));
+        Ok(committed)
     }
 
     /// Creates an application facade around a DTO-only durable repository.

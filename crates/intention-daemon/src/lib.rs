@@ -2994,22 +2994,10 @@ mod tests {
             )
             .expect("the fixture tool-call row commits");
 
-        let evidence = intention_storage::ToolResultEvidenceDto::new(
-            session_id,
-            run_id,
-            call_id,
-            "read",
-            ToolResultStatusDto::Completed,
-            r#"{"result":"read"}"#,
-            Vec::new(),
-            TimestampDto::from_unix_seconds(3).expect("the fixture timestamp is valid"),
-        )
-        .expect("the fixture tool evidence is valid");
         let committed = host
             .facade
             .repository()
-            .write_tool_result(
-                evidence,
+            .append_message(
                 NewMessageDto::new(
                     session_id,
                     Some(run_id),
@@ -3032,6 +3020,7 @@ mod tests {
                     )),
                 )
                 .expect("the fixture tool row is valid"),
+                TimestampDto::from_unix_seconds(3).expect("the fixture timestamp is valid"),
             )
             .expect("the fixture tool-result row commits");
         HostCommitObserver {

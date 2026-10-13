@@ -21,7 +21,7 @@ A DTO is a stable contract, not merely any serializable struct.
 | Persistence DTO | Storage-safe representation of a record or projection. | `RunProjectionDto`, `MessageProjectionDto`. |
 | Provider DTO | Provider-neutral model request/stream/error contract, including advertised tool definitions and the transient same-run reasoning attachment. | `ModelRequestDto`, `ModelToolDefinitionDto`, `AssistantReasoningDto`, `ModelEventDto`. |
 | Runtime execution DTO | Immutable selected execution input, safe terminal outcome, and provider-neutral time and transient text-delta ports over injected provider/storage contracts. | `ModelRunExecutionInputDto`, `ModelRunExecutionOutcomeDto`, `ModelTimePort`, `ModelTextDeltaPort`. |
-| Tool DTO | Typed tool invocation, bounded result and interruption outcome, durable result evidence, and the typed projection each committed tool row carries. | `ToolId`, `ToolInput`, `ToolResult`, `ToolResultEvidenceDto`, `ToolRowDto`. |
+| Tool DTO | Typed tool invocation, bounded result and interruption outcome, and the typed projection each committed tool row carries. | `ToolId`, `ToolInput`, `ToolResult`, `ToolRowDto`. |
 | Config DTO | Parsed, validated, resolved, and revisioned TOML configuration. | `ResolvedConfigDto`, `ConfigSnapshotDto`. |
 | Presentation DTO | Explicit adapter projection, if transport DTO is not appropriate for display. | None today; adapters render transport projections directly. |
 
@@ -87,7 +87,9 @@ ErrorDto
 
 `CorrelationIdDto` accepts only a canonical UUID string and is an opaque reference, not diagnostic content. An error
 carries no dynamic detail payload: user-visible context is code-owned safe guidance, never a path, an OS error, a
-command line, a stack trace, or file content.
+command line, a stack trace, or file content. A tool failure is the one bounded exception: tool failures return the
+workspace-relative path and the OS error verbatim, bounded; never the absolute root, a resolved symlink target, the
+command line, or file content.
 
 Messages are code-owned safe guidance. Runtime data must never be interpolated into `message` or placed in a
 map/`serde_json::Value`. `Display` remains exactly `code: message` and never renders correlation data.
@@ -138,7 +140,7 @@ There is no binary canonical form: the wire and domain contracts are the serde J
 registry, canonical digest, or identity layer exists. Canonicalization is introduced only when a first real
 consumer needs canonical bytes, and then only as RFC 8785 JSON Canonicalization (`serde_json_canonicalizer`); no
 canonicalization dependency is added before that consumer exists. The public DTOs that declare invariants beyond their
-field types are validated at admission; extending decode-time enforcement to them remains a recorded follow-up card.
+field types are validated at admission; extending decode-time enforcement to them is a v1 non-goal ([architecture 11](11-implementation-roadmap.md), M8).
 Until a real canonicalization consumer exists, no component hashes JSON for identity, addressing, or comparison:
 equality is typed structural equality, and record identity is a typed revision identity rather than a digest.
 
@@ -194,17 +196,13 @@ persisted rows keep their recorded meaning.
 
 ## Contract tests required before implementation
 
--  typed wire fixtures for every request and result family, including malformed and foreign-byte cases;
-- invalid-shape and invalid-ID tests at every input boundary;
-- explicit wire-validation tests for non-blank, path, timestamp, and schema invariants;
-- schema compatibility fixtures for transport and persisted records;
-- compile-time tests proving forbidden implementation types do not appear in public signatures where tooling permits;
-- consumer-driven contract tests for `intention-client` against daemon transport;
-- redaction tests for all error and stream DTOs carrying configuration or provider context.
+- round-trip fixtures for every request, result, and frame family;
+- malformed-decode tests: invalid shape, invalid ID, unknown closed variant, and foreign bytes all fail closed;
+- redaction tests for DTOs carrying configuration or provider context.
 
 ## Quality-gate integration
 
-DTO compatibility, validation, redaction, and public-API boundary tests are blocking `make verify` inputs. Every
+DTO validation, redaction, and public-API boundary tests are blocking `make verify` inputs. Every
 DTO-owning crate is subject to its declared coverage tier, and contract fixtures run in the single feature
 configuration.
 See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).

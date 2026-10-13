@@ -11,10 +11,10 @@ use intention_config::{
 };
 use intention_proto::{
     BoundedText, CreateSessionCommandDto, ExecuteResult, MessageKindDto, MessageProjectionDto,
-    NewMessageDto, PathsResult, PendingTurnProjectionDto, ReadInput, RemoveTurnCommandDto,
-    RunModeDto, RunProjectionDto, RunStatusDto, TextResult, ToolCallRowDto, ToolIdentityDto,
-    ToolInput, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto,
-    ToolRowDto, WorkspaceRelativePathDto,
+    NewMessageDto, PendingTurnProjectionDto, ReadInput, RemoveTurnCommandDto, RunModeDto,
+    RunProjectionDto, RunStatusDto, TextResult, ToolCallRowDto, ToolIdentityDto, ToolInput,
+    ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
+    WorkspaceRelativePathDto,
 };
 use intention_proto::{
     ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId,
@@ -22,7 +22,6 @@ use intention_proto::{
 };
 use intention_storage::{
     AcceptedTurnOutcomeDto, RunOutcomeDto, SqliteStorageRepository, StorageRepositoryDto,
-    ToolResultEvidenceDto,
 };
 use tempfile::TempDir;
 
@@ -320,8 +319,8 @@ fn a_stale_schema_stamp_discards_the_database_once_and_recreates_it() {
     );
 }
 
-/// A database from the immediately previous stamped schema (stamp 3) is
-/// discarded exactly like any other stale stamp and recreated at stamp 4.
+/// A database from the immediately previous stamped schema (stamp 4) is
+/// discarded exactly like any other stale stamp and recreated at stamp 5.
 #[test]
 fn a_database_from_the_previous_stamp_is_discarded() {
     let directory = TempDir::new().expect("temporary directory exists");
@@ -334,7 +333,7 @@ fn a_database_from_the_previous_stamp_is_discarded() {
     connection
         .execute_batch(
             "CREATE TABLE previous_stamp_marker (id INTEGER PRIMARY KEY);
-             PRAGMA user_version = 3;",
+             PRAGMA user_version = 4;",
         )
         .expect("the previous stamp applies");
     drop(connection);
@@ -353,7 +352,7 @@ fn a_database_from_the_previous_stamp_is_discarded() {
     let stamp: i32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("the recreated stamp reads");
-    assert_eq!(stamp, 4, "the recreated database carries the current stamp");
+    assert_eq!(stamp, 5, "the recreated database carries the current stamp");
     let marker: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE name = 'previous_stamp_marker'",
@@ -938,105 +937,30 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
     let metadata = vec![
         ToolResultMetadataEntryDto::new("truncated", "false").expect("fixture metadata is valid"),
     ];
-    let evidence = ToolResultEvidenceDto::new(
-        session,
-        run,
-        call_id,
-        "read",
-        ToolResultStatusDto::Completed,
-        r#"{"result":"read","value":{"text":"hello","truncated":false}}"#,
-        metadata.clone(),
-        time(4),
-    )
-    .expect("tool result evidence is valid");
+    let content = r#"{"result":"read","value":{"text":"hello","truncated":false}}"#;
     let answering = result_row(
         call_id,
         identity("read"),
         ToolResultStatusDto::Completed,
         Some(read_result("hello")),
-        metadata.clone(),
+        metadata,
     );
-    let message = tool_message(
-        session,
-        run,
-        MessageKindDto::ToolResult,
-        evidence.content(),
-        answering.clone(),
-    );
-    for mismatched in [
-        NewMessageDto::new(
-            session,
-            Some(run),
-            MessageKindDto::Assistant,
-            "not a result",
-            None,
-            None,
-        )
-        .expect("assistant row is valid"),
-        tool_message(
-            SessionId::new(),
-            run,
-            MessageKindDto::ToolResult,
-            evidence.content(),
-            answering.clone(),
-        ),
-        tool_message(
-            session,
-            RunId::new(),
-            MessageKindDto::ToolResult,
-            evidence.content(),
-            answering,
-        ),
-        tool_message(
-            session,
-            run,
-            MessageKindDto::ToolResult,
-            evidence.content(),
-            result_row(
-                ToolCallId::new(),
-                identity("read"),
-                ToolResultStatusDto::Completed,
-                Some(read_result("hello")),
-                metadata.clone(),
-            ),
-        ),
-        tool_message(
-            session,
-            run,
-            MessageKindDto::ToolResult,
-            evidence.content(),
-            result_row(
-                call_id,
-                identity("glob"),
-                ToolResultStatusDto::Completed,
-                Some(ToolResult::Glob(PathsResult {
-                    paths: Vec::new(),
-                    truncated: false,
-                })),
-                metadata,
-            ),
-        ),
-    ] {
-        assert_eq!(
-            store
-                .write_tool_result(evidence.clone(), mismatched)
-                .expect_err("a tool result commits only with its own answering row")
-                .code(),
-            "invalid_tool_result"
-        );
-    }
     let committed = store
-        .write_tool_result(evidence.clone(), message.clone())
-        .expect("evidence and its transcript row commit atomically");
+        .append_message(
+            tool_message(
+                session,
+                run,
+                MessageKindDto::ToolResult,
+                content,
+                answering.clone(),
+            ),
+            time(4),
+        )
+        .expect("the result row commits with its typed outcome");
     assert_eq!(committed.kind(), MessageKindDto::ToolResult);
     assert_eq!(committed.tool_call_id(), Some(call_id));
-    assert_eq!(committed.text(), evidence.content());
-    assert_eq!(
-        store
-            .load_tool_result(session, run, call_id)
-            .expect("typed evidence rereads"),
-        evidence
-    );
+    assert_eq!(committed.text(), content);
+    assert_eq!(committed.tool(), Some(&answering));
     assert_eq!(
         store
             .load_run_messages(session, run, 10)
@@ -1047,36 +971,50 @@ fn tool_result_evidence_commits_with_its_message_and_rereads_durably() {
         Some(committed.id()),
         "the committed row carries the durable row identity the commit assigned"
     );
+    // A result row is scoped to its run: an unknown session or an unknown run
+    // rejects before the row is written.
     assert_eq!(
         store
-            .write_tool_result(evidence.clone(), message)
-            .expect_err("a second result for one call conflicts")
+            .append_message(
+                tool_message(
+                    SessionId::new(),
+                    run,
+                    MessageKindDto::ToolResult,
+                    content,
+                    answering.clone(),
+                ),
+                time(4),
+            )
+            .expect_err("a result row cannot address another session")
             .code(),
-        "tool_result_conflict"
+        "storage_record_not_found"
     );
     assert_eq!(
         store
-            .load_tool_result(session, run, ToolCallId::new())
-            .expect_err("an unknown call has no durable evidence")
+            .append_message(
+                tool_message(
+                    session,
+                    RunId::new(),
+                    MessageKindDto::ToolResult,
+                    content,
+                    answering.clone(),
+                ),
+                time(4),
+            )
+            .expect_err("a result row cannot address an unknown run")
             .code(),
-        "tool_result_not_found"
-    );
-    assert_eq!(
-        store
-            .load_tool_result(SessionId::new(), run, call_id)
-            .expect_err("a cross-session identity finds no evidence")
-            .code(),
-        "tool_result_not_found"
+        "storage_record_not_found"
     );
 
     drop(store);
-    let reopened = reopen(&directory);
-    assert_eq!(
-        reopened
-            .load_tool_result(session, run, call_id)
-            .expect("durable evidence rereads after reopen"),
-        evidence
-    );
+    let row = reopen(&directory)
+        .load_run_messages(session, run, 10)
+        .expect("the transcript rereads after reopen")
+        .into_iter()
+        .find(|row| row.kind() == MessageKindDto::ToolResult)
+        .expect("the committed result row rereads");
+    assert_eq!(row.text(), content);
+    assert_eq!(row.tool(), Some(&answering));
 }
 
 /// A partial result's interruption cause and declared deadline survive the
@@ -1088,46 +1026,47 @@ fn partial_tool_result_evidence_rereads_with_its_interruption_metadata() {
     let run = RunId::new();
     let _ = accept(&store, session, IdempotencyKey::new(), run, "run");
     let call_id = ToolCallId::new();
-    let evidence = ToolResultEvidenceDto::new(
-        session,
-        run,
-        call_id,
-        "execute",
-        ToolResultStatusDto::Partial,
-        "stdout:\n\nstderr:\n\n[The tool call hit its declared timeout of 1s and was terminated before a final result; the output above is partial.]",
-        vec![
-            ToolResultMetadataEntryDto::new("interruption", "tool_timed_out")
-                .expect("fixture metadata is valid"),
-            ToolResultMetadataEntryDto::new("declared_timeout_seconds", "1")
-                .expect("fixture metadata is valid"),
-        ],
-        time(4),
-    )
-    .expect("partial tool result evidence is valid");
-    let message = tool_message(
-        session,
-        run,
-        MessageKindDto::ToolResult,
-        evidence.content(),
-        result_row(
-            call_id,
-            identity("execute"),
-            ToolResultStatusDto::Partial,
-            Some(partial_execute_result("stdout:\n\nstderr:\n")),
-            evidence.metadata().to_vec(),
-        ),
-    );
+    let content = "stdout:\n\nstderr:\n\n[The tool call hit its declared timeout of 1s and was terminated before a final result; the output above is partial.]";
+    let metadata = vec![
+        ToolResultMetadataEntryDto::new("interruption", "tool_timed_out")
+            .expect("fixture metadata is valid"),
+        ToolResultMetadataEntryDto::new("declared_timeout_seconds", "1")
+            .expect("fixture metadata is valid"),
+    ];
     store
-        .write_tool_result(evidence.clone(), message)
-        .expect("partial evidence and its transcript row commit atomically");
+        .append_message(
+            tool_message(
+                session,
+                run,
+                MessageKindDto::ToolResult,
+                content,
+                result_row(
+                    call_id,
+                    identity("execute"),
+                    ToolResultStatusDto::Partial,
+                    Some(partial_execute_result("stdout:\n\nstderr:\n")),
+                    metadata,
+                ),
+            ),
+            time(4),
+        )
+        .expect("the partial result row commits with its typed outcome");
     drop(store);
 
-    let reread = reopen(&directory)
-        .load_tool_result(session, run, call_id)
-        .expect("partial evidence rereads after reopen");
-    assert_eq!(reread, evidence);
+    let read = reopen(&directory)
+        .load_run_messages(session, run, 10)
+        .expect("the transcript rereads after reopen");
+    let row = read
+        .iter()
+        .find(|row| row.kind() == MessageKindDto::ToolResult)
+        .expect("the committed partial result row rereads");
+    assert_eq!(row.text(), content);
+    let Some(ToolRowDto::Result(result)) = row.tool() else {
+        unreachable!("the committed result row carries its result evidence")
+    };
+    assert_eq!(result.status(), ToolResultStatusDto::Partial);
     assert_eq!(
-        reread
+        result
             .metadata()
             .iter()
             .map(|entry| (entry.key(), entry.value()))
@@ -1250,23 +1189,8 @@ fn a_tool_result_row_round_trips_its_typed_outcome() {
         ),
     ];
     for tool in &cases {
-        let ToolRowDto::Result(row) = tool else {
-            unreachable!("the fixtures are result rows")
-        };
-        let evidence = ToolResultEvidenceDto::new(
-            session,
-            run,
-            tool.call_id(),
-            tool.tool_id().wire_name(),
-            row.status(),
-            "rendered content",
-            row.metadata().to_vec(),
-            time(4),
-        )
-        .expect("fixture evidence is valid");
         store
-            .write_tool_result(
-                evidence,
+            .append_message(
                 tool_message(
                     session,
                     run,
@@ -1274,8 +1198,9 @@ fn a_tool_result_row_round_trips_its_typed_outcome() {
                     "rendered content",
                     tool.clone(),
                 ),
+                time(4),
             )
-            .expect("evidence and its transcript row commit atomically");
+            .expect("the result row commits with its typed outcome");
     }
     drop(store);
 
@@ -2019,20 +1944,8 @@ fn write_result(
     call_id: ToolCallId,
     text: &str,
 ) {
-    let evidence = ToolResultEvidenceDto::new(
-        session,
-        run,
-        call_id,
-        "read",
-        ToolResultStatusDto::Completed,
-        r#"{"result":"read"}"#,
-        Vec::new(),
-        time(3),
-    )
-    .expect("fixture tool result evidence is valid");
     let _ = store
-        .write_tool_result(
-            evidence,
+        .append_message(
             tool_message(
                 session,
                 run,
@@ -2046,6 +1959,7 @@ fn write_result(
                     Vec::new(),
                 ),
             ),
+            time(3),
         )
         .expect("tool result commits");
 }
@@ -2165,7 +2079,7 @@ fn messages_transcript_indexes_and_stamp_are_current() {
     let stamp: i32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("the schema stamp reads");
-    assert_eq!(stamp, 4, "the created database carries the current stamp");
+    assert_eq!(stamp, 5, "the created database carries the current stamp");
     let columns = |table: &str| {
         let mut statement = connection
             .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
@@ -2183,6 +2097,17 @@ fn messages_transcript_indexes_and_stamp_are_current() {
             .iter()
             .any(|name| name == "projection_json"),
         "the current schema carries the typed tool projection column"
+    );
+    let tool_results: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tool_results'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("removed table lookup runs");
+    assert_eq!(
+        tool_results, 0,
+        "the removed tool_results table stays removed"
     );
     let run_columns = columns("runs");
     assert!(
@@ -2245,7 +2170,7 @@ fn messages_transcript_indexes_and_stamp_are_current() {
     let stamp: i32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("the recreated stamp reads");
-    assert_eq!(stamp, 4, "the recreated database carries the current stamp");
+    assert_eq!(stamp, 5, "the recreated database carries the current stamp");
 }
 
 #[test]
@@ -2493,21 +2418,9 @@ fn terminal_runs_reject_pending_turns_messages_and_tool_results() {
         "run_already_terminal"
     );
     let call_id = ToolCallId::new();
-    let evidence = ToolResultEvidenceDto::new(
-        session,
-        run,
-        call_id,
-        "read",
-        ToolResultStatusDto::Completed,
-        r#"{"result":"read"}"#,
-        Vec::new(),
-        time(5),
-    )
-    .expect("fixture evidence is valid");
     assert_eq!(
         store
-            .write_tool_result(
-                evidence,
+            .append_message(
                 tool_message(
                     session,
                     run,
@@ -2521,6 +2434,7 @@ fn terminal_runs_reject_pending_turns_messages_and_tool_results() {
                         Vec::new(),
                     ),
                 ),
+                time(5),
             )
             .expect_err("a terminal run accepts no tool result")
             .code(),
@@ -2539,13 +2453,6 @@ fn terminal_runs_reject_pending_turns_messages_and_tool_results() {
             .len(),
         1,
         "the terminal run keeps only its starting turn"
-    );
-    assert_eq!(
-        store
-            .load_tool_result(session, run, call_id)
-            .expect_err("no tool result was written")
-            .code(),
-        "tool_result_not_found"
     );
 }
 

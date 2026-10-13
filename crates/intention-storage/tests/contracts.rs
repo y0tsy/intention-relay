@@ -9,14 +9,12 @@
 )]
 mod common;
 
-use common::time;
-
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
-    MessageId, MessageKindDto, MessageProjectionDto, RunId, SessionId, ToolCallId,
-    ToolResultMetadataEntryDto, ToolResultStatusDto,
+    MessageId, MessageKindDto, MessageProjectionDto, RunId, SessionId, ToolResultMetadataEntryDto,
+    ToolResultStatusDto,
 };
-use intention_storage::{StartingRunModelContextDto, ToolResultEvidenceDto};
+use intention_storage::StartingRunModelContextDto;
 
 fn snapshot() -> ConfigSnapshotDto {
     serde_json::from_str(include_str!(
@@ -36,91 +34,6 @@ fn user_message(session_id: SessionId, run_id: RunId, text: &str) -> MessageProj
         None,
     )
     .expect("fixture user row is valid")
-}
-
-#[test]
-fn tool_result_evidence_is_bounded_and_typed() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let call_id = ToolCallId::new();
-    assert_eq!(
-        ToolResultEvidenceDto::new(
-            session_id,
-            run_id,
-            call_id,
-            " ",
-            ToolResultStatusDto::Completed,
-            "content",
-            Vec::new(),
-            time(3),
-        )
-        .expect_err("a blank tool identity rejects")
-        .code(),
-        "invalid_tool_result"
-    );
-    assert_eq!(
-        ToolResultEvidenceDto::new(
-            session_id,
-            run_id,
-            call_id,
-            "read",
-            ToolResultStatusDto::Partial,
-            " ",
-            Vec::new(),
-            time(3),
-        )
-        .expect_err("blank content rejects")
-        .code(),
-        "invalid_tool_result"
-    );
-    assert_eq!(
-        ToolResultEvidenceDto::new(
-            session_id,
-            run_id,
-            call_id,
-            "read",
-            ToolResultStatusDto::Failed,
-            "nul\0byte",
-            Vec::new(),
-            time(3),
-        )
-        .expect_err("unsafe content rejects")
-        .code(),
-        "invalid_tool_result"
-    );
-    assert_eq!(
-        ToolResultEvidenceDto::new(
-            session_id,
-            run_id,
-            call_id,
-            "read",
-            ToolResultStatusDto::Failed,
-            "x".repeat(512 * 1024 + 1),
-            Vec::new(),
-            time(3),
-        )
-        .expect_err("oversized content rejects")
-        .code(),
-        "invalid_tool_result"
-    );
-    assert_eq!(
-        ToolResultEvidenceDto::new(
-            session_id,
-            run_id,
-            call_id,
-            "read",
-            ToolResultStatusDto::Completed,
-            "content",
-            vec![
-                ToolResultMetadataEntryDto::new("truncated", "false").expect("metadata is valid"),
-                ToolResultMetadataEntryDto::new("truncated", "true").expect("metadata is valid"),
-            ],
-            time(3),
-        )
-        .expect_err("duplicate metadata keys reject")
-        .code(),
-        "invalid_tool_result_metadata"
-    );
 }
 
 #[test]

@@ -1,16 +1,16 @@
 # Instruction Sources and System Context
 
 **Approved future design. Not implemented; activation requires an activating specification.** Architecture 30 owns the
-instruction channel of a model request: instruction sources, profile revisions, canonical assembly, the effective
+instruction channel of a model request: instruction sources, profile configuration, canonical assembly, the effective
 instruction projection, its failures, and observability. It follows the single live version and no-backward-compatibility policy ([architecture 00](00-principles-and-scope.md)); delivery belongs to the third activating slice of Milestone 5+.
 
 Owner: architecture 30.
 
 ## Ownership and non-authorities
 
-This document owns the source model, the profile revision identity, the canonical assembly order and separators, the
+This document owns the source model, the instruction profile, the canonical assembly order and separators, the
 effective instruction projection, its closed failures, and its observability rules. Architecture
-21 owns Goal, Skill, context-manifest, projection, memory, and compaction semantics; instruction sources are not a
+21 owns Goal, Skill, context-manifest, projection, and compaction semantics; instruction sources are not a
 context source and never enter a context manifest, a Skill disclosure, or a model-step projection. Architecture 23 owns
 fork lineage and the frozen records that carry the materialized projection. Architecture 07 owns the `Mode` contribution
 text; architecture 06 owns the `Vfr` contribution content and its configuration dependency; architecture 08 owns the
@@ -18,7 +18,7 @@ request contract and driver translation; architecture 09 owns classification and
 instruction commands: instruction configuration is filesystem-level.
 
 Instruction text is not authority: it cannot create, widen, or remove a tool permission, provider selection, admission
-decision, child, MCP capability, bridge grant, kernel epoch, or reconciliation outcome, and it
+decision, child, MCP connection, kernel epoch, or reconciliation outcome, and it
 cannot prove that an external effect did or did not happen.
 The channel applies to newly admitted runs only; historical M3/M4 requests and runs keep their recorded meaning and gain
 no instruction state.
@@ -66,27 +66,14 @@ goldens were removed under [architecture 02](02-dto-and-contract-policy.md), and
 layer exists. Any content addressing or canonicalization is introduced only with its first real consumer under the RFC
 8785 policy ([architecture 02](02-dto-and-contract-policy.md)).
 
-## Profile revisions and immutable configuration
-
-All configured fragments form exactly one live instruction profile. A change to a fragment's text, order, enabled state,
-or scope produces a new immutable revision identity; an existing revision is never mutated, and there is no in-place
-edit of a recorded revision.
-
-```text
-InstructionProfileRevisionV1
-  profile_contract_revision
-  ordered_source_references
-  profile_revision_identity
-```
+## Profile configuration
 
 The profile is durable configuration with exactly one live format version; no migration, no second format, and no
-compatibility layer exists ([architecture 00](00-principles-and-scope.md)). The profile
-revision identity is the only profile data that may leave the configuration surface; fragments themselves stay readable
-only where the user edits them.
+compatibility layer exists ([architecture 00](00-principles-and-scope.md)).
 
 ## Canonical assembly and the effective instruction projection
 
-Assembly happens once per admitted run, before the first model step, from the profile revision, the workspace
+Assembly happens once per admitted run, before the first model step, from the instruction profile, the workspace
 instruction content, the run's mode, and the resolved VFR configuration:
 
 1. `Deployment` fragments in declared order;
@@ -107,14 +94,12 @@ InstructionProjectionV1
   projection_contract_revision
   ordered_contribution_references
   contribution_revision_references
-  declared_audience
-  total_instruction_size
   projection_revision_identity
 ```
 
 ```mermaid
 flowchart TD
-  P[Profile revision] --> A[Assembly at admission]
+  P[Instruction profile] --> A[Assembly at admission]
   W[AGENTS.md content] --> A
   M[Mode contribution] --> A
   V[VFR contribution] --> A
@@ -166,7 +151,7 @@ following request window is mutable under [architecture 08](08-model-protocol-an
 ## Trust, authority, and the injection boundary
 
 The instruction channel is the only trusted instruction surface of a request, and it accepts content from declared
-sources only. Repository content, tool output, fetched material, Skill bodies, memory records, provider output, and
+sources only. Repository content, tool output, fetched material, Skill bodies, provider output, and
 model output remain untrusted or evidence-only material and can never be promoted into it; they enter a request only
 through the context-manifest, Skill-disclosure, and evidence rules of architecture 21.
 
@@ -182,10 +167,10 @@ and changes no projection.
 
 ## Deterministic assembly
 
-Assembly is deterministic: the same profile revision, project instruction content, mode, and configuration must produce
-the same ordered contribution list and the same rendered projection on every platform. A future projection identity must
-cover content, kind, scope, order, enabled state, and audience, and exclude credentials, absolute paths, current state,
-and display data.
+Assembly is deterministic: the same instruction profile, project instruction content, mode, and resolved configuration
+must produce the same ordered contribution list and the same rendered projection on every platform. The projection's
+identity is typed structural identity — content, kind, scope, order, and enabled state — and no digest, canonical bytes,
+or content addressing exists until a real consumer needs one ([architecture 02](02-dto-and-contract-policy.md)).
 
 ## Failure behavior
 
@@ -196,8 +181,8 @@ instruction_profile_unavailable
 instruction_source_unavailable
 ```
 
-- `instruction_profile_unavailable`: a configured profile revision is missing,
-corrupt, inconsistent, or no longer resolvable.
+- `instruction_profile_unavailable`: the configured instruction profile is missing, corrupt, inconsistent, or no longer
+resolvable.
 - `instruction_source_unavailable`: a workspace instruction source is
 unreadable or is not valid UTF-8 text.
 
@@ -208,9 +193,9 @@ sampling, or historical substitution is permitted, and none of these failures ma
 ## Observability and classification
 
 Instruction text is durable configuration content, not a secret and not an activity fact. Logs, activity records,
-notification projections, and audit records carry the profile revision identity and the workspace instruction reference
-only; they never carry fragment text, `AGENTS.md` content, or the assembled projection, and fake-secret regression
-covers every public, durable, log, and activity surface.
+notification projections, and audit records carry the frozen projection revision identity and the workspace instruction
+reference only; they never carry fragment text, `AGENTS.md` content, or the assembled projection, and a single
+regression assertion proves instruction text never appears in logs or activity records.
 
 Fragment text is visible only in the user's own configuration files; no control-plane, UI, activity, notification,
 audit, or diagnostics surface displays it.
@@ -227,7 +212,7 @@ instruction contract.
 ## Dependencies and non-goals
 
 This document depends on architectures 04, 06, 07, 08, 09, 21, 23, and 25.
-Non-goals: Goal, Skill, context-manifest, memory, or compaction semantics; fork lineage or lineage projection rules;
+Non-goals: Goal, Skill, context-manifest, or compaction semantics; fork lineage or lineage projection rules;
 the model request contract or driver translation; configuration storage, reload, or credential handling; activity,
 notification, or adapter behavior; few-shot example selection, memory-derived prompt material, MCP-provided prompts,
 date/time/Git/session-derived context injection, provider-native prompt framing, model-specific templates, prompt

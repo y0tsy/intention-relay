@@ -63,10 +63,10 @@ The model stream remains provider-neutral; durable provider evidence is a transc
 Policy](02-dto-and-contract-policy.md) and [Sessions, Runs, and Storage](04-sessions-runs-events-and-storage.md).
 
 Text and reasoning accumulate in memory and commit once per completed model step as one `messages` row; usage, finish
-reason, and failure commit on the `runs` row; tool calls and results commit as message and `tool_results` rows. Attempts
-are positive; a retry's next attempt is exactly the failed attempt plus one; an assistant message is non-blank and
-bounded by the transcript bounds; and a terminal run accepts no new content. There is no per-fact position, cursor, or
-snapshot.
+reason, and failure commit on the `runs` row; tool calls and results commit as tool-call and tool-result message rows.
+Attempts are positive; a retry's next attempt is exactly the failed attempt plus one; an assistant message is non-blank
+and bounded by the transcript bounds; and a terminal run accepts no new content. There is no per-fact position, cursor,
+or snapshot.
 
 ```mermaid
 sequenceDiagram
@@ -161,9 +161,9 @@ mutates an already-started run's immutable snapshot or its validated selection.
 
 The model stream can emit content, reasoning, tool-call, usage, and terminal events. Runtime owns ordering,
 persistence, and conversion of a model tool call into typed durable rows and execution through the daemon-owned tool
-service: it commits the assistant tool-call row, the application commits the call's `tool_results` row and its
-answering tool-result row in one transaction, and the runtime continues the provider exchange with
-assistant-tool-call and tool-role messages until the provider finishes.
+service: it commits the assistant tool-call row, the application commits the call's answering tool-result row in one
+transaction, and the runtime continues the provider exchange with assistant-tool-call and tool-role messages until the
+provider finishes.
 
 Ordinary production requests advertise the active registered tools: the request carries validated typed
 `ModelToolDefinitionDto` definitions built by `intention_tools::model_visible_descriptors()` in advertisement order

@@ -35,11 +35,10 @@ compatibility is neither required nor in demand (see `AGENTS.md`).
   `write`, `edit`, `execute`, `glob`, `grep`) with one deterministic typed
   tool sequence and durable, redacted tool-result evidence.
 - **SQLite-first durable state.** One composition crate selects the SQLite
-  adapter; the durable store is nine current-state tables (`projects`,
-  `workspace_roots`, `sessions`, `runs`, `turns`, `messages`, `tool_results`,
+  adapter; the durable store is eight current-state tables (`projects`,
+  `workspace_roots`, `sessions`, `runs`, `turns`, `messages`,
   `configuration_revisions`, `tui_settings`) in a single-version schema,
-  `messages` plus
-  `tool_results` are the transcript, and every state change commits in one
+  `messages` rows are the transcript, and every state change commits in one
   SQLite transaction before publication, with recovery-before-readiness on
   daemon start.
 - **Security posture.** Single-user, endpoint and state kept under the current
@@ -355,7 +354,7 @@ What `main` does not yet provide (all of it is documented roadmap work):
   delivers as agent-authored modules persisted through the frozen tool
   descriptors ([architecture 20](docs/intention-relay/architecture/20-ipython-kernel-lifecycle.md)).
 - Slice 1.5 core simplification is activated: the event log, snapshots,
-  cursors, and resync are replaced by the nine current-state tables written in
+  cursors, and resync are replaced by the eight current-state tables written in
   one SQLite transaction per state change, and the nine-production-crate
   consolidation and the composition-facade removal are merged on `main`.
 - Slice 2 terminal UX is closed and merged into `main` as `0fd8ad5` (PR

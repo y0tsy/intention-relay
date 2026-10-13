@@ -562,10 +562,10 @@ async fn send_user_turn(endpoint: &LocalEndpoint, session_id: SessionId, content
 /// committed transcript rows that carry the run's history.
 ///
 /// The transcript is the durable record of user, assistant, tool-call,
-/// tool-result, and notice content. The repository writes each `tool_results`
-/// evidence row and its answering `tool_result` transcript row in one
-/// transaction, so a call row paired with a result row of the same call
-/// identity is the durable evidence of one recorded tool outcome.
+/// tool-result, and notice content. Each completed tool call commits one
+/// `tool_result` transcript row whose projection carries the result status and
+/// metadata, so a call row paired with a result row of the same call identity
+/// is the durable evidence of one recorded tool outcome.
 struct ObservedRun {
     run: RunProjectionDto,
     messages: Vec<MessageProjectionDto>,

@@ -24,13 +24,13 @@ use intention_proto::{
     CreateSessionCommandDto, DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, MessageId,
     MessageProjectionDto, NewMessageDto, PendingTurnProjectionDto, ProjectId, RemoveTurnCommandDto,
     RunId, RunModeDto, RunProjectionDto, RunStatusDto, SessionId, SessionProjectionDto,
-    SessionSummariesDto, ThemeDto, TimestampDto, ToolCallId, ToolResultStatusDto, TurnId, UsageDto,
-    WorkspaceBindingDto, WorkspaceId, WorkspaceRootDto, run_status_is_terminal,
+    SessionSummariesDto, ThemeDto, TimestampDto, ToolCallId, ToolResultMetadataEntryDto,
+    ToolResultStatusDto, ToolRowDto, TurnId, UsageDto, WorkspaceBindingDto, WorkspaceId,
+    WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_providers::ToolCallDto;
 use intention_storage::{
     AcceptedTurnOutcomeDto, RunOutcomeDto, StartingRunModelContextDto, StorageRepositoryDto,
-    ToolResultEvidenceDto,
 };
 use intention_test_support::fixture_snapshot;
 
@@ -54,6 +54,66 @@ pub fn workspace_root() -> WorkspaceRootDto {
             .into_owned(),
     )
     .expect("native fixture workspace is valid")
+}
+
+/// One committed tool-result row recorded by the fixture from its message.
+///
+/// A result is stored the way the transcript stores it: the row's committed
+/// content is its message text, and its typed status, payload, and metadata
+/// are the row's own projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordedToolResult {
+    session_id: SessionId,
+    run_id: RunId,
+    call_id: ToolCallId,
+    tool_id: String,
+    status: ToolResultStatusDto,
+    content: String,
+    metadata: Vec<ToolResultMetadataEntryDto>,
+    occurred_at: TimestampDto,
+}
+
+impl RecordedToolResult {
+    /// Returns the owning durable session.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+    /// Returns the run that executed the tool call.
+    #[must_use]
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
+    }
+    /// Returns the identified tool invocation.
+    #[must_use]
+    pub const fn call_id(&self) -> ToolCallId {
+        self.call_id
+    }
+    /// Returns the wire tool identity that produced the result.
+    #[must_use]
+    pub fn tool_id(&self) -> &str {
+        &self.tool_id
+    }
+    /// Returns the terminal outcome recorded for the result.
+    #[must_use]
+    pub const fn status(&self) -> ToolResultStatusDto {
+        self.status
+    }
+    /// Returns the committed model-visible result content.
+    #[must_use]
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+    /// Returns the approved structured metadata entries.
+    #[must_use]
+    pub fn metadata(&self) -> &[ToolResultMetadataEntryDto] {
+        &self.metadata
+    }
+    /// Returns the commit event time.
+    #[must_use]
+    pub const fn occurred_at(&self) -> TimestampDto {
+        self.occurred_at
+    }
 }
 
 /// One recorded call to [`FakeRepository::finish_run`].
@@ -161,7 +221,7 @@ pub struct FakeRepository {
     pub messages: Mutex<Vec<MessageProjectionDto>>,
     pub finishes: Mutex<Vec<RecordedFinish>>,
     pub transitions: Mutex<Vec<RecordedTransition>>,
-    pub tool_results: Mutex<Vec<ToolResultEvidenceDto>>,
+    pub tool_results: Mutex<Vec<RecordedToolResult>>,
     /// Counts committed tool-result rows for `Send + Sync` observers that must
     /// not borrow this fixture; mirrors `tool_results`.
     pub committed_result_rows: AtomicUsize,
@@ -309,9 +369,9 @@ impl FakeRepository {
             .clone()
     }
 
-    /// Returns every committed tool-result evidence row.
+    /// Returns every committed tool-result row.
     #[must_use]
-    pub fn committed_results(&self) -> Vec<ToolResultEvidenceDto> {
+    pub fn committed_results(&self) -> Vec<RecordedToolResult> {
         self.tool_results
             .lock()
             .expect("the fixture mutex is not poisoned")
@@ -559,7 +619,7 @@ impl StorageRepositoryDto for FakeRepository {
     fn append_message(
         &self,
         message: NewMessageDto,
-        _occurred_at: TimestampDto,
+        occurred_at: TimestampDto,
     ) -> DtoResult<MessageProjectionDto> {
         self.next_commit()?;
         let index = self.next_append_index();
@@ -601,38 +661,27 @@ impl StorageRepositoryDto for FakeRepository {
             .lock()
             .expect("the fixture mutex is not poisoned")
             .push(committed.clone());
+        // A result row is its own durable home: the fixture records it from
+        // the committed message it just appended.
+        if let Some(ToolRowDto::Result(row)) = message.tool() {
+            self.tool_results
+                .lock()
+                .expect("the fixture mutex is not poisoned")
+                .push(RecordedToolResult {
+                    session_id: message.session_id(),
+                    run_id: message
+                        .run_id()
+                        .expect("a fixture tool-result row is run-bound"),
+                    call_id: row.call_id(),
+                    tool_id: row.tool_id().wire_name().to_owned(),
+                    status: row.status(),
+                    content: message.text().to_owned(),
+                    metadata: row.metadata().to_vec(),
+                    occurred_at,
+                });
+            self.committed_result_rows.fetch_add(1, Ordering::SeqCst);
+        }
         Ok(committed)
-    }
-
-    fn write_tool_result(
-        &self,
-        evidence: ToolResultEvidenceDto,
-        message: NewMessageDto,
-    ) -> DtoResult<MessageProjectionDto> {
-        self.next_commit()?;
-        let committed = self.committed_row(self.assign_message_id(), &message)?;
-        self.messages
-            .lock()
-            .expect("the fixture mutex is not poisoned")
-            .push(committed.clone());
-        self.tool_results
-            .lock()
-            .expect("the fixture mutex is not poisoned")
-            .push(evidence);
-        self.committed_result_rows.fetch_add(1, Ordering::SeqCst);
-        Ok(committed)
-    }
-
-    fn load_tool_result(
-        &self,
-        _session_id: SessionId,
-        _run_id: RunId,
-        _call_id: ToolCallId,
-    ) -> DtoResult<ToolResultEvidenceDto> {
-        Err(ErrorDto::unavailable(
-            "fixture_unused",
-            "tool result loads are not used by this fixture",
-        ))
     }
 
     fn load_run_config_snapshot(

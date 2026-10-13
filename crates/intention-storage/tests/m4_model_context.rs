@@ -15,7 +15,6 @@ use intention_proto::{
     ToolResultStatusDto, ToolRowDto, UsageDto,
 };
 use intention_proto::{MessageKindDto, MessageProjectionDto, NewMessageDto, RunStatusDto};
-use intention_storage::ToolResultEvidenceDto;
 use intention_storage::{
     AcceptedTurnOutcomeDto, RunOutcomeDto, SqliteStorageRepository, StorageRepositoryDto,
 };
@@ -27,32 +26,19 @@ fn starting_run_model_context_rebuilds_the_committed_transcript_in_insertion_ord
 
     let first_run = start_run(&repository, session_id, "first user", "first-model", 2);
     let call_id = ToolCallId::new();
-    // A result row commits atomically with its lifecycle evidence, so the
-    // fixture commits through the one writer the transcript reads expect.
-    repository
-        .write_tool_result(
-            ToolResultEvidenceDto::new(
-                session_id,
-                first_run,
-                call_id,
-                "read",
-                ToolResultStatusDto::Completed,
-                "file contents",
-                Vec::new(),
-                time(3),
-            )
-            .expect("fixture evidence is valid"),
-            NewMessageDto::new(
-                session_id,
-                Some(first_run),
-                MessageKindDto::ToolResult,
-                "file contents",
-                None,
-                Some(read_result_row(call_id)),
-            )
-            .expect("fixture answering row is valid"),
-        )
-        .expect("fixture tool result commits");
+    // A result row commits as one tool-result message carrying its own typed
+    // status, payload, and metadata projection, so the fixture commits through
+    // the one writer the transcript reads expect.
+    append(
+        &repository,
+        session_id,
+        Some(first_run),
+        MessageKindDto::ToolResult,
+        "file contents",
+        None,
+        Some(read_result_row(call_id)),
+        3,
+    );
     append(
         &repository,
         session_id,
