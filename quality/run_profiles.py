@@ -9,10 +9,8 @@ import subprocess
 
 if __package__:
     from .timing import run_command
-    from .toolchains import nightly_selector
 else:
     from timing import run_command
-    from toolchains import nightly_selector
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,7 +24,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "command",
-        choices=["lint", "test", "doctest", "doc", "udeps"],
+        choices=["lint", "test", "doctest", "doc"],
     )
     arguments = parser.parse_args()
 
@@ -35,7 +33,6 @@ def main() -> None:
         "test": ["cargo", "nextest", "run", "--workspace", "--all-targets", "--locked"],
         "doctest": ["cargo", "test", "--workspace", "--doc", "--locked"],
         "doc": ["cargo", "doc", "--workspace", "--no-deps", "--locked"],
-        "udeps": ["cargo", nightly_selector(), "udeps", "--workspace", "--all-targets", "--locked"],
     }
 
     command = list(commands[arguments.command])

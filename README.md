@@ -267,8 +267,7 @@ Notes:
   mapping. Code, tests, and fixtures must not hard-code POSIX-only paths.
 - **Rust.** The pinned stable toolchain is `1.97.1`
   ([rust-toolchain.toml](rust-toolchain.toml)) with `rustfmt`, `clippy`, and
-  `llvm-tools-preview`. Coverage CI additionally uses pinned
-  `nightly-2026-07-31`; all quality tools are pinned in
+  `llvm-tools-preview`; all quality tools are pinned in
   [quality/tools.toml](quality/tools.toml).
 - **Python 3** for the quality scripts behind the Makefile.
 - **Network** on first setup: `make bootstrap-tools` installs the exact pinned
@@ -291,7 +290,7 @@ quick` while iterating and run `make verify` before acceptance.
 | `make docs-check` | Rustdoc, then Markdown link/Mermaid/secret-pattern validation. |
 | `make coverage` | Line coverage, enforcing each collected crate's declared tier floor (see [quality/coverage.toml](quality/coverage.toml)). |
 | `make verify` | Full acceptance gate: `check` plus coverage and dependency gates; removes only generated LLVM coverage artifacts. |
-| `make deps` | Supply-chain gates: deny, audit, outdated, machete, udeps, notices check. |
+| `make deps` | Supply-chain gates: deny, audit, outdated, machete, notices check. |
 | `make notices` / `make notices-check` | Regenerate / verify [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) against the locked graph. |
 | `make ci` | Local alias for the full gate; GitHub Actions runs the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default`, `ci-deps`) in parallel. |
 

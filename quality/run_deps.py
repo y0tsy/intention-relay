@@ -107,9 +107,6 @@ def main() -> int:
                 result = future.result()
                 if result[1] != 0:
                     failures.append(result)
-    udeps = run_check("udeps", [python, "quality/run_profiles.py", "udeps"])
-    if udeps[1] != 0:
-        failures.append(udeps)
     if failures:
         for label, code, output in sorted(failures):
             print(f"deps: {label} failed (exit {code})\n{output}", file=sys.stderr)

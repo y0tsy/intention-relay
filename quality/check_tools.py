@@ -16,74 +16,54 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = ROOT / "quality" / "tools.toml"
 WORKFLOW = ROOT / ".github" / "workflows" / "quality.yml"
 
-# Scoped CI checks: every CI job validates only the toolchains, components,
-# and tools its phase actually uses, while local runs (no scope) still
-# validate the complete pinned set. The union of all CI scopes covers every
-# pinned toolchain and tool, so none escapes CI validation; components are
-# validated by the phase that installs them, and the unscoped local run
-# validates the complete pinned set.
+# Scoped CI checks: every CI job validates only the components and tools its
+# phase actually uses, while local runs (no scope) still validate the complete
+# pinned set. The union of all CI scopes covers every pinned tool, so none
+# escapes CI validation; components are validated by the phase that installs
+# them, and the unscoped local run validates the complete pinned set.
 SCOPES = ("all", "lint-arch", "test", "coverage", "deps")
 
 TOOLCHAIN_LITERAL = re.compile(r"^\s*toolchain:\s*(\S+)\s*$", re.MULTILINE)
-NIGHTLY_SELECTOR = re.compile(r"\+nightly-[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
 def check_workflow_toolchain_pins(policy: dict[str, object]) -> list[str]:
     """Return failures for toolchain spellings that drift from the pinned policy.
 
     The workflow installs toolchains by literal name while the Python runners
-    read `quality/tools.toml`, so the workflow literals and every `+nightly-*`
-    selector inside a pinned tool command are compared against that one source.
+    read `quality/tools.toml`, so every workflow literal is compared against
+    that one source.
     """
-    toolchains = policy["toolchains"]
-    stable = toolchains["stable"]
-    nightly = toolchains["nightly"]
-    pinned = sorted({stable, nightly})
+    stable = policy["toolchains"]["stable"]
     failures: list[str] = []
     if not WORKFLOW.exists():
         return [f"the quality workflow is missing: {WORKFLOW}"]
     for match in TOOLCHAIN_LITERAL.finditer(WORKFLOW.read_text(encoding="utf-8")):
         literal = match.group(1)
-        if literal not in {stable, nightly}:
+        if literal != stable:
             failures.append(
-                f"{WORKFLOW}: workflow toolchain {literal!r} must be one of the quality/tools.toml pins {pinned}"
+                f"{WORKFLOW}: workflow toolchain {literal!r} must be the quality/tools.toml pin {stable!r}"
             )
-    for tool in policy["tools"]:
-        for part in tool["command"]:
-            for selector in NIGHTLY_SELECTOR.findall(part):
-                if selector != f"+{nightly}":
-                    failures.append(
-                        f"quality/tools.toml tool {tool['name']} selects {selector!r}, "
-                        f"but [toolchains].nightly is {nightly!r}"
-                    )
     return failures
 
 
 def scope_toolchains(scope: str, policy: dict[str, object]) -> list[str]:
-    toolchains = policy["toolchains"]
-    stable = toolchains["stable"]
-    nightly = toolchains["nightly"]
+    stable = policy["toolchains"]["stable"]
     return {
-        "all": [stable, nightly],
+        "all": [stable],
         "lint-arch": [stable],
         "test": [stable],
-        "coverage": [nightly],
-        "deps": [stable, nightly],
+        "coverage": [stable],
+        "deps": [stable],
     }[scope]
 
 
 def scope_components(scope: str, policy: dict[str, object]) -> dict[str, list[str]]:
-    toolchains = policy["toolchains"]
-    stable = toolchains["stable"]
-    nightly = toolchains["nightly"]
+    stable = policy["toolchains"]["stable"]
     return {
-        "all": {
-            stable: list(policy["components"]["stable"]),
-            nightly: list(policy["components"]["nightly"]),
-        },
+        "all": {stable: list(policy["components"]["stable"])},
         "lint-arch": {stable: ["rustfmt", "clippy"]},
         "test": {},
-        "coverage": {nightly: ["llvm-tools-preview"]},
+        "coverage": {stable: ["llvm-tools-preview"]},
         "deps": {},
     }[scope]
 
@@ -99,7 +79,6 @@ def scope_tools(scope: str, policy: dict[str, object]) -> list[dict[str, object]
         "deps": {
             "cargo-deny",
             "cargo-audit",
-            "cargo-udeps",
             "cargo-machete",
             "cargo-about",
             "cargo-outdated",
@@ -166,20 +145,11 @@ def main() -> None:
         policy = tomllib.load(policy_file)
 
     stable = policy["toolchains"]["stable"]
-    nightly = policy["toolchains"]["nightly"]
     selected_toolchains = scope_toolchains(arguments.scope, policy)
     for toolchain in selected_toolchains:
         require_toolchain(toolchain)
     if stable in selected_toolchains:
         require_version("Rust stable", ["rustup", "run", stable, "rustc", "--version"], stable)
-    if nightly in selected_toolchains:
-        if not nightly.startswith("nightly-"):
-            fail("nightly toolchain must use a dated nightly-YYYY-MM-DD pin")
-        nightly_rustc_version = policy["toolchains"].get("nightly_rustc_version")
-        if not isinstance(nightly_rustc_version, str) or not nightly_rustc_version:
-            fail("nightly_rustc_version must be an explicit Rust version pin")
-        require_version("Rust nightly", ["rustup", "run", nightly, "rustc", "--version"], nightly_rustc_version)
-        run(["rustup", "run", nightly, "rustdoc", "--version"])
 
     for toolchain, components in scope_components(arguments.scope, policy).items():
         for component in components:

@@ -9,7 +9,7 @@ adapter, quality tool, or an explicitly approved stronger check.
 
 The policy covers pinned toolchains and external quality tools; formatting and strict pragmatic linting; per-crate
 coverage tiers; tests, doctests, documentation, and architecture checks; dependency,
-license, advisory, unused-dependency, stale-dependency, and manifest hygiene; the Makefile contract and CI entry point;
+license, advisory, stale-dependency, and manifest hygiene; the Makefile contract and CI entry point;
 and explicit, reviewable exception handling. It complements, and does not replace, [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md): numeric coverage never replaces contract, architecture,
 failure-path, or outcome tests.
@@ -43,9 +43,8 @@ aliases, and the opt-in `e2e-real-api`.
 - Pinned versions and invocation policy live in `quality/tools.toml`; the toolchain is pinned by `rust-toolchain.toml`;
   the lockfile is committed and gates run with `--locked`. A missing or mismatched tool is a typed quality-gate failure,
   never an implicit install.
-- The pinned nightly is single-sourced: the Python runners read it from `quality/tools.toml` through
-  `quality/toolchains.py`, and `make tools-check` fails when a workflow `toolchain:` literal or a pinned tool's
-  `+nightly-*` selector drifts from that value.
+- The pinned stable toolchain is single-sourced: the Python runners read it from `quality/tools.toml`, and
+  `make tools-check` fails when a workflow `toolchain:` literal drifts from that value.
 
 ## Formatting and lint policy
 
@@ -141,7 +140,7 @@ rendered under when the bytes differ only because the local registry cache group
 differently, so the check does not depend on which machine ran it while a changed graph, version, or license name still
 fails; `cargo deny check` for advisories, licenses, banned crates, allowed sources,
 and duplicate-version policy, using the policy expression in `deny.toml`; `cargo audit` as an independent advisory
-source; `cargo udeps` for unused dependencies; `cargo machete` for manifest hygiene; and `cargo outdated` for stale
+source; `cargo machete` for manifest hygiene; and `cargo outdated` for stale
 direct dependencies under the policy in `quality/outdated.toml`.
 
 `THIRD_PARTY_NOTICES.md` is a checked-in generated disclosure artifact, not a hand-maintained license inventory; private
@@ -191,7 +190,7 @@ fixtures themselves live with their checkers.
 | Removed wire name still spelled in a document or a crate | `make docs-check`. |
 | Documented placeholder constant that no crate defines | `make docs-check`. |
 | Dependency advisory/license/source/ban/duplicate violation | `make deps`. |
-| Unused, stale, or manifest-only dependency | `make deps`. |
+| Stale or manifest-only dependency | `make deps`. |
 | Recognizable fake secret in output fixture | `make test` and `make verify`. |
 
 ## Test-first integration

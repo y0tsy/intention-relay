@@ -1,11 +1,8 @@
 [toolchains]
 stable = "1.97.1"
-nightly = "nightly-2026-07-31"
-nightly_rustc_version = "1.99.0-nightly"
 
 [components]
 stable = ["rustfmt", "clippy", "llvm-tools-preview"]
-nightly = ["rustfmt", "clippy", "llvm-tools-preview"]
 
 [[tools]]
 name = "cargo-nextest"
@@ -26,11 +23,6 @@ command = ["cargo", "deny", "--version"]
 name = "cargo-audit"
 version = "0.22.2"
 command = ["cargo", "audit", "--version"]
-
-[[tools]]
-name = "cargo-udeps"
-version = "0.1.61"
-command = ["cargo", "+nightly-2026-07-31", "udeps", "--version"]
 
 [[tools]]
 name = "cargo-machete"

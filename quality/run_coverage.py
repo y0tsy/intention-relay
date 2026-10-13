@@ -11,10 +11,8 @@ import tomllib
 
 try:
     from .timing import run_command
-    from .toolchains import nightly_selector
 except ImportError:
     from timing import run_command
-    from toolchains import nightly_selector
 
 ROOT = Path(__file__).resolve().parents[1]
 COVERAGE_POLICY = ROOT / "quality" / "coverage.toml"
@@ -106,7 +104,7 @@ def package_has_test_target(package: dict[str, object]) -> bool:
     return False
 
 
-METADATA_COMMAND = ["cargo", nightly_selector(), "metadata", "--no-deps", "--format-version", "1", "--locked"]
+METADATA_COMMAND = ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"]
 
 
 def coverage_plan(
@@ -225,7 +223,6 @@ def main() -> None:
         # thresholds comparable across coverage runs.
         command = [
             "cargo",
-            nightly_selector(),
             "llvm-cov",
             "--json",
             "--summary-only",
@@ -260,7 +257,7 @@ def main() -> None:
     # line metric stays informational over collected crates only.
     report = REPORTS / "coverage-workspace.json"
     run([
-        "cargo", nightly_selector(), "llvm-cov", "--json",
+        "cargo", "llvm-cov", "--json",
         "--summary-only", "--output-path", str(report), "nextest",
         "--all-targets", "--workspace", "--locked", *FEATURE_FLAGS,
     ], stage="collect")
