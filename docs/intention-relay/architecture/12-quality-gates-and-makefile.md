@@ -147,20 +147,14 @@ direct dependencies under the policy in `quality/outdated.toml`.
 `publish = false` workspace packages stay project-owned code and are excluded. A failed or stale notice generation is a
 blocking supply-chain failure, not an inferred pass.
 
-`revue` 3.9.1 is vendored at `vendor/revue` and selected through the root `[patch.crates-io]` entry. The copy was
-taken for two reasons: the released crate quit the `App` event loop on Ctrl+C with no builder option, and it pulled the
-unmaintained `unic-emoji-char` probe. The first reason is settled upstream — 3.10.0 adds `App::prevent_default`, which
-the terminal's layered Ctrl+C adopts when this copy is dropped — and the second is what keeps the copy here: registry
-3.10.0 still depends on `unic-emoji-char`, whose unmaintained advisories the advisory policy resolves instead of
-acknowledging, and a `cargo deny check advisories` probe against that graph fails. Upstream plans to replace the probe's
-source (hawk90/revue#950); the upgrade, the `prevent_default` switch, and the deletion of this copy land together in one
-change. The vendored copy is 3.9.1 upstream source with `tests/`, `benches/`, `examples/`, and `docs/` dropped and their
-manifest targets stripped, plus two changes: an `AppBuilder::quit_key(Option<KeyEvent>)` option whose default, Ctrl+C,
-is the pre-patch behavior, and the removal of the `unic-emoji-char` probe, which only served the public
-`CharWidthTable` while `unicode-width` reports the same width for all but the 26 regional-indicator code points. The
-copy is excluded from the workspace, so format, lint, coverage, and architecture policy stay scoped to `crates/`, and
-`quality/check_architecture.py` skips `vendor/` in its raw-text scans; `vendor/revue/PATCH.md` records the patch, its
-files, and the conditions that drop the vendored copy.
+`revue` is an ordinary crates.io dependency of `intention-tui`, pinned at `3.10.0`. Two of its properties are visible
+here. Its event loop quits on Ctrl+C after the handler returns, while Ctrl+C is the shared core's layered action, so
+`handle_event` calls `App::prevent_default` for the press the core consumes. It also depends on `unic-emoji-char`,
+whose whole `rust-unic` family is archived: five `unmaintained` advisories with no safe upgrade
+(RUSTSEC-2025-0075, -0080, -0081, -0090, -0098) reachable only through that probe. Those five are the complete
+`advisories.ignore` set in `deny.toml`; every other advisory is resolved by upgrading the graph, and entries there
+carry the reason the acknowledgement is allowed to stand. Upstream plans to replace the probe's source
+(hawk90/revue#950); the acknowledgement goes away with that release.
 
 The terminal binary takes `mimalloc` as its process-wide global allocator, because a terminal frame allocates many
 short-lived small strings; it is an ordinary crates.io dependency under the MIT license, disclosed like every other

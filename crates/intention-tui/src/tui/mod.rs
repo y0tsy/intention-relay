@@ -137,19 +137,11 @@ pub fn run_blocking(
         // text) and leaves copying to the terminal emulator. A library
         // selection surface would remove the trade-off.
         .mouse_capture(true)
-        // Ctrl+C is the shared core's layered action, so revue must not
-        // consume it as the framework's own quit key first.
-        // @todo(revue): revue 3.9.1 hardcodes Ctrl+C as its quit key and its
-        // event loop quits right after the app handler runs, so on the default
-        // configuration a single press during a live run tears the front end
-        // down before the layered interrupt can arm or notice anything. This
-        // argument and the repository's vendored patch (`AppBuilder::quit_key`,
-        // `vendor/revue/PATCH.md`, the root `[patch.crates-io]` entry) exist
-        // only for this option; drop both once upstream exposes it. The
-        // argument and the Ctrl+C arms in `keymap.rs` must go together: without
-        // the argument revue silently resumes quitting on the first press, and
-        // without the arms Ctrl+C silently does nothing.
-        .quit_key(None)
+        // Ctrl+C is the shared core's layered action, not revue's quit key:
+        // `handle_event` calls `App::prevent_default` for the press so the
+        // framework leaves the one key to the front end. That call and the
+        // Ctrl+C arms in `keymap.rs` must go together - without the arms Ctrl+C
+        // silently does nothing.
         .build()
         .run(front_end, handle_event)
         // @todo(revue): revue's `run` failure carries no typed cause, so every
@@ -233,6 +225,12 @@ fn handle_event(event: &Event, front_end: &mut FrontEnd, app: &mut App) -> bool 
                 let pressed = action.is_some();
                 if let Some(action) = action {
                     front_end.apply(action);
+                }
+                // revue quits on Ctrl+C after the handler returns; the layered
+                // core action owns that key, so the press it consumed must not
+                // also end the application.
+                if key.is_ctrl_c() {
+                    app.prevent_default();
                 }
                 pressed
             }

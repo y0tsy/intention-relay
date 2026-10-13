@@ -39,9 +39,30 @@ def main() -> None:
         fail("graph.all-features must be true")
     if advisories.get("version") != 2 or not isinstance(advisories.get("ignore"), list):
         fail("advisories must use version 2 with an explicit ignore list")
-    expected_advisory_ignores: set[str] = set()
-    if set(advisories["ignore"]) != expected_advisory_ignores:
-        fail("advisories.ignore must stay empty: advisories are resolved by upgrading the graph (the 2026-09-23 refresh upgraded rustls to 0.23.45 for RUSTSEC-2026-0285)")
+    # The five `unmaintained` rust-unic advisories reachable through
+    # revue 3.10.0 -> unic-emoji-char are the reviewed acknowledgement set: the
+    # family is archived, no safe upgrade exists, and the widget library drops
+    # the probe upstream (hawk90/revue#950). Every other advisory is resolved by
+    # upgrading the graph instead of being acknowledged, so each entry must
+    # carry its reason and the set may not grow silently.
+    expected_advisory_ignores = {
+        "RUSTSEC-2025-0075",
+        "RUSTSEC-2025-0080",
+        "RUSTSEC-2025-0081",
+        "RUSTSEC-2025-0090",
+        "RUSTSEC-2025-0098",
+    }
+    ignored_advisories: set[str] = set()
+    for entry in advisories["ignore"]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) or not entry.get("reason"):
+            fail("every advisories.ignore entry must name an advisory and carry a reason")
+        ignored_advisories.add(entry["id"])
+    if ignored_advisories != expected_advisory_ignores:
+        fail(
+            "advisories.ignore must acknowledge exactly the reviewed rust-unic set "
+            "(RUSTSEC-2025-0075/-0080/-0081/-0090/-0098); "
+            "every other advisory is resolved by upgrading the graph"
+        )
     outdated_ignores = outdated_policy.get("outdated_ignores")
     if not isinstance(outdated_ignores, dict) or outdated_ignores.get("crates") != []:
         fail("outdated_ignores.crates must stay empty: stale direct dependencies are upgraded (the 2026-09-23 refresh moved openrouter-rs to 0.16.0 and async-openai to 0.42.0)")

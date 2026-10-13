@@ -60,9 +60,7 @@ def packages_by_name(metadata: dict[str, object]) -> dict[str, dict[str, object]
 
 
 def source_files(root: Path) -> list[Path]:
-    # `vendor/` holds a third-party crate vendored under `[patch.crates-io]`;
-    # the raw-text scans below cover source this repository authors.
-    ignored = {"target", ".git", "fixtures", "__pycache__", "vendor"}
+    ignored = {"target", ".git", "fixtures", "__pycache__"}
     return [
         path
         for path in root.rglob("*.rs")

@@ -545,7 +545,7 @@ text above is the live policy.
   without a drag is a hit-test only, except that a click on a collapsed reasoning block's marker expands that block. A
   drag past the transcript's top or bottom edge scrolls the window one fast step — five wheel notches — while extending
   the selection to the row the pointer reaches, and a wheel notch while the button is held adds the same fast step. The
-  transcript reserves a one-column gutter for revue's vendored scroll view, which renders a native scrollbar, so content
+  transcript reserves a one-column gutter for revue's scroll view, which renders a native scrollbar, so content
   above the window stays visible natively. The application performs no clipboard work of any kind: copying is the
   terminal emulator's business, pasting is its own delivery of the text the user asked for, and the crate carries
   neither a copy path nor a clipboard read. The trade-off is the terminal's own drag-selection:
