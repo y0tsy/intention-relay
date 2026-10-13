@@ -175,6 +175,12 @@ The terminal binary takes `mimalloc` as its process-wide global allocator, becau
 short-lived small strings; it is an ordinary crates.io dependency under the MIT license, disclosed like every other
 dependency through the generated `THIRD_PARTY_NOTICES.md`.
 
+The terminal's local theme resolution adds three direct dependencies, and none of them adds a package to the locked
+graph: `toml` parses and writes the local `tui.toml`, and the `cfg(unix)` pair `crossterm` (raw mode) and `mio`
+(readiness on the terminal's own input) serve the bounded `OSC 11` background probe. `crossterm` and `mio` were already
+locked as the backend and event source of `revue 3.10.0`, and `toml` was already locked through the same graph, so the
+declared set changed without a new package, license, or advisory entering it.
+
 ## Required quality-gate failure tests
 
 Controlled probes and the native failures of the manifests, rustc, Clippy, and the runners prove that the quality system
@@ -219,7 +225,7 @@ mutating, networked, and opt-in, and it is never part of the blocking gate. The 
 
 Slice 1.5 (the current-state core) changes the evidence base without lowering it:
 
-- the storage contract suite is rebuilt for the nine-table current-state schema and the one-transaction rule, and the
+- the storage contract suite is rebuilt for the seven-table current-state schema and the one-transaction rule, and the
   event/snapshot/replay contract blocks are deleted with their surfaces;
 - the engine tests cover commit-and-publish without events or replays, and tool tests cover one transaction per call and
   the pre-effect identity rejection;

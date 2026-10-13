@@ -11,7 +11,7 @@ use common::{FAKE_CREDENTIAL, explicit_source};
 use intention_config::{ConfigSnapshotDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto};
 use intention_proto::{ConfigRevisionId, SchemaVersionDto, TimestampDto};
 
-const VALID_RESOLVED: &str = r#"{"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000},"tui":{"theme":"light"},"source_kind":"explicit"}"#;
+const VALID_RESOLVED: &str = r#"{"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000},"source_kind":"explicit"}"#;
 
 const CURRENT_SCHEMA_WIRE: &str = r#"{"major":1,"minor":0}"#;
 const FOREIGN_SCHEMA_WIRE: &str = r#"{"major":2,"minor":0}"#;
@@ -28,17 +28,7 @@ fn snapshot_wire(schema_version: &str, revision_id: &str, resolved: &str) -> Str
 /// Builds one resolved projection from its three policy fragments.
 fn resolved_wire(provider: &str, provider_execution: &str, context_window: &str) -> String {
     format!(
-        r#"{{"provider":{provider},"provider_execution":{provider_execution},"context_window":{context_window},"tui":{{"theme":"light"}},"source_kind":"explicit"}}"#
-    )
-}
-
-/// Builds one resolved projection with an explicitly supplied theme fragment.
-fn resolved_tui_wire(theme: &str) -> String {
-    format!(
-        r#"{{"provider":{},"provider_execution":{},"context_window":{},"tui":{{"theme":"{theme}"}},"source_kind":"explicit"}}"#,
-        provider_wire("openrouter", "fixture", "null"),
-        execution_wire(30, 2),
-        context_window_wire(250_000),
+        r#"{{"provider":{provider},"provider_execution":{provider_execution},"context_window":{context_window},"source_kind":"explicit"}}"#
     )
 }
 
@@ -254,27 +244,6 @@ fn malformed_config_snapshot_wire_shapes_are_rejected() {
             ),
         ),
         (
-            "unknown tui theme spelling",
-            snapshot_wire(
-                CURRENT_SCHEMA_WIRE,
-                VALID_REVISION_ID,
-                &resolved_tui_wire("midnight"),
-            ),
-        ),
-        (
-            "resolved projection without its tui settings",
-            snapshot_wire(
-                CURRENT_SCHEMA_WIRE,
-                VALID_REVISION_ID,
-                &format!(
-                    r#"{{"provider":{},"provider_execution":{},"context_window":{},"source_kind":"explicit"}}"#,
-                    provider_wire("openrouter", "fixture", "null"),
-                    execution_wire(30, 2),
-                    context_window_wire(250_000),
-                ),
-            ),
-        ),
-        (
             "empty resolved projection",
             snapshot_wire(CURRENT_SCHEMA_WIRE, VALID_REVISION_ID, "{}"),
         ),
@@ -427,7 +396,7 @@ fn resolved_config_public_contract_is_credential_free_and_closed() {
     assert_eq!(resolved.provider().kind(), ProviderKindDto::Openrouter);
     assert!(
         serde_json::from_str::<ResolvedConfigDto>(
-            r#"{"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000},"tui":{"theme":"light"},"source_kind":"explicit","unexpected":true}"#
+            r#"{"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000},"source_kind":"explicit","unexpected":true}"#
         )
         .is_err()
     );

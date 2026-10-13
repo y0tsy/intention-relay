@@ -12,7 +12,7 @@ use intention_proto::{DtoResult, ErrorDto, RunModeDto, SessionId, WorkspaceRootD
 use intention_transport::LocalEndpoint;
 use tokio::sync::mpsc;
 
-use crate::app::{Action, Effect};
+use crate::app::{Action, Effect, Theme};
 use crate::client_task;
 
 /// The startup choices the command line hands to the fullscreen front end.
@@ -22,6 +22,7 @@ pub struct TuiOptions {
     mode: Option<RunModeDto>,
     session: Option<SessionId>,
     continue_session: bool,
+    theme: Option<Theme>,
 }
 
 impl TuiOptions {
@@ -32,7 +33,9 @@ impl TuiOptions {
     /// the session the caller selected; `None` opens nothing, so the launch
     /// shows the welcome state until the user asks for a session. A caller that
     /// wants the newest session opened asks for it explicitly with
-    /// [`TuiOptions::continuing`].
+    /// [`TuiOptions::continuing`]. No theme is selected: the launch resolves
+    /// one from its environment unless the caller spells one with
+    /// [`TuiOptions::with_theme`].
     #[must_use]
     pub const fn new(
         workspace_root: WorkspaceRootDto,
@@ -44,7 +47,25 @@ impl TuiOptions {
             mode,
             session,
             continue_session: false,
+            theme: None,
         }
+    }
+
+    /// Returns these options asking for a theme the caller spelled.
+    ///
+    /// The spelled theme wins over every source the launch would otherwise
+    /// resolve, so one run or one script can pick a palette without touching
+    /// the local settings file.
+    #[must_use]
+    pub const fn with_theme(mut self, theme: Option<Theme>) -> Self {
+        self.theme = theme;
+        self
+    }
+
+    /// Returns the theme the caller spelled, if any.
+    #[must_use]
+    pub const fn theme(&self) -> Option<Theme> {
+        self.theme
     }
 
     /// Returns these options asking to continue the newest session, or not.
@@ -216,6 +237,13 @@ async fn drive(
                     }
                     Err(error) => Some(Action::SessionStreamFailed(error)),
                 }
+            }
+            Step::Effect(Some(Effect::PersistTheme(theme))) => {
+                // The theme never reaches the daemon: the selection is written
+                // to the front end's own settings file here, off the draw path.
+                crate::tui::theme::rewrite(theme)
+                    .err()
+                    .map(Action::ThemePersistFailed)
             }
             Step::Effect(Some(effect)) => {
                 client_task::perform(&client, &workspace_root, mode, effect)

@@ -179,6 +179,24 @@ impl TerminalHost {
         self.workspace.path().to_string_lossy().into_owned()
     }
 
+    /// Returns the local theme file the spawned binary resolves under this
+    /// host's redirected configuration directory.
+    ///
+    /// The path mirrors the platform rule the binary itself applies, so a
+    /// scenario can observe whether a front end wrote a theme preference.
+    fn local_theme_file(&self) -> PathBuf {
+        #[cfg(target_os = "macos")]
+        let directory = self
+            .config_home
+            .path()
+            .join("Library")
+            .join("Application Support")
+            .join("intention-relay");
+        #[cfg(not(target_os = "macos"))]
+        let directory = self.config_home.path().join("intention-relay");
+        directory.join("tui.toml")
+    }
+
     /// Runs the real terminal binary with a bounded wait and piped streams.
     ///
     /// A supplied input is written and the pipe is closed, so a line front end
@@ -985,10 +1003,9 @@ fn a_multi_line_prompt_reaches_the_session_unchanged() {
 #[test]
 fn a_slash_prefixed_prompt_reaches_the_session_as_a_turn() {
     // The prompt is a turn and not an interactive command: `/theme light` must
-    // reach the session instead of opening the picker and writing a preference.
+    // reach the session instead of opening the picker or selecting a palette.
     let host = TerminalHost::new(ProviderEndpoint::scripted(), Some(WORKSPACE_FILE));
     let workspace = host.workspace_root();
-    let committed = block_on(host.client.tui_settings()).expect("the settings read");
     let prompt = "/theme light";
     let output = host.run(
         &["run", prompt, "--format", "json", "--workspace", &workspace],
@@ -1022,11 +1039,9 @@ fn a_slash_prefixed_prompt_reaches_the_session_as_a_turn() {
         1,
         "the prompt created exactly the session it needed"
     );
-    let after = block_on(host.client.tui_settings()).expect("the settings read");
-    assert_eq!(
-        after.theme(),
-        committed.theme(),
-        "a prompt never writes a theme preference"
+    assert!(
+        !host.local_theme_file().exists(),
+        "a headless prompt never writes the terminal's local theme preference"
     );
 }
 

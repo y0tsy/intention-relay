@@ -24,9 +24,9 @@ use intention_proto::{
     CreateSessionCommandDto, DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, MessageId,
     MessageProjectionDto, NewMessageDto, PendingTurnProjectionDto, ProjectId, RemoveTurnCommandDto,
     RunId, RunModeDto, RunProjectionDto, RunStatusDto, SessionId, SessionProjectionDto,
-    SessionSummariesDto, ThemeDto, TimestampDto, ToolCallId, ToolResultMetadataEntryDto,
-    ToolResultStatusDto, ToolRowDto, TurnId, UsageDto, WorkspaceBindingDto, WorkspaceId,
-    WorkspaceRootDto, run_status_is_terminal,
+    SessionSummariesDto, TimestampDto, ToolCallId, ToolResultMetadataEntryDto, ToolResultStatusDto,
+    ToolRowDto, TurnId, UsageDto, WorkspaceBindingDto, WorkspaceId, WorkspaceRootDto,
+    run_status_is_terminal,
 };
 use intention_providers::ToolCallDto;
 use intention_storage::{
@@ -796,20 +796,6 @@ impl StorageRepositoryDto for FakeRepository {
         Err(ErrorDto::unavailable(
             "fixture_unused",
             "recovery is not used by this fixture",
-        ))
-    }
-
-    fn load_tui_theme(&self) -> DtoResult<Option<ThemeDto>> {
-        Err(ErrorDto::unavailable(
-            "fixture_unused",
-            "terminal settings are not used by this fixture",
-        ))
-    }
-
-    fn save_tui_theme(&self, _theme: ThemeDto) -> DtoResult<()> {
-        Err(ErrorDto::unavailable(
-            "fixture_unused",
-            "terminal settings are not used by this fixture",
         ))
     }
 

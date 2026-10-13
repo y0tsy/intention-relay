@@ -73,6 +73,7 @@ mod palette;
 mod panes;
 mod paste;
 mod screens;
+mod theme;
 
 pub use driver::TuiOptions;
 pub use screens::RevueView;
@@ -90,7 +91,8 @@ use revue::event::{Event, Key, KeyEvent, MouseButton, MouseEvent, MouseEventKind
 use revue::widget::{RenderContext, View};
 
 use crate::app::{
-    Action, AppState, BrowserCursorMove, Effect, Screen, TRANSCRIPT_DRAG_ROWS, TranscriptScroll,
+    Action, AppState, BrowserCursorMove, Effect, Screen, TRANSCRIPT_DRAG_ROWS, Theme,
+    TranscriptScroll,
 };
 
 use driver::Driver;
@@ -105,14 +107,19 @@ use paste::Pastes;
 ///
 /// # Errors
 ///
-/// Returns an unavailable error when the client runtime or the terminal cannot
-/// be started. Client, protocol, and run failures reach the status pane instead
-/// of ending the session.
+/// Returns the typed validation error of a local settings file that declares
+/// an undeclared theme or an unreadable shape, and an unavailable error when
+/// the client runtime or the terminal cannot be started. Client, protocol, and
+/// run failures reach the status pane instead of ending the session.
 pub fn run_blocking(
     options: TuiOptions,
     client: IntentionClient,
     endpoint: LocalEndpoint,
 ) -> DtoResult<()> {
+    // The theme is this front end's own value and is resolved once, before the
+    // first frame: the spelled flag, the environment, the local settings file,
+    // and the terminal probe, in that order. See `theme`.
+    let theme = theme::resolve(options.theme())?;
     // The front end resolves the session it opens once, through the client: an
     // explicit continuation asks the client for the target, a selected session
     // is used as it is, and a launch that asked for neither opens nothing.
@@ -127,7 +134,7 @@ pub fn run_blocking(
         options.workspace_root().clone(),
         options.mode(),
     )?;
-    let front_end = FrontEnd::new(session, options.workspace_root().clone(), driver);
+    let front_end = FrontEnd::new(session, options.workspace_root().clone(), driver, theme);
     front_end.start();
     App::builder()
         // @todo(revue): revue has no text-selection model, so the front end
@@ -463,10 +470,18 @@ impl FrontEnd {
     /// `session` is the session this launch opens: the one the caller selected,
     /// or the one the client resolved for an explicit continuation. A launch
     /// that named neither opens none, and the user can still ask for a session
-    /// later with `/new` or a row of the sessions browser.
-    fn new(session: Option<SessionId>, workspace_root: WorkspaceRootDto, driver: Driver) -> Self {
+    /// later with `/new` or a row of the sessions browser. `theme` is the theme
+    /// the launch resolved, so the first frame already paints it.
+    fn new(
+        session: Option<SessionId>,
+        workspace_root: WorkspaceRootDto,
+        driver: Driver,
+        theme: Theme,
+    ) -> Self {
         Self {
-            state: AppState::new(session).with_workspace_root(workspace_root),
+            state: AppState::new(session)
+                .with_theme(theme)
+                .with_workspace_root(workspace_root),
             driver,
             timer: TurnTimer::new(),
             pastes: Pastes::new(),

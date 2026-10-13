@@ -138,10 +138,11 @@ const fn sessions_action(key: &KeyEvent) -> Option<Action> {
 ///
 /// The picker owns the same two rows the core does: `Up` and `Down` walk them
 /// without wrapping and preview the candidate they land on, `Enter` commits
-/// the highlighted theme through the daemon, and `Esc` drops the preview and
-/// returns to the chat. The picker's `Esc` is its own close key, exactly as the
-/// browser's is: while it is open, the chat's cancel, clear, and exit arms are
-/// unreachable. Ctrl+C and Ctrl+Q keep the meanings every screen gives them.
+/// the highlighted theme and asks for its local rewrite, and `Esc` drops the
+/// preview and returns to the chat. The picker's `Esc` is its own close key,
+/// exactly as the browser's is: while it is open, the chat's cancel, clear, and
+/// exit arms are unreachable. Ctrl+C and Ctrl+Q keep the meanings every screen
+/// gives them.
 const fn theme_action(key: &KeyEvent, state: &AppState) -> Option<Action> {
     match key.key {
         Key::Char('q') if key.ctrl => Some(Action::Quit),

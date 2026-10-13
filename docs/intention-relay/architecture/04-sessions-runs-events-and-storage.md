@@ -116,24 +116,22 @@ notices, each committed tool row carrying its typed tool projection in that row'
 arguments, or the result's payload, status, and approved metadata — and the result's bounded redacted content in its own
 `text`;
 -  credential-free canonical configuration revisions keyed by `ConfigRevisionId`; the same revision ID with an equal
-revision is idempotent, while the same ID with a different revision fails with a typed conflict; and
-- one single-row `tui_settings` override holding the terminal theme the presentation layer renders with.
+revision is idempotent, while the same ID with a different revision fails with a typed conflict.
 
-The storage schema contains the `projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`,
-`configuration_revisions`, and `tui_settings` tables, all created directly on open, plus the `messages_session_id_id`
+The storage schema contains the `projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`, and
+`configuration_revisions` tables, all created directly on open, plus the `messages_session_id_id`
 and `messages_session_run_id_id` indexes that serve the transcript reads. The `turns` table
 carries one accepted turn with its proposed run and configuration revision and a closed `state` in `started`,
-`pending`, `appended`, or `removed`. The `tui_settings` table is the singleton settings row (`id = 1` with its `theme`
-text). The `messages` table carries the committed typed tool projection in `projection_json`; that column is the
-transcript's single durable home of a result's status, payload, and metadata, and the current schema stamp is 5, so a
+`pending`, `appended`, or `removed`. The `messages` table carries the committed typed tool projection in
+`projection_json`; that column is the
+transcript's single durable home of a result's status, payload, and metadata, and the current schema stamp is 6, so a
 database created under any other stamp is discarded and recreated like any other schema change, with no migration.
 Ordering is SQLite row insertion order — `messages.id` for the transcript — and there is no separate event log,
 snapshot, or ordering authority.
 
-The terminal theme override is presentation-only: it is written in one immediate transaction, it records no
-configuration revision, it never enters a run's immutable captured configuration snapshot, and the daemon never
-rewrites the credential-bearing configuration file. Its effective value is the stored override, else the resolved
-configuration's `[tui]` theme, else light.
+The terminal theme has no durable home here: it is the terminal client's local presentation state, resolved and stored
+by `intention-tui` itself, so the store carries no settings row for it and the daemon never knows which palette a
+front end paints.
 
 Recovery is one immediate transaction over every unfinished run: each run that is not terminal becomes `Interrupted`
 and records its `finished_at` time inside that same transaction, so a restart cannot leave a half-applied recovery. A

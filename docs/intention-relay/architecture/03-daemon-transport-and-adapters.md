@@ -52,14 +52,11 @@ table: a request variant is the operation, and the reply variant is its typed re
 | `GetSessionSnapshot` | `GetSessionSnapshotQueryDto` | `SessionSnapshot` |
 | `GetDaemonHealth` | none | `DaemonHealth` |
 | `ListSessions` | none | `SessionsListed` |
-| `GetTuiSettings` | none | `TuiSettings` |
-| `SetTuiTheme` | `SetTuiThemeCommandDto` | `TuiThemeSet` |
 | `SubscribeSession` | `SubscribeSessionCommandDto` | `SessionSubscribed` |
 
-The terminal theme is a presentation-only wire value: `ThemeDto` is the durable `light`/`dark` spelling,
-`TuiSettingsDto` is the daemon's effective theme a client renders with, and `TuiThemeAcceptedDto` is the stored
-selection's acceptance evidence. A theme selection enters no run's immutable configuration selection and records no
-configuration revision.
+The wire carries no terminal-theme operation: the theme is the terminal client's own presentation state, resolved and
+stored locally, so the daemon never learns which palette a front end paints. A theme change records no configuration
+revision all the same, and the local file it writes is not the credential-bearing `config.toml`.
 
 Errors travel on exactly one channel: a rejection carrying the structured `ErrorDto` with its stable code, category,
 retry guidance, and safe message. A request line that cannot be decoded is answered with a typed identity-less
@@ -475,22 +472,33 @@ text above is the live policy.
   keep collecting across the pauses a terminal's own chunked delivery leaves, and the `Enter` a paste carried stays its
   line break while the `Enter` the user presses afterwards submits the line — so the keystrokes reach the line as the one
   paste they are, never as a row per line.
-- Terminal settings. `config.toml` supplies the default through its optional `[tui] theme` key (`light` or `dark`; an
-  absent section and an absent key both mean light, and an unknown spelling is the typed `invalid_tui_theme` validation
-  error, so nothing silently falls back). The daemon owns the runtime value as a single-row `tui_settings` override in
-  the state database and answers the effective theme — the stored override, else the configuration default, else light
-  — through `GetTuiSettings`; `SetTuiTheme` commits the override in one transaction and answers the accepted theme. A
-  theme is presentation-only: a change records no configuration revision, never enters a run's immutable captured
-  selection, and the daemon never rewrites the credential-bearing configuration file. The committed theme is the
-  daemon's value, never the terminal's guess: a selection previews locally while the round trip is in flight, and only
-  the accepted reply moves the committed value.
+- Terminal theme resolution. The theme is the terminal client's own presentation state: it is no wire value, the
+  daemon never learns it, and no remote round trip gates a repaint. The launch resolves it in one fixed precedence —
+  the fullscreen UI's `--theme` flag; else the `COLORFGBG` environment variable a terminal exports; else the local
+  `tui.toml` beside `config.toml` under the same platform configuration directory (a `[tui] theme` declaration of
+  `light` or `dark`; an absent file, section, or key declares nothing, and an unknown spelling is the typed
+  `invalid_tui_theme` validation error, so nothing silently falls back); else a foreground-free `OSC 11` query of the
+  terminal's background colour, read with a bounded deadline before the frame starts and answered from the report the
+  terminal sends, with a malformed or missing report standing for no evidence; else light. The terminal route is the
+  zero-configuration source rather than a platform theme lookup, because the background the terminal paints is the
+  surface this front end draws on and the route needs no platform dependency. Every level is evidence the front end
+  gathered itself, so a level that answers
+  nothing falls through to the next and only the last one names the default. A theme is presentation-only: a change
+  records no configuration revision, never enters a run's immutable captured selection, and never rewrites the
+  credential-bearing `config.toml`.
+- Theme selection. `Enter` on the picker commits the highlighted theme in memory at once and asks for one rewrite of
+  the local `tui.toml`, so the next launch reads it without anyone asking again; a selection that matches the committed
+  theme writes nothing, and a failed rewrite reports its typed error while the committed selection stands. The write
+  happens after the frame the selection produced, so no local file access sits in the input path, and the terminal
+  re-lays the transcript out exactly as a resize does because the layout cache is keyed by the theme.
 - Theme picker. `/theme` with no argument opens the picker as `Screen::Theme`, a small panel in the chat panel's own
   band region — the region above the input block the command band uses — so the input block and the detail line keep
   their rows rather than the panel docking at the window's bottom. Its rounded frame carries the `Theme` title, one row
   per theme with the theme's name and one-line description, the effective theme's row marked with the sessions
   browser's `> ` cursor and selected wash, and its own last inner row carries the `enter apply | esc revert` legend.
   `Up` and `Down` preview the row they land on: the whole window, transcript included, repaints through the candidate
-  and nothing is persisted. `Enter` commits the highlighted theme through the daemon and closes the picker; `Esc`
+  and nothing is persisted. `Enter` commits the highlighted theme, asks for its local rewrite, and closes the picker;
+  `Esc`
   drops the preview, restores the committed theme, and closes. The picker's `Esc` is its own keymap layer, so the
   chat's cancel, clear, and exit arms are unreachable while it is open; the Esc layering is the open band, then the
   picker, then a live run's cancel, then the input-clear arm, then the exit.

@@ -9,12 +9,14 @@ the revue fullscreen UI (`tui`), the interactive `repl`, and the headless
 - `src/app/` — `action.rs` (`Action`/`Effect` vocabulary), `state.rs` (state,
   accessors, `update`), `commands.rs` (the one command registry with its
   declared arguments, the command and argument word, and the menu's filter and
-  ranking), `theme.rs` (the theme vocabulary, the settings round trip, and the
-  picker transitions), `sessions.rs`/`browser.rs`/`run.rs`/
+  ranking), `theme.rs` (the theme vocabulary and the picker transitions),
+  `sessions.rs`/`browser.rs`/`run.rs`/
   `input.rs` and the layered `ctrl_c.rs`/`escape.rs` (transitions), `tests.rs`.
 - `src/client_task.rs` — the one async `Effect` to client-call mapper.
 - `src/tui/` — `mod.rs` (`run_blocking`, event handler, wheel mapping, wiring,
-  the turn clock), `layout.rs` (the neutral row model and the transcript layout
+  the turn clock), `theme.rs` (the local theme file, the launch resolution and
+  its precedence, and the terminal's background probe), `layout.rs` (the neutral
+  row model and the transcript layout
   cache the front end owns, keyed by pane width, theme, and transcript
   epochs), `palette.rs` (the one
   colour system, resolved per frame from the active theme), `screens/`
@@ -163,23 +165,29 @@ a command with a declared argument reopens the band on its argument word; a
 space after a complete value closes it. The band closes when the slash is
 removed, on `Esc`, or when nothing matches.
 
-The colour theme is the terminal's own value and the daemon's. The light palette
+The colour theme belongs to this front end: it is local presentation state, no
+wire operation carries it, and the daemon never learns it. The light palette
 is the warm off-white surface every session starts in; the dark palette is a
 neutral graphite surface whose only hue is its accent pair. Both are
 the same role table resolved by `palette::of(theme)`, which the frame calls once
 per state's effective theme and hands to every pane, so a theme switch repaints
 the whole window - the transcript layout cache included, because the cache is
-keyed by the theme like the pane width. The committed theme is never the
-terminal's guess: `config.toml` supplies the default through an optional
-`[tui] theme = "light" | "dark"` (an absent section or key means light, and an
-unknown spelling is a typed validation error), the daemon answers the effective
-theme - the single-row `tui_settings` override in the state database, else the
-configuration default, else light - and only the accepted reply to a selection
-moves the committed value. `/theme light` and `/theme dark` select a theme
-through the daemon; the selection previews while the round trip is in flight, a
-rejection drops the preview and shows the error line, and a theme set records no
-configuration revision and never rewrites the credential-bearing configuration
-file.
+keyed by the theme like the pane width. The launch resolves the theme in one
+fixed precedence, each level consulted only while the ones above it answered
+nothing: the fullscreen UI's `--theme light|dark` flag, else the `COLORFGBG`
+variable a terminal exports, else the local `tui.toml`, else a foreground-free
+`OSC 11` query of the terminal background - the zero-configuration source,
+which needs no platform theme lookup - else light. The local file is `tui.toml` beside the
+configuration directory's `config.toml` (Linux `$XDG_CONFIG_HOME` or
+`~/.config`, macOS `~/Library/Application Support`, Windows `%APPDATA%`), it
+carries one `[tui] theme` declaration, and an unknown spelling is a typed
+validation error rather than a silent fallback. `/theme light` and `/theme dark`
+select a theme; the selection commits in memory at once and asks for one rewrite
+of the local file after the frame it produced, so the next launch reads the same
+theme and no daemon round trip gates the repaint. A failed rewrite reports its
+typed error while the committed selection stands, and a selection that matches
+the committed theme writes nothing. A theme change records no configuration
+revision and never rewrites the credential-bearing configuration file.
 
 `/theme` with no argument opens the theme picker as `Screen::Theme`: a small
 panel in the same one-window layout, drawn in the chat panel's band region above
@@ -190,7 +198,8 @@ name and one-line description, the committed row marked with the sessions
 browser's `> ` cursor and selected wash, and its own last inner row carries the
 `enter apply | esc revert` legend. `Up`/`Down` preview the candidate they land
 on: the whole window, transcript included, repaints through it and nothing is
-persisted. `Enter` commits the highlighted theme through the daemon and closes;
+persisted. `Enter` commits the highlighted theme, writes the local file the next
+launch reads, and closes;
 `Esc` drops the preview, restores the committed theme, and closes. The picker's
 `Esc` is its own layer, so the Esc layering is the open band, then the picker,
 then a live run's cancel, then the input-clear arm, then the exit.
@@ -442,9 +451,12 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
 ### Where the tests go
 
 - `AppState` transitions: `src/app/tests.rs`, without a terminal or daemon.
-- Theme vocabulary, the settings round trip, and the picker transitions: inline
+- Theme vocabulary, the picker transitions, and the app's selection transitions:
+  inline
   `#[cfg(test)]` modules in `src/app/theme.rs`, plus the app transition tests in
   `src/app/tests.rs`.
+- The local theme file, the launch precedence, and the terminal probe: inline
+  `#[cfg(test)]` modules in `src/tui/theme.rs`.
 - Rendering and geometry: `tests/tui_render.rs` over
   `intention_tui::tui::RevueView`. The assertions read characters, cells, and
   rows, never colours; `Pilot::find_text` reports a byte offset, so a test that

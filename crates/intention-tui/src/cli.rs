@@ -12,6 +12,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use intention_proto::{ErrorCategoryDto, ErrorDto, RunModeDto, RunStatusDto, SessionId};
+use intention_tui::app::Theme;
 
 /// The one-line usage every command-line rejection prints.
 pub const USAGE: &str = "usage: intention-tui [tui | repl | run <PROMPT>] [OPTIONS]";
@@ -28,6 +29,7 @@ pub const TUI_REQUIRES_TERMINAL: &str =
 pub fn help() -> String {
     let modes = RunModeDto::ALL.map(RunModeDto::as_str).join("|");
     let default = RunModeDto::DEFAULT.as_str();
+    let themes = Theme::ALL.map(Theme::as_str).join("|");
     format!(
         "Intention Relay terminal client
 
@@ -41,6 +43,7 @@ options:
   --session ID        open an existing session by its durable identifier
   --continue          continue the most recently updated session
   --mode {modes}   run policy of a created session (default: {default})
+  --theme {themes}    colour theme of the fullscreen UI (default: detected)
   --timeout SECS      stop the run when it does not finish within SECS
   --format text|json  run output format: progressive text or NDJSON records
   -h, --help          print this help
@@ -64,6 +67,7 @@ pub struct Options {
     session: Option<SessionId>,
     continue_session: bool,
     mode: Option<RunModeDto>,
+    theme: Option<Theme>,
     timeout: Option<Duration>,
     format: Format,
 }
@@ -95,6 +99,16 @@ impl Options {
     #[must_use]
     pub const fn mode(&self) -> Option<RunModeDto> {
         self.mode
+    }
+
+    /// Returns the colour theme the caller spelled, if any.
+    ///
+    /// The grammar carries no default: an absent `--theme` leaves the theme to
+    /// the launch's own resolution, so a scripted run never overrides the
+    /// environment it starts in.
+    #[must_use]
+    pub const fn theme(&self) -> Option<Theme> {
+        self.theme
     }
 
     /// Returns the run wait deadline the caller configured, if any.
@@ -212,6 +226,9 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, String> {
     // The flag carries only a mode the caller spelled: the durable default of a
     // created session is the core's, so the grammar substitutes none.
     let mut mode = None;
+    // The flag carries only a theme the caller spelled: an absent value leaves
+    // the theme to the launch's own resolution.
+    let mut theme = None;
     let mut timeout = None;
     let mut format = None;
 
@@ -227,6 +244,7 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, String> {
             }
             Long("continue") => continue_session = true,
             Long("mode") => mode = Some(mode_value(&text(parser)?)?),
+            Long("theme") => theme = Some(theme_value(&text(parser)?)?),
             Long("timeout") => timeout = Some(seconds(&text(parser)?)?),
             Long("format") => format = Some(format_value(&text(parser)?)?),
             Value(value) => {
@@ -245,6 +263,9 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, String> {
     if session.is_some() && continue_session {
         return Err("--session and --continue are mutually exclusive".to_owned());
     }
+    if command != Command::Tui && theme.is_some() {
+        return Err("--theme applies to the tui command".to_owned());
+    }
     if command != Command::Run {
         if timeout.is_some() {
             return Err("--timeout applies to the run command".to_owned());
@@ -258,6 +279,7 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, String> {
         session,
         continue_session,
         mode,
+        theme,
         timeout,
         format: format.unwrap_or(Format::Text),
     };
@@ -335,6 +357,18 @@ fn mode_value(value: &str) -> Result<RunModeDto, String> {
     })
 }
 
+/// Parses one `--theme` value.
+///
+/// # Errors
+///
+/// Returns the usage message for a theme the grammar does not declare.
+fn theme_value(value: &str) -> Result<Theme, String> {
+    Theme::parse(value).map_err(|_| {
+        let themes = Theme::ALL.map(Theme::as_str).join(" or ");
+        format!("--theme must be {themes}, got '{value}'")
+    })
+}
+
 /// Parses one `--format` value.
 ///
 /// # Errors
@@ -390,6 +424,31 @@ mod tests {
         assert_eq!(default.mode(), None);
         assert_eq!(default.timeout(), None);
         assert_eq!(default.format(), Format::Text);
+        assert_eq!(
+            default.theme(),
+            None,
+            "the grammar carries no theme of its own"
+        );
+    }
+
+    #[test]
+    fn the_theme_flag_selects_one_declared_theme_for_the_fullscreen_front_end() {
+        let spelled = options_of(parsed(&["--theme", "dark"]).expect("the flag parses"));
+        assert_eq!(spelled.theme(), Some(Theme::Dark));
+        let light = options_of(parsed(&["tui", "--theme=light"]).expect("the flag parses"));
+        assert_eq!(light.theme(), Some(Theme::Light));
+        let help = help();
+        let themes = Theme::ALL.map(Theme::as_str).join("|");
+        assert!(
+            help.contains(&format!("--theme {themes}")),
+            "the help renders the declared theme set"
+        );
+        let declared = Theme::ALL.map(Theme::as_str).join(" or ");
+        assert_eq!(
+            theme_value("midnight"),
+            Err(format!("--theme must be {declared}, got 'midnight'")),
+            "an undeclared theme names the declared set"
+        );
     }
 
     #[test]
@@ -499,6 +558,8 @@ mod tests {
         assert!(parsed(&["repl", "--format", "json"]).is_err());
         assert!(parsed(&["tui", "--timeout", "2"]).is_err());
         assert!(parsed(&["--format", "json"]).is_err());
+        assert!(parsed(&["repl", "--theme", "dark"]).is_err());
+        assert!(parsed(&["run", "hello", "--theme", "dark"]).is_err());
     }
 
     #[test]

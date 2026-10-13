@@ -107,8 +107,8 @@ feature crates are created at their milestones. The target
 keeps DTOs only at the three physical boundaries — the IPC wire, SQLite persistence, and provider SDKs — with internal
 crates passing domain types, and makes schema-validated JSON tool inputs and outputs the only JSON payloads in the
 system. The current-state core has already landed on this branch: the event log, snapshots, cursors, and resync are
-replaced by the eight current-state tables (`projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`,
-`configuration_revisions`, `tui_settings`); the transcript is `messages` rows, and a completed tool call commits one
+replaced by the seven current-state tables (`projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`,
+`configuration_revisions`); the transcript is `messages` rows, and a completed tool call commits one
 tool-result message row carrying its status and metadata in its projection; identity
 is the nine newtypes (`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`,
 `IdempotencyKey`, and the durable transcript row `MessageId`), with model steps and tool groups addressed by plain

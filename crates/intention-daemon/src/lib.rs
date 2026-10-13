@@ -1450,14 +1450,6 @@ fn dispatch_request(
             .facade
             .list_sessions(composition::SESSION_LIST_ROWS)
             .map(ProtocolResultDto::SessionsListed),
-        ClientRequestDto::GetTuiSettings => host
-            .facade
-            .tui_settings()
-            .map(ProtocolResultDto::TuiSettings),
-        ClientRequestDto::SetTuiTheme(command) => host
-            .facade
-            .set_tui_theme(command.theme())
-            .map(ProtocolResultDto::TuiThemeSet),
         ClientRequestDto::CreateSession(command) => {
             // The session and the first turn it carries commit through the same
             // sink every other durable commit uses: a session's subscribers see
@@ -1682,8 +1674,8 @@ mod tests {
         GetSessionSnapshotQueryDto, IdempotencyKey, MessageId, MessageKindDto,
         MessageProjectionDto, NewMessageDto, ProtocolDaemonMessageDto, ProtocolResultDto,
         RunModeDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId,
-        SetTuiThemeCommandDto, SubscribeSessionCommandDto, ThemeDto, WorkspaceId, WorkspaceRootDto,
-        decode_response, encode_request, parse_daemon_message,
+        SubscribeSessionCommandDto, WorkspaceId, WorkspaceRootDto, decode_response, encode_request,
+        parse_daemon_message,
     };
     use intention_proto::{ProjectId, RunId, SchemaVersionDto, TimestampDto};
     use intention_providers::{
@@ -1709,11 +1701,6 @@ mod tests {
     }
 
     fn fixture_snapshot() -> ConfigSnapshotDto {
-        fixture_snapshot_with_tui("")
-    }
-
-    /// Builds the fixture configuration snapshot with one optional `[tui]` section.
-    fn fixture_snapshot_with_tui(tui: &str) -> ConfigSnapshotDto {
         let source = ConfigSourceDto::Explicit(
             ConfigPathDto::parse(
                 std::env::temp_dir()
@@ -1724,9 +1711,7 @@ mod tests {
             .expect("fixture configuration path is absolute"),
         );
         let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            format!(
-                "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"\n{tui}"
-            ),
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"\n",
             source,
         ))
         .expect("fixture configuration resolves");
@@ -1986,74 +1971,6 @@ mod tests {
 
         drop((requests, messages));
         server.await.expect("host serves the merged connection");
-    }
-
-    #[tokio::test]
-    async fn tui_settings_dispatch_answers_configuration_then_the_stored_override() {
-        let directory = TempDir::new().expect("temporary fixture directory exists");
-        let facade = DaemonApplicationFacade::open_for_test_support_with_driver(
-            directory.path().join("tui-dispatch.sqlite"),
-            fixture_snapshot_with_tui("[tui]\ntheme = \"dark\"\n"),
-            Arc::new(EmptyDriver),
-        )
-        .expect("fixture facade opens");
-        let endpoint = endpoint();
-        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
-        let server = tokio::spawn(serve_one_test_connection(listener, facade));
-
-        let (mut requests, mut messages) = connect_fixture(&endpoint).await;
-        requests
-            .send_message(&encode_request(1, ClientRequestDto::GetTuiSettings))
-            .await
-            .expect("settings request sends");
-        let line = messages
-            .receive_line()
-            .await
-            .expect("settings reply arrives");
-        let settings = match decode_response(&line, 1).expect("settings reply decodes") {
-            ProtocolResultDto::TuiSettings(settings) => settings,
-            other => panic!("a settings read answers with terminal settings: {other:?}"),
-        };
-        assert_eq!(
-            settings.theme(),
-            ThemeDto::Dark,
-            "the configuration document answers before any set"
-        );
-
-        requests
-            .send_message(&encode_request(
-                2,
-                ClientRequestDto::SetTuiTheme(SetTuiThemeCommandDto::new(ThemeDto::Light)),
-            ))
-            .await
-            .expect("theme request sends");
-        let line = messages.receive_line().await.expect("theme reply arrives");
-        let accepted = match decode_response(&line, 2).expect("theme reply decodes") {
-            ProtocolResultDto::TuiThemeSet(accepted) => accepted,
-            other => panic!("a theme set answers with its acceptance: {other:?}"),
-        };
-        assert_eq!(accepted.theme(), ThemeDto::Light);
-
-        requests
-            .send_message(&encode_request(3, ClientRequestDto::GetTuiSettings))
-            .await
-            .expect("settings request sends");
-        let line = messages
-            .receive_line()
-            .await
-            .expect("settings reply arrives");
-        let settings = match decode_response(&line, 3).expect("settings reply decodes") {
-            ProtocolResultDto::TuiSettings(settings) => settings,
-            other => panic!("a settings read answers with terminal settings: {other:?}"),
-        };
-        assert_eq!(
-            settings.theme(),
-            ThemeDto::Light,
-            "the stored override answers after the set"
-        );
-
-        drop((requests, messages));
-        server.await.expect("host serves the settings connection");
     }
 
     #[tokio::test]

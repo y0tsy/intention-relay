@@ -6,10 +6,9 @@ use intention_proto::{
     MessageKindDto, MessageProjectionDto, PathsResult, ProjectId, RunId, RunModeDto,
     RunProjectionDto, RunStatusDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionId,
     SessionProjectionDto, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto,
-    TextDeltaChannelDto, TextDeltaFrameDto, TextResult, ThemeDto, TimestampDto, ToolCallId,
-    ToolCallRowDto, ToolId, ToolIdentityDto, ToolInput, ToolProcessStatus, ToolResult,
-    ToolResultRowDto, ToolResultStatusDto, ToolRowDto, TurnId, WorkspaceId, WorkspaceRootDto,
-    WriteResult,
+    TextDeltaChannelDto, TextDeltaFrameDto, TextResult, TimestampDto, ToolCallId, ToolCallRowDto,
+    ToolId, ToolIdentityDto, ToolInput, ToolProcessStatus, ToolResult, ToolResultRowDto,
+    ToolResultStatusDto, ToolRowDto, TurnId, WorkspaceId, WorkspaceRootDto, WriteResult,
 };
 
 use super::{
@@ -522,11 +521,7 @@ fn bootstrap_lists_sessions_and_opens_the_selected_session() {
     let effects = state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
     assert_eq!(
         effects,
-        vec![
-            Effect::ListSessions,
-            Effect::LoadSettings,
-            Effect::OpenSession(session_id)
-        ],
+        vec![Effect::ListSessions, Effect::OpenSession(session_id)],
         "an explicitly selected session is opened without waiting for the list"
     );
     assert_eq!(
@@ -551,78 +546,57 @@ fn bootstrap_failure_is_reported_without_client_work() {
 }
 
 #[test]
-fn the_settings_load_records_the_daemons_theme_on_startup() {
-    let mut state = AppState::new(None);
+fn the_launch_theme_holds_across_a_ready_connection() {
+    let mut state = AppState::new(None).with_theme(Theme::Dark);
     let effects = state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
     assert_eq!(
         effects,
-        vec![Effect::ListSessions, Effect::LoadSettings],
-        "a ready connection reads the daemon's terminal settings"
-    );
-    assert_eq!(
-        state.theme(),
-        Theme::Light,
-        "the terminal's own default holds until the daemon answers"
-    );
-
-    let effects = state.update(Action::SettingsReceived(ThemeDto::Dark));
-    assert!(
-        effects.is_empty(),
-        "the settings reply asks for no more work"
+        vec![Effect::ListSessions],
+        "a ready connection reads the session list and no theme"
     );
     assert_eq!(
         state.theme(),
         Theme::Dark,
-        "the daemon's theme becomes the committed one"
+        "the theme the launch resolved stays the committed one"
     );
     assert_eq!(state.effective_theme(), Theme::Dark);
 }
 
 #[test]
-fn only_the_accepted_reply_moves_the_committed_theme_and_a_rejection_notices() {
+fn a_selection_commits_at_once_and_asks_for_its_local_rewrite() {
     let mut state = AppState::new(None);
     let effects = state.update(Action::ThemeSelected(Theme::Dark));
     assert_eq!(
         effects,
         vec![Effect::PersistTheme(Theme::Dark)],
-        "a selection asks the daemon to persist it"
+        "a selection asks for its local rewrite"
     );
     assert_eq!(
         state.theme(),
-        Theme::Light,
-        "a selection never commits optimistically"
-    );
-    assert_eq!(
-        state.effective_theme(),
         Theme::Dark,
-        "the candidate previews while the daemon confirms"
+        "the selection moves the committed theme at once"
+    );
+    assert_eq!(state.effective_theme(), Theme::Dark);
+
+    let effects = state.update(Action::ThemeSelected(Theme::Dark));
+    assert!(
+        effects.is_empty(),
+        "selecting the committed theme writes nothing"
     );
 
-    let effects = state.update(Action::SettingsFailed(failure()));
+    let effects = state.update(Action::ThemePersistFailed(failure()));
     assert!(effects.is_empty());
     assert_eq!(
         state.theme(),
-        Theme::Light,
-        "a rejected selection leaves the committed theme"
-    );
-    assert_eq!(
-        state.effective_theme(),
-        Theme::Light,
-        "a rejected selection drops the preview it showed"
+        Theme::Dark,
+        "a failed local rewrite never rolls the theme back"
     );
     assert!(
         state
             .error()
             .is_some_and(|error| error.starts_with("fixture_failure:")),
-        "the rejection reaches the error line"
+        "the failure reaches the error line"
     );
-
-    // The accepted reply is the only thing that moves the committed theme.
-    let mut state = AppState::new(None);
-    state.update(Action::ThemeSelected(Theme::Dark));
-    state.update(Action::SettingsReceived(ThemeDto::Dark));
-    assert_eq!(state.theme(), Theme::Dark);
-    assert_eq!(state.effective_theme(), Theme::Dark);
 }
 
 #[test]
@@ -674,11 +648,7 @@ fn listing_never_auto_opens_over_an_explicitly_selected_session() {
     let mut state = AppState::new(Some(selected));
     assert_eq!(
         state.update(Action::Bootstrapped(DaemonHealthDto::ready())),
-        vec![
-            Effect::ListSessions,
-            Effect::LoadSettings,
-            Effect::OpenSession(selected)
-        ],
+        vec![Effect::ListSessions, Effect::OpenSession(selected)],
         "the selected session is opened without waiting for the list"
     );
     // The list reply can overtake the selected session's snapshot, so the list
@@ -1218,17 +1188,22 @@ fn a_word_that_already_spells_its_command_or_value_runs_on_one_enter() {
     assert_eq!(state.screen(), Screen::Sessions);
     assert_eq!(state.input(), "", "a command never stays in the input line");
 
-    // `/theme LIGHT`: a declared value spelled in full is complete too, in
+    // `/theme DARK`: a declared value spelled in full is complete too, in
     // whichever case the submission path accepts.
     let mut state = AppState::new(None);
-    type_text(&mut state, "/theme LIGHT");
+    type_text(&mut state, "/theme DARK");
     assert!(state.command_menu().is_some(), "the value is still offered");
     assert_eq!(
         state.update(Action::InputSubmitted),
-        vec![Effect::PersistTheme(Theme::Light)],
+        vec![Effect::PersistTheme(Theme::Dark)],
         "one Enter applies the value the word already spells"
     );
     assert_eq!(state.input(), "");
+    assert_eq!(
+        state.theme(),
+        Theme::Dark,
+        "the value the word spells is committed at once"
+    );
 
     // An abbreviated word still completes first, and its completion runs on
     // the next press.
@@ -1358,10 +1333,9 @@ fn the_band_lists_a_declared_arguments_values_and_completes_one() {
         state.command_menu().is_none(),
         "a complete value closes the band"
     );
-    assert_eq!(
-        state.update(Action::InputSubmitted),
-        vec![Effect::PersistTheme(Theme::Light)],
-        "the completed line runs on the next Enter"
+    assert!(
+        state.update(Action::InputSubmitted).is_empty(),
+        "the completed value names the committed theme, so it writes nothing"
     );
 
     // A typed prefix narrows the band, and Enter completes it the same way.
@@ -1557,24 +1531,28 @@ fn the_theme_command_applies_a_theme_name_however_it_is_spelled() {
         type_text(&mut state, &format!("/theme {typed}"));
         let effects = run_command(&mut state);
         assert_eq!(
-            effects,
-            vec![Effect::PersistTheme(theme)],
-            "/theme {typed} asks the daemon to persist {theme:?}"
-        );
-        assert_eq!(
             state.screen(),
             Screen::Chat,
             "a spelled-out theme never opens the picker"
         );
         assert_eq!(
             state.theme(),
-            Theme::Light,
-            "the committed theme waits for the accepted reply"
+            theme,
+            "/theme {typed} commits {theme:?} however it is spelled"
         );
         assert_eq!(
             state.effective_theme(),
             theme,
-            "the selection previews while the daemon confirms"
+            "the committed theme is what the window paints"
+        );
+        let expected = if theme == Theme::Light {
+            Vec::new()
+        } else {
+            vec![Effect::PersistTheme(theme)]
+        };
+        assert_eq!(
+            effects, expected,
+            "a moved theme asks for its local rewrite; the committed one writes nothing"
         );
     }
 }
@@ -1582,17 +1560,23 @@ fn the_theme_command_applies_a_theme_name_however_it_is_spelled() {
 #[test]
 fn every_declared_theme_value_names_a_theme() {
     for theme in Theme::ALL {
-        let name = ThemeDto::from(theme).as_str();
+        let name = theme.as_str();
         let uppercase = name.to_uppercase();
         for typed in [name, uppercase.as_str()] {
             let mut state = AppState::new(None);
             type_text(&mut state, &format!("/theme {typed}"));
             let effects = run_command(&mut state);
             assert_eq!(
-                effects,
-                vec![Effect::PersistTheme(theme)],
+                state.theme(),
+                theme,
                 "/theme {typed} applies {theme:?} however the name is spelled"
             );
+            let expected = if theme == Theme::Light {
+                Vec::new()
+            } else {
+                vec![Effect::PersistTheme(theme)]
+            };
+            assert_eq!(effects, expected);
             assert_eq!(
                 state.screen(),
                 Screen::Chat,
@@ -1622,11 +1606,17 @@ fn a_declared_theme_value_never_opens_the_picker() {
         type_text(&mut state, &format!("/theme {}", value.value));
         let effects = run_command(&mut state);
         assert_eq!(
-            effects,
-            vec![Effect::PersistTheme(Theme::ALL[position])],
+            state.theme(),
+            Theme::ALL[position],
             "/theme {} selects the theme its declaration derives from",
             value.value
         );
+        let expected = if Theme::ALL[position] == Theme::Light {
+            Vec::new()
+        } else {
+            vec![Effect::PersistTheme(Theme::ALL[position])]
+        };
+        assert_eq!(effects, expected);
         assert_ne!(
             state.screen(),
             Screen::Theme,
@@ -1674,7 +1664,7 @@ fn the_picker_moves_the_highlight_and_previews_the_candidate_without_persisting(
     let effects = state.update(Action::ThemePreviewed(Theme::Dark));
     assert!(
         effects.is_empty(),
-        "a preview asks the daemon for nothing: it is never persisted"
+        "a preview asks for nothing: it is never persisted"
     );
     assert_eq!(
         state.effective_theme(),
@@ -1684,7 +1674,7 @@ fn the_picker_moves_the_highlight_and_previews_the_candidate_without_persisting(
     assert_eq!(
         state.theme(),
         Theme::Light,
-        "the committed theme stays what the daemon carries"
+        "the committed theme stays what the launch resolved"
     );
 
     // The picker walks its two rows from the effective theme, so the last row
@@ -1703,7 +1693,7 @@ fn the_picker_moves_the_highlight_and_previews_the_candidate_without_persisting(
 }
 
 #[test]
-fn the_picker_commits_the_highlighted_theme_through_the_daemon_and_closes() {
+fn the_picker_commits_the_highlighted_theme_and_asks_for_its_local_rewrite() {
     let mut state = AppState::new(None);
     open_picker(&mut state);
     state.update(Action::ThemePreviewed(Theme::Dark));
@@ -1712,7 +1702,7 @@ fn the_picker_commits_the_highlighted_theme_through_the_daemon_and_closes() {
     assert_eq!(
         effects,
         vec![Effect::PersistTheme(Theme::Dark)],
-        "Enter asks the daemon to persist the highlighted theme"
+        "Enter asks for the highlighted theme's local rewrite"
     );
     assert_eq!(
         state.screen(),
@@ -1721,18 +1711,9 @@ fn the_picker_commits_the_highlighted_theme_through_the_daemon_and_closes() {
     );
     assert_eq!(
         state.theme(),
-        Theme::Light,
-        "the committed theme moves only on the accepted reply"
-    );
-    assert_eq!(
-        state.effective_theme(),
         Theme::Dark,
-        "the candidate stays on screen while the daemon confirms"
+        "the commit moves the theme at once"
     );
-
-    let effects = state.update(Action::SettingsReceived(ThemeDto::Dark));
-    assert!(effects.is_empty());
-    assert_eq!(state.theme(), Theme::Dark);
     assert_eq!(state.effective_theme(), Theme::Dark);
 }
 
@@ -3556,12 +3537,8 @@ fn a_lost_stream_re_reads_the_session_after_the_reconnect() {
     let effects = state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
     assert_eq!(
         effects,
-        vec![
-            Effect::ListSessions,
-            Effect::LoadSettings,
-            Effect::OpenSession(session_id)
-        ],
-        "a reconnect re-reads the session it was showing and the daemon's settings"
+        vec![Effect::ListSessions, Effect::OpenSession(session_id)],
+        "a reconnect re-reads the session it was showing"
     );
 }
 

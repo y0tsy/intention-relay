@@ -49,16 +49,12 @@ pub async fn perform(
             .await
             .map(Action::SessionSnapshotLoaded)
             .map_err(|error| (Action::SessionSnapshotFailed(error.clone()), error)),
-        Effect::LoadSettings => client
-            .tui_settings()
-            .await
-            .map(|settings| Action::SettingsReceived(settings.theme()))
-            .map_err(|error| (Action::SettingsFailed(error.clone()), error)),
-        Effect::PersistTheme(theme) => client
-            .set_tui_theme(theme.into())
-            .await
-            .map(|accepted| Action::SettingsReceived(accepted.theme()))
-            .map_err(|error| (Action::SettingsFailed(error.clone()), error)),
+        Effect::PersistTheme(_) => {
+            // The local settings file is the fullscreen front end's own work:
+            // no client call carries a theme, and no other terminal mode has a
+            // theme to write.
+            return None;
+        }
         Effect::CreateSession { first_turn } => {
             let carried_first_turn = first_turn.is_some();
             let first_turn = match first_turn {
