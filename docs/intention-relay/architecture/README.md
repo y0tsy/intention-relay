@@ -78,7 +78,7 @@ flowchart TD
 9. [Goals, skills, context, and compaction](21-goals-skills-context-memory-and-compaction.md)
 10. [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md)
 11. [Non-destructive session branching and regeneration](23-non-destructive-session-branching-and-regeneration.md)
-12. [Configuration and provider control plane](25-configuration-provider-control-plane.md)
+12. [Provider discovery and typed configuration editing](25-configuration-provider-control-plane.md)
 13. [Goal domain and verification](28-goal-domain-and-verification.md)
 14. [Provider session selection and profiles protocol](29-provider-session-and-profiles-protocol.md)
 

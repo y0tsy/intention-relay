@@ -39,10 +39,10 @@ its own immutable selected snapshot/revision.
 
 M3 applies TOML **only at daemon startup**. It neither watches TOML nor applies an edit to an already-running daemon. A
 changed TOML file therefore takes effect only after a restart; the new startup snapshot applies to new runs, while
-existing persisted runs retain their recorded revision. Controlled live reload is the accepted future direction
-([architecture 25](25-configuration-provider-control-plane.md)) and must be introduced by an explicit contract,
-transaction, and
-outcome test; it affects fresh runs only and never mutates a recorded snapshot.
+existing persisted runs retain their recorded revision. Configuration application stays daemon-startup-only: controlled
+live reload was removed from the accepted directions by the owner decision 2026-10-13 ([architecture
+25](25-configuration-provider-control-plane.md)), so no reload contract, transaction, or outcome test is owed, and a
+running daemon has no second activation path.
 
 ### M3 lifecycle rules
 
@@ -55,8 +55,8 @@ to a configuration edit.
 -  TOML application is **daemon-restart-only** in M3: the daemon neither watches TOML nor applies an edit to an
 already-running daemon, and a changed TOML file takes effect only after a restart, where the new startup snapshot
 applies to new runs while existing persisted runs retain their recorded revision. The precise user experience for
-detecting or requesting the restart remains open; controlled live reload is the accepted future direction and must
-never be implied by M3/M4 behavior.
+detecting or requesting the restart remains open; M3/M4 behavior must never imply a second activation path for a
+running daemon.
 -  Configuration discovery remains platform-standard with a validated explicit absolute-path override; it never falls
 back to process CWD.
 
@@ -79,8 +79,8 @@ Safe resolved/snapshot DTOs, committed records, frames, protocol, diagnostics, l
 credential-free.
 
 These M4 configuration and credential-isolation rules are implemented and verified at the M4 closure baseline. They
-remain startup-only behavior; a follow-on milestone must not imply live reload, credential persistence, or rotation
-without new contracts and outcome evidence.
+remain startup-only behavior; a follow-on milestone must not imply credential persistence, in-process rotation, or a
+second configuration activation path without new contracts and outcome evidence.
 
 ### M5+ provider context-window policy
 
@@ -188,5 +188,5 @@ Makefile](12-quality-gates-and-makefile.md).
 
 - exact TOML layout and include/import policy, if any;
 - user experience for config edits and daemon-restart-required changes;
-- credential rotation flow;
+- credential entry at the startup boundary (no rotation command);
 - transcript/log retention and diagnostic export policy.

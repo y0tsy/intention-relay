@@ -10,9 +10,10 @@ This document owns provider kinds, profiles and catalog lifecycle, provider/mode
 credential-transport semantics, driver-contract compatibility, provider-local availability, and normalized textual
 reasoning. It applies only to future run execution; `openrouter` and `generic-chat-completion-api` remain the only M4
 kinds. Retained provider/profile/reasoning material is research provenance where it conflicts with architectures
-15--21. The configuration/provider control-plane cluster (profile
-UI/control plane, live reload, credential rotation, discovery, pricing, health checks) is owned by [architecture
-25](25-configuration-provider-control-plane.md).
+15--21. Provider/model discovery, typed configuration editing, and the profile UI are owned by [architecture
+25](25-configuration-provider-control-plane.md). Controlled live reload, in-process credential rotation, provider health
+checks, pricing and budget policy, and raw-TOML editing were removed from the accepted directions by the owner decision
+2026-10-13.
 
 ## Ownership and non-authorities
 
@@ -146,7 +147,8 @@ Every profile holds one opaque literal credential in private composition state. 
 authorization or one descriptor-selected validated header whose complete value is that credential. Credentials are
 non-serde and non-`Debug`, never compared/deduplicated, and absent from typed records, persistence, protocol, logs,
 diagnostics, adapter projections, and model context. Credential-only replacement may supply fresh private material after
-restart when every safe selected field still matches. It is not credential rotation and never resumes old work.
+restart when every safe selected field still matches. It is not in-process rotation and never resumes old work: the
+startup boundary is the only credential path.
 
 An endpoint is credential-free execution metadata only after strict validation: absolute HTTPS with a non-root API base
 path. HTTP is permitted only under an explicit loopback policy for exactly `localhost`, `127.0.0.1`, or `[::1]`. Reject
@@ -479,13 +481,14 @@ untagged meaning and gains no synthetic category, summary, or history.
 This document depends on architectures 15 and 21. It does not define a
 Responses SDK/driver, user-kind parser, profile picker/editor presentation, credential entry/keychain,
 telemetry, multimodal or structured output, plugin drivers, or remote continuation. The catalog database, the single
-current storage schema (logical version 1), credential rotation, health checks, discovery, pricing, controlled live
-reload, and typed header policy belong to the not-activated Slice 4; the typed preservation-control and
+current storage schema (logical version 1), discovery, typed configuration editing, and typed header policy belong to
+the not-activated Slice 4; controlled live reload, credential rotation, health checks, pricing, and raw-TOML editing
+were removed from it by the owner decision 2026-10-13; the typed preservation-control and
 server-side-parser contracts were removed as unconsumed by the unconsumed-surface audit (2026-09), and no
 parser-configuration surface is activated.
 Semantic content inspection of reasoning or provider content is an accepted post-M5 future direction,
 bound to Milestone 5+; it is not activated here, never substitutes for central redaction, and never rewrites stored
-records. The profile picker/editor, credential rotation, health test, discovery, pricing, telemetry, and live reload
+records. The profile picker/editor, discovery, and telemetry
 items are accepted post-M5 directions owned by [architecture 25](25-configuration-provider-control-plane.md) under
 [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment) and belong to the
 not-activated Slice 4, so they are documentation-only; the profile picker/editor presentation and telemetry remain not

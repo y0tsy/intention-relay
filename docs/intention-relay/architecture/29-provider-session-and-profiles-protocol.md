@@ -18,7 +18,7 @@ The removed run-execution meaning layer (its canonical codec was removed under [
 02](02-dto-and-contract-policy.md)) leaves no live path.
 Architecture 15 owns tool identity and the tool loop, and architecture 23 session branching.
 Architecture 22 owns provider kinds, profiles, catalogs, selections, and driver compatibility;
-architecture 25 owns the configuration/provider control plane.
+architecture 25 owns provider/model discovery and typed configuration editing.
 
 This document owns only the session-selection and presentation layer. A session default, override, usage aggregate, or
 protocol frame is not a second runtime, registry, persistence authority, catalog, or sandbox, and creates no `RunId`,
@@ -77,9 +77,10 @@ The profiles protocol serves paginated catalog reads, catalog status, session de
 per-turn and fork overrides, and resolved-selection projections. It is not gated on the
 capability plane: the negotiated `provider_profiles_v1` capability mechanism is removed under [architecture
 03](03-daemon-transport-and-adapters.md), so the surface uses plain typed requests with no
-capability or family gate. It does not imply live reload, configuration editing, profile testing, credential entry, or
-model discovery; configuration editing belongs to the [architecture 25](25-configuration-provider-control-plane.md)
-atomic reload contract and is not part of this surface. The daemon advertises and serves no `provider_profiles_v1`
+capability or family gate. It does not imply configuration editing, profile testing, credential entry, or
+model discovery; typed configuration editing belongs to the [architecture 25](25-configuration-provider-control-plane.md)
+direction and is not part of this surface, and no live-reload or atomic-reload contract exists (removed by the owner
+decision 2026-10-13). The daemon advertises and serves no `provider_profiles_v1`
 capability today.
 
 A catalog list is bounded, paginated by an opaque token, sorted by stable `ProfileId`, carries the active
@@ -99,8 +100,9 @@ create/edit/enable/disable profiles or kinds, enter credentials, or receive conf
 Profiles v1 are startup-only: no watcher, polling, auto-restart, or restart protocol command exists. Startup
 auto-accepts additions, new user-kind additions, execution edits, enable/disable, and display changes; an existing user
 kind never accepts an edited composition under an old ID. A semantic-equal catalog writes no new revision but
-reconstructs the private registry, and credential-only changes are invisible durable state (a deferred
-credential-rotation limitation). An invalid or internally inconsistent catalog (a profile pointing at an omitted kind,
+reconstructs the private registry, and credential-only changes are invisible durable state: there is no rotation
+command, and the startup boundary is the only credential path. An invalid or internally inconsistent catalog (a profile
+pointing at an omitted kind,
 an unknown revision, or a duplicate) fails startup loudly, and restart is the only way to apply changes; a stored
 session default or run selection referencing an absent entry resolves as a closed unavailable projection and is never
 mass-rewritten.
@@ -122,10 +124,11 @@ the layer is not activated and activation requires an activating specification.
 
 This document depends on architectures 15, 22, 23, and 25.
 Non-goals: a `responses` SDK/driver, user-kind parser, catalog database, profile picker/editor
-presentation, credential entry/keychain, health test, discovery, pricing, telemetry, live reload, multimodal or
+presentation, credential entry/keychain, discovery, telemetry, multimodal or
 structured output, plugin drivers, remote continuation, and production behavior. The catalog database, the single
-current storage schema (logical version 1), credential rotation, health checks, discovery, pricing, controlled live
-reload, and typed header policy belong to the not-activated Slice 4; the typed server-side-parser and
+current storage schema (logical version 1), discovery, typed configuration editing, and typed header policy belong to
+the not-activated Slice 4; controlled live reload, credential rotation, health checks, pricing, and raw-TOML editing
+were removed from it by the owner decision 2026-10-13; the typed server-side-parser and
 preservation-control contracts were removed as unconsumed by the unconsumed-surface audit (2026-09), so no
 parser-configuration surface is activated.
 

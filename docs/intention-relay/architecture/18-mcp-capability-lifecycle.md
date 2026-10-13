@@ -48,8 +48,7 @@ The record is typed serde JSON ([architecture 02](02-dto-and-contract-policy.md)
 user alone creates, edits, archives, and restores a connection, and a model may only prepare a draft under the selected
 proposal rules. `safe_endpoint_identity` is credential-free execution and presentation metadata. The private endpoint
 and one opaque credential live only in the daemon's private loading boundary
-([architecture 09](09-configuration-security-and-observability.md),
-[architecture 25](25-configuration-provider-control-plane.md)); a reference is resolved there for a call and is never a
+([architecture 09](09-configuration-security-and-observability.md)); a reference is resolved there for a call and is never a
 raw URL, command, header, token, key, keychain locator, SDK value, socket, process handle, raw frame, raw result, or
 server error body, and none of those enters a DTO, log, diagnostic, card, model context, or safe result. A connection
 edit takes effect for later calls and never retargets an already-committed call or an already-sent model step.

@@ -158,7 +158,8 @@ execution path carries no capability check. A truncation limitation of that pinn
 
 Resolved TOML configuration selects a provider and model. M1 defines a serializable, credential-free `ConfigSnapshotDto`
 foundation containing a `ConfigRevisionId`, capture timestamp, and redacted resolved selection. M1 does not persist
-revisions, apply daemon reload, or attach snapshots to runs; M3/M4 own those workflows. A later run receives the
+revisions, apply configuration to a running daemon, or attach snapshots to runs; M3/M4 own the startup application and
+recorded-revision workflows. A later run receives the
 immutable snapshot selected at startup.
 
 Provider/model selection changes do not mutate an already-started run. They apply to a later run, except if a future

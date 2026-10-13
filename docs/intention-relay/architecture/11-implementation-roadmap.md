@@ -161,10 +161,12 @@ child-result fact bound to the same `ToolCallId` and delivered once into the par
 frozen tool selection, tool admission, and Gateway/RLM bridge stay with Milestone 10. Its activating specification
 declares the instruction contract families as typed serde JSON contracts, activates the `sub_agent` tool contract and
 the Plan/Build policy on the live tool path, and changes no earlier slice.
--  **Slice 4 — Control plane — not activated.** The cluster and provider session selection (architectures 25/29/22):
-controlled live reload, credential rotation, provider health checks, model discovery, pricing policy, provider profile
-UI and raw-TOML/configuration editing, arbitrary authentication headers, session defaults and per-turn/fork overrides,
-the provider profiles protocol, and the provider reasoning/catalog surface, with the catalog built at startup. The
+-  **Slice 4 — Provider discovery and typed configuration editing — not activated.** Provider/model discovery and typed
+configuration editing (architecture 25) and provider session selection (architectures 29/22): discovery, the typed
+configuration-editing surface, provider profile UI, arbitrary authentication headers, session defaults and per-turn/fork
+overrides, the provider profiles protocol, and the provider reasoning/catalog surface, with the catalog built at startup.
+Controlled live reload, in-process credential rotation, provider health checks, pricing and budget policy, and raw-TOML
+editing were removed from the slice by the owner decision 2026-10-13 (architecture 25). The
 unconsumed-surface audit (2026-09) removed the unconsumed
 typed preservation-control, server-side-parser, Responses reasoning-mode, reasoning-usage, and model-capability-envelope
 contracts, the protocol-only reasoning/header/parser duplicates, the eight producer-less control-plane event DTOs, and
@@ -202,7 +204,7 @@ stamp bump discards and recreates the database with no migration or compatibilit
 semantics keep their recorded law.
 -  The Slice 2 terminal keeps one `intention-tui` binary whose three modes stay contract-equivalent over one
 `intention-client` surface, exit with the closed typed status set, and carry no presentation logic into the daemon.
--  The Slice 4 health, discovery, and pricing surfaces are non-authorizing: they create no RunId, tool
+-  The Slice 4 discovery and typed configuration-editing surfaces are non-authorizing: they create no RunId, tool
 permission, kernel epoch, context projection, or branch, and the activating
 specification must prove that non-authority.
 -  Applicable crates meet their declared tier floors without excluding policy or boundary logic; every activated slice
