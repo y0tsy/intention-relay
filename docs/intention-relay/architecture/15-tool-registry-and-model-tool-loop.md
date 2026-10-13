@@ -116,7 +116,7 @@ version; labels, executor handles, live readiness, and opaque owner resources ar
 -  **`ask_user`** is a normal long-running `user_interaction` tool. After
   `ToolCallStarted` the post-M4 run stays `Running`; other independently admitted calls may complete concurrently, and
   the next model step waits for this question's terminal safe result with every other group result. It never moves the
-  post-M4 run out of `Running` and never rewrites committed `messages` or `tool_results` rows or recovery state.
+  post-M4 run out of `Running` and never rewrites committed `messages` rows or recovery state.
 -  **`sub_agent`** admits one child run and returns its markdown answer. The typed input carries the bounded markdown
   task and the selected `mode`. `Sync` holds the call open until the child run reaches a terminal state and returns the
   child's terminal markdown answer as the call's result. `Async` terminates the call immediately with a `Deferred`
@@ -230,8 +230,8 @@ sequenceDiagram
 ```
 
 A `ToolCalls` finish closes a model step, not the run: one transaction records the completed assistant message alone,
-and each admitted call then records its own `tool_results` row and its answering transcript row in one transaction; no
-local effect occurs inside it.
+and each admitted call then records its committed tool-result message row and its answering transcript row in one
+transaction; no local effect occurs inside it.
 
 Every completed step commits exactly one assistant row whenever it produced text or reasoning, and that row commits
 before the step's own tool rows do. The row carries the step's whole reasoning; a step that reasoned without answering
@@ -256,8 +256,8 @@ calls' order or meaning.
 ### Tool output, terminal outcomes, and bounds
 
 A call produces one normalized safe output, bounded by the tool's output window, and exactly one terminal result. Output
-accumulates in memory and commits once, together with its `tool_results` row. Duplicate, post-terminal, or wrong-group
-results fail closed as `tool_result_stream_invalid`.
+accumulates in memory and commits once, together with its committed tool-result message row. Duplicate, post-terminal,
+or wrong-group results fail closed as `tool_result_stream_invalid`.
 
 Only the terminal safe result projection of every call becomes model context, and only after the whole group completes.
 The first-scope bounds are:
@@ -391,9 +391,10 @@ beyond the nine identity newtypes and the plain step and group indices.
 ## Dependencies and non-goals
 
 This document depends on the one-capability-path rules. It retains the `sub_agent` tool contract, admission, and
-generic tool-effect boundary, which the third slice of Milestone 5+ delivers. Architecture 18 owns the future `mcp` tool's source/discovery/capability/invocation
-semantics; this document retains tool identity, admission, and generic loop ownership. Architecture 19 owns
-Gateway/RLM attachment, grants, bridge operation correlation, and bridge-visible delivery; its ingress must use this
+generic tool-effect boundary, which the third slice of Milestone 5+ delivers. Architecture 18 owns the future `mcp`
+tool's connection-record, discovery, and direct-invocation semantics; this document retains tool identity, admission,
+and generic loop ownership. Architecture 19 owns the spawned kernel child's typed-client ingress, bridge-local
+recovery, and bridge-visible delivery; its ingress must use this
 document's frozen tool selection, admission, `ToolCallId`, start/result state, and publication from the commit
 without bypass or duplication, and tool admission never grants target-mutation authority. Architecture 20 kernel host
 requests consume the same frozen tool selection, admission, `ToolCallId`, and publication path; kernel execution

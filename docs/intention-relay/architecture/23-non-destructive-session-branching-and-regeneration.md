@@ -16,7 +16,7 @@ kernel semantics. Architecture 21 owns Goal/Skill/context source, audience, and 
 owns provider/profile/capability/reasoning semantics.
 
 This document owns only ordinary Session lineage and frozen fork transfer semantics. A conversation branch is not an RLM
-parent link, activity aggregate, provider continuation, tool permission, bridge grant, kernel epoch, MCP selection, or
+parent link, activity aggregate, provider continuation, tool permission, kernel epoch, MCP connection, or
 authority.
 
 ## Branch identity and user workflow
@@ -41,12 +41,12 @@ flowchart LR
   S[Source session] --> B[Committed boundary]
   B --> F[Fork transaction]
   F --> C[Idle child]
-  C --> R[Ordinary regen]
   S --> X[Source continues]
 ```
 
-`Regenerate response` is a user-turn fork followed by a separate idempotent ordinary `StartForkRunCommandDto`.
-A failed start leaves the committed idle child visible.
+`Regenerate response` is an ordinary new run in the same Session, appended after the committed turn and bound to the
+parent `RunId` it regenerates; it never forks, truncates, replaces, or rewrites history; a failed start leaves the prior
+response committed.
 
 ## Closed boundaries and frozen context
 
@@ -73,7 +73,7 @@ projection, or blocks the dependent operation.
 Every child owns one flattened credential-free `ForkBaseSnapshotDto`; nested forks never require runtime traversal of
 ancestor or sibling history. The child context starts from its own snapshot and adds only child-owned later history.
 Missing, corrupt, unknown, or incompatible data blocks dependent work before an effect and never falls back to a live
-source, current catalog, provider, file, index, memory, registry, bridge, kernel, MCP, or UI state.
+source, current catalog, provider, file, index, registry, bridge, kernel, MCP, or UI state.
 
 Fork snapshot, preview, and command records are typed serde JSON shapes; the former `typed-tlv` framing,
 canonicalization-version byte, and SHA-256 digest construction were removed under [architecture
@@ -112,7 +112,8 @@ no depth, descendant-count, source-boundary rate, or base-snapshot size limit
 15](15-tool-registry-and-model-tool-loop.md)). Title and page bounds remain intrinsic
 representation/protocol constraints where their owning field table requires them.
 
-The typed fork preview, fork, ordinary regeneration, tree page, rename, archive, and restore DTOs are exposed as
+The typed fork preview, fork, tree page, rename, archive, and restore DTOs, plus the ordinary regeneration run start
+carrying the parent `RunId` it regenerates (the concrete field lands with the activating specification), are exposed as
 ordinary typed requests over the single local connection; the former `session_fork_v1` negotiated family and its
 capability gate were removed under [architecture 03](03-daemon-transport-and-adapters.md). Tree reads are bounded
 immediate-child projections with stable continuation order. They are not tree-wide event streams. A peer that does not
@@ -175,8 +176,8 @@ every named session belongs to the same tree, project, and workspace.
 
 `SessionTitleDto` is bounded to 128 Unicode scalar values after trim and NFC normalization, and rejects blank, control,
 and bidi-override characters. An adapter may request a title when it forks; otherwise the daemon stores a deterministic
-safe title derived from the source title or its stable fallback and the fork point. A migrated root session has no
-stored title and uses only the stable presentation fallback until renamed. Rename changes one session only, writes
+safe title derived from the source title or its stable fallback and the fork point. A root session without a stored
+title uses only the stable presentation fallback until renamed. Rename changes one session only, writes
 `SessionRenamed`, and never changes lineage, a base snapshot, or a tree-wide title.
 
 ### Field tables
@@ -210,7 +211,7 @@ define a canonical binding for the preview together with its first real consumer
 
 `effective_instruction_projection` and `materialized_effective_instruction_projection` carry the typed
 `InstructionProjectionV1` of [architecture 30](30-instruction-sources-and-system-context.md): the exact ordered
-contributions with their source revisions, the declared audience, and the projection revision identity, materialized
+contributions with their source revisions and the projection revision identity, materialized
 when the fork is created. A child
 inherits the projection verbatim; no fork, regeneration, or later run re-derives it from current configuration,
 current project instructions, or current session state.
@@ -263,14 +264,13 @@ They disclose no credential, path, source content, raw provider data, or impleme
 
 ## Compatibility, dependencies, and non-goals
 
-M3/M4 historical sessions remain linear ordinary records until an additive migration creates deterministic root lineage
-records. Migration preserves IDs, turns, runs, pending turns, and configuration revisions. It creates no synthetic
-parent, anchor, run, assistant message, or source event.
+No migration exists: a database under an older stamp is discarded and recreated. Root lineage records are created for
+live-schema sessions (on creation or at first branch); no synthetic parent/anchor/run/event is written.
 
 A fork begins with no run and no execution authority. It cannot transfer a provider request/client/credential, tool
-action, kernel task, MCP process, bridge grant, or unfinished effect. Later child runs select their own immutable
-provider meaning. A profile override is allowed only for user-turn regeneration as a safe future-default proposal, never
-as a current run selection or continuation.
+action, kernel task, MCP process, or unfinished effect. Later child runs select their own immutable
+provider meaning. Regeneration is never a continuation: it resolves under ordinary admission and the per-turn override
+rules of [architecture 29](29-provider-session-and-profiles-protocol.md).
 
 This document depends on architectures 04 and 15--22 plus the DTO, transport, security, verification, and quality
 policies. It does not define activity-journal or UI implementation, workspace cloning/rebinding, autonomous

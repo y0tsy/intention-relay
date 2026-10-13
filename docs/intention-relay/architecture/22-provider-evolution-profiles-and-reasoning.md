@@ -23,8 +23,8 @@ lifecycle; 21 owns source selection, audience, disclosure, and immutable model-c
 
 This document owns only provider selection, compatibility, catalog, private adapter translation, and provider-local
 availability. A provider/profile/kind, model ID, endpoint, capability, reasoning value, catalog entry, driver, output,
-or availability observation cannot create a `RunId`, lifecycle transition, tool permission, MCP capability, bridge
-grant, kernel epoch, context projection, branch, or reconciliation result; it is not a second runtime, tool registry,
+or availability observation cannot create a `RunId`, lifecycle transition, tool permission, MCP connection, kernel
+epoch, context projection, branch, or reconciliation result; it is not a second runtime, tool registry,
 context builder, persistence authority, profile UI, or sandbox.
 
 ## Immutable provider and capability selections
@@ -167,41 +167,29 @@ apply fails closed at the seam with the adapter's typed error, live `SafeHeader`
 and adapter applicability remains adapter-owned. The option seam and every declaration belong to the not-activated
 Slice 4 and must be implemented under an activating specification.
 
-The catalog is startup-only, and acceptance is all-or-nothing: the auto-accept path builds and pre-validates the
-replacement registry and its admissions map before durable acceptance, so a build or validation failure leaves the
-durable catalog revision unadvanced and only a successful build commits the acceptance and swaps the in-memory registry
-and gate:
+The catalog is startup-only: it is parsed, validated, and built once at startup before the ready state. An invalid or
+internally inconsistent catalog (a profile pointing at an omitted kind, an unknown revision, or a duplicate) fails
+startup loudly, and restart is the only way to apply changes. A stored session default or run selection referencing an
+absent entry resolves as a closed unavailable projection and is never mass-rewritten.
 
 ```mermaid
 flowchart LR
   T[TOML restart] --> V[Local validation]
-  V --> P[Prepared candidate]
-  P -->|No removal| B[Build and pre-validate registry]
-  P -->|Removal| W[Pending removal]
-  W -->|Accept| A[Accept durable catalog]
-  W -->|Reject or expire| D[Degraded read mode]
-  B --> A
+  V --> B[Build and pre-validate registry]
+  B --> A[Accept durable catalog]
   A --> S[Exact private registry swap]
   S --> R[Fresh readiness]
-  A -. crash .-> C[Activation recovery]
-  C --> S
 ```
 
-Candidate construction may parse endpoints and create private clients but cannot perform DNS, HTTP, credential
-testing, telemetry, model discovery, or background provider work; a semantically equal safe catalog creates no new
-revision; valid non-removal changes auto-accept at startup; and a removal creates one pending candidate requiring
-explicit accept/reject against exact revisions, where rejection/expiry cannot reconstruct omitted credentials or
-prior readiness.
+The startup build may parse endpoints and create private clients but cannot perform DNS, HTTP, credential testing,
+telemetry, model discovery, or background provider work; a semantically equal safe catalog creates no new revision.
 
-Acceptance commits the state change in one transaction; no external action occurs inside it, and registry activation
-then swaps the exact accepted private entries. A crash after acceptance but before
-activation leaves `activation_recovery_required`, a changed current file cannot be adopted, and fresh provider
-readiness is unavailable until exact recovery succeeds. Catalog/default/enablement changes affect fresh selection
-only: they neither rewrite stored selection nor revoke an already admitted run, and explicit Run cancellation
-remains the stopping authority. No private binding survives restart. The catalog, its tables, and the
-configuration-audit vocabulary belong to the not-activated Slice 4: the closed audit taxonomy listed below is written
-by the storage path and carried by no wire DTO. Numeric catalog/parser/page bounds must be explicitly classified as
-intrinsic representation bounds, protocol bounds, or actual capacity, never admission quotas.
+Catalog/default/enablement changes affect fresh selection only: they neither rewrite stored selection nor revoke an
+already admitted run, and explicit Run cancellation remains the stopping authority. No private binding survives
+restart. The catalog, its tables, and the configuration-audit vocabulary belong to the not-activated Slice 4: the
+closed audit taxonomy listed below is written by the storage path and carried by no wire DTO. Numeric
+catalog/parser/page bounds must be explicitly classified as intrinsic representation bounds, protocol bounds, or
+actual capacity, never admission quotas.
 
 ## Availability, attempts, cancellation, and recovery
 
@@ -214,8 +202,8 @@ Future provider attempts use the admitted-before-start, started, known-terminal,
 `Started` commits before an outbound boundary and never inside an external-effect transaction. A known terminal or
 pre-start failure remains known. A started request without durable terminal proof after loss, cancellation, timeout, or
 restart commits a bounded `Partial` result with its notice; nothing is retried, and a later attempt is fresh admission.
-Late provider data is non-authoritative. Recovery terminalizes admitted-before-start work as known interruption,
-recovers exact catalog activation, establishes new readiness, and permits only fresh admission with a new `RunId`.
+Late provider data is non-authoritative. Recovery terminalizes admitted-before-start work as known interruption and
+permits only fresh admission with a new `RunId`.
 
 A future retry may follow only a frozen-policy, durably known retryable terminal or pre-start outcome. Any accepted
 text, reasoning, summary, usage, tool, or terminal record prevents retry. A post-dispatch timeout/loss without terminal
@@ -419,9 +407,8 @@ parsing, or provider SDK data outside its owner adapter.
 
 ## Catalog lifecycle detail: limits, tombstones, and audit
 
-The Slice 4 fixed catalog caps (profile/kind/display-name lengths, catalog and registry counts, candidate
-and page sizes, validation-issue counts, pending-removal lifetime, and its queue-promotion and reconciliation pages) are
-not part of the direction: the limits-by-precedent rule ([architecture
+The Slice 4 fixed catalog caps (profile/kind/display-name lengths, catalog and registry counts, page
+sizes, and validation-issue counts) are not part of the direction: the limits-by-precedent rule ([architecture
 09](09-configuration-security-and-observability.md), [architecture 15](15-tool-registry-and-model-tool-loop.md)) removes
 speculative contract limits and requires any future numeric bound to record the failure mode it prevents, its unit, and
 its behavior at the bound. The activating specification must not restore the caps.
@@ -431,30 +418,19 @@ stream/reasoning/activation/budget-effort/credential-transport parts fails with 
 valid path is a new kind ID plus reassignment. Credential-free catalog/profile-revision rows are immutable append-only
 SQLite history. Removal writes a removal-history `ProviderProfileTombstoneDto` (safe identity, removed catalog
 revision/time, provenance). Durable tombstones are append-only removal events keyed by (id, removed catalog revision);
-admission authority is the current active projection, so an identifier reintroduced by a later accepted catalog is
+admission authority is the current active projection, so an identifier reintroduced by a later catalog revision is
 admitted again and its next removal records a fresh history row. Kind removal while referenced fails
-`provider_kind_has_dependents`; after removing or reassigning all dependents in the same candidate, accepted kind
-removal writes a removal-history `ProviderKindTombstoneDto`. The audit taxonomy is:
+`provider_kind_has_dependents`; after removing or reassigning all dependents in the same catalog revision, the startup
+build writes a removal-history `ProviderKindTombstoneDto`. The audit taxonomy is:
 
 ```text
-ProviderCatalogCandidatePrepared
-ProviderCatalogRemovalPending
-ProviderCatalogRemovalAccepted
-ProviderCatalogCandidateRejected
-ProviderCatalogCandidateExpired
 ProviderCatalogAccepted
 ProviderCatalogActivated
-ProviderCatalogActivationRecoveryRequired
-ProviderCatalogRecoveryCompleted
 ```
 
-Ordering: every successful preparation appends `ProviderCatalogCandidatePrepared`; a removal candidate appends
-`ProviderCatalogRemovalPending`; acceptance orders `ProviderCatalogRemovalAccepted`, `ProviderCatalogAccepted`,
-`ProviderCatalogActivated` (no-removal: `ProviderCatalogAccepted` then `ProviderCatalogActivated`); rejection/expiry
-never emit acceptance/activation; a crash after acceptance orders `ProviderCatalogActivationRecoveryRequired`,
-replacement `ProviderCatalogActivated`, and `ProviderCatalogRecoveryCompleted` only when the exact accepted registry is
-active. The gate serializes catalog acceptance, session default changes, turn/fork admission, and registry lookups and
-never blocks active model tasks. Private enabled entries are keyed by the exact `(ProviderProfileId,
+Ordering: the startup build orders `ProviderCatalogAccepted` then `ProviderCatalogActivated`. The gate serializes the
+startup catalog build, session default changes, turn/fork admission, and registry lookups and never blocks active model
+tasks. Private enabled entries are keyed by the exact `(ProviderProfileId,
 ProviderProfileRevisionId, ProviderKindDescriptorRevisionId, ProviderDriverContractRevisionDto)`; each profile owns an
 independent private client/driver entry, and no SDK/credential/ client/handle crosses a DTO, persistence, protocol,
 runtime public API, or adapter boundary.
@@ -467,16 +443,15 @@ materialized, no `legacy_m4_selection_bindings` table exists, and provider bindi
 catalog runtime and resolved through the catalog admission port. No synthetic binding or provider selection is ever
 created for historical runs.
 
-## Session selection, degraded recovery, and protocol
+## Session selection and protocol
 
-The provider session-selection layer (session default, per-turn/fork overrides, profile-keyed usage, and pending-removal
-accept/reject) is owned by [architecture 29](29-provider-session-and-profiles-protocol.md); it belongs to the
-not-activated Slice 4.
+The provider session-selection layer (session default, per-turn/fork overrides, and profile-keyed usage) is owned by
+[architecture 29](29-provider-session-and-profiles-protocol.md); it belongs to the not-activated Slice 4.
 
 ## Child, MCP, bridge, kernel, context, and compatibility boundaries
 
 Every fresh run, including a child run, has its own immutable provider selection. Provider output is evidence only and
-cannot confer execution authority. Provider work cannot discover/invoke MCP, issue a bridge grant, create a kernel, or
+cannot confer execution authority. Provider work cannot discover/invoke MCP, create a kernel, or
 execute a tool. Bridge and kernel paths consume immutable provider selections only through their existing owners. A
 kernel never carries provider continuation or private driver resources.
 

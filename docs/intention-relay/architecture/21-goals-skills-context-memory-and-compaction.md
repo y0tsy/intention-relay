@@ -1,12 +1,12 @@
-# Goals, Skills, Context, Memory, and Compaction
+# Goals, Skills, Context, and Compaction
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
 Owner: architecture 21.
 
 This document owns future Goal scope and evidence, Skill selection and safe disclosure, context-source manifests,
-model-step projections, typed memory records, and immutable compaction. It applies only to future run execution.
-Retained Goal, Skill, memory, or compaction material remains research provenance and historical-only where it conflicts
+model-step projections, and immutable compaction. It applies only to future run execution.
+Retained Goal, Skill, or compaction material remains research provenance and historical-only where it conflicts
 with architectures 15--20.
 
 ## Ownership and non-authorities
@@ -14,14 +14,13 @@ with architectures 15--20.
 The removed execution-meaning envelope and decoders ([architecture
 02](02-dto-and-contract-policy.md)) leave no live path; 15 owns tool
 identity, frozen direct-tool selection, tool admission, model-tool loop, `ToolCallId`, and generic effect facts; 18 owns
-MCP lifecycle; 19 owns bridge grants, ingress, operation correlation, and bridge delivery; 20 owns kernel epochs, cells,
-checkpoints, and kernel-local safe projection.
+MCP connection records; 19 owns kernel-child ingress, safe committed-result delivery, and bridge-local recovery; 20 owns kernel
+epochs, cells, checkpoints, and kernel-local safe projection.
 
 This document owns only future non-authorizing context/evidence selection and safe representation. A Goal, Skill, source
-manifest, projection, memory record, card, disclosure, summary, omission, or compaction never creates or mutates a
-`RunId`, lifecycle state, tool permission, tool selection, `WorkspaceRoot`, MCP capability, bridge grant, kernel epoch,
-provider route, or reconciliation decision. Context is not a hidden prompt-mutation channel, sandbox, policy engine, or
-continuation mechanism.
+manifest, projection, card, disclosure, summary, omission, or compaction never creates or mutates a `RunId`, lifecycle
+state, tool permission, tool selection, `WorkspaceRoot`, MCP connection, kernel epoch, provider route, or reconciliation
+decision. Context is not a hidden prompt-mutation channel, sandbox, policy engine, or continuation mechanism.
 
 ## Immutable selection and Goal scope
 
@@ -36,7 +35,7 @@ This document owns detailed semantics of these credential-free nested future run
 
 Each optional selection remains exactly `Disabled` or `Selected`. Unknown, corrupt, unsupported, mismatched, or
 unavailable required selection blocks dependent future work before a model, provider, tool, process, bridge, kernel,
-child, or MCP effect. No current file, catalog, index, Goal, Skill, memory, configuration, UI, ancestry, model,
+child, or MCP effect. No current file, catalog, index, Goal, Skill, configuration, UI, ancestry, model,
 provider, bridge, kernel, or MCP state may repair missing meaning.
 
 A Goal is a user-managed, immutable revisioned acceptance/evidence record. It is not an instruction channel or execution
@@ -66,14 +65,25 @@ credential, bridge/kernel/MCP resource, or implicit child/lifecycle power.
 SkillSelectionV1
   skill_contract_revision
   ordered_skill_references
+    skill_id
+    exact_revision
+    origin
+    owner_scope_provenance
+    card_reference
+    body_reference_when_disclosed
+    disclosed_supplement_references
+    typed_reference_set_reference
+    invocation_origin = UserSlash | ModelMatch
   disclosure_policy_revision
   safe_projection_revision
 ```
 
-A model step receives only its explicitly selected bounded safe Skill projection. Full source remains private unless the
-selection's disclosure policy expressly permits its safe representation. Omitted, incompatible, or unsafe material is
-recorded as a typed omission/degradation outcome; it is never silently replaced with current catalog content or hidden
-injected text.
+The envelope binds the Skill contract, disclosure-policy, and safe-projection revisions; each ordered entry binds one
+selected Skill's identity, exact revision, origin, owner-scope provenance, card reference, disclosed body and supplement
+references, typed reference set, and invocation origin. A model step receives only its explicitly selected bounded safe
+Skill projection. Full source remains private unless the selection's disclosure policy expressly permits its safe
+representation. Omitted, incompatible, or unsafe material is recorded as a typed omission/degradation outcome; it is
+never silently replaced with current catalog content or hidden injected text.
 
 ## Factory-aligned Skill model
 
@@ -150,9 +160,8 @@ frontmatter cannot change behavior.
 Bodies and supplements are bounded immutable UTF-8 text or typed structured reference content only. They contain no
 binary/image/rich-MIME payload, executable code, shell template, Python package, install instruction, plug-in runtime,
 raw JSON schema, arbitrary URL/host/header, endpoint, credential, provider/SDK value, process/kernel/socket handle,
-hidden external effect, or dynamic registration. The only typed references are immutable memory, role, gate-template,
-registered descriptor revision, retained content, and an exact MCP capability revision already present
-in the same frozen run-local MCP selection.
+hidden external effect, or dynamic registration. The only typed references are role, registered descriptor revision,
+retained content, and an exact MCP connection-and-method reference already present in the same frozen run-local tool selection.
 
 ```text
 SkillOriginDto
@@ -201,8 +210,8 @@ Supporting resources are never implicitly loaded. The body may name a `SkillSupp
 context and selected references only. Every actual action still travels through the selected Rust-owned
 descriptor/gateway path. A card, body, supplement, frontmatter, declared tools, origin, role link, Goal, child,
 IPython facade, MCP server, or model request cannot create a ToolId, descriptor, registry entry, credential access,
-provider selection, authorization, confirmation, policy/quota, lifecycle mutation, child authority, gate success, or
-external effect.
+provider selection, authorization, confirmation, policy/quota, lifecycle mutation, child authority, or external
+effect.
 
 Skill text is untrusted model-visible data, not policy or executable authority. It may recommend already available work
 and may narrow a task, class, context/result bound, or selected descriptor subset through an exact typed role or
@@ -215,26 +224,13 @@ body, supplement, or package reference. A Skill may name a library module only a
 module itself stays an ordinary project file created and run through the registered tools. This document adds no script
 supplement kind, and a script never becomes Skill content, Skill authority, or Skill disclosure.
 
-```text
-SkillSelectionV1
-  skill_id
-  exact_revision
-  origin
-  owner_scope_provenance
-  card_reference
-  body_reference_when_disclosed
-  disclosed_supplement_references
-  typed_reference_set_reference
-  invocation_origin = UserSlash | ModelMatch
-```
-
-Selection is immutable before the next affected model step or external action. `GoalRunSelectionV1` records exact Skill
-selections; ordinary runs use a separately versioned optional selection carrying the same non-authorizing frozen Skill
-context. A child run receives only exact selected Skill/role/reference values explicitly selected for it. Forks retain
-the exact selected card/revision/disclosure references in their immutable base snapshot. Retry and recovery validate
-stored selection and never rediscover a current Skill. A new revision, disable, archive, revoke, replacement,
-or restore affects future discovery/admission only; it never rewrites an admitted run, child, fork, historical
-selection, or body.
+A `SkillSelectionV1` is immutable before the next affected model step or external action. `GoalRunSelectionV1` records
+exact Skill selections; ordinary runs use a separately versioned optional selection carrying the same non-authorizing
+frozen Skill context. A child run receives only exact selected Skill/role/reference values explicitly selected for it.
+Forks retain the exact selected card/revision/disclosure references in their immutable base snapshot. Retry and
+recovery validate stored selection and never rediscover a current Skill. A new revision, disable, archive, revoke,
+replacement, or restore affects future discovery/admission only; it never rewrites an admitted run, child, fork,
+historical selection, or body.
 
 Skill records are session-scoped: `SkillCreated`, `SkillImported`, `SkillRevisionCreated`, `SkillReplacementLinked`,
 `SkillRolledBack`, `SkillArchived`, `SkillRestored`, `SkillRevoked`, `SkillResolutionRecorded`, `SkillSelected`,
@@ -261,14 +257,14 @@ At minimum, closed failures are `skill_invalid`, `skill_disabled`, `skill_overri
 `skill_capability_reference_unavailable`, `skill_selection_incompatible`, and `skill_revision_conflict`. They reveal no
 full body, secret, private host, path, raw reference body, implementation resource, or external state.
 
-## Context sources, projections, and memory
+## Context sources and projections
 
 Same-Session Plan-to-Build continuation may retain the conversation as model context, but it must bind the approved plan
 revision and create a fresh Build run. Conversation history is context evidence, not proof of current mutable state or
 completion of an earlier effect. Before mutation, the Build run must revalidate mutable project and external state. An
 optional new-Session handoff materializes the full available safe conversation context, approved plan, and execution
-prompt into an immutable credential-free snapshot; it never transfers live runtime resources, credentials, grants,
-queues, or unfinished effects.
+prompt into an immutable credential-free snapshot; it never transfers live runtime resources, credentials, queues, or
+unfinished effects.
 
 Admission freezes an exact typed manifest before a dependent model step begins:
 
@@ -298,11 +294,9 @@ tool-role results in place when the request estimate crosses the configured cont
 projection, and every durable fact stay recorded as written. A source or card may be narrower than its original content
 but can never be broader or visible to a wider audience.
 
-Memory uses immutable typed records, not mutable hidden prompt state. A memory record has provenance, scope, safe card,
-audience, explicit disclosure status, and supersession/replacement/rollback references. Retrieval and disclosure may
-refuse safely or omit a record with typed reason. They cannot infer conflicts, mutate historical context, inject
-undisclosed content, or leak source material. A replacement creates a new immutable record and explicit relation;
-rollback selects an earlier record explicitly and does not erase either record.
+Memory is ordinary markdown the user and model maintain in the workspace, and the model reads it with the existing
+six-tool set ([architecture 05](05-tools-and-workspace.md)). No memory records, scopes, cards, or replacement links
+exist, and no context selection carries memory state.
 
 ## Compaction, cancellation, and recovery
 
@@ -341,20 +335,19 @@ or missing selected context blocks only dependent future work before effect; unr
 
 ## Child, MCP, bridge, kernel, protocol, and compatibility boundaries
 
-A child receives only separately selected frozen safe references. It never inherits a live manifest, undisclosed memory,
-Goal applicability, Skill source, bridge grant, kernel namespace/checkpoint, provider continuation, MCP selection,
-connection, process, or unfinished effect. Child context is independent and non-authorizing.
+A child receives only separately selected frozen safe references. It never inherits a live manifest, Goal
+applicability, Skill source, kernel namespace/checkpoint, provider continuation, MCP connection, process, or
+unfinished effect. Child context is independent and non-authorizing.
 
-MCP, bridge, and kernel context is safe projection only. Context cannot discover or invoke MCP, issue a bridge
-grant/operation, create a kernel epoch, restore a checkpoint, or cause a host request. Future delivery uses typed
+MCP, bridge, and kernel context is safe projection only. Context cannot discover or invoke MCP, issue a bridge ingress
+request, create a kernel epoch, restore a checkpoint, or cause a host request. Future delivery uses typed
 requests ([architecture 03](03-daemon-transport-and-adapters.md)): correlated, read-only current-state
 projections. Reconnect re-reads current state; there is no event tail, cursor, or resynchronization. Reconnection or
-audit cannot create a Goal, disclose memory,
-recompact, execute a model step, invoke a tool, start a child, issue authority, or perform external work. Partial
-delivery is never permitted.
+audit cannot create a Goal, recompact, execute a model step, invoke a tool, start a child, issue authority, or perform
+external work. Partial delivery is never permitted.
 
-M3/M4 and retained records gain no Goal, Skill, source-manifest, projection, memory, disclosure, summary, applicability
-link, child, MCP, activity, or policy state. Historical M4 tool calls remain denial evidence. No current mutable state
+M3/M4 and retained records gain no Goal, Skill, source-manifest, projection, disclosure, summary, applicability link,
+child, MCP, activity, or policy state. Historical M4 tool calls remain denial evidence. No current mutable state
 may reconstruct missing future context meaning.
 
 ## Dependencies, non-goals, and evidence

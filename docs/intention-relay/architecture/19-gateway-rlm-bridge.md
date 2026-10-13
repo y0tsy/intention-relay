@@ -4,8 +4,8 @@
 
 Owner: architecture 19.
 
-This document owns future Gateway/RLM attachment, ephemeral bridge grant, ingress operation correlation, safe
-bridge-visible delivery, and bridge recovery. It applies only to future run execution. Retained RLM bridge, child, and
+This document owns future kernel-child ingress, safe delivery of committed results, cancellation propagation, and
+bridge-local recovery classification. It applies only to future run execution. Retained RLM bridge, child, and
 activity material remains research provenance and historical-only where it conflicts with architectures 15--18.
 
 ## Ownership and one capability path
@@ -13,226 +13,129 @@ activity material remains research provenance and historical-only where it confl
 The removed execution-meaning envelope and decoders ([architecture
 02](02-dto-and-contract-policy.md)) leave no live path; 15 owns the
 fixed tool set, frozen tool selection, direct admission, model-tool loop, `ToolCallId`, generic effect evidence, and
-recovery; 18 owns MCP source, discovery, selection, invocation, and recovery.
+recovery; 18 owns MCP connection records, discovery, method lists, invocation, and recovery.
 
-This document owns only bridge attachment, grant, operation identity, ingress correlation, safe bridge projection,
+This document owns only the spawned kernel child's typed-client ingress, safe delivery of committed results,
 cancellation propagation, and bridge-local recovery classification; it is not a second registry, gateway,
 daemon, lifecycle, tool implementation, child executor, MCP client, provider selector, persistence authority, sandbox,
 or OS privilege boundary.
 
-Python/RLM facade code, direct model ingress, kernels, children, MCP servers, providers, adapters, bridge channels,
-grants, operation IDs, current configuration, readiness, evidence, and retained RLM identities cannot create or widen
+Python/RLM facade code, direct model ingress, kernels, children, MCP servers, providers, adapters, bridge connections,
+current configuration, readiness, evidence, and retained RLM identities cannot create or widen
 tool, lifecycle, child, or reconciliation authority; every invocation reaches architecture 15's one daemon-owned,
 Rust-owned capability path.
 
-## Immutable bridge selection and ephemeral grant
+## One spawned child and one typed client
 
-This document owns the semantic fields of the credential-free nested bridge selection in the future typed run record
-(typed serde JSON, [architecture 02](02-dto-and-contract-policy.md)):
+The daemon spawns the session's IPython kernel as its own child process ([architecture
+20](20-ipython-kernel-lifecycle.md)). The child holds the existing typed client for that process; the daemon recognizes
+the caller as its spawned child from its own process bookkeeping and resolves the session, executing run, model step,
+and turn from the daemon-assigned cell reference of the execution window it opened, never from a caller-supplied value.
+There is no durable grant record, attachment handshake, or
+caller-selected identity: the client is process-local transport, not a credential, semantic selection, lifecycle
+permission, policy decision, or capability. Nothing joins the future typed run record: the run's frozen tool selection,
+model step, and admission already carry everything a call needs.
 
-```text
-BridgeSelectionV1
-  gateway_contract_revision
-  ingress_family
-  safe_projection_revision
-  operation_binding_revision
-```
+The client rides the repository's existing typed local wire ([architecture
+03](03-daemon-transport-and-adapters.md)) on its existing private per-user Unix-socket/Windows-named-pipe endpoint, its
+live wire-version byte, bounds, and OS-user access boundary. There is no second local listener, TCP/HTTP endpoint,
+remote attachment, sandbox, or daemon, and no added handshake, method table, or version negotiation: the child sends
+architecture-15's typed tool invocation through the existing typed local request path and receives architecture-15's
+ordinary records and frames. An unsupported request fails with a typed error before a partial result or live
+notification is delivered.
 
-It freezes the executable bridge contract, not a live attachment, and excludes a grant, daemon epoch, channel, kernel,
-process, connection, endpoint, credential, registry state, descriptor handle, live readiness, child identity, and
-external resource.
+## Ingress, admission, and dedupe
 
-After a durable reread proves a supported active run, exact frozen bridge and tool selections, active model step, and no
-cancellation gate, the daemon alone may issue an opaque ephemeral grant:
+Every kernel-originated call is an ordinary architecture-15 call. The daemon assigns the canonical `ToolCallId`, which
+remains the one identity for that call's durable records and stream frames; an equal repeat within one turn dedupes
+against the turn idempotency key ([architecture 04](04-sessions-runs-events-and-storage.md)) and returns the existing
+evidence instead of admitting a second action. Admission is architecture 15's three outcomes — `Admitted`, typed
+`Incompatible`, typed `Unavailable`; quota, parent, Goal, Skill, provider, MCP, or bridge-specific authorization cannot
+be introduced.
 
-```text
-BridgeAttachmentGrantV1
-  opaque_grant_id
-  daemon_epoch
-  issued_protocol_revision
-  run_id
-  model_step_position
-```
-
-A grant binds its holder to one daemon-held `SessionId`, `RunId`, originating `TurnId`, and the daemon-assigned
-model-step position (never caller-selected). It is non-secret ephemeral transport evidence for one daemon epoch and live
-daemon process, not a credential, durable record, semantic selection, lifecycle permission, policy decision, or
-caller-selected identity. It expires on model-step closure, run terminalization or interruption, cancellation
-reaching the bridge gate, channel detachment, or daemon exit, and never enters the future typed run record, model
-messages, model context, logs, diagnostics, or a public projection. A persistent Python namespace may outlive an
-expired grant but must obtain a newly issued grant before invoking a tool for a later run.
-
-## Attachment, operation identity, and admission
-
-Bridge attachment is a future additive surface on the repository's typed local wire ([architecture
-03](03-daemon-transport-and-adapters.md)), reusing the
-existing private per-user Unix-socket/Windows-named-pipe endpoint with its live wire-version byte, the **1 MiB message
-bound**, and the OS-user access boundary; it requires `model_tool_loop_v1` descriptor/model support whenever the peer
-receives future tool-loop facts. An unsupported request fails with a typed error before a partial bridge result or live
-notification is delivered. There is no second local listener, TCP/HTTP endpoint, remote attachment,
-credential, sandbox, or daemon.
-
-`BridgeOperationId` is the caller-stable idempotency identity of one bridge ingress request, distinct from the
-diagnostic `CorrelationIdDto` and the daemon-assigned `ToolCallId`. A durable operation binding records only typed
-references:
-
-```text
-BridgeOperationV1
-  bridge_operation_id
-  run_id
-  model_step_position
-  tool_id
-  descriptor_revision
-  typed_input_reference
-  tool_call_id
-  admission_outcome
-  attempt_reference
-```
-
-It excludes the grant, raw input, Python/Jupyter value, provider value, path, endpoint, credential, SDK object, handle,
-process, socket, and raw output. The facade creates and retains `BridgeOperationId`; an in-daemon direct-model ingress
-receives an equivalent stable ID from the gateway before admission. The daemon validates the opaque grant, resolves the
-selected active descriptor, and assigns the canonical `ToolCallId`, durably binding the operation to the authority
-context, `ToolId`, descriptor revision, and the non-public typed input before any external action; the record contains
-no grant value, credential, raw input, Python/Jupyter value, provider value, workspace root, implementation handle, or
-source path.
-
-Bridge ingress validates the grant/epoch, exact run/revision/model step, frozen bridge and descriptor selection,
-operation identity, typed input, intrinsic bounds, and live availability, then invokes architecture 15's generic
-admission contract. The only bridge admission outcomes are `Admitted`, typed `Incompatible`, typed `Unavailable`, an
-idempotent existing binding, or an operation conflict; quota, parent, Goal, Skill, provider, or bridge-specific
-authorization cannot be introduced.
-
-Reuse with a different authority context, `ToolId`, descriptor revision, or typed input fails pre-effect with
-`bridge_operation_conflict`; an equal command returns the saved binding, current admission state, stream attachment, or
-terminal safe result and never admits, starts, or executes a second action. `ToolCallId` remains the one canonical
-identity for the call's durable records and stream frames. Before the call start boundary, a bound operation may report
-`Admitted`; on daemon recovery an admitted operation that never reached start records `InterruptedBeforeStart`; once the
-call has started, a repeat is read-only and returns only durable evidence, never re-executing.
+Before the call start boundary, an admitted call that never started records `InterruptedBeforeStart` on daemon
+recovery; once the call has started, a repeat is read-only and returns only durable evidence, never re-executing.
 
 ```mermaid
 sequenceDiagram
-  participant F as RLM facade
-  participant B as Bridge
+  participant D as Daemon
+  participant K as Kernel child
   participant L as Tool loop
-  participant D as Durable state
   participant T as Tool owner
+  participant S as Durable state
 
-  F->>B: Attach over the typed wire
-  B->>D: Reread active context
-  D-->>B: Ephemeral grant
-  F->>B: Operation ID and typed call
-  B->>L: Validate frozen binding
-  L->>D: Commit admission and start
+  D->>K: Spawn session kernel child
+  K->>L: Typed call over the existing local wire
+  L->>S: Commit admission and start
   L->>T: Dispatch after commit
-  T-->>D: Safe facts and result
-  D-->>B: Publish committed values
+  T-->>S: Safe facts and result
+  S-->>K: Publish committed values
 ```
 
-## Effects, delivery, cancellation, and recovery
+## Delivery, cancellation, and recovery
 
-Architecture 15's committed call start is the only generic durable boundary after which a bridge-routed external effect
-may be possible; the bridge introduces no second start marker, result stream, or terminal-result frame. Fragments and
-terminal results remain architecture-15 records demultiplexed by `ToolCallId`. Each state change is one transaction;
-there is no separate event or ordering record. Publication occurs only after commit, from the values the commit
-recorded; publisher/channel failure cannot roll back a commit or cause redispatch.
+Results, fragments, and publication are architecture 15's records alone, demultiplexed by `ToolCallId`; the bridge adds
+no second start marker, result stream, terminal-result frame, commit boundary, or ordering record, and it reuses
+architecture 15's effect, before-start/interruption, partial-result, cancellation, and recovery rules rather than
+restating them.
 
-Before the call start boundary, cancellation or recovery records known `CancelledBeforeStart` or
-`InterruptedBeforeStart`. After start, a durably proven terminal result remains known; without terminal proof the exact
-attempt commits a bounded `Partial` result with its notice, and the next model step proceeds. Known validation, denial,
-protocol, tool, or remote failures remain known when terminal effect proof exists.
+Channel close does not stop a run; the run stop remains owner-controlled and the bridge only propagates it. `run.cancel`
+signals the registered in-flight call, which ends with its bounded `Partial` result and notice ([architecture
+20](20-ipython-kernel-lifecycle.md)); late frames after a stop, terminalization, or restart are non-authoritative and
+cannot append durable records.
 
-Channel close and grant expiry do not stop a run; the run stop remains owner-controlled and
-the bridge only propagates it. The first bridge contract adds no per-`ToolCallId` stop command: `run.cancel`
-signals the registered execution, ends the in-flight operation with its bounded `Partial` result and notice, and ends
-the run, and a valid durable stop/result race is decided by the first committing mutation, with the
-loser rereading and unable to overwrite. Late fragments/results after a stop, terminalization, grant
-expiry, or restart are non-authoritative and cannot append durable records.
-
-Bridge recovery invalidates old grants, disposes private bridge-side resources, classifies operations only from durable
-evidence, and rebuilds safe projections only from supported records. It never reissues an old grant, re-admits an old
-operation, reattaches a facade/kernel/task, retries/reruns a tool, recreates a child, polls remote work, or
-reconstructs meaning from current registry, configuration, kernel, process, channel, or graph state. Post-restart
-lookup is read-only; later work requires a new `RunId`, fresh admission, a new grant, and new operation identity.
+Bridge recovery classifies unfinished calls only from durable evidence and rebuilds safe projections only from
+supported records; it never reattaches a kernel, retries a tool, recreates a child, or reconstructs meaning from
+current registry, configuration, kernel, process, or graph state. Post-restart lookup is read-only; later work requires
+a new `RunId` and fresh admission.
 
 ## Child, MCP, and protocol boundaries
 
 For `sub_agent`, the bridge performs only generic ingress and architecture-15 admission, returns only safe references
 and result projections, and assigns no child identity, control, message, terminalization, or authority. A child never
-inherits a live bridge grant, kernel, provider continuation, MCP selection, connection, process, or unfinished effect,
-and a child run requires its own fresh admission.
+inherits a live kernel process, namespace, provider continuation, MCP connection, process handle, or unfinished
+effect, and a child run requires its own fresh admission.
 
-Bridge transport may carry only architecture-18 safe MCP projections and cannot discover, select, invoke, reattach, or
+Bridge transport may carry only architecture-18 safe MCP projections and cannot discover, invoke, reattach, or
 recreate MCP work. Reconnect re-reads current state; there is no event tail, cursor, or resynchronization, and bridge
 delivery cannot create a bridge-owned sequence, start a child, rediscover/invoke MCP, or execute external work.
 
-## Bridge detail: DTOs, limits, and safe failures
+## Bridge detail: bounds and safe failures
 
-The first-scope versioned typed bridge DTO families are:
-
-```text
-BridgeRunGrantDto
-  opaque_grant_identity
-  issued_protocol_revision
-
-BridgeAttachmentResponseDto
-  bridge_run_grant
-
-BridgeInvocationCommandDto
-  bridge_run_grant
-  bridge_operation_id
-  typed_tool_invocation
-
-BridgeInvocationAcceptedDto
-  bridge_operation_id
-  tool_call_id
-  admission_state
-```
-
-One attached peer sends correlated attachment, invocation, operation-read, and run-control commands; the daemon sends
-correlated responses and uncorrelated `SessionFrameDto` values over the same persistent local connection. The
-first-scope bounds are transport and liveness safeguards only:
-
-- **1 MiB** per local frame;
-- a bounded slow-peer subscription path enforced by the host's subscriber queue and write deadline ([architecture
-03](03-daemon-transport-and-adapters.md)); and
-- **512 KiB** per durable record.
-
-Bridge operations are admitted independently: the bridge keeps no unfinished-operation counter, and each invocation
-passes architecture 15's admission contract before any external action. There is no broader buffer, alternate deadline,
-truncation rule, or unbounded queue. The bounded slow-peer path never delays durable execution or healthy subscribers:
-a slow or detached peer is bounded by the host's slow-peer path without blocking execution, persistence, or healthy
-peers. Reconnect re-reads current state; there is no event tail, cursor, or resynchronization. The bridge never treats
-channel state as authoritative or repeats external work.
+The spawned child's typed client adds no transport, bound, or deadline of its own: it uses the existing local wire and
+its frame bound, the host's slow-peer path, and architecture 15's durable record bounds ([architecture
+03](03-daemon-transport-and-adapters.md)). There is no broader buffer, alternate deadline,
+truncation rule, or unbounded queue, and a slow or detached peer is bounded without blocking execution, persistence, or
+healthy peers. The bridge keeps no unfinished-call counter: each call passes architecture 15's admission contract
+before any external action, and the bridge never treats channel state as authoritative or repeats external work.
 
 The closed bridge safe failures through `ErrorDto` are:
 
 ```text
 daemon_tool_gateway_required
 bridge_authority_unavailable
-bridge_authority_expired
-bridge_operation_conflict
-bridge_operation_not_found
 ```
 
-They disclose no credential, path, grant value, raw input, Python/Jupyter value, provider resource, process topology, or
+A caller that would reach a tool or primitive path directly fails `daemon_tool_gateway_required`; a kernel-originated
+call the daemon cannot resolve to its spawned child and active run fails `bridge_authority_unavailable` before effect.
+They disclose no credential, path, raw input, Python/Jupyter value, provider resource, process topology, or
 implementation detail.
 
 ## Compatibility, dependencies, and non-goals
 
 M4 provider kinds remain `openrouter` and `generic-chat-completion-api`; model names do not select a provider or bridge
-contract. Historical M4 tool calls remain denial evidence. Historical M3/M4 and retained RLM records gain no bridge
-grant, operation, MCP selection, Skill, Goal, activity, or policy state, and no current mutable state may reconstruct
+behavior. Historical M4 tool calls remain denial evidence. Historical M3/M4 and retained RLM records gain no bridge
+ingress, operation, MCP, Skill, Goal, activity, or policy state, and no current mutable state may reconstruct
 missing bridge meaning. Retained RLM `SubAgentId`, `RlmParentLinkDto`, session/run-rooted
 trees, policy inheritance, queues, activity identities, and product limits remain historical only; no later bridge may
 reference exact legacy bytes, rewrite, normalize, or synthesize future state
 ([architecture 00](00-principles-and-scope.md)).
 
-This document depends on architectures 15 and 18. Related
-owners: 20 owns kernel process/namespace/checkpoint lifecycle; 21 owns Goal, Skill, context, memory, and compaction
+This document depends on architectures 15, 18, and 20. Related
+owners: 20 owns kernel process/namespace/checkpoint lifecycle; 21 owns Goal, Skill, context, and compaction
 (bridge-delivered context is safe immutable projection only); 22 owns provider profile/capability semantics (bridge
-delivery uses only safe existing provider facts); 23 owns ordinary Session forks (no bridge grant or operation crosses
-one); 03 owns activity/UI projections (bridge grants, operations, and resources never become activity authority or
+delivery uses only safe existing provider facts); 23 owns ordinary Session forks (no live kernel process or unfinished
+effect crosses one); 03 owns activity/UI projections (kernel-host calls never become activity authority or
 public activity payload). It does not define kernel lifecycle, RLM executor or recursion topology, provider evolution,
 Skills, Goals, context, session forks, activity/UI, direct MCP administration, SQL, migrations, wire tags, crates,
 Cargo, Makefile/CI, or production implementation.

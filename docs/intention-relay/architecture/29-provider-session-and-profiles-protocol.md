@@ -22,7 +22,7 @@ architecture 25 owns the configuration/provider control plane.
 
 This document owns only the session-selection and presentation layer. A session default, override, usage aggregate, or
 protocol frame is not a second runtime, registry, persistence authority, catalog, or sandbox, and creates no `RunId`,
-lifecycle transition, tool permission, tool selection, child, MCP capability, bridge grant, kernel epoch, context
+lifecycle transition, tool permission, tool selection, child, MCP connection, kernel epoch, context
 projection, branch, or reconciliation result.
 
 ## Session selection, runs, and usage
@@ -74,7 +74,7 @@ resolution service belong to this not-activated layer; the fork wire commands re
 ## Public protocol and presentation
 
 The profiles protocol serves paginated catalog reads, catalog status, session default query/command, safe
-per-turn and fork overrides, resolved-selection projections, and pending-removal accept/reject. It is not gated on the
+per-turn and fork overrides, and resolved-selection projections. It is not gated on the
 capability plane: the negotiated `provider_profiles_v1` capability mechanism is removed under [architecture
 03](03-daemon-transport-and-adapters.md), so the surface uses plain typed requests with no
 capability or family gate. It does not imply live reload, configuration editing, profile testing, credential entry, or
@@ -88,38 +88,25 @@ entry includes profile/catalog revisions, display name, enabled state, kind ID, 
 normalized endpoint where applicable, effective policy, capability subset, credential transport mode and safe header
 name where applicable, `credential_configured`, deterministic driver-declared capabilities, and local readiness. The
 closed readiness projection is `ready`, `disabled`, or `unavailable` (never claiming network or credential health).
-`GetProviderCatalogStatusQueryDto` returns the closed activation state `preparing`, `active`, `pending_removal`, or
-`activation_recovery_required`; the applicable closed degraded reason; active/candidate safe revisions; the default; and
-safe validation/removal impact.
+`GetProviderCatalogStatusQueryDto` returns the closed activation state `active`, the active catalog revision, and the
+session default.
 
-Adapters can only read safe state, set session defaults, supply user-originated overrides, and accept/reject pending
-removal; they never write TOML, create/edit/enable/disable profiles or kinds, enter credentials, or receive
-configuration paths.
+Adapters can only read safe state, set session defaults, and supply user-originated overrides; they never write TOML,
+create/edit/enable/disable profiles or kinds, enter credentials, or receive configuration paths.
 
-## Startup-only application and degraded recovery
+## Startup-only application
 
 Profiles v1 are startup-only: no watcher, polling, auto-restart, or restart protocol command exists. Startup
 auto-accepts additions, new user-kind additions, execution edits, enable/disable, and display changes; an existing user
 kind never accepts an edited composition under an old ID. A semantic-equal catalog writes no new revision but
 reconstructs the private registry, and credential-only changes are invisible durable state (a deferred
-credential-rotation limitation). An omitted profile or unreferenced kind becomes a process-local pending-removal
-candidate (not auto-tombstoned); a profile pointing to an omitted kind is invalid. Degraded mode is admin/read only.
+credential-rotation limitation). An invalid or internally inconsistent catalog (a profile pointing at an omitted kind,
+an unknown revision, or a duplicate) fails startup loudly, and restart is the only way to apply changes; a stored
+session default or run selection referencing an absent entry resolves as a closed unavailable projection and is never
+mass-rewritten.
 
-`AcceptProviderCatalogRemovalCommandDto` (idempotent) takes a candidate handle, expected active/candidate revisions, and
-an operation ID; it commits the state change in one transaction and then activates the registry; no external action
-occurs inside it.
-`RejectProviderCatalogCandidateCommandDto` drops the private candidate and pending status, records
-`ProviderCatalogCandidateRejected`, and leaves degraded read-only with `removal_candidate_rejected`. At most one
-candidate exists, with a lifetime of **30 minutes** from `ProviderCatalogRemovalPending`; expiry produces
-`ProviderCatalogCandidateExpired` and degraded read-only with `removal_candidate_expired`.
-
-Startup opens storage first, applies the architecture 04 recovery-before-ready rule, then prepares and activates the
-catalog. A degraded daemon serves health, safe catalog status/validation, and session/run/tree reads; all provider state
-changes, admission, and default changes are rejected with `execution_not_ready`, the only exceptions being accept/reject
-of the one pending candidate. A crash after acceptance produces `ProviderCatalogActivationRecoveryRequired` before
-reconstruction and `ProviderCatalogRecoveryCompleted` only after the exact accepted catalog is active; a mismatch stays
-`activation_recovery_required`. The closed degraded reasons are `removal_candidate_pending`,
-`removal_candidate_rejected`, `removal_candidate_expired`, and `activation_recovery_required`. The layer does not
+Startup opens storage first, applies the architecture 04 recovery-before-ready rule, then parses, validates, and builds
+the catalog before ready. A catalog failure means no ready state and no degraded read-only mode. The layer does not
 include the held-run admission path (`AdmitRecoveredRunCommandDto`); the limits-by-precedent rule ([architecture
 09](09-configuration-security-and-observability.md), [architecture 15](15-tool-registry-and-model-tool-loop.md)) keeps
 it out of the direction, and the
