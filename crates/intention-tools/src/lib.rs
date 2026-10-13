@@ -481,7 +481,9 @@ fn bounded_output_with_timeout(
                 inner: pipe,
                 progress,
             });
-            read_bounded(&mut reader, &mut output).map(|truncated| (output, truncated))
+            read_bounded(&mut reader, &mut output)
+                .map(|truncated| (output, truncated))
+                .map_err(|_| "tool_execute_read_failed")
         })
     });
     let stderr = child.stderr.take().map(|pipe| {
@@ -493,7 +495,9 @@ fn bounded_output_with_timeout(
                 inner: pipe,
                 progress,
             });
-            read_bounded(&mut reader, &mut output).map(|truncated| (output, truncated))
+            read_bounded(&mut reader, &mut output)
+                .map(|truncated| (output, truncated))
+                .map_err(|_| "tool_execute_read_failed")
         })
     });
     let mut pipes = PipeReaders::new(stdout, stderr, progress);
@@ -819,12 +823,11 @@ mod process_failure_tests {
     }
 
     #[test]
-    fn read_failure_is_classified_as_read_failure() {
+    fn read_failure_keeps_the_underlying_error() {
         let mut output = Vec::new();
-        assert_eq!(
-            read_bounded(&mut FailingReader, &mut output),
-            Err("tool_execute_read_failed")
-        );
+        let error = read_bounded(&mut FailingReader, &mut output)
+            .expect_err("an injected read failure is reported");
+        assert_eq!(error.kind(), io::ErrorKind::Other);
     }
 
     #[test]
@@ -840,7 +843,9 @@ mod process_failure_tests {
         let reader = thread::spawn(|| {
             let mut reader = PanicReader;
             let mut output = Vec::new();
-            read_bounded(&mut reader, &mut output).map(|truncated| (output, truncated))
+            read_bounded(&mut reader, &mut output)
+                .map(|truncated| (output, truncated))
+                .map_err(|_| "tool_execute_read_failed")
         });
         assert_eq!(join_reader(Some(reader)), Err("tool_execute_read_failed"));
     }
@@ -861,8 +866,8 @@ enum LimitedReadOutcome {
     Content(Vec<u8>),
     /// The file exceeds the bound; no content is retained.
     TooLarge,
-    /// The file could not be opened or read.
-    Unreadable,
+    /// The file could not be opened or read, with its underlying error.
+    Unreadable(std::io::Error),
 }
 
 /// Reads a whole file only when it fits within `limit` bytes.
@@ -873,11 +878,11 @@ fn read_limited(path: &std::path::Path, limit: usize) -> LimitedReadOutcome {
     use std::io::Read;
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
-        Err(_) => return LimitedReadOutcome::Unreadable,
+        Err(error) => return LimitedReadOutcome::Unreadable(error),
     };
     let mut bytes = Vec::new();
-    if file.take(limit as u64 + 1).read_to_end(&mut bytes).is_err() {
-        return LimitedReadOutcome::Unreadable;
+    if let Err(error) = file.take(limit as u64 + 1).read_to_end(&mut bytes) {
+        return LimitedReadOutcome::Unreadable(error);
     }
     if bytes.len() > limit {
         return LimitedReadOutcome::TooLarge;
@@ -888,16 +893,14 @@ fn read_limited(path: &std::path::Path, limit: usize) -> LimitedReadOutcome {
 fn read_bounded(
     reader: &mut impl std::io::Read,
     output: &mut Vec<u8>,
-) -> Result<bool, &'static str> {
+) -> Result<bool, std::io::Error> {
     let mut buffer = [0_u8; 4096];
     let mut total = 0;
     // Truncation means bytes were actually dropped: a source ending exactly at
     // the bound stays untruncated.
     let mut truncated = false;
     loop {
-        let count = reader
-            .read(&mut buffer)
-            .map_err(|_| "tool_execute_read_failed")?;
+        let count = reader.read(&mut buffer)?;
         if count == 0 {
             return Ok(truncated);
         }
@@ -1544,6 +1547,24 @@ impl ToolService {
     }
 }
 
+/// Builds one failed workspace-operation error for the addressed target.
+///
+/// The message names the logical target the call addressed — never the
+/// resolved absolute path — and reports the underlying error verbatim; the
+/// guidance rendering is what bounds the model-visible detail.
+fn operation_failure(
+    code: &'static str,
+    operation: &str,
+    target: &str,
+    error: &impl std::fmt::Display,
+) -> intention_proto::ErrorDto {
+    intention_proto::ErrorDto::owned_message(
+        code,
+        intention_proto::ErrorCategoryDto::Validation,
+        format!("unable to {operation} {target}: {error}"),
+    )
+}
+
 fn read_tool(
     root: &WorkspaceRoot,
     input: ReadInput,
@@ -1552,12 +1573,12 @@ fn read_tool(
     if cancellation.is_cancelled() {
         return Ok(stopped_outcome(None));
     }
-    let mut file = std::fs::File::open(root.resolve_path(&input.path)).map_err(|_| {
-        intention_proto::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
+    let mut file = std::fs::File::open(root.resolve_path(&input.path)).map_err(|error| {
+        operation_failure("tool_read_failed", "read", input.path.as_str(), &error)
     })?;
     let mut bytes = Vec::new();
-    let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|_| {
-        intention_proto::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
+    let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|error| {
+        operation_failure("tool_read_failed", "read", input.path.as_str(), &error)
     })?;
     let (text, truncated) = bounded_lossy(&bytes);
     // A read that rewrote invalid UTF-8 reports it the way grep does, so the
@@ -1660,11 +1681,8 @@ fn write_tool(
         // larger file can never equal the bounded expected content and is
         // reported as changed instead of being slurped (PR24-022).
         let current = match read_limited(&path, MAX_EDIT_TARGET_BYTES) {
-            LimitedReadOutcome::Content(bytes) => String::from_utf8(bytes).map_err(|_| {
-                intention_proto::ErrorDto::validation(
-                    "tool_write_conflict",
-                    "workspace file changed before write",
-                )
+            LimitedReadOutcome::Content(bytes) => String::from_utf8(bytes).map_err(|error| {
+                operation_failure("tool_write_conflict", "read", input.path.as_str(), &error)
             })?,
             LimitedReadOutcome::TooLarge => {
                 return Err(intention_proto::ErrorDto::validation(
@@ -1672,10 +1690,12 @@ fn write_tool(
                     "workspace file changed before write",
                 ));
             }
-            LimitedReadOutcome::Unreadable => {
-                return Err(intention_proto::ErrorDto::validation(
+            LimitedReadOutcome::Unreadable(error) => {
+                return Err(operation_failure(
                     "tool_write_conflict",
-                    "workspace file changed before write",
+                    "read",
+                    input.path.as_str(),
+                    &error,
                 ));
             }
         };
@@ -1690,8 +1710,8 @@ fn write_tool(
             return Ok(stopped_outcome(None));
         }
     }
-    std::fs::write(path, input.content.as_str()).map_err(|_| {
-        intention_proto::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
+    std::fs::write(path, input.content.as_str()).map_err(|error| {
+        operation_failure("tool_write_failed", "write", input.path.as_str(), &error)
     })?;
     Ok(ToolDispatchOutcome::Completed(ToolResult::Write(
         WriteResult { bytes },
@@ -1711,11 +1731,8 @@ fn edit_tool(
     // therefore size-bounded so a huge file cannot allocate unboundedly
     // (PR24-022).
     let text = match read_limited(&path, MAX_EDIT_TARGET_BYTES) {
-        LimitedReadOutcome::Content(bytes) => String::from_utf8(bytes).map_err(|_| {
-            intention_proto::ErrorDto::validation(
-                "tool_read_failed",
-                "unable to read workspace file",
-            )
+        LimitedReadOutcome::Content(bytes) => String::from_utf8(bytes).map_err(|error| {
+            operation_failure("tool_read_failed", "read", input.path.as_str(), &error)
         })?,
         LimitedReadOutcome::TooLarge => {
             return Err(intention_proto::ErrorDto::validation(
@@ -1723,10 +1740,12 @@ fn edit_tool(
                 "edit target exceeds the workspace file size bound",
             ));
         }
-        LimitedReadOutcome::Unreadable => {
-            return Err(intention_proto::ErrorDto::validation(
+        LimitedReadOutcome::Unreadable(error) => {
+            return Err(operation_failure(
                 "tool_read_failed",
-                "unable to read workspace file",
+                "read",
+                input.path.as_str(),
+                &error,
             ));
         }
     };
@@ -1749,8 +1768,8 @@ fn edit_tool(
         return Ok(stopped_outcome(None));
     }
     let replacement = text.replacen(input.old.as_str(), input.new.as_str(), 1);
-    std::fs::write(path, &replacement).map_err(|_| {
-        intention_proto::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
+    std::fs::write(path, &replacement).map_err(|error| {
+        operation_failure("tool_write_failed", "write", input.path.as_str(), &error)
     })?;
     Ok(ToolDispatchOutcome::Completed(ToolResult::Edit(
         WriteResult {
@@ -1777,8 +1796,13 @@ fn glob_tool(
         })?
         .to_owned();
     let mut paths = Vec::new();
-    for entry in glob::glob(&pattern).map_err(|_| {
-        intention_proto::ErrorDto::validation("invalid_tool_pattern", "tool pattern is invalid")
+    for entry in glob::glob(&pattern).map_err(|error| {
+        operation_failure(
+            "invalid_tool_pattern",
+            "expand",
+            input.pattern.as_str(),
+            &error,
+        )
     })? {
         // The traversal is the tool's I/O step: a stop ends it and the entries
         // collected so far are returned as an honestly truncated partial list.
@@ -1862,8 +1886,8 @@ fn grep_tool(
     // An explicit file path is addressed as given: `metadata` follows a
     // symbolic link like any other filesystem path, and only the type
     // decision happens here.
-    let metadata = std::fs::metadata(&resolved).map_err(|_| {
-        intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
+    let metadata = std::fs::metadata(&resolved).map_err(|error| {
+        operation_failure("tool_search_failed", "search", path.as_str(), &error)
     })?;
     if !metadata.is_file() {
         return Err(intention_proto::ErrorDto::validation(
@@ -1871,12 +1895,12 @@ fn grep_tool(
             "workspace search failed",
         ));
     }
-    let mut file = std::fs::File::open(resolved).map_err(|_| {
-        intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
+    let mut file = std::fs::File::open(resolved).map_err(|error| {
+        operation_failure("tool_search_failed", "search", path.as_str(), &error)
     })?;
     let mut bytes = Vec::new();
-    let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|_| {
-        intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
+    let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|error| {
+        operation_failure("tool_search_failed", "search", path.as_str(), &error)
     })?;
     let text = String::from_utf8_lossy(&bytes);
     let lossy_truncated = std::str::from_utf8(&bytes).is_err();
@@ -1937,17 +1961,24 @@ fn grep_scoped(
     scope: GrepScope,
     cancellation: &CancellationSignal,
 ) -> DtoResult<ToolDispatchOutcome> {
-    let (base, single) = match scope {
-        GrepScope::File { path } => (root.resolve_path(&path), Some(path)),
-        GrepScope::Directory { path } => (root.resolve_path(&path), None),
-        GrepScope::Workspace => (root.root().to_path_buf(), None),
+    let (base, single, target) = match scope {
+        GrepScope::File { path } => {
+            let base = root.resolve_path(&path);
+            let target = path.as_str().to_owned();
+            (base, Some(path), target)
+        }
+        GrepScope::Directory { path } => {
+            let base = root.resolve_path(&path);
+            let target = path.as_str().to_owned();
+            (base, None, target)
+        }
+        GrepScope::Workspace => (root.root().to_path_buf(), None, "the workspace".to_owned()),
     };
     // An explicit scope is addressed as given: `metadata` follows a symbolic
     // link like any other filesystem path, and only the type decision happens
     // here.
-    let metadata = std::fs::metadata(&base).map_err(|_| {
-        intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
-    })?;
+    let metadata = std::fs::metadata(&base)
+        .map_err(|error| operation_failure("tool_search_failed", "search", &target, &error))?;
     if single.is_some() && !metadata.is_file() {
         return Err(intention_proto::ErrorDto::validation(
             "tool_search_failed",
@@ -2013,27 +2044,27 @@ fn grep_scoped(
                 truncated: true,
             }))));
         }
-        let mut file = std::fs::File::open(&path).map_err(|_| {
-            intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
-        })?;
-        let mut bytes = Vec::new();
-        // Every file is read through the bounded reader, so an oversized file
-        // cannot allocate unbounded memory during a directory search; the
-        // truncation flag reports the dropped tail (PR24-022).
-        let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|_| {
-            intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
-        })?;
-        let text = String::from_utf8_lossy(&bytes);
-        let lossy_truncated = std::str::from_utf8(&bytes).is_err();
-        if source_truncated || lossy_truncated {
-            truncated = true;
-        }
         let logical = single.clone().or_else(|| {
             path.strip_prefix(root.root()).ok().and_then(|p| {
                 WorkspaceRelativePathDto::parse(p.to_string_lossy().replace('\\', "/")).ok()
             })
         });
         let Some(logical) = logical else { continue };
+        let mut file = std::fs::File::open(&path).map_err(|error| {
+            operation_failure("tool_search_failed", "search", logical.as_str(), &error)
+        })?;
+        let mut bytes = Vec::new();
+        // Every file is read through the bounded reader, so an oversized file
+        // cannot allocate unbounded memory during a directory search; the
+        // truncation flag reports the dropped tail (PR24-022).
+        let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|error| {
+            operation_failure("tool_search_failed", "search", logical.as_str(), &error)
+        })?;
+        let text = String::from_utf8_lossy(&bytes);
+        let lossy_truncated = std::str::from_utf8(&bytes).is_err();
+        if source_truncated || lossy_truncated {
+            truncated = true;
+        }
         for (line_index, line) in text.lines().enumerate() {
             // A stop observed between scanned lines ends the search with the
             // matches found so far.

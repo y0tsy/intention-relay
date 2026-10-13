@@ -529,7 +529,7 @@ fn a_stopped_tool_never_starts_its_effect_and_keeps_partial_results() {
 }
 
 #[test]
-fn public_tool_errors_redact_secret_paths_commands_and_os_text() {
+fn public_tool_errors_name_the_logical_path_and_never_the_root_or_content() {
     let root_dir = fixture_dir("redaction");
     let root = root_dir.path();
     let service = service(&root_dir);
@@ -549,7 +549,7 @@ fn public_tool_errors_redact_secret_paths_commands_and_os_text() {
     let rendered = format!("{error:?}");
     assert!(!rendered.contains(secret.as_str()));
     assert!(!rendered.contains(&root.to_string_lossy().to_string()));
-    assert!(!rendered.contains("No such file or directory"));
+    assert!(rendered.contains("unable to write missing/new.txt:"));
 }
 
 #[test]

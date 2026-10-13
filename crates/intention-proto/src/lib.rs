@@ -469,6 +469,21 @@ impl ErrorDto {
         }
     }
 
+    /// Creates a stable error from a trusted internal code and an owned message.
+    ///
+    /// The caller builds the message from data it has already classified as
+    /// safe to report, such as a workspace-relative path and its OS error.
+    #[must_use]
+    pub fn owned_message(code: &'static str, category: ErrorCategoryDto, message: String) -> Self {
+        Self {
+            code: code.to_owned(),
+            category,
+            message,
+            retry: ErrorRetryDto::Manual,
+            correlation_id: None,
+        }
+    }
+
     /// Creates a stable unavailable error from trusted internal constants.
     #[must_use]
     pub fn unavailable(code: &'static str, message: &'static str) -> Self {

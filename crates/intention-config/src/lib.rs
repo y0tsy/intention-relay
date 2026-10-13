@@ -734,35 +734,6 @@ struct RawProviderExecutionPolicyDto {
     max_attempts: Option<u8>,
 }
 
-#[cfg(unix)]
-/// Verifies that an existing configuration file is not group- or world-readable.
-///
-/// # Errors
-///
-/// Returns a policy error when the file mode exposes the configuration to other
-/// users, or an unavailable error if metadata cannot be inspected.
-pub fn ensure_user_only_permissions(path: &ConfigPathDto) -> DtoResult<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let metadata = std::fs::metadata(path.as_str()).map_err(|_| {
-        ErrorDto::unavailable(
-            "config_permission_metadata_unavailable",
-            "configuration file permissions could not be inspected",
-        )
-    })?;
-    if metadata.permissions().mode() & 0o077 == 0 {
-        Ok(())
-    } else {
-        Err(ErrorDto::new(
-            "unsafe_config_permissions",
-            intention_proto::ErrorCategoryDto::Policy,
-            "configuration file must be readable only by its owner",
-            intention_proto::ErrorRetryDto::Manual,
-            None,
-        )?)
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -930,51 +901,6 @@ credential = \"{credential}\"
         ))
         .expect_err("unversioned configuration must fail closed");
         assert_eq!(unversioned.code(), "invalid_config_schema");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn unix_permission_policy_accepts_owner_only_and_rejects_unsafe_or_missing_files() {
-        use std::fs;
-        use std::os::unix::fs::PermissionsExt;
-
-        let directory = std::env::temp_dir().join(format!(
-            "intention-config-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time must be after the Unix epoch")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&directory).expect("temporary directory is available");
-        let safe_path = directory.join("safe.toml");
-        fs::write(&safe_path, "fixture").expect("fixture file is writable");
-        fs::set_permissions(&safe_path, fs::Permissions::from_mode(0o600))
-            .expect("safe permissions can be set");
-        let safe_dto = ConfigPathDto::parse(safe_path.to_string_lossy().into_owned())
-            .expect("temporary path is absolute");
-        assert!(ensure_user_only_permissions(&safe_dto).is_ok());
-
-        fs::set_permissions(&safe_path, fs::Permissions::from_mode(0o644))
-            .expect("unsafe permissions can be set");
-        assert_eq!(
-            ensure_user_only_permissions(&safe_dto)
-                .expect_err("group-readable file must fail")
-                .code(),
-            "unsafe_config_permissions"
-        );
-        let missing = ConfigPathDto::parse(
-            directory
-                .join("missing.toml")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("temporary path is absolute");
-        assert_eq!(
-            ensure_user_only_permissions(&missing)
-                .expect_err("missing file must fail")
-                .code(),
-            "config_permission_metadata_unavailable"
-        );
     }
 
     #[test]

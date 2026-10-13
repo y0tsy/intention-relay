@@ -232,7 +232,7 @@ fn local_tool_rejects_storage_before_execution() {
 }
 
 #[test]
-fn committed_rows_redact_absolute_workspace_root_and_os_error_text() {
+fn committed_rows_name_the_logical_path_and_never_the_absolute_root() {
     let root = std::env::temp_dir().join(format!("intention-redaction-{}", SessionId::new()));
     fs::create_dir_all(&root).expect("root");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
@@ -257,7 +257,7 @@ fn committed_rows_redact_absolute_workspace_root_and_os_error_text() {
         repository.committed_results()
     );
     assert!(!rendered.contains(&root.to_string_lossy().to_string()));
-    assert!(!rendered.contains("No such file or directory"));
+    assert!(rendered.contains("unable to read missing:"));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1460,6 +1460,14 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
     assert!(
         !content.contains(&root.to_string_lossy().to_string()),
         "guidance never carries the absolute workspace root"
+    );
+    assert!(
+        content.contains("unable to read missing.txt:"),
+        "guidance names the workspace-relative path it addressed"
+    );
+    assert!(
+        content.contains("os error"),
+        "guidance carries the OS error verbatim"
     );
     assert_single_terminal_result(
         &repository,

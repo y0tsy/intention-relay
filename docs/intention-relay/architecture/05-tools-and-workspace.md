@@ -67,7 +67,7 @@ default scope decides what a pathless call addresses, not what the process may r
 - `execute` starts with `cwd = workspace_root` unless the call declares a `cwd`, and inherits the invoking process
 environment with the call's own declared variables overlaid by name. WorkspaceRoot is an addressing anchor and
 default CWD, not a security, environment, or privilege boundary.
-- a tool result identifies the path/CWD used, with safe redaction as necessary;
+- a tool result identifies the logical path/CWD it used;
 - plan artifact storage is not implicitly included in `workspace_root`; it is authorized by mode policy.
 
 ### Project script library
@@ -80,8 +80,8 @@ The project script library is the logical, slash-separated, workspace-relative p
 in, or excluded from, any other policy, and no plan artifact, daemon state, checkpoint, or configuration lives there;
 - modules are created and edited only through `write` and `edit`, read through
 `read`, `glob`, and `grep`, and run through `execute`; the relative-path addressing rules above apply unchanged;
-- a tool result or error identifies a module by its logical relative path, with
-the same redaction as every other workspace path; and
+- a tool result or error identifies a module by its logical relative path,
+like every other workspace path; and
 - `write` and `edit` remain incompatible in Plan mode, so library mutation stays
 Build activity.
 
@@ -92,18 +92,19 @@ WorkspaceRoot is an anchor for addressing, not a security boundary: the daemon a
 user's ordinary OS authority. Real isolation, if it is ever required, must be an OS-level boundary such as a sandbox,
 container, or ACL, never a lexical path check.
 
-### Safe missing-path outcome
+### Failed workspace operations
 
-A file-oriented failure outcome uses `ErrorDto` with a stable code and a code-owned safe message: a workspace read that
-cannot open or read its target reports `tool_read_failed` with `unable to read workspace file`. The tool must not
-disclose the absolute workspace root, a resolved symlink target, an OS error string, command details, or file content,
-and the error carries no dynamic path detail payload.
+A failed workspace operation uses `ErrorDto` with its existing stable code and a message that names the target it
+addressed — the workspace-relative path, or the `glob` pattern — and the underlying OS or pattern error verbatim: a
+read that cannot open or read its target reports `tool_read_failed` with `unable to read {path}: {error}`. The message
+never carries the absolute workspace root, a resolved symlink target, the command line, or file content; the guidance
+rendering below bounds what the model sees.
 
 A failed call is durable, model-visible evidence rather than a stopped run: the application commits one terminal
-`Failed` result whose content is bounded guidance rendered by `tool_failure_guidance` (the code-owned safe message, the
+`Failed` result whose content is bounded guidance rendered by `tool_failure_guidance` (the typed failure message, the
 failed tool identity, and a code-owned suggestion), and the model loop answers the call with that content before
-continuing. The guidance is tool-result content, not an `ErrorDto` payload: it never carries the absolute root, an OS
-error string, a command line, or file content, and it stays inside `MAX_TOOL_GUIDANCE_BYTES`.
+continuing. The guidance is tool-result content, not an `ErrorDto` payload: its only dynamic detail is that same
+addressed path and error, and it stays inside `MAX_TOOL_GUIDANCE_BYTES`.
 
 ## Tool pipeline
 

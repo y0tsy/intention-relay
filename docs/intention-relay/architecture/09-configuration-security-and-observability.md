@@ -2,9 +2,9 @@
 
 **Current policy.**
 
-This document defines TOML-only configuration, configuration persistence, open-text credential handling, redaction,
-configuration snapshots, daemon diagnostics, and operational observability. It does not introduce remote authentication,
-cloud secrets management, or multi-user configuration.
+This document defines TOML-only configuration, configuration persistence, open-text credential handling, credential
+isolation, configuration snapshots, daemon diagnostics, and operational observability. It does not introduce remote
+authentication, cloud secrets management, or multi-user configuration.
 
 ## TOML-only configuration
 
@@ -97,12 +97,12 @@ them to leak through the system.
 
 ### Required protections
 
-- configuration files have user-only permissions where the platform supports them, such as `0600` on Unix;
-- creation and update code warns or refuses unsafe permissions according to a documented platform policy;
--  secrets are excluded from transport DTOs, the durable `runs`, `turns`, `messages`, `tool_results`, and
+- an open-text credential is protected by the platform's own file permissions, for example an owner-only `0600` file
+on Unix; the application performs no permission check and issues no warning;
+-  secrets are excluded from transport DTOs, the durable `runs`, `turns`, `messages`, and
 `configuration_revisions` records, plan frontmatter, UI DTOs, and normal logs. `execute` is trusted-local and may
 inherit the invoking process environment; environment variables are not name-filtered or copied into evidence or logs;
-- errors, logs, and diagnostic bundles use centralized redaction;
+- errors, logs, and diagnostic bundles never carry credentials;
 - configuration displays do not log values while rendering or validation fails;
 -  hermetic test fixtures use fake credentials only; the single opt-in live-provider e2e channel
 ([12 Quality Gates and Makefile](12-quality-gates-and-makefile.md)) injects a real credential from the environment
@@ -124,38 +124,17 @@ The current bounds are:
 | --- | --- |
 | Transport message cap (`MAX_MESSAGE_BYTES`, 1 MiB) | Liveness: the single owner of the envelope bound; rejects an over-size frame before unbounded allocation, and an over-size correlated response is answered with the typed `local_protocol_message_too_large` failure instead of a silent close. |
 | Tool read and output windows (`MAX_TOOL_OUTPUT_BYTES`, `MAX_EDIT_TARGET_BYTES`, `MAX_GREP_AGGREGATE_BYTES`) | Representation: bounds one tool read or rendered result; a cut is marked, never hidden. |
-| Tool-result content (`MAX_TOOL_RESULT_CONTENT_BYTES`, 512 KiB) | Representation: bounds one persisted tool-result content; an over-bound value fails `invalid_tool_result` instead of truncating. |
 | Transient reasoning attachment (`MAX_MODEL_ASSISTANT_REASONING_BYTES`, 512 KiB) | Representation: bounds the reasoning one provider response attaches to its tool calls for the same-run continuation; an over-bound value fails `invalid_model_assistant_reasoning_text`. |
 | Tool failure guidance (`MAX_TOOL_GUIDANCE_BYTES`, 8 KiB) | Representation: bounds one failed call's model-visible guidance; a cut is marked and never hides the failure. |
 | Pipe-collection window (`READER_DRAIN_GRACE`, 5 s) | Liveness: after the direct child is reaped, a descendant holding the pipes open cannot extend the call; a window that runs out stops the process group and keeps the captured output. |
 | Provider idle attempt window and retry delay | Liveness: a live provider request that delivers no event for the configured window fails typed; the window re-arms after every delivered event, so a request that keeps producing facts is never cut off. |
 | Subscriber queue and write deadline (`SUBSCRIBER_QUEUE_CAPACITY` 64, `SUBSCRIBER_WRITE_DEADLINE` 10 s) | Liveness: isolates a slow local peer from execution, persistence, and healthy delivery. |
 
-## Data classification
+## Credential isolation
 
-| Class | Examples | May persist | May emit to adapters | May log |
-| --- | --- | --- | --- | --- |
-| Public operational | run status, model ID, plan status, usage. | Yes. | Yes. | Yes, policy-limited. |
-| Workspace-sensitive | logical relative workspace path, source/result content. | Yes, scoped. | Only through user-visible tool/session policy. | Redacted or minimized. |
-| Secret | API keys, auth headers, credentials. | TOML only by decision. | No. | No. |
-| Internal diagnostic | socket path, canonical `CorrelationIdDto`, backtrace. | Limited/audited. | Safe identifier only. | Safe/redacted. |
-| Local configuration path | `ConfigPathDto`. | Local configuration operation only. | No, including resolved config/snapshot projections. | No. |
-
-## Redaction boundary
-
-Redaction is a central reusable policy, not duplicated in providers, tools, Tauri, and TUI. Every crossing below must
-apply safe projection before output:
-
-```text
-config -> provider
-provider error -> event/log
-process output -> tool result
-committed record -> snapshot
-snapshot/frame -> transport
-transport -> Tauri/TUI presentation
-```
-
-A redaction failure is a security defect and must have regression coverage.
+Credentials never cross into transport DTOs, durable records, logs, or adapter projections. The rule's required
+evidence is one absence test: a recognizable fake credential must be absent from configuration-revision JSON, the
+committed `runs`, `turns`, and `messages` rows, errors, logs, and presentation DTOs.
 
 ## Observability
 
@@ -177,7 +156,7 @@ Adapters render observations. They do not infer daemon health from presentation 
 
 ## Logging and audit
 
--  The committed current-state records (`runs`, `turns`, `messages`, `tool_results`, `configuration_revisions`) are
+-  The committed current-state records (`runs`, `turns`, `messages`, `configuration_revisions`) are
 the durable audit of application facts; structured logs are operational diagnostics, not a replacement for them.
 -  Logs have correlation IDs and safe context DTOs, and no sensitive prompt/configuration content is emitted merely for
 diagnostics.
@@ -194,17 +173,15 @@ atomicity.
 | Startup/restart-only application | Daemon composition lifecycle fixture. | The startup snapshot is recorded before recovery/readiness; an on-disk TOML change requires restart and cannot mutate an active run. |
 | Run snapshot immutability | Accepted-turn integration fixtures. | Started runs retain their selected immutable config revision. |
 | Path selection | Config and platform-state location fixtures. | Config/storage locations use explicit absolute override or platform locations, never CWD. |
-| Permission safety | Filesystem permission test on Unix. | Created config is user-readable only or fails safely. |
-| Redaction | Table-driven secret injection plus raw SQLite persistence fixtures. | Recognizable fake credentials are absent from configuration-revision JSON, the committed `runs`, `turns`, `messages`, and `tool_results` rows, errors, logs, and presentation DTOs. |
+| Credential isolation | Table-driven secret injection plus raw SQLite persistence fixtures. | A recognizable fake credential is absent from configuration-revision JSON, the committed `runs`, `turns`, and `messages` rows, errors, logs, and presentation DTOs. |
 | Safe observability | Daemon status contract test. | Health/usage/tool state is visible without credentials. |
 
 ## Quality-gate integration
 
-`intention-config` remains subject to its `standard` tier floor. TOML parsing, M1 revision serialization, permissions,
-redaction,
-and safe observability tests are blocking `make verify` inputs; M3 adds canonical revision persistence, restart-only
-application, and per-run configuration-selection coverage. A recognizable fake secret is a mandatory regression
-fixture across logs, errors, persisted state, and adapter DTOs. See [12 Quality Gates and
+`intention-config` remains subject to its `standard` tier floor. TOML parsing, M1 revision serialization, credential
+isolation, and safe observability tests are blocking `make verify` inputs; M3 adds canonical revision persistence,
+restart-only application, and per-run configuration-selection coverage. The credential absence test is a mandatory
+regression fixture across logs, errors, persisted state, and adapter DTOs. See [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md).
 
 ## Open decisions
@@ -212,5 +189,4 @@ Makefile](12-quality-gates-and-makefile.md).
 - exact TOML layout and include/import policy, if any;
 - user experience for config edits and daemon-restart-required changes;
 - credential rotation flow;
-- transcript/log retention and diagnostic export policy;
-- platform-specific config permission behavior outside Unix.
+- transcript/log retention and diagnostic export policy.
