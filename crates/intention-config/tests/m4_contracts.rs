@@ -1,8 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    reason = "M4 contract fixtures use expect to provide precise test failure messages."
-)]
-
 //! Resolved-value, startup-material, and public snapshot fixture contracts.
 
 #[allow(

@@ -43,13 +43,6 @@
 //! lives only in a private temporary configuration file, and is never printed
 //! by the test.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    clippy::print_stderr,
-    reason = "Opt-in live-provider end-to-end fixtures use assertion conveniences and one stderr diagnostic on the unwind path for precise failures."
-)]
-
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::thread;

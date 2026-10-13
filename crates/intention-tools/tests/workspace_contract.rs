@@ -1,8 +1,4 @@
 #![allow(
-    clippy::expect_used,
-    reason = "Contract test setup failures are reported with local context."
-)]
-#![allow(
     clippy::unwrap_used,
     reason = "Test setup failures are reported with local context."
 )]

@@ -1,8 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Source guards use expect for precise test diagnostics."
-)]
-
 // The storage boundary guard scans source text, so it lives in this
 // integration target instead of the library test module: the crate's
 // coverage denominator stays about the library the guard protects.

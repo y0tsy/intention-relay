@@ -236,10 +236,6 @@ fn recreate_stale_database(location: &str) -> DtoResult<()> {
 }
 
 /// Reports one discarded database on stderr, the daemon's only observable log.
-#[allow(
-    clippy::print_stderr,
-    reason = "The schema discard is the one path that loses durable data and must be observable."
-)]
 fn report_schema_discard() {
     eprintln!("storage_schema_discarded: database did not carry schema stamp {SCHEMA_STAMP}");
 }
@@ -2488,10 +2484,6 @@ enum FaultPoint {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Focused SQLite fixtures use expect for test diagnostics."
-    )]
     use super::*;
     use crate::StorageRepositoryDto;
     use intention_config::{ConfigPathDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto};

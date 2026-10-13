@@ -535,10 +535,6 @@ fn translate_assistant_message(
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    reason = "Private tool-fragment fixtures use expect to provide precise test failure messages."
-)]
 mod tests {
     use super::*;
     use crate::model::{ModelRoleDto, UsageDto};

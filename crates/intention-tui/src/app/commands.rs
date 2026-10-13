@@ -697,10 +697,6 @@ fn resolve_arguments(spec: CommandSpec, words: &[&str]) -> CommandResolution {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Registry tests assert the declared commands and their ranking directly."
-    )]
 
     use super::{
         ArgumentSpec, COMMANDS, CommandAction, CommandMenu, CommandResolution, CommandSpec,

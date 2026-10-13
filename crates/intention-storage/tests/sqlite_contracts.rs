@@ -1,8 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    reason = "SQLite contract fixtures use expect for precise test diagnostics."
-)]
-
 #[allow(
     dead_code,
     reason = "Shared fixtures serve every integration target in this crate; each target compiles the subset its suite calls."

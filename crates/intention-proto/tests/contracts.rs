@@ -1,8 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Contract fixtures use expect to provide precise test failure messages."
-)]
-
 //! DTO contract evidence for the `intention-proto` public API: identity, error, shared
 //! model-value wire contracts, the workspace-root and turn-command value contracts, and
 //! the run-lifecycle rules.

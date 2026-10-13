@@ -1,11 +1,4 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Focused runtime fixtures use expect to provide precise test failures."
-)]
-
 mod common;
-
-use std::sync::PoisonError;
 
 use common::{FakeRepository, time};
 use intention_engine::fail_starting_run;
@@ -31,7 +24,7 @@ fn fail_starting_run_records_a_manual_failure_for_the_exact_starting_run() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].session_id(), session_id);
@@ -66,7 +59,7 @@ fn fail_starting_run_rejects_a_run_that_is_no_longer_starting() {
         repository
             .finishes
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty()
     );
 }
@@ -91,7 +84,7 @@ fn fail_starting_run_propagates_an_absent_run_without_writing() {
         repository
             .finishes
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty()
     );
 }

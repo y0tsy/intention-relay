@@ -51,13 +51,18 @@ aliases, and the opt-in `e2e-real-api`.
 
 - `rustfmt` is mandatory; `make fmt-check` fails on formatting drift and never modifies files.
 - All warnings are errors in every non-mutating verification target. `unsafe` is
-  denied by default, and production code denies unreviewed `unwrap`, `expect`, `panic`, `todo!`, `unimplemented!`,
-  `dbg!`, direct stdout/stderr printing, direct process termination, and memory-forget patterns.
+  denied by default, and production code denies unreviewed `unwrap`, `todo!`, `unimplemented!`, `dbg!`, direct process
+  termination, and memory-forget patterns. `expect`, `panic`, and direct stdout/stderr printing are allowed: the
+  daemon's and terminal's own logs are an observable surface, and a human-readable `expect` message beats a silent
+  error path.
 - A lint suppression uses a narrow local scope with a mandatory `reason` that explains why it is safe; test-only
   exceptions are also local and reasoned.
-- The strict pragmatic Clippy baseline (Clippy defaults, `nursery`, the selected `pedantic` and `restriction` lints) is
-  configured in the root Cargo lint configuration. The policy deliberately does not deny all `pedantic` or all
-  `restriction` lints, because some are subjective or ergonomically harmful.
+- The Clippy baseline denies `clippy::all`, the selected `pedantic` and `restriction` lints, and the five named
+  `nursery` lints kept for readability, logic, and clarity (`use_self`, `redundant_clone`, `option_if_let_else`,
+  `suspicious_operation_groupings`, `unused_peekable`); it is configured in the root Cargo lint configuration. The
+  `nursery` group itself is not denied, because it is unstable and churns between releases, and the policy
+  deliberately does not deny all `pedantic` or all `restriction` lints, because some are subjective or ergonomically
+  harmful.
 - `make architecture` enforces the architectural protections encoded in `quality/architecture.toml` and implemented by
   `quality/check_architecture.py`: the per-crate role, responsibility, and named integration test target declarations,
   the exact allowed cross-crate edge and external dependency sets (including the non-production test crates), the

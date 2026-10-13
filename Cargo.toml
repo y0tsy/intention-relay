@@ -34,22 +34,25 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = "deny"
-nursery = "deny"
+# The nursery group is unstable and churns between releases, so it is not denied
+# wholesale. The group sits at a lower priority than the individual lints below,
+# which keep the five nursery lints chosen for readability, logic, and clarity.
+nursery = { level = "allow", priority = -1 }
+use_self = "deny"
+redundant_clone = "deny"
+option_if_let_else = "deny"
+suspicious_operation_groupings = "deny"
+unused_peekable = "deny"
 must_use_candidate = "deny"
 missing_errors_doc = "deny"
 missing_panics_doc = "deny"
 return_self_not_must_use = "deny"
-use_self = "deny"
 allow_attributes_without_reason = "deny"
 as_underscore = "deny"
 dbg_macro = "deny"
 else_if_without_else = "deny"
 exit = "deny"
-expect_used = "deny"
 mem_forget = "deny"
-panic = "deny"
-print_stdout = "deny"
-print_stderr = "deny"
 todo = "deny"
 unimplemented = "deny"
 unwrap_used = "deny"

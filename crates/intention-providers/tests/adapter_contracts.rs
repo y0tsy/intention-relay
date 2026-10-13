@@ -1,9 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "Provider contract fixtures use explicit failure messages for impossible pending local streams."
-)]
-
 mod support;
 
 use intention_config::StartupProviderMaterial;

@@ -9,12 +9,6 @@
 //! closed exit-status set, the NDJSON and text output, the committed
 //! transcript, and the durable effect of the deadline interrupt.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "Terminal end-to-end fixtures use assertion conveniences for precise diagnostics."
-)]
-
 use std::future::Future;
 use std::io::{Read, Write};
 use std::net::TcpListener;

@@ -7,15 +7,11 @@
     dead_code,
     reason = "every integration target compiles the shared module and uses a different subset"
 )]
-#![allow(
-    clippy::expect_used,
-    reason = "shared fixtures use expect to provide precise failures"
-)]
 
 use std::collections::VecDeque;
 use std::future;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
-use std::sync::{Mutex, PoisonError};
 use std::task::Poll;
 use std::time::Duration;
 
@@ -243,7 +239,7 @@ impl FakeRepository {
         *repository
             .status
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = status;
+            .expect("the fixture mutex is not poisoned") = status;
         repository
     }
 
@@ -254,7 +250,7 @@ impl FakeRepository {
         *repository
             .accepted
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = accepted;
+            .expect("the fixture mutex is not poisoned") = accepted;
         repository
     }
 
@@ -267,12 +263,15 @@ impl FakeRepository {
     /// Returns the current run projection, preferring an explicitly stored run.
     #[must_use]
     pub fn projection(&self) -> RunProjectionDto {
-        let stored = *self.run.lock().unwrap_or_else(PoisonError::into_inner);
+        let stored = *self.run.lock().expect("the fixture mutex is not poisoned");
         if let Some(run) = stored {
             return run;
         }
         let started_at = self.config.captured_at();
-        let status = *self.status.lock().unwrap_or_else(PoisonError::into_inner);
+        let status = *self
+            .status
+            .lock()
+            .expect("the fixture mutex is not poisoned");
         self.fixture_run(
             status,
             run_status_is_terminal(status).then_some(started_at),
@@ -306,7 +305,7 @@ impl FakeRepository {
     pub fn committed_messages(&self) -> Vec<MessageProjectionDto> {
         self.messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone()
     }
 
@@ -315,7 +314,7 @@ impl FakeRepository {
     pub fn committed_results(&self) -> Vec<ToolResultEvidenceDto> {
         self.tool_results
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone()
     }
 
@@ -333,7 +332,7 @@ impl FakeRepository {
         let mut count = self
             .append_count
             .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+            .expect("the fixture mutex is not poisoned");
         *count += 1;
         *count
     }
@@ -343,7 +342,7 @@ impl FakeRepository {
         let mut next = self
             .next_message_id
             .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+            .expect("the fixture mutex is not poisoned");
         *next += 1;
         MessageId::new(*next).expect("fixture row identity is positive")
     }
@@ -370,7 +369,7 @@ impl FakeRepository {
         let injected = self
             .commit_error
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone();
         if let Some(error) = injected {
             return Err(error);
@@ -379,14 +378,14 @@ impl FakeRepository {
             let mut calls = self
                 .commit_calls
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+                .expect("the fixture mutex is not poisoned");
             *calls += 1;
             *calls
         };
         if self
             .commit_failures
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .contains(&ordinal)
         {
             return Err(ErrorDto::unavailable(
@@ -399,11 +398,14 @@ impl FakeRepository {
 
     /// Stores one durable status transition and keeps an explicit run current.
     fn store_status(&self, status: RunStatusDto, occurred_at: TimestampDto) {
-        *self.status.lock().unwrap_or_else(PoisonError::into_inner) = status;
+        *self
+            .status
+            .lock()
+            .expect("the fixture mutex is not poisoned") = status;
         let refreshed = self
             .run
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .as_ref()
             .map(|run| {
                 RunProjectionDto::new(
@@ -420,7 +422,7 @@ impl FakeRepository {
                 .expect("fixture run projection is coherent")
             });
         if let Some(refreshed) = refreshed {
-            *self.run.lock().unwrap_or_else(PoisonError::into_inner) = Some(refreshed);
+            *self.run.lock().expect("the fixture mutex is not poisoned") = Some(refreshed);
         }
     }
 }
@@ -433,15 +435,15 @@ impl StorageRepositoryDto for FakeRepository {
     ) -> DtoResult<SessionProjectionDto> {
         self.calls
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push("create_session");
         self.create_commands
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push(command);
         self.created
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone()
     }
 
@@ -452,7 +454,7 @@ impl StorageRepositoryDto for FakeRepository {
         Ok(*self
             .workspace_binding
             .lock()
-            .unwrap_or_else(PoisonError::into_inner))
+            .expect("the fixture mutex is not poisoned"))
     }
 
     fn accept_user_turn(
@@ -466,11 +468,11 @@ impl StorageRepositoryDto for FakeRepository {
     ) -> DtoResult<AcceptedTurnOutcomeDto> {
         self.calls
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push("accept_user_turn");
         self.accepted_inputs
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push(RecordedTurn {
                 proposed_run_id,
                 config_snapshot,
@@ -478,7 +480,7 @@ impl StorageRepositoryDto for FakeRepository {
             });
         self.accepted
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone()
     }
 
@@ -489,7 +491,7 @@ impl StorageRepositoryDto for FakeRepository {
     ) -> DtoResult<PendingTurnProjectionDto> {
         self.removed
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone()
             .ok_or_else(|| {
                 ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
@@ -507,11 +509,11 @@ impl StorageRepositoryDto for FakeRepository {
         *self
             .pending_consumes
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) += 1;
+            .expect("the fixture mutex is not poisoned") += 1;
         Ok(self
             .pending
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .drain(..)
             .collect())
     }
@@ -528,7 +530,7 @@ impl StorageRepositoryDto for FakeRepository {
         self.store_status(status, occurred_at);
         self.transitions
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push(RecordedTransition { status });
         Ok(self.projection())
     }
@@ -543,7 +545,7 @@ impl StorageRepositoryDto for FakeRepository {
         let status = outcome.status();
         self.finishes
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push(RecordedFinish {
                 session_id,
                 run_id,
@@ -564,7 +566,7 @@ impl StorageRepositoryDto for FakeRepository {
         let injected = self
             .append_failure
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .take();
         if let Some(error) = injected {
             return Err(error);
@@ -572,14 +574,14 @@ impl StorageRepositoryDto for FakeRepository {
         if self
             .append_failure_at
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .as_ref()
             .is_some_and(|(at, _)| *at == index)
         {
             return Err(self
                 .append_failure_at
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                .expect("the fixture mutex is not poisoned")
                 .take()
                 .expect("configured append failure exists")
                 .1);
@@ -587,7 +589,7 @@ impl StorageRepositoryDto for FakeRepository {
         let scheduled = self
             .cancel_after_append
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone();
         if let Some((cancel_at, signal)) = scheduled
             && cancel_at == index
@@ -597,7 +599,7 @@ impl StorageRepositoryDto for FakeRepository {
         let committed = self.committed_row(self.assign_message_id(), &message)?;
         self.messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push(committed.clone());
         Ok(committed)
     }
@@ -611,11 +613,11 @@ impl StorageRepositoryDto for FakeRepository {
         let committed = self.committed_row(self.assign_message_id(), &message)?;
         self.messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push(committed.clone());
         self.tool_results
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push(evidence);
         self.committed_result_rows.fetch_add(1, Ordering::SeqCst);
         Ok(committed)
@@ -642,7 +644,7 @@ impl StorageRepositoryDto for FakeRepository {
         let injected = self
             .config_error
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .take();
         if let Some(error) = injected {
             return Err(error);
@@ -657,7 +659,7 @@ impl StorageRepositoryDto for FakeRepository {
     ) -> DtoResult<StartingRunModelContextDto> {
         self.starting_context
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone()
             .ok_or_else(|| {
                 ErrorDto::unavailable(
@@ -675,7 +677,7 @@ impl StorageRepositoryDto for FakeRepository {
         let expected = self
             .run
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .as_ref()
             .map_or((self.session_id, self.run_id), |run| {
                 (run.session_id(), run.run_id())
@@ -693,7 +695,7 @@ impl StorageRepositoryDto for FakeRepository {
         let loaded = self
             .loaded_projection
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone();
         if let Some(projection) = loaded {
             return Ok(projection);
@@ -793,7 +795,7 @@ impl ModelTimePort for ImmediateTime {
     fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
         self.sleeps
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push(duration);
         Box::pin(future::ready(()))
     }
@@ -824,14 +826,20 @@ impl ManualTime {
 
     /// Advances the clock by one provider silence.
     pub fn advance(&self, silence: Duration) {
-        let mut elapsed = self.elapsed.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut elapsed = self
+            .elapsed
+            .lock()
+            .expect("the fixture mutex is not poisoned");
         *elapsed += silence;
     }
 
     /// Returns the elapsed virtual time.
     #[must_use]
     pub fn elapsed(&self) -> Duration {
-        *self.elapsed.lock().unwrap_or_else(PoisonError::into_inner)
+        *self
+            .elapsed
+            .lock()
+            .expect("the fixture mutex is not poisoned")
     }
 
     /// Returns every armed delay in arming order.
@@ -839,7 +847,7 @@ impl ManualTime {
     pub fn sleeps(&self) -> Vec<Duration> {
         self.sleeps
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone()
     }
 }
@@ -852,7 +860,7 @@ impl ModelTimePort for ManualTime {
     fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
         self.sleeps
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push(duration);
         if duration < Duration::from_secs(1) {
             self.advance(duration);
@@ -888,7 +896,7 @@ impl RecordingCommitObserver {
     pub fn commits(&self) -> Vec<SessionCommitDto> {
         self.commits
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone()
     }
 }
@@ -897,7 +905,7 @@ impl SessionCommitObserver for RecordingCommitObserver {
     fn observe_session_commit(&self, committed: &SessionCommitDto) {
         self.commits
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push(committed.clone());
     }
 }
@@ -923,7 +931,7 @@ impl ScriptedPort {
     pub fn calls(&self) -> Vec<(SessionId, RunId, ToolCallDto)> {
         self.calls
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone()
     }
 }
@@ -939,12 +947,12 @@ impl ToolExecutionPort for ScriptedPort {
     > {
         self.calls
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push((session_id, run_id, call));
         let outcome = self
             .outcomes
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .pop_front()
             .expect("scripted tool outcome exists");
         Box::pin(future::ready(outcome))

@@ -775,10 +775,6 @@ fn advertised_tool_definitions() -> DtoResult<Vec<ModelToolDefinitionDto>> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Metadata fixtures use expect to provide precise failures."
-    )]
 
     use super::tool_result_metadata;
     use intention_proto::{

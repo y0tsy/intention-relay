@@ -350,10 +350,6 @@ fn translate_assistant_message(message: &ModelMessageDto) -> DtoResult<Message> 
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    reason = "Private SDK error fixtures construct exact native variants."
-)]
 mod tests {
     use super::*;
     use crate::model::{ModelRoleDto, ToolCallDto, UsageDto};

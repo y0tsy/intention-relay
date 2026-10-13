@@ -1,12 +1,7 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Execution fixtures use expect to provide precise failures."
-)]
-
 mod common;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::{
@@ -83,7 +78,7 @@ impl CapturingTextDeltaPort {
     fn deltas(&self) -> Vec<(u32, TextDeltaChannelDto, String)> {
         self.deltas
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone()
     }
 }
@@ -92,7 +87,7 @@ impl ModelTextDeltaPort for CapturingTextDeltaPort {
     fn text_delta(&self, step: u32, channel: TextDeltaChannelDto, text: &str) {
         self.deltas
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push((step, channel, text.to_owned()));
     }
 }
@@ -307,7 +302,7 @@ fn observer_receives_only_committed_transcript_rows_and_statuses() {
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .len(),
         1
     );
@@ -322,7 +317,7 @@ fn observer_receives_no_content_when_a_message_commit_fails() {
     *repository
         .append_failure
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(ErrorDto::unavailable(
+        .expect("the fixture mutex is not poisoned") = Some(ErrorDto::unavailable(
         "append_failed",
         "append fails before commit",
     ));
@@ -364,14 +359,14 @@ fn observer_receives_no_content_when_a_message_commit_fails() {
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty()
     );
     assert!(
         repository
             .finishes
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty()
     );
 }
@@ -419,7 +414,7 @@ fn streams_commit_one_assistant_step_with_reasoning_and_complete() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
@@ -432,7 +427,7 @@ fn streams_commit_one_assistant_step_with_reasoning_and_complete() {
         repository
             .transitions
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .iter()
             .map(RecordedTransition::status)
             .collect::<Vec<_>>(),
@@ -481,14 +476,14 @@ fn malformed_provider_and_eof_streams_safely_fail_without_committing_content() {
             repository
                 .messages
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                .expect("the fixture mutex is not poisoned")
                 .is_empty(),
             "an invalid stream never commits assistant content"
         );
         let finishes = repository
             .finishes
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone();
         assert_eq!(finishes.len(), 1);
         assert_eq!(finishes[0].error_code(), Some(expected_code));
@@ -532,7 +527,7 @@ fn interruption_records_a_notice_and_continues_the_same_run() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -566,7 +561,7 @@ fn interruption_records_a_notice_and_continues_the_same_run() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1, "one terminal outcome commits");
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
@@ -574,7 +569,7 @@ fn interruption_records_a_notice_and_continues_the_same_run() {
         repository
             .transitions
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .iter()
             .map(RecordedTransition::status)
             .collect::<Vec<_>>(),
@@ -619,7 +614,7 @@ fn an_interrupt_before_the_first_round_still_records_a_notice_and_continues() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -633,7 +628,7 @@ fn an_interrupt_before_the_first_round_still_records_a_notice_and_continues() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
@@ -651,7 +646,7 @@ fn an_interrupt_whose_notice_cannot_commit_surfaces_the_storage_error() {
     *repository
         .append_failure_at
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some((
+        .expect("the fixture mutex is not poisoned") = Some((
         2,
         ErrorDto::unavailable(
             "fixture_notice_unavailable",
@@ -678,7 +673,7 @@ fn an_interrupt_whose_notice_cannot_commit_surfaces_the_storage_error() {
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .len(),
         1
     );
@@ -686,7 +681,7 @@ fn an_interrupt_whose_notice_cannot_commit_surfaces_the_storage_error() {
         repository
             .finishes
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty()
     );
 }
@@ -735,7 +730,7 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
         clock
             .sleeps
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .iter()
             .filter(|&&duration| duration == Duration::from_millis(250))
             .count(),
@@ -745,7 +740,7 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
         repository
             .transitions
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .iter()
             .map(RecordedTransition::status)
             .collect::<Vec<_>>(),
@@ -754,7 +749,7 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
@@ -762,7 +757,7 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty(),
         "an uncommitted reasoning echo never becomes a transcript row"
     );
@@ -794,7 +789,7 @@ fn model_execution_preconditions_fail_without_provider_calls() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(
@@ -812,7 +807,7 @@ fn model_execution_preconditions_fail_without_provider_calls() {
     *repository
         .config_error
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(ErrorDto::unavailable(
+        .expect("the fixture mutex is not poisoned") = Some(ErrorDto::unavailable(
         "configuration_not_found",
         "the persisted configuration is unavailable",
     ));
@@ -834,7 +829,7 @@ fn model_execution_preconditions_fail_without_provider_calls() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(
@@ -867,7 +862,7 @@ fn model_execution_preconditions_fail_without_provider_calls() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(
@@ -885,7 +880,7 @@ fn execution_rejects_non_starting_run_before_configuration_or_provider_work() {
     *repository
         .status
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = RunStatusDto::Running;
+        .expect("the fixture mutex is not poisoned") = RunStatusDto::Running;
     let driver = ScriptedDriver::new(Vec::new());
 
     let error = execute(
@@ -903,21 +898,21 @@ fn execution_rejects_non_starting_run_before_configuration_or_provider_work() {
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty()
     );
     assert!(
         repository
             .finishes
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty()
     );
     assert!(
         repository
             .transitions
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty()
     );
 }
@@ -972,7 +967,7 @@ fn retryable_failure_after_a_committed_step_does_not_retry() {
         clock
             .sleeps
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .iter()
             .filter(|&&duration| duration == Duration::from_millis(250))
             .count(),
@@ -983,14 +978,14 @@ fn retryable_failure_after_a_committed_step_does_not_retry() {
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .len(),
         2
     );
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Failed);
@@ -1047,7 +1042,7 @@ fn exhausted_retryable_failure_stops_after_second_attempt() {
         clock
             .sleeps
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .iter()
             .filter(|&&duration| duration == Duration::from_millis(250))
             .count(),
@@ -1057,7 +1052,7 @@ fn exhausted_retryable_failure_stops_after_second_attempt() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].error_code(), Some("provider_down"));
@@ -1103,7 +1098,7 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
         clock
             .sleeps
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .as_slice(),
         &[
             Duration::from_secs(30),
@@ -1114,7 +1109,7 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].error_code(), Some("provider_attempt_timed_out"));
@@ -1122,7 +1117,7 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty(),
         "a timed-out attempt commits no transcript row"
     );
@@ -1201,7 +1196,7 @@ fn continuous_provider_progress_outlives_the_attempt_timeout_and_completes() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -1277,7 +1272,7 @@ fn a_silent_stall_expires_the_idle_window_armed_after_the_last_event() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].error_code(), Some("provider_attempt_timed_out"));
@@ -1285,7 +1280,7 @@ fn a_silent_stall_expires_the_idle_window_armed_after_the_last_event() {
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty(),
         "a stalled attempt commits no transcript row"
     );
@@ -1315,7 +1310,7 @@ fn a_completed_step_never_carries_the_interrupted_marker() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].kind(), MessageKindDto::Assistant);
@@ -1373,7 +1368,7 @@ fn retryable_failure_with_uncommitted_text_commits_the_text_and_does_not_retry()
         clock
             .sleeps
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .iter()
             .filter(|&&duration| duration == Duration::from_millis(250))
             .count()
@@ -1383,7 +1378,7 @@ fn retryable_failure_with_uncommitted_text_commits_the_text_and_does_not_retry()
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -1441,7 +1436,7 @@ fn whitespace_only_text_keeps_the_attempt_budget_open() {
         clock
             .sleeps
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .as_slice(),
         &[
             Duration::from_secs(30),
@@ -1457,7 +1452,7 @@ fn whitespace_only_text_keeps_the_attempt_budget_open() {
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty(),
         "whitespace-only text commits no transcript row"
     );
@@ -1496,7 +1491,7 @@ fn a_persisted_window_policy_disagreement_fails_the_run_before_provider_work() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(
@@ -1569,7 +1564,7 @@ fn text_delta_port_observes_both_channels_with_their_model_step_index() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -1643,14 +1638,14 @@ fn interrupted_round_evidence(
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .iter()
         .map(|message| (message.kind(), message.text().to_owned()))
         .collect();
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .iter()
         .map(RecordedFinish::status)
         .collect();

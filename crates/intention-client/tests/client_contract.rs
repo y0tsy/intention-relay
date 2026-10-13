@@ -1,7 +1,5 @@
 #![allow(
     clippy::await_holding_lock,
-    clippy::expect_used,
-    clippy::panic,
     reason = "Client contract fixtures use direct assertions and controlled fixture launchers; the standard fixture mutex serializes independent fixture servers, and every async test owns its own single-threaded runtime, so holding that guard across awaits cannot deadlock."
 )]
 

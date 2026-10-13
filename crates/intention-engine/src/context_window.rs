@@ -237,10 +237,6 @@ fn leading_system_block_end(messages: &[ModelMessageDto]) -> Option<usize> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    reason = "Unit fixtures use expect to provide precise test failure messages."
-)]
 mod tests {
     use super::*;
     use intention_proto::{RunId, ToolCallId};

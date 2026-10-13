@@ -7,12 +7,6 @@
 //! closed instead of resynchronized: a re-subscribing client re-reads current
 //! state.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "Focused daemon-foundation fixtures use assertion conveniences for precise diagnostics."
-)]
-
 mod common;
 
 #[cfg(feature = "test-support")]

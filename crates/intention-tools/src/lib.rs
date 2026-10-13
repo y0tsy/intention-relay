@@ -23,7 +23,6 @@ pub use guidance::tool_failure_guidance;
 pub use workspace::WorkspaceRoot;
 
 #[cfg(test)]
-#[allow(clippy::expect_used, reason = "deterministic timeout fixture setup")]
 mod timeout_tests {
     use super::*;
     use std::process::Command;
@@ -1275,10 +1274,6 @@ pub fn partial_tool_result_content(
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    reason = "Renderer fixtures use expect to provide precise failures."
-)]
 mod tool_result_renderer_tests {
     use super::*;
 

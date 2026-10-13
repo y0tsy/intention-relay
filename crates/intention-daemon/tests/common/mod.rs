@@ -8,10 +8,6 @@
     dead_code,
     reason = "streaming-foundation fixtures exist only under its test-support feature"
 )]
-#![allow(
-    clippy::expect_used,
-    reason = "shared fixtures use expect to provide precise failures"
-)]
 
 use std::path::Path;
 use std::sync::Arc;

@@ -1,8 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    reason = "M4 SQLite safe configuration fixtures use expect for precise diagnostics."
-)]
-
 #[allow(
     dead_code,
     reason = "Shared fixtures serve every integration target in this crate; each target compiles the subset its suite calls."

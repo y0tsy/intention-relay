@@ -8,12 +8,6 @@
 //! the same durable run is replayed as current state without re-executing the
 //! tool.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "Client end-to-end fixtures use assertion conveniences for precise diagnostics."
-)]
-
 use std::process::Child;
 use std::time::{Duration, Instant};
 

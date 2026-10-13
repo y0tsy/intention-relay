@@ -174,10 +174,6 @@ fn usage_failure(message: &str, err: &mut impl Write) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Workspace resolution tests assert one resolved native root."
-    )]
 
     use super::*;
     use std::path::PathBuf;

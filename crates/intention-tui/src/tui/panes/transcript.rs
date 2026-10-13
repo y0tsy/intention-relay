@@ -562,10 +562,6 @@ fn text_row(text: &str, ink: RowStyleId, palette: &'static Palette) -> LaidOutRo
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Unit tests build typed fixture DTOs directly and assert them for diagnostics."
-    )]
 
     use std::cell::RefCell;
     use std::ops::Range;

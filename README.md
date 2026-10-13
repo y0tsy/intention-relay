@@ -275,7 +275,7 @@ Notes:
   toolchains and quality tools (this target is mutating and networked;
   everything else is offline once installed).
 - Everything builds from the committed `Cargo.lock`; the workspace uses
-  edition 2024, denies `unsafe_code`, and applies a strict Clippy policy
+  edition 2024, denies `unsafe_code`, and applies a pragmatic Clippy policy
   (see [Cargo.toml](Cargo.toml)).
 
 ## Build, test, and quality commands

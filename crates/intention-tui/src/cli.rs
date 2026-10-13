@@ -362,11 +362,6 @@ fn seconds(value: &str) -> Result<Duration, String> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        clippy::panic,
-        reason = "Grammar tests assert the parsed invocation directly for precise diagnostics."
-    )]
 
     use super::*;
 

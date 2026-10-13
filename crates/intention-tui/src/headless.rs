@@ -1022,11 +1022,6 @@ impl<W: Write> Report for JsonReport<W> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        clippy::panic,
-        reason = "Format and deadline tests assert written bytes and instants directly."
-    )]
 
     use super::*;
     use std::sync::atomic::{AtomicI64, Ordering};

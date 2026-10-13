@@ -216,10 +216,6 @@ type HostRecorder = RecordingExecutionRecorder;
 /// fixture suites that drive a real daemon. The line names the safe code and
 /// message the run recorded, so the daemon's only observable log carries what
 /// the durable state knows.
-#[allow(
-    clippy::print_stderr,
-    reason = "A failed run's reason is durable but carried by no client-visible projection, so the daemon's log is the only place it can be observed."
-)]
 fn report_execution_failure(result: &DtoResult<ModelRunExecutionOutcomeDto>) {
     let error = match result {
         Err(error) => error,
@@ -1674,11 +1670,6 @@ impl TestHostLifecycle {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        clippy::panic,
-        reason = "Daemon host unit tests use controlled native fixtures for direct protocol diagnostics."
-    )]
 
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};

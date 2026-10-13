@@ -5,12 +5,6 @@
 //! [`fixture_config_document`] executes the production provider path without a
 //! network dependency.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "the fake provider fixture fails with a precise diagnostic when a scripted round is violated"
-)]
-
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;

@@ -8,11 +8,6 @@
 //! revue's pilot exposes cells and characters, not styles, and the palette's
 //! own unit tests guard the colour values.
 
-#![allow(
-    clippy::expect_used,
-    reason = "Render tests build typed fixture states and assert the rendered text directly."
-)]
-
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use intention_client::SessionStreamState;

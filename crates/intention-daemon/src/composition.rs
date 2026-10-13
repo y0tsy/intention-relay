@@ -719,10 +719,6 @@ fn unavailable_storage() -> ErrorDto {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Composition internals use controlled durable fixtures."
-    )]
 
     use super::*;
 

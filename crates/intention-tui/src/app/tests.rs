@@ -1,8 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Unit tests build typed fixture DTOs directly and assert them for diagnostics."
-)]
-
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use intention_client::SessionStreamState;

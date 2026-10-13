@@ -4,10 +4,8 @@
 //! needs a builder includes it with `mod support;`.
 
 #![allow(
-    clippy::expect_used,
-    clippy::panic,
     dead_code,
-    reason = "The shared provider fixtures use expect and panic for impossible local failures, and each suite uses its own subset of the builders."
+    reason = "Each suite uses its own subset of the shared provider fixture builders."
 )]
 
 use std::{

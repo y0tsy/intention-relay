@@ -1039,10 +1039,6 @@ fn invalid_wire_response() -> ErrorDto {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Unit fixtures use expect to provide precise test failure messages."
-    )]
 
     use super::*;
     use crate::MessageKindDto;

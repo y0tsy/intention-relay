@@ -1228,11 +1228,6 @@ fn startup_lock_timeout() -> ErrorDto {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        clippy::panic,
-        reason = "Unit fixtures use direct assertions for precise diagnostics."
-    )]
 
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};

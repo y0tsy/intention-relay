@@ -1,8 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Contract fixtures use expect to provide precise test failure messages."
-)]
-
 //! Test-first typed-wire contract evidence.
 
 #[allow(

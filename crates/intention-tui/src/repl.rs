@@ -302,10 +302,6 @@ impl Line {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::panic,
-        reason = "Line tests assert the parsed step of typed input directly."
-    )]
 
     use super::*;
 
