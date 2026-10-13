@@ -24,19 +24,33 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "command",
-        choices=["lint", "test", "doctest", "doc"],
+        choices=["lint", "lint-windows", "test", "doctest", "doc"],
     )
     arguments = parser.parse_args()
 
     commands: dict[str, list[str]] = {
         "lint": ["cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-Dwarnings"],
+        # The Windows target is linted from Linux: Clippy stops before linking,
+        # so the pass needs the target's standard library and a C compiler for
+        # the bundled C dependencies, not a Windows linker.
+        "lint-windows": [
+            "cargo",
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--locked",
+            "--target",
+            "x86_64-pc-windows-gnu",
+            "--",
+            "-Dwarnings",
+        ],
         "test": ["cargo", "nextest", "run", "--workspace", "--all-targets", "--locked"],
         "doctest": ["cargo", "test", "--workspace", "--doc", "--locked"],
         "doc": ["cargo", "doc", "--workspace", "--no-deps", "--locked"],
     }
 
     command = list(commands[arguments.command])
-    if arguments.command == "lint":
+    if arguments.command in {"lint", "lint-windows"}:
         warning_flags = command[-2:]
         command = command[:-2] + FEATURE_FLAGS + warning_flags
     else:

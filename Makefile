@@ -11,11 +11,11 @@ SHELL := /bin/bash
 define TIMED
 $(PYTHON) -c 'import subprocess,time,sys; command=sys.argv[1:]; t=time.monotonic(); p=subprocess.run(command); print(f"timing: {command[0]}: {time.monotonic()-t:.2f}s", flush=True); raise SystemExit(p.returncode)'
 endef
-.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check lint test doc coverage coverage-default coverage-artifacts-clean deps e2e-real-api quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps
+.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check lint lint-windows test doctest doc coverage coverage-default coverage-artifacts-clean deps e2e-real-api quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps
 
 help: ## List supported M0 targets and mutation behavior.
 	@printf '%s\n' \
-	  'Non-mutating: tools-check fmt-check notices-check lint test doc coverage coverage-default deps quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps' \
+	  'Non-mutating: tools-check fmt-check notices-check lint lint-windows test doctest doc coverage coverage-default deps quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps' \
 	  'Mutating/networked: bootstrap-tools fmt notices coverage-artifacts-clean e2e-real-api' \
 	  '' \
 	  'Use make quick for the fast local loop and make verify before acceptance.'
@@ -41,8 +41,14 @@ notices-check: tools-check ## Verify committed third-party notices match the loc
 lint: tools-check ## Run strict Rust and Clippy linting.
 	$(PYTHON) quality/run_profiles.py lint
 
+lint-windows: tools-check ## Cross-lint the Windows target from Linux (needs the pinned cross target and MinGW).
+	$(PYTHON) quality/run_profiles.py lint-windows
+
 test: tools-check ## Run nextest and doctests.
 	$(PYTHON) quality/run_profiles.py test
+	$(PYTHON) quality/run_profiles.py doctest
+
+doctest: tools-check ## Run the workspace documentation tests.
 	$(PYTHON) quality/run_profiles.py doctest
 
 doc: tools-check ## Verify Rust documentation without warnings.
@@ -105,7 +111,7 @@ verify: check coverage deps ## Full reproducible merge and release gate.
 ci: verify ## CI alias for one local full gate. GitHub Actions invokes the per-job aliases below in parallel matrix jobs.
 	@true
 
-ci-lint-arch: fmt-check lint doc ## CI lint/architecture job: formatting, lint, and rustdoc.
+ci-lint-arch: fmt-check lint lint-windows doctest doc ## CI lint job: formatting, native and Windows-target lint, doctests, rustdoc.
 	@true
 
 ci-test: test ## CI test job: nextest and doctests.

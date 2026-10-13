@@ -266,9 +266,11 @@ Notes:
   (`ubuntu-24.04`, `windows-2025`); the codebase also carries macOS path
   mapping. Code, tests, and fixtures must not hard-code POSIX-only paths.
 - **Rust.** The pinned stable toolchain is `1.97.1`
-  ([rust-toolchain.toml](rust-toolchain.toml)) with `rustfmt`, `clippy`, and
-  `llvm-tools-preview`; all quality tools are pinned in
-  [quality/tools.toml](quality/tools.toml).
+  ([rust-toolchain.toml](rust-toolchain.toml)) with `rustfmt`, `clippy`,
+  `llvm-tools-preview`, and the `x86_64-pc-windows-gnu` target; all quality
+  tools are pinned in [quality/tools.toml](quality/tools.toml).
+- **MinGW** only for `make lint-windows`, which lints the Windows target from
+  Linux; CI installs it for the lint job, and no other local target needs it.
 - **Python 3** for the quality scripts behind the Makefile.
 - **Network** on first setup: `make bootstrap-tools` installs the exact pinned
   toolchains and quality tools (this target is mutating and networked;
@@ -287,6 +289,7 @@ quick` while iterating and run `make verify` before acceptance.
 | `make bootstrap-tools` | Mutating/networked: install exact pinned toolchains and quality tools. |
 | `make quick` | Fast local loop: tools check, `fmt-check`, lint, tests. |
 | `make check` | Complete non-mutating source gate: format, lint, tests, doctests/rustdoc. |
+| `make lint-windows` | Lint the Windows target from Linux; needs the pinned `x86_64-pc-windows-gnu` target and a MinGW toolchain. |
 | `make coverage` | Line coverage, enforcing each collected crate's declared tier floor (see [quality/coverage.toml](quality/coverage.toml)). |
 | `make verify` | Full acceptance gate: `check` plus coverage and dependency gates; removes only generated LLVM coverage artifacts. |
 | `make deps` | Supply-chain gates: deny, audit, outdated, machete, notices check. |

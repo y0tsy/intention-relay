@@ -19,19 +19,23 @@ architecture, failure-path, or outcome tests.
 - `make quick` is the fast inner-loop signal: tools check, `fmt-check`, lint, and the test suite.
 - `make check` is the complete non-mutating source gate; `make verify` adds coverage and the dependency/supply-chain
   gates; `make ci` aliases the full gate so local and CI behavior cannot drift.
-- `.github/workflows/quality.yml` runs the blocking gate as parallel matrix jobs through the per-job aliases:
-  `ci-lint-arch` (formatting, lint, and rustdoc) and `ci-test` on Linux and Windows, `ci-coverage-default` and `ci-deps`
-  on Linux. Branch protection requires the six resulting status checks.
+- `.github/workflows/quality.yml` runs the blocking gate in four parallel matrix jobs through the per-job aliases:
+  `ci-lint-arch` on Linux (formatting, native lint, the Windows cross-target lint, doctests, and rustdoc),
+  `ci-coverage-default` and `ci-deps` on Linux, and `ci-test` on Windows. Linux test execution belongs to
+  `ci-coverage-default`, which runs the same instrumented suite `make test` would, so no separate Linux test job
+  duplicates it. Branch protection requires the four resulting status checks.
 - CI installs exact tool releases through checksum-verified actions, scopes tools per job, uses `rust-cache`, the mold
-  linker on Linux jobs whose flags request it, and sccache for coverage builds.
+  linker on Linux jobs whose flags request it, the MinGW cross compiler for the Windows-target lint, and sccache for
+  coverage builds.
 - The `cache-cleanup` workflow prunes every non-`main` Actions cache and every `main` cache older than seven days after
   each merge and on a weekly schedule, so the shared rust-cache/sccache space cannot fill and start failing new writes.
 - The opt-in `real-api-e2e` workflow supports the gate without ever being part of it.
 - The gates never install tools, update the lockfile, or resolve dependencies differently from the committed state.
 
 `make help` is the contract for the supported targets, their dependencies, and their mutation status. The principal
-targets are `bootstrap-tools` (mutating and networked), `fmt`/`fmt-check`, `lint`, `test`, `doc`, `coverage`, `deps`,
-`notices`/`notices-check`, `quick`, `check`, `verify`, `ci`, the `ci-*` job aliases, and the opt-in `e2e-real-api`.
+targets are `bootstrap-tools` (mutating and networked), `fmt`/`fmt-check`, `lint`, `lint-windows`, `test`, `doctest`,
+`doc`, `coverage`, `deps`, `notices`/`notices-check`, `quick`, `check`, `verify`, `ci`, the `ci-*` job aliases, and the
+opt-in `e2e-real-api`.
 
 ## Reproducible tooling
 
@@ -44,6 +48,9 @@ targets are `bootstrap-tools` (mutating and networked), `fmt`/`fmt-check`, `lint
   never an implicit install.
 - The pinned stable toolchain is single-sourced: the Python runners read it from `quality/tools.toml`, and
   `make tools-check` fails when a workflow `toolchain:` literal drifts from that value.
+- The pinned toolchain also carries the `x86_64-pc-windows-gnu` target, so the cross-target lint has one declared
+  source. MinGW (`gcc-mingw-w64-x86-64`) and `nasm` are host prerequisites of that pass alone; CI installs them for the
+  lint job, and locally they are needed only to run `make lint-windows` or `make ci-lint-arch` by hand.
 
 ## Formatting and lint policy
 
@@ -61,6 +68,12 @@ targets are `bootstrap-tools` (mutating and networked), `fmt`/`fmt-check`, `lint
   `nursery` group itself is not denied, because it is unstable and churns between releases, and the policy
   deliberately does not deny all `pedantic` or all `restriction` lints, because some are subjective or ergonomically
   harmful.
+- The Windows target is linted beside the native one: `make lint-windows` runs the same Clippy command with
+  `--target x86_64-pc-windows-gnu`, so `#[cfg(windows)]` code, Windows-gated dependencies, and Windows-only items are
+  checked exactly like their Unix counterparts. Clippy stops before linking, so the pass needs the target's standard
+  library and a C compiler for the bundled C dependencies (`libsqlite3-sys`, `libmimalloc-sys`, `aws-lc-sys`, `ring`),
+  never a Windows linker; the target is pinned in `rust-toolchain.toml`, and CI installs MinGW for the pass. Local
+  `make quick`, `make check`, and `make verify` stay free of that prerequisite.
 - Two source rules are enforced by the compiler rather than by a text scan, through the root `clippy.toml` and the
   denied `clippy::disallowed_types` and `clippy::disallowed_methods` lints: production code never names
   `serde_json::Value` or `serde_json::Map` (DTO-first), and no code reaches for the process working directory instead
@@ -125,8 +138,10 @@ The root `Makefile` is the sole supported orchestration surface for local and CI
 shell behavior and label each command as mutating or non-mutating. `make verify` runs `check`, `coverage`, and `deps`,
 then removes only the generated LLVM coverage target; coverage reports remain available for CI upload. `make ci`,
 `make ci-lint-arch`, `make ci-test`, `make ci-coverage-default`, and `make ci-deps` are thin aliases for the gate
-sequences CI runs. `make check`, `make verify`, and `make ci` fail rather than modify source, update the lockfile,
-install tools, or resolve dependencies differently from committed state.
+sequences CI runs: `ci-lint-arch` composes `fmt-check`, `lint`, the Windows cross-target `lint-windows`, the standalone
+`doctest` stage, and `doc`, while `check` keeps the doctests inside `test`. `make check`, `make verify`, and `make ci`
+fail rather than modify source, update the lockfile, install tools, or resolve dependencies differently from committed
+state.
 
 An ordinary `cargo build`, `cargo run`, or destructive `cargo clean` is not an independent required quality gate when
 the compile and test contracts are already covered.
@@ -169,6 +184,7 @@ fails correctly.
 | --- | --- |
 | Formatting drift | `make fmt-check`. |
 | Compiler or Clippy warning | `make lint`. |
+| Windows-only code that fails Clippy or the Windows-target build | `make lint-windows`. |
 | Unreasoned or broad lint suppression | `make lint`. |
 | Missing/mismatched pinned tool | `make tools-check`. |
 | Missing, stale, or hand-edited third-party notices | `make notices-check` and `make deps`. |
@@ -182,6 +198,7 @@ fails correctly.
 | Undeclared or stale coverage skip declaration | `make coverage`. |
 | Unapproved coverage exclusion metadata | `make coverage`. |
 | Rustdoc warning or broken intra-doc link | `make doc`. |
+| Broken documentation example | `make doctest`, also part of `make test`. |
 | Dependency advisory/license/source/ban/duplicate violation | `make deps`. |
 | Stale or manifest-only dependency | `make deps`. |
 | Recognizable fake secret in output fixture | `make test` and `make verify`. |
