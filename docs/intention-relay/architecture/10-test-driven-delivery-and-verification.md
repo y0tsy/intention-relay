@@ -13,7 +13,8 @@ Makefile](12-quality-gates-and-makefile.md).
 A feature is delivered only when all three are true:
 
 1. its typed contract is specified and tested;
-2. its architecture boundaries are protected by executable checks where feasible;
+2. its architecture boundaries are enforced where a mechanism can decide them - by the crate manifests, by rustc, and by
+   the lint configuration - and reviewed where one cannot;
 3. a user-visible or operational outcome is verified through the real command/persistence path.
 
 ```mermaid
@@ -62,17 +63,17 @@ The following are mandatory candidates for automated architecture tests:
 | Autopilot continuity | Plan approval pins a revision, starts a fresh same-Session Build run, and optional handoff transfers only a safe frozen context. |
 | Secret safety | Secret-bearing config cannot appear in public DTO/log/error/snapshot types. |
 
-The mandatory tooling is fixed by [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md). Architecture tests
-are executed through `make architecture`; the complete reproducible acceptance gate is `make verify`, `make ci` is the
-local single-pass alias, while CI invokes the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default`,
-`ci-deps`) as parallel matrix jobs. `make architecture` also contains isolated expected-failure fixtures for adapter
-isolation, protocol isolation, composition-only concrete selection, provider-SDK public-contract leakage,
-and policy-aligned workspace cycles.
+The mandatory tooling is fixed by [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md). Architecture rules a
+mechanism can decide are enforced where they belong: the crate manifests and rustc keep provider SDKs, foreign
+implementation crates, and composition-only crates out of the wrong consumers, and Clippy denies untyped JSON in public
+contracts and direct working-directory access. The complete reproducible acceptance gate is `make verify`, `make ci` is
+the local single-pass alias, while CI invokes the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default`,
+`ci-deps`) as parallel matrix jobs.
 
 ## Minimum test portfolio by crate
 
-`quality/architecture.toml` classifies every workspace crate and declares each production crate's allowed workspace
-dependency edges, and `quality/coverage.toml` declares the per-crate tier floors ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
+Every production crate states its responsibility and its test targets in [01 Workspace and Crate Map](01-workspace-and-crate-map.md), and
+`quality/coverage.toml` declares the per-crate tier floors ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 Every production crate's test targets must exist before implementation and prove the contracts, invariants, failure
 modes, and outcomes its owner architecture document states. The smallest portfolio that proves every stated invariant, contract, failure mode, and
 outcome is required; no aggregate coverage number replaces it, and boundary crates prove behavior over fixture daemons
@@ -513,7 +514,7 @@ named only where a commit's cases span several, and each commit's MRs close with
 
 The pass's remaining commits are documentation. `27467bf docs: correct the terminal README and the root stop
 vocabulary` (MR-28, MR-30, MR-31) and `6a5358b docs(m5+): repair the stale run-frame names` (MR-27) carry no case:
-their evidence is the two self-tested `quality/check_docs.py` rules and one falsifiable `rg` line per claim, and
+their evidence is one falsifiable `rg` line per claim, and
 `99973a8 docs(m5+): count the terminal e2e cases the crate ships` repaired the `terminal_e2e` tally this section
 supersedes. `b3043ae docs(m5+): record the open decisions of the second rot audit` writes the roadmap record,
 `62a7343 docs(tui): record the corrected terminal facts` rewrites both READMEs, and `72dbb98 docs(m5+): record the
@@ -529,14 +530,14 @@ favorite and archive flags, a session list paged past its bounded window, and a 
 alternatives a wave chose against instead of delivering — the durable streamed-step identity (OD-10), the run-captured
 provider model (OD-13), live per-round usage (OD-15), the in-UI launch failure (OD-23), and the sessionless
 `--continue` launch (OD-7). The two designs the pass rejected rather than deferred — the non-terminal interrupt stop
-(OD-9) and a configurable run-mode default (OD-5) — are not rows. `make verify` and `make docs-check architecture` stay
-the gate the merge step owes; this record measures `make quick`.
+(OD-9) and a configurable run-mode default (OD-5) — are not rows. `make verify` stays the gate the merge step owes; this
+record measures `make quick`.
 
 The five-lane re-audit then read the frozen tip `79082b4` and found every MR-1…MR-31 fixed under the audit's own criteria,
 with the roadmap's whole open-decisions record re-checked and every row stamped `re-audited: L5 79082b4`. It also found
 two defects in the code this pass had just written, and fixed them before acceptance: `87786d7` bounds a lost stream to
 its one reconnect and restores the budget only from a delivered frame, `ef5dc69` ends the waiting phase a rejected create
-started, `67e5423` corrects the live continue-failure name and the `docs-check` rule list, and `19f8ba3` repairs two
+started, `67e5423` corrects the live continue-failure name and the documentation rule list, and `19f8ba3` repairs two
 stale mechanism comments. The owner then withdrew a rejected design rather than ledgering it: `40c2dc3` removes the
 non-terminal interrupt command end to end, and `0227953` spells the theme registry with the wire vocabulary so the
 adapter re-declares nothing. `make quick` at that closing tip runs 855 passed and 2 skipped.

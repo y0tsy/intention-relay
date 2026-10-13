@@ -71,8 +71,8 @@ named here (`intention-domain`, `intention-protocol`, `intention-application`, `
 
 ## Pre-collapse dependency direction (historical)
 
-This diagram records the pre-collapse dependency direction. The live edges are the ones declared in
-`quality/architecture.toml` and shown by the activated crate map below.
+This diagram records the pre-collapse dependency direction. The live edges are the ones the crate manifests declare and
+the activated crate map below shows.
 
 ```mermaid
 flowchart BT
@@ -112,8 +112,8 @@ flowchart BT
 ## Slice 1.5 crate map (activated)
 
 Slice 1.5 collapsed the workspace to nine production crates, shown below together with what each absorbed. The table
-below is the live crate map, and the exact permitted edges and coverage tiers are declared
-by `quality/architecture.toml` under phase `slice2`.
+below is the live crate map; each crate's permitted dependency direction is the one its manifest declares, and
+`quality/coverage.toml` declares its coverage tier.
 
 | Target crate | Absorbs | Owns |
 | --- | --- | --- |
@@ -233,8 +233,9 @@ The workspace must have tests that fail when these rules are broken:
 4. only `intention-daemon` selects concrete storage/provider/tool extension implementations;
 5. `intention-proto` has no dependency on Tauri, SQLite, provider SDKs, or UI crates;
 6. public cross-crate methods accept/return DTOs, not implementation resources or provider SDK types;
-7. every planned crate has a stated test target before implementation begins;
-8. every declared boundary is enforced by the architecture checker against the machine-readable policy.
+7. every planned crate states its test targets in this crate map before implementation begins;
+8. every boundary a mechanism can decide is enforced by the crate manifests, by rustc, and by the lint configuration;
+   the rest is a review responsibility.
 
 The exact test strategy and minimum test portfolio are defined in [10 Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (per-crate tiers),

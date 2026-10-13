@@ -1,14 +1,14 @@
 [policy]
-phase = "slice2"
 # A collected crate Cargo declares with no test-executing target is skipped
 # only when it is listed here; an undeclared skip fails the coverage run, and a
 # declaration whose crate does have a test target fails as stale.
 unexecutable_crates = []
 
-# Line-coverage floors. [crate_tiers] assigns every active production crate and
-# every adapter package to exactly one tier; the runner collects every crate
-# whose tier is above zero with one isolated line-only Cargo package
-# invocation, and exempt crates stay outside collection and every aggregate.
+# Line-coverage floors. [crate_tiers] assigns every workspace crate Cargo
+# declares with a test-executing target to exactly one tier, so a new crate
+# cannot appear without a floor; the runner collects every crate whose tier is
+# above zero with one isolated line-only Cargo package invocation, and exempt
+# crates stay outside collection and every aggregate.
 [tiers]
 core = 75.0
 standard = 60.0
@@ -26,6 +26,7 @@ exempt = 0.0
 "intention-tui" = "edge"
 "intention-client" = "edge"
 "intention-proto" = "exempt"
+"intention-test-support" = "exempt"
 
 [[exclusions]]
 enabled = true

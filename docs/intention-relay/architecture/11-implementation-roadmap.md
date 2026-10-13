@@ -5,8 +5,7 @@
 This is a dependency-aware delivery roadmap, not a time estimate. The first implementation milestone is the reproducible
 quality foundation. Every later milestone begins with failing tests and is accepted only after its applicable `make
 verify` evidence passes. This roadmap owns milestone order, dependencies, activation, and status only: required quality
-commands, pinned tools, the coverage policy, lint policy,
-architecture checks, and supply-chain gates live in [Quality Gates and
+commands, pinned tools, the coverage policy, the lint policy, and supply-chain gates live in [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md); test-first and outcome-verification rules live in [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md).
 
@@ -207,8 +206,8 @@ instance and falls back to the platform-default endpoint, and the launcher resol
   clean; the delivered behavior and the corrective pass that followed it are recorded by
   [architecture 03](03-daemon-transport-and-adapters.md) and [Test-Driven Delivery and
   Verification](10-test-driven-delivery-and-verification.md). The quality phase keeps its `slice2` name: closing a slice
-  changes no crate classification, so `quality/architecture.toml`, `quality/coverage.toml`, and the checker that pins the
-  live slice move together only when Slice 3 activates its own.
+  changes no crate classification, so `quality/coverage.toml` and the crate map move together only when Slice 3 adds its
+  own crates.
 -  **Slice 3 — Agent operation — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
 deployment instruction profile adapted from the legacy Antibusy static prompt set, user-authored fragments at user,

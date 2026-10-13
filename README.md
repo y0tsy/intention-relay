@@ -55,7 +55,7 @@ of each.
 
 | Milestone | Status | Scope |
 | --- | --- | --- |
-| M0 Quality foundation | Closed | Reproducible Makefile-orchestrated quality pipeline (format, lint, nextest, docs, architecture, coverage, supply-chain gates) with pinned tools. |
+| M0 Quality foundation | Closed | Reproducible Makefile-orchestrated quality pipeline (format, lint, nextest, rustdoc, coverage, supply-chain gates) with pinned tools. |
 | M1 Contracts, configuration, workspace skeleton | Closed | Tier-A crate boundaries (`intention-proto`, `intention-config`; M1's `intention-domain` was later folded into `intention-proto`), DTO-first policy, TOML config with redacted projections, compile-only skeletons for every later crate. |
 | M1+ Quality policy hardening | Closed | Machine-readable policies (`quality/*.toml`) enforce the crate classification with its declared responsibilities, workspace and external dependency edges, named integration test targets, and coverage tiers. |
 | M2 Local protocol, client, daemon bootstrap | Closed | Private local IPC, correlated request/response codec, shared bootstrap client with startup lock and readiness polling, in-memory fixture composition, minimal TUI proof adapter (the hello/version handshake was later replaced by one typed wire). |
@@ -286,8 +286,7 @@ quick` while iterating and run `make verify` before acceptance.
 | --- | --- |
 | `make bootstrap-tools` | Mutating/networked: install exact pinned toolchains and quality tools. |
 | `make quick` | Fast local loop: tools check, `fmt-check`, lint, tests. |
-| `make check` | Complete non-mutating source gate: format, lint, tests/doctests, docs, architecture. |
-| `make docs-check` | Rustdoc, then Markdown link/Mermaid/secret-pattern validation. |
+| `make check` | Complete non-mutating source gate: format, lint, tests, doctests/rustdoc. |
 | `make coverage` | Line coverage, enforcing each collected crate's declared tier floor (see [quality/coverage.toml](quality/coverage.toml)). |
 | `make verify` | Full acceptance gate: `check` plus coverage and dependency gates; removes only generated LLVM coverage artifacts. |
 | `make deps` | Supply-chain gates: deny, audit, outdated, machete, notices check. |
@@ -385,9 +384,9 @@ The v1 boundary and non-goals are stated precisely in
 - Use the quality gates: `make quick` while iterating, `make verify` before
   handoff; CI must stay green on pull requests to `main`.
 - Keep machine-readable policies ([quality/](quality)) and architecture
-  documentation in sync with code changes: new production crates must be
-  declared with a responsibility, test target, and coverage tier before
-  production code is accepted.
+  documentation in sync with code changes: a new production crate states its
+  responsibility and test targets in the crate map and gets a coverage tier
+  before production code is accepted.
 - Single live version, no backward compatibility: when an execution path
   becomes outdated, remove it; do not add compatibility layers, fallback
   branches, or migration fixtures for older schema/protocol/format versions.

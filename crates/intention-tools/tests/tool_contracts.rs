@@ -2,7 +2,6 @@
     clippy::unwrap_used,
     reason = "Integration tests use unwrap only for deterministic fixture setup; failures indicate a broken test fixture."
 )]
-
 #![expect(
     clippy::disallowed_types,
     reason = "Contract tests decode and index raw JSON Schema text by shape; DTO-first binds production code."
@@ -535,7 +534,7 @@ fn public_tool_errors_redact_secret_paths_commands_and_os_text() {
     let root = root_dir.path();
     let service = service(&root_dir);
     // Assembled at runtime: recognizably fake, yet never a literal
-    // secret-shaped assignment that docs-check rejects.
+    // secret-shaped assignment that must not surface in the note.
     let secret = format!("credential{}", "-leak-probe");
     let error = service
         .dispatch_with_cancellation(

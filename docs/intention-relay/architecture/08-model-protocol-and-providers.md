@@ -53,9 +53,9 @@ that instruction block as an ephemeral prompt-cache breakpoint. Historical M3/M4
 absent. A driver never synthesizes, substitutes, reorders, or truncates instruction text, and a provider cannot inject
 or extend it.
 
-Provider SDK types cannot leave their provider crate. The architecture checker permits `openrouter_rs` namespace use
-only inside `intention-providers`, in its private OpenRouter adapter, and `async_openai` only in its generic-chat adapter; source-level ownership analysis rejects either SDK plus HTTP/runtime resources
-outside those owners.
+Provider SDK types cannot leave their provider crate. Only `intention-providers` declares `openrouter-rs` and
+`async-openai`, so any other crate that names either SDK namespace fails to compile; inside the crate each SDK stays in
+its own private adapter, and only the composition root selects between them.
 
 ## Model evidence in the transcript
 

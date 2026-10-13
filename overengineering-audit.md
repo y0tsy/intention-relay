@@ -51,6 +51,7 @@ Branch `cleanup/overengineering-removal`, base `a359729`, four commits:
 | `3aa5b8b` | `build(quality)`: drop `cargo-udeps` and the pinned nightly toolchain |
 | `54117be` | `build(deps)`: de-vendor `revue` and adopt upstream 3.10.0 |
 | `0231be8` | `build(deps)`: upgrade `openrouter-rs` to 0.19.0 |
+| `12ebbf8` + the Part 1 removal commit | `build`/`refactor(quality)`: Clippy carries the two source rules; the architecture and docs checkers and their self-tests are deleted |
 
 Findings this closes:
 
@@ -70,13 +71,26 @@ Findings this closes:
 - **L1-10, top burden 3, Wave R1 bullet 3 — partly resolved** (`3aa5b8b`). `cargo-udeps` is gone with the pinned nightly
   toolchain it required; coverage now runs on stable 1.97.1. `cargo deny`, `cargo audit`, `cargo machete`,
   `cargo outdated`, byte-exact notices, and the six-job CI matrix stay.
+- **L1-4, L1-5, L1-6, L1-7, L1-8, L1-9, L1-13, L1-14, L1-15, L1-16, L7-8, L7-13, top burdens 4 and 5, Wave R1
+  bullet 4, C8 — resolved** (Part 1, commit `12ebbf8` plus the removal commit). `quality/` shrinks by 2,001 lines:
+  `check_architecture.py` (1,126), `architecture.toml` (210), `check_docs.py` (288), `test_check_coverage.py` (229),
+  and `test_run_coverage.py` (148) are deleted, and no gate runs a meta-test suite. The two source rules that survive
+  run natively: `clippy.toml` denies `serde_json::Value`/`serde_json::Map` and
+  `std::env::current_dir`/`set_current_dir` through `clippy::disallowed_types` and `clippy::disallowed_methods`, which
+  rustc resolves at every use site instead of scanning raw text. Crate classification, the declared dependency-edge and
+  external-dependency sets, the named test-target declarations, the composition-name and ordering-suffix bans, the
+  documentation link/fence/Mermaid checks, the mirrored `MAX_*`/`MIN_*` constants, the removed-wire-name list, the
+  `@todo(core)` placeholder, and the secret-shaped-assignment regex are gone; the boundary rules worth keeping are
+  enforced by the manifests, by rustc, and by review. `make doc` (`cargo doc --workspace --no-deps` with
+  `RUSTDOCFLAGS=-D warnings`) is all that remains of the documentation gate. The coverage tiers, floors, and
+  exclusions stay exactly as they were, with one completeness rule added: a workspace crate with a test-executing
+  target and no tier fails `make coverage`, and `intention-test-support` is declared `exempt`.
 
 Landed outside the audit's scope: `0231be8` upgrades `openrouter-rs` to 0.19.0, published 2026-10-13, because the
 stale-pin gate (`cargo outdated --exit-code 1`) in `make deps` trips on an external release rather than on a defect.
 
-Still open in Wave R1: coverage floors (L1-3, L7-12), the checkers' own test suite blocking `make check` (L1-9, L7-13),
-the label taxonomy and the agent quotas (L1-17, L1-18), the six-job CI matrix (L1-12), and the new-crate and
-new-dependency tax (L1-4, L7-8).
+Still open in Wave R1: coverage floors (L1-3, L7-12), the label taxonomy and the agent quotas (L1-17, L1-18), and the
+six-job CI matrix (L1-12).
 
 Anchors elsewhere in this file remain as read at `a359729`; doc 12 and doc 03 were rewritten by the branch, so their
 line numbers have shifted.
@@ -88,8 +102,8 @@ line numbers have shifted.
 | 1 | `nursery=deny` plus panic/print/expect denied everywhere incl. tests (91 suppressions, 72 files with `reason=`) — **resolved** (`eeaa99c`) | `Cargo.toml:36-56`, `12:53-58` | HIGH |
 | 2 | Coverage floors bite from the first production line (75/60/20), no ramp | `12:79-99`, `coverage.toml:14-24` | HIGH |
 | 3 | Six-tool supply-chain stack with byte-exact notices while `publish=false` — **partly resolved** (`3aa5b8b`): `cargo-udeps` and the nightly toolchain are gone, the rest stays | `12:130-145`, `Cargo.toml:29` | HIGH |
-| 4 | The quality system has its own ~1000-line test suite, blocking in `make check` | `Makefile:60-62`, `check_architecture.py:817-978` | HIGH |
-| 5 | Every new crate/dep is a policy edit with declared↔Cargo equality and named test targets | `architecture.toml:20-130` | MED-HIGH |
+| 4 | The quality system has its own ~1000-line test suite, blocking in `make check` — **resolved** (Part 1): the meta-suite is deleted | `Makefile:60-62`, `check_architecture.py:817-978` | HIGH |
+| 5 | Every new crate/dep is a policy edit with declared↔Cargo equality and named test targets — **partly resolved** (Part 1): only the coverage tier is left, and an untiered crate now fails `make coverage` | `architecture.toml:20-130` | MED-HIGH |
 | 6 | Vendored, patched `revue` maintained for one advisory — **resolved** (`54117be`) | `Cargo.toml:22,74-76`, `12:146-160` | HIGH |
 | 7 | Atomic-slice rule blocks sequential merges inside one slice | `11:85-89`, `11:299-303` | HIGH |
 | 8 | Rot-audit apparatus cites an unrecoverable `/tmp` input | `10:403-418` | HIGH |
@@ -123,31 +137,36 @@ of Python/Makefile for a local single-user tool, and `make check` blocks on the 
 4. **Exact dependency-set equality against Cargo metadata** — `architecture.toml:98-130`, `01:226-241`, `12:61-68`.
    Adding one dependency means editing the manifest *and* `[external_dependencies]` in the same change; an undeclared
    or stale entry fails. Simpler: assert only edges carrying a real invariant (adapter, proto, composition-root);
-   let Cargo own the rest. **MED-HIGH** (load-bearing for the adapter/proto/composition subset).
+   let Cargo own the rest. **MED-HIGH** (load-bearing for the adapter/proto/composition subset). **Resolved** in Part 1:
+   `architecture.toml` is deleted; the edges the manifests declare are the edges Cargo enforces.
 
 5. **Integration test targets pinned by name** — `architecture.toml:20-75`, `check_architecture.py:287-306`. Renaming or
    adding a test file is a policy edit. Simpler: require a test target only for crates with a declared contract
-   surface. **MEDIUM.**
+   surface. **MEDIUM.** **Resolved** in Part 1: the named test-target declarations are gone; the crate map states the
+   targets.
 
 6. **Ordering-authority name-suffix ban** — `architecture.toml:190-210`, `check_architecture.py:750-783`. No production
    type name may end in `SequenceDto`/`CursorDto`/`PositionDto`/`TicketDto`/`WatermarkDto`/`OrderDto`/`EpochDto`/
    `JournalDto`. A regex policing naming. Simpler: the single-live-schema decision already covers it; keep as a
-   documented rule. **MEDIUM.**
+   documented rule. **MEDIUM.** **Resolved** in Part 1: the suffix ban is deleted.
 
 7. **Composition type-name ownership + selection-pattern presence** — `architecture.toml:166-183`,
    `check_architecture.py:786-814`. `SqliteStorageRepository` may be named only in its crate or the daemon, and the
    string `SelectedProvider` must appear in daemon source. Duplicates the dependency-direction rule. **MEDIUM.**
+   **Resolved** in Part 1: both checks are deleted; rustc keeps composition-only crates out of the wrong consumers.
 
 8. **Forbidden patterns scanned as raw text, comments included** — `architecture.toml:78-87`,
    `check_architecture.py:73-74,1090-1104`. Literal `serde_json::{`, `::<Value>`, `Value::as_`, `serde_json::Value`,
    `rusqlite::` must not appear in any `.rs` outside `tests/`. A doc comment explaining the ban fails the build; a
    grouped `use serde_json::{json, ...}` fails though `json!` is legitimate. Simpler: match `use`/type positions and
-   skip comment lines. **MEDIUM.**
+   skip comment lines. **MEDIUM.** **Resolved** in Part 1: the text scan is gone, and `clippy.toml` denies the two
+   shapes the policy keeps at every resolved use site, comments included.
 
 9. **The quality system has its own test suite, blocking in `make check`** — `12:75,120`, `Makefile:60-62`,
    `test_check_coverage.py` (229 lines), `test_run_coverage.py` (148), seven `self_test_*` in
    `check_architecture.py:817-978`, three in `check_docs.py:221-252`. ~1,000 lines of meta-code beside 1,128 lines of
-   checker. Simpler: 2-3 fixture cases per checker, or run self-tests on demand. **HIGH.**
+   checker. Simpler: 2-3 fixture cases per checker, or run self-tests on demand. **HIGH.** **Resolved** in Part 1: the
+   meta-suite and its checkers are deleted, and `make check` runs no self-tests.
 
 10. **Six-tool supply-chain stack with byte-exact notices** — `12:130-145`: `cargo deny`, `audit`, `udeps`, `machete`,
     `outdated`, `cargo-about` byte-compared with a license-grouping fallback, all blocking in `make verify`. Nothing is
@@ -168,17 +187,19 @@ of Python/Makefile for a local single-user tool, and `make check` blocks on the 
 
 13. **Docs mirror code constants** — `check_docs.py:87-109`, `12:69-74`. Every `MAX_*`/`MIN_*` named in a
     `**Current policy.**` doc must exist verbatim under `crates/`. Renaming a constant forces a doc edit. Simpler: check
-    only in the owning document. **MEDIUM.**
+    only in the owning document. **MEDIUM.** **Resolved** in Part 1: the constant-mirroring check is deleted.
 
 14. **Removed-wire-name scan over `crates/` too** — `check_docs.py:24,174-185,206-219`, `12:75`. A removed name cannot
     be mentioned in a history note or comment; the curated list is three names. Simpler: scan `docs/` only. **LOW-MED.**
+    **Resolved** in Part 1: the scan is deleted.
 
 15. **`@todo(core)` placeholder-constant check** — `check_docs.py:25-30,153-172`. Regex over prose for a convention
-    review already enforces. Simpler: delete. **LOW-MED.**
+    review already enforces. Simpler: delete. **LOW-MED.** **Resolved** in Part 1: the check is deleted.
 
 16. **Secret-shaped-assignment scan contradicts the stated ban** — `check_docs.py:13-15,254-259` scans sources for
     credential-shaped strings while `AGENTS.md:79` bans content scanning. Repo-level vs runtime, but the two policies
-    should be reconciled explicitly. **LOW.**
+    should be reconciled explicitly. **LOW.** **Resolved** in Part 1: the regex scan is deleted, so the repository no
+    longer scans any source text for credential-shaped strings (C8).
 
 17. **19-label taxonomy with per-PR `type:` and per-surface `area:` labels** — `AGENTS.md:91-97`. Label bookkeeping with
     no consumer. Simpler: `type:` only. **MEDIUM.**
@@ -705,6 +726,8 @@ Note: `docs/intention-relay/closeout/` **does not exist**; roadmap `11:19-23` re
 13. **The quality system is itself a product** — `12:165-190` requires 19 controlled failure fixtures, backed by ~11
     Python checkers (`check_architecture.py` 49KB) and `make quality-tests` in `make check`. Simpler: keep
     expected-failure fixtures for gates that have caught something (lint, architecture, notices). **MED-HIGH.**
+    **Resolved** in Part 1: the Python checkers, the meta-suite, and `make quality-tests` are gone, and the failure table
+    now records the native failures of the manifests, rustc, Clippy, the coverage runner, and rustdoc.
 
 14. **Vendored UI toolkit gated on an upstream issue** — `12:146-159`: `vendor/revue` with `PATCH.md` and a deletion
     trigger (`hawk90/revue#950`) exists mainly because the advisory policy forbids acknowledging `unic-emoji-char`.
@@ -741,7 +764,7 @@ Note: `docs/intention-relay/closeout/` **does not exist**; roadmap `11:19-23` re
 | C5 | `SkillSelectionV1` is defined twice with different field sets | `21:65-71` vs `21:219-229` |
 | C6 | Memory records have two owners with overlapping semantics | `21:7-8,301-305` vs `28:3-5,160-178` |
 | C7 | Profile UI / configuration control plane has two owners | `25:103-112` vs `29:76-84` |
-| C8 | Secret-shaped source scan contradicts the repo's ban on content scanning | `check_docs.py:13-15,254-259` vs `AGENTS.md:79` |
+| C8 | Secret-shaped source scan contradicts the repo's ban on content scanning — **resolved** in Part 1: the scan is deleted | `check_docs.py:13-15,254-259` vs `AGENTS.md:79` |
 | C9 | Roadmap cites `docs/intention-relay/closeout/`, which was deleted | `11:19-23` vs absent directory |
 
 ---
@@ -802,7 +825,8 @@ Note: `docs/intention-relay/closeout/` **does not exist**; roadmap `11:19-23` re
 - Move coverage floors to milestone acceptance, or changed-lines only (`12:79-99`).
 - Reduce supply chain to `cargo deny` + on-demand rest; drop `THIRD_PARTY_NOTICES.md` (`12:130-145`). — **partly done**
   (`3aa5b8b`): `cargo-udeps` and the nightly toolchain are gone; the notices artifact and the other tools stay.
-- Remove `make quality-tests` from the blocking gate (`Makefile:60-62`).
+- Remove `make quality-tests` from the blocking gate (`Makefile:60-62`). — **done** (Part 1): the target, the checkers,
+  and their self-tests are deleted.
 - `revue` to registry 3.10.0 + scoped advisory ignore (`Cargo.toml:74-76`, `12:146-160`). — **done** (`54117be`).
 - One CI job running `make verify`; delete cache-cleanup (`12:22-26`).
 

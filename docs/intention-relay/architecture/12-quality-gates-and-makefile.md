@@ -1,18 +1,18 @@
 # Quality Gates and Makefile
 
 **Current policy.** The pinned Rust toolchain and external-tool manifest, the root `Makefile`, Cargo configuration and
-committed lockfile, machine-readable policies, quality checkers, and the CI workflow are implemented and blocking, and
-the policy below is the v1 quality policy. Future milestones extend it only when they add a crate, feature combination,
-adapter, quality tool, or an explicitly approved stronger check.
+committed lockfile, the machine-readable policies, the lint configuration, and the CI workflow are implemented and
+blocking, and the policy below is the v1 quality policy. Future milestones extend it only when they add a crate, feature
+combination, adapter, or an explicitly approved stronger check.
 
 ## Scope
 
 The policy covers pinned toolchains and external quality tools; formatting and strict pragmatic linting; per-crate
-coverage tiers; tests, doctests, documentation, and architecture checks; dependency,
-license, advisory, stale-dependency, and manifest hygiene; the Makefile contract and CI entry point;
-and explicit, reviewable exception handling. It complements, and does not replace, [Test-Driven Delivery and
-Verification](10-test-driven-delivery-and-verification.md): numeric coverage never replaces contract, architecture,
-failure-path, or outcome tests.
+coverage tiers; tests, doctests, and rustdoc; dependency, license, advisory, stale-dependency, and manifest hygiene; the
+Makefile contract and CI entry point; and explicit, reviewable exception handling. Architecture rules that no mechanism
+can decide are review responsibilities rather than gates. The policy complements, and does not replace, [Test-Driven
+Delivery and Verification](10-test-driven-delivery-and-verification.md): numeric coverage never replaces contract,
+architecture, failure-path, or outcome tests.
 
 ## Quality model
 
@@ -20,8 +20,8 @@ failure-path, or outcome tests.
 - `make check` is the complete non-mutating source gate; `make verify` adds coverage and the dependency/supply-chain
   gates; `make ci` aliases the full gate so local and CI behavior cannot drift.
 - `.github/workflows/quality.yml` runs the blocking gate as parallel matrix jobs through the per-job aliases:
-  `ci-lint-arch` (formatting, lint, docs, architecture, and the checker self-tests) and `ci-test` on Linux and Windows,
-  `ci-coverage-default` and `ci-deps` on Linux. Branch protection requires the six resulting status checks.
+  `ci-lint-arch` (formatting, lint, and rustdoc) and `ci-test` on Linux and Windows, `ci-coverage-default` and `ci-deps`
+  on Linux. Branch protection requires the six resulting status checks.
 - CI installs exact tool releases through checksum-verified actions, scopes tools per job, uses `rust-cache`, the mold
   linker on Linux jobs whose flags request it, and sccache for coverage builds.
 - The `cache-cleanup` workflow prunes every non-`main` Actions cache and every `main` cache older than seven days after
@@ -30,9 +30,8 @@ failure-path, or outcome tests.
 - The gates never install tools, update the lockfile, or resolve dependencies differently from the committed state.
 
 `make help` is the contract for the supported targets, their dependencies, and their mutation status. The principal
-targets are `bootstrap-tools` (mutating and networked), `fmt`/`fmt-check`, `lint`, `test`, `docs-check`, `architecture`,
-`quality-tests`, `coverage`, `deps`, `notices`/`notices-check`, `quick`, `check`, `verify`, `ci`, the `ci-*` job
-aliases, and the opt-in `e2e-real-api`.
+targets are `bootstrap-tools` (mutating and networked), `fmt`/`fmt-check`, `lint`, `test`, `doc`, `coverage`, `deps`,
+`notices`/`notices-check`, `quick`, `check`, `verify`, `ci`, the `ci-*` job aliases, and the opt-in `e2e-real-api`.
 
 ## Reproducible tooling
 
@@ -68,21 +67,14 @@ aliases, and the opt-in `e2e-real-api`.
   of `WorkspaceRoot`. Test targets and in-source test modules carry one reasoned `#[expect]` each where they decode raw
   JSON by shape, and the headless line writer is the single allowed production site; because the attribute is an
   expectation rather than an allowance, it fails as unfulfilled as soon as its last use disappears.
-- `make architecture` enforces the architectural protections encoded in `quality/architecture.toml` and implemented by
-  `quality/check_architecture.py`: the per-crate role, responsibility, and named integration test target declarations,
-  the exact allowed cross-crate edge and external dependency sets (including the non-production test crates), the
-  acyclic production dependency graph, private provider-SDK ownership, DTO-only boundaries, no process-CWD fallback,
-  forbidden escape hatches, and the closed ordering-authority set. Every declared set is compared for equality against
-  Cargo metadata, so an undeclared edge or dependency fails exactly like a stale declaration. Development-dependency
-  edges follow Cargo and are excluded from cycle detection: a shared test-fixture crate may depend on the crate under
-  test without closing a production cycle, while a production dependency cycle still fails.
-- `make docs-check` resolves Markdown links across `docs/` and the root documents (`README.md`, `AGENTS.md`,
-  `THIRD_PARTY_NOTICES.md`), checks code-fence balance and Mermaid diagram headers, verifies that every `MAX_*`/`MIN_*`
-  bound a current-policy document names exists in `crates/`, rejects a removed wire name still spelled under `docs/`
-  or `crates/`, verifies that a placeholder constant a `@todo(core)` convention sentence names exists under `crates/`,
-  and rejects secret-shaped assignments. Prose counts, tables, code-path claims, and cross-document contradictions
-  remain review responsibilities.
-- `make quality-tests` runs the checkers' own focused self-tests over synthetic inputs, and it is part of `make check`.
+- The structural boundary rules are enforced without a text scan: a crate that names a foreign implementation crate, a
+  provider SDK outside `intention-providers`, or a composition-only concrete implementation outside the daemon's
+  composition root fails to compile, and `cargo metadata` reports the same edges the manifests declare. Provider-SDK
+  ownership, DTO-only public boundaries, the acyclic production dependency graph, and the closed ordering-authority set
+  are review responsibilities, checked against the crate map and the dependency manifests rather than by a checker.
+- Documentation is verified by rustdoc: `make doc` builds the workspace documentation with `-D warnings`, so a broken
+  intra-doc link or an undocumented public item fails the gate. Markdown links, prose counts, tables, code-path claims,
+  and cross-document consistency are review responsibilities.
 
 ## Coverage policy
 
@@ -98,8 +90,11 @@ a threshold authority.
 | `core` | 75% | `intention-transport`, `intention-storage`, `intention-engine` |
 | `standard` | 60% | `intention-tools`, `intention-config`, `intention-daemon`, `intention-providers` |
 | `edge` | 20% | `intention-tui`, `intention-client` |
-| `exempt` | 0% (not collected) | `intention-proto` |
+| `exempt` | 0% (not collected) | `intention-proto`, `intention-test-support` |
 
+- Every workspace crate Cargo declares with a test-executing target carries a tier: the runner reads the locked Cargo
+  metadata snapshot and fails on an untiered crate before it collects anything, so a crate cannot enter the workspace
+  outside the coverage policy.
 - A coverage decrease below a crate's tier floor fails `make coverage` and `make verify`.
 - Generated code and technically unmeasurable code may be excluded only through a versioned policy entry with
   rationale, owner, and equivalent test evidence, and exclusions cannot hide core runtime, policy, provider
@@ -126,8 +121,7 @@ adapter, or feature extends that one configuration instead of adding a profile m
 
 ## Makefile contract
 
-The root `Makefile` is the sole supported orchestration surface for local and CI quality workflows, including the
-quality checkers' own self-tests (`make quality-tests`, which `make check` runs). Recipes use strict
+The root `Makefile` is the sole supported orchestration surface for local and CI quality workflows. Recipes use strict
 shell behavior and label each command as mutating or non-mutating. `make verify` runs `check`, `coverage`, and `deps`,
 then removes only the generated LLVM coverage target; coverage reports remain available for CI upload. `make ci`,
 `make ci-lint-arch`, `make ci-test`, `make ci-coverage-default`, and `make ci-deps` are thin aliases for the gate
@@ -168,36 +162,34 @@ dependency through the generated `THIRD_PARTY_NOTICES.md`.
 
 ## Required quality-gate failure tests
 
-Controlled fixtures prove that the quality system fails correctly. The intent of each fixture is recorded here; the
-fixtures themselves live with their checkers.
+Controlled probes and the native failures of the manifests, rustc, Clippy, and the runners prove that the quality system
+fails correctly.
 
 | Intentional defect | Gate that fails |
 | --- | --- |
 | Formatting drift | `make fmt-check`. |
 | Compiler or Clippy warning | `make lint`. |
-| Unreasoned or broad lint suppression | `make lint` or `make architecture`. |
+| Unreasoned or broad lint suppression | `make lint`. |
 | Missing/mismatched pinned tool | `make tools-check`. |
 | Missing, stale, or hand-edited third-party notices | `make notices-check` and `make deps`. |
-| Missing, conflicting, or incomplete crate classification metadata | `make architecture`. |
-| Undeclared or stale workspace, external, or named-test-target declaration | `make architecture`. |
-| Forbidden crate dependency or import | `make architecture`. |
-| Untyped-decode import shape hidden from the raw-text scan | `make architecture` (the `[forbidden] source_patterns` shapes and the checker's own `self_test_source_patterns` fixture). |
-| DTO/SDK implementation leak | `make architecture`. |
+| Forbidden crate dependency, provider-SDK leak, or a composition-only implementation outside the composition root | `cargo metadata` and rustc: the offending crate fails to compile. |
+| Untyped JSON in a production public contract | `make lint` (the `clippy.toml` `disallowed-types` ban). |
+| Direct process working-directory access | `make lint` (the `clippy.toml` `disallowed-methods` ban). |
+| Unfulfilled or unreasoned lint suppression | `make lint`. |
+| DTO/SDK implementation leak in a public signature | `make lint` and review. |
+| Workspace crate with a test-executing target and no coverage tier | `make coverage`. |
 | Coverage below a crate's tier floor | `make coverage`. |
 | Undeclared or stale coverage skip declaration | `make coverage`. |
 | Unapproved coverage exclusion metadata | `make coverage`. |
-| Documented bound that no crate defines | `make docs-check`. |
-| Removed wire name still spelled in a document or a crate | `make docs-check`. |
-| Documented placeholder constant that no crate defines | `make docs-check`. |
+| Rustdoc warning or broken intra-doc link | `make doc`. |
 | Dependency advisory/license/source/ban/duplicate violation | `make deps`. |
 | Stale or manifest-only dependency | `make deps`. |
 | Recognizable fake secret in output fixture | `make test` and `make verify`. |
 
 ## Test-first integration
 
-Every production boundary is activated with its machine-readable architecture and coverage policies
-updated in the same change, together with focused expected-failure architecture fixtures and outcome evidence.
-A focused test suite is not a substitute for the full gates.
+Every production boundary is activated with its crate-map entry, its declared test targets, and its coverage tier
+updated in the same change, together with outcome evidence. A focused test suite is not a substitute for the full gates.
 
 ## Opt-in live-provider e2e
 

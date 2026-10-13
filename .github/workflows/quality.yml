@@ -148,13 +148,6 @@ jobs:
       - name: Report disk space before the quality gate
         run: df -h . "$HOME"
 
-      - name: Run the quality-checker self-tests
-        # Pure-Python decisions over synthetic reports and metadata;
-        # platform-invariant, so it runs on the Linux lint-arch entry like the
-        # other source gates.
-        if: matrix.phase == 'lint-arch' && runner.os == 'Linux'
-        run: make quality-tests
-
       - name: Run repository quality gate (${{ matrix.phase }})
         run: make ci-${{ matrix.phase }}
 

@@ -11,11 +11,11 @@ SHELL := /bin/bash
 define TIMED
 $(PYTHON) -c 'import subprocess,time,sys; command=sys.argv[1:]; t=time.monotonic(); p=subprocess.run(command); print(f"timing: {command[0]}: {time.monotonic()-t:.2f}s", flush=True); raise SystemExit(p.returncode)'
 endef
-.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check lint test docs-check architecture quality-tests coverage coverage-default coverage-artifacts-clean deps e2e-real-api quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps
+.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check lint test doc coverage coverage-default coverage-artifacts-clean deps e2e-real-api quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps
 
 help: ## List supported M0 targets and mutation behavior.
 	@printf '%s\n' \
-	  'Non-mutating: tools-check fmt-check notices-check lint test docs-check architecture quality-tests coverage coverage-default deps quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps' \
+	  'Non-mutating: tools-check fmt-check notices-check lint test doc coverage coverage-default deps quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps' \
 	  'Mutating/networked: bootstrap-tools fmt notices coverage-artifacts-clean e2e-real-api' \
 	  '' \
 	  'Use make quick for the fast local loop and make verify before acceptance.'
@@ -45,16 +45,8 @@ test: tools-check ## Run nextest and doctests.
 	$(PYTHON) quality/run_profiles.py test
 	$(PYTHON) quality/run_profiles.py doctest
 
-docs-check: tools-check ## Verify Rust docs, Markdown links, Mermaid, and secret patterns.
+doc: tools-check ## Verify Rust documentation without warnings.
 	$(PYTHON) quality/run_profiles.py doc
-	$(PYTHON) quality/check_docs.py
-
-architecture: tools-check ## Verify workspace membership and architectural policy.
-	$(PYTHON) quality/check_architecture.py
-
-quality-tests: ## Verify the quality checkers' own focused self-tests.
-	$(PYTHON) quality/test_check_coverage.py
-	$(PYTHON) quality/test_run_coverage.py
 
 coverage: tools-check ## Collect line coverage and enforce the per-crate tier floors.
 	$(PYTHON) quality/run_coverage.py
@@ -104,7 +96,7 @@ e2e-real-api: tools-check ## MUTATING/NETWORKED: run ignored real-provider API e
 quick: tools-check fmt-check lint ## Fast local quality loop.
 	$(PYTHON) quality/run_profiles.py test
 
-check: tools-check fmt-check lint test docs-check architecture quality-tests ## Complete non-mutating source-quality gate.
+check: tools-check fmt-check lint test doc ## Complete non-mutating source-quality gate.
 	@true
 
 verify: check coverage deps ## Full reproducible merge and release gate.
@@ -113,7 +105,7 @@ verify: check coverage deps ## Full reproducible merge and release gate.
 ci: verify ## CI alias for one local full gate. GitHub Actions invokes the per-job aliases below in parallel matrix jobs.
 	@true
 
-ci-lint-arch: fmt-check lint docs-check architecture ## CI lint/architecture job: formatting, lint, docs, architecture.
+ci-lint-arch: fmt-check lint doc ## CI lint/architecture job: formatting, lint, and rustdoc.
 	@true
 
 ci-test: test ## CI test job: nextest and doctests.

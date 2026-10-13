@@ -52,6 +52,14 @@ def collected_crates(coverage_policy: dict[str, object]) -> list[str]:
     return sorted(collected)
 
 
+def tiered_crates(coverage_policy: dict[str, object]) -> set[str]:
+    """Return every crate the policy assigns a tier, including zero-percent tiers."""
+    assignments = coverage_policy.get("crate_tiers")
+    if not isinstance(assignments, dict):
+        raise ValueError("coverage policy requires a [crate_tiers] table")
+    return {crate for crate in assignments if isinstance(crate, str)}
+
+
 def unexecutable_crates(coverage_policy: dict[str, object]) -> list[str]:
     """Return the collected crates the policy declares as having no test target."""
     state = coverage_policy.get("policy")
@@ -109,6 +117,7 @@ METADATA_COMMAND = ["cargo", "metadata", "--no-deps", "--format-version", "1", "
 
 def coverage_plan(
     coverage_crates: list[str],
+    tiered_crates: set[str],
     packages: dict[str, dict[str, object]],
     unexecutable: set[str],
 ) -> tuple[list[str], list[str], list[str]]:
@@ -118,6 +127,9 @@ def coverage_plan(
     test-executing target unless the policy declares it unexecutable. A
     declaration for a crate that does have one, or for a crate outside
     collection, is a failure: the declared floor can never silently retire.
+    Cargo is also the source of truth in the other direction: a workspace crate
+    that declares a test-executing target and carries no tier is a failure, so a
+    new crate cannot enter the workspace outside the coverage policy.
     """
     collect: list[str] = []
     skip: list[str] = []
@@ -144,6 +156,17 @@ def coverage_plan(
             )
             continue
         collect.append(crate)
+    untiered = sorted(
+        crate
+        for crate, package in packages.items()
+        if crate not in tiered_crates and package_has_test_target(package)
+    )
+    if untiered:
+        failures.append(
+            "workspace crates with a test-executing target and no tier: "
+            + ", ".join(untiered)
+            + "; assign each one a tier in quality/coverage.toml [crate_tiers]"
+        )
     uncollected = sorted(unexecutable - set(coverage_crates))
     if uncollected:
         failures.append(
@@ -196,7 +219,10 @@ def main() -> None:
     metadata = collect_metadata(ROOT)
     packages = metadata_packages(metadata)
     collect, skip, plan_failures = coverage_plan(
-        coverage_crates, packages, set(unexecutable_crates(coverage_policy))
+        coverage_crates,
+        tiered_crates(coverage_policy),
+        packages,
+        set(unexecutable_crates(coverage_policy)),
     )
     if plan_failures:
         raise SystemExit("coverage-runner: " + "\ncoverage-runner: ".join(plan_failures))
