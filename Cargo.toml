@@ -30,6 +30,11 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = "deny"
+# The two restriction lints below carry the source rules that outlive the
+# architecture checker: untyped JSON and process-working-directory use are
+# banned at the compiler level through `clippy.toml`, not by scanning text.
+disallowed_types = "deny"
+disallowed_methods = "deny"
 # The nursery group is unstable and churns between releases, so it is not denied
 # wholesale. The group sits at a lower priority than the individual lints below,
 # which keep the five nursery lints chosen for readability, logic, and clarity.

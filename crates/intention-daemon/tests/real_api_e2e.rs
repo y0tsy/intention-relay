@@ -43,6 +43,11 @@
 //! lives only in a private temporary configuration file, and is never printed
 //! by the test.
 
+#![expect(
+    clippy::disallowed_types,
+    reason = "The live-provider test decodes raw provider responses to assert their shape; DTO-first binds production code."
+)]
+
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::thread;

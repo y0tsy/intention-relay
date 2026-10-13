@@ -7,6 +7,14 @@
 //! core. Around the driver the module owns the wait deadline, the two output
 //! formats, and the mapping of a driven run to one process status.
 
+// The one production site the untyped-JSON rule allows: the headless line
+// writer emits one JSON record per line by construction, and the typed record
+// above it is the boundary. See the quality-gate policy.
+#![expect(
+    clippy::disallowed_types,
+    reason = "The headless line writer emits one JSON record per line by construction; the typed record enum above it is the DTO boundary."
+)]
+
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};

@@ -349,6 +349,10 @@ fn translate_assistant_message(message: &ModelMessageDto) -> DtoResult<Message> 
     }
 }
 
+#[expect(
+    clippy::disallowed_types,
+    reason = "Adapter tests build raw SDK payloads to assert the translation; DTO-first binds production code."
+)]
 #[cfg(test)]
 mod tests {
     use super::*;

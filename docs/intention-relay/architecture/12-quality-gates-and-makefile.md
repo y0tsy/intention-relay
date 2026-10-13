@@ -62,6 +62,12 @@ aliases, and the opt-in `e2e-real-api`.
   `nursery` group itself is not denied, because it is unstable and churns between releases, and the policy
   deliberately does not deny all `pedantic` or all `restriction` lints, because some are subjective or ergonomically
   harmful.
+- Two source rules are enforced by the compiler rather than by a text scan, through the root `clippy.toml` and the
+  denied `clippy::disallowed_types` and `clippy::disallowed_methods` lints: production code never names
+  `serde_json::Value` or `serde_json::Map` (DTO-first), and no code reaches for the process working directory instead
+  of `WorkspaceRoot`. Test targets and in-source test modules carry one reasoned `#[expect]` each where they decode raw
+  JSON by shape, and the headless line writer is the single allowed production site; because the attribute is an
+  expectation rather than an allowance, it fails as unfulfilled as soon as its last use disappears.
 - `make architecture` enforces the architectural protections encoded in `quality/architecture.toml` and implemented by
   `quality/check_architecture.py`: the per-crate role, responsibility, and named integration test target declarations,
   the exact allowed cross-crate edge and external dependency sets (including the non-production test crates), the

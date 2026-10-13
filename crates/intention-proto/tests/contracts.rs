@@ -2,6 +2,11 @@
 //! model-value wire contracts, the workspace-root and turn-command value contracts, and
 //! the run-lifecycle rules.
 
+#![expect(
+    clippy::disallowed_types,
+    reason = "Contract tests decode and index raw wire JSON by shape; DTO-first binds production code."
+)]
+
 use intention_proto::{
     ConfigRevisionId, CorrelationIdDto, CreateSessionCommandDto, ErrorCategoryDto, ErrorDto,
     ErrorRetryDto, GetSessionSnapshotQueryDto, IdempotencyKey, ProjectId, ProviderErrorDto,

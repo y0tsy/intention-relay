@@ -9,6 +9,11 @@
 //! closed exit-status set, the NDJSON and text output, the committed
 //! transcript, and the durable effect of the deadline interrupt.
 
+#![expect(
+    clippy::disallowed_types,
+    reason = "Process tests decode the NDJSON lines the binary writes to assert their shape; DTO-first binds production code."
+)]
+
 use std::future::Future;
 use std::io::{Read, Write};
 use std::net::TcpListener;

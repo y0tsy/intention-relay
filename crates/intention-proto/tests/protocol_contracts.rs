@@ -1,5 +1,10 @@
 //! Test-first typed-wire contract evidence.
 
+#![expect(
+    clippy::disallowed_types,
+    reason = "Contract tests decode and index raw wire JSON by shape; DTO-first binds production code."
+)]
+
 #[allow(
     dead_code,
     reason = "Shared fixtures serve every integration target in this crate; each target compiles the subset its suite calls."

@@ -5,6 +5,11 @@
 //! [`fixture_config_document`] executes the production provider path without a
 //! network dependency.
 
+#![expect(
+    clippy::disallowed_types,
+    reason = "This crate is test support: it builds the raw provider payloads a real daemon consumes."
+)]
+
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;

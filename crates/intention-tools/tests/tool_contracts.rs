@@ -3,6 +3,11 @@
     reason = "Integration tests use unwrap only for deterministic fixture setup; failures indicate a broken test fixture."
 )]
 
+#![expect(
+    clippy::disallowed_types,
+    reason = "Contract tests decode and index raw JSON Schema text by shape; DTO-first binds production code."
+)]
+
 mod common;
 
 use common::{DispatchCompleted, fixture_dir, service};
