@@ -91,7 +91,7 @@ declaration once before any request is built.
 
 ### OpenRouter
 
-`intention-providers` uses the pinned `openrouter-rs` 0.18.0 privately. It owns:
+`intention-providers` uses the pinned `openrouter-rs` 0.19.0 privately. It owns:
 
 - OpenRouter configuration translation;
 -  private SDK request construction and normalization for text, reasoning, usage, finish, tool-call, and error
