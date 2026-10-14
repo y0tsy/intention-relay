@@ -363,13 +363,11 @@ impl ModelCapabilitiesDto {
     }
 }
 
-/// Maximum characters of one tool-definition name (provider function-name constraint).
-const MAX_TOOL_DEFINITION_NAME_CHARS: usize = 64;
-
-/// Maximum bytes of one tool-definition JSON parameter document.
-const MAX_TOOL_DEFINITION_PARAMETERS_BYTES: usize = 65_536;
-
-/// A validated model tool definition advertised to a provider.
+/// A model tool definition advertised to a provider.
+///
+/// The definitions and their input JSON Schema text are code-owned: the
+/// composition builds them from `intention_tools::model_visible_descriptors()`,
+/// so construction carries no validation failure mode.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ModelToolDefinitionDto {
     name: String,
@@ -378,49 +376,18 @@ pub struct ModelToolDefinitionDto {
 }
 
 impl ModelToolDefinitionDto {
-    /// Creates a validated tool definition with object-shaped JSON parameters.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the name is not an ASCII `[A-Za-z0-9_-]`
-    /// token of at most 64 characters, the description is blank, or the
-    /// parameters are empty, larger than 64 KiB, or not a JSON object.
+    /// Creates a tool definition with its code-owned name, description, and JSON Schema text.
+    #[must_use]
     pub fn new(
         name: impl Into<String>,
         description: impl Into<String>,
         parameters_json: impl Into<String>,
-    ) -> DtoResult<Self> {
-        let name = name.into();
-        let description = description.into();
-        let parameters_json = parameters_json.into();
-        if name.trim().is_empty()
-            || name.len() > MAX_TOOL_DEFINITION_NAME_CHARS
-            || !name.bytes().all(is_tool_definition_name_byte)
-        {
-            return Err(ErrorDto::validation(
-                "invalid_tool_definition_name",
-                "tool definition name must be an ASCII [A-Za-z0-9_-] token of at most 64 characters",
-            ));
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            parameters_json: parameters_json.into(),
         }
-        if description.trim().is_empty() {
-            return Err(ErrorDto::validation(
-                "invalid_tool_definition_description",
-                "tool definition description must not be empty",
-            ));
-        }
-        if parameters_json.is_empty()
-            || parameters_json.len() > MAX_TOOL_DEFINITION_PARAMETERS_BYTES
-        {
-            return Err(invalid_tool_definition_parameters());
-        }
-        let _: std::collections::BTreeMap<String, serde::de::IgnoredAny> =
-            serde_json::from_str(&parameters_json)
-                .map_err(|_| invalid_tool_definition_parameters())?;
-        Ok(Self {
-            name,
-            description,
-            parameters_json,
-        })
     }
 
     /// Returns the advertised function name.
@@ -435,24 +402,11 @@ impl ModelToolDefinitionDto {
         &self.description
     }
 
-    /// Returns the validated JSON object text describing the tool parameters.
+    /// Returns the code-owned JSON object text describing the tool parameters.
     #[must_use]
     pub fn parameters_json(&self) -> &str {
         &self.parameters_json
     }
-}
-
-/// Whether `byte` is one provider function-name character (`[A-Za-z0-9_-]`).
-const fn is_tool_definition_name_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
-}
-
-/// The validation error for invalid tool-definition JSON parameters.
-fn invalid_tool_definition_parameters() -> ErrorDto {
-    ErrorDto::validation(
-        "invalid_tool_definition_parameters",
-        "tool definition parameters must be a non-empty JSON object of at most 64 KiB",
-    )
 }
 
 /// A validated provider-neutral model request.

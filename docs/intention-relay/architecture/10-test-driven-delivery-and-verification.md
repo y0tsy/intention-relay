@@ -59,7 +59,7 @@ The following are mandatory candidates for automated architecture tests:
 | Daemon authority | SQLite/runtime actor ownership appears only daemon-side. |
 | Workspace boundary | File-oriented tool invocations require `WorkspaceRootDto`. |
 | Extension boundaries | VFR/Headroom attach as ordinary library calls with a declared contract, not base-tool private coupling. |
-| Plan integrity | Model-visible plan reads cannot expose frontmatter; ordinary Plan `write`/`edit` cannot target project paths, while Plan `execute` remains advisory-guided and audited. |
+| Plan integrity | Model-visible plan reads expose exactly the plan body, and plan metadata lives on the SQLite record; ordinary Plan `write`/`edit` cannot target project paths, while Plan `execute` remains advisory-guided and audited. |
 | Autopilot continuity | Plan approval pins a revision, starts a fresh same-Session Build run, and optional handoff transfers only a safe frozen context. |
 | Secret safety | Secret-bearing config cannot appear in public DTO/log/error/snapshot types. |
 
@@ -129,11 +129,13 @@ The following scenarios must become executable before the corresponding capabili
 ### D. Plan artifact integrity
 
 1. Create a Plan-mode session/run.
-2. Allocate plan `0`.
+2. Allocate plan `0` with a requested file name.
 3. Edit its body through the plan path.
-4. Verify frontmatter remains valid and invisible in captured model context.
-5. Attempt a project-file write with normal write/edit.
-6. Verify the typed denial and the durable audit record it commits.
+4. Verify the file and the captured model context contain exactly the plan body, with no frontmatter or embedded
+   metadata, and that the plan number, revision, and status read from the SQLite plan record.
+5. Request a second plan with the same file name and verify the typed `plan_name_conflict` before anything is written.
+6. Attempt a project-file write with normal write/edit.
+7. Verify the typed denial and the durable audit record it commits.
 
 ### E. VFR and Headroom pipeline
 

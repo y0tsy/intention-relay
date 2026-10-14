@@ -14,7 +14,6 @@ fn message(role: ModelRoleDto, content: &str) -> ModelMessageDto {
 
 fn tool_definition(name: &str) -> ModelToolDefinitionDto {
     ModelToolDefinitionDto::new(name, "fixture description", r#"{"type":"object"}"#)
-        .expect("fixture tool definition is valid")
 }
 
 #[test]
@@ -353,45 +352,7 @@ fn model_request_assistant_reasoning_survives_rebuilds() {
 }
 
 #[test]
-fn model_tool_definitions_validate_names_descriptions_and_parameters() {
-    let long_name = "a".repeat(65);
-    for name in [
-        "",
-        " ",
-        "inspect.path",
-        "inspect space",
-        "inspecté",
-        long_name.as_str(),
-    ] {
-        assert_eq!(
-            ModelToolDefinitionDto::new(name, "description", r#"{"type":"object"}"#)
-                .expect_err("invalid tool definition name must fail")
-                .code(),
-            "invalid_tool_definition_name"
-        );
-    }
-    assert_eq!(
-        ModelToolDefinitionDto::new("inspect", " ", r#"{"type":"object"}"#)
-            .expect_err("blank tool definition description must fail")
-            .code(),
-        "invalid_tool_definition_description"
-    );
-    let oversized_parameters = format!(r#"{{"padding":"{}"}}"#, "a".repeat(70_000));
-    for parameters in [
-        "",
-        "[]",
-        r#""text""#,
-        "not-json",
-        oversized_parameters.as_str(),
-    ] {
-        assert_eq!(
-            ModelToolDefinitionDto::new("inspect", "description", parameters)
-                .expect_err("invalid tool definition parameters must fail")
-                .code(),
-            "invalid_tool_definition_parameters"
-        );
-    }
-
+fn model_tool_definitions_expose_their_code_owned_fields() {
     let definition = tool_definition("inspect_path");
     assert_eq!(definition.name(), "inspect_path");
     assert_eq!(definition.description(), "fixture description");

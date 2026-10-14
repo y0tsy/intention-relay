@@ -56,9 +56,9 @@ persisted under the one-transaction state-change law of [architecture 04](04-ses
 
 ### 9. Plan and Build are separate policies
 
-Plan and Build share an agent loop but have distinct tool policies. Plan may read the workspace and mutates only its own
-physical plan artifact directory through filesystem tools. `execute` cannot be fully constrained and therefore has an
-explicit prompt policy, risk policy, and audit trail.
+Plan and Build share an agent loop but have distinct tool policies. Plan may read the workspace and mutates only plan
+files in the daemon-defined plans directory through the plan owner. `execute` cannot be fully constrained and therefore
+has an explicit prompt policy, risk policy, and audit trail.
 
 ### 10. Test-driven delivery is architectural
 
@@ -118,8 +118,8 @@ The implementation must demonstrably provide:
 2. A daemon restart marks an unfinished run as interrupted and exposes that result through the same contract.
 3.  A filesystem tool cannot escape its session `WorkspaceRoot` through relative paths, absolute paths, or process CWD
 fallback.
-4.  A Plan-mode agent can create and refine a physical plan, while normal write/edit tools cannot mutate the project
-outside that plan's directory.
+4.  A Plan-mode agent can create and refine a physical plan in the daemon-defined plans directory, while normal
+write/edit tools cannot mutate the project or that directory.
 5.  VFR and Headroom can be enabled independently as ordinary calls, preserve typed observability, and expose their
 supporting tools.
 6.  State visible to an adapter was committed before its corresponding live frame was published; provisional text
@@ -149,7 +149,7 @@ work; the second stays owned by the named slice.
 | Risk policy | Build runs without a per-action confirmation barrier for configured active capabilities, while Plan keeps hard-denied project writes and an advisory-guided `execute` ([architecture 07](07-plan-and-build-modes.md)); the exact capability taxonomy and audit policy for `execute`, network, and destructive file actions remains listed as open in [architecture 05](05-tools-and-workspace.md). |
 | AppData location | Production SQLite state lives in the platform AppData/state location with no process-CWD fallback (roadmap M3), and the migration half of the question is closed by the single-live-schema rule. |
 | Schema history | The existence of databases is not an argument for keeping DB migrations or old-schema compatibility; every versioned system keeps exactly one live version and evolves in place. |
-| Plan revision mechanics | Each edit rewrites the single full-file `plan.md` artifact, preserves controlled metadata, increments the frontmatter revision, and persists a matching typed plan revision ([architecture 07](07-plan-and-build-modes.md)); no patch-record family exists, and Plan mode itself is M5+ Slice 3 scope. |
+| Plan revision mechanics | Each edit rewrites the single body-only plan file, and the plan number, revision, and status live on the SQLite plan record ([architecture 07](07-plan-and-build-modes.md)); no frontmatter and no patch-record family exist, and Plan mode itself is M5+ Slice 3 scope. |
 | Provider retries | Runtime owns at most one retry for a delayed or retryable provider failure before any durable fact, with a fixed 250 ms delay and `max_attempts` 1..=2 / `attempt_timeout_seconds` 1..=60, the attempt window being an idle window re-armed by every delivered provider event ([architecture 08](08-model-protocol-and-providers.md), [architecture 09](09-configuration-security-and-observability.md)). |
 
 ### Still open

@@ -632,7 +632,7 @@ fn schedule_from_context(
         messages,
         None,
     )?
-    .with_tools(advertised_tool_definitions()?)?;
+    .with_tools(advertised_tool_definitions())?;
     // The constructed request must agree with the requested run identity and
     // the durable starting-run selection before it becomes executable work.
     if request.run_id() != run_id
@@ -749,13 +749,9 @@ fn incomplete_tool_row() -> ErrorDto {
 
 /// Builds the model-visible tool definitions advertised with every scheduled run.
 ///
-/// The model-visible tools surface in advertisement order.
-///
-/// # Errors
-///
-/// Returns a typed validation error when a model-visible tool cannot be mapped
-/// into a provider-neutral tool definition.
-fn advertised_tool_definitions() -> DtoResult<Vec<ModelToolDefinitionDto>> {
+/// The model-visible tools surface in advertisement order; their definitions and
+/// schema text are code-owned, so construction cannot fail.
+fn advertised_tool_definitions() -> Vec<ModelToolDefinitionDto> {
     intention_tools::model_visible_descriptors()
         .iter()
         .map(|descriptor| {

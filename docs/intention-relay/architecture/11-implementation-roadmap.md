@@ -144,13 +144,13 @@ instruction projection, frozen at admission, delivered through the
 existing `system_context` channel, materialized into fork, plan, and handoff records, and recorded as safe usage
 provenance; closed safe failures, channel closure, and safe observability. The slice also carries the Plan/Build half of
 [architecture 07](07-plan-and-build-modes.md): the Plan/Build run policy, with Build Autopilot as the single
-user-authorized unrestricted Build policy; physical plan artifacts at
-`<AppData>/sessions/<session-id>/plans/<plan-number>/plan.md` with zero-based per-session numbers, controlled hidden
-YAML frontmatter, and committed revisions; the plan submission, approval, rejection, and supersede lifecycle, where an
-approval pins one exact revision and, by default, immediately starts a fresh same-Session Build Autopilot run with a new
-`RunId`; ordinary project `write`/`edit` denied in Plan mode while `execute` stays available, advisory-guided, and
-audited, its focus instruction being the `Mode` contribution this same slice assembles; and the `intention-plans` crate
-with the `plan_submit` ToolId variant, its own spec, and its typed input. The optional implementation handoff to a new
+user-authorized unrestricted Build policy; body-only plan artifacts in the daemon-defined global plans directory,
+named by the model's requested file name (`plan_name_conflict` on a taken name), with zero-based per-session numbers
+and committed revisions tracked in SQLite; the `drafting | approved | abandoned` lifecycle, where approval pins one
+exact revision and, by default, immediately starts a fresh same-Session Build Autopilot run with a new `RunId`;
+ordinary project `write`/`edit` denied in Plan mode while `execute` stays available, advisory-guided, and audited, its
+focus instruction being the `Mode` contribution this same slice assembles; and the `intention-plans` crate with the
+`plan_submit` ToolId variant, its own spec, and its typed input carrying the requested file name. The optional implementation handoff to a new
 Session stays Slice 6 work. The slice also carries the `sub_agent` tool path of
 [architecture 15](15-tool-registry-and-model-tool-loop.md): the closed `ToolId` variant whose typed input carries the
 bounded markdown task and the selected mode; `Sync` holds the call open until the child run's terminal markdown answer,

@@ -63,7 +63,7 @@ named here (`intention-domain`, `intention-protocol`, `intention-application`, `
 | `intention-tools` | Tool identity and core tool contracts with JSON Schema argument text, the static six-tool spec match, and the WorkspaceRoot addressing anchor. | Proto. |
 | `intention-vfr` (created at M7) | VFR transform, mapping, expansion/raw-read tools. | Tools, domain, types. |
 | `intention-headroom` (created at M7) | Headroom compression, CCR contracts, retrieve tool. | Tools, storage contracts, domain, types. |
-| `intention-plans` (created at M5+ Slice 3) | Plan artifacts, hidden frontmatter, Plan/Build policy. | Tools, storage contracts, domain, types. |
+| `intention-plans` (created at M5+ Slice 3) | Plan artifacts, plan lifecycle records, Plan/Build policy. | Tools, storage contracts, domain, types. |
 | `intention-transport` | Socket/pipe framing, server/client protocol, subscriptions. | Protocol, types. |
 | `intention-client` | Bootstrap, connection, dispatch, subscription, reconnect. | Protocol, transport, types. |
 | `intention-daemon` | One durable composition holder (`DaemonApplicationFacade`) that selects and connects the configuration snapshot, SQLite storage, and the provider driver, plus the daemon host and binary. | All selected concrete implementations. |

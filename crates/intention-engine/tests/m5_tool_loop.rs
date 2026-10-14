@@ -30,7 +30,6 @@ fn tool_definition() -> ModelToolDefinitionDto {
         "Read bounded text from a workspace file.",
         r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
     )
-    .expect("fixture tool definition is valid")
 }
 
 fn request(run_id: RunId, model: &str) -> ModelRequestDto {

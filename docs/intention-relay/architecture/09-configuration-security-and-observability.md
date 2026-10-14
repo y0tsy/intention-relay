@@ -15,8 +15,7 @@ M1/M4 accept only `openrouter` and `generic-chat-completion-api` provider kinds.
 `responses`, not `openai`; any `openai` spelling is only a future parse-time alias under architecture 22 and does not
 amend M1/M4.
 
-No YAML, JSON, database-only, or UI-only configuration source is authoritative in v1. YAML is reserved for internal plan
-frontmatter, not application configuration.
+No YAML, JSON, database-only, or UI-only configuration source is authoritative in v1.
 
 ## Configuration lifecycle
 
@@ -100,7 +99,7 @@ them to leak through the system.
 - an open-text credential is protected by the platform's own file permissions, for example an owner-only `0600` file
 on Unix; the application performs no permission check and issues no warning;
 -  secrets are excluded from transport DTOs, the durable `runs`, `turns`, `messages`, and
-`configuration_revisions` records, plan frontmatter, UI DTOs, and normal logs. `execute` is trusted-local and may
+`configuration_revisions` records, plan files, UI DTOs, and normal logs. `execute` is trusted-local and may
 inherit the invoking process environment; environment variables are not name-filtered or copied into evidence or logs;
 - errors, logs, and diagnostic bundles never carry credentials;
 - configuration displays do not log values while rendering or validation fails;

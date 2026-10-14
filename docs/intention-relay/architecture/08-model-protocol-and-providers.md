@@ -179,16 +179,14 @@ service: it commits the assistant tool-call row, the application commits the cal
 transaction, and the runtime continues the provider exchange with assistant-tool-call and tool-role messages until the
 provider finishes.
 
-Ordinary production requests advertise the active registered tools: the request carries validated typed
+Ordinary production requests advertise the active registered tools: the request carries typed
 `ModelToolDefinitionDto` definitions built by `intention_tools::model_visible_descriptors()` in advertisement order
 (`read`, `write`, `edit`, `execute`, `glob`, `grep`). Provider selection already requires a driver that declares
 streamed text with tool calls, so a driver without tool-call support fails closed there with
 `unsupported_model_capability`. Both current adapters translate the definitions into their private SDK request and omit
-`tool_choice`; an empty advertisement preserves the previous request shape. A definition validates its input: the name is an ASCII `[A-Za-z0-9_-]` token of
-at most 64 characters (`invalid_tool_definition_name`), the description is non-blank
-(`invalid_tool_definition_description`), and the schema text is non-empty JSON-object text of at most 64 KiB
-(`invalid_tool_definition_parameters`). The schema text is code-owned and always present, so no missing-schema
-failure mode exists. Advertisement is transient request state: it creates no durable record, digest, or
+`tool_choice`; an empty advertisement preserves the previous request shape. The definitions and their code-owned input
+JSON Schema text are valid by construction, so no definition-validation failure mode exists. Advertisement is transient
+request state: it creates no durable record, digest, or
 storage row, and it never reconstructs a stored selection from the current spec match.
 
 The same-run continuation is the only place provider reasoning returns to a request today: the runtime attaches the
@@ -254,7 +252,7 @@ The classification selects the normalized `generic_chat_provider_unavailable` (r
 `generic_chat_provider_request_rejected` (permanent) failure.
 - Runtime/application policy determines whether an error is retryable for the run.
 - Config snapshots define timeout/retry limits applied to the run.
-- A retry must produce explicit events and preserve causal relation to the originating model turn.
+- A retry preserves its causal relation to the originating model turn through the run's durable attempt count.
 - A daemon restart does not retry an in-flight provider request.
 - Recorded truncation limitation: a provider body that ends without `[DONE]` completes as `Finished { Unknown }`,
   because the pinned OpenRouter SDK consumes the marker inside its own stream, so the adapter cannot classify
@@ -266,10 +264,10 @@ window after every normalized event the stream delivers — stream start, text d
 or finish — so a stream that keeps producing facts is never cut off, and only a stream that delivers nothing for the
 whole window expires one. An expired window is a retryable
 `provider_attempt_timed_out` failure. Before any durable text, reasoning, usage, or tool fact, only a delayed/retryable
-provider failure may produce one retry; it appends `ProviderAttemptFailed(1)`, then `RetryScheduled(1, 2)`, waits
-exactly 250 ms through `ModelTimePort`, and starts attempt two. Interruption races the stream, deadline, and wait: the
-stopped stream ends and the run rebuilds its next request with the durable notice, and an interrupt during the retry
-wait starts the next attempt immediately.
+provider failure may produce one retry; the runtime increments the run's durable attempt count, waits exactly 250 ms
+through `ModelTimePort`, and starts attempt two. No separate durable retry events are written. Interruption races the
+stream, deadline, and wait: the stopped stream ends and the run rebuilds its next request with the durable notice, and
+an interrupt during the retry wait starts the next attempt immediately.
 
 ## Required tests and outcomes
 

@@ -64,31 +64,11 @@ A spec carries credential-free fields only: the `ToolId`, its description, and i
 Identity is the enum variant, never a presentation string. Public boundaries reject raw JSON/maps, unvalidated paths,
 provider/Python values, implementation handles, resources, and implementation errors.
 
-`ToolEffectProfile` describes direct declared effects: workspace read or write, process start, network retrieval, user
-interaction, session mutation, retained-content read, and future child controls. It is not authority, sandbox, or a
-complete indirect-effect inventory. The initial mapping is:
-
-| `ToolId` | Direct effect flags |
-| --- | --- |
-| `read`, `glob`, `grep`, `expand` | `workspace_read` |
-| `write` | `workspace_write` |
-| `edit` | `workspace_read`, `workspace_write` |
-| `execute` | `process_start` |
-| `fetch_url` | `network_retrieval` |
-| `ask_user` | `user_interaction` |
-| `todo`, `plan_submit` | `session_state_mutation` |
-| `retrieve` | `retained_content_read` |
-| `sub_agent` | `child_agent_start`, `child_agent_control` |
-| `mcp` | `process_start`, `network_retrieval` |
-
-The profile states direct declared capability only: `process_start` does not claim a shell program cannot
-read/write/start descendants/access network, and `network_retrieval` does not claim side-effect-free remote retrieval.
-No flag requires confirmation. `WorkspaceRoot` is required for `read`, `write`, `edit`, `execute`, `glob`, `grep`, and
-`expand` (default relative-path base and initial `execute` CWD, not an access boundary; absolute and `..` paths are
-accepted with no path-based denial). `fetch_url`, `ask_user`, `todo`, `retrieve`, `plan_submit`, `sub_agent`, and `mcp`
-get no fictional workspace path; their owners may require typed URL, question, todo, retained-content, plan,
-child-agent, or MCP-method references instead. Plan denies ordinary `write`/`edit`; plan mutation remains plan-policy
-work.
+`WorkspaceRoot` is required for `read`, `write`, `edit`, `execute`, `glob`, `grep`, and `expand` (default relative-path
+base and initial `execute` CWD, not an access boundary; absolute and `..` paths are accepted with no path-based
+denial). `fetch_url`, `ask_user`, `todo`, `retrieve`, `plan_submit`, `sub_agent`, and `mcp` get no fictional workspace
+path; their owners may require typed URL, question, todo, retained-content, plan, child-agent, or MCP-method references
+instead. No tool requires confirmation. Plan denies ordinary `write`/`edit`; plan mutation remains plan-policy work.
 
 Selection records are typed serde JSON values ([architecture 02](02-dto-and-contract-policy.md)); the removed `IRCR` /
 `typed-tlv-v1` / SHA-256 canonical codec is not replaced by a competing codec. Semantic changes require a new record
@@ -122,8 +102,8 @@ version; labels, executor handles, live readiness, and opaque owner resources ar
   never moves the run out of `Running` or rewrites committed `messages` rows or recovery state.
 -  **`sub_agent`** admits one child run and returns its markdown answer. The typed input carries the bounded markdown
   task and the selected `mode`. `Sync` holds the call open until the child run reaches a terminal state and returns the
-  child's terminal markdown answer as the call's result. `Async` terminates the call immediately with a `Deferred`
-  outcome carrying the child session handle as plain text (a UUIDv4); the child's terminal markdown answer is recorded
+  child's terminal markdown answer as the call's result. `Async` terminates the call immediately with a `Completed`
+  result carrying the child session handle as plain text (a UUIDv4); the child's terminal markdown answer is recorded
   as one durable child-result fact bound to the same `ToolCallId` and delivered once into the parent's next fresh model
   request. There is no message exchange, delegation pair, clarification round trip, or `AwaitResult`. A child run is an
   ordinary run with its own lifecycle, tool loop, cancellation, and no-resume rules; a child result never starts a parent
@@ -142,17 +122,19 @@ not describe the facade, tool gateway, prompt policy, or audit trail as OS-level
 A run's frozen tool selection is a closed, credential-free `Disabled | Selected` typed serde JSON record. When
 selected it contains:
 
-- a tool-admission-engine revision limited to common typed mechanics; and
-- an ordered list of only the tools actually supplied to the model, each binding its `ToolId`, its code-owned input JSON
-  Schema text (the contract the model sees), its required-capability binding, and its mode relation.
+- a tool-admission-engine revision limited to common typed mechanics;
+- one tool-layer revision that `spec(id)` serves; and
+- an ordered list of the `ToolId` values actually supplied to the model.
 
 It excludes unexposed tools, credentials, untyped JSON payloads, provider-native schema forms, executor handles,
-readiness, current advertisement state, provider-native IDs, quotas, and mutable policy state. Ordering is the
-advertisement order of that list: semantic, preserved by the typed record, with no positions or cursors, and duplicate
-semantic keys are rejected. Admission, retry, recovery, forks, audit, or a later package must not rebuild a missing
-selection from the current spec match, configuration, model/provider names, driver availability, workspace,
-ancestry, MCP discovery, bridge/kernel state, logs, or UI state; unknown, corrupt, or unsupported selections block
-dependent work before effect while unrelated readable history remains available.
+readiness, current advertisement state, provider-native IDs, quotas, and mutable policy state. The model-visible tools'
+code-owned input JSON Schema text stays the contract the model sees and is read through `spec(id)` when the request is
+built, never copied into the selection. Ordering is the advertisement order of the list: semantic, preserved by the
+typed record, with no positions or cursors, and duplicate `ToolId` values are rejected. Admission, retry, recovery,
+forks, audit, or a later package must not rebuild a missing selection from the current spec match, configuration,
+model/provider names, driver availability, workspace, ancestry, MCP discovery, bridge/kernel state, logs, or UI state;
+unknown, corrupt, or unsupported selections block dependent work before effect while unrelated readable history remains
+available.
 
 ## Validation ownership and limit classification
 
@@ -268,28 +250,25 @@ The first-scope bounds are:
 - the existing **64 KiB** `MAX_TOOL_OUTPUT_BYTES` bound applies to a call's committed output; and
 -  a tool renders its output within its own output window and reports a cut through the result's truncation flag and explicit marker before the result commits; there is no output-refusal outcome, and committed output is never truncated or partly committed.
 
-The closed initial terminal outcome taxonomy is: `Succeeded`, `Deferred`, `DeniedBeforeExecution`,
-`FailedBeforeExternalEffect`, `CancelledBeforeStart`, `InterruptedBeforeStart`, `ExecutionUnavailable`, and `Partial`.
-It carries only safe model-visible projection and approved typed metadata; no value silently changes category later.
-`Succeeded`, `Deferred`, known denials, known pre-effect failures, and `Partial` may enter the next typed exchange; a
-`Partial` result carries the bounded captured output with its interruption notice, never blocks another model step, and
-is never retried. Every `Failed` outcome answers its call with its bounded code-owned guidance the same way, so the
-model reads what went wrong and can correct the call instead of losing the run to it. `Deferred` is the asynchronous `sub_agent` acceptance outcome: it carries the child session handle,
-permits the next model step, and never changes category when the child's terminal markdown answer arrives later as the committed child-result message.
+The durable result row stores exactly `ToolResultStatusDto`: `Completed`, `Failed`, or `Partial`. The specific cause is
+a bounded metadata code on the same result row, never a second status dimension; the closed first set is
+`tool_cancelled`, `tool_timed_out`, `tool_execution_interrupted`, `denied_before_execution`, and
+`execution_unavailable`. A successful call, including the asynchronous `sub_agent` acceptance that returns the child
+session handle as its content, records `Completed`; a known denial or an unavailable implementation records `Failed`
+with its bounded code-owned guidance; a call stopped before or during execution records `Partial` with the bounded
+captured output and its interruption notice. `Completed` and `Partial` results may enter the next typed exchange, and a
+`Partial` result never blocks another model step and is never retried.
 
 Failure semantics are closed: invalid tool input or a refused workspace binding produces a typed `Failed` result whose
 bounded model-visible guidance answers the call, and the model loop continues to the next step without retrying the
 call or stopping the run; a tool infrastructure error produces a safe normalized failure without leaking provider or OS
 text and remains the one tool-path outcome that terminalizes the run.
 
-#### Lifecycle vocabulary and interruption notices
+#### Interruption notices
 
-The tool lifecycle vocabulary is closed: `ToolLifecycleStatusDto` is `Admitted`, `Rejected`, `Started`, `Completed`,
-`Failed`, `Cancelled`, or `Partial`, and `ToolResultStatusDto` is `Completed`, `Failed`, or `Partial`,
-mapping one to one onto the matching terminal lifecycle member. The transition set is closed: none to `Admitted`;
-`Admitted` to `Cancelled`, `Started`, or `Rejected`; `Started` to `Completed`, `Failed`, or `Partial`. A `Partial`
-result records one execution that was interrupted before a final result, requires non-blank content exactly like a
-successful result, never terminalizes the run, and is never retried. A run-level stop is not a tool outcome:
+A `Partial` result records one execution that was interrupted before a final result, requires non-blank content
+exactly like a successful result, never terminalizes the run, and is never retried. A run-level stop is not a tool
+outcome:
 `run.cancel` cancels a call in flight with the same stopped `Partial` result and notice, keeps a result that committed
 before the stop was honored, and ends the run `Interrupted` at its execution's next boundary instead of asking the
 model again. Three interruption codes are recorded:
@@ -366,7 +345,8 @@ durable terminal proof; the next model step proceeds, and nothing pauses.
 ## Effect evidence, cancellation, and recovery
 
 An admitted call's start is the boundary after which an external effect may be possible. Before it, cancellation or
-restart records `CancelledBeforeStart` or `InterruptedBeforeStart` and no external action occurs; after it, known
+restart records a `Partial` result with the `tool_cancelled` or `tool_execution_interrupted` code and no external
+action occurs; after it, known
 terminal evidence records the exact known result, and a started action interrupted or lost without proven terminal
 effect commits a bounded `Partial` result with its interruption notice. Known validation failures, denials, and known
 tool/process failures are known outcomes, not partial results, and each one is delivered to the model as the call's

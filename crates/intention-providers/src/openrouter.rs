@@ -504,8 +504,7 @@ mod tests {
             "read",
             "Read a workspace file",
             r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
-        )
-        .expect("tool definition is valid");
+        );
         let request = request()
             .with_tools(vec![definition])
             .expect("tool advertisement is valid");
@@ -681,8 +680,7 @@ mod tests {
             "read",
             "Read a workspace file",
             r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
-        )
-        .expect("tool definition is valid");
+        );
         let request = ModelRequestDto::new(
             RunId::new(),
             "fixture-model",
@@ -788,8 +786,7 @@ mod tests {
             "read",
             "Read a workspace file",
             r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
-        )
-        .expect("tool definition is valid");
+        );
         let widest = ModelRequestDto::new(
             RunId::new(),
             "fixture-model",
@@ -817,10 +814,9 @@ mod tests {
         );
 
         // A tool-role message always carries its identity, so the tool-result
-        // step cannot fail; tool parameters and the request identity are
-        // validated where they are built, so the remaining steps cannot fail.
+        // step cannot fail; the request identity is validated where it is
+        // built, so the remaining steps cannot fail.
         assert!(ModelMessageDto::new(ModelRoleDto::Tool, "result").is_err());
-        assert!(ModelToolDefinitionDto::new("read", "Read a file", "not-json").is_err());
         assert!(ModelRequestDto::new(RunId::new(), " ", vec![message], None).is_err());
         assert!(ModelRequestDto::new(RunId::new(), "fixture-model", Vec::new(), None).is_err());
 

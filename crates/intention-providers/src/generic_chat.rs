@@ -729,14 +729,12 @@ mod tests {
                 "read_file",
                 "Reads one file",
                 r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
-            )
-            .expect("tool is valid"),
+            ),
             crate::model::ModelToolDefinitionDto::new(
                 "search",
                 "Searches files",
                 r#"{"type":"object","required":["query"]}"#,
-            )
-            .expect("tool is valid"),
+            ),
         ])
         .expect("tools are valid");
 
@@ -882,8 +880,7 @@ mod tests {
             "read",
             "Read a workspace file",
             r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
-        )
-        .expect("tool definition is valid");
+        );
         let attachment =
             crate::model::AssistantReasoningDto::new(vec![call.call_id()], "chain of thought")
                 .expect("reasoning attachment is valid");
@@ -918,12 +915,9 @@ mod tests {
         );
 
         // A tool-role message always carries its identity, so the tool-result
-        // step cannot fail; tool parameters and the request identity are
-        // validated where they are built, so the remaining steps cannot fail.
+        // step cannot fail; the request identity is validated where it is
+        // built, so the remaining steps cannot fail.
         assert!(ModelMessageDto::new(ModelRoleDto::Tool, "result").is_err());
-        assert!(
-            crate::model::ModelToolDefinitionDto::new("read", "Read a file", "not-json").is_err()
-        );
         assert!(ModelRequestDto::new(RunId::new(), " ", vec![message], None).is_err());
         assert!(ModelRequestDto::new(RunId::new(), "fixture", Vec::new(), None).is_err());
 
