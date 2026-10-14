@@ -81,17 +81,15 @@ doc: ## Verify Rust documentation without warnings.
 coverage: ## Collect one instrumented workspace run and enforce the per-crate line floors.
 	$(PYTHON) quality/check_tools.py $(COVERAGE_PINS)
 	$(TIMED) $(CARGO) llvm-cov --no-report --workspace --all-targets --locked --all-features nextest
-	set -euo pipefail; for entry in $(COVERAGE_FLOORS); do \
-	  crate="$${entry%%=*}"; floor="$${entry##*=}"; \
-	  $(CARGO) llvm-cov report --package "$$crate" --fail-under-lines "$$floor"; \
-	done
 	mkdir -p quality/reports
-	$(CARGO) llvm-cov report --json --summary-only --output-path quality/reports/coverage-workspace.json
+	$(TIMED) $(CARGO) llvm-cov report --json --summary-only --output-path quality/reports/coverage-workspace.json
+	$(PYTHON) quality/check_coverage_floors.py quality/reports/coverage-workspace.json "$(COVERAGE_FLOORS)"
 
 coverage-default: coverage ## Alias for the single-pass coverage gate.
 	@true
 
-coverage-artifacts-clean: ## MUTATING: remove generated LLVM coverage build artifacts after coverage passes.
+coverage-artifacts-clean: ## MUTATING: report and remove the generated LLVM coverage build artifacts.
+	@if [ -d target/llvm-cov-target ]; then du -sh target/llvm-cov-target; else printf '%s\n' 'target/llvm-cov-target: absent'; fi
 	rm -rf target/llvm-cov-target
 
 deps: ## Run the lockfile anchor, the supply-chain policy, the notices check, and manifest hygiene.

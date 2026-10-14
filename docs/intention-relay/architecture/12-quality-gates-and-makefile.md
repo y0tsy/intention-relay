@@ -94,9 +94,11 @@ opt-in `e2e-real-api`.
 ## Coverage policy
 
 Coverage is a blocking guardrail from the moment a crate contains production code; there is no grace baseline and no
-gradual ramp. `make coverage` runs the instrumented workspace suite once, then asks `cargo llvm-cov report --package`
-for each measured crate's line coverage and lets `--fail-under-lines` fail the gate below its floor. The workspace
-aggregate report is written as a CI artifact and is informational: it is never a threshold authority.
+gradual ramp. `make coverage` runs the instrumented workspace suite once, then writes one JSON report and checks every
+floor against it. `cargo llvm-cov report` merges the whole profiling set on each invocation, so asking it for one crate
+at a time pays that merge once per crate; the report carries every file's line summary, and a crate's line coverage is
+the covered-over-total ratio over its own files, so `quality/check_coverage_floors.py` computes the floors from the one
+artifact instead. The same artifact is the CI upload.
 
 `COVERAGE_FLOORS` in the root `Makefile` is the whole policy — one `crate=floor` pair per measured crate:
 
@@ -115,7 +117,8 @@ aggregate report is written as a CI artifact and is informational: it is never a
   daemon's own 60% floor rather than being subtracted from it, so no crate needs a carve-out and none exists.
 - One line-only `cargo llvm-cov` run covers the workspace under its single feature configuration (`--all-features`,
   which enables the daemon's non-production `test-support` feature), and every measured crate's report comes from that
-  one run. Coverage reports are stored as CI artifacts.
+  one run. A floor whose crate contributes no file to the report fails the gate rather than being skipped, so a renamed
+  or removed crate cannot drop out silently. Coverage reports are stored as CI artifacts.
 - `intention-proto` and `intention-test-support` carry no floor: the first is types and contract fixtures, the second is
   the non-production fixture crate, and neither carries product logic that a line floor would protect.
 
@@ -129,7 +132,8 @@ adapter, or feature extends that one configuration instead of adding a profile m
 
 The root `Makefile` is the sole supported orchestration surface for local and CI quality workflows. Recipes use strict
 shell behavior and label each command as mutating or non-mutating. `make verify` runs `check`, `coverage`, and `deps`,
-then removes only the generated LLVM coverage target; coverage reports remain available for CI upload. `make ci`,
+then reports the size of the generated LLVM coverage target and removes it; the target is a disposable four-gigabyte
+instrumented build tree, and coverage reports remain available for CI upload. `make ci`,
 `make ci-lint-arch`, `make ci-test`, `make ci-coverage-default`, and `make ci-deps` are thin aliases for the gate
 sequences CI runs: `ci-lint-arch` composes `fmt-check`, `lint`, the Windows cross-target `lint-windows`, the standalone
 `doctest` stage, and `doc`, while `check` keeps the doctests inside `test`. `make check`, `make verify`, and `make ci`
