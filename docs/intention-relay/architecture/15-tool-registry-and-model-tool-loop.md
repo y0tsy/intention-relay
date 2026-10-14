@@ -319,28 +319,24 @@ model-tool-loop content receives the current
 typed state or a typed error, never a partially understood snapshot or live stream. New run-selection provenance records
 the tool/model `model_tool_loop_v1` support needed to reconstruct local exchanges.
 
-## Model progress deadline
+## Model step progress
 
-`model_stream_progress_timeout_v1` is the selected model-step policy for all post-M4 model-tool-loop steps, including
-roots and children. Progress is content, not schedule: only non-empty text and reasoning content counts; usage and other
-non-content values do not, and a continuously producing stream has no fixed step duration. The policy is active only
-while a provider stream for a model step is open; it is paused while a tool or foreground kernel cell runs, a retry delay
-runs, or the run is completing or cancelling.
+Progress is content, not schedule: only non-empty text and reasoning content counts; usage and other non-content values
+do not, and a continuously producing stream has no fixed step duration. A model step's deadline is active only while a
+provider stream for that step is open, and it is paused while a tool or foreground kernel cell runs, a retry delay runs,
+or the run is completing or cancelling.
 
-A provider stream that stops producing content fails with `model_stream_progress_timeout`. This document selects no
-fixed deadline value: the enforcing bound for the current scope is the provider execution's configured attempt timeout,
-an implementation safeguard owned by [architecture 08](08-model-protocol-and-providers.md) and [architecture
-09](09-configuration-security-and-observability.md), and a later activating specification selects any progress deadline
-it adds. That safeguard bounds silence, not content: it is armed when a provider stream opens and re-armed by every
-event the stream delivers, usage and tool-call facts included, so it holds the no-stall outcome while this policy's
-content-only refinement waits for its activating specification. Before the first committed content or other irreversible evidence, exactly one retry is permitted after
-`model_stream_progress_timeout`; after such a fact, no retry is permitted. A simultaneously committed user cancellation
-wins the race. A timeout otherwise produces a safe failed outcome, suppresses late output, and never claims success
-or resumes work after restart.
+The deadline has exactly one owner. [Architecture 08](08-model-protocol-and-providers.md) arms the provider attempt's
+idle window when the stream opens and re-arms it on every normalized event, expires it as the retryable
+`provider_attempt_timed_out` failure, and owns the attempt count: at most two attempts, with one retry permitted only
+before any durable text, reasoning, usage, or tool fact. This document selects no deadline value, adds no second failure
+code, and adds no retry of its own ([architecture 09](09-configuration-security-and-observability.md) carries the window
+in the limits registry). That window bounds silence, not content, so a later activating specification may add a
+content-only refinement; it must state the deadline it selects and keep the pause rule above.
 
-The progress policy is a model-step policy owned by this document. A timeout outcome is a known typed failure before an
-external effect when no irreversible evidence preceded it, and a bounded `Partial` result when a started effect lacks
-durable terminal proof; the next model step proceeds, and nothing pauses.
+A model step that ends by deadline is a known typed failure before an external effect when no irreversible evidence
+preceded it, and a bounded `Partial` result when a started effect lacks durable terminal proof; the next model step
+proceeds, and nothing pauses.
 
 ## Effect evidence, cancellation, and recovery
 

@@ -28,7 +28,7 @@ authority.
 
 One live `KernelEpochId` names the run-scoped namespace and execution window of exactly one admitted `RunId`; the
 session kernel process that hosts it is not an executable epoch and never carries a usable namespace across runs. A new
-run receives a fresh epoch and a fresh namespace; only an explicitly verified checkpoint projection may seed it. The
+run receives a fresh epoch and a fresh namespace; only the verified checkpoint may seed it. The
 single canonical lifetime statement is in *Kernel detail* below. Fixed idle/concurrency limits in retained research are
 historical provenance, not future run policy.
 
@@ -153,7 +153,7 @@ publication gate under this document's cell rules. Evidence that cannot be repre
 publication with `kernel_script_library_unavailable`; it is never truncated, sampled, or stringified. Verified
 checkpoint metadata may record the script-library reference as safe verification metadata, while checkpoint payload and
 metadata keep excluding script source and any executable payload. Deleting a module stays an explicit user or agent
-action through the ordinary tools; idle disposal, checkpoint promotion, and restart never collect one.
+action through the ordinary tools; idle disposal, checkpoint replacement, and restart never collect one.
 
 ## Checkpoints and namespace restoration
 
@@ -168,11 +168,7 @@ KernelCheckpointMetadataV1
   namespace_contract_revision
   serializer_revision
   source_kernel_epoch
-  source_execution_id
-  source_run_id
-  parent_checkpoint_reference
   bounded_size
-  verification_status
   omission_summary
 ```
 
@@ -183,11 +179,12 @@ provider/MCP/Jupyter resource, raw Jupyter frame, provider SDK object, credentia
 traceback, or implementation resource; unsupported or non-serializable values are explicitly omitted with typed safe
 metadata, never guessed or stringified. Verified metadata may additionally carry the project script-library reference;
 the payload never carries script source.
-Payload, metadata, verification, generation promotion, and publication are atomic: a failed generation leaves the prior
-verified one intact and never becomes latest verified. Checkpoint payload stays private to the daemon-owned session
-kernel service; public artifacts contain only safe generation, schema, bounded size, and restoration status.
+Payload, metadata, verification, and publication are atomic: a failed write leaves the previous checkpoint intact and
+never becomes the verified one. One verified checkpoint exists per session kernel selection, and a new verified
+checkpoint replaces it. Checkpoint payload stays private to the daemon-owned session
+kernel service; public artifacts contain only safe schema, bounded size, and restoration status.
 
-Only a selected verified checkpoint may seed the fresh run-scoped namespace of a new run. `Required` restoration failure
+Only the verified checkpoint may seed the fresh run-scoped namespace of a new run. `Required` restoration failure
 blocks dependent work before effect; `Optional` restoration failure starts an empty namespace only in that new run with
 a typed degraded-restoration result. Restoration never revives a typed-client handle, task, process, provider request,
 child, MCP resource, unfinished run, or external effect. An uncreatable or unverifiable checkpoint after a successful
@@ -195,7 +192,7 @@ cell produces `kernel_checkpoint_unavailable`. Saving follows the same policy as
 blocks dependent work before effect and the cell is not rerun, and under `Optional` the run continues with a typed
 degraded result while the cell is still not rerun. On restart,
 no execution or action resumes; the next explicit execution creates a fresh session kernel process and may restore only
-the latest verified checkpoint into its fresh namespace. Missing, corrupt, incompatible, or over-limit state produces
+the verified checkpoint into its fresh namespace. Missing, corrupt, incompatible, or over-limit state produces
 `kernel_state_restore_unavailable`, the namespace starts empty, and durable history remains readable.
 
 ## Background work, interruption, and recovery
@@ -246,19 +243,21 @@ bypass the facade and are not sandboxed or fully observable.
 
 ## Kernel detail: DTO family, bounds, and safe failures
 
-The first-scope versioned typed DTO family for kernel execution is conceptually:
+Only four kernel names are DTOs, because only they cross a boundary. The cell's invocation and its terminal result are
+architecture 15's existing tool-call request and terminal result, which the cell's output already becomes
+([architecture 15](15-tool-registry-and-model-tool-loop.md)):
 
 ```text
-KernelExecutionRequestDto
-KernelExecutionResultDto
-KernelOutputChunkDto
-KernelStatusDto
-KernelStateSnapshotDto
-KernelHostRequestDto
-KernelHostResponseDto
-KernelScriptLibraryDto
-KernelScriptImportEvidenceDto
+KernelOutputChunkDto           safe output notification on architecture 15's stream
+KernelHostRequestDto           the kernel child's host request
+KernelHostResponseDto          its correlated response
+KernelScriptImportEvidenceDto  a published run fact
 ```
+
+The remaining kernel shapes are values inside their own records, not DTOs: `KernelExecutionBindingV1` binds one
+foreground cell, `KernelScriptLibraryV1` is the value the selection's `script_library_reference` points at, and the
+checkpoint payload stays private to the daemon-owned session kernel service. Attempt status is attempt evidence
+([architecture 15](15-tool-registry-and-model-tool-loop.md)), not a kernel-owned status DTO.
 
 A kernel is session-scoped: one daemon-owned session actor owns at most one IPython kernel process, never shared across
 sessions/projects/users/daemon instances, inheriting the session's `WorkspaceRoot` as context metadata without owning
