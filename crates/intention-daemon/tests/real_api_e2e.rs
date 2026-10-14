@@ -119,12 +119,9 @@ const TOOL_TURN_ATTEMPTS: u8 = 3;
 // minutes instead of hanging until the CI timeout. The session reads carry the
 // harness `SESSION_READ_DEADLINE` on top of the same client bound.
 //
-// `.github/workflows/real-api-e2e.yml` gives the run step 120 minutes and the
-// job 150 minutes: the 74-minute worst case leaves a 46-minute step margin for
-// the build, and the job keeps a 30-minute overhead above the step. A degraded
-// live run reports the harness diagnostic ("did not record a succeeded <tool>
-// call within 3 turns") instead of an opaque GitHub timeout; a change to any
-// budget constant must keep that relation.
+// A degraded live run reports the harness diagnostic ("did not record a
+// succeeded <tool> call within 3 turns") instead of hanging: a change to any
+// budget constant must keep the total below the caller's own timeout.
 
 /// Environment variables that must never reach the spawned daemon.
 ///

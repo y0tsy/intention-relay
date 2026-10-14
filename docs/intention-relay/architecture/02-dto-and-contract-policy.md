@@ -205,7 +205,7 @@ persisted rows keep their recorded meaning.
 ## Quality-gate integration
 
 DTO validation, redaction, and public-API boundary tests are blocking `make verify` inputs. Every
-DTO-owning crate is subject to its declared coverage tier, and contract fixtures run in the single feature
+DTO-owning crate is subject to its declared line floor, and contract fixtures run in the single feature
 configuration.
 See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 

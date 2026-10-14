@@ -56,7 +56,7 @@ of each.
 | --- | --- | --- |
 | M0 Quality foundation | Closed | Reproducible Makefile-orchestrated quality pipeline (format, lint, nextest, rustdoc, coverage, supply-chain gates) with pinned tools. |
 | M1 Contracts, configuration, workspace skeleton | Closed | Tier-A crate boundaries (`intention-proto`, `intention-config`; M1's `intention-domain` was later folded into `intention-proto`), DTO-first policy, TOML config with redacted projections, compile-only skeletons for every later crate. |
-| M1+ Quality policy hardening | Closed | Machine-readable policies (`quality/*.toml`) enforce the crate classification with its declared responsibilities, workspace and external dependency edges, named integration test targets, and coverage tiers. |
+| M1+ Quality policy hardening | Closed | Machine-readable policies (`quality/*.toml`) enforce the pinned toolchains and tools, the workspace and external dependency edges, and the supply-chain policy. |
 | M2 Local protocol, client, daemon bootstrap | Closed | Private local IPC, correlated request/response codec, shared bootstrap client with startup lock and readiness polling, in-memory fixture composition, minimal TUI proof adapter (the hello/version handshake was later replaced by one typed wire). |
 | M3 SQLite sessions, transcript, queue | Closed | Durable SQLite-backed sessions, runs, turns, and transcript rows; turn queueing; canonical credential-free config revisions; recovery-before-ready. |
 | M4 Model contract, providers, one streaming run | Closed | Provider-neutral model contracts and validated stream facts; private OpenRouter and generic Chat Completions drivers; durable model evidence in the transcript; one daemon-owned streaming run with reconnect to current state and live session delivery. |
@@ -72,11 +72,10 @@ closed M0-M5 behavior.
 ## Crate map
 
 All workspace crates live under [crates/](crates/) unless noted. Coverage is
-enforced by the machine-readable policy in
-[quality/coverage.toml](quality/coverage.toml) under
+enforced by `COVERAGE_FLOORS` in the root [Makefile](Makefile) under
 [architecture 12](docs/intention-relay/architecture/12-quality-gates-and-makefile.md): per-crate line
-tiers of 75% (`core`), 60% (`standard`), and 20% (`edge`), with `intention-proto`
-exempt at 0% and outside collection.
+floors of 75%, 60%, and 20%, with `intention-proto` and `intention-test-support`
+outside measurement.
 
 ### DTO foundations
 
@@ -289,9 +288,9 @@ quick` while iterating and run `make verify` before acceptance.
 | `make quick` | Fast local loop: tools check, `fmt-check`, lint, tests. |
 | `make check` | Complete non-mutating source gate: format, lint, tests, doctests/rustdoc. |
 | `make lint-windows` | Lint the Windows target from Linux; needs the pinned `x86_64-pc-windows-gnu` target and a MinGW toolchain. |
-| `make coverage` | Line coverage, enforcing each collected crate's declared tier floor (see [quality/coverage.toml](quality/coverage.toml)). |
+| `make coverage` | One instrumented workspace run; enforces each measured crate's line floor from `COVERAGE_FLOORS` in the [Makefile](Makefile). |
 | `make verify` | Full acceptance gate: `check` plus coverage and dependency gates; removes only generated LLVM coverage artifacts. |
-| `make deps` | Supply-chain gates: deny, audit, outdated, machete, notices check. |
+| `make deps` | Supply-chain gates: lockfile anchor, deny, machete, notices check. |
 | `make notices` / `make notices-check` | Regenerate / verify [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) against the locked graph. |
 | `make ci` | Local alias for the full gate; GitHub Actions runs the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default`, `ci-deps`) in parallel. |
 
@@ -311,13 +310,12 @@ and pull requests to `main`:
 - `test` on `windows-2025`, where the Windows-only fixtures run; Linux test
   execution happens inside `coverage-default`, which runs the same suite
   instrumented;
-- pinned toolchains and per-job tool scopes, rust-cache, `mold` on Linux,
+- pinned toolchains and per-job tool installs, rust-cache, `mold` on Linux,
   MinGW for the Windows-target lint, sccache for coverage builds, and uploaded
   quality reports.
 
-One supporting workflow is not part of the blocking gate: the manual
-live-provider end-to-end run
-([real-api-e2e.yml](.github/workflows/real-api-e2e.yml)). Dependabot is
+The live-provider end-to-end run is a local target, `make e2e-real-api`, and
+never part of the blocking gate. Dependabot is
 enabled for dependency updates
 ([dependabot.yml](.github/dependabot.yml)).
 
@@ -392,8 +390,8 @@ The v1 boundary and non-goals are stated precisely in
   handoff; CI must stay green on pull requests to `main`.
 - Keep machine-readable policies ([quality/](quality)) and architecture
   documentation in sync with code changes: a new production crate states its
-  responsibility and test targets in the crate map and gets a coverage tier
-  before production code is accepted.
+  responsibility and test targets in the crate map and gets a line floor in the
+  Makefile's `COVERAGE_FLOORS` before production code is accepted.
 - Single live version, no backward compatibility: when an execution path
   becomes outdated, remove it; do not add compatibility layers, fallback
   branches, or migration fixtures for older schema/protocol/format versions.

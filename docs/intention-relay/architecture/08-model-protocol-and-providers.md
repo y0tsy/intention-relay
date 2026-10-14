@@ -288,7 +288,7 @@ an interrupt during the retry wait starts the next attempt immediately.
 
 ## Quality-gate integration
 
-`intention-providers` is subject to its `standard` tier floor. Stream normalization, capability
+`intention-providers` is subject to its 60% line floor. Stream normalization, capability
 validation, retry,
 SDK-isolation, and secret-redaction fixtures are blocking `make verify` inputs in the single feature configuration.
 Dependency and public-API checks must prevent provider SDK types and secrets from escaping their crate. See [12 Quality

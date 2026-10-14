@@ -70,7 +70,7 @@ delivery and verification](10-test-driven-delivery-and-verification.md).
 ### 11. Reproducible quality gates are architectural
 
 Before production functionality is accepted, the workspace must have a pinned toolchain, strict pragmatic linting, the
-per-crate line-coverage tiers, rustdoc verification, and supply-chain verification. The root
+per-crate line-coverage floors, rustdoc verification, and supply-chain verification. The root
 Makefile orchestrates these non-mutating gates. GitHub Actions runs the per-job aliases (`ci-lint-arch`, `ci-test`,
 `ci-coverage-default`, `ci-deps`) as parallel matrix jobs in `.github/workflows/quality.yml`, and
 `make ci` is the local single-pass alias for the same full gate. See [Quality gates and

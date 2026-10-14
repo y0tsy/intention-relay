@@ -312,8 +312,8 @@ follow-up run.
 ## Quality-gate integration
 
 The daemon, transport, client, and adapter tests in this document are blocking `make verify` inputs under the coverage
-policy of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate tiers). Tauri and TUI carry the
-`edge` tier floor in addition to
+policy of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate line floors). Tauri and TUI carry
+their 20% line floor in addition to
 their mapping contracts and fixture-daemon outcome scenarios; the floor never replaces that evidence.
 
 ## Open implementation decisions

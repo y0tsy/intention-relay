@@ -188,7 +188,7 @@ optional handoff's delivery is M5+ Slice 6, whose frozen fork records carry the 
 
 ## Quality-gate integration
 
-Plan policy and artifact crates are subject to the coverage tier declared when they are activated. Plan-number
+Plan policy and artifact crates are subject to the line floor declared when they are activated. Plan-number
 allocation, the file-name conflict rule, the body-only artifact, ordinary mutation
 denial, Plan `execute` audit, revision integrity, and same-Session Autopilot continuation are blocking `make verify`
 inputs. Coverage cannot replace captured model-context assertions or policy-denial tests. See [12 Quality Gates and

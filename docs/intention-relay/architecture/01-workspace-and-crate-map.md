@@ -43,8 +43,8 @@ tools (`read`, `write`, `edit`, `execute`, `glob`, and `grep`) and the workspace
 the application path but does not select implementations. No registry or reserved slot exists: the tool set is the
 closed six-variant `ToolId`, and any other tool name is rejected as `unknown_tool` before effect.
 
-The M1-M5 activation notes are historical records: the coverage policy is now the per-crate tiers declared in
-`quality/coverage.toml` ([12 Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
+The M1-M5 activation notes are historical records: the coverage policy is now the per-crate line floors in the root
+`Makefile`'s `COVERAGE_FLOORS` ([12 Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ## Pre-collapse crate map (historical)
 
@@ -113,8 +113,8 @@ flowchart BT
 ## Slice 1.5 crate map (activated)
 
 Slice 1.5 collapsed the workspace to nine production crates, shown below together with what each absorbed. The table
-below is the live crate map; each crate's permitted dependency direction is the one its manifest declares, and
-`quality/coverage.toml` declares its coverage tier.
+below is the live crate map; each crate's permitted dependency direction is the one its manifest declares, and the
+root `Makefile`'s `COVERAGE_FLOORS` declares the line floor of every measured crate.
 
 | Target crate | Absorbs | Owns |
 | --- | --- | --- |
@@ -242,7 +242,7 @@ The workspace must have tests that fail when these rules are broken:
    the rest is a review responsibility.
 
 The exact test strategy and minimum test portfolio are defined in [10 Test-Driven Delivery and
-Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (per-crate tiers),
+Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (per-crate line floors),
 lint policy, and Makefile/CI contract in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Non-goals

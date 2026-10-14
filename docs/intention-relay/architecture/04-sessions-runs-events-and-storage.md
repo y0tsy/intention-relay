@@ -234,8 +234,8 @@ tool and run evidence is evidence of intent and observed state, not proof of ext
 ## Quality-gate integration
 
 Session, run, turn, transcript, and transaction tests are mandatory `make verify` inputs under the coverage policy of
-[12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate tiers), and must run in the single feature
-configuration. Numeric
+[12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate line floors), and must run in the single
+feature configuration. Numeric
 coverage does not excuse missing fault-injection, recovery, ordering, or durable turn outcome tests.
 
 ## Non-goals

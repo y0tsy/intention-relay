@@ -140,7 +140,7 @@ original/retrieved content.
 
 ## Quality-gate integration
 
-The VFR and Headroom modules live in `intention-tools` and are covered by its declared `standard` tier; their
+The VFR and Headroom modules live in `intention-tools` and are covered by its declared 60% line floor; their
 transform, retrieval, expiry, ordering, and adapter/model distinction tests are blocking `make verify` inputs in the
 single feature configuration. Base tools stay free of transform behavior as an organization and review rule, not a
 separate crate boundary. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).

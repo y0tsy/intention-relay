@@ -5,7 +5,7 @@
 This document makes TTD a delivery requirement for Intention Relay: it defines how architecture rules become executable
 checks and how implementation is judged by observable product outcomes, not only source structure or unit coverage. It
 applies to every crate, vertical slice, and adapter. The mandatory pinned tooling, strict linting, the coverage policy
-(per-crate tiers), Makefile targets, and supply-chain gates are defined in [Quality Gates and
+(per-crate line floors), Makefile targets, and supply-chain gates are defined in [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md).
 
 ## Delivery principle
@@ -50,8 +50,6 @@ The following are mandatory candidates for automated architecture tests:
 
 | Rule | Required protection |
 | --- | --- |
-| Small-crate structure | Dependency graph check, deny cycles, and a manifest assertion for the required v1 crate set. |
-| Crate accountability | A Cargo-metadata-backed check that every workspace crate is classified exactly once by its declared role and responsibility, that its named integration test targets match Cargo exactly, and that every active production crate keeps at least one. |
 | Composition ownership | Only `intention-daemon` selects concrete storage/provider/tool implementations. |
 | Adapter isolation | Adapter crates (`intention-tui` today; `intention-tauri` is added at M6) cannot depend directly on application runtime/storage implementations. |
 | DTO-first | Public cross-crate APIs use DTOs; forbidden implementation resources/SDK types cannot escape. |
@@ -73,7 +71,7 @@ the local single-pass alias, while CI invokes the per-job aliases (`ci-lint-arch
 ## Minimum test portfolio by crate
 
 Every production crate states its responsibility and its test targets in [01 Workspace and Crate Map](01-workspace-and-crate-map.md), and
-`quality/coverage.toml` declares the per-crate tier floors ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
+the root `Makefile`'s `COVERAGE_FLOORS` declares the per-crate line floors ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 Every production crate's test targets must exist before implementation and prove the contracts, invariants, failure
 modes, and outcomes its owner architecture document states. The smallest portfolio that proves every stated invariant, contract, failure mode, and
 outcome is required; no aggregate coverage number replaces it, and boundary crates prove behavior over fixture daemons
@@ -168,8 +166,7 @@ requests the `tool_calls` capability.
 ### J. Live provider tool loop (opt-in, manual)
 
 1. Set `INTENTION_REAL_API_KEY` and `INTENTION_REAL_API_MODEL`, then run
-`make e2e-real-api` (which exports the `INTENTION_REAL_API_E2E=1` opt-in), or dispatch the manual
-`.github/workflows/real-api-e2e.yml` workflow with its provider and model inputs. The provider kind defaults to
+`make e2e-real-api` (which exports the `INTENTION_REAL_API_E2E=1` opt-in). The provider kind defaults to
 `generic-chat-completion-api`; `openrouter` is selectable through the optional `INTENTION_REAL_API_KIND`, and
 `INTENTION_REAL_API_ENDPOINT` overrides the endpoint for self-hosted providers.
 2. The `#[ignore]`d test `crates/intention-daemon/tests/real_api_e2e.rs` spawns
@@ -200,8 +197,8 @@ narrow, and `make verify` checks it ran; the outcome scenarios it covers; and ev
 dependency, or architecture exception with its recorded rationale. Deliberately deferred behavior is recorded as an
 explicit known deferral, never as omitted coverage; every deferred fact lives in the [Implementation
 Roadmap](11-implementation-roadmap.md)'s Known deferrals list with its owner when one exists. A cited live run reports
-its date, commit, provider, model, and
-workflow run URL and never the credential; the opt-in live channel is additional evidence only and never a substitute
+its date, commit, provider, model, and the command and machine it ran on, and never the credential; the opt-in live
+channel is additional evidence only and never a substitute
 for the mandatory hermetic gates ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ### Future package evidence

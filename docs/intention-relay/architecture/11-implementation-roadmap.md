@@ -56,13 +56,13 @@ flowchart TD
 
 Every milestone after Milestone 0 follows the test-first rules of [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md) and the quality policy of [Quality Gates and
-Makefile](12-quality-gates-and-makefile.md): new production crates meet the tier floor declared for them before merge,
+Makefile](12-quality-gates-and-makefile.md): new production crates meet the line floor declared for them before merge,
 new optional Cargo features extend the single feature
 configuration in the same change, only pinned dependencies and tools are used, `make quick` runs during
 development and `make verify` before acceptance, and any policy exception is recorded in a reviewed, versioned policy
 file with rationale and equivalent test evidence.
 
-The coverage policy is the per-crate tiers declared in `quality/coverage.toml`
+The coverage policy is the per-crate line floors in the root `Makefile`'s `COVERAGE_FLOORS`
 ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ## Milestone 5+: Post-M5 retrospective alignment
@@ -131,9 +131,9 @@ contract-equivalent modes — the full-screen TUI, the mandatory interactive REP
 logic in the daemon. The delivered behavior, including the slice's retrospective corrections, is owned by
 [architecture 03](03-daemon-transport-and-adapters.md)'s Slice 2 terminal model (closed); acceptance evidence
 obligations are unchanged ([Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md)).
-Slice 2 is closed: it merged into `main` as one squash commit, `0fd8ad5` (PR #67), with all six CI jobs green on the
-merged head. The quality phase keeps its `slice2` name: closing a slice changes no crate classification, so
-`quality/coverage.toml` and the crate map move together only when Slice 3 adds its own crates.
+Slice 2 is closed: it merged into `main` as one squash commit, `0fd8ad5` (PR #67), with the full quality gate green on
+the merged head. Closing a slice changes no crate classification, so the crate map and the coverage floors move together
+only when Slice 3 adds its own crates.
 -  **Slice 3 — Agent operation — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the code-owned base instruction text, one
 user-authored fragment list edited at the filesystem level, workspace `AGENTS.md` project instructions read through the
@@ -204,8 +204,7 @@ semantics keep their recorded law.
 -  The Slice 4 discovery and typed configuration-editing surfaces are non-authorizing: they create no RunId, tool
 permission, kernel epoch, context projection, or branch, and the activating
 specification must prove that non-authority.
--  Applicable crates meet their declared tier floors without excluding policy or boundary logic; every activated slice
-passes `make quick`, `make verify`, and Linux/Windows CI.
+-  Applicable crates meet their declared line floors without excluding policy or boundary logic.
 -  Every activated contract ships with its version, owner, tests, policy mapping, storage/schema treatment, and
 evidence.
 -  No remaining-milestone boundary behavior is implemented, and no second runtime, registry, persistence authority, or
@@ -292,7 +291,7 @@ activating specification selects the deferred values.
 - Headroom retention/retrieval/expiry fixtures;
 - full pipeline-order integration test;
 - UI/model representation distinction test;
--  coverage fixtures for transform, expiry, retrieval, and error paths under the `intention-tools` tier floor
+-  coverage fixtures for transform, expiry, retrieval, and error paths under the `intention-tools` line floor
 ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ### Exit criteria
@@ -300,7 +299,7 @@ activating specification selects the deferred values.
 -  VFR and Headroom operate as independently enabled modules; `retrieve` returns retained content while valid,
 with typed expiry behavior afterward;
 - base tools stay free of transform behavior, and no separate extension crate exists;
--  The modules meet `intention-tools`' declared tier floor ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
+-  The modules meet `intention-tools`' declared line floor ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ## Milestone 8: Hardening and acceptance verification
 
@@ -394,8 +393,7 @@ publication;
 
 ### Exit criteria
 
--  the activating specification's contracts, tests, coverage, and evidence are recorded and pass `make quick`, `make
-verify`, and Linux/Windows CI;
+-  the activating specification's contracts, tests, coverage, and evidence are recorded;
 -  no two capability paths or registries exist, and supervision is topology only, never a second runtime or sandbox;
 - M3/M4 bytes and retained RLM history remain unchanged;
 - the milestone's activation evidence is recorded.
@@ -449,8 +447,8 @@ never truncated or stringified;
 
 ### Exit criteria
 
--  the activating specification's contracts, tests, coverage, and evidence are recorded and pass `make quick`, `make
-verify`, and Linux/Windows CI, and the kernel families' typed serde JSON contracts are declared in the same change;
+-  the activating specification's contracts, tests, coverage, and evidence are recorded, and the kernel families'
+typed serde JSON contracts are declared in the same change;
 -  no second runtime, registry, persistence authority, or sandbox is introduced, and no module, capability, or context
 record gains authority;
 - the milestone's activation evidence is recorded.

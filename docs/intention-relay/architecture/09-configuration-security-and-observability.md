@@ -177,7 +177,7 @@ atomicity.
 
 ## Quality-gate integration
 
-`intention-config` remains subject to its `standard` tier floor. TOML parsing, M1 revision serialization, credential
+`intention-config` remains subject to its 60% line floor. TOML parsing, M1 revision serialization, credential
 isolation, and safe observability tests are blocking `make verify` inputs; M3 adds canonical revision persistence,
 restart-only application, and per-run configuration-selection coverage. The credential absence test is a mandatory
 regression fixture across logs, errors, persisted state, and adapter DTOs. See [12 Quality Gates and

@@ -62,7 +62,7 @@
 ## Test-first and architectural boundaries
 
 - Follow TDD/TTD: establish applicable contract, architecture, and outcome tests before implementation.
-- Every new production crate states its responsibility and its test targets in [the crate map](docs/intention-relay/architecture/01-workspace-and-crate-map.md) and gets a coverage tier in `quality/coverage.toml` before production code is accepted; the coverage runner fails on a workspace crate that carries tests without a tier ([coverage policy](docs/intention-relay/architecture/12-quality-gates-and-makefile.md)).
+- Every new production crate states its responsibility and its test targets in [the crate map](docs/intention-relay/architecture/01-workspace-and-crate-map.md); a crate that carries production logic gets a line floor in the root `Makefile`'s `COVERAGE_FLOORS` ([coverage policy](docs/intention-relay/architecture/12-quality-gates-and-makefile.md)).
 - Never bypass `WorkspaceRoot`, DTO-first, or adapter-isolation rules. DTO-first and the working-directory rule are denied by Clippy through the root `clippy.toml`; adapter isolation and the composition root are enforced by the dependency manifests, by rustc, and by review.
 - Follow existing data, configuration, and dependency patterns. Do not hard-code values that are genuinely configurable, and do not add configuration unless configurability is a requirement.
 - Check the workspace `Cargo.toml` and existing dependency graph before adding a dependency.

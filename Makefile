@@ -11,6 +11,22 @@ SHELL := /bin/bash
 define TIMED
 $(PYTHON) -c 'import subprocess,time,sys; command=sys.argv[1:]; t=time.monotonic(); p=subprocess.run(command); print(f"timing: {command[0]}: {time.monotonic()-t:.2f}s", flush=True); raise SystemExit(p.returncode)'
 endef
+# Line-coverage floors, one per collected crate. A crate that is absent from
+# this list is not measured: coverage is a guardrail over the crates that carry
+# production logic, not a central registry every crate must be entered into.
+COVERAGE_FLOORS = intention-transport=75 intention-storage=75 intention-engine=75 \
+                  intention-tools=60 intention-config=60 intention-daemon=60 intention-providers=60 \
+                  intention-tui=20 intention-client=20
+
+# The components and tools each gate runs, so a gate validates exactly the
+# pinned set it uses. `tools-check` without arguments validates the union.
+LINT_PINS = --component rustfmt --component clippy
+TEST_PINS = --tool cargo-nextest
+COVERAGE_PINS = --component llvm-tools-preview --tool cargo-nextest --tool cargo-llvm-cov
+DEPS_PINS = --tool cargo-deny --tool cargo-machete
+NOTICES_PINS = --tool cargo-about
+ALL_PINS = $(LINT_PINS) $(COVERAGE_PINS) $(DEPS_PINS) $(NOTICES_PINS)
+
 .PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check lint lint-windows test doctest doc coverage coverage-default coverage-artifacts-clean deps e2e-real-api quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps
 
 help: ## List supported M0 targets and mutation behavior.
@@ -23,8 +39,8 @@ help: ## List supported M0 targets and mutation behavior.
 bootstrap-tools: ## MUTATING/NETWORKED: install exact pinned toolchains and quality tools.
 	$(PYTHON) quality/bootstrap_tools.py
 
-tools-check: ## Verify pinned Rust toolchains, components, and quality tools (CI scopes via CI_TOOLS_SCOPE).
-	$(PYTHON) quality/check_tools.py --scope $${CI_TOOLS_SCOPE:-all}
+tools-check: ## Verify the pinned Rust toolchain, its components, and every pinned quality tool.
+	$(PYTHON) quality/check_tools.py $(ALL_PINS)
 
 fmt: ## MUTATING: format all Rust code.
 	$(CARGO) fmt --all
@@ -32,30 +48,42 @@ fmt: ## MUTATING: format all Rust code.
 fmt-check: ## Verify formatting without changing files.
 	$(TIMED) $(CARGO) fmt --all --check
 
-notices: tools-check ## MUTATING: regenerate committed third-party notices from the locked graph.
+notices: ## MUTATING: regenerate committed third-party notices from the locked graph.
+	$(PYTHON) quality/check_tools.py $(NOTICES_PINS)
 	$(PYTHON) quality/generate_third_party_notices.py
 
-notices-check: tools-check ## Verify committed third-party notices match the locked graph.
+notices-check: ## Verify committed third-party notices match the locked graph.
+	$(PYTHON) quality/check_tools.py $(NOTICES_PINS)
 	$(PYTHON) quality/generate_third_party_notices.py --check
 
-lint: tools-check ## Run strict Rust and Clippy linting.
-	$(PYTHON) quality/run_profiles.py lint
+lint: ## Run strict Rust and Clippy linting.
+	$(PYTHON) quality/check_tools.py $(LINT_PINS)
+	$(TIMED) $(CARGO) clippy --workspace --all-targets --locked --all-features -- -Dwarnings
 
-lint-windows: tools-check ## Cross-lint the Windows target from Linux (needs the pinned cross target and MinGW).
-	$(PYTHON) quality/run_profiles.py lint-windows
+lint-windows: ## Cross-lint the Windows target from Linux (needs the pinned cross target and MinGW).
+	$(PYTHON) quality/check_tools.py $(LINT_PINS)
+	$(TIMED) $(CARGO) clippy --workspace --all-targets --locked --target x86_64-pc-windows-gnu --all-features -- -Dwarnings
 
-test: tools-check ## Run nextest and doctests.
-	$(PYTHON) quality/run_profiles.py test
-	$(PYTHON) quality/run_profiles.py doctest
+test: ## Run nextest and doctests.
+	$(PYTHON) quality/check_tools.py $(TEST_PINS)
+	$(TIMED) $(CARGO) nextest run --workspace --all-targets --locked --all-features
+	$(TIMED) $(CARGO) test --workspace --doc --locked --all-features
 
-doctest: tools-check ## Run the workspace documentation tests.
-	$(PYTHON) quality/run_profiles.py doctest
+doctest: ## Run the workspace documentation tests.
+	$(PYTHON) quality/check_tools.py $(TEST_PINS)
+	$(TIMED) $(CARGO) test --workspace --doc --locked --all-features
 
-doc: tools-check ## Verify Rust documentation without warnings.
-	$(PYTHON) quality/run_profiles.py doc
+doc: ## Verify Rust documentation without warnings.
+	RUSTDOCFLAGS="-D warnings" $(TIMED) $(CARGO) doc --workspace --no-deps --locked --all-features
 
-coverage: tools-check ## Collect line coverage and enforce the per-crate tier floors.
-	$(PYTHON) quality/run_coverage.py
+coverage: ## Collect one instrumented workspace run and enforce the per-crate line floors.
+	$(PYTHON) quality/check_tools.py $(COVERAGE_PINS)
+	$(TIMED) $(CARGO) llvm-cov --no-report --workspace --all-targets --locked --all-features nextest
+	set -euo pipefail; for entry in $(COVERAGE_FLOORS); do \
+	  crate="$${entry%%=*}"; floor="$${entry##*=}"; \
+	  $(CARGO) llvm-cov report --package "$$crate" --fail-under-lines "$$floor"; \
+	done
+	$(CARGO) llvm-cov report --json --summary-only --output-path quality/reports/coverage-workspace.json
 
 coverage-default: coverage ## Alias for the single-pass coverage gate.
 	@true
@@ -63,8 +91,12 @@ coverage-default: coverage ## Alias for the single-pass coverage gate.
 coverage-artifacts-clean: ## MUTATING: remove generated LLVM coverage build artifacts after coverage passes.
 	rm -rf target/llvm-cov-target
 
-deps: tools-check notices-check ## Run online dependency, license, advisory, notices, and hygiene gates.
-	$(PYTHON) quality/run_deps.py
+deps: ## Run the lockfile anchor, the supply-chain policy, the notices check, and manifest hygiene.
+	$(PYTHON) quality/check_tools.py $(DEPS_PINS) $(NOTICES_PINS)
+	$(TIMED) $(CARGO) metadata --locked --format-version 1 > /dev/null
+	$(TIMED) $(CARGO) deny check
+	$(TIMED) $(CARGO) machete --with-metadata --skip-target-dir
+	$(PYTHON) quality/generate_third_party_notices.py --check
 
 e2e-real-api: tools-check ## MUTATING/NETWORKED: run ignored real-provider API end-to-end tests (network access required; reads .env when present).
 	@if [ -f .env ]; then \
@@ -99,8 +131,9 @@ e2e-real-api: tools-check ## MUTATING/NETWORKED: run ignored real-provider API e
 	if [ -n "$${INTENTION_REAL_API_ENDPOINT:-}" ]; then export INTENTION_REAL_API_ENDPOINT; else unset INTENTION_REAL_API_ENDPOINT; fi
 	$(CARGO) nextest run --locked --package intention-daemon --test real_api_e2e --run-ignored only --no-capture 2>&1 | tee quality/reports/real-api-e2e/last-run.log
 
-quick: tools-check fmt-check lint ## Fast local quality loop.
-	$(PYTHON) quality/run_profiles.py test
+quick: fmt-check lint ## Fast local quality loop.
+	$(PYTHON) quality/check_tools.py $(TEST_PINS)
+	$(TIMED) $(CARGO) nextest run --workspace --all-targets --locked --all-features
 
 check: tools-check fmt-check lint test doc ## Complete non-mutating source-quality gate.
 	@true

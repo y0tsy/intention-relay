@@ -8,8 +8,8 @@ combination, adapter, or an explicitly approved stronger check.
 ## Scope
 
 The policy covers pinned toolchains and external quality tools; formatting and strict pragmatic linting; per-crate
-coverage tiers; tests, doctests, and rustdoc; dependency, license, advisory, stale-dependency, and manifest hygiene; the
-Makefile contract and CI entry point; and explicit, reviewable exception handling. Architecture rules that no mechanism
+coverage floors; tests, doctests, and rustdoc; dependency, license, advisory, and manifest hygiene; the Makefile
+contract and CI entry point; and explicit, reviewable exception handling. Architecture rules that no mechanism
 can decide are review responsibilities rather than gates. The policy complements, and does not replace, [Test-Driven
 Delivery and Verification](10-test-driven-delivery-and-verification.md): numeric coverage never replaces contract,
 architecture, failure-path, or outcome tests.
@@ -24,12 +24,13 @@ architecture, failure-path, or outcome tests.
   `ci-coverage-default` and `ci-deps` on Linux, and `ci-test` on Windows. Linux test execution belongs to
   `ci-coverage-default`, which runs the same instrumented suite `make test` would, so no separate Linux test job
   duplicates it. Branch protection requires the four resulting status checks.
-- CI installs exact tool releases through checksum-verified actions, scopes tools per job, uses `rust-cache`, the mold
+- CI installs exact tool releases through checksum-verified actions, installs per job only the tools that job runs,
+  uses `rust-cache`, the mold
   linker on Linux jobs whose flags request it, the MinGW cross compiler for the Windows-target lint, and sccache for
   coverage builds.
 - The `cache-cleanup` workflow prunes every non-`main` Actions cache and every `main` cache older than seven days after
   each merge and on a weekly schedule, so the shared rust-cache/sccache space cannot fill and start failing new writes.
-- The opt-in `real-api-e2e` workflow supports the gate without ever being part of it.
+- The opt-in live-provider run is a local target, `make e2e-real-api`, and never part of the gate.
 - The gates never install tools, update the lockfile, or resolve dependencies differently from the committed state.
 
 `make help` is the contract for the supported targets, their dependencies, and their mutation status. The principal
@@ -41,8 +42,9 @@ opt-in `e2e-real-api`.
 
 - `make bootstrap-tools` is the sole installer for external quality tools; it is explicitly mutating and networked, and
   it installs only exact pinned versions.
-- `make tools-check` validates the pinned Rust version, required components, and external tool availability with exact
-  versions; it is non-mutating and CI scopes it per job through `check_tools.py --scope`.
+- `make tools-check` validates the pinned Rust version, the pinned components, and every pinned tool at its exact
+  version; it is non-mutating. Each gate validates the subset it runs by passing its pins to `check_tools.py`
+  (`--component`, `--tool`), so a gate fails on a missing tool it needs and never on one it does not.
 - Pinned versions and invocation policy live in `quality/tools.toml`; the toolchain is pinned by `rust-toolchain.toml`;
   the lockfile is committed and gates run with `--locked`. A missing or mismatched tool is a typed quality-gate failure,
   never an implicit install.
@@ -92,39 +94,30 @@ opt-in `e2e-real-api`.
 ## Coverage policy
 
 Coverage is a blocking guardrail from the moment a crate contains production code; there is no grace baseline and no
-gradual ramp. Every collected crate gets one line-only `cargo llvm-cov` pass under the workspace's single feature
-configuration, and its own report must reach its tier floor; the workspace aggregate report is informational and never
-a threshold authority.
+gradual ramp. `make coverage` runs the instrumented workspace suite once, then asks `cargo llvm-cov report --package`
+for each measured crate's line coverage and lets `--fail-under-lines` fail the gate below its floor. The workspace
+aggregate report is written as a CI artifact and is informational: it is never a threshold authority.
 
-`quality/coverage.toml` declares the numeric ladder and assigns every crate:
+`COVERAGE_FLOORS` in the root `Makefile` is the whole policy — one `crate=floor` pair per measured crate:
 
-| Tier | Minimum line coverage | Crates |
-| --- | ---: | --- |
-| `core` | 75% | `intention-transport`, `intention-storage`, `intention-engine` |
-| `standard` | 60% | `intention-tools`, `intention-config`, `intention-daemon`, `intention-providers` |
-| `edge` | 20% | `intention-tui`, `intention-client` |
-| `exempt` | 0% (not collected) | `intention-proto`, `intention-test-support` |
+| Floor | Crates |
+| ---: | --- |
+| 75% | `intention-transport`, `intention-storage`, `intention-engine` |
+| 60% | `intention-tools`, `intention-config`, `intention-daemon`, `intention-providers` |
+| 20% | `intention-tui`, `intention-client` |
 
-- Every workspace crate Cargo declares with a test-executing target carries a tier: the runner reads the locked Cargo
-  metadata snapshot and fails on an untiered crate before it collects anything, so a crate cannot enter the workspace
-  outside the coverage policy.
-- A coverage decrease below a crate's tier floor fails `make coverage` and `make verify`.
-- Generated code and technically unmeasurable code may be excluded only through a versioned policy entry with
-  rationale, owner, and equivalent test evidence, and exclusions cannot hide core runtime, policy, provider
-  translation, persistence, redaction, or security logic. Coverage reports are stored as CI artifacts, and test code
-  must not inflate the production denominator.
-- The one enabled exclusion is `intention-daemon/src/main.rs`: a thin process adapter whose real-binary bootstrap
-  fixtures are accepted as equivalent evidence, while all daemon library behavior stays under the `standard` floor.
-- `quality/run_coverage.py` makes one line-only pass per collected crate under the workspace's single feature
-  configuration (`--all-features`, which enables the daemon's non-production `test-support` feature); `intention-daemon`
-  and `intention-tools` run through `cargo test` so their library harnesses merge. Test executability comes from the
-  Cargo metadata snapshot the runner already writes, not from a source-text marker, so a crate whose only tests use an
-  async test attribute is collected like any other. A collected crate is skipped only when Cargo declares no
-  test-executing target for it and the crate is listed in `quality/coverage.toml` under `[policy].unexecutable_crates`;
-  an undeclared skip, a stale declaration, or a collected crate absent from the snapshot fails the run.
-- The tool contract families' move into the exempt `intention-proto` is a coverage-position change, not a policy change:
-  `quality/coverage.toml` keeps its tiers, floors, and exclusions, and the moved families' cases are carried by
-  `intention-proto`'s declared `contracts`, `m3_contracts`, and `protocol_contracts` targets.
+- A coverage decrease below a crate's floor fails `make coverage` and `make verify`.
+- The floors are a guardrail over the crates that carry production logic, not a registry every crate must be entered
+  into. A crate absent from `COVERAGE_FLOORS` is not measured; adding one to the list is how a new crate becomes
+  measured, and the crate map entry ([01 Workspace and Crate Map](01-workspace-and-crate-map.md)) states its
+  responsibility and test targets in the same change.
+- There is no exclusion mechanism. `intention-daemon`'s `main.rs` is a thin process adapter whose lines sit inside the
+  daemon's own 60% floor rather than being subtracted from it, so no crate needs a carve-out and none exists.
+- One line-only `cargo llvm-cov` run covers the workspace under its single feature configuration (`--all-features`,
+  which enables the daemon's non-production `test-support` feature), and every measured crate's report comes from that
+  one run. Coverage reports are stored as CI artifacts.
+- `intention-proto` and `intention-test-support` carry no floor: the first is types and contract fixtures, the second is
+  the non-production fixture crate, and neither carries product logic that a line floor would protect.
 
 ## Cargo feature policy
 
@@ -148,15 +141,22 @@ the compile and test contracts are already covered.
 
 ## Supply-chain and dependency hygiene
 
-`make deps` and blocking CI run `cargo metadata --locked` as the authoritative lockfile check; `make notices-check`,
-which regenerates `THIRD_PARTY_NOTICES.md` from `Cargo.lock`, `quality/about.toml`, and the notice template through
-pinned `cargo-about` and compares it byte for byte, falling back to comparing which license every crate reference is
-rendered under when the bytes differ only because the local registry cache grouped or attributed identical license texts
-differently, so the check does not depend on which machine ran it while a changed graph, version, or license name still
-fails; `cargo deny check` for advisories, licenses, banned crates, allowed sources,
-and duplicate-version policy, using the policy expression in `deny.toml`; `cargo audit` as an independent advisory
-source; `cargo machete` for manifest hygiene; and `cargo outdated` for stale
-direct dependencies under the policy in `quality/outdated.toml`.
+`make deps` and blocking CI run `cargo metadata --locked` as the authoritative lockfile check; `cargo deny check` for
+advisories, licenses, banned crates, allowed sources, and duplicate-version policy, using the policy expression in
+`deny.toml`; `cargo machete` for manifest hygiene; and `make notices-check`, which regenerates `THIRD_PARTY_NOTICES.md`
+from `Cargo.lock`, `quality/about.toml`, and the notice template through pinned `cargo-about` and compares it byte for
+byte, falling back to comparing which license every crate reference is rendered under when the bytes differ only
+because the local registry cache grouped or attributed identical license texts differently, so the check does not
+depend on which machine ran it while a changed graph, version, or license name still fails.
+
+`cargo deny` is the single advisory and license authority: it reads the RustSec database and the `deny.toml` policy,
+which is what a separate `cargo audit` pass would re-read. Stale direct dependencies are not a gate either: a
+dependency releasing a patch would fail the build without any change to this repository, so freshness is dependabot's
+work rather than a blocking check.
+
+That `deny.toml`'s `advisories.ignore` set is exactly the five reviewed `rust-unic` entries is a review
+responsibility, not a gate: `cargo deny` reads the file as written, so a newly added entry passes silently. Adding one
+is a decision to review, and the accompanying `reason` is what makes it reviewable.
 
 `THIRD_PARTY_NOTICES.md` is a checked-in generated disclosure artifact, not a hand-maintained license inventory; private
 `publish = false` workspace packages stay project-owned code and are excluded. A failed or stale notice generation is a
@@ -183,63 +183,22 @@ input or output is not a terminal, and never run at all when the terminal export
 locked as the backend and event source of `revue 3.10.0`, and `toml` was already locked through the same graph, so the
 declared set changed without a new package, license, or advisory entering it.
 
-## Required quality-gate failure tests
-
-Controlled probes and the native failures of the manifests, rustc, Clippy, and the runners prove that the quality system
-fails correctly.
-
-| Intentional defect | Gate that fails |
-| --- | --- |
-| Formatting drift | `make fmt-check`. |
-| Compiler or Clippy warning | `make lint`. |
-| Windows-only code that fails Clippy or the Windows-target build | `make lint-windows`. |
-| Unreasoned or broad lint suppression | `make lint`. |
-| Missing/mismatched pinned tool | `make tools-check`. |
-| Missing, stale, or hand-edited third-party notices | `make notices-check` and `make deps`. |
-| Forbidden crate dependency, provider-SDK leak, or a composition-only implementation outside the composition root | `cargo metadata` and rustc: the offending crate fails to compile. |
-| Untyped JSON in a production public contract | `make lint` (the `clippy.toml` `disallowed-types` ban). |
-| Direct process working-directory access | `make lint` (the `clippy.toml` `disallowed-methods` ban). |
-| Unfulfilled or unreasoned lint suppression | `make lint`. |
-| DTO/SDK implementation leak in a public signature | `make lint` and review. |
-| Workspace crate with a test-executing target and no coverage tier | `make coverage`. |
-| Coverage below a crate's tier floor | `make coverage`. |
-| Undeclared or stale coverage skip declaration | `make coverage`. |
-| Unapproved coverage exclusion metadata | `make coverage`. |
-| Rustdoc warning or broken intra-doc link | `make doc`. |
-| Broken documentation example | `make doctest`, also part of `make test`. |
-| Dependency advisory/license/source/ban/duplicate violation | `make deps`. |
-| Stale or manifest-only dependency | `make deps`. |
-| Recognizable fake secret in output fixture | `make test` and `make verify`. |
-
 ## Test-first integration
 
-Every production boundary is activated with its crate-map entry, its declared test targets, and its coverage tier
+Every production boundary is activated with its crate-map entry, its declared test targets, and its coverage floor
 updated in the same change, together with outcome evidence. A focused test suite is not a substitute for the full gates.
 
 ## Opt-in live-provider e2e
 
-The manual `real-api-e2e` workflow and `make e2e-real-api` run the ignored `real_api_e2e` daemon integration test against
-a real provider API, taking the credential only from the repository secret `REAL_API_E2E_PROVIDER_KEY`; the mode is
+The manual `make e2e-real-api` target runs the ignored `real_api_e2e` daemon integration test against
+a real provider API, taking the credential only from `INTENTION_REAL_API_KEY` in the environment or a local gitignored
+`.env`; the mode is
 mutating, networked, and opt-in, and it is never part of the blocking gate. The obligation itself is owned by
 [Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md), scenario J.
 
-## Slice 1.5 quality evidence
-
-Slice 1.5 (the current-state core) changes the evidence base without lowering it:
-
-- the storage contract suite is rebuilt for the seven-table current-state schema and the one-transaction rule, and the
-  event/snapshot/replay contract blocks are deleted with their surfaces;
-- the engine tests cover commit-and-publish without events or replays, and tool tests cover one transaction per call and
-  the pre-effect identity rejection;
-- protocol contract fixtures cover the reduced current-state surface (current-state session snapshots and
-  `SessionFrameDto` notifications, no cursors or resync);
-- deleted-surface tests are deleted without replacement; per-crate coverage tiers in `quality/coverage.toml` stay as
-  declared, and a merged crate inherits the strictest source floor;
-- `intention-tui`'s declared `edge` floor is enforced again: the runner decides executability from Cargo metadata, so
-  the crate's async contract suite is collected instead of skipped, and no collected crate can be skipped without a
-  policy declaration.
-
 ## Non-goals
 
-An aggregate coverage threshold; per-file coverage bars; denying all `pedantic` or all `restriction` lints; a second
-quality toolset or Makefile surface; hidden installs inside the gates; weakening a gate to make a change pass.
+An aggregate coverage threshold; per-file coverage bars; a coverage exclusion mechanism; a central registry every crate
+must be entered into; a policy checker that re-asserts what a pinned tool already enforces; denying all `pedantic` or all
+`restriction` lints; a second quality toolset or Makefile surface; hidden installs inside the gates; weakening a gate to
+make a change pass.
