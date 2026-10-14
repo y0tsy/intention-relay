@@ -13,7 +13,7 @@ the root `Cargo.toml`.
 
 ## License index
 
-- [Apache License 2.0](#Apache-2.0), used by 137 dependency entries
+- [Apache License 2.0](#Apache-2.0), used by 133 dependency entries
 - [MIT License](#MIT), used by 57 dependency entries
 - [Unicode License v3](#Unicode-3.0), used by 23 dependency entries
 - [ISC License](#ISC), used by 5 dependency entries
@@ -288,11 +288,7 @@ PERFORMANCE OF THIS SOFTWARE.
 #### Used by
 
 - [windows-link 0.2.1](https://github.com/microsoft/windows-rs)
-- [windows-sys 0.52.0](https://github.com/microsoft/windows-rs)
 - [windows-sys 0.61.2](https://github.com/microsoft/windows-rs)
-- [windows-targets 0.52.6](https://github.com/microsoft/windows-rs)
-- [windows_x86_64_gnu 0.52.6](https://github.com/microsoft/windows-rs)
-- [windows_x86_64_msvc 0.52.6](https://github.com/microsoft/windows-rs)
 
 ```text
                                  Apache License
@@ -5493,7 +5489,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 - [tokio-stream 0.1.19](https://github.com/tokio-rs/tokio)
 - [tokio-util 0.7.19](https://github.com/tokio-rs/tokio)
-- [tokio 1.53.2](https://github.com/tokio-rs/tokio)
+- [tokio 1.53.3](https://github.com/tokio-rs/tokio)
 
 ```text
 MIT License
