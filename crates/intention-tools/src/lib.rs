@@ -130,8 +130,15 @@ mod timeout_tests {
         let child = command.spawn().expect("spawn descendant fixture");
         let started = Instant::now();
         // No declared timeout: the only bound is the post-exit collection
-        // window, which a descendant holding the pipes cannot extend.
-        let result = bounded_output_with_timeout(child, CancellationSignal::new(), None);
+        // window, which a descendant holding the pipes cannot extend. The test
+        // passes a short window so it exercises that bound instead of waiting
+        // out the production grace; the window's behavior is identical.
+        let result = bounded_output_with_grace(
+            child,
+            CancellationSignal::new(),
+            None,
+            Duration::from_millis(100),
+        );
         assert!(matches!(
             result,
             Err(ExecuteFailure::Interrupted {
@@ -140,7 +147,7 @@ mod timeout_tests {
             })
         ));
         assert!(
-            started.elapsed() < Duration::from_secs(20),
+            started.elapsed() < Duration::from_secs(2),
             "a descendant holding the pipes open must not extend the collection"
         );
         // The process-group termination must also kill the background
@@ -466,9 +473,23 @@ fn deadline_cause(
 }
 
 fn bounded_output_with_timeout(
+    child: Child,
+    cancellation: CancellationSignal,
+    timeout: Option<ToolTimeoutSecondsDto>,
+) -> Result<BoundedOutput, ExecuteFailure> {
+    bounded_output_with_grace(child, cancellation, timeout, READER_DRAIN_GRACE)
+}
+
+/// Bounds one call with an explicit drain window.
+///
+/// The window is a parameter so a test can exercise the window itself without
+/// waiting out the production grace; every production call passes
+/// [`READER_DRAIN_GRACE`].
+fn bounded_output_with_grace(
     mut child: Child,
     cancellation: CancellationSignal,
     timeout: Option<ToolTimeoutSecondsDto>,
+    grace: Duration,
 ) -> Result<BoundedOutput, ExecuteFailure> {
     let child_id = child.id();
     let progress = Arc::new(ReaderProgress::default());
@@ -521,7 +542,7 @@ fn bounded_output_with_timeout(
             // joining the killed readers instead of bailing on the signal, so
             // their captured output survives as the partial result whenever
             // the pipes were collected.
-            let _ = pipes.collect(READER_DRAIN_GRACE, None);
+            let _ = pipes.collect(grace, None);
             return Err(ExecuteFailure::Interrupted {
                 cause,
                 partial: pipes.partial(),
@@ -535,13 +556,13 @@ fn bounded_output_with_timeout(
                 // descendant, and a descendant must never extend the call. A
                 // window that runs out stops the process group and keeps
                 // whatever the readers already captured.
-                match pipes.collect(READER_DRAIN_GRACE, Some(&cancellation)) {
+                match pipes.collect(grace, Some(&cancellation)) {
                     PipeDrain::Complete => return pipes.into_bounded_output(status),
                     PipeDrain::Stalled => {
                         let cause = interruption_cause(&cancellation);
                         terminate_process_tree(&mut child, child_id);
                         let _ = child.wait();
-                        let _ = pipes.collect(READER_DRAIN_GRACE, None);
+                        let _ = pipes.collect(grace, None);
                         return Err(ExecuteFailure::Interrupted {
                             cause,
                             partial: pipes.partial(),
@@ -554,7 +575,7 @@ fn bounded_output_with_timeout(
                 let cause = interruption_cause(&cancellation);
                 terminate_process_tree(&mut child, child_id);
                 let _ = child.wait();
-                let _ = pipes.collect(READER_DRAIN_GRACE, None);
+                let _ = pipes.collect(grace, None);
                 return Err(ExecuteFailure::Interrupted {
                     cause,
                     partial: pipes.partial(),
