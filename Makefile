@@ -19,7 +19,8 @@ COVERAGE_FLOORS = intention-transport=75 intention-storage=75 intention-engine=7
                   intention-tui=20 intention-client=20
 
 # The components and tools each gate runs, so a gate validates exactly the
-# pinned set it uses. `tools-check` without arguments validates the union.
+# pinned set it uses. Every gate also validates the pinned toolchain, and a gate
+# with no pins of its own needs nothing beyond it.
 LINT_PINS = --component rustfmt --component clippy
 TEST_PINS = --tool cargo-nextest
 COVERAGE_PINS = --component llvm-tools-preview --tool cargo-nextest --tool cargo-llvm-cov
@@ -70,10 +71,11 @@ test: ## Run nextest and doctests.
 	$(TIMED) $(CARGO) test --workspace --doc --locked --all-features
 
 doctest: ## Run the workspace documentation tests.
-	$(PYTHON) quality/check_tools.py $(TEST_PINS)
+	$(PYTHON) quality/check_tools.py
 	$(TIMED) $(CARGO) test --workspace --doc --locked --all-features
 
 doc: ## Verify Rust documentation without warnings.
+	$(PYTHON) quality/check_tools.py
 	RUSTDOCFLAGS="-D warnings" $(TIMED) $(CARGO) doc --workspace --no-deps --locked --all-features
 
 coverage: ## Collect one instrumented workspace run and enforce the per-crate line floors.
@@ -83,6 +85,7 @@ coverage: ## Collect one instrumented workspace run and enforce the per-crate li
 	  crate="$${entry%%=*}"; floor="$${entry##*=}"; \
 	  $(CARGO) llvm-cov report --package "$$crate" --fail-under-lines "$$floor"; \
 	done
+	mkdir -p quality/reports
 	$(CARGO) llvm-cov report --json --summary-only --output-path quality/reports/coverage-workspace.json
 
 coverage-default: coverage ## Alias for the single-pass coverage gate.
