@@ -3075,7 +3075,7 @@ limitations under the License.
 - [rustc_version 0.4.1](https://github.com/djc/rustc-version-rs)
 - [rustix 1.1.5](https://github.com/bytecodealliance/rustix)
 - [rustls-native-certs 0.8.4](https://github.com/rustls/rustls-native-certs)
-- [rustls 0.23.45](https://github.com/rustls/rustls)
+- [rustls 0.23.46](https://github.com/rustls/rustls)
 - [scopeguard 1.2.0](https://github.com/bluss/scopeguard)
 - [signal-hook-mio 0.2.5](https://github.com/vorner/signal-hook)
 - [signal-hook-registry 1.4.8](https://github.com/vorner/signal-hook)
