@@ -183,8 +183,9 @@ fallbacks went with the client's own closed-stream classification and its typed 
 `crates/intention-tui/src/headless.rs:343-347`, `:163-169`, and `:618-626` at base `99973a8`.
 -  **Slice 6 — UI foundation — last slice; not activated.** Session branching and regeneration, reasoning/catalog
 delivery, and adapter boundaries (architectures 23/22 plus architecture 03's flat activity journal and notification
-list): `session_fork_v1` and the ordinary same-session regeneration run start bound to the parent `RunId` it
-regenerates; normalized reasoning delivery; and the exact typed client/protocol surface M6 consumes. It also carries
+list): the fork, preview, branch-level, rename, archive, and restore DTOs plus the ordinary same-session regeneration
+run start bound to the parent `RunId` it regenerates; normalized reasoning delivery; and the exact typed
+client/protocol surface M6 consumes. It also carries
 the optional implementation handoff after plan approval, which creates an independent Session from a frozen safe
 context, materializes the frozen instruction text into its frozen records, and may start a fresh Build Autopilot run
 (architecture 23);

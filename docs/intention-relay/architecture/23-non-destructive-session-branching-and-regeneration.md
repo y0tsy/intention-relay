@@ -89,13 +89,13 @@ repositories, remote systems, or effects. A fork never clones or rolls back mach
 Future storage adds fork-owned records for conversation trees, child lineage, base snapshots, and fork operations under
 the one-transaction state-change law of [architecture 04](04-sessions-runs-events-and-storage.md).
 
-One transaction validates the source head and the accepted preview binding, then commits the child projection, lineage,
+One transaction validates the source head, then commits the child projection, lineage,
 base snapshot, optional anchor, and idempotency result; no external action occurs inside it.
 
 No synthetic fork provenance record is allowed.
 
 Equal operation identity and command semantics return the same child without new records. Changed reuse, stale source
-state, preview mismatch, ineligible boundary, unavailable history, unsupported snapshot, or unavailable reference fails
+state, ineligible boundary, unavailable history, unsupported snapshot, or unavailable reference fails
 closed before a side effect. A failed transaction leaves no partial child, lineage, base snapshot, or operation
 binding.
 
@@ -107,14 +107,14 @@ Archive requires an idle session; archived sources remain readable and forkable.
 Session lineage is ordinary-session structure only; it never constrains run admission or child creation. A fork carries
 no depth, descendant-count, source-boundary rate, or base-snapshot size limit
 ([architecture 09](09-configuration-security-and-observability.md), [architecture
-15](15-tool-registry-and-model-tool-loop.md)). Title and page bounds remain intrinsic
-representation/protocol constraints where their owning field table requires them.
+15](15-tool-registry-and-model-tool-loop.md)). The title bound remains an intrinsic
+representation constraint where its owning field table requires it.
 
-The typed fork preview, fork, tree page, rename, archive, and restore DTOs, plus the ordinary regeneration run start
+The typed fork preview, fork, branch-level, rename, archive, and restore DTOs, plus the ordinary regeneration run start
 carrying the parent `RunId` it regenerates (the concrete field lands with the activating specification), are exposed as
 ordinary typed requests over the single local connection; the former `session_fork_v1` negotiated family and its
 capability gate were removed under [architecture 03](03-daemon-transport-and-adapters.md). Tree reads are bounded
-immediate-child projections with stable continuation order. They are not tree-wide event streams. A peer that does not
+immediate-child projections in stable creation order. They are not tree-wide event streams. A peer that does not
 speak the live wire fails closed with the typed `stale_daemon_protocol` error before any request is served.
 
 ## Detailed protocol DTOs, field tables, and bounds
@@ -126,9 +126,8 @@ ForkSessionCommandDto
 ForkSessionResultDto
 GetForkPreviewQueryDto
 ForkPreviewDto
-StartForkRunCommandDto
 GetConversationTreeQueryDto
-ConversationTreePageDto
+ConversationTreeLevelDto
 ConversationBranchSummaryDto
 RenameSessionCommandDto
 ArchiveSessionCommandDto
@@ -136,7 +135,7 @@ RestoreSessionCommandDto
 ```
 
 `ForkSessionCommandDto` contains source session identity, the typed boundary, `ForkOperationId`, expected source
-sequence, the expected preview binding, and an optional validated title. It
+sequence, and an optional validated title. It
 never accepts a client-selected child ID, raw snapshot, raw event, configuration path, credential, workspace path, or
 opaque implementation value. `ForkSessionResultDto` is bounded and returns child and tree identities, immediate parent,
 accepted boundary, optional child-anchor `TurnId`, snapshot and context schema versions, inherited future defaults, and
@@ -144,13 +143,12 @@ the closed `unverified` workspace notice; it does not return the base snapshot i
 
 `GetForkPreviewQueryDto` takes only a source session and a candidate typed boundary. `ForkPreviewDto` returns a fresh
 source sequence, accepted boundary data, safe inherited future defaults, the deterministic fallback title, counts and
-safe types of retained terminal references, and the closed `unverified` workspace state. The client must bind its command to the exact preview it accepted; it must not
-manufacture a preview binding locally.
+safe types of what the child inherits, and the closed `unverified` workspace state. It carries no materialized
+instruction text, no materialized model messages, and no stored copy of the reference lists: the counts summarize them,
+and the source session keeps them.
 
-`StartForkRunCommandDto` names the child session, the immutable anchor turn, and a separate operation ID. It is valid
-only for a non-archived child created from a user-turn boundary whose anchor has not already started a fork run. It uses
-the anchor already included in the frozen context, resolves one immutable current run selection under the normal
-admission rules, and starts no duplicate user message. Its failure leaves the idle child visible.
+A fork child begins idle and owns no run-start path of its own: every child run starts from an ordinary user turn under
+the normal admission rules, with the frozen context already in place as the child's own history.
 
 `RenameSessionCommandDto`, `ArchiveSessionCommandDto`, and `RestoreSessionCommandDto` each carry a session ID, expected
 ordinary session sequence, and a globally stable `SessionPresentationOperationId`; rename also carries a
@@ -159,12 +157,10 @@ fails `session_presentation_operation_conflict`; a stale sequence fails `session
 observes its requested presentation state succeeds with `changed = false` and appends no event. Archive still performs
 its mandatory idle check before either outcome.
 
-`GetConversationTreeQueryDto` contains a `ConversationTreeId`, optional parent `SessionId`, optional opaque continuation
-token, and a requested page size from 1 through 64. It returns the root summary, at most 64 immediate child summaries,
-`has_more`, and an opaque continuation after the final `(created_at, child_session_id)` sort key. A tree is
-intentionally live between pages: new, renamed, archived, restored, or otherwise changed branches may appear on later
-pages, and a continuation never promises a revision-consistent tree snapshot. A token with another tree, another parent,
-malformed contents, or an oversized page fails closed with `invalid_conversation_tree_page`.
+`GetConversationTreeQueryDto` contains a `ConversationTreeId` and an optional parent `SessionId`. It returns the
+requested parent's immediate child summaries in stable creation order; asking without a parent returns the root
+summary. A tree is intentionally live between reads: new, renamed, archived, restored, or otherwise changed branches
+appear in the next read, and no read promises a revision-consistent tree snapshot.
 
 `ConversationBranchSummaryDto` exposes only branch identity, immediate parent, creation ordering data, safe title or
 stable fallback, archive state, mode, fork point, and `unverified` workspace state.
@@ -185,25 +181,19 @@ length encoding, canonicalization-version byte, and SHA-256 digest construction 
 00](00-principles-and-scope.md)) each record keeps exactly one live shape.
 
 - `fork-base-snapshot`: `1 schema_version`, `2 context_schema_version`, `3 source_session_id`,
-`4 conversation_tree_id`, `5 boundary`, `6 source_boundary_sequence`, `7 source_run_cursors`, `8
-effective_instruction_text`, `9 materialized_model_messages`, `10 inherited_future_defaults`, `11
-historical_config_policy_references`, `12 safe_usage_provenance`, `13
-terminal_tool_result_references`, `14 policy_decision_references`, `15 terminal_child_result_references`, `16
-workspace_state`.
+`4 conversation_tree_id`, `5 boundary`, `6 source_boundary_sequence`, `7 effective_instruction_text`, `8
+materialized_model_messages`, `9 inherited_future_defaults`, `10 workspace_state`.
 - `fork-preview`: `1 preview_schema_version`, `2 source_session_id`, `3 conversation_tree_id`, `4 boundary`,
-`5 source_head_sequence`, `6 materialized_effective_instruction_text`, `7 materialized_model_messages`, `8
-inherited_future_defaults`, `9 historical_config_policy_references`, `10 safe_usage_provenance`, `11
-terminal_tool_result_references`, `12 policy_decision_references`, `13
-terminal_child_result_references`, `14 workspace_state`. Field 6 is the selected boundary sequence, not the current
-source head observed during the fork operation.
-- `fork-command`: `1 source_session_id`, `2 boundary`, `3 expected_source_sequence`, `4 expected_preview_binding`,
-`5 title_present`, `6 requested_title`.
+`5 source_head_sequence`, `6 inherited_future_defaults`, `7 workspace_state`, `8 inherited_reference_counts`. Field 5 is
+the selected boundary sequence, not the current source head observed during the fork operation; field 8 carries the
+counts and safe types of what the child inherits, read from the source records rather than stored in the preview.
+- `fork-command`: `1 source_session_id`, `2 boundary`, `3 expected_source_sequence`, `4 title_present`,
+`5 requested_title`.
 
 The former `canonical_snapshot_digest`, `model_context_digest`, and `fork-command` digest construction are removed with
-the codec ([architecture 02](02-dto-and-contract-policy.md)). A command binds to the exact source state the
-client accepted through `expected_source_sequence` and `expected_preview_binding`; a later activating specification may
-define a canonical binding for the preview together with its first real consumer under the RFC 8785 policy
-([architecture 02](02-dto-and-contract-policy.md)), and no canonical digest is part of the current contract.
+the codec ([architecture 02](02-dto-and-contract-policy.md)). A command binds to the exact source state the client
+accepted through `expected_source_sequence`, which the fork transaction validates; no canonical digest and no preview
+binding are part of the current contract.
 
 `effective_instruction_text` and `materialized_effective_instruction_text` carry the frozen instruction text of
 [architecture 30](30-instruction-sources-and-system-context.md), materialized
@@ -213,18 +203,17 @@ current project instructions, or current session state.
 
 ### Fixed bounds and audit taxonomy
 
-The fork's representation bounds — the 64-summary tree page and the 128-NFC-scalar session title — are the
-conversation-tree row of the limits registry in
-[architecture 09](09-configuration-security-and-observability.md), where every numeric bound in the system is recorded
-with its classification and reason. They are enforced inside the fork transaction before any partial child record
-exists, and a parameter failure is a typed policy result rather than an oversized transport frame, partial branch, or
-unstructured storage error: the page rejects a size outside 1..=64 with `invalid_conversation_tree_page`, and an
-out-of-bound title is rejected before the presentation event.
+The fork's representation bound — the 128-NFC-scalar session title — is the conversation-tree row of the limits registry
+in [architecture 09](09-configuration-security-and-observability.md), where every numeric bound in the system is recorded
+with its classification and reason. It is enforced inside the fork transaction before any partial child record exists,
+and an out-of-bound title is a typed policy result rejected before the presentation event, never an oversized transport
+frame, partial branch, or unstructured storage error.
 
-The conversation tree has no depth, descendant-count, or source-boundary rate limit, and a base snapshot has no
-canonical size limit ([architecture 09](09-configuration-security-and-observability.md), [architecture
-15](15-tool-registry-and-model-tool-loop.md)): a fork is bounded
-only by the page and title representation bounds above. Boundaries, base snapshots, lineage, and idempotency records
+The conversation tree has no depth, descendant-count, or branch-count bound, and a base snapshot has no canonical size
+limit ([architecture 09](09-configuration-security-and-observability.md), [architecture
+15](15-tool-registry-and-model-tool-loop.md)): a fork and a tree read are bounded
+only by the title representation bound above, and a read whose branch list exceeds the transport envelope is answered
+with the typed `local_protocol_message_too_large` failure. Boundaries, base snapshots, lineage, and idempotency records
 remain indefinitely readable under the initial archive-only retention policy.
 
 Fork provenance is stored as committed records: fork, anchor materialization, rename, archive, and restore each commit
@@ -245,12 +234,10 @@ fork_snapshot_unsupported
 fork_reference_unavailable
 fork_operation_conflict
 fork_source_changed
-fork_preview_mismatch
 fork_boundary_ineligible
 session_archive_not_idle
 session_presentation_operation_conflict
 session_changed
-invalid_conversation_tree_page
 ```
 
 They disclose no credential, path, source content, raw provider data, or implementation resource.

@@ -70,22 +70,22 @@ GoalStatusDto
 
 A Goal holds exactly one status. `Active` is the only status that admits a new goal-directed run; `Done` and `Stopped`
 are terminal for new runs. `accepted` is an independent boolean recording explicit user acceptance of the exact active
-revision's evidenced outcome, and a new active revision resets it. Stop prevents new ordinary and verification runs,
+revision's evidenced outcome, and a new active revision resets it. Stop prevents new runs,
 interrupts active runs under the cooperative signal, and commits a bounded `Partial` result with its notice for a
 started external effect that cannot be proven terminal.
 
 ## Leading-goal run selection and durable transactions
 
 A run is ordinary (no leading Goal) or goal-directed (exactly one leading Goal), never multiple coequal Goals after
-admission. A verification run has that one Goal with kind `VerificationOnly`; it may attach verification evidence but
-cannot alter Goal, Skill, role, or connection state.
+admission. Verification evidence attaches to the leading Goal revision it attests, and the run that collects it is an
+ordinary goal-directed run: no run kind exists for verification.
 
 A run's immutable selection is a typed serde JSON record rather than one canonical execution-meaning envelope; the
 former `run-execution-meaning-v4` carrier was removed with the canonical codec under [architecture
 02](02-dto-and-contract-policy.md). The applicable record is `GoalRunSelectionV1`; its absence means the run is ordinary,
 and historical M4 records gain nothing.
 
-`GoalRunSelectionV1` contains the leading `GoalId`, its exact revision, the session-link provenance, run kind, the
+`GoalRunSelectionV1` contains the leading `GoalId`, its exact revision, the session-link provenance, the
 target-snapshot reference, immutable bounds, and the one frozen `SkillSelectionV1` defined by [architecture
 21](21-goals-skills-context-memory-and-compaction.md). It holds no full Skill/role/summary,
 credential, provider value, current machine state, raw transcript, process resource, or handle.
@@ -104,7 +104,7 @@ loop.
 Verification evidence is one exact durable reference — a terminal run result or an accepted user declaration —
 validated against the exact goal revision it attests. There is no gate DTO, no template, no `ExecutableGate`, no
 create/edit/archive/restore surface, and no template proposal. Evidence is collected in the terminal verification
-phase of an ordinary leading-goal run or by a separately user-admitted `VerificationOnly` run; failure, timeout,
+phase of an ordinary leading-goal run, or recorded by the accepted user declaration itself; failure, timeout,
 cancellation, interruption, an output bound, a missing reference, or a stale revision are known typed outcomes, there
 is no hidden retry, retries occur only before the first irreversible durable fact, and a started external action is
 never repeated.
