@@ -28,6 +28,21 @@ DEPS_PINS = --tool cargo-deny --tool cargo-machete
 NOTICES_PINS = --tool cargo-about
 ALL_PINS = $(LINT_PINS) $(COVERAGE_PINS) $(DEPS_PINS) $(NOTICES_PINS)
 
+# The suites whose outcome can differ on Windows: the crates that cross a
+# platform boundary. `intention-transport` is the named-pipe/Unix-socket split,
+# `intention-tools` is the only crate that calls the Windows process API
+# (`intention-tools/src/shell.rs`), `intention-test-support` spawns daemon
+# processes per platform, and `intention-client`, `intention-config`, and
+# `intention-proto` resolve `APPDATA`/`LOCALAPPDATA`/`XDG_*` and validate
+# native absolute paths. `intention-daemon`'s `client_e2e` binary is the
+# cross-process proof that a real daemon serves over that transport.
+#
+# `intention-storage`'s SQLite contracts, `intention-providers`,
+# `intention-engine`, `intention-tui`, and the daemon's other suites assert
+# logic no platform boundary reaches, so the Linux coverage job verifies them
+# once; `lint-windows` still compiles every Windows code path.
+PLATFORM_TESTS = package(intention-transport) + package(intention-tools) + package(intention-test-support) + package(intention-client) + package(intention-config) + package(intention-proto) + (package(intention-daemon) and binary(client_e2e))
+
 .PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check lint lint-windows test doctest doc coverage coverage-default coverage-artifacts-clean deps e2e-real-api quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps
 
 help: ## List supported M0 targets and mutation behavior.
@@ -80,6 +95,8 @@ doc: ## Verify Rust documentation without warnings.
 
 coverage: ## Collect one instrumented workspace run and enforce the per-crate line floors.
 	$(PYTHON) quality/check_tools.py $(COVERAGE_PINS)
+	# `--no-report` runs the instrumented suite and keeps its build tree, so a
+	# later run reuses the instrumented artifacts instead of rebuilding them.
 	$(TIMED) $(CARGO) llvm-cov --no-report --workspace --all-targets --locked --all-features nextest
 	mkdir -p quality/reports
 	$(TIMED) $(CARGO) llvm-cov report --json --summary-only --output-path quality/reports/coverage-workspace.json
@@ -140,7 +157,7 @@ check: tools-check fmt-check lint test doc ## Complete non-mutating source-quali
 	@true
 
 verify: check coverage deps ## Full reproducible merge and release gate.
-	$(MAKE) coverage-artifacts-clean
+	@true
 
 ci: verify ## CI alias for one local full gate. GitHub Actions invokes the per-job aliases below in parallel matrix jobs.
 	@true
@@ -148,10 +165,12 @@ ci: verify ## CI alias for one local full gate. GitHub Actions invokes the per-j
 ci-lint-arch: fmt-check lint lint-windows doctest doc ## CI lint job: formatting, native and Windows-target lint, doctests, rustdoc.
 	@true
 
-ci-test: test ## CI test job: nextest and doctests.
-	@true
+ci-test: ## CI test job: the platform-dependent suite on Windows, plus the doctests.
+	$(PYTHON) quality/check_tools.py $(TEST_PINS)
+	$(TIMED) $(CARGO) nextest run --workspace --all-targets --locked --all-features -E '$(PLATFORM_TESTS)'
+	$(TIMED) $(CARGO) test --workspace --doc --locked --all-features
 
-ci-coverage-default: coverage-default coverage-artifacts-clean ## CI coverage job: coverage, generated-artifact cleanup.
+ci-coverage-default: coverage-default ## CI coverage job.
 	@true
 
 ci-deps: deps ## CI dependency job.

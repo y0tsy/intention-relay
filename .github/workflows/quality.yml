@@ -40,12 +40,13 @@ jobs:
           # roughly twenty minutes while running identical work about 1.7x
           # slower than Linux.
           #
-          # Caching follows what each phase actually reuses. lint-arch and test
-          # build a plain target tree that rust-cache keeps warm. coverage-default
-          # deletes its instrumented target after the gate, so sccache carries
-          # its objects and the registry cache carries the sources. deps compiles
-          # nothing and needs only the registry. Only the coverage and lint jobs
-          # link with mold, and only they pass the flag that selects it.
+          # Caching follows what each phase actually reuses. lint-arch, test,
+          # and coverage-default build a target tree and keep it warm across
+          # runs; the coverage job's instrumented tree survives its own run
+          # because the coverage gate no longer removes it. deps compiles
+          # nothing and needs only the crate sources. Only the coverage and
+          # lint jobs link with mold, and only they pass the flag that selects
+          # it; the test job links with LLD instead of link.exe.
           - os: ubuntu-24.04
             phase: lint-arch
             stable: true
@@ -61,7 +62,7 @@ jobs:
             tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
             rustflags: "-C link-arg=-fuse-ld=mold"
             uses_mold: true
-            uses_rust_cache: false
+            uses_rust_cache: true
           - os: ubuntu-24.04
             phase: deps
             stable: true
@@ -89,10 +90,10 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Restore Cargo and build caches
-        # The two jobs that compile a plain target tree keep it warm across
-        # runs. The coverage job cannot: its instrumented target is deleted
-        # after the gate so the tree stays disposable, and sccache serves its
-        # objects instead. The deps job compiles nothing at all.
+        # The three jobs that compile a target tree reuse it across runs. The
+        # coverage job's target is its instrumented tree, which `--no-report`
+        # leaves in place precisely so this cache can carry it. The deps job
+        # compiles nothing at all.
         #
         # `add-job-id-key` is off because the prefix already separates the
         # phases: leaving it on gives every run a fresh key, so each run writes
@@ -105,9 +106,7 @@ jobs:
           add-job-id-key: false
 
       - name: Restore the Cargo registry cache
-        # What a warm object cache cannot replace is the crate sources: sccache
-        # stores compiled objects only, so these jobs keep the registry and git
-        # checkouts keyed by the committed lockfile.
+        # The deps job builds nothing, so it needs only the crate sources.
         if: matrix.uses_rust_cache == false
         uses: actions/cache@v4
         with:
@@ -168,6 +167,30 @@ jobs:
       - name: Verify the mold linker
         if: runner.os == 'Linux' && matrix.uses_mold
         run: mold --version
+
+      - name: Select the LLD linker
+        # The test job links 44 test binaries, and LLD links each of them
+        # faster than link.exe. `-C link-arg=-fuse-ld=lld-link` is not the
+        # mechanism: that flag is a GCC driver option, and rustc's MSVC path
+        # invokes the linker directly, so the argument would reach link.exe
+        # unparsed. `-C linker=` is what selects the linker, and rustc gives it
+        # MSVC-style arguments for this target.
+        #
+        # Both candidates are bare names resolved through PATH because
+        # RUSTFLAGS splits on whitespace and the LLVM install path contains a
+        # space. `lld-link` comes from the runner's LLVM; `rust-lld` ships with
+        # the toolchain, so one of the two always resolves.
+        if: matrix.phase == 'test'
+        run: |
+          set -euo pipefail
+          if command -v lld-link >/dev/null 2>&1; then
+            linker=lld-link
+          else
+            linker=rust-lld
+          fi
+          echo "RUSTFLAGS=-C linker=$linker" >> "$GITHUB_ENV"
+          echo "LLD linker: $linker ($(command -v "$linker"))"
+          "$linker" --version
 
       - name: Set canonical Rust homes
         run: |

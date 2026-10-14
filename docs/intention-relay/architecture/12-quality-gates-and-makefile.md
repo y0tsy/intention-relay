@@ -23,19 +23,21 @@ architecture, failure-path, or outcome tests.
   `ci-lint-arch` on Linux (formatting, native lint, the Windows cross-target lint, doctests, and rustdoc),
   `ci-coverage-default` and `ci-deps` on Linux, and `ci-test` on Windows. Linux test execution belongs to
   `ci-coverage-default`, which runs the same instrumented suite `make test` would, so no separate Linux test job
-  duplicates it. Branch protection requires the four resulting status checks.
+  duplicates it. The Windows job runs `PLATFORM_TESTS`, the subset whose behavior differs by platform, because the
+  Linux run already covers the rest and the Windows-target cross-lint compiles every Windows code path. Branch
+  protection requires the four resulting status checks.
 - CI installs exact tool releases through checksum-verified actions, installs per job only the tools that job runs,
-  and caches per phase according to what that phase reuses. `lint-arch` and `test` build a plain target tree that
-  `rust-cache` keeps warm under one stable key per phase, so each run replaces its phase's entry instead of adding
-  another generation and the repository cache budget is not consumed by copies of the same tree. `coverage-default`
-  deletes its instrumented target after the gate, so the target tree is
-  never cached: sccache carries its compiled objects for both the Rust and the C/C++ builds, and an `actions/cache`
-  entry keyed by `Cargo.lock` carries the crate sources, which an object cache cannot replace. `deps` compiles nothing
-  and needs only that registry entry. `mold` comes from its own pinned action, and only the jobs whose flags select it
-  install it and pass `-fuse-ld=mold`, so it is never made the system default linker. The MinGW cross compiler and
+  and caches per phase according to what that phase reuses. `lint-arch`, `test`, and `coverage-default` build a target
+  tree and keep it warm under one stable key per phase, so each run replaces its phase's entry instead of adding
+  another generation and the repository cache budget is not consumed by copies of the same tree. The coverage job's
+  entry is its instrumented tree: `cargo llvm-cov --no-report` leaves that tree in place, so a restored cache turns the
+  gate's build into a no-op, and sccache remains the fallback that serves the compiled objects when the tree is cold.
+  `deps` compiles nothing and needs only a lockfile-keyed crate-source entry. `mold` comes from its own pinned action,
+  and only the jobs whose flags select it install it and pass `-fuse-ld=mold`, so it is never made the system default
+  linker; the Windows job selects LLD with `-C linker=` instead of the MSVC `link.exe`. The MinGW cross compiler and
   `nasm` remain host prerequisites of the Windows-target lint alone.
 - The `cache-cleanup` workflow prunes every non-`main` Actions cache and every `main` cache older than seven days after
-  each merge and on a weekly schedule, so the shared rust-cache/sccache space cannot fill and start failing new writes.
+  each merge, on a weekly schedule, and on demand, so the shared cache space cannot fill and start failing new writes.
 - The opt-in live-provider run is a local target, `make e2e-real-api`, and never part of the gate.
 - The gates never install tools, update the lockfile, or resolve dependencies differently from the committed state.
 
@@ -106,6 +108,20 @@ at a time pays that merge once per crate; the report carries every file's line s
 the covered-over-total ratio over its own files, so `quality/check_coverage_floors.py` computes the floors from the one
 artifact instead. The same artifact is the CI upload.
 
+`PLATFORM_TESTS` in the root `Makefile` selects the suites whose outcome can differ on Windows, and it is the whole
+set the Windows CI job runs: the named-pipe transport (`intention-transport`), the Windows process API and process
+lifecycle boundary (`intention-tools`, `intention-test-support`), the `APPDATA`/`LOCALAPPDATA`/`XDG_*` resolution and
+native absolute-path validation in `intention-client`, `intention-config`, and `intention-proto`, and the daemon's
+cross-process `client_e2e` suite, which is the one run that proves a real daemon serves over that transport. The
+remaining suites — `intention-storage`'s SQLite contracts, `intention-providers`, `intention-engine`, `intention-tui`,
+and the daemon's platform-independent suites — assert logic no platform-conditional branch reaches, so the Linux
+coverage run verifies them once and the cross-target lint compiles them for Windows. A new test that reaches a
+platform-conditional branch belongs in `PLATFORM_TESTS`; one that does not stays out.
+
+The instrumented build tree is a cache, not a scratch artifact: `cargo llvm-cov --no-report` leaves it in place, so a
+second `make coverage` reuses it and only recompiles what changed. `make coverage-artifacts-clean` reports its size and
+removes it, and is not part of any gate.
+
 `COVERAGE_FLOORS` in the root `Makefile` is the whole policy — one `crate=floor` pair per measured crate:
 
 | Floor | Crates |
@@ -137,12 +153,13 @@ adapter, or feature extends that one configuration instead of adding a profile m
 ## Makefile contract
 
 The root `Makefile` is the sole supported orchestration surface for local and CI quality workflows. Recipes use strict
-shell behavior and label each command as mutating or non-mutating. `make verify` runs `check`, `coverage`, and `deps`,
-then reports the size of the generated LLVM coverage target and removes it; the target is a disposable four-gigabyte
-instrumented build tree, and coverage reports remain available for CI upload. `make ci`,
+shell behavior and label each command as mutating or non-mutating. `make verify` runs `check`, `coverage`, and `deps`;
+the instrumented coverage tree stays on disk so a later run reuses it, and `make coverage-artifacts-clean` reports its
+size and removes it when the four gigabytes are wanted back. `make ci`,
 `make ci-lint-arch`, `make ci-test`, `make ci-coverage-default`, and `make ci-deps` are thin aliases for the gate
 sequences CI runs: `ci-lint-arch` composes `fmt-check`, `lint`, the Windows cross-target `lint-windows`, the standalone
-`doctest` stage, and `doc`, while `check` keeps the doctests inside `test`. `make check`, `make verify`, and `make ci`
+`doctest` stage, and `doc`; `ci-test` runs `PLATFORM_TESTS` and the doctests on Windows; `ci-coverage-default` runs the
+full instrumented suite; and `check` keeps the doctests inside `test`. `make check`, `make verify`, and `make ci`
 fail rather than modify source, update the lockfile, install tools, or resolve dependencies differently from committed
 state.
 

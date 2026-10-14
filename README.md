@@ -307,14 +307,13 @@ and pull requests to `main`:
 
 - `lint-arch` (formatting, native lint, Windows-target lint, doctests,
   rustdoc), `coverage-default`, and `deps` on `ubuntu-24.04`;
-- `test` on `windows-2025`, where the Windows-only fixtures run; Linux test
-  execution happens inside `coverage-default`, which runs the same suite
-  instrumented;
-- pinned toolchains and per-job tool installs, `rust-cache` for the jobs that
-  build a plain target tree, an object cache for the coverage build's Rust and
-  C/C++ compilations plus a lockfile-keyed registry cache, `mold` from its own
-  pinned action, MinGW for the Windows-target lint, and uploaded quality
-  reports.
+- `test` on `windows-2025`, which runs the platform-dependent suite
+  (`PLATFORM_TESTS`) and the doctests; Linux test execution happens inside
+  `coverage-default`, which runs the full suite instrumented;
+- pinned toolchains and per-job tool installs, a per-phase build cache that
+  keeps each job's target tree warm, `mold` from its own pinned action on
+  Linux, LLD instead of `link.exe` on Windows, MinGW for the Windows-target
+  lint, and uploaded quality reports.
 
 The live-provider end-to-end run is a local target, `make e2e-real-api`, and
 never part of the blocking gate. Dependabot is
