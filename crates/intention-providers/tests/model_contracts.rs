@@ -287,14 +287,14 @@ fn assistant_reasoning_validates_tool_call_identities_and_bounded_text() {
         AssistantReasoningDto::new(vec![call_id], oversized)
             .expect_err("oversized reasoning must fail")
             .code(),
-        "invalid_model_assistant_reasoning_text"
+        "invalid_model_assistant_reasoning"
     );
     for text in ["bad\u{0}text", "bad\u{7}text", "bad\u{1b}text"] {
         assert_eq!(
             AssistantReasoningDto::new(vec![call_id], text)
                 .expect_err("invalid control characters must fail")
                 .code(),
-            "invalid_model_assistant_reasoning_text"
+            "invalid_model_assistant_reasoning"
         );
     }
 }

@@ -222,18 +222,12 @@ impl AssistantReasoningDto {
     /// control character other than a line break or tab.
     pub fn new(tool_call_ids: Vec<ToolCallId>, text: impl Into<String>) -> DtoResult<Self> {
         let text = text.into();
-        if !valid_assistant_reasoning_tool_call_ids(&tool_call_ids) {
+        let text_valid = text.len() <= MAX_MODEL_ASSISTANT_REASONING_BYTES
+            && !text.chars().any(forbidden_reasoning_text_character);
+        if !valid_assistant_reasoning_tool_call_ids(&tool_call_ids) || !text_valid {
             return Err(ErrorDto::validation(
                 "invalid_model_assistant_reasoning",
-                "assistant reasoning requires at least one unique tool-call identity",
-            ));
-        }
-        if text.len() > MAX_MODEL_ASSISTANT_REASONING_BYTES
-            || text.chars().any(forbidden_reasoning_text_character)
-        {
-            return Err(ErrorDto::validation(
-                "invalid_model_assistant_reasoning_text",
-                "assistant reasoning text must be at most 512 KiB without invalid control characters",
+                "assistant reasoning requires at least one unique tool-call identity and at most 512 KiB of text without invalid control characters",
             ));
         }
         Ok(Self {

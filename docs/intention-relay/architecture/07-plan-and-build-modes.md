@@ -70,11 +70,11 @@ workspace.
 
 ### Plan allocation
 
-- `CreatePlanCommandDto` creates the plan artifact and atomically allocates the next plan number for its `SessionId`.
-- The number is never reused, including after plan deletion/archival if those features are later introduced.
--  Allocation and initial physical artifact creation must be transactionally reconciled. A file-system failure must not
-  leave a falsely usable persisted plan record.
-- The precise file/DB atomicity strategy is implementation-required and must have recovery tests.
+- `CreatePlanCommandDto` creates the plan artifact and allocates the next plan number for its `SessionId`. The number
+  comes from the session's monotonic plan-number sequence and is never reused.
+- The body file is written and flushed before the plan record commits. A file-system failure therefore leaves no plan
+  record at all, and a failure after the write but before the commit leaves an orphan file that the next allocation of
+  that number overwrites. Nothing is ever repaired in place.
 
 ## Plan body and metadata
 
