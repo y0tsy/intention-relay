@@ -45,9 +45,9 @@ Core DTO families:
 | `FinishReasonDto` | Typed terminal reason. |
 | `ProviderErrorDto` | Safe normalized failure, retry category, and correlation data. |
 
-The optional system context is the effective instruction projection of [architecture
-30](30-instruction-sources-and-system-context.md): the daemon assembles it once per admitted run from
-declared instruction sources, it is bounded and credential-free, and the current drivers keep translating it into the
+The optional system context is the frozen instruction text of [architecture
+30](30-instruction-sources-and-system-context.md): the daemon assembles it once per admitted run from the
+declared sources, it is bounded and credential-free, and the current drivers keep translating it into the
 leading system message with no driver-specific framing, rewrite, or provider-side scan; the request marks the end of
 that instruction block as an ephemeral prompt-cache breakpoint. Historical M3/M4 requests keep the system context
 absent. A driver never synthesizes, substitutes, reorders, or truncates instruction text, and a provider cannot inject
@@ -212,7 +212,7 @@ injected `ToolExecutionPort`; there is no no-port fallback and a tool round with
 
 Each provider attempt windows its message list before every outbound request. The runtime owns the pass, the
 provider-neutral message shape carries the transient marker and the in-place content replacement, and the selected
-driver translates the result into its private request. The optional system context is not part of the window: the instruction projection of architecture 30 stays the stable leading block. It is never compressed and never
+driver translates the result into its private request. The optional system context is not part of the window: the frozen instruction text of architecture 30 stays the stable leading block. It is never compressed and never
 re-derived.
 
 The `[provider]` configuration key `context_window_tokens` (default `250000`) resolves into the credential-free

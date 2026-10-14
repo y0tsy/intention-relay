@@ -186,12 +186,12 @@ length encoding, canonicalization-version byte, and SHA-256 digest construction 
 
 - `fork-base-snapshot`: `1 schema_version`, `2 context_schema_version`, `3 source_session_id`,
 `4 conversation_tree_id`, `5 boundary`, `6 source_boundary_sequence`, `7 source_run_cursors`, `8
-effective_instruction_projection`, `9 materialized_model_messages`, `10 inherited_future_defaults`, `11
+effective_instruction_text`, `9 materialized_model_messages`, `10 inherited_future_defaults`, `11
 historical_config_policy_references`, `12 safe_usage_provenance`, `13
 terminal_tool_result_references`, `14 policy_decision_references`, `15 terminal_child_result_references`, `16
 workspace_state`.
 - `fork-preview`: `1 preview_schema_version`, `2 source_session_id`, `3 conversation_tree_id`, `4 boundary`,
-`5 source_head_sequence`, `6 materialized_effective_instruction_projection`, `7 materialized_model_messages`, `8
+`5 source_head_sequence`, `6 materialized_effective_instruction_text`, `7 materialized_model_messages`, `8
 inherited_future_defaults`, `9 historical_config_policy_references`, `10 safe_usage_provenance`, `11
 terminal_tool_result_references`, `12 policy_decision_references`, `13
 terminal_child_result_references`, `14 workspace_state`. Field 6 is the selected boundary sequence, not the current
@@ -205,11 +205,10 @@ client accepted through `expected_source_sequence` and `expected_preview_binding
 define a canonical binding for the preview together with its first real consumer under the RFC 8785 policy
 ([architecture 02](02-dto-and-contract-policy.md)), and no canonical digest is part of the current contract.
 
-`effective_instruction_projection` and `materialized_effective_instruction_projection` carry the typed
-`InstructionProjectionV1` of [architecture 30](30-instruction-sources-and-system-context.md): the exact ordered
-contributions with their source revisions and the projection revision identity, materialized
+`effective_instruction_text` and `materialized_effective_instruction_text` carry the frozen instruction text of
+[architecture 30](30-instruction-sources-and-system-context.md), materialized
 when the fork is created. A child
-inherits the projection verbatim; no fork, regeneration, or later run re-derives it from current configuration,
+inherits the text verbatim; no fork, regeneration, or later run re-derives it from current configuration,
 current project instructions, or current session state.
 
 ### Fixed bounds and audit taxonomy

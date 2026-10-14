@@ -135,14 +135,13 @@ Slice 2 is closed: it merged into `main` as one squash commit, `0fd8ad5` (PR #67
 merged head. The quality phase keeps its `slice2` name: closing a slice changes no crate classification, so
 `quality/coverage.toml` and the crate map move together only when Slice 3 adds its own crates.
 -  **Slice 3 — Agent operation — not activated.** The instruction channel of
-[architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
-deployment instruction profile adapted from the legacy Antibusy static prompt set, user-authored fragments at user,
-project, and session scope edited at the filesystem level, workspace `AGENTS.md` project instructions read through the
+[architecture 30](30-instruction-sources-and-system-context.md): the code-owned base instruction text, one
+user-authored fragment list edited at the filesystem level, workspace `AGENTS.md` project instructions read through the
 `WorkspaceRoot` anchor, and the
-reserved `Mode` and `Vfr` contributions owned by architectures 07 and 06; deterministic assembly and the effective
-instruction projection, frozen at admission, delivered through the
-existing `system_context` channel, materialized into fork, plan, and handoff records, and recorded as safe usage
-provenance; closed safe failures, channel closure, and safe observability. The slice also carries the Plan/Build half of
+reserved `Mode` and `Vfr` contributions owned by architectures 07 and 06; deterministic assembly and the frozen
+instruction text, delivered through the
+existing `system_context` channel, and materialized into fork, plan, and handoff records; closed safe failures,
+channel closure, and safe observability. The slice also carries the Plan/Build half of
 [architecture 07](07-plan-and-build-modes.md): the Plan/Build run policy, with Build Autopilot as the single
 user-authorized unrestricted Build policy; body-only plan artifacts in the daemon-defined global plans directory,
 named by the model's requested file name (`plan_name_conflict` on a taken name), with zero-based per-session numbers
@@ -159,7 +158,7 @@ run with its own lifecycle, tool loop, cancellation, and no-resume rules, and it
 child-result fact bound to the same `ToolCallId` and delivered once into the parent's next fresh model request. The
 `sub_agent` tool activates on the live six-tool admission path and activates no registry, bridge, or MCP contract: the
 frozen tool selection, tool admission, and Gateway/RLM bridge stay with Milestone 10. Its activating specification
-declares the instruction contract families as typed serde JSON contracts, activates the `sub_agent` tool contract and
+declares the instruction-channel contracts as typed serde JSON contracts, activates the `sub_agent` tool contract and
 the Plan/Build policy on the live tool path, and changes no earlier slice.
 -  **Slice 4 — Provider configuration and typed configuration editing — not activated.** Discovery (architecture 25),
 the typed configuration-editing surface (architecture 25), and the session-selection layer (architectures 29/22): the
@@ -186,7 +185,7 @@ delivery, and adapter boundaries (architectures 23/22 plus architecture 03's fla
 list): `session_fork_v1` and the ordinary same-session regeneration run start bound to the parent `RunId` it
 regenerates; normalized reasoning delivery; and the exact typed client/protocol surface M6 consumes. It also carries
 the optional implementation handoff after plan approval, which creates an independent Session from a frozen safe
-context, materializes the instruction projection into its frozen records, and may start a fresh Build Autopilot run
+context, materializes the frozen instruction text into its frozen records, and may start a fresh Build Autopilot run
 (architecture 23);
 cross-workspace clone/rebind (architecture 23); and the physical deletion/GC retention policy for historical work under
 architecture 04's retention rules.
@@ -211,7 +210,7 @@ passes `make quick`, `make verify`, and Linux/Windows CI.
 evidence.
 -  No remaining-milestone boundary behavior is implemented, and no second runtime, registry, persistence authority, or
 sandbox is introduced.
--  The third slice proves instruction text is advisory-only, typed, and materialized for frozen context, that Plan-mode
+-  The third slice proves instruction text is advisory-only and materialized for frozen context, that Plan-mode
 mutation denial is enforced and audited while Plan `execute` stays advisory-guided, and that a `sub_agent` child run
 stays an ordinary run, with no untrusted material entering the instruction channel and no authority created
 ([architecture 30](30-instruction-sources-and-system-context.md), [architecture 07](07-plan-and-build-modes.md)).

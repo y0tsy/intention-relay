@@ -119,9 +119,9 @@ You are in Plan mode. Focus on investigation, decomposition, design, and plan au
 This instruction is advisory. It cannot authorize, prevent, or prove the absence of shell, process, filesystem, network,
 or external effects.
 
-It is the `Mode` contribution of the effective instruction projection ([architecture
+It is the `Mode` contribution of the frozen instruction text ([architecture
 30](30-instruction-sources-and-system-context.md)): architecture 30 owns the assembly order and the
-materialization of the projection, while this document keeps the instruction text and its advisory meaning. The
+frozen text, while this document keeps the instruction text and its advisory meaning. The
 contribution cannot widen or narrow tool policy, and a Build run's projection never inherits the Plan contribution.
 
 ## Mode invariants
@@ -168,7 +168,7 @@ run gets a new `RunId`, immutable Build/Autopilot policy snapshot, exact approve
 projection. It does not resume the Plan stream or provider request. An optional implementation-handoff operation may
 instead create a new Session from a frozen full safe context snapshot; it is separate from run continuation and does
 not transfer live resources or authority. The default same-Session continuation is delivered by M5+ Slice 3, while the
-optional handoff's delivery is M5+ Slice 6, whose frozen fork records carry the materialized instruction projection.
+optional handoff's delivery is M5+ Slice 6, whose frozen fork records carry the materialized instruction text.
 
 ## Required tests and outcomes
 

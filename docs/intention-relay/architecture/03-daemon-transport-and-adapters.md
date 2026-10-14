@@ -604,7 +604,7 @@ fabricated value. The table below names each one, taken from the markers in the 
 | the `Favorites` tab's empty state | a durable favorite flag |
 | the `Archived` tab's empty state and the `Ctrl+X` notice | a durable archive flag and its command |
 | the row counter's `+N omitted (core: paged list @todo)` | a session list that can be paged past its bounded window |
-| the welcome overview's `AGENTS.md` chip | the instruction sources and their effective projection (Slice 3) |
+| the welcome overview's `AGENTS.md` chip | the instruction channel (Slice 3) |
 | the welcome overview's `MCPs` chip | MCP capability support |
 | the welcome overview's `Skills` chip | skills support |
 | the `Ctrl+F` tree notice | session forks (Slice 6) |

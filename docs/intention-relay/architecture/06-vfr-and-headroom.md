@@ -44,7 +44,7 @@ The VFR module owns:
 - typed virtual representation DTOs;
 - source map/hidden segment metadata;
 - expansion and raw-read tool contracts (`expand` and the raw-read path, delivered as future `ToolId` variants);
-- the VFR-specific typed instruction contribution assembled into the frozen instruction text of [architecture
+- the instruction contribution assembled into the frozen instruction text of [architecture
 30](30-instruction-sources-and-system-context.md);
 - tests proving loss-aware, deterministic transformations.
 
