@@ -38,6 +38,15 @@ multiple-versions = "deny"
 wildcards = "deny"
 highlight = "all"
 deny = []
+# Every duplicate family in the graph belongs to one of the two provider SDKs
+# or to the HTTP/TLS stacks they pull, and no release of either SDK collapses
+# one. Each entry names its owning chain, so a duplicate that appears without an
+# entry here fails the gate instead of accumulating. Reassess the set when
+# async-openai or openrouter-rs moves.
+#
+# The diagnostic needs the whole workspace: the root `Cargo.toml` declares
+# `default-members`, so a bare `cargo tree -d` inspects only `intention-proto`
+# and `intention-config` and reports nothing. Use `cargo tree -d --workspace`.
 skip = [
   { crate = "hashbrown@0.16.1", reason = "Reviewed target-specific duplicate: required only by rusqlite 0.40.2 -> sqlite-wasm-rs -> rsqlite-vfs on WASM targets; retain native bundled SQLite and reassess when that target chain no longer requires hashbrown 0.16." },
   { crate = "syn@2.0.119", reason = "Reviewed duplicate: required by async-openai 0.42.2 -> async-openai-macros 0.3.0 (proc-macro), by the darling/derive_builder proc-macro path that both selected SDKs use, and on WASM targets only by wasm-bindgen support; the native proc-macro path uses syn 3. Reassess with either SDK chain." },

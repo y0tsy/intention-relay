@@ -310,9 +310,11 @@ and pull requests to `main`:
 - `test` on `windows-2025`, where the Windows-only fixtures run; Linux test
   execution happens inside `coverage-default`, which runs the same suite
   instrumented;
-- pinned toolchains and per-job tool installs, rust-cache, `mold` on Linux,
-  MinGW for the Windows-target lint, sccache for coverage builds, and uploaded
-  quality reports.
+- pinned toolchains and per-job tool installs, `rust-cache` for the jobs that
+  build a plain target tree, an object cache for the coverage build's Rust and
+  C/C++ compilations plus a lockfile-keyed registry cache, `mold` from its own
+  pinned action, MinGW for the Windows-target lint, and uploaded quality
+  reports.
 
 The live-provider end-to-end run is a local target, `make e2e-real-api`, and
 never part of the blocking gate. Dependabot is

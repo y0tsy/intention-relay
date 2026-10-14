@@ -39,6 +39,13 @@ jobs:
           # and the Windows coverage jobs dominated the CI critical path at
           # roughly twenty minutes while running identical work about 1.7x
           # slower than Linux.
+          #
+          # Caching follows what each phase actually reuses. lint-arch and test
+          # build a plain target tree that rust-cache keeps warm. coverage-default
+          # deletes its instrumented target after the gate, so sccache carries
+          # its objects and the registry cache carries the sources. deps compiles
+          # nothing and needs only the registry. Only the coverage and lint jobs
+          # link with mold, and only they pass the flag that selects it.
           - os: ubuntu-24.04
             phase: lint-arch
             stable: true
@@ -46,6 +53,7 @@ jobs:
             tools: ""
             rustflags: "-C link-arg=-fuse-ld=mold"
             uses_mold: true
+            uses_rust_cache: true
           - os: ubuntu-24.04
             phase: coverage-default
             stable: true
@@ -53,13 +61,15 @@ jobs:
             tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
             rustflags: "-C link-arg=-fuse-ld=mold"
             uses_mold: true
+            uses_rust_cache: false
           - os: ubuntu-24.04
             phase: deps
             stable: true
             stable_components: ""
             tools: "cargo-deny@0.20.2,cargo-about@0.9.1,cargo-machete@0.9.2"
-            rustflags: "-C link-arg=-fuse-ld=mold"
-            uses_mold: true
+            rustflags: ""
+            uses_mold: false
+            uses_rust_cache: false
           - os: windows-2025
             phase: test
             stable: true
@@ -67,6 +77,7 @@ jobs:
             tools: "cargo-nextest@0.9.140"
             rustflags: ""
             uses_mold: false
+            uses_rust_cache: true
     env:
       CARGO_TERM_COLOR: never
       CARGO_INCREMENTAL: "0"
@@ -78,9 +89,27 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Restore Cargo and build caches
+        # The two jobs that compile a plain target tree keep it warm across
+        # runs. The coverage job cannot: its instrumented target is deleted
+        # after the gate so the tree stays disposable, and sccache serves its
+        # objects instead. The deps job compiles nothing at all.
+        if: matrix.uses_rust_cache
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: ${{ matrix.phase }}
+
+      - name: Restore the Cargo registry cache
+        # What a warm object cache cannot replace is the crate sources: sccache
+        # stores compiled objects only, so these jobs keep the registry and git
+        # checkouts keyed by the committed lockfile.
+        if: matrix.uses_rust_cache == false
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
 
       - name: Install stable Rust toolchain
         if: matrix.stable
@@ -110,15 +139,29 @@ jobs:
           # wrapper is honored only from the cargo build.rustc_wrapper
           # config, so sccache is wired through that config key.
           echo "CARGO_BUILD_RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          # The Rust side is cached by the wrapper above; the native builds
+          # are not, and they are the longest single steps of the instrumented
+          # build. `cc` and `cmake` read these variables, so the bundled
+          # SQLite, mimalloc, and aws-lc-sys builds join the same cache.
+          echo "CC=sccache gcc" >> "$GITHUB_ENV"
+          echo "CXX=sccache g++" >> "$GITHUB_ENV"
+          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
 
       - name: Install mold linker
-        # Only Linux jobs that actually link with mold install it; the
-        # version check verifies the install without hiding its failure.
+        # The version check verifies the install without hiding its failure.
+        # Only the Linux jobs that link with mold install it, and only those
+        # jobs pass `-fuse-ld=mold`, so the binary is never made the system
+        # default linker.
         if: runner.os == 'Linux' && matrix.uses_mold
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq mold
-          mold --version
+        uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038
+        with:
+          mold-version: 2.30.0
+          make-default: false
+
+      - name: Verify the mold linker
+        if: runner.os == 'Linux' && matrix.uses_mold
+        run: mold --version
 
       - name: Set canonical Rust homes
         run: |

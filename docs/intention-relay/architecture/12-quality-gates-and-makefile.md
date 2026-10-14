@@ -25,9 +25,13 @@ architecture, failure-path, or outcome tests.
   `ci-coverage-default`, which runs the same instrumented suite `make test` would, so no separate Linux test job
   duplicates it. Branch protection requires the four resulting status checks.
 - CI installs exact tool releases through checksum-verified actions, installs per job only the tools that job runs,
-  uses `rust-cache`, the mold
-  linker on Linux jobs whose flags request it, the MinGW cross compiler for the Windows-target lint, and sccache for
-  coverage builds.
+  and caches per phase according to what that phase reuses. `lint-arch` and `test` build a plain target tree that
+  `rust-cache` keeps warm. `coverage-default` deletes its instrumented target after the gate, so the target tree is
+  never cached: sccache carries its compiled objects for both the Rust and the C/C++ builds, and an `actions/cache`
+  entry keyed by `Cargo.lock` carries the crate sources, which an object cache cannot replace. `deps` compiles nothing
+  and needs only that registry entry. `mold` comes from its own pinned action, and only the jobs whose flags select it
+  install it and pass `-fuse-ld=mold`, so it is never made the system default linker. The MinGW cross compiler and
+  `nasm` remain host prerequisites of the Windows-target lint alone.
 - The `cache-cleanup` workflow prunes every non-`main` Actions cache and every `main` cache older than seven days after
   each merge and on a weekly schedule, so the shared rust-cache/sccache space cannot fill and start failing new writes.
 - The opt-in live-provider run is a local target, `make e2e-real-api`, and never part of the gate.
@@ -157,6 +161,15 @@ depend on which machine ran it while a changed graph, version, or license name s
 which is what a separate `cargo audit` pass would re-read. Stale direct dependencies are not a gate either: a
 dependency releasing a patch would fail the build without any change to this repository, so freshness is dependabot's
 work rather than a blocking check.
+
+Duplicate versions are reviewed, not eliminated. Every duplicate family in the graph is owned by the two provider SDKs
+and their HTTP/TLS stacks, and neither SDK offers a release that would collapse one: `async-openai` 0.42.2 requires
+`reqwest` 0.13 with `base64` 0.22 and `getrandom` 0.3, while `openrouter-rs` 0.19.0 requires `reqwest` 0.12 with
+`thiserror` 1 and `dotenvy`, whose macro brings `syn` 1; `futures-macro` brings `syn` 3, `uuid` brings `getrandom` 0.4,
+and `hyper-util` brings `base64` 0.23. `deny.toml`'s `[bans] skip` list carries each one with its owning chain, and
+`cargo deny` fails on any duplicate that list does not name, so a new family is a blocking finding rather than an
+accretion. The diagnostic needs `--workspace`: the root `Cargo.toml` declares `default-members`, so a bare
+`cargo tree -d` inspects only `intention-proto` and `intention-config` and reports nothing.
 
 That `deny.toml`'s `advisories.ignore` set is exactly the five reviewed `rust-unic` entries is a review
 responsibility, not a gate: `cargo deny` reads the file as written, so a newly added entry passes silently. Adding one
