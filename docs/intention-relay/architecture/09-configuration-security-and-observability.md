@@ -161,7 +161,7 @@ the durable audit of application facts; structured logs are operational diagnost
 -  Logs have correlation IDs and safe context DTOs, and no sensitive prompt/configuration content is emitted merely for
 diagnostics.
 - Tool output logging is size-bounded and subject to content policy.
--  Audit retains plan/permission/policy facts required to explain an action without claiming proof of external process
+-  Audit retains plan and policy facts required to explain an action without claiming proof of external process
 atomicity.
 
 ## Required tests and outcomes

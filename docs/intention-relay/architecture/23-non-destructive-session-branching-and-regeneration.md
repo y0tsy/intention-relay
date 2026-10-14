@@ -63,7 +63,7 @@ waiting interaction, admitted work, and external effects never cross it.
 
 `fork-model-context-v1` is a closed ordered text-only causal projection from committed source facts at the selected
 boundary. It includes validated user messages and only eligible final nonblank assistant messages. It excludes reasoning
-text/summaries, attempts, usage, tool calls/results, questions, permissions, child results, raw provider data, and
+text/summaries, attempts, usage, tool calls/results, child results, raw provider data, and
 opaque continuation state. Unsupported material rejects rather than truncates, omits, or uses current
 state. A later implementation uses the stored compatible schema unchanged, defines a separately versioned compatible
 projection, or blocks the dependent operation.

@@ -2,8 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.** Architecture 28 owns the
 future Goal aggregate domain: Goal identity, scope, and links; Goal status; leading-goal run selection; verification
-evidence; roles; model proposals and user confirmation; the conversation-compaction working form; and Goal-domain
-bounds and closed safe failures.
+evidence; roles; model proposals and user confirmation; and Goal-domain bounds and closed safe failures.
 
 Owner: architecture 28.
 
@@ -85,7 +84,8 @@ former `run-execution-meaning-v4` carrier was removed with the canonical codec u
 and historical M4 records gain nothing.
 
 `GoalRunSelectionV1` contains the leading `GoalId`, its exact revision, the session-link provenance, run kind, the
-target-snapshot reference, immutable bounds, and the one frozen `SkillSelectionV1`. It holds no full Skill/role/summary,
+target-snapshot reference, immutable bounds, and the one frozen `SkillSelectionV1` defined by [architecture
+21](21-goals-skills-context-memory-and-compaction.md). It holds no full Skill/role/summary,
 credential, provider value, current machine state, raw transcript, process resource, or handle.
 
 The admission transaction validates the Goal and session link, the complete target snapshot, all references and bounds,
@@ -107,14 +107,13 @@ cancellation, interruption, an output bound, a missing reference, or a stale rev
 is no hidden retry, retries occur only before the first irreversible durable fact, and a started external action is
 never repeated.
 
-## Skills and roles
+## Roles
 
-A Skill is a bounded textual procedure with typed references to roles and registered capabilities; no binary,
-executable, install, plug-in, dynamic registration, arbitrary MCP schema, or hidden external action. A Role is a named
-reusable `sub_agent` template (task, permitted class, tool subset, contextual limits, typed references); a concrete use
-may only narrow task, class, context/result limits, and tool subset and cannot add a tool, increase a class, widen
-scope, change a provider, or weaken policy. Skill and role cards are discovered first; full records require explicit
-selection.
+A Role is a named reusable `sub_agent` template (task, permitted class, tool subset, contextual limits, typed
+references); a concrete use may only narrow task, class, context/result limits, and tool subset and cannot add a tool,
+increase a class, widen scope, change a provider, or weaken policy. Role cards are discovered first; a full role record
+requires explicit selection. Skill discovery, selection, and record semantics are owned by [architecture
+21](21-goals-skills-context-memory-and-compaction.md).
 
 ## Model proposals and user confirmation
 
@@ -129,25 +128,18 @@ through the asynchronous `ask_user` path; the run continues while the draft stay
 edit-and-accept, or reject it whenever they return. Acceptance validates the exact base revision and creates a new immutable record revision; a
 stale base is a typed conflict, and rejection changes no active record.
 
-## Conversation compaction and progressive context selection
+## Conversation compaction
 
-Compaction is a versioned model-context projection, not a replacement for the source transcript, model facts, tool
-facts, reasoning, kernel checkpoint, child dossier, or Goal evidence. `ConversationSummaryDto`
-covers one continuous completed durable-history range and contains schema/contract version, start/end references, a
-previous-summary reference when present, bounded safe content, identity, and provenance; original facts remain readable.
-The working form is one cumulative current summary plus the later uncompacted suffix. A new revision made inside an
-already active run uses the previous selected summary plus the next bounded completed source range and becomes part of
-the next model step in the same run; it executes no registered tool, creates no service run, and cannot run before a
-user-admitted run, after terminalization, or after restart. A user or model may request it in an active run; if the
-selected model-context bound would be exceeded, the daemon requires it in that same run rather than silently creating
-another. Correcting a summary creates a separately immutable later revision with exact source and predecessor
-references, and the earlier summary remains historical evidence. Fork creation stores only exact compatible selected
-summary references in the frozen projection and never reads a current ancestor or imports a future summary. Headroom,
-VFR, and `retrieve` retain their own semantics and never turn source content into summary text implicitly.
+Compaction is a versioned model-context projection over one continuous completed durable-history range, never a
+replacement for the source transcript, model facts, tool facts, reasoning, kernel checkpoint, child dossier, or Goal
+evidence. The summary record, its immutable corrections, its failures, and the frozen summary-reference semantics are
+owned by [architecture 21](21-goals-skills-context-memory-and-compaction.md). A fork stores only the exact compatible
+selected summary references that document freezes and never reads a current ancestor or imports a future summary.
+Headroom, VFR, and `retrieve` retain their own semantics and never turn source content into summary text implicitly.
 
 ## Branches, children, interruption, and recovery
 
-A new session fork receives a frozen copy of applicable project-Goal links, session Skill/role cards, exact revisions,
+A new session fork receives a frozen copy of applicable project-Goal links, selected role cards, exact revisions,
 and the selected current summary reference in an independent fork snapshot. It does not receive a new session Goal,
 active Goal run, kernel namespace, current ancestor record, local MCP process, external connection resource, or future
 source change; the user explicitly creates any new session Goal in the branch.
@@ -194,13 +186,8 @@ goal_not_active
 goal_revision_conflict
 goal_snapshot_too_large
 goal_snapshot_unavailable
-skill_entry_too_large
-skill_reference_unavailable
 delegation_role_invalid
 delegation_role_widening_forbidden
-compaction_summary_too_large
-compaction_summary_unavailable
-compaction_history_unavailable
 refinement_draft_conflict
 refinement_draft_too_large
 ```

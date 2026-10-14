@@ -19,8 +19,6 @@ erDiagram
   SESSION ||--o{ PLAN : contains
   SESSION ||--o{ TODO : tracks
   RUN ||--o{ PLAN : creates_or_updates
-  RUN ||--o{ PERMISSION_REQUEST : requests
-  RUN ||--o{ QUESTION_REQUEST : asks
   PLAN ||--o{ PLAN_REVISION : revisions
 ```
 
@@ -33,7 +31,7 @@ one root carries an unbounded number of sessions while storage still rejects a d
 (`workspace_root_conflict`). M5 owns the workspace addressing policy — the root as an anchor, not a containment boundary
 ([architecture 05](05-tools-and-workspace.md)).
 2. A session has at most one run in an active state.
-3. Every turn, run, plan, tool call, todo, permission, question, and message carries stable typed identity.
+3. Every turn, run, plan, tool call, todo, and message carries stable typed identity.
 4.  Every state-changing repository method commits its change in one SQLite transaction, or changes nothing. No
 filesystem-dependent validation, provider call, or other external action runs inside that transaction.
 5.  Live updates publish only after commit, from the values the commit recorded; a publisher failure never rolls back
@@ -75,8 +73,7 @@ An environment stop takes the same path: a graceful daemon shutdown cancels ever
 bounded timeout, so the partial answer is committed with the marker and its notice before the process exits. A hard
 kill cannot persist the in-memory buffer; recovery then marks the unfinished run `Interrupted` with no answer text.
 
-The exact policy for a question or permission after restart remains future tool and interaction work and adds no run
-status. M4 preserves the M3 rule: the unfinished run is marked interrupted and does not resume.
+M4 preserves the M3 rule: the unfinished run is marked interrupted and does not resume.
 
 ## Pending turns
 
