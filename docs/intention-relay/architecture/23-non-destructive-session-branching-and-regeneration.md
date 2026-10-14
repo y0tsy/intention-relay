@@ -12,8 +12,8 @@ audit, and branch presentation. It applies to future ordinary Session branching 
 Architecture 04 owns current Session/Run persistence and recovery. Run-execution meaning and historical compatibility
 left no live path: their canonical framing was removed under [architecture
 02](02-dto-and-contract-policy.md). Architectures 15, 18, 19, and 20 own tool, MCP, bridge, and
-kernel semantics. Architecture 21 owns Goal, Skill, and context-source semantics. Architecture 22
-owns provider/profile/capability/reasoning semantics.
+kernel semantics. Architecture 21 owns Goal, Skill, and context-source semantics. Architecture 22 owns provider configuration and
+reasoning semantics.
 
 This document owns only ordinary Session lineage and frozen fork transfer semantics. A conversation branch is not an RLM
 parent link, activity aggregate, provider continuation, tool permission, kernel epoch, MCP connection, or
@@ -68,7 +68,7 @@ opaque continuation state. Unsupported material rejects rather than truncates, o
 state. A later implementation uses the stored compatible schema unchanged, defines a separately versioned compatible
 projection, or blocks the dependent operation.
 
-## Base snapshot, reasoning references, and workspace state
+## Base snapshot and workspace state
 
 Every child owns one flattened credential-free `ForkBaseSnapshotDto`; nested forks never require runtime traversal of
 ancestor or sibling history. The child context starts from its own snapshot and adds only child-owned later history.
@@ -78,10 +78,8 @@ source, current catalog, provider, file, index, registry, bridge, kernel, MCP, o
 Fork snapshot, preview, and command records are typed serde JSON shapes; the former `typed-tlv` framing,
 canonicalization-version byte, and SHA-256 digest construction were removed under [architecture
 02](02-dto-and-contract-policy.md), and under the single-version policy ([architecture
-00](00-principles-and-scope.md)) there is one live shape per record, carrying
-the typed, ordered, compatibility-bound inherited reasoning references. References carry source identity, category,
-and size and never reasoning text. Architecture 22 owns reasoning compatibility; this document owns only the
-immutable fork-reference transfer.
+00](00-principles-and-scope.md)) there is one live shape per record. Cross-run reasoning transfer is `Disabled` in v1
+([architecture 22](22-provider-evolution-profiles-and-reasoning.md)), so no fork record carries reasoning references.
 
 `WorkspaceStateDto::Unverified` is the only initial workspace-state value. It makes no claim about files, processes,
 repositories, remote systems, or effects. A fork never clones or rolls back machine state.
@@ -138,7 +136,7 @@ RestoreSessionCommandDto
 ```
 
 `ForkSessionCommandDto` contains source session identity, the typed boundary, `ForkOperationId`, expected source
-sequence, the expected preview binding, an optional validated title, and an optional safe future-profile override. It
+sequence, the expected preview binding, and an optional validated title. It
 never accepts a client-selected child ID, raw snapshot, raw event, configuration path, credential, workspace path, or
 opaque implementation value. `ForkSessionResultDto` is bounded and returns child and tree identities, immediate parent,
 accepted boundary, optional child-anchor `TurnId`, snapshot and context schema versions, inherited future defaults, and
@@ -146,8 +144,7 @@ the closed `unverified` workspace notice; it does not return the base snapshot i
 
 `GetForkPreviewQueryDto` takes only a source session and a candidate typed boundary. `ForkPreviewDto` returns a fresh
 source sequence, accepted boundary data, safe inherited future defaults, the deterministic fallback title, counts and
-safe types of retained terminal references, the count and aggregate size of inherited reasoning-history references, and
-the closed `unverified` workspace state. The client must bind its command to the exact preview it accepted; it must not
+safe types of retained terminal references, and the closed `unverified` workspace state. The client must bind its command to the exact preview it accepted; it must not
 manufacture a preview binding locally.
 
 `StartForkRunCommandDto` names the child session, the immutable anchor turn, and a separate operation ID. It is valid
@@ -170,7 +167,7 @@ pages, and a continuation never promises a revision-consistent tree snapshot. A 
 malformed contents, or an oversized page fails closed with `invalid_conversation_tree_page`.
 
 `ConversationBranchSummaryDto` exposes only branch identity, immediate parent, creation ordering data, safe title or
-stable fallback, archive state, mode, safe future-profile availability, fork point, and `unverified` workspace state.
+stable fallback, archive state, mode, fork point, and `unverified` workspace state.
 The immutable base snapshot and its retained source content are not list data. Tree and lineage reads validate that
 every named session belongs to the same tree, project, and workspace.
 
@@ -185,23 +182,22 @@ title uses only the stable presentation fallback until renamed. Rename changes o
 Fork snapshot, preview, and command records are typed serde JSON shapes; the former `typed-tlv` framing, type tags,
 length encoding, canonicalization-version byte, and SHA-256 digest construction were removed under [architecture
 02](02-dto-and-contract-policy.md). Under the single-version policy ([architecture
-00](00-principles-and-scope.md)) each record keeps exactly one live shape,
-which carries the typed, ordered, compatibility-bound inherited reasoning references.
+00](00-principles-and-scope.md)) each record keeps exactly one live shape.
 
 - `fork-base-snapshot`: `1 schema_version`, `2 context_schema_version`, `3 source_session_id`,
 `4 conversation_tree_id`, `5 boundary`, `6 source_boundary_sequence`, `7 source_run_cursors`, `8
 effective_instruction_projection`, `9 materialized_model_messages`, `10 inherited_future_defaults`, `11
-historical_config_policy_references`, `12 inherited_reasoning_history_references`, `13 safe_usage_provenance`, `14
-terminal_tool_result_references`, `15 policy_decision_references`, `16 terminal_child_result_references`, `17
+historical_config_policy_references`, `12 safe_usage_provenance`, `13
+terminal_tool_result_references`, `14 policy_decision_references`, `15 terminal_child_result_references`, `16
 workspace_state`.
 - `fork-preview`: `1 preview_schema_version`, `2 source_session_id`, `3 conversation_tree_id`, `4 boundary`,
 `5 source_head_sequence`, `6 materialized_effective_instruction_projection`, `7 materialized_model_messages`, `8
-inherited_future_defaults`, `9 historical_config_policy_references`, `10 inherited_reasoning_history_references`, `11
-safe_usage_provenance`, `12 terminal_tool_result_references`, `13 policy_decision_references`, `14
-terminal_child_result_references`, `15 workspace_state`. Field 6 is the selected boundary sequence, not the current
+inherited_future_defaults`, `9 historical_config_policy_references`, `10 safe_usage_provenance`, `11
+terminal_tool_result_references`, `12 policy_decision_references`, `13
+terminal_child_result_references`, `14 workspace_state`. Field 6 is the selected boundary sequence, not the current
 source head observed during the fork operation.
 - `fork-command`: `1 source_session_id`, `2 boundary`, `3 expected_source_sequence`, `4 expected_preview_binding`,
-`5 title_present`, `6 requested_title`, `7 future_profile_override_present`, `8 future_profile_override`.
+`5 title_present`, `6 requested_title`.
 
 The former `canonical_snapshot_digest`, `model_context_digest`, and `fork-command` digest construction are removed with
 the codec ([architecture 02](02-dto-and-contract-policy.md)). A command binds to the exact source state the
@@ -246,7 +242,6 @@ The closed fork safe failures through `ErrorDto` are:
 
 ```text
 fork_context_schema_unsupported
-reasoning_history_unavailable
 fork_history_unavailable
 fork_snapshot_unsupported
 fork_reference_unavailable
@@ -269,8 +264,8 @@ live-schema sessions (on creation or at first branch); no synthetic parent/ancho
 
 A fork begins with no run and no execution authority. It cannot transfer a provider request/client/credential, tool
 action, kernel task, MCP process, or unfinished effect. Later child runs select their own immutable
-provider meaning. Regeneration is never a continuation: it resolves under ordinary admission and the per-turn override
-rules of [architecture 29](29-provider-session-and-profiles-protocol.md).
+provider meaning. Regeneration is never a continuation: it resolves under ordinary admission and follows the
+session's provider selection ([architecture 29](29-provider-session-and-profiles-protocol.md)).
 
 This document depends on architectures 04 and 15--22 plus the DTO, transport, security, verification, and quality
 policies. It does not define activity-journal or UI implementation, workspace cloning/rebinding, autonomous

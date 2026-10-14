@@ -11,9 +11,9 @@ authentication, cloud secrets management, or multi-user configuration.
 `intention-config` owns TOML parsing, schema validation, defaults and resolved configuration, and the M1
 `ConfigRevisionId` and credential-free `ResolvedConfigDto`/`ConfigSnapshotDto` contract foundation.
 
-M1/M4 accept only `openrouter` and `generic-chat-completion-api` provider kinds. A future canonical Responses kind is
-`responses`, not `openai`; any `openai` spelling is only a future parse-time alias under architecture 22 and does not
-amend M1/M4.
+M1/M4 accept only `openrouter` and `generic-chat-completion-api` provider kinds; the named provider-entry list and
+session selection are owned by [architecture 22](22-provider-evolution-profiles-and-reasoning.md) and [architecture
+29](29-provider-session-and-profiles-protocol.md).
 
 No YAML, JSON, database-only, or UI-only configuration source is authoritative in v1.
 

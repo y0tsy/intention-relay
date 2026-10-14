@@ -156,7 +156,9 @@ execution path carries no capability check. A truncation limitation of that pinn
 
 ## Provider selection
 
-Resolved TOML configuration selects a provider and model. M1 defines a serializable, credential-free `ConfigSnapshotDto`
+Resolved TOML configuration selects a provider entry and model; the named entry list, the global default, and the
+optional per-session selection are owned by [architectures 22](22-provider-evolution-profiles-and-reasoning.md) and
+[29](29-provider-session-and-profiles-protocol.md). M1 defines a serializable, credential-free `ConfigSnapshotDto`
 foundation containing a `ConfigRevisionId`, capture timestamp, and redacted resolved selection. M1 does not persist
 revisions, apply configuration to a running daemon, or attach snapshots to runs; M3/M4 own the startup application and
 recorded-revision workflows. A later run receives the

@@ -218,7 +218,7 @@ pointers:
 - Provider evolution, profiles, and reasoning — [architecture 22](22-provider-evolution-profiles-and-reasoning.md).
 - Session branching and regeneration — [architecture 23](23-non-destructive-session-branching-and-regeneration.md).
 - Daemon, transport, and adapter boundary — [architecture 03](03-daemon-transport-and-adapters.md).
-- Provider discovery and typed configuration editing — [architecture 25](25-configuration-provider-control-plane.md) (protocol:
+- Provider configuration, discovery, and typed configuration editing — [architecture 25](25-configuration-provider-control-plane.md) (session selection:
   [architecture 29](29-provider-session-and-profiles-protocol.md)).
 - Post-M4 evidence obligations — activating specification per [architecture 12](12-quality-gates-and-makefile.md).
 

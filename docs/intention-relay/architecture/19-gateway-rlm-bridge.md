@@ -133,8 +133,8 @@ reference exact legacy bytes, rewrite, normalize, or synthesize future state
 
 This document depends on architectures 15, 18, and 20. Related
 owners: 20 owns kernel process/namespace/checkpoint lifecycle; 21 owns Goal, Skill, context, and compaction
-(bridge-delivered context is safe immutable projection only); 22 owns provider profile/capability semantics (bridge
-delivery uses only safe existing provider facts); 23 owns ordinary Session forks (no live kernel process or unfinished
+(bridge-delivered context is safe immutable projection only); 22 owns provider configuration and reasoning semantics
+(bridge delivery uses only safe existing provider facts); 23 owns ordinary Session forks (no live kernel process or unfinished
 effect crosses one); 03 owns activity/UI projections (kernel-host calls never become activity authority or
 public activity payload). It does not define kernel lifecycle, RLM executor or recursion topology, provider evolution,
 Skills, Goals, context, session forks, activity/UI, direct MCP administration, SQL, migrations, wire tags, crates,

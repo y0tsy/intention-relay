@@ -303,8 +303,8 @@ Evidence: activating specification per [architecture 12](12-quality-gates-and-ma
 
 Architecture 21 owns Goal, Skill, context, and compaction; kernel steps consume only immutable safe context
 projections, and context cannot create a kernel process, epoch, or namespace, disclose private namespace/checkpoint
-state, issue a host request, or reconstruct missing kernel meaning. Architecture 22 owns provider profile/capability
-semantics; kernel state,
+state, issue a host request, or reconstruct missing kernel meaning. Architecture 22 owns provider configuration and
+reasoning semantics; kernel state,
 checkpoints, and namespaces cannot select a provider, retain a provider continuation, or carry private provider
 clients/resources. Architecture 23 owns ordinary Session forks; no live kernel process, epoch, task, namespace,
 checkpoint authority, or unfinished effect crosses a fork. Architecture 03 may expose safe kernel outcome provenance

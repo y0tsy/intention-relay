@@ -11,7 +11,7 @@ Owner: architecture 25.
 ## Ownership and non-authorities
 
 Architecture 09 owns TOML parsing, schema validation, configuration discovery, redaction, and startup-only application.
-Architecture 22 owns future provider kinds, profiles, catalogs, selections, and driver compatibility. Architecture 15
+Architecture 22 owns future provider entries, selection resolution, and reasoning. Architecture 15
 owns the tool loop, and architecture 03 owns the flat activity journal, the notification list, and adapter behavior.
 
 This document owns only the accepted future directions below: no second runtime, registry, persistence authority, or
@@ -36,14 +36,12 @@ editing replaces the last of them.
 
 ## Provider and model discovery
 
-Discovery enumerates provider/model capabilities as typed non-authorizing records:
+Discovery enumerates provider/model metadata as typed non-authorizing records:
 
-- discovery results never select a provider kind, endpoint, driver, capability,
-profile, or execution kind; model identifiers never route behavior;
-- discovery is an independently identified external attempt with its own
-before-start/started/terminal evidence and no automatic continuation;
-- discovered records are additive and cannot reconstruct, repair, or replace an
-immutable selection.
+- discovery results never select a provider entry, endpoint, kind, or execution kind; model identifiers never route
+  behavior;
+- discovery is an ordinary non-authorizing read with no automatic continuation and no attempt-evidence obligation;
+- discovered records are additive and cannot reconstruct or replace a resolved run selection.
 
 ## Typed configuration editing
 
@@ -65,8 +63,9 @@ expose credentials, private endpoint material, SDK objects, or raw provider payl
 
 ## Presentation and protocol surface
 
-The provider profile UI and the typed configuration-editing surface's presentation and protocol surface are owned by
-[architecture 29](29-provider-session-and-profiles-protocol.md) (public protocol and presentation).
+The provider list and session-selection protocol are owned by [architecture
+29](29-provider-session-and-profiles-protocol.md); this document owns only the editing direction, and no presentation
+surface is designed here.
 
 ## Compatibility and historical preservation
 
@@ -77,7 +76,7 @@ activating specification.
 ## Dependencies and non-goals
 
 This document depends on architectures 03, 09, and 22. Non-goals: a reload
-watcher or transport, keychain or secret store, standalone discovery topology, profile
+watcher or transport, keychain or secret store, standalone discovery topology, provider
 picker/editor implementation, instruction-fragment editing or preview (instruction configuration is filesystem-level,
 [architecture 30](30-instruction-sources-and-system-context.md)), OS notifications, remote transport, multi-user access,
 sandbox/container isolation, and production activation beyond the accepted directions. The daemon-facade serving

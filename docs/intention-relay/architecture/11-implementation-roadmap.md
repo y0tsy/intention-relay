@@ -161,16 +161,14 @@ child-result fact bound to the same `ToolCallId` and delivered once into the par
 frozen tool selection, tool admission, and Gateway/RLM bridge stay with Milestone 10. Its activating specification
 declares the instruction contract families as typed serde JSON contracts, activates the `sub_agent` tool contract and
 the Plan/Build policy on the live tool path, and changes no earlier slice.
--  **Slice 4 — Provider discovery and typed configuration editing — not activated.** Provider/model discovery and typed
-configuration editing (architecture 25) and provider session selection (architectures 29/22): discovery, the typed
-configuration-editing surface, provider profile UI, arbitrary authentication headers, session defaults and per-turn/fork
-overrides, the provider profiles protocol, and the provider reasoning/catalog surface, with the catalog built at startup.
-Controlled live reload, in-process credential rotation, provider health checks, pricing and budget policy, and raw-TOML
-editing were removed from the slice (architecture 25). The
-unconsumed-surface audit (2026-09) removed the unconsumed
-typed preservation-control, server-side-parser, Responses reasoning-mode, reasoning-usage, and model-capability-envelope
-contracts, the protocol-only reasoning/header/parser duplicates, the eight producer-less control-plane event DTOs, and
-the `provider_profile_tombstoned` wire code.
+-  **Slice 4 — Provider configuration and typed configuration editing — not activated.** Discovery (architecture 25),
+the typed configuration-editing surface (architecture 25), and the session-selection layer (architectures 29/22): the
+named provider-entry list with its global default, the session selection command and query, the bounded provider list,
+the typed editing surface, discovery as an ordinary non-authorizing read, and the optional named authentication header,
+with the entries built at startup. Controlled live reload, in-process credential rotation, provider health checks,
+pricing and budget policy, raw-TOML editing, per-turn and fork provider overrides, opaque catalog pagination, catalog
+tombstones, user-declared kinds, and the typed cross-run reasoning-transfer surface were removed from the slice
+(architectures 22, 25, 29).
 -  **Slice 5 — Goal domain — not activated.** The Goal domain (architecture 28). The slice also activates the
 tool-descriptor, tool-registry, and model-tool-loop contracts as amended under [architecture
 15](15-tool-registry-and-model-tool-loop.md), the bridge invocation and MCP connection-record contracts (architectures
@@ -260,7 +258,7 @@ agent-operation slices.
 activity-journal and notification projections;
 - TUI/REPL remains a contract-equivalent client;
 -  post-M4 activity-journal and notification contracts are delivered by the Milestone 5+ UI-foundation slice and
-consumed here, while the durable `SessionProviderProfileChanged` delivery stays reserved to M6.
+consumed here.
 
 ### Tests first
 
@@ -408,8 +406,7 @@ verify`, and Linux/Windows CI;
 **Depends on Milestone 10.** It delivers the post-M4 MCP, kernel, and context packages (architectures 18/20/21), the
 project script library of [architecture
 20](20-ipython-kernel-lifecycle.md), and the architecture 22 provider work that remains
-not activated: the `responses` driver, `SafeHeader` live wire injection, and the
-user-kind parser. It starts only when an activating specification per [architecture
+not activated: the `responses` driver and the optional named authentication header. It starts only when an activating specification per [architecture
 12](12-quality-gates-and-makefile.md) is accepted; that activating change also declares the kernel contract families as
 typed serde JSON contracts ([architecture 02](02-dto-and-contract-policy.md)).
 
@@ -427,8 +424,7 @@ projection;
 -  scoped Goal acceptance and evidence, immutable untrusted Skill selection, the admission-frozen context-source
 selection, model-step context, and immutable compaction over exact completed history
 (architecture 21), with the Goal domain itself owned by architecture 28;
--  the canonical `responses` provider driver, `SafeHeader` live wire injection, and the user-kind parser (architecture
-22);
+-  the canonical `responses` provider driver and the optional named authentication header (architecture 22);
 -  crate ownership and coverage declarations under [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations for every activated family.
 

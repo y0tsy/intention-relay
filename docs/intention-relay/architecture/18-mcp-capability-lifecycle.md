@@ -32,7 +32,7 @@ gateway, typed boundary, private resources, idempotency, redaction, publication 
 and no-resume law.
 
 This document owns the field semantics of one user-editable, credential-free connection record, mirroring the
-provider-profile pattern ([architecture 22](22-provider-evolution-profiles-and-reasoning.md)):
+provider endpoint rules ([architecture 22](22-provider-evolution-profiles-and-reasoning.md)):
 
 ```text
 McpConnectionV1
