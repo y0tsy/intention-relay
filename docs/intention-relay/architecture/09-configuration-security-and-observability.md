@@ -117,7 +117,7 @@ precedent or a liveness reason, and the reasoning is recorded with the value. No
 for credential-shaped strings exists: secrets are protected structurally, and a recognizable fake secret is a
 regression fixture rather than a scan target.
 
-The current bounds are:
+Every numeric bound in the system is recorded here with the reason it exists:
 
 | Bound | Class and purpose |
 | --- | --- |
@@ -128,6 +128,8 @@ The current bounds are:
 | Pipe-collection window (`READER_DRAIN_GRACE`, 5 s) | Liveness: after the direct child is reaped, a descendant holding the pipes open cannot extend the call; a window that runs out stops the process group and keeps the captured output. |
 | Provider idle attempt window and retry delay | Liveness: a live provider request that delivers no event for the configured window fails typed; the window re-arms after every delivered event, so a request that keeps producing facts is never cut off. |
 | Subscriber queue and write deadline (`SUBSCRIBER_QUEUE_CAPACITY` 64, `SUBSCRIBER_WRITE_DEADLINE` 10 s) | Liveness: isolates a slow local peer from execution, persistence, and healthy delivery. |
+| Goal domain ([28](28-goal-domain-and-verification.md)) | Representation: 256 goals in one project, 64 in one session, tree depth 16, 32 direct children per goal, 64 session links per project goal, 32 selected skills and roles in one run, 512 KiB per skill, role, summary, or draft, 1 MiB per canonical goal target snapshot, 4 MiB of goal context and summaries in one run, and one pending proposal per owner scope and record kind with evidence coalescing. |
+| Conversation tree ([23](23-non-destructive-session-branching-and-regeneration.md)) | Representation: 64 summaries per tree page and 128 NFC Unicode scalar values per session title. The tree carries no depth, descendant-count, or source-boundary rate limit, and a base snapshot carries no canonical size limit. |
 
 ## Credential isolation
 

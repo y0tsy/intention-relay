@@ -191,7 +191,9 @@ Only a selected verified checkpoint may seed the fresh run-scoped namespace of a
 blocks dependent work before effect; `Optional` restoration failure starts an empty namespace only in that new run with
 a typed degraded-restoration result. Restoration never revives a typed-client handle, task, process, provider request,
 child, MCP resource, unfinished run, or external effect. An uncreatable or unverifiable checkpoint after a successful
-cell produces `kernel_checkpoint_unavailable`; the cell is not rerun and the run cannot silently continue. On restart,
+cell produces `kernel_checkpoint_unavailable`. Saving follows the same policy as restoring: under `Required` the failure
+blocks dependent work before effect and the cell is not rerun, and under `Optional` the run continues with a typed
+degraded result while the cell is still not rerun. On restart,
 no execution or action resumes; the next explicit execution creates a fresh session kernel process and may restore only
 the latest verified checkpoint into its fresh namespace. Missing, corrupt, incompatible, or over-limit state produces
 `kernel_state_restore_unavailable`, the namespace starts empty, and durable history remains readable.
@@ -235,10 +237,11 @@ Future kernel delivery uses typed requests ([architecture 03](03-daemon-transpor
 correlated results followed by live notifications.
 Reconnect re-reads current state; there is no event tail, cursor, or resynchronization. Delivery is read-only: it cannot
 create a kernel process, restore a namespace, execute a cell, repeat a host request, start a child, or invoke
-MCP. Partial delivery is never permitted. M3/M4 and retained IPython/RLM records gain no kernel selection, epoch,
-namespace, checkpoint, typed-client, child, MCP, activity, or policy state; M4 tool calls remain denial evidence, and no
-current kernel, process, checkpoint, registry, configuration, bridge, provider, model,
-graph, or UI state may reconstruct missing meaning. The trusted-local model remains explicit: direct Python OS APIs can
+MCP. Partial delivery is never permitted. M3/M4 and retained IPython/RLM rows that the current storage stamp still
+carries gain no kernel selection, epoch, namespace, checkpoint, typed-client, child, MCP, activity, or policy state, and
+a database without that stamp is discarded whole rather than opened; M4 tool calls remain denial evidence, and no
+current kernel, process, checkpoint, registry, configuration, bridge, provider, model, graph, or UI state may
+reconstruct missing meaning. The trusted-local model remains explicit: direct Python OS APIs can
 bypass the facade and are not sandboxed or fully observable.
 
 ## Kernel detail: DTO family, bounds, and safe failures

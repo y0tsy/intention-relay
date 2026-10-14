@@ -213,14 +213,13 @@ current project instructions, or current session state.
 
 ### Fixed bounds and audit taxonomy
 
-The first scope uses these fixed representation bounds, enforced inside the fork transaction before any partial child
-record exists; a parameter failure is a typed policy result rather than an oversized transport frame, partial branch, or
-unstructured storage error:
-
-| Subject | Bound | Enforcement |
-| --- | ---: | --- |
-| Tree query page | 64 summaries | Reject page sizes outside 1..=64 with `invalid_conversation_tree_page`. |
-| Session title | 128 NFC Unicode scalar values | Reject invalid title before the presentation event. |
+The fork's representation bounds — the 64-summary tree page and the 128-NFC-scalar session title — are the
+conversation-tree row of the limits registry in
+[architecture 09](09-configuration-security-and-observability.md), where every numeric bound in the system is recorded
+with its classification and reason. They are enforced inside the fork transaction before any partial child record
+exists, and a parameter failure is a typed policy result rather than an oversized transport frame, partial branch, or
+unstructured storage error: the page rejects a size outside 1..=64 with `invalid_conversation_tree_page`, and an
+out-of-bound title is rejected before the presentation event.
 
 The conversation tree has no depth, descendant-count, or source-boundary rate limit, and a base snapshot has no
 canonical size limit ([architecture 09](09-configuration-security-and-observability.md), [architecture

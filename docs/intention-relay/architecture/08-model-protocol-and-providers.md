@@ -256,9 +256,10 @@ The classification selects the normalized `generic_chat_provider_unavailable` (r
 - Config snapshots define timeout/retry limits applied to the run.
 - A retry preserves its causal relation to the originating model turn through the run's durable attempt count.
 - A daemon restart does not retry an in-flight provider request.
-- Recorded truncation limitation: a provider body that ends without `[DONE]` completes as `Finished { Unknown }`,
-  because the pinned OpenRouter SDK consumes the marker inside its own stream, so the adapter cannot classify
-  `openrouter_stream_incomplete` and a truncated generation is reported as an ordinary completion.
+- Recorded truncation limitation: the pinned OpenRouter SDK consumes the `[DONE]` marker inside its own stream, so the
+  adapter's completion signal is the SDK's terminal event rather than the marker. A native stream that ends without
+  that event fails `openrouter_stream_incomplete`, and a truncated generation therefore never reports an ordinary
+  completion.
 
 The runtime uses the immutable persisted attempt timeout and at most two total attempts. That timeout is an idle
 deadline, never a total wall-clock cap: a round arms one window when its provider stream opens and re-arms a fresh

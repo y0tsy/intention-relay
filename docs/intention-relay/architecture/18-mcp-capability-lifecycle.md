@@ -134,9 +134,10 @@ Future MCP projections use typed requests ([architecture 03](03-daemon-transport
 layered with the `model_tool_loop_v1` descriptor/model
 capability: live notifications through one post-commit gate; reconnect re-reads current state, and there is no event
 tail, cursor, or resynchronization. No caller receives a partial ordinary snapshot. M3/M4 and retained bounded-MCP/RLM
-records gain no synthetic connection, method, process, or authority state; historical M4 tool calls remain denial
-evidence, and no historical record, current server, endpoint, credential, schema, registry, configuration, ancestry,
-Goal, Skill, UI, logs, or remote continuation state may reconstruct missing MCP meaning.
+rows that the current storage stamp still carries gain no synthetic connection, method, process, or authority state, and
+a database without that stamp is discarded whole rather than opened; historical M4 tool calls remain denial evidence,
+and no historical record, current server, endpoint, credential, schema, registry, configuration, ancestry, Goal, Skill,
+UI, logs, or remote continuation state may reconstruct missing MCP meaning.
 
 ## MCP detail: bounded gateway, bounds, and safe failures
 

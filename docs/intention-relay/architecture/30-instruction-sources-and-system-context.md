@@ -15,7 +15,8 @@ closed failures, and its observability rules. Architecture
 context source and never enter a context selection, a Skill selection, or a model-step context. Architecture 23 owns
 fork lineage and the frozen records that carry the materialized text. Architecture 07 owns the `Mode` contribution
 text; architecture 06 owns the `Vfr` contribution content and its configuration dependency; architecture 08 owns the
-request contract and driver translation; architecture 09 owns classification and redaction. Architecture 25 owns no
+request contract and driver translation; architecture 09 owns configuration loading and credential isolation, while
+this document owns the classification of instruction content and its redaction rules. Architecture 25 owns no
 instruction commands: instruction configuration is filesystem-level.
 
 Instruction text is not authority: it cannot create, widen, or remove a tool, provider selection, admission

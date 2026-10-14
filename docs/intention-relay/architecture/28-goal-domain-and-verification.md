@@ -53,9 +53,11 @@ GoalSessionLinkDto
 ```
 
 Goals are flat: `parent_goal_id_when_present` is a display-only reference to another Goal, and it grants no
-inheritance, readiness, requirement, or bound in either direction. Self-link and cycles fail before partial record. A
-revision is credential-free, typed, bounded, and immutable; edits create new revisions and never rewrite admitted-run
-meaning.
+inheritance, readiness, or requirement in either direction. It still shapes a tree, so the tree's depth and each node's
+direct children are bounded by the registry entries in
+[architecture 09](09-configuration-security-and-observability.md), and self-link and cycles fail before partial record.
+A revision is credential-free, typed, bounded, and immutable; edits create new revisions and never rewrite
+admitted-run meaning.
 
 ## Goal status
 
@@ -158,20 +160,10 @@ attempt obtains a new run identity and target snapshot.
 
 ## Bounds and closed safe failures
 
-The first scope uses these code-owned limits:
-
-| Subject | Selected limit |
-| --- | ---: |
-| Goals in one project | 256 |
-| Goals in one session | 64 |
-| Goal-tree depth | 16 |
-| Direct children of one goal | 32 |
-| Session links of one project goal | 64 |
-| Selected skills and roles in one run | 32 |
-| Full skill, role, summary, or draft | 512 KiB |
-| Canonical goal target snapshot | 1 MiB |
-| Goal context and summaries in one run | 4 MiB |
-| Pending proposal per owner scope and record kind | 1, with evidence coalescing |
+The Goal-domain bounds are registry entries, not local constants: their subjects, values, and classification are the
+Goal-domain row of the limits registry in
+[architecture 09](09-configuration-security-and-observability.md), where every numeric bound in the system is recorded
+with the reason it exists.
 
 No content is truncated or partly committed to satisfy a bound. The Goal-domain closed safe failures through `ErrorDto`
 are:

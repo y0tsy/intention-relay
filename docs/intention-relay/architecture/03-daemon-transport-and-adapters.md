@@ -307,14 +307,14 @@ follow-up run.
 | Reconnect | Subscription integration test. | A new request receives the current durable snapshot, a reconnect re-reads current state, and no request claims replayed history. |
 | Restart | Persisted active-run recovery test. | Recovery completes before ready; every pre-existing unfinished run becomes `interrupted`, pending turns stay durable input, and no provider/tool call resumes. |
 | State location | Platform-state path fixture. | The database resolves under AppData/platform state and fails safely without an absolute platform directory, never using CWD. |
-| Adapter isolation | Dependency/contract test. | Tauri and TUI have no direct runtime/storage implementation dependency. |
+| Adapter isolation | Dependency/contract test. | The TUI adapter has no direct runtime/storage implementation dependency; the desktop bridge carries the same rule when M6 creates it. |
 
 ## Quality-gate integration
 
 The daemon, transport, client, and adapter tests in this document are blocking `make verify` inputs under the coverage
-policy of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate line floors). Tauri and TUI carry
-their 20% line floor in addition to
-their mapping contracts and fixture-daemon outcome scenarios; the floor never replaces that evidence.
+policy of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate line floors). `intention-tui`
+carries its 20% line floor in addition to its mapping contracts and fixture-daemon outcome scenarios; the floor never
+replaces that evidence, and the bridge crate takes its own floor when M6 creates it.
 
 ## Open implementation decisions
 

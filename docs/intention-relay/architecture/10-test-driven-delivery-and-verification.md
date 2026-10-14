@@ -44,9 +44,11 @@ Compilation is necessary but never sufficient acceptance evidence.
 | Adapter integration tests | Prove Tauri bridge and TUI consume the same daemon contract. | Identical session snapshot and frames observed by both clients. |
 | Outcome tests | Prove end-to-end behavior against acceptance scenarios. | Restart marks run interrupted and UI receives it. |
 
-## Architecture rules to encode
+## Architecture rules and their enforcement
 
-The following are mandatory candidates for automated architecture tests:
+These rules bind every slice. Each row states the protection it requires; the mechanism that can decide a rule is named
+below, and a rule without a mechanism is a review responsibility rather than a gate
+([12 Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 | Rule | Required protection |
 | --- | --- |

@@ -194,14 +194,15 @@ Autopilot. Plan's advisory instruction is not a technical boundary.
 | Shell semantics | Tool contract test. | Pipelines, redirects, and compound commands run through the platform shell. |
 | Recoverable call failure | Engine lifecycle and daemon end-to-end tests. | An undecodable, denied, or failed call commits one terminal `Failed` result with bounded guidance and the next model step proceeds. |
 | Pre-effect rejection | Application integration test. | An unknown tool id is rejected before any external effect and still leaves the durable call row and one guided `Failed` result. |
-| Adapter independence | Daemon tool-stream contract test from TUI and bridge clients. | Both see the same committed tool results. |
+| Adapter independence | Daemon tool-stream contract test from the TUI client. | The adapter sees the same committed tool results the daemon owns; the desktop bridge joins this row when M6 creates it. |
 
 ## Quality-gate integration
 
 Tool and WorkspaceRoot tests are blocking `make verify` inputs under the coverage policy of [12 Quality Gates and
-Makefile](12-quality-gates-and-makefile.md) (per-crate line floors). Architecture checks must reject direct process-CWD
-fallback, and base tools stay free of transform behavior; line coverage cannot replace the explicit relative-addressing, search-scope,
-execute-CWD, and policy-denial scenarios above.
+Makefile](12-quality-gates-and-makefile.md) (per-crate line floors). Direct process-CWD fallback is rejected by the
+compiler, through the `clippy.toml` entries that deny `std::env::current_dir` and `std::env::set_current_dir`; that base
+tools stay free of transform behavior is a review responsibility. Line coverage cannot replace the explicit
+relative-addressing, search-scope, execute-CWD, and policy-denial scenarios above.
 
 ## Open decisions
 

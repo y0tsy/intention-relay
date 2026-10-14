@@ -56,7 +56,7 @@ of each.
 | --- | --- | --- |
 | M0 Quality foundation | Closed | Reproducible Makefile-orchestrated quality pipeline (format, lint, nextest, rustdoc, coverage, supply-chain gates) with pinned tools. |
 | M1 Contracts, configuration, workspace skeleton | Closed | Tier-A crate boundaries (`intention-proto`, `intention-config`; M1's `intention-domain` was later folded into `intention-proto`), DTO-first policy, TOML config with redacted projections, compile-only skeletons for every later crate. |
-| M1+ Quality policy hardening | Closed | Machine-readable policies (`quality/*.toml`) enforce the pinned toolchains and tools, the workspace and external dependency edges, and the supply-chain policy. |
+| M1+ Quality policy hardening | Closed | Policy files carry the pinned toolchain and tools (`quality/tools.toml`, read by `quality/check_tools.py`), the supply-chain policy (`deny.toml`), the two compiler-enforced source rules (`clippy.toml`), and notice generation (`quality/about.toml`). Crate and external dependency edges are enforced by the manifests and rustc, not by a policy file. |
 | M2 Local protocol, client, daemon bootstrap | Closed | Private local IPC, correlated request/response codec, shared bootstrap client with startup lock and readiness polling, in-memory fixture composition, minimal TUI proof adapter (the hello/version handshake was later replaced by one typed wire). |
 | M3 SQLite sessions, transcript, queue | Closed | Durable SQLite-backed sessions, runs, turns, and transcript rows; turn queueing; canonical credential-free config revisions; recovery-before-ready. |
 | M4 Model contract, providers, one streaming run | Closed | Provider-neutral model contracts and validated stream facts; private OpenRouter and generic Chat Completions drivers; durable model evidence in the transcript; one daemon-owned streaming run with reconnect to current state and live session delivery. |
@@ -331,7 +331,7 @@ enabled for dependency updates
   target architecture with reading paths (principles, crate map, DTO policy,
   quality gates, TTD, roadmap, and the instruction channel).
 - [Implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md):
-  the remaining milestone plan (M6-M11) and the M5+ slice order.
+  the remaining milestone plan (M6-M8 and M10-M11) and the M5+ slice order.
 
 - [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md): generated license notices
   for registry dependencies.

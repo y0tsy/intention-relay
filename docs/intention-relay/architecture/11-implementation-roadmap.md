@@ -19,7 +19,8 @@ M0-M5 are closed. Their per-milestone sections and the `docs/intention-relay/clo
 removed as dead historical artifacts by `eeff780`, and both remain recoverable from repository history:
 `git show eeff780^:docs/intention-relay/architecture/11-implementation-roadmap.md` for the sections and
 `git show eeff780^:docs/intention-relay/closeout/` for the evidence. The milestones below therefore record the
-remaining plan (M6-M11); the delivered behavior of M0-M5 is described by the architecture documents themselves.
+remaining plan (M6-M8 and M10-M11); the delivered behavior of M0-M5 is described by the architecture documents
+themselves.
 
 ## Dependency graph
 

@@ -15,10 +15,13 @@ map](01-workspace-and-crate-map.md).
 Intention Relay is a Rust workspace of small, logically grouped crates. `intention-daemon` is a composition root that creates
 factories and connects implementations, not a catch-all core crate.
 
-### 2. DTO-first at every boundary
+### 2. DTO-first at the three physical boundaries
 
-Every crate, process, persistence, provider, tool, and adapter boundary exchanges explicit typed DTOs. Untyped
-maps, raw JSON, implementation records, SDK objects, and stringly typed identifiers are prohibited as contracts.
+A boundary communicates through an explicit, strictly typed DTO, and exactly three boundaries force a serialized shape:
+the IPC wire, SQLite persistence, and provider SDK calls. Untyped maps, raw JSON, implementation records, SDK objects,
+and stringly typed identifiers are prohibited as contracts anywhere. Crates inside the process call each other with
+domain types: a DTO is not introduced between internal crates, and a type acquires wire attributes only where it
+crosses one of the three boundaries ([architecture 02](02-dto-and-contract-policy.md)).
 
 ### 3. One daemon owns application runtime
 
@@ -95,20 +98,10 @@ they apply when the user returns and never pause execution.
 
 ## Scope boundaries
 
-```mermaid
-flowchart LR
-  AD[Adapters] --> PR[Protocol]
-  PR --> DM[Daemon]
-  DM --> AP[Application]
-  AP --> RT[Runtime]
-  RT --> TO[Tools]
-  RT --> MO[Model drivers]
-  AP --> DB[Storage]
-
-  AD -. no business logic .-> AP
-  AD -. no direct access .-> DB
-  AD -. no direct access .-> MO
-```
+Adapters — the terminal application today, the desktop bridge at M6 — reach the daemon through `intention-client` and
+the typed wire. They hold no business logic, no direct storage access, and no direct model-driver access. The live
+crate graph and every dependency edge are the crate map in
+[architecture 01](01-workspace-and-crate-map.md).
 
 ## Required v1 outcomes
 
@@ -125,8 +118,8 @@ supporting tools.
 6.  State visible to an adapter was committed before its corresponding live frame was published; provisional text
 deltas are transient, never authoritative, and are replaced by the committed row.
 7.  Provider secrets cannot appear in transport frames, persisted state, diagnostics, or normal UI output.
-8.  `make verify` proves the applicable formatting, lint, feature, test, documentation, architecture, coverage, and
-supply-chain gates before an implementation slice is accepted.
+8.  `make verify` proves the applicable formatting, lint, feature, test, documentation, coverage, and supply-chain
+gates before an implementation slice is accepted.
 
 ## Explicit v1 non-goals
 

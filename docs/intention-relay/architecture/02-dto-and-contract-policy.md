@@ -2,8 +2,8 @@
 
 **Current policy.**
 
-This document makes the DTO-first principle executable. It applies to all crate, process, persistence, provider, tool,
-and presentation boundaries.
+This document makes the DTO-first principle executable. It applies to the three physical boundaries: the IPC wire,
+SQLite persistence, and provider SDK calls, together with the process and adapter edges that carry them.
 
 ## Non-negotiable rule
 
@@ -181,12 +181,15 @@ typed identity for an adapter to reconcile state.
 
 ## Versioning and compatibility
 
-- Every transport schema and persisted row schema has exactly one live version.
-- Changes are additive by default. Current payloads may omit additive fields
-such as `ErrorDto.correlation_id`; omitted fields decode as `None`.
-- Public DTOs tolerate unknown additive JSON fields unless a closed
-configuration schema explicitly documents `deny_unknown_fields`. Required fields, invalid types, invalid IDs, unknown
-closed variants, and any stored schema other than the current one always fail safely.
+- Every transport schema and persisted row schema has exactly one live version, and that version evolves in place.
+  Backward compatibility is neither offered nor required: there is no earlier payload shape to accept, no negotiated
+  version, and no compatibility layer.
+- Optional stays optional inside that one version. A current payload may omit a field such as
+  `ErrorDto.correlation_id`, and the omission decodes as `None`; that is a property of the live schema, never an
+  allowance for an earlier or later writer.
+- Public DTOs tolerate unknown JSON fields unless a closed configuration schema explicitly documents
+  `deny_unknown_fields`. Required fields, invalid types, invalid IDs, unknown closed variants, and any stored schema
+  other than the current one always fail safely.
 - The typed local wire has exactly one live version, carried by the platform-default endpoint name byte
 ([architecture 03](03-daemon-transport-and-adapters.md)): there is no negotiated protocol version, no handshake, and no
 per-payload `schema_version`. Configuration and storage keep their own explicit schema versions.

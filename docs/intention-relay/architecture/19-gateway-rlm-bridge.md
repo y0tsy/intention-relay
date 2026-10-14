@@ -124,8 +124,9 @@ implementation detail.
 ## Compatibility, dependencies, and non-goals
 
 M4 provider kinds remain `openrouter` and `generic-chat-completion-api`; model names do not select a provider or bridge
-behavior. Historical M4 tool calls remain denial evidence. Historical M3/M4 and retained RLM records gain no bridge
-ingress, operation, MCP, Skill, Goal, activity, or policy state, and no current mutable state may reconstruct
+behavior. Historical M4 tool calls remain denial evidence. Historical M3/M4 and retained RLM rows that the current
+storage stamp still carries gain no bridge ingress, operation, MCP, Skill, Goal, activity, or policy state, and a
+database without that stamp is discarded whole rather than opened, so no current mutable state may reconstruct
 missing bridge meaning. Retained RLM `SubAgentId`, `RlmParentLinkDto`, session/run-rooted
 trees, policy inheritance, queues, activity identities, and product limits remain historical only; no later bridge may
 reference exact legacy bytes, rewrite, normalize, or synthesize future state
