@@ -26,7 +26,9 @@ architecture, failure-path, or outcome tests.
   duplicates it. Branch protection requires the four resulting status checks.
 - CI installs exact tool releases through checksum-verified actions, installs per job only the tools that job runs,
   and caches per phase according to what that phase reuses. `lint-arch` and `test` build a plain target tree that
-  `rust-cache` keeps warm. `coverage-default` deletes its instrumented target after the gate, so the target tree is
+  `rust-cache` keeps warm under one stable key per phase, so each run replaces its phase's entry instead of adding
+  another generation and the repository cache budget is not consumed by copies of the same tree. `coverage-default`
+  deletes its instrumented target after the gate, so the target tree is
   never cached: sccache carries its compiled objects for both the Rust and the C/C++ builds, and an `actions/cache`
   entry keyed by `Cargo.lock` carries the crate sources, which an object cache cannot replace. `deps` compiles nothing
   and needs only that registry entry. `mold` comes from its own pinned action, and only the jobs whose flags select it

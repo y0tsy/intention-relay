@@ -93,10 +93,16 @@ jobs:
         # runs. The coverage job cannot: its instrumented target is deleted
         # after the gate so the tree stays disposable, and sccache serves its
         # objects instead. The deps job compiles nothing at all.
+        #
+        # `add-job-id-key` is off because the prefix already separates the
+        # phases: leaving it on gives every run a fresh key, so each run writes
+        # a new copy instead of replacing the previous one and the repository
+        # cache fills with generations of the same four trees.
         if: matrix.uses_rust_cache
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: ${{ matrix.phase }}
+          add-job-id-key: false
 
       - name: Restore the Cargo registry cache
         # What a warm object cache cannot replace is the crate sources: sccache
