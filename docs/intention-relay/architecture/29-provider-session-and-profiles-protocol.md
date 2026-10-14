@@ -26,9 +26,9 @@ A session stores at most one selected provider entry name; with no selection it 
 `SetSessionProviderCommandDto { session_id, provider_name }` changes it for future runs only, last write wins, and it
 carries no expected revision, operation ID, event, or `changed = false` no-op semantics. `GetSessionProviderQueryDto`
 returns the selected name, the global default, and the availability of the selected entry (`available | missing`). A
-selection that names an entry absent from the startup document resolves as a closed unavailable projection
-(`provider_configuration_unavailable` at admission); it is never mass-rewritten, and a session whose selection is
-cleared follows the global default again.
+selection that names an entry absent from the startup document fails the run with
+`provider_configuration_unavailable`, a closed detail, and recorded provenance, with no provider call; it is never
+mass-rewritten, and a session whose selection is cleared follows the global default again.
 
 Every accepted run freezes exactly one resolved entry's safe fields into its immutable configuration snapshot
 ([architecture 09](09-configuration-security-and-observability.md)): entry name, kind, model, normalized endpoint, the
@@ -50,11 +50,11 @@ credentials, or receive configuration paths. The daemon advertises no provider c
 
 ## Startup-only application
 
-Provider entries are startup-only: no watcher, polling, restart protocol, or live reload exists. An invalid or
-internally inconsistent document fails startup loudly, and restart is the only way to apply changes; configuration
-activation stays daemon-startup-only under [architecture
-09](09-configuration-security-and-observability.md). The layer does not include the held-run admission path
-(`AdmitRecoveredRunCommandDto`); the ordinary recovery path is the only one.
+Provider entries are startup-only and activation stays daemon-startup-only ([architecture
+22](22-provider-evolution-profiles-and-reasoning.md), [architecture
+09](09-configuration-security-and-observability.md)); the layer adds no watcher, polling, restart protocol, or live
+reload. The layer does not include the held-run admission path (`AdmitRecoveredRunCommandDto`); the ordinary recovery
+path is the only one.
 
 ## Compatibility and historical preservation
 
